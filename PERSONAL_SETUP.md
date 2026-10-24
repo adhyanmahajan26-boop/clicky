@@ -1,7 +1,7 @@
 # Personal Clicky — Setup
 
 Clicky running on your Claude subscription. No API keys, no tracking.
-Phases done: 1 (subscription) and 2 (hands-free mode).
+Phases done: 1 (subscription), 2 (hands-free mode) and 3 (live marks).
 
 ## 1. Sign Claude Code in (once)
 
@@ -62,6 +62,7 @@ open and you just talk.
 | “go” / “keep going” | Un-pauses |
 | “capture” / “screenshot” | Saves a full-resolution screenshot (camera count in the pill goes up) |
 | “slower” / “faster” | Sets scroll speed for the autopilot (phase 4) |
+| “clear” / “clear marks” / “erase” | Removes the marks Clicky drew on screen |
 | “done” / “that's it” | Ends the session and opens the captures in Finder |
 
 **Esc** stops everything at any time. Double-tapping Control + Option again
@@ -76,6 +77,17 @@ cancellation off (then quit and reopen Clicky):
 defaults write com.personal.clicky handsFreeEchoCancellationDisabled -bool YES
 ```
 
+## Live marks (phase 3)
+
+When an answer involves places on your screen, Clicky draws on top of it while
+it talks: **numbered steps** (1, 2, 3…) for "click this, then this", a
+**circle** around the thing it's talking about, and an **arrow** for small or
+easy-to-miss targets. Nothing to turn on; ask something like "how do I turn
+on dark mode?" with System Settings open.
+
+Marks go away when you ask the next question, press **Esc**, say **“clear”**
+in a hands-free session, or 20 seconds after Clicky stops talking.
+
 ## Better voice (optional, free)
 
 System Settings → Accessibility → Spoken Content → System Voice → Manage Voices,
@@ -84,7 +96,6 @@ one installed automatically.
 
 ## What's next
 
-- Phase 3: live marks (circles, arrows, numbered steps)
 - Phase 4: autopilot scroller + auto-capture
 - Phase 5: "do it for me" agent (point-and-say "this, this, this — fix")
 - Phase 6: screenshot markup editor

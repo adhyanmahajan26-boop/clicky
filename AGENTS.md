@@ -31,6 +31,10 @@ This is a personal build: no API keys, no proxy server, no analytics, no auto-up
 
 Double-tapping the push-to-talk shortcut (or the panel button) starts an always-on mic session. `HandsFreeListeningSession` runs its own `AVAudioEngine` with voice processing (echo cancellation) and on-device `SFSpeechRecognizer`, splitting speech into utterances after ~1.1s of silence and restarting the recognition request each time. `HandsFreeVoiceCommand` matches whole utterances against local command phrases (wait/go/capture/slower/faster/done) so they act instantly; everything else goes to Claude. "wait"/"stop" also fire on partial transcripts while the buddy is talking or thinking. Non-command speech heard while the buddy was speaking is dropped as likely echo. Escape (seen via the listen-only event tap) stops speech, cancels the response, and ends the session. Captures are full-resolution PNGs in `~/Pictures/Clicky/Session …/`.
 
+### Live Marks
+
+Claude can draw circles, arrows, and numbered step badges on the overlay by adding `[MARK:kind:x,y:label:screenN]` tags (kind = `circle`, `arrow`, or a step number) right before the final `[POINT:...]` tag. `LiveScreenMarkTagParser` strips every MARK tag (even malformed ones, so they're never spoken) before the POINT parser runs, caps marks at 6, and `CompanionManager` maps them from screenshot pixels to global coords the same way POINT does. `LiveScreenMarksOverlayView` draws them inside each screen's `BlueCursorView`, staggered in response order. Marks clear on the next question, on Escape, on the hands-free "clear" command, or 20s after speech ends; transient-mode overlays stay up while marks are showing.
+
 ### Key Architecture Decisions
 
 **Menu Bar Panel Pattern**: The companion panel uses `NSStatusItem` for the menu bar icon and a custom borderless `NSPanel` for the floating control panel. This gives full control over appearance (dark, rounded corners, custom shadow) and avoids the standard macOS menu/popover chrome. The panel is non-activating so it doesn't steal focus. A global event monitor auto-dismisses it on outside clicks.
@@ -48,7 +52,7 @@ Double-tapping the push-to-talk shortcut (or the panel button) starts an always-
 | File | Lines | Purpose |
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1026 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Claude Code bridge, system-voice TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
+| `CompanionManager.swift` | ~1460 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Claude Code bridge, system-voice TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
 | `CompanionPanelView.swift` | ~761 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, model picker (Sonnet/Opus), permissions UI, DM feedback button, and quit button. Dark aesthetic using `DS` design system. |
 | `OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
@@ -62,9 +66,11 @@ Double-tapping the push-to-talk shortcut (or the panel button) starts an always-
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
 | `HandsFreeListeningSession.swift` | ~300 | Always-on mic + on-device speech for hands-free sessions. Echo cancellation, silence-based utterance splitting, off-main-thread audio/speech callbacks. |
-| `HandsFreeVoiceCommand.swift` | ~150 | Local instant-command parser (pause, resume, capture N, slower, faster, end session). Pure Foundation, whole-utterance matching. |
+| `HandsFreeVoiceCommand.swift` | ~150 | Local instant-command parser (pause, resume, capture N, slower, faster, clear marks, end session). Pure Foundation, whole-utterance matching. |
 | `HandsFreeSessionIndicator.swift` | ~170 | Click-through pill at the top of the screen showing listening/paused/thinking, last heard words, and capture count. |
 | `HandsFreeSessionCaptureStore.swift` | ~65 | Saves a session's full-resolution captures into its own folder and reveals them in Finder. |
+| `LiveScreenMark.swift` | ~140 | Live mark model and `[MARK:...]` tag parser (circles, arrows, numbered steps). Pure Foundation. |
+| `LiveScreenMarksOverlayView.swift` | ~215 | Draws live marks in the overlay with staggered draw-in animations. |
 | `ClaudeCodeBridge.swift` | ~280 | Runs Claude through the local Claude Code CLI on the user's subscription. Streams text, maps CLI errors, checks sign-in status. |
 | `SystemVoiceTTSClient.swift` | ~60 | Built-in Mac voice TTS (AVSpeechSynthesizer), same surface as ElevenLabsTTSClient. |
 | `OpenAIAPI.swift` | ~142 | OpenAI GPT vision API client. |
