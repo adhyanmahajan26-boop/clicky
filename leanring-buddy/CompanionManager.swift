@@ -10,7 +10,9 @@
 import AVFoundation
 import Combine
 import Foundation
+import os
 import ScreenCaptureKit
+import Speech
 import SwiftUI
 
 enum CompanionVoiceState {
@@ -126,6 +128,11 @@ final class CompanionManager: ObservableObject {
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
+
+    /// Permission changes go to the unified log (not just the Xcode console)
+    /// so they can be checked with `log show --predicate 'subsystem == "com.personal.clicky"'`.
+    private let permissionLogger = Logger(subsystem: "com.personal.clicky", category: "permissions")
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
     /// speaks again before the delay elapses.
@@ -283,6 +290,8 @@ final class CompanionManager: ObservableObject {
         accessibilityCheckTimer = nil
     }
 
+    private var hasLoggedPermissionStateThisLaunch = false
+
     func refreshAllPermissions() {
         let previouslyHadAccessibility = hasAccessibilityPermission
         let previouslyHadScreenRecording = hasScreenRecordingPermission
@@ -303,11 +312,16 @@ final class CompanionManager: ObservableObject {
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         hasMicrophonePermission = micAuthStatus == .authorized
 
-        // Debug: log permission state on changes
-        if previouslyHadAccessibility != hasAccessibilityPermission
+        // Log permission state on changes (and on the first check of a launch)
+        if !hasLoggedPermissionStateThisLaunch
+            || previouslyHadAccessibility != hasAccessibilityPermission
             || previouslyHadScreenRecording != hasScreenRecordingPermission
             || previouslyHadMicrophone != hasMicrophonePermission {
-            print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
+            hasLoggedPermissionStateThisLaunch = true
+            let speechRecognitionStatus = SFSpeechRecognizer.authorizationStatus() == .authorized ? "authorized" : "not authorized (\(SFSpeechRecognizer.authorizationStatus().rawValue))"
+            let permissionSummary = "accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), speech: \(speechRecognitionStatus)"
+            print("🔑 Permissions — \(permissionSummary)")
+            permissionLogger.notice("Permissions — \(permissionSummary, privacy: .public)")
         }
 
         // Track individual permission grants as they happen
@@ -394,6 +408,18 @@ final class CompanionManager: ObservableObject {
     /// macOS requires an app restart for that one to take effect.
     private func startPermissionPolling() {
         accessibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAllPermissions()
+            }
+        }
+
+        // Coming back from System Settings activates Clicky (e.g. clicking its
+        // menu bar icon), so re-check right away instead of waiting for the timer.
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshAllPermissions()
             }

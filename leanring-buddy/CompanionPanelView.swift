@@ -13,6 +13,9 @@ import SwiftUI
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @State private var emailInput: String = ""
+    /// True once Screen Recording was requested this launch: the grant only
+    /// applies after a relaunch, so the row swaps Grant for Relaunch.
+    @State private var isScreenRecordingRelaunchOffered = WindowPositionManager.hasRequestedScreenRecordingDuringCurrentLaunch
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -286,9 +289,15 @@ struct CompanionPanelView: View {
                     .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
                     .frame(width: 16)
 
-                Text("Accessibility")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Accessibility")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+
+                    if !isGranted {
+                        staleSettingsEntryHint
+                    }
+                }
             }
 
             Spacer()
@@ -361,11 +370,17 @@ struct CompanionPanelView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(DS.Colors.textSecondary)
 
-                    Text(isGranted
-                         ? "Only takes a screenshot when you use the hotkey"
-                         : "Quit and reopen after granting")
-                        .font(.system(size: 10))
-                        .foregroundColor(DS.Colors.textTertiary)
+                    if isGranted {
+                        Text("Only takes a screenshot when you use the hotkey")
+                            .font(.system(size: 10))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    } else if isScreenRecordingRelaunchOffered {
+                        Text("Turned it on? Relaunch to apply it.")
+                            .font(.system(size: 10))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    } else {
+                        staleSettingsEntryHint
+                    }
                 }
             }
 
@@ -380,12 +395,31 @@ struct CompanionPanelView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(DS.Colors.success)
                 }
+            } else if isScreenRecordingRelaunchOffered {
+                Button(action: {
+                    // macOS only applies Screen Recording to a fresh launch.
+                    WindowPositionManager.relaunchApp()
+                }) {
+                    Text("Relaunch")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(DS.Colors.textOnAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(DS.Colors.accent)
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
             } else {
                 Button(action: {
                     // Triggers the native macOS screen recording prompt on first
                     // attempt (auto-adds app to the list), then opens System Settings
-                    // on subsequent attempts.
+                    // on subsequent attempts. Either way it only applies after a
+                    // relaunch, so offer that next.
                     WindowPositionManager.requestScreenRecordingPermission()
+                    isScreenRecordingRelaunchOffered = true
                 }) {
                     Text("Grant")
                         .font(.system(size: 11, weight: .semibold))
@@ -402,6 +436,16 @@ struct CompanionPanelView: View {
             }
         }
         .padding(.vertical, 6)
+    }
+
+    /// Shown under a missing Accessibility / Screen Recording permission. When
+    /// Clicky's signature changes, System Settings can still show an old Clicky
+    /// entry switched on that no longer applies to this build.
+    private var staleSettingsEntryHint: some View {
+        Text("Already on in Settings? Select Clicky, press −, then add it again.")
+            .font(.system(size: 10))
+            .foregroundColor(DS.Colors.textTertiary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var screenContentPermissionRow: some View {

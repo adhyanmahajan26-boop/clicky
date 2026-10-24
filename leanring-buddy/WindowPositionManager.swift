@@ -129,6 +129,24 @@ class WindowPositionManager {
         return presentationDestination
     }
 
+    /// Screen Recording only takes effect after a relaunch, so once the user has
+    /// asked for it this launch the panel offers a Relaunch button.
+    static var hasRequestedScreenRecordingDuringCurrentLaunch: Bool {
+        hasAttemptedScreenRecordingSystemPromptDuringCurrentLaunch
+    }
+
+    /// Starts a fresh copy of Clicky and quits this one, so a newly granted
+    /// Screen Recording permission applies without the user reopening it.
+    static func relaunchApp() {
+        let openConfiguration = NSWorkspace.OpenConfiguration()
+        openConfiguration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: openConfiguration) { _, _ in
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
     /// Opens System Settings to the Screen Recording pane.
     static func openScreenRecordingSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
