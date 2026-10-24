@@ -1,7 +1,7 @@
 # Personal Clicky — Setup
 
 Clicky running on your Claude subscription. No API keys, no tracking.
-Phases done: 1 (subscription), 2 (hands-free mode) and 3 (live marks).
+Phases done: 1 (subscription), 2 (hands-free mode), 3 (live marks), plus the Claude spark companion with helper workers.
 
 ## 1. Sign Claude Code in (once)
 
@@ -45,7 +45,7 @@ Then press **Start**.
 ## 4. Use it
 
 - **Hold Control + Option**, talk, let go.
-- Clicky looks at your screen, answers out loud, and flies its blue cursor to what it's talking about.
+- Clicky looks at your screen, answers out loud, and flies its orange spark to what it's talking about.
 - Pick **Sonnet** (faster) or **Opus** (smarter) in the menu-bar panel.
 - The panel shows **"Claude subscription connected"** when Claude Code is signed in. If it says signed out, run `claude auth login` and click the row to re-check.
 
@@ -87,6 +87,27 @@ on dark mode?" with System Settings open.
 
 Marks go away when you ask the next question, press **Esc**, say **“clear”**
 in a hands-free session, or 20 seconds after Clicky stops talking.
+
+## The spark companion and helper workers
+
+The orange spark next to your cursor is Clicky's main brain. It breathes
+gently while idle and **spins while it's thinking**.
+
+For questions that split into separate smaller parts (for example "compare
+these three plans" or "what's wrong in each of these two windows"), the main
+brain can hand the parts to **helper workers** that run at the same time on
+the faster Haiku model. Each running worker is a **mini spark orbiting the big
+one**; it fades away when it's done. Up to four run at once, and extra ones
+wait in line. When they're all back, the main brain gives you one spoken
+answer. Simple questions don't use workers.
+
+**Esc** or saying **“stop”** cancels the main brain and every worker.
+
+In Debug builds the menu-bar panel has a **Companion** row: **Think** makes
+the spark spin and **0–4** adds simulated workers, so you can see the
+animations without asking anything.
+
+Previews: `docs/companion-preview/`.
 
 ## Better voice (optional, free)
 

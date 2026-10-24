@@ -5,7 +5,7 @@
 
 ## Overview
 
-macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it on-device with Apple Speech, and sends the transcript + a screenshot of the user's screen to Claude through the local Claude Code CLI (the user's Claude subscription). Claude's reply is spoken with the built-in Mac voice. A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
+macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it on-device with Apple Speech, and sends the transcript + a screenshot of the user's screen to Claude through the local Claude Code CLI (the user's Claude subscription). Claude's reply is spoken with the built-in Mac voice. A Claude-orange spark companion follows the cursor, spins while Claude is thinking, shows helper workers as orbiting minis, and can fly to and point at UI elements Claude references on any connected monitor.
 
 This is a personal build: no API keys, no proxy server, no analytics, no auto-updater.
 
@@ -35,6 +35,14 @@ Double-tapping the push-to-talk shortcut (or the panel button) starts an always-
 
 Claude can draw circles, arrows, and numbered step badges on the overlay by adding `[MARK:kind:x,y:label:screenN]` tags (kind = `circle`, `arrow`, or a step number) right before the final `[POINT:...]` tag. `LiveScreenMarkTagParser` strips every MARK tag (even malformed ones, so they're never spoken) before the POINT parser runs, caps marks at 6, and `CompanionManager` maps them from screenshot pixels to global coords the same way POINT does. `LiveScreenMarksOverlayView` draws them inside each screen's `BlueCursorView`, staggered in response order. Marks clear on the next question, on Escape, on the hands-free "clear" command, or 20s after speech ends; transient-mode overlays stay up while marks are showing.
 
+### Spark Companion and Helper Workers
+
+The old blue triangle and spinner are replaced by `ClaudeCompanionView`: an orange spark (`ClaudeSparkShape`, drawn in code) that breathes while idle and spins while `voiceState == .processing`. Flight/pointing logic in `BlueCursorView` is unchanged; the spark just sits at `cursorPosition`. Overlay colors (bubbles, waveform, live marks) use `DS.Colors.overlayCompanionOrange`.
+
+What orbits the spark comes from `CompanionActivitySource` objects registered with `CompanionManager.addCompanionActivitySource`; their workers are merged and capped at 4 visible (`CompanionActivityLimits`). Two sources exist: `CompanionWorkerRunner` (real) and `SimulatedCompanionActivitySource` (driven by the DEBUG-only "Companion" row in the panel: Think toggle and 0–4 workers).
+
+Helper workers: the main request may reply with a short heads-up plus `[WORKER:short title:task prompt]` tags. `CompanionWorkerTagParser` strips them (max 8). `CompanionWorkerRunner.runWorkers` runs each as its own `ClaudeCodeBridge` request with model `haiku` (`workerClaudeModel`), at most 4 concurrently with the rest queued, in a task group that is a child of the response task, so Escape / "stop" / a new question cancels every worker (the bridge terminates each CLI process). Results are folded into a second main-brain request (`makeMainBrainPromptWithWorkerResults`) that produces the final spoken answer with MARK/POINT tags. One round of workers per question. The main brain keeps the user's chosen model.
+
 ### Key Architecture Decisions
 
 **Menu Bar Panel Pattern**: The companion panel uses `NSStatusItem` for the menu bar icon and a custom borderless `NSPanel` for the floating control panel. This gives full control over appearance (dark, rounded corners, custom shadow) and avoids the standard macOS menu/popover chrome. The panel is non-activating so it doesn't steal focus. A global event monitor auto-dismisses it on outside clicks.
@@ -52,7 +60,7 @@ Claude can draw circles, arrows, and numbered step badges on the overlay by addi
 | File | Lines | Purpose |
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1460 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Claude Code bridge, system-voice TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
+| `CompanionManager.swift` | ~1590 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Claude Code bridge, system-voice TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
 | `CompanionPanelView.swift` | ~761 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, model picker (Sonnet/Opus), permissions UI, DM feedback button, and quit button. Dark aesthetic using `DS` design system. |
 | `OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
@@ -71,6 +79,9 @@ Claude can draw circles, arrows, and numbered step badges on the overlay by addi
 | `HandsFreeSessionCaptureStore.swift` | ~65 | Saves a session's full-resolution captures into its own folder and reveals them in Finder. |
 | `LiveScreenMark.swift` | ~140 | Live mark model and `[MARK:...]` tag parser (circles, arrows, numbered steps). Pure Foundation. |
 | `LiveScreenMarksOverlayView.swift` | ~215 | Draws live marks in the overlay with staggered draw-in animations. |
+| `ClaudeCompanionView.swift` | ~140 | Spark shape and the companion view: breathing/spinning coordinator spark plus 0–4 orbiting worker minis. |
+| `CompanionActivitySource.swift` | ~90 | Protocol for what the companion shows (thinking, workers), the 4-worker visible cap, and the simulated debug source. |
+| `CompanionWorkers.swift` | ~230 | `[WORKER:...]` tag parser and `CompanionWorkerRunner`: Haiku workers, 4 concurrent with a queue, cancellation, activity source. |
 | `ClaudeCodeBridge.swift` | ~280 | Runs Claude through the local Claude Code CLI on the user's subscription. Streams text, maps CLI errors, checks sign-in status. |
 | `SystemVoiceTTSClient.swift` | ~60 | Built-in Mac voice TTS (AVSpeechSynthesizer), same surface as ElevenLabsTTSClient. |
 | `OpenAIAPI.swift` | ~142 | OpenAI GPT vision API client. |
