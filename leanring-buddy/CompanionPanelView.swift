@@ -31,6 +31,12 @@ struct CompanionPanelView: View {
 
                 modelPickerRow
                     .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
+                handsFreeSessionButton
+                    .padding(.horizontal, 16)
             }
 
             if !companionManager.allPermissionsGranted {
@@ -62,7 +68,7 @@ struct CompanionPanelView: View {
                 Spacer()
                     .frame(height: 16)
 
-                dmFarzaButton
+                claudeCodeConnectionButton
                     .padding(.horizontal, 16)
             }
 
@@ -127,7 +133,7 @@ struct CompanionPanelView: View {
     @ViewBuilder
     private var permissionsCopySection: some View {
         if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            Text("Hold Control+Option to talk.")
+            Text("Hold Control+Option to talk. Double-tap it for hands-free.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(DS.Colors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,16 +167,16 @@ struct CompanionPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Hi, I'm Farza. This is Clicky.")
+                Text("Your personal Clicky.")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(DS.Colors.textSecondary)
 
-                Text("A side project I made for fun to help me learn stuff as I use my computer.")
+                Text("Runs on your Claude subscription through Claude Code. No API keys, no tracking.")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Nothing runs in the background. Clicky will only take a screenshot when you press the hot key. So, you can give that permission in peace. If you are still sus, eh, I can't do much there champ.")
+                Text("Clicky only takes a screenshot while you hold the hotkey. Screenshots go to Claude through Claude Code and are not saved.")
                     .font(.system(size: 11))
                     .foregroundColor(Color(red: 0.9, green: 0.4, blue: 0.4))
                     .fixedSize(horizontal: false, vertical: true)
@@ -607,8 +613,8 @@ struct CompanionPanelView: View {
             Spacer()
 
             HStack(spacing: 0) {
-                modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
-                modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
+                modelOptionButton(label: "Sonnet", modelID: "sonnet")
+                modelOptionButton(label: "Opus", modelID: "opus")
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -641,22 +647,64 @@ struct CompanionPanelView: View {
         .pointerCursor()
     }
 
-    // MARK: - DM Farza Button
+    // MARK: - Hands-Free Session
 
-    private var dmFarzaButton: some View {
+    /// Starts or ends the always-listening session. Same as double-tapping
+    /// Control+Option, for when the user would rather click.
+    private var handsFreeSessionButton: some View {
         Button(action: {
-            if let url = URL(string: "https://x.com/farzatv") {
-                NSWorkspace.shared.open(url)
-            }
+            companionManager.toggleHandsFreeSession()
         }) {
             HStack(spacing: 8) {
-                Image(systemName: "bubble.left.fill")
-                    .font(.system(size: 12, weight: .medium))
+                Image(systemName: companionManager.isHandsFreeSessionActive ? "stop.circle.fill" : "waveform.circle.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(companionManager.isHandsFreeSessionActive ? DS.Colors.destructiveText : DS.Colors.accentText)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Got feedback? DM me")
+                    Text(companionManager.isHandsFreeSessionActive ? "End hands-free session" : "Start hands-free session")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Bugs, ideas, anything — I read every message.")
+                    Text("Just talk. Say “wait”, “capture”, or “done”.")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+            }
+            .foregroundColor(DS.Colors.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    // MARK: - Claude Code Connection
+
+    /// Shows whether the Claude Code CLI is signed in to the user's Claude
+    /// subscription. Clicking re-checks, so after running `claude auth login`
+    /// in Terminal the user can confirm without restarting the app.
+    private var claudeCodeConnectionButton: some View {
+        Button(action: {
+            companionManager.refreshClaudeCodeSignInStatus()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: companionManager.isClaudeCodeSignedIn ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(companionManager.isClaudeCodeSignedIn ? DS.Colors.success : DS.Colors.warning)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(companionManager.isClaudeCodeSignedIn ? "Claude subscription connected" : "Claude Code is signed out")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(companionManager.isClaudeCodeSignedIn
+                         ? "Answers run on your plan through Claude Code."
+                         : "Run claude auth login in Terminal, then click here.")
                         .font(.system(size: 10))
                         .foregroundColor(DS.Colors.textTertiary)
                 }

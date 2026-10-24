@@ -10,7 +10,6 @@
 import AVFoundation
 import Combine
 import Foundation
-import PostHog
 import ScreenCaptureKit
 import SwiftUI
 
@@ -68,17 +67,25 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
-
-    private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+    /// Claude runs through the local Claude Code CLI on the user's
+    /// subscription — no API key or proxy server involved.
+    private lazy var claudeCodeBridge: ClaudeCodeBridge = {
+        return ClaudeCodeBridge(model: selectedModel)
     }()
 
-    private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
-    }()
+    /// Built-in Mac voice for spoken replies (free, offline).
+    private let speechOutputClient = SystemVoiceTTSClient()
+
+    /// Whether the Claude Code CLI is signed in. Checked on launch so the
+    /// panel can prompt for `claude auth login` instead of failing silently.
+    @Published private(set) var isClaudeCodeSignedIn = false
+
+    func refreshClaudeCodeSignInStatus() {
+        Task {
+            isClaudeCodeSignedIn = await ClaudeCodeBridge.checkIsSignedIn()
+            print("🔑 Claude Code signed in: \(isClaudeCodeSignedIn)")
+        }
+    }
 
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
@@ -108,12 +115,14 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isOverlayVisible: Bool = false
 
     /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    /// Stored as a Claude Code model alias ("sonnet" / "opus") so it always
+    /// tracks the newest model in that family.
+    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeCodeModelAlias") ?? "sonnet"
 
     func setSelectedModel(_ model: String) {
         selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-        claudeAPI.model = model
+        UserDefaults.standard.set(model, forKey: "selectedClaudeCodeModelAlias")
+        claudeCodeBridge.model = model
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -146,30 +155,14 @@ final class CompanionManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
     }
 
-    /// Whether the user has submitted their email during onboarding.
-    @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
+    /// The upstream app gated onboarding behind an email signup form. This
+    /// personal build has no signup, so the gate is always considered passed.
+    @Published var hasSubmittedEmail: Bool = true
 
-    /// Submits the user's email to FormSpark and identifies them in PostHog.
+    /// Kept so the panel's (now hidden) email field still compiles. Nothing
+    /// is sent anywhere.
     func submitEmail(_ email: String) {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEmail.isEmpty else { return }
-
         hasSubmittedEmail = true
-        UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
-
-        // Identify user in PostHog
-        PostHogSDK.shared.identify(trimmedEmail, userProperties: [
-            "email": trimmedEmail
-        ])
-
-        // Submit to FormSpark
-        Task {
-            var request = URLRequest(url: URL(string: "https://submit-form.com/RWbGJxmIs")!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmedEmail])
-            _ = try? await URLSession.shared.data(for: request)
-        }
     }
 
     func start() {
@@ -179,9 +172,9 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        // Eagerly touch the Claude API so its TLS warmup handshake completes
-        // well before the onboarding demo fires at ~40s into the video.
-        _ = claudeAPI
+        bindEscapeKey()
+        _ = claudeCodeBridge
+        refreshClaudeCodeSignInStatus()
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -288,6 +281,8 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
+        endHandsFreeSession()
+        escapeKeyCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
@@ -473,6 +468,10 @@ final class CompanionManager: ObservableObject {
     private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
         switch transition {
         case .pressed:
+            lastShortcutPressDate = Date()
+            // During a hands-free session the mic is already open, so holding
+            // the shortcut does nothing — a double-tap ends the session instead.
+            guard !isHandsFreeSessionActive else { return }
             guard !buddyDictationManager.isDictationInProgress else { return }
             // Don't register push-to-talk while the onboarding video is playing
             guard !showOnboardingVideo else { return }
@@ -493,7 +492,7 @@ final class CompanionManager: ObservableObject {
 
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
-            elevenLabsTTSClient.stopPlayback()
+            speechOutputClient.stopPlayback()
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -526,6 +525,15 @@ final class CompanionManager: ObservableObject {
                 )
             }
         case .released:
+            let wasShortcutDoubleTapped = registerShortcutReleaseAndDetectDoubleTap()
+
+            if isHandsFreeSessionActive {
+                if wasShortcutDoubleTapped {
+                    endHandsFreeSession()
+                }
+                return
+            }
+
             // Cancel the pending start task in case the user released the shortcut
             // before the async startPushToTalk had a chance to begin recording.
             // Without this, a quick press-and-release drops the release event and
@@ -534,9 +542,290 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+
+            if wasShortcutDoubleTapped {
+                // The two quick taps each started a (silent) push-to-talk
+                // recording — throw those away before opening the session mic.
+                buddyDictationManager.cancelCurrentDictation(preserveDraftText: false)
+                startHandsFreeSession()
+            }
         case .none:
             break
         }
+    }
+
+    // MARK: - Hands-Free Session
+
+    /// True while the always-on mic session is running (started by
+    /// double-tapping the shortcut or from the panel).
+    @Published private(set) var isHandsFreeSessionActive = false
+    /// Set by "wait" / "stop", cleared by "go". The autopilot scroller
+    /// (later phase) holds still while this is true.
+    @Published private(set) var isHandsFreeSessionPaused = false
+    /// Live partial transcript, shown in the session indicator.
+    @Published private(set) var handsFreeLastHeardText = ""
+    @Published private(set) var handsFreeSessionCaptureCount = 0
+    /// Short-lived feedback in the indicator, e.g. "Saved capture 3".
+    @Published private(set) var handsFreeStatusMessage: String?
+    /// Scroll speed for the autopilot scroller (later phase), adjusted by
+    /// "slower" / "faster". 1.0 is the default speed.
+    @Published private(set) var autopilotScrollSpeedMultiplier: Double = 1.0
+
+    private var handsFreeListeningSession: HandsFreeListeningSession?
+    private var handsFreeSessionCaptureStore: HandsFreeSessionCaptureStore?
+    private let handsFreeSessionIndicatorManager = HandsFreeSessionIndicatorManager()
+    private var handsFreeStatusMessageClearTask: Task<Void, Never>?
+    private var escapeKeyCancellable: AnyCancellable?
+
+    /// The buddy was talking while this utterance was being heard. If it's
+    /// not a command, it's most likely the mic picking up the buddy's own
+    /// voice, so we drop it instead of sending it to Claude.
+    private var currentUtteranceOverlappedBuddySpeech = false
+
+    /// Two quick taps of the shortcut within this window toggle the session.
+    private static let shortcutDoubleTapMaximumIntervalSeconds: TimeInterval = 0.45
+    /// A press shorter than this counts as a tap rather than push-to-talk.
+    private static let shortcutTapMaximumHoldSeconds: TimeInterval = 0.3
+    private var lastShortcutPressDate: Date?
+    private var lastShortcutTapReleaseDate: Date?
+
+    func toggleHandsFreeSession() {
+        if isHandsFreeSessionActive {
+            endHandsFreeSession()
+        } else {
+            startHandsFreeSession()
+        }
+    }
+
+    func startHandsFreeSession() {
+        guard !isHandsFreeSessionActive else { return }
+        guard !showOnboardingVideo else { return }
+
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        stopBuddySpeechAndCancelResponse()
+
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        if !isOverlayVisible {
+            overlayWindowManager.hasShownOverlayBefore = true
+            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            isOverlayVisible = true
+        }
+
+        let handsFreeListeningSession = HandsFreeListeningSession(
+            onPartialTranscript: { [weak self] partialTranscript in
+                self?.handleHandsFreePartialTranscript(partialTranscript)
+            },
+            onUtteranceFinished: { [weak self] finishedUtterance in
+                self?.handleHandsFreeUtteranceFinished(finishedUtterance)
+            }
+        )
+        self.handsFreeListeningSession = handsFreeListeningSession
+        handsFreeSessionCaptureStore = HandsFreeSessionCaptureStore()
+
+        isHandsFreeSessionActive = true
+        isHandsFreeSessionPaused = false
+        handsFreeLastHeardText = ""
+        handsFreeSessionCaptureCount = 0
+        currentUtteranceOverlappedBuddySpeech = false
+        handsFreeSessionIndicatorManager.showIndicator(companionManager: self)
+        NSSound(named: "Pop")?.play()
+
+        Task {
+            do {
+                try await handsFreeListeningSession.startListening()
+            } catch {
+                print("⚠️ Hands-free session couldn't start: \(error)")
+                endHandsFreeSession()
+                try? await speechOutputClient.speakText(error.localizedDescription)
+            }
+        }
+    }
+
+    func endHandsFreeSession() {
+        guard isHandsFreeSessionActive else { return }
+
+        handsFreeListeningSession?.stopListening()
+        handsFreeListeningSession = nil
+        isHandsFreeSessionActive = false
+        isHandsFreeSessionPaused = false
+        handsFreeLastHeardText = ""
+        handsFreeStatusMessageClearTask?.cancel()
+        handsFreeStatusMessage = nil
+        handsFreeSessionIndicatorManager.hideIndicator()
+        NSSound(named: "Bottle")?.play()
+
+        let endedSessionCaptureStore = handsFreeSessionCaptureStore
+        handsFreeSessionCaptureStore = nil
+        let savedCaptureCount = endedSessionCaptureStore?.savedCaptureFileURLs.count ?? 0
+
+        if savedCaptureCount > 0 {
+            endedSessionCaptureStore?.revealCapturesInFinder()
+            let captureWord = savedCaptureCount == 1 ? "capture" : "captures"
+            Task {
+                try? await speechOutputClient.speakText("session done. I saved \(savedCaptureCount) \(captureWord).")
+            }
+        }
+
+        scheduleTransientHideIfNeeded()
+    }
+
+    private func handleHandsFreePartialTranscript(_ partialTranscript: String) {
+        handsFreeLastHeardText = partialTranscript
+
+        if speechOutputClient.isPlaying {
+            currentUtteranceOverlappedBuddySpeech = true
+        }
+
+        // "wait" / "stop" should cut the buddy off mid-sentence, so check
+        // partial transcripts for them instead of waiting for the pause.
+        // Only when there's something to interrupt — otherwise a sentence
+        // that merely starts with "stop…" would get chopped in half.
+        let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
+        guard isBuddyBusy,
+              let instantCommand = HandsFreeVoiceCommand.parse(partialTranscript),
+              instantCommand.shouldTriggerOnPartialTranscript else {
+            return
+        }
+
+        // Start a fresh utterance so these words aren't delivered again
+        // (and run twice) when the user stops talking.
+        handsFreeListeningSession?.discardCurrentUtterance()
+        currentUtteranceOverlappedBuddySpeech = false
+        performHandsFreeVoiceCommand(instantCommand)
+    }
+
+    private func handleHandsFreeUtteranceFinished(_ finishedUtterance: String) {
+        let utteranceOverlappedBuddySpeech = currentUtteranceOverlappedBuddySpeech
+        currentUtteranceOverlappedBuddySpeech = false
+
+        if let voiceCommand = HandsFreeVoiceCommand.parse(finishedUtterance) {
+            performHandsFreeVoiceCommand(voiceCommand)
+            return
+        }
+
+        guard !utteranceOverlappedBuddySpeech else {
+            print("🔇 Hands-free: ignored speech heard while the buddy was talking: \(finishedUtterance)")
+            return
+        }
+
+        lastTranscript = finishedUtterance
+        ClickyAnalytics.trackUserMessageSent(transcript: finishedUtterance)
+        sendTranscriptToClaudeWithScreenshot(transcript: finishedUtterance)
+    }
+
+    private func performHandsFreeVoiceCommand(_ voiceCommand: HandsFreeVoiceCommand) {
+        print("⚡️ Hands-free command: \(voiceCommand)")
+
+        switch voiceCommand {
+        case .pause:
+            stopBuddySpeechAndCancelResponse()
+            isHandsFreeSessionPaused = true
+            showHandsFreeStatusMessage("Paused")
+
+        case .resume:
+            isHandsFreeSessionPaused = false
+            showHandsFreeStatusMessage("Continuing")
+
+        case .capture(let requestedCaptureCount):
+            captureScreenForHandsFreeSession(requestedCaptureCount: requestedCaptureCount)
+
+        case .slower:
+            autopilotScrollSpeedMultiplier = max(0.25, autopilotScrollSpeedMultiplier * 0.75)
+            showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+
+        case .faster:
+            autopilotScrollSpeedMultiplier = min(3.0, autopilotScrollSpeedMultiplier * 1.33)
+            showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+
+        case .endSession:
+            endHandsFreeSession()
+        }
+    }
+
+    /// Saves one full-resolution screenshot of the cursor's screen. When the
+    /// user asks for several ("capture these two"), the autopilot scroller
+    /// will take the rest as it scrolls; until then each "capture" is one shot.
+    private func captureScreenForHandsFreeSession(requestedCaptureCount: Int) {
+        guard let handsFreeSessionCaptureStore else { return }
+
+        Task {
+            do {
+                try await handsFreeSessionCaptureStore.captureCursorScreenAndSave()
+                handsFreeSessionCaptureCount = handsFreeSessionCaptureStore.savedCaptureFileURLs.count
+                NSSound(named: "Tink")?.play()
+
+                if requestedCaptureCount > 1 {
+                    showHandsFreeStatusMessage("Saved capture \(handsFreeSessionCaptureCount) · say “capture” for the next one")
+                } else {
+                    showHandsFreeStatusMessage("Saved capture \(handsFreeSessionCaptureCount)")
+                }
+            } catch {
+                print("⚠️ Hands-free capture failed: \(error)")
+                showHandsFreeStatusMessage("Couldn't save the screenshot")
+            }
+        }
+    }
+
+    private func showHandsFreeStatusMessage(_ statusMessage: String) {
+        handsFreeStatusMessage = statusMessage
+        handsFreeStatusMessageClearTask?.cancel()
+        handsFreeStatusMessageClearTask = Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            handsFreeStatusMessage = nil
+        }
+    }
+
+    /// Cuts off the buddy mid-sentence and abandons any answer in flight.
+    private func stopBuddySpeechAndCancelResponse() {
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        clearDetectedElementLocation()
+        // A cancelled response task skips its own reset to idle, so do it here
+        // or the cursor would stay stuck on the spinner.
+        if voiceState == .processing || voiceState == .responding {
+            voiceState = .idle
+        }
+    }
+
+    /// Returns true when this release completes a quick double-tap.
+    private func registerShortcutReleaseAndDetectDoubleTap() -> Bool {
+        let releaseDate = Date()
+        guard let lastShortcutPressDate,
+              releaseDate.timeIntervalSince(lastShortcutPressDate) <= Self.shortcutTapMaximumHoldSeconds else {
+            // A long hold is push-to-talk, not a tap — it breaks any tap sequence.
+            lastShortcutTapReleaseDate = nil
+            return false
+        }
+
+        if let lastShortcutTapReleaseDate,
+           releaseDate.timeIntervalSince(lastShortcutTapReleaseDate) <= Self.shortcutDoubleTapMaximumIntervalSeconds {
+            self.lastShortcutTapReleaseDate = nil
+            return true
+        }
+
+        lastShortcutTapReleaseDate = releaseDate
+        return false
+    }
+
+    private func bindEscapeKey() {
+        escapeKeyCancellable = globalPushToTalkShortcutMonitor
+            .escapeKeyPressedPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.handleEscapeKeyPressed()
+            }
+    }
+
+    /// Escape is the universal "stop everything": it silences the buddy,
+    /// cancels any answer in flight, and ends a hands-free session.
+    private func handleEscapeKeyPressed() {
+        let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
+        guard isHandsFreeSessionActive || isBuddyBusy else { return }
+
+        stopBuddySpeechAndCancelResponse()
+        endHandsFreeSession()
     }
 
     // MARK: - Companion Prompt
@@ -579,13 +868,13 @@ final class CompanionManager: ObservableObject {
     // MARK: - AI Response Pipeline
 
     /// Captures a screenshot, sends it along with the transcript to Claude,
-    /// and plays the response aloud via ElevenLabs TTS. The cursor stays in
+    /// and plays the response aloud with the built-in Mac voice. The cursor stays in
     /// the spinner/processing state until TTS audio begins playing.
     /// Claude's response may include a [POINT:x,y:label] tag which triggers
     /// the buddy to fly to that element on screen.
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
-        elevenLabsTTSClient.stopPlayback()
+        speechOutputClient.stopPlayback()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -610,7 +899,7 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await claudeCodeBridge.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
@@ -701,13 +990,13 @@ final class CompanionManager: ObservableObject {
                 // until the audio actually starts playing, then switch to responding.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
+                        try await speechOutputClient.speakText(spokenText)
                         // speakText returns after player.play() — audio is now playing
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
+                        print("⚠️ System voice TTS error: \(error)")
+                        speakErrorFallback(for: error)
                     }
                 }
             } catch is CancellationError {
@@ -715,7 +1004,7 @@ final class CompanionManager: ObservableObject {
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                speakErrorFallback(for: error)
             }
 
             if !Task.isCancelled {
@@ -735,7 +1024,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = Task {
             // Wait for TTS audio to finish playing
-            while elevenLabsTTSClient.isPlaying {
+            while speechOutputClient.isPlaying {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -755,11 +1044,24 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Speaks a hardcoded error message using macOS system TTS when API
-    /// credits run out. Uses NSSpeechSynthesizer so it works even when
-    /// ElevenLabs is down.
-    private func speakCreditsErrorFallback() {
-        let utterance = "I'm all out of credits. Please DM Farza and tell him to bring me back to life."
+    /// Speaks a short explanation when a response fails, so the user hears
+    /// what to fix instead of the buddy going quiet. The most common cause is
+    /// Claude Code being signed out or out of subscription usage.
+    private func speakErrorFallback(for error: Error) {
+        let utterance: String
+        switch error {
+        case ClaudeCodeBridgeError.claudeCodeNotInstalled:
+            utterance = "I can't find Claude Code on this Mac. Install it, then sign in."
+        case ClaudeCodeBridgeError.claudeCodeReportedError(let message)
+            where message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("login"):
+            utterance = "I'm signed out of Claude. Run claude auth login in Terminal, then try again."
+        case ClaudeCodeBridgeError.claudeCodeReportedError(let message)
+            where message.localizedCaseInsensitiveContains("limit"):
+            utterance = "You've hit your Claude usage limit for now. Try again a bit later."
+        default:
+            utterance = "Something went wrong talking to Claude. Check the Xcode console for details."
+        }
+        refreshClaudeCodeSignInStatus()
         let synthesizer = NSSpeechSynthesizer()
         synthesizer.startSpeaking(utterance)
         voiceState = .responding
@@ -982,7 +1284,7 @@ final class CompanionManager: ObservableObject {
                 let dimensionInfo = " (image dimensions: \(cursorScreenCapture.screenshotWidthInPixels)x\(cursorScreenCapture.screenshotHeightInPixels) pixels)"
                 let labeledImages = [(data: cursorScreenCapture.imageData, label: cursorScreenCapture.label + dimensionInfo)]
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await claudeCodeBridge.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.onboardingDemoSystemPrompt,
                     userPrompt: "look around my screen and find something interesting to point at",

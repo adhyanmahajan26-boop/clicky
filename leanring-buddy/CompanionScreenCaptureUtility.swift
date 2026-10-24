@@ -129,4 +129,44 @@ enum CompanionScreenCaptureUtility {
 
         return capturedScreens
     }
+
+    /// Captures the screen the cursor is on at full Retina resolution as PNG.
+    /// Used for screenshots the user keeps (session captures), where quality
+    /// matters more than payload size — unlike the downscaled JPEGs sent to Claude.
+    static func captureCursorScreenAsFullResolutionPNG() async throws -> Data {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let mouseLocation = NSEvent.mouseLocation
+
+        let cursorScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
+        let cursorScreenDisplayID = cursorScreen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+
+        guard let cursorDisplay = content.displays.first(where: { $0.displayID == cursorScreenDisplayID })
+                ?? content.displays.first else {
+            throw NSError(domain: "CompanionScreenCapture", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No display available for capture"])
+        }
+
+        let ownBundleIdentifier = Bundle.main.bundleIdentifier
+        let ownAppWindows = content.windows.filter { window in
+            window.owningApplication?.bundleIdentifier == ownBundleIdentifier
+        }
+
+        let filter = SCContentFilter(display: cursorDisplay, excludingWindows: ownAppWindows)
+        let configuration = SCStreamConfiguration()
+        let backingScaleFactor = cursorScreen?.backingScaleFactor ?? 2
+        configuration.width = Int(CGFloat(cursorDisplay.width) * backingScaleFactor)
+        configuration.height = Int(CGFloat(cursorDisplay.height) * backingScaleFactor)
+        configuration.showsCursor = false
+
+        let cgImage = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        )
+
+        guard let pngData = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "CompanionScreenCapture", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't encode screenshot as PNG"])
+        }
+        return pngData
+    }
 }
