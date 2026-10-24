@@ -31,6 +31,14 @@ open leanring-buddy.xcodeproj
 Always run from Xcode with ⌘R. Building from Terminal makes macOS forget the
 app's permissions.
 
+### Why the Team matters
+
+Without a Team, Xcode signs Clicky "to run locally" (ad-hoc). macOS then
+ties Accessibility and Screen Recording to that exact build, so **every
+rebuild looks like a new app and the permission prompts come back**. With
+your Apple ID's team selected, the signature stays the same across rebuilds
+and you grant permissions once. A free Apple ID works ("Personal Team").
+
 ## 3. Grant permissions
 
 Click the Clicky icon in the menu bar and grant:
@@ -108,6 +116,20 @@ the spark spin and **0–4** adds simulated workers, so you can see the
 animations without asking anything.
 
 Previews: `docs/companion-preview/`.
+
+## If Clicky keeps asking for permissions
+
+1. Xcode → Settings → Accounts → **+** → sign in with your Apple ID.
+2. Click the blue **leanring-buddy** project → **leanring-buddy** target →
+   **Signing & Capabilities** → **Team**: pick your account (it can say
+   "Personal Team").
+3. System Settings → Privacy & Security → **Accessibility** and **Screen &
+   System Audio Recording**: select every old **Clicky** entry and remove it
+   with **−**.
+4. Press **⌘R** in Xcode, then allow each permission once when asked. If
+   Screen Recording says to quit and reopen, press ⌘R again.
+
+After that, rebuilding keeps the permissions.
 
 ## Better voice (optional, free)
 
