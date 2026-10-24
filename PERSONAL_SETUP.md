@@ -119,7 +119,11 @@ Previews: `docs/companion-preview/`.
 
 ## If Clicky keeps asking for permissions
 
-**Easiest (no Apple ID needed):** run this once in Terminal:
+The project is now set to Addy's Personal Team (`9JAQUUW553`), so builds are
+signed with an Apple Development certificate and permissions survive rebuilds.
+If the team ever goes missing (e.g. a different Mac), use one of these:
+
+**No Apple ID needed:** run this once in Terminal:
 
 ```bash
 bash ~/Projects/clicky/scripts/setup-local-signing.sh
