@@ -37,4 +37,23 @@ struct leanring_buddyTests {
         #expect(shouldTreatPermissionAsGranted)
     }
 
+    @Test func handsFreeCommandsIgnoreFillerWordsAndPunctuation() async throws {
+        #expect(HandsFreeVoiceCommand.parse("Okay Clicky, wait.") == .pause)
+        #expect(HandsFreeVoiceCommand.parse("Keep going!") == .resume)
+        #expect(HandsFreeVoiceCommand.parse("Stop listening") == .endSession)
+        #expect(HandsFreeVoiceCommand.parse("That's it") == .endSession)
+        #expect(HandsFreeVoiceCommand.parse("Slow down") == .slower)
+    }
+
+    @Test func handsFreeCaptureCommandsParseTheRequestedCount() async throws {
+        #expect(HandsFreeVoiceCommand.parse("Take a screenshot") == .capture(requestedCaptureCount: 1))
+        #expect(HandsFreeVoiceCommand.parse("capture these two") == .capture(requestedCaptureCount: 2))
+        #expect(HandsFreeVoiceCommand.parse("take 3 screenshots") == .capture(requestedCaptureCount: 3))
+    }
+
+    @Test func handsFreeQuestionsThatContainCommandWordsGoToClaude() async throws {
+        #expect(HandsFreeVoiceCommand.parse("how do I stop the music from playing") == nil)
+        #expect(HandsFreeVoiceCommand.parse("what does this capture button do") == nil)
+    }
+
 }

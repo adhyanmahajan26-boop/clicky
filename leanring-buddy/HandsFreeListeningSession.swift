@@ -80,6 +80,14 @@ final class HandsFreeListeningSession {
     func startListening() async throws {
         guard !isListening else { return }
 
+        // Without mic access AVAudioEngine still starts and just delivers
+        // silence, so the session would look like it's listening but never
+        // hear anything. Fail loudly instead.
+        let isMicrophoneAuthorized = await Self.requestMicrophoneAuthorizationIfNeeded()
+        guard isMicrophoneAuthorized else {
+            throw HandsFreeListeningSessionError(message: "Microphone permission is off. Turn it on in System Settings > Privacy & Security > Microphone.")
+        }
+
         let isSpeechRecognitionAuthorized = await Self.requestSpeechRecognitionAuthorizationIfNeeded()
         guard isSpeechRecognitionAuthorized else {
             throw HandsFreeListeningSessionError(message: "Speech recognition permission is off. Turn it on in System Settings > Privacy & Security > Speech Recognition.")
@@ -284,6 +292,17 @@ final class HandsFreeListeningSession {
                     recognitionTaskGeneration: recognitionTaskGeneration
                 )
             }
+        }
+    }
+
+    private static func requestMicrophoneAuthorizationIfNeeded() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            return false
         }
     }
 
