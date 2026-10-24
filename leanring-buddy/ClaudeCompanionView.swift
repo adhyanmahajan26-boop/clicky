@@ -13,42 +13,87 @@
 
 import SwiftUI
 
-/// A radial burst of rounded rays, like Claude's spark mark. Ray lengths vary
-/// slightly so it looks hand-drawn rather than like a perfect asterisk.
+/// Claude's spark mark: twelve tapered rays of slightly uneven length and
+/// spacing, thin where they meet in the middle and wider at their clipped
+/// tips, so it reads as hand-drawn rather than a geometric star.
 struct ClaudeSparkShape: Shape {
-    /// Relative length of each ray (1.0 = reaches the edge of the frame).
-    /// Fixed values, not random, so every spark looks the same.
-    private static let relativeRayLengths: [CGFloat] = [
-        1.00, 0.84, 0.94, 0.80, 0.98, 0.87, 0.92, 0.82, 1.00, 0.86, 0.95, 0.81
+    private struct SparkRay {
+        /// Direction in degrees: 0 points right, increasing clockwise.
+        let angleDegrees: CGFloat
+        /// 1.0 reaches the edge of the frame.
+        let relativeLength: CGFloat
+        /// Half the width of the tip, as a fraction of the spark's radius.
+        let relativeTipHalfWidth: CGFloat
+    }
+
+    /// Angles and lengths measured from the real mark, so the unevenness
+    /// matches it instead of being random.
+    private static let sparkRays: [SparkRay] = [
+        SparkRay(angleDegrees: 15, relativeLength: 0.93, relativeTipHalfWidth: 0.104),
+        SparkRay(angleDegrees: 44, relativeLength: 0.95, relativeTipHalfWidth: 0.111),
+        SparkRay(angleDegrees: 60, relativeLength: 0.93, relativeTipHalfWidth: 0.098),
+        SparkRay(angleDegrees: 95, relativeLength: 0.96, relativeTipHalfWidth: 0.098),
+        SparkRay(angleDegrees: 123, relativeLength: 0.96, relativeTipHalfWidth: 0.104),
+        SparkRay(angleDegrees: 146, relativeLength: 0.92, relativeTipHalfWidth: 0.098),
+        SparkRay(angleDegrees: 179, relativeLength: 0.96, relativeTipHalfWidth: 0.078),
+        SparkRay(angleDegrees: 212, relativeLength: 0.95, relativeTipHalfWidth: 0.104),
+        SparkRay(angleDegrees: 242, relativeLength: 1.00, relativeTipHalfWidth: 0.111),
+        SparkRay(angleDegrees: 279, relativeLength: 0.87, relativeTipHalfWidth: 0.091),
+        SparkRay(angleDegrees: 311, relativeLength: 0.91, relativeTipHalfWidth: 0.104),
+        SparkRay(angleDegrees: 353, relativeLength: 0.90, relativeTipHalfWidth: 0.104)
     ]
+
+    /// Where the rays start, and their half-width there. Rays start inside
+    /// the hub so they merge into one solid centre.
+    private static let relativeRayBaseRadius: CGFloat = 0.10
+    private static let relativeRayBaseHalfWidth: CGFloat = 0.05
+    private static let relativeHubRadius: CGFloat = 0.2
+    /// How far back from the tip its corners are clipped.
+    private static let relativeTipChamferLength: CGFloat = 0.07
 
     func path(in rect: CGRect) -> Path {
         let sparkCenter = CGPoint(x: rect.midX, y: rect.midY)
         let sparkRadius = min(rect.width, rect.height) / 2
-        // Rays are stroked with round caps, so pull the tips in by half the
-        // stroke width to keep them inside the frame.
-        let rayStrokeWidth = sparkRadius * 0.26
-        let rayInnerRadius = sparkRadius * 0.12
-        let rayCount = Self.relativeRayLengths.count
 
-        var raySkeletonPath = Path()
-        for rayIndex in 0..<rayCount {
-            // Start pointing straight up and go clockwise.
-            let rayAngle = (CGFloat(rayIndex) / CGFloat(rayCount)) * 2 * .pi - .pi / 2
-            let rayOuterRadius = (sparkRadius - rayStrokeWidth / 2) * Self.relativeRayLengths[rayIndex]
-            raySkeletonPath.move(to: CGPoint(
-                x: sparkCenter.x + cos(rayAngle) * rayInnerRadius,
-                y: sparkCenter.y + sin(rayAngle) * rayInnerRadius
-            ))
-            raySkeletonPath.addLine(to: CGPoint(
-                x: sparkCenter.x + cos(rayAngle) * rayOuterRadius,
-                y: sparkCenter.y + sin(rayAngle) * rayOuterRadius
-            ))
+        /// Maps a point in a ray's own frame (x along the ray, y across it)
+        /// to the view, rotated to the ray's direction.
+        func pointAlongRay(angleRadians: CGFloat, alongRay: CGFloat, acrossRay: CGFloat) -> CGPoint {
+            CGPoint(
+                x: sparkCenter.x + (cos(angleRadians) * alongRay - sin(angleRadians) * acrossRay) * sparkRadius,
+                y: sparkCenter.y + (sin(angleRadians) * alongRay + cos(angleRadians) * acrossRay) * sparkRadius
+            )
         }
 
-        // Turning the stroke into a filled outline lets callers use .fill()
-        // like any other shape, and overlapping rays merge cleanly at the center.
-        return raySkeletonPath.strokedPath(StrokeStyle(lineWidth: rayStrokeWidth, lineCap: .round))
+        var sparkPath = Path()
+
+        // Every subpath winds the same way so the default non-zero fill
+        // merges the overlapping rays and hub instead of punching holes.
+        for sparkRay in Self.sparkRays {
+            let rayAngleRadians = sparkRay.angleDegrees * .pi / 180
+            let tipDistance = sparkRay.relativeLength
+            let tipHalfWidth = sparkRay.relativeTipHalfWidth
+            let rayOutline: [(alongRay: CGFloat, acrossRay: CGFloat)] = [
+                (Self.relativeRayBaseRadius, -Self.relativeRayBaseHalfWidth),
+                (tipDistance - Self.relativeTipChamferLength, -tipHalfWidth),
+                (tipDistance, -tipHalfWidth * 0.45),
+                (tipDistance, tipHalfWidth * 0.45),
+                (tipDistance - Self.relativeTipChamferLength, tipHalfWidth),
+                (Self.relativeRayBaseRadius, Self.relativeRayBaseHalfWidth)
+            ]
+            sparkPath.addLines(rayOutline.map {
+                pointAlongRay(angleRadians: rayAngleRadians, alongRay: $0.alongRay, acrossRay: $0.acrossRay)
+            })
+            sparkPath.closeSubpath()
+        }
+
+        let hubCornerCount = 24
+        sparkPath.addLines((0..<hubCornerCount).map { hubCornerIndex in
+            let hubAngleRadians = CGFloat(hubCornerIndex) / CGFloat(hubCornerCount) * 2 * .pi
+            return pointAlongRay(angleRadians: hubAngleRadians, alongRay: Self.relativeHubRadius, acrossRay: 0)
+        })
+        sparkPath.closeSubpath()
+
+        return sparkPath
     }
 }
 
@@ -62,9 +107,9 @@ struct ClaudeCompanionView: View {
     /// saves redrawing every overlay at 60fps.
     let isAnimationRunning: Bool
 
-    static let coordinatorSparkDiameter: CGFloat = 20
-    static let workerSparkDiameter: CGFloat = 9
-    static let workerOrbitRadius: CGFloat = 22
+    static let coordinatorSparkDiameter: CGFloat = 24
+    static let workerSparkDiameter: CGFloat = 10
+    static let workerOrbitRadius: CGFloat = 25
 
     private let coordinatorThinkingSpinDegreesPerSecond: Double = 220
     private let idleBreathingCycleSeconds: Double = 3.2
