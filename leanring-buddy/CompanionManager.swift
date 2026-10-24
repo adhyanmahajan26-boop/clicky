@@ -58,16 +58,17 @@ final class CompanionManager: ObservableObject {
     /// Running workers to draw as orbiting minis (at most 4).
     @Published private(set) var visibleCompanionWorkers: [CompanionWorkerActivity] = []
 
-    /// The only source for now. The debug controls in the panel drive it so the
-    /// visuals can be tried before a real source (e.g. project threads) exists.
+    /// The real source: Haiku helper workers the main brain opens for a question.
+    let companionWorkerRunner = CompanionWorkerRunner()
+    /// Driven by the debug controls in the panel so the visuals can be tried
+    /// without asking Claude anything.
     let simulatedCompanionActivitySource = SimulatedCompanionActivitySource()
-    private var companionActivitySource: CompanionActivitySource?
+    private var companionActivitySources: [CompanionActivitySource] = []
 
-    /// Swaps in a different activity source. A real source should be plugged
-    /// in here; the overlay only ever reads the published values above.
-    func useCompanionActivitySource(_ newCompanionActivitySource: CompanionActivitySource) {
-        companionActivitySource?.onActivityChanged = nil
-        companionActivitySource = newCompanionActivitySource
+    /// Adds a source whose thinking state and workers the companion shows.
+    /// Every source's workers share the one orbit (still capped at four).
+    func addCompanionActivitySource(_ newCompanionActivitySource: CompanionActivitySource) {
+        companionActivitySources.append(newCompanionActivitySource)
         newCompanionActivitySource.onActivityChanged = { [weak self] in
             self?.republishCompanionActivity()
         }
@@ -75,8 +76,8 @@ final class CompanionManager: ObservableObject {
     }
 
     private func republishCompanionActivity() {
-        isCompanionCoordinatorThinking = companionActivitySource?.coordinatorIsThinking ?? false
-        visibleCompanionWorkers = CompanionActivityLimits.visibleWorkers(from: companionActivitySource?.workers ?? [])
+        isCompanionCoordinatorThinking = companionActivitySources.contains { $0.coordinatorIsThinking }
+        visibleCompanionWorkers = CompanionActivityLimits.visibleWorkers(from: companionActivitySources.flatMap(\.workers))
     }
 
     // MARK: - Onboarding Video State (shared across all screen overlays)
@@ -204,7 +205,8 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
-        useCompanionActivitySource(simulatedCompanionActivitySource)
+        addCompanionActivitySource(companionWorkerRunner)
+        addCompanionActivitySource(simulatedCompanionActivitySource)
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -941,7 +943,12 @@ final class CompanionManager: ObservableObject {
 
     format: [MARK:kind:x,y:label] where kind is circle, arrow, or the step number (1, 2, 3...). x,y use the same pixel coordinate space as POINT. label is optional, one to three words. add :screenN at the end for a mark on a different screen, same as POINT. put all MARK tags at the end of your response, right BEFORE the POINT tag. the POINT tag must still be the very last thing.
 
-    example:
+    helper workers:
+    for a question that splits into two to four independent, smaller sub-tasks that each deserve their own look (for example comparing three options, or checking several separate parts of the screen), you can hand those sub-tasks to fast helper workers that run in parallel. most questions need no workers. never use them for simple, quick, or conversational questions, or when the parts depend on each other.
+
+    to use workers, reply with ONLY a very short spoken heads-up (under ten words, like "on it, checking those three for you") followed by one tag per sub-task: [WORKER:short title:task prompt]. the title is two to four words. the task prompt must stand on its own: workers see the same screenshots but not this conversation. no MARK or POINT tags in that reply. at most four workers run at once and extras wait in line. you'll then get their results and give the final answer.
+
+    live marks example:
     - user asks how to turn on dark mode in system settings: "click appearance in the sidebar, then pick dark at the top of the window. [MARK:1:160,320:appearance] [MARK:2:540,140:dark] [POINT:160,320:appearance]"
     """
 
@@ -993,9 +1000,26 @@ final class CompanionManager: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
+                // If the main brain split the question into helper workers, run
+                // them (on Haiku, at most four at once) and ask the main brain
+                // again with their results for the final answer.
+                let (responseTextWithoutWorkerTags, companionWorkerRequests) = CompanionWorkerTagParser.extractWorkerTags(from: fullResponseText)
+                var mainBrainResponseText = responseTextWithoutWorkerTags
+                if !companionWorkerRequests.isEmpty {
+                    mainBrainResponseText = try await runCompanionWorkersAndAskMainBrainForFinalAnswer(
+                        companionWorkerRequests: companionWorkerRequests,
+                        workerHeadsUpText: responseTextWithoutWorkerTags,
+                        transcript: transcript,
+                        labeledImages: labeledImages,
+                        historyForAPI: historyForAPI
+                    )
+                }
+
+                guard !Task.isCancelled else { return }
+
                 // Pull out the [MARK:...] tags first. They sit before the
                 // [POINT:...] tag, which must be last for its parser to find it.
-                let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: fullResponseText)
+                let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: mainBrainResponseText)
 
                 // Parse the [POINT:...] tag from Claude's response
                 let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
@@ -1168,6 +1192,80 @@ final class CompanionManager: ObservableObject {
         synthesizer.startSpeaking(utterance)
         voiceState = .responding
     }
+
+    // MARK: - Helper Workers
+
+    /// Speaks the main brain's short heads-up, runs every worker in parallel
+    /// (the runner caps it at four and queues the rest), then asks the main
+    /// brain for the final answer with the workers' results folded in.
+    /// Cancelling the response task (Escape, "stop", a new question) cancels
+    /// the workers too, because they run as child tasks of it.
+    private func runCompanionWorkersAndAskMainBrainForFinalAnswer(
+        companionWorkerRequests: [CompanionWorkerRequest],
+        workerHeadsUpText: String,
+        transcript: String,
+        labeledImages: [(data: Data, label: String)],
+        historyForAPI: [(userPlaceholder: String, assistantResponse: String)]
+    ) async throws -> String {
+        print("🧠 Main brain opened \(companionWorkerRequests.count) worker(s): \(companionWorkerRequests.map(\.workerTitle))")
+
+        // The heads-up shouldn't carry marks or a point, but strip them in
+        // case it does so they're never read aloud.
+        let spokenWorkerHeadsUpText = Self.parsePointingCoordinates(
+            from: LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: workerHeadsUpText).textWithoutMarkTags
+        ).spokenText
+        if !spokenWorkerHeadsUpText.isEmpty {
+            try? await speechOutputClient.speakText(spokenWorkerHeadsUpText)
+        }
+
+        let companionWorkerResults = try await companionWorkerRunner.runWorkers(companionWorkerRequests) { companionWorkerRequest in
+            let workerClaudeCodeBridge = CompanionWorkerRunner.makeWorkerClaudeCodeBridge()
+            let (workerResultText, _) = try await workerClaudeCodeBridge.analyzeImageStreaming(
+                images: labeledImages,
+                systemPrompt: Self.companionWorkerSystemPrompt,
+                userPrompt: companionWorkerRequest.workerTaskPrompt,
+                onTextChunk: { _ in }
+            )
+            return workerResultText
+        }
+
+        try Task.checkCancellation()
+
+        let (finalResponseText, _) = try await claudeCodeBridge.analyzeImageStreaming(
+            images: labeledImages,
+            systemPrompt: Self.companionVoiceResponseSystemPrompt,
+            conversationHistory: historyForAPI,
+            userPrompt: Self.makeMainBrainPromptWithWorkerResults(
+                transcript: transcript,
+                companionWorkerResults: companionWorkerResults
+            ),
+            onTextChunk: { _ in }
+        )
+
+        // One round of workers per question: any new worker tags are dropped.
+        return CompanionWorkerTagParser.extractWorkerTags(from: finalResponseText).textWithoutWorkerTags
+    }
+
+    static func makeMainBrainPromptWithWorkerResults(
+        transcript: String,
+        companionWorkerResults: [CompanionWorkerResult]
+    ) -> String {
+        let workerResultSections = companionWorkerResults.map { companionWorkerResult in
+            "### \(companionWorkerResult.workerTitle)\n\(companionWorkerResult.workerResultText)"
+        }.joined(separator: "\n\n")
+
+        return """
+        \(transcript)
+
+        (your helper workers finished. their results are below. now give the user your final spoken answer, following all the usual rules. MARK and POINT tags are allowed. do not open any more workers. if a helper failed, answer with what the others found.)
+
+        \(workerResultSections)
+        """
+    }
+
+    private static let companionWorkerSystemPrompt = """
+    you're a fast helper working for clicky, a voice assistant. clicky's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
+    """
 
     // MARK: - Live Screen Marks
 

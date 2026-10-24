@@ -138,4 +138,75 @@ struct leanring_buddyTests {
         #expect(ClaudeCompanionView.evenlySpacedOrbitSlotDegrees(workerIndex: 1, activeWorkerCount: 4) == 0)
     }
 
+
+    @Test func workerTagsAreParsedInOrderAndRemovedFromSpeech() async throws {
+        let (textWithoutWorkerTags, workerRequests) = CompanionWorkerTagParser.extractWorkerTags(
+            from: "on it, checking both. [WORKER:Swift pricing:What does Swift cost? Answer briefly.] [worker: Rust pricing : What does Rust cost: free or paid?] [WORKER:broken]"
+        )
+
+        #expect(textWithoutWorkerTags == "on it, checking both.")
+        #expect(workerRequests == [
+            CompanionWorkerRequest(workerTitle: "Swift pricing", workerTaskPrompt: "What does Swift cost? Answer briefly."),
+            CompanionWorkerRequest(workerTitle: "Rust pricing", workerTaskPrompt: "What does Rust cost: free or paid?")
+        ])
+    }
+
+    @Test func responsesWithoutWorkerTagsAreLeftAlone() async throws {
+        let (textWithoutWorkerTags, workerRequests) = CompanionWorkerTagParser.extractWorkerTags(
+            from: "click the save button. [POINT:10,20:save]"
+        )
+
+        #expect(textWithoutWorkerTags == "click the save button. [POINT:10,20:save]")
+        #expect(workerRequests.isEmpty)
+    }
+
+    @Test func workersRunOnHaiku() async throws {
+        #expect(CompanionWorkerRunner.workerClaudeModel == "haiku")
+        #expect(CompanionWorkerRunner.makeWorkerClaudeCodeBridge().model == "haiku")
+    }
+
+    @MainActor
+    @Test func workerRunnerRunsAtMostFourAtOnceAndQueuesTheRest() async throws {
+        let companionWorkerRunner = CompanionWorkerRunner()
+        let sixWorkerRequests = (1...6).map {
+            CompanionWorkerRequest(workerTitle: "task \($0)", workerTaskPrompt: "do task \($0)")
+        }
+        var currentlyRunningWorkerCount = 0
+        var peakRunningWorkerCount = 0
+        var peakVisibleWorkerCount = 0
+        companionWorkerRunner.onActivityChanged = {
+            peakVisibleWorkerCount = max(peakVisibleWorkerCount, companionWorkerRunner.workers.filter(\.isWorking).count)
+        }
+
+        let workerResults = try await companionWorkerRunner.runWorkers(sixWorkerRequests) { workerRequest in
+            currentlyRunningWorkerCount += 1
+            peakRunningWorkerCount = max(peakRunningWorkerCount, currentlyRunningWorkerCount)
+            try await Task.sleep(nanoseconds: 20_000_000)
+            currentlyRunningWorkerCount -= 1
+            return "done: \(workerRequest.workerTitle)"
+        }
+
+        #expect(peakRunningWorkerCount == 4)
+        #expect(peakVisibleWorkerCount == 4)
+        #expect(workerResults.map(\.workerResultText) == sixWorkerRequests.map { "done: \($0.workerTitle)" })
+        #expect(companionWorkerRunner.workers.isEmpty)
+    }
+
+    @MainActor
+    @Test func oneFailedWorkerDoesNotSinkTheOthers() async throws {
+        struct SimulatedWorkerFailure: Error {}
+        let companionWorkerRunner = CompanionWorkerRunner()
+        let twoWorkerRequests = [
+            CompanionWorkerRequest(workerTitle: "works", workerTaskPrompt: "ok"),
+            CompanionWorkerRequest(workerTitle: "fails", workerTaskPrompt: "boom")
+        ]
+
+        let workerResults = try await companionWorkerRunner.runWorkers(twoWorkerRequests) { workerRequest in
+            if workerRequest.workerTitle == "fails" { throw SimulatedWorkerFailure() }
+            return "fine"
+        }
+
+        #expect(workerResults.map(\.didWorkerSucceed) == [true, false])
+    }
+
 }
