@@ -823,24 +823,6 @@ struct CompanionPanelView: View {
             }
             .buttonStyle(.plain)
             .pointerCursor()
-
-            if companionManager.hasCompletedOnboarding {
-                Spacer()
-
-                Button(action: {
-                    companionManager.replayOnboarding()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.circle")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("Watch Onboarding Again")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(DS.Colors.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
         }
     }
 

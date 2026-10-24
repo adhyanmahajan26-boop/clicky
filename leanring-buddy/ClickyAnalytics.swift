@@ -22,9 +22,6 @@ enum ClickyAnalytics {
     // MARK: - Onboarding
 
     static func trackOnboardingStarted() {}
-    static func trackOnboardingReplayed() {}
-    static func trackOnboardingVideoCompleted() {}
-    static func trackOnboardingDemoTriggered() {}
 
     // MARK: - Permissions
 
