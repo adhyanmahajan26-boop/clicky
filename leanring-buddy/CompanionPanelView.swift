@@ -35,7 +35,10 @@ struct CompanionPanelView: View {
                 modelPickerRow
                     .padding(.horizontal, 16)
 
-                CompanionVoicePickerRow(speechOutputClient: companionManager.speechOutputClient)
+                CompanionVoicePickerRow(
+                    speechOutput: companionManager.speechOutputClient,
+                    systemVoiceClient: companionManager.speechOutputClient.systemVoiceClient
+                )
                     .padding(.horizontal, 16)
 
                 Spacer()
@@ -919,10 +922,12 @@ struct CompanionPanelView: View {
 
 // MARK: - Voice Picker
 
-/// Lets the user pick which installed Mac voice answers them, with a quick
-/// preview. Its own view so it can observe the speech client directly.
+/// Lets the user pick the voice that answers them (the local Qwen AI voice or
+/// an installed Mac voice), with a quick preview. Its own view so it can
+/// observe the speech objects directly.
 private struct CompanionVoicePickerRow: View {
-    @ObservedObject var speechOutputClient: SystemVoiceTTSClient
+    @ObservedObject var speechOutput: CompanionSpeechOutput
+    @ObservedObject var systemVoiceClient: SystemVoiceTTSClient
 
     /// Opens System Settings > Accessibility > Spoken Content, where the
     /// System Voice menu has "Manage Voices…" to download Premium voices.
@@ -940,7 +945,7 @@ private struct CompanionVoicePickerRow: View {
                 voiceMenu
 
                 Button(action: {
-                    speechOutputClient.previewVoice()
+                    speechOutput.previewVoice()
                 }) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 10, weight: .semibold))
@@ -956,7 +961,7 @@ private struct CompanionVoicePickerRow: View {
                 .help("Preview")
             }
 
-            if !SystemVoiceTTSClient.hasHighQualityVoiceInstalled {
+            if !speechOutput.usesQwenLocalVoice && !SystemVoiceTTSClient.hasHighQualityVoiceInstalled {
                 Button(action: {
                     if let spokenContentSettingsURL = URL(string: Self.spokenContentSettingsURLString) {
                         NSWorkspace.shared.open(spokenContentSettingsURL)
@@ -977,15 +982,21 @@ private struct CompanionVoicePickerRow: View {
 
     private var voiceMenu: some View {
         Menu {
-            Button("Automatic (best installed)") {
-                speechOutputClient.selectVoice(identifier: nil)
-                speechOutputClient.previewVoice()
+            if QwenLocalTTSClient.isAvailableOnThisMac {
+                Button("Qwen · local AI voice (best)") {
+                    speechOutput.selectQwenLocalVoice()
+                    speechOutput.previewVoice()
+                }
+                Divider()
             }
-            Divider()
+            Button("Automatic Mac voice") {
+                speechOutput.selectSystemVoice(identifier: nil)
+                speechOutput.previewVoice()
+            }
             ForEach(SystemVoiceTTSClient.selectableEnglishVoices(), id: \.identifier) { selectableVoice in
                 Button(Self.menuTitle(for: selectableVoice)) {
-                    speechOutputClient.selectVoice(identifier: selectableVoice.identifier)
-                    speechOutputClient.previewVoice()
+                    speechOutput.selectSystemVoice(identifier: selectableVoice.identifier)
+                    speechOutput.previewVoice()
                 }
             }
         } label: {
@@ -1000,8 +1011,9 @@ private struct CompanionVoicePickerRow: View {
     }
 
     private var currentVoiceLabel: String {
-        guard let voiceInUse = speechOutputClient.voiceInUse else { return "System default" }
-        let automaticSuffix = speechOutputClient.selectedVoiceIdentifier == nil ? " (auto)" : ""
+        if speechOutput.usesQwenLocalVoice { return "Qwen · local AI" }
+        guard let voiceInUse = systemVoiceClient.voiceInUse else { return "System default" }
+        let automaticSuffix = systemVoiceClient.selectedVoiceIdentifier == nil ? " (auto)" : ""
         return Self.menuTitle(for: voiceInUse) + automaticSuffix
     }
 
@@ -1015,4 +1027,3 @@ private struct CompanionVoicePickerRow: View {
         return "\(voice.name) (\(voice.language))\(qualityLabel)"
     }
 }
-

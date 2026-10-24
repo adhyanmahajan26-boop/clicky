@@ -17,7 +17,6 @@ final class SystemVoiceTTSClient: ObservableObject {
     private let speechSynthesizer = AVSpeechSynthesizer()
 
     private static let selectedVoiceIdentifierUserDefaultsKey = "selectedSpeechVoiceIdentifier"
-    private static let voicePreviewSentence = "Hey, I'm Clicky. This is how I'll sound when I answer you."
 
     /// The voice the user picked in the panel, or nil to pick automatically.
     @Published private(set) var selectedVoiceIdentifier: String? =
@@ -83,11 +82,6 @@ final class SystemVoiceTTSClient: ObservableObject {
     func selectVoice(identifier voiceIdentifier: String?) {
         selectedVoiceIdentifier = voiceIdentifier
         UserDefaults.standard.set(voiceIdentifier, forKey: Self.selectedVoiceIdentifierUserDefaultsKey)
-    }
-
-    /// Plays a short sample sentence in the current voice.
-    func previewVoice() {
-        try? speakTextImmediately(Self.voicePreviewSentence)
     }
 
     /// Starts speaking `text` and returns once speech has begun, matching

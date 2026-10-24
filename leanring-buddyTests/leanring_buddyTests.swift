@@ -209,4 +209,27 @@ struct leanring_buddyTests {
         #expect(workerResults.map(\.didWorkerSucceed) == [true, false])
     }
 
+
+    @Test func qwenVoiceSplitsAnswersIntoSentenceChunksAndMergesTinyOnes() async throws {
+        let spokenChunks = QwenLocalTTSClient.splitIntoSpokenChunks(
+            "Sure. Click the appearance tab on the left side of the window.\nThen pick dark at the top. Done!"
+        )
+
+        #expect(spokenChunks == [
+            "Sure. Click the appearance tab on the left side of the window.",
+            "Then pick dark at the top. Done!"
+        ])
+        #expect(QwenLocalTTSClient.splitIntoSpokenChunks("   ").isEmpty)
+    }
+
+    @Test func qwenVoiceBreaksVeryLongSentencesIntoShortChunks() async throws {
+        let longSentence = Array(repeating: "this part keeps going,", count: 30).joined(separator: " ")
+
+        let spokenChunks = QwenLocalTTSClient.splitIntoSpokenChunks(longSentence)
+
+        #expect(spokenChunks.count > 1)
+        #expect(spokenChunks.allSatisfy { $0.count <= 220 })
+        #expect(spokenChunks.joined(separator: " ") == longSentence)
+    }
+
 }

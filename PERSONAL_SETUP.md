@@ -140,7 +140,16 @@ pick your account under the target's **Signing & Capabilities → Team**.
 Either way, press **⌘R** afterwards and allow each permission once. If Screen
 Recording says to quit and reopen, press ⌘R again.
 
-## Better voice (free)
+## Voice
+
+Clicky speaks with **Qwen3-TTS**, a local AI voice run by MLX Core's
+`mlx-serve` (free, offline). Clicky starts the voice server itself (only on
+127.0.0.1) and loads the model at launch, and stops it when Clicky quits.
+Long answers are spoken sentence by sentence, so it starts talking quickly.
+If MLX Core isn't installed or the server can't start, Clicky falls back to
+the Mac voice. Pick the voice under **Voice** in the panel (▶︎ previews it).
+
+### Better Mac voice (fallback, free)
 
 Clicky only sounds as good as the Mac voices installed. Out of the box macOS
 has robotic "compact" voices. To fix that:

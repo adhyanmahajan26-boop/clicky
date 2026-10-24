@@ -103,7 +103,7 @@ final class CompanionManager: ObservableObject {
     }()
 
     /// Built-in Mac voice for spoken replies (free, offline).
-    let speechOutputClient = SystemVoiceTTSClient()
+    let speechOutputClient = CompanionSpeechOutput()
 
     /// Whether the Claude Code CLI is signed in. Checked on launch so the
     /// panel can prompt for `claude auth login` instead of failing silently.
@@ -200,6 +200,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        speechOutputClient.warmUpIfNeeded()
         addCompanionActivitySource(companionWorkerRunner)
         addCompanionActivitySource(simulatedCompanionActivitySource)
         refreshAllPermissions()
@@ -274,6 +275,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
+        speechOutputClient.shutDown()
         endHandsFreeSession()
         escapeKeyCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
