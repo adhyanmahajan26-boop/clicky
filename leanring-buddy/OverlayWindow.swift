@@ -186,6 +186,13 @@ struct BlueCursorView: View {
             // Nearly transparent background (helps with compositing)
             Color.black.opacity(0.001)
 
+            // Claude's live marks (circles, arrows, numbered steps), drawn
+            // under the buddy so the cursor stays on top.
+            LiveScreenMarksOverlayView(
+                screenFrame: screenFrame,
+                liveScreenMarks: companionManager.liveScreenMarks
+            )
+
             // Welcome speech bubble (first launch only)
             if isCursorOnThisScreen && showWelcome && !welcomeText.isEmpty {
                 Text(welcomeText)

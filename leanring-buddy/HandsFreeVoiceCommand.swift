@@ -24,6 +24,9 @@ enum HandsFreeVoiceCommand: Equatable {
     /// "slower" / "faster" — change autopilot scroll speed.
     case slower
     case faster
+    /// "clear", "clear marks", "erase" — remove the circles, arrows, and
+    /// numbered steps Claude drew on screen.
+    case clearMarks
     /// "done", "end session", "stop listening" — end the hands-free session.
     case endSession
 
@@ -52,6 +55,12 @@ enum HandsFreeVoiceCommand: Equatable {
 
     private static let fasterPhrases: Set<String> = [
         "faster", "speed up", "go faster", "too slow", "scroll faster", "quicker"
+    ]
+
+    private static let clearMarksPhrases: Set<String> = [
+        "clear", "clear it", "clear that", "clear marks", "clear the marks",
+        "clear the screen", "clear screen", "erase", "erase that", "erase marks",
+        "remove marks", "remove the marks", "hide marks", "hide the marks"
     ]
 
     private static let endSessionPhrases: Set<String> = [
@@ -89,6 +98,7 @@ enum HandsFreeVoiceCommand: Equatable {
         if resumePhrases.contains(normalizedUtterance) { return .resume }
         if slowerPhrases.contains(normalizedUtterance) { return .slower }
         if fasterPhrases.contains(normalizedUtterance) { return .faster }
+        if clearMarksPhrases.contains(normalizedUtterance) { return .clearMarks }
         if endSessionPhrases.contains(normalizedUtterance) { return .endSession }
 
         if let requestedCaptureCount = parseCaptureCount(from: normalizedUtterance) {

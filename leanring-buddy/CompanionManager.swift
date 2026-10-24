@@ -41,6 +41,15 @@ final class CompanionManager: ObservableObject {
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
 
+    /// Circles, arrows, and numbered steps Claude drew for the current answer
+    /// (global AppKit coords). Cleared when the user asks something new, says
+    /// "clear", presses Escape, or a little while after the answer finishes.
+    @Published private(set) var liveScreenMarks: [LiveScreenMark] = []
+    private var liveScreenMarksAutoClearTask: Task<Void, Never>?
+    /// How long marks stay up after the buddy finishes talking, so the user
+    /// has time to actually follow the steps.
+    private static let liveScreenMarksSecondsToKeepAfterSpeech: UInt64 = 20
+
     // MARK: - Onboarding Video State (shared across all screen overlays)
 
     @Published var onboardingVideoPlayer: AVPlayer?
@@ -278,6 +287,29 @@ final class CompanionManager: ObservableObject {
         detectedElementScreenLocation = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
+    }
+
+    func clearLiveScreenMarks() {
+        liveScreenMarksAutoClearTask?.cancel()
+        liveScreenMarksAutoClearTask = nil
+        liveScreenMarks = []
+    }
+
+    /// Keeps the marks up while the buddy is still talking, then for a short
+    /// grace period so the user can follow them, then clears them.
+    private func scheduleLiveScreenMarksAutoClear() {
+        liveScreenMarksAutoClearTask?.cancel()
+        guard !liveScreenMarks.isEmpty else { return }
+
+        liveScreenMarksAutoClearTask = Task {
+            while speechOutputClient.isPlaying {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            try? await Task.sleep(nanoseconds: Self.liveScreenMarksSecondsToKeepAfterSpeech * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            liveScreenMarks = []
+        }
     }
 
     func stop() {
@@ -738,6 +770,10 @@ final class CompanionManager: ObservableObject {
             autopilotScrollSpeedMultiplier = min(3.0, autopilotScrollSpeedMultiplier * 1.33)
             showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
 
+        case .clearMarks:
+            clearLiveScreenMarks()
+            showHandsFreeStatusMessage("Cleared marks")
+
         case .endSession:
             endHandsFreeSession()
         }
@@ -782,6 +818,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         clearDetectedElementLocation()
+        clearLiveScreenMarks()
         // A cancelled response task skips its own reset to idle, so do it here
         // or the cursor would stay stuck on the spinner.
         if voiceState == .processing || voiceState == .responding {
@@ -822,7 +859,8 @@ final class CompanionManager: ObservableObject {
     /// cancels any answer in flight, and ends a hands-free session.
     private func handleEscapeKeyPressed() {
         let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
-        guard isHandsFreeSessionActive || isBuddyBusy else { return }
+        let hasLiveScreenMarksShowing = !liveScreenMarks.isEmpty
+        guard isHandsFreeSessionActive || isBuddyBusy || hasLiveScreenMarksShowing else { return }
 
         stopBuddySpeechAndCancelResponse()
         endHandsFreeSession()
@@ -863,6 +901,18 @@ final class CompanionManager: ObservableObject {
     - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
     - user asks how to commit in xcode: "see that source control menu up top? click that and hit commit, or you can use command option c as a shortcut. [POINT:285,11:source control]"
     - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
+
+    live marks:
+    you can also draw marks on top of the user's screen. they appear while you talk and stay up for a little while after. use them when one pointing cursor isn't enough:
+    - numbered steps when your answer walks through two or more places in order ("first click this, then this"). number them in the order you say them.
+    - a circle to highlight a specific thing you're talking about, like a setting, a value, or an error message.
+    - an arrow when the target is small or easy to miss.
+    don't mark anything for answers that have nothing to do with the screen, and use at most five marks.
+
+    format: [MARK:kind:x,y:label] where kind is circle, arrow, or the step number (1, 2, 3...). x,y use the same pixel coordinate space as POINT. label is optional, one to three words. add :screenN at the end for a mark on a different screen, same as POINT. put all MARK tags at the end of your response, right BEFORE the POINT tag. the POINT tag must still be the very last thing.
+
+    example:
+    - user asks how to turn on dark mode in system settings: "click appearance in the sidebar, then pick dark at the top of the window. [MARK:1:160,320:appearance] [MARK:2:540,140:dark] [POINT:160,320:appearance]"
     """
 
     // MARK: - AI Response Pipeline
@@ -875,6 +925,8 @@ final class CompanionManager: ObservableObject {
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
+        // Marks from the previous answer would be confusing next to a new one.
+        clearLiveScreenMarks()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -911,8 +963,12 @@ final class CompanionManager: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
+                // Pull out the [MARK:...] tags first. They sit before the
+                // [POINT:...] tag, which must be last for its parser to find it.
+                let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: fullResponseText)
+
                 // Parse the [POINT:...] tag from Claude's response
-                let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
+                let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
                 let spokenText = parseResult.spokenText
 
                 // Handle element pointing if Claude returned coordinates.
@@ -970,6 +1026,14 @@ final class CompanionManager: ObservableObject {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
 
+                liveScreenMarks = Self.makeLiveScreenMarks(
+                    from: parsedLiveScreenMarkTags,
+                    screenCaptures: screenCaptures
+                )
+                if !liveScreenMarks.isEmpty {
+                    print("✏️ Live marks: \(liveScreenMarks.map { "\($0.markKind) \($0.markLabel ?? "")" })")
+                }
+
                 // Save this exchange to conversation history (with the point tag
                 // stripped so it doesn't confuse future context)
                 conversationHistory.append((
@@ -1009,6 +1073,7 @@ final class CompanionManager: ObservableObject {
 
             if !Task.isCancelled {
                 voiceState = .idle
+                scheduleLiveScreenMarksAutoClear()
                 scheduleTransientHideIfNeeded()
             }
         }
@@ -1032,6 +1097,13 @@ final class CompanionManager: ObservableObject {
             // Wait for pointing animation to finish (location is cleared
             // when the buddy flies back to the cursor)
             while detectedElementScreenLocation != nil {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+            }
+
+            // Keep the overlay up while live marks are showing, otherwise
+            // they'd vanish the moment the buddy stops talking.
+            while !liveScreenMarks.isEmpty {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -1065,6 +1137,65 @@ final class CompanionManager: ObservableObject {
         let synthesizer = NSSpeechSynthesizer()
         synthesizer.startSpeaking(utterance)
         voiceState = .responding
+    }
+
+    // MARK: - Live Screen Marks
+
+    /// Turns Claude's [MARK:...] tags into drawable marks, mapping each from
+    /// its screenshot's pixel space onto the matching display. Marks that name
+    /// a screen that doesn't exist fall back to the cursor's screen.
+    private static func makeLiveScreenMarks(
+        from parsedLiveScreenMarkTags: [ParsedLiveScreenMarkTag],
+        screenCaptures: [CompanionScreenCapture]
+    ) -> [LiveScreenMark] {
+        var liveScreenMarks: [LiveScreenMark] = []
+
+        for parsedLiveScreenMarkTag in parsedLiveScreenMarkTags {
+            let targetScreenCapture: CompanionScreenCapture? = {
+                if let screenNumber = parsedLiveScreenMarkTag.screenNumber,
+                   screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                    return screenCaptures[screenNumber - 1]
+                }
+                return screenCaptures.first(where: { $0.isCursorScreen })
+            }()
+            guard let targetScreenCapture else { continue }
+
+            liveScreenMarks.append(LiveScreenMark(
+                markKind: parsedLiveScreenMarkTag.markKind,
+                globalScreenLocation: globalScreenLocation(
+                    forScreenshotPixelCoordinate: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
+                    in: targetScreenCapture
+                ),
+                markLabel: parsedLiveScreenMarkTag.markLabel,
+                orderInResponse: liveScreenMarks.count
+            ))
+        }
+
+        return liveScreenMarks
+    }
+
+    /// Same mapping the [POINT:...] flight uses: screenshot pixels (top-left
+    /// origin) → display points → AppKit global coords (bottom-left origin).
+    private static func globalScreenLocation(
+        forScreenshotPixelCoordinate screenshotPixelCoordinate: CGPoint,
+        in screenCapture: CompanionScreenCapture
+    ) -> CGPoint {
+        let screenshotWidth = CGFloat(screenCapture.screenshotWidthInPixels)
+        let screenshotHeight = CGFloat(screenCapture.screenshotHeightInPixels)
+        let displayWidth = CGFloat(screenCapture.displayWidthInPoints)
+        let displayHeight = CGFloat(screenCapture.displayHeightInPoints)
+        let displayFrame = screenCapture.displayFrame
+
+        let clampedX = max(0, min(screenshotPixelCoordinate.x, screenshotWidth))
+        let clampedY = max(0, min(screenshotPixelCoordinate.y, screenshotHeight))
+        let displayLocalX = clampedX * (displayWidth / screenshotWidth)
+        let displayLocalY = clampedY * (displayHeight / screenshotHeight)
+        let appKitY = displayHeight - displayLocalY
+
+        return CGPoint(
+            x: displayLocalX + displayFrame.origin.x,
+            y: appKitY + displayFrame.origin.y
+        )
     }
 
     // MARK: - Point Tag Parsing
