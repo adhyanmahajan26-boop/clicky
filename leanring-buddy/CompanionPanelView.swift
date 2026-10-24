@@ -35,6 +35,9 @@ struct CompanionPanelView: View {
                 modelPickerRow
                     .padding(.horizontal, 16)
 
+                CompanionVoicePickerRow(speechOutputClient: companionManager.speechOutputClient)
+                    .padding(.horizontal, 16)
+
                 Spacer()
                     .frame(height: 8)
 
@@ -913,3 +916,103 @@ struct CompanionPanelView: View {
     }
 
 }
+
+// MARK: - Voice Picker
+
+/// Lets the user pick which installed Mac voice answers them, with a quick
+/// preview. Its own view so it can observe the speech client directly.
+private struct CompanionVoicePickerRow: View {
+    @ObservedObject var speechOutputClient: SystemVoiceTTSClient
+
+    /// Opens System Settings > Accessibility > Spoken Content, where the
+    /// System Voice menu has "Manage Voices…" to download Premium voices.
+    private static let spokenContentSettingsURLString = "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Voice")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Spacer()
+
+                voiceMenu
+
+                Button(action: {
+                    speechOutputClient.previewVoice()
+                }) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .frame(width: 24, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Preview")
+            }
+
+            if !SystemVoiceTTSClient.hasHighQualityVoiceInstalled {
+                Button(action: {
+                    if let spokenContentSettingsURL = URL(string: Self.spokenContentSettingsURLString) {
+                        NSWorkspace.shared.open(spokenContentSettingsURL)
+                    }
+                }) {
+                    Text("Sounds robotic? Download a Premium voice (System Voice → Manage Voices…)")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.accentText)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var voiceMenu: some View {
+        Menu {
+            Button("Automatic (best installed)") {
+                speechOutputClient.selectVoice(identifier: nil)
+                speechOutputClient.previewVoice()
+            }
+            Divider()
+            ForEach(SystemVoiceTTSClient.selectableEnglishVoices(), id: \.identifier) { selectableVoice in
+                Button(Self.menuTitle(for: selectableVoice)) {
+                    speechOutputClient.selectVoice(identifier: selectableVoice.identifier)
+                    speechOutputClient.previewVoice()
+                }
+            }
+        } label: {
+            Text(currentVoiceLabel)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textPrimary)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .pointerCursor()
+    }
+
+    private var currentVoiceLabel: String {
+        guard let voiceInUse = speechOutputClient.voiceInUse else { return "System default" }
+        let automaticSuffix = speechOutputClient.selectedVoiceIdentifier == nil ? " (auto)" : ""
+        return Self.menuTitle(for: voiceInUse) + automaticSuffix
+    }
+
+    private static func menuTitle(for voice: AVSpeechSynthesisVoice) -> String {
+        let qualityLabel: String
+        switch voice.quality {
+        case .premium: qualityLabel = " · Premium"
+        case .enhanced: qualityLabel = " · Enhanced"
+        default: qualityLabel = ""
+        }
+        return "\(voice.name) (\(voice.language))\(qualityLabel)"
+    }
+}
+

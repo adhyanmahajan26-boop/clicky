@@ -9,41 +9,105 @@
 //
 
 import AVFoundation
+import Combine
 import Foundation
 
 @MainActor
-final class SystemVoiceTTSClient {
+final class SystemVoiceTTSClient: ObservableObject {
     private let speechSynthesizer = AVSpeechSynthesizer()
 
-    /// The best-sounding installed English voice. Premium and enhanced voices
-    /// sound far more natural than the compact default, so prefer those when
-    /// the user has downloaded them in System Settings > Accessibility > Spoken Content.
-    private lazy var preferredVoice: AVSpeechSynthesisVoice? = {
-        let englishVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+    private static let selectedVoiceIdentifierUserDefaultsKey = "selectedSpeechVoiceIdentifier"
+    private static let voicePreviewSentence = "Hey, I'm Clicky. This is how I'll sound when I answer you."
+
+    /// The voice the user picked in the panel, or nil to pick automatically.
+    @Published private(set) var selectedVoiceIdentifier: String? =
+        UserDefaults.standard.string(forKey: SystemVoiceTTSClient.selectedVoiceIdentifierUserDefaultsKey)
+
+    /// English voices worth offering: no novelty voices (Bells, Bubbles…),
+    /// no Eloquence voices (Eddy, Grandma…) and no pre-2010 voices (Fred,
+    /// Ralph…), which all sound robotic. Best quality first.
+    static func selectableEnglishVoices() -> [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { voice in
+                voice.language.hasPrefix("en")
+                    && !voice.voiceTraits.contains(.isNoveltyVoice)
+                    && !voice.identifier.contains(".eloquence.")
+                    && !voice.identifier.hasPrefix("com.apple.speech.synthesis.voice.")
+            }
+            .sorted { firstVoice, secondVoice in
+                if firstVoice.quality != secondVoice.quality {
+                    return firstVoice.quality.rawValue > secondVoice.quality.rawValue
+                }
+                return firstVoice.name < secondVoice.name
+            }
+    }
+
+    /// True when only compact voices are installed, so the panel can point
+    /// the user to System Settings to download a Premium one.
+    static var hasHighQualityVoiceInstalled: Bool {
+        selectableEnglishVoices().contains { $0.quality == .premium || $0.quality == .enhanced }
+    }
+
+    /// The user's pick if it's still installed, otherwise the best voice:
+    /// Premium, then Enhanced, then default quality, preferring the user's
+    /// own English variant (en-US, en-GB, en-IN…).
+    var voiceInUse: AVSpeechSynthesisVoice? {
+        if let selectedVoiceIdentifier,
+           let selectedVoice = AVSpeechSynthesisVoice(identifier: selectedVoiceIdentifier) {
+            return selectedVoice
+        }
+        return Self.automaticallyChosenVoice()
+    }
+
+    static func automaticallyChosenVoice() -> AVSpeechSynthesisVoice? {
+        let selectableVoices = selectableEnglishVoices()
         let currentLanguageCode = AVSpeechSynthesisVoice.currentLanguageCode()
 
-        func bestVoice(withQuality voiceQuality: AVSpeechSynthesisVoiceQuality) -> AVSpeechSynthesisVoice? {
-            let voicesOfQuality = englishVoices.filter { $0.quality == voiceQuality }
-            return voicesOfQuality.first(where: { $0.language == currentLanguageCode }) ?? voicesOfQuality.first
+        for voiceQuality in [AVSpeechSynthesisVoiceQuality.premium, .enhanced, .default] {
+            let voicesOfQuality = selectableVoices.filter { $0.quality == voiceQuality }
+            if let voiceInUsersLanguage = voicesOfQuality.first(where: { $0.language == currentLanguageCode }) {
+                return voiceInUsersLanguage
+            }
+            // Among compact voices, Samantha is the least robotic US voice.
+            if voiceQuality == .default, let samanthaVoice = voicesOfQuality.first(where: { $0.name == "Samantha" }) {
+                return samanthaVoice
+            }
+            if let anyVoiceOfQuality = voicesOfQuality.first {
+                return anyVoiceOfQuality
+            }
         }
+        return AVSpeechSynthesisVoice(language: currentLanguageCode)
+    }
 
-        return bestVoice(withQuality: .premium)
-            ?? bestVoice(withQuality: .enhanced)
-            ?? AVSpeechSynthesisVoice(language: currentLanguageCode)
-    }()
+    /// Remembers the user's pick; nil goes back to choosing automatically.
+    func selectVoice(identifier voiceIdentifier: String?) {
+        selectedVoiceIdentifier = voiceIdentifier
+        UserDefaults.standard.set(voiceIdentifier, forKey: Self.selectedVoiceIdentifierUserDefaultsKey)
+    }
+
+    /// Plays a short sample sentence in the current voice.
+    func previewVoice() {
+        try? speakTextImmediately(Self.voicePreviewSentence)
+    }
 
     /// Starts speaking `text` and returns once speech has begun, matching
     /// ElevenLabsTTSClient which returns right after playback starts.
     func speakText(_ text: String) async throws {
         try Task.checkCancellation()
+        try speakTextImmediately(text)
+    }
 
+    private func speakTextImmediately(_ text: String) throws {
         let speechUtterance = AVSpeechUtterance(string: text)
-        speechUtterance.voice = preferredVoice
-        speechUtterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        let currentVoice = voiceInUse
+        speechUtterance.voice = currentVoice
+        // The default rate is a touch fast for long answers; this is closer
+        // to a person explaining something.
+        speechUtterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
 
         speechSynthesizer.stopSpeaking(at: .immediate)
         speechSynthesizer.speak(speechUtterance)
-        print("🔊 System voice TTS: speaking \(text.count) characters with \(preferredVoice?.name ?? "default voice")")
+        print("🔊 System voice TTS: speaking \(text.count) characters with \(currentVoice?.name ?? "default voice")")
     }
 
     /// Whether speech is currently playing back.

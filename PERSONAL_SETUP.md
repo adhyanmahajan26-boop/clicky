@@ -140,12 +140,17 @@ pick your account under the target's **Signing & Capabilities → Team**.
 Either way, press **⌘R** afterwards and allow each permission once. If Screen
 Recording says to quit and reopen, press ⌘R again.
 
-## Better voice (optional, free)
+## Better voice (free)
 
-System Settings → Accessibility → Spoken Content → System Voice → Manage Voices,
-and download a **Premium** or **Enhanced** English voice. Clicky picks the best
-one installed automatically.
+Clicky only sounds as good as the Mac voices installed. Out of the box macOS
+has robotic "compact" voices. To fix that:
 
+1. Click the "Sounds robotic? Download a Premium voice" link under **Voice**
+   in Clicky's panel (or System Settings → Accessibility → Spoken Content).
+2. **System Voice → Manage Voices…** → English → download a **Premium** voice
+   (e.g. Zoe, Ava, Evan or Nathan; Premium ones are ~200–400 MB).
+3. In Clicky's panel, pick it under **Voice** (or leave it on Automatic, which
+   picks the best installed voice) and press ▶︎ to preview.
 ## What's next
 
 - Phase 4: autopilot scroller + auto-capture

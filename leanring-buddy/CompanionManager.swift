@@ -103,7 +103,7 @@ final class CompanionManager: ObservableObject {
     }()
 
     /// Built-in Mac voice for spoken replies (free, offline).
-    private let speechOutputClient = SystemVoiceTTSClient()
+    let speechOutputClient = SystemVoiceTTSClient()
 
     /// Whether the Claude Code CLI is signed in. Checked on launch so the
     /// panel can prompt for `claude auth login` instead of failing silently.
@@ -1133,8 +1133,11 @@ final class CompanionManager: ObservableObject {
             utterance = "Something went wrong talking to Claude. Check the Xcode console for details."
         }
         refreshClaudeCodeSignInStatus()
-        let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(utterance)
+        // Same voice as normal answers. (This used a throwaway
+        // NSSpeechSynthesizer before, which was freed mid-sentence and cut off.)
+        Task {
+            try? await speechOutputClient.speakText(utterance)
+        }
         voiceState = .responding
     }
 
