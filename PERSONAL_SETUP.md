@@ -119,17 +119,22 @@ Previews: `docs/companion-preview/`.
 
 ## If Clicky keeps asking for permissions
 
-1. Xcode → Settings → Accounts → **+** → sign in with your Apple ID.
-2. Click the blue **leanring-buddy** project → **leanring-buddy** target →
-   **Signing & Capabilities** → **Team**: pick your account (it can say
-   "Personal Team").
-3. System Settings → Privacy & Security → **Accessibility** and **Screen &
-   System Audio Recording**: select every old **Clicky** entry and remove it
-   with **−**.
-4. Press **⌘R** in Xcode, then allow each permission once when asked. If
-   Screen Recording says to quit and reopen, press ⌘R again.
+**Easiest (no Apple ID needed):** run this once in Terminal:
 
-After that, rebuilding keeps the permissions.
+```bash
+bash ~/Projects/clicky/scripts/setup-local-signing.sh
+```
+
+It creates a local signing certificate called "Clicky Local Signing" in your
+login keychain (macOS asks for your login password once) and clears Clicky's
+old permission entries. After that the project is switched to sign with it,
+so every rebuild keeps the same signature.
+
+**Or, with an Apple ID:** Xcode → Settings → Accounts → **+** → sign in, then
+pick your account under the target's **Signing & Capabilities → Team**.
+
+Either way, press **⌘R** afterwards and allow each permission once. If Screen
+Recording says to quit and reopen, press ⌘R again.
 
 ## Better voice (optional, free)
 
