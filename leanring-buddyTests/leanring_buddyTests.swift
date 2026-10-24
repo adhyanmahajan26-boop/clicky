@@ -98,4 +98,44 @@ struct leanring_buddyTests {
         #expect(HandsFreeVoiceCommand.parse("what does this capture button do") == nil)
     }
 
+
+    @Test func companionShowsOnlyRunningWorkersAndAtMostFour() async throws {
+        let sixWorkersWithOneFinished = (1...6).map { workerNumber in
+            CompanionWorkerActivity(id: "worker-\(workerNumber)", workerTitle: "Thread \(workerNumber)", isWorking: workerNumber != 2)
+        }
+
+        let visibleWorkers = CompanionActivityLimits.visibleWorkers(from: sixWorkersWithOneFinished)
+
+        #expect(visibleWorkers.map(\.id) == ["worker-1", "worker-3", "worker-4", "worker-5"])
+    }
+
+    @MainActor
+    @Test func simulatedActivitySourceClampsToFourAndKeepsExistingWorkers() async throws {
+        let simulatedCompanionActivitySource = SimulatedCompanionActivitySource()
+        var activityChangeCount = 0
+        simulatedCompanionActivitySource.onActivityChanged = { activityChangeCount += 1 }
+
+        simulatedCompanionActivitySource.setSimulatedWorkingWorkerCount(3)
+        let firstThreeWorkerIDs = simulatedCompanionActivitySource.workers.map(\.id)
+        simulatedCompanionActivitySource.setSimulatedWorkingWorkerCount(9)
+        #expect(simulatedCompanionActivitySource.workers.count == 4)
+        #expect(Array(simulatedCompanionActivitySource.workers.map(\.id).prefix(3)) == firstThreeWorkerIDs)
+
+        simulatedCompanionActivitySource.setSimulatedWorkingWorkerCount(1)
+        #expect(simulatedCompanionActivitySource.workers.map(\.id) == [firstThreeWorkerIDs[0]])
+
+        simulatedCompanionActivitySource.setSimulatedCoordinatorThinking(true)
+        #expect(simulatedCompanionActivitySource.coordinatorIsThinking)
+        #expect(activityChangeCount == 4)
+    }
+
+    @MainActor
+    @Test func orbitingWorkersAreEvenlySpacedStartingAtTheTop() async throws {
+        let threeWorkerSlotDegrees = (0..<3).map {
+            ClaudeCompanionView.evenlySpacedOrbitSlotDegrees(workerIndex: $0, activeWorkerCount: 3)
+        }
+        #expect(threeWorkerSlotDegrees == [-90, 30, 150])
+        #expect(ClaudeCompanionView.evenlySpacedOrbitSlotDegrees(workerIndex: 1, activeWorkerCount: 4) == 0)
+    }
+
 }

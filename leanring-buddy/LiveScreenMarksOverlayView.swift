@@ -88,10 +88,10 @@ private struct LiveScreenMarkView: View {
         ZStack {
             Circle()
                 .trim(from: 0, to: drawInProgress)
-                .stroke(DS.Colors.overlayCursorBlue, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round))
+                .stroke(DS.Colors.overlayCompanionOrange, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .frame(width: circleMarkRadius * 2, height: circleMarkRadius * 2)
-                .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 6)
+                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 6)
                 .position(markLocationInThisScreen)
 
             if let markLabel = liveScreenMark.markLabel {
@@ -127,8 +127,8 @@ private struct LiveScreenMarkView: View {
         return ZStack {
             LiveScreenArrowShape(tailLocation: tailLocation, headLocation: headLocation)
                 .trim(from: 0, to: drawInProgress)
-                .stroke(DS.Colors.overlayCursorBlue, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round, lineJoin: .round))
-                .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 6)
+                .stroke(DS.Colors.overlayCompanionOrange, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round, lineJoin: .round))
+                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 6)
 
             if let markLabel = liveScreenMark.markLabel {
                 markLabelPill(markLabel)
@@ -152,8 +152,8 @@ private struct LiveScreenMarkView: View {
                 .frame(width: numberedStepBadgeDiameter, height: numberedStepBadgeDiameter)
                 .background(
                     Circle()
-                        .fill(DS.Colors.overlayCursorBlue)
-                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 6)
+                        .fill(DS.Colors.overlayCompanionOrange)
+                        .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 6)
                 )
                 .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5))
                 .scaleEffect(drawInProgress)
@@ -178,8 +178,8 @@ private struct LiveScreenMarkView: View {
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(DS.Colors.overlayCursorBlue)
-                    .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.5), radius: 6)
+                    .fill(DS.Colors.overlayCompanionOrange)
+                    .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.5), radius: 6)
             )
             .fixedSize()
     }

@@ -143,6 +143,11 @@ enum DS {
         /// (screen overlay vs in-app UI).
         static let overlayCursorBlue = Color(hex: "#3380FF")
 
+        /// Claude orange for the spark companion that replaced the blue
+        /// triangle, plus everything drawn around it in the overlay (bubbles,
+        /// waveform, live marks) so the overlay reads as one character.
+        static let overlayCompanionOrange = Color(hex: "#D97757")
+
         // ── Floating Button Gradient ─────────────────────────────────
 
         /// The floating session button gradient colors (unchanged from original —

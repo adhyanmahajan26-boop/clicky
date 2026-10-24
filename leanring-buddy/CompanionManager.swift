@@ -50,6 +50,35 @@ final class CompanionManager: ObservableObject {
     /// has time to actually follow the steps.
     private static let liveScreenMarksSecondsToKeepAfterSpeech: UInt64 = 20
 
+    // MARK: - Companion Activity (spark + orbiting workers)
+
+    /// True while the activity source says the coordinator is thinking. The
+    /// spark also spins while Clicky's own answer is processing.
+    @Published private(set) var isCompanionCoordinatorThinking = false
+    /// Running workers to draw as orbiting minis (at most 4).
+    @Published private(set) var visibleCompanionWorkers: [CompanionWorkerActivity] = []
+
+    /// The only source for now. The debug controls in the panel drive it so the
+    /// visuals can be tried before a real source (e.g. project threads) exists.
+    let simulatedCompanionActivitySource = SimulatedCompanionActivitySource()
+    private var companionActivitySource: CompanionActivitySource?
+
+    /// Swaps in a different activity source. A real source should be plugged
+    /// in here; the overlay only ever reads the published values above.
+    func useCompanionActivitySource(_ newCompanionActivitySource: CompanionActivitySource) {
+        companionActivitySource?.onActivityChanged = nil
+        companionActivitySource = newCompanionActivitySource
+        newCompanionActivitySource.onActivityChanged = { [weak self] in
+            self?.republishCompanionActivity()
+        }
+        republishCompanionActivity()
+    }
+
+    private func republishCompanionActivity() {
+        isCompanionCoordinatorThinking = companionActivitySource?.coordinatorIsThinking ?? false
+        visibleCompanionWorkers = CompanionActivityLimits.visibleWorkers(from: companionActivitySource?.workers ?? [])
+    }
+
     // MARK: - Onboarding Video State (shared across all screen overlays)
 
     @Published var onboardingVideoPlayer: AVPlayer?
@@ -175,6 +204,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        useCompanionActivitySource(simulatedCompanionActivitySource)
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()

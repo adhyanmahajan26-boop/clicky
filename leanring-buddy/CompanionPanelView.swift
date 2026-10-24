@@ -72,6 +72,14 @@ struct CompanionPanelView: View {
                     .padding(.horizontal, 16)
             }
 
+            #if DEBUG
+            Spacer()
+                .frame(height: 12)
+
+            companionPreviewDebugRow
+                .padding(.horizontal, 16)
+            #endif
+
             Spacer()
                 .frame(height: 12)
 
@@ -646,6 +654,78 @@ struct CompanionPanelView: View {
         .buttonStyle(.plain)
         .pointerCursor()
     }
+
+    // MARK: - Companion Preview (Debug)
+
+    #if DEBUG
+    /// Debug-only controls that drive the simulated activity source, so the
+    /// spark's thinking spin and 0–4 orbiting workers can be tried before a
+    /// real source is connected.
+    private var companionPreviewDebugRow: some View {
+        HStack(spacing: 8) {
+            Text("Companion")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(DS.Colors.textSecondary)
+
+            Spacer()
+
+            companionPreviewThinkingToggleButton
+
+            HStack(spacing: 0) {
+                ForEach(0...CompanionActivityLimits.maximumVisibleWorkers, id: \.self) { simulatedWorkerCount in
+                    companionPreviewWorkerCountButton(simulatedWorkerCount: simulatedWorkerCount)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var companionPreviewThinkingToggleButton: some View {
+        let isSimulatingThinking = companionManager.isCompanionCoordinatorThinking
+        return Button(action: {
+            companionManager.simulatedCompanionActivitySource.setSimulatedCoordinatorThinking(!isSimulatingThinking)
+        }) {
+            Text("Think")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(isSimulatingThinking ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSimulatingThinking ? DS.Colors.overlayCompanionOrange.opacity(0.35) : Color.white.opacity(0.06))
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    private func companionPreviewWorkerCountButton(simulatedWorkerCount: Int) -> some View {
+        let isSelected = companionManager.visibleCompanionWorkers.count == simulatedWorkerCount
+        return Button(action: {
+            companionManager.simulatedCompanionActivitySource.setSimulatedWorkingWorkerCount(simulatedWorkerCount)
+        }) {
+            Text("\(simulatedWorkerCount)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+    #endif
 
     // MARK: - Hands-Free Session
 
