@@ -135,6 +135,12 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.projectSpeakUpdates, kind: .toggle(defaultValue: true),
                             explanation: "Say a short update when your project replies (thread started, done, couldn't do it)."),
 
+        // Actions (P7).
+        ClickySettingsEntry(key: ClickySettings.Keys.actionsEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Let Clicky do things on screen when asked: open apps and links, search, click, type, highlight, summarize (with safety tiers)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.actionsCountdownSeconds, kind: .number(defaultValue: 1.5, range: 0.5...5, step: 0.5),
+                            explanation: "Seconds Clicky shows a typing or click step before doing it (any key, mouse move or \"stop\" cancels)."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

@@ -258,6 +258,9 @@ final class CompanionManager: ObservableObject {
         self?.speakCodeModeLine(text)
     }
 
+    /// P7 computer-use actions: <actions> blocks, the observe → act loop, tiers and cancels.
+    private(set) lazy var actionTaskController = ActionTaskController(companionManager: self)
+
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
     /// The board panel is open: the caption bubble stays hidden (the board has its subtitle bar).
@@ -416,6 +419,8 @@ final class CompanionManager: ObservableObject {
         // P6.2: the TYPING prompt section (sent only while v2.typeForMe.enabled is on); the card takes Esc first.
         TypeForMePrompt.register()
         escapeKeyConsumers.insert({ [weak self] in self?.typeForMeController.handleEscapeKey() ?? false }, at: 0)
+        // P7: Esc ends an action task (never consumed: Escape's usual stop still runs).
+        escapeKeyConsumers.insert({ [weak self] in self?.actionTaskController.handleEscapeKey() ?? false }, at: 0)
 
         // P4: the whiteboard prompt section exists now that boards are drawn.
         SystemPromptBuilder.gatedSectionTexts[.whiteboard] = WhiteboardPromptSection.text
@@ -999,7 +1004,7 @@ final class CompanionManager: ObservableObject {
         // partial transcripts for them instead of waiting for the pause.
         // Only when there's something to interrupt — otherwise a sentence
         // that merely starts with "stop…" would get chopped in half.
-        let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
+        let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing || actionTaskController.isActive
         guard isBuddyBusy,
               let instantCommand = HandsFreeVoiceCommand.parse(partialTranscript),
               instantCommand.shouldTriggerOnPartialTranscript else {
@@ -1016,6 +1021,12 @@ final class CompanionManager: ObservableObject {
     private func handleHandsFreeUtteranceFinished(_ finishedUtterance: String) {
         let utteranceOverlappedBuddySpeech = currentUtteranceOverlappedBuddySpeech
         currentUtteranceOverlappedBuddySpeech = false
+
+        // P7: a yes/no to an action's confirm card, or "stop" (not Clicky's own echo).
+        if !utteranceOverlappedBuddySpeech, actionTaskController.isActive,
+           (actionTaskController.isAwaitingConfirmation && ActionConfirmReply.parse(finishedUtterance) != .notAReply) || ActionStopCommand.isStop(finishedUtterance) {
+            if actionTaskController.handleOwnerTranscript(finishedUtterance) { return }
+        }
 
         // Board commands first (with a board open "next" / "pause" mean the board).
         if let boardCommand = BoardVoiceCommand.parse(finishedUtterance), !boardCommand.needsOpenBoard || boardController.isOpen {
@@ -1145,6 +1156,8 @@ final class CompanionManager: ObservableObject {
 
     /// Cuts off the buddy mid-sentence and abandons any answer in flight.
     func stopBuddySpeechAndCancelResponse() {
+        // P7: "stop", Escape and the dashboard's Cancel end an action task too.
+        actionTaskController.cancel(reason: "stopped", stopsSpeech: false, speaksLine: false)
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         clearDetectedElementLocation()
@@ -1319,6 +1332,8 @@ final class CompanionManager: ObservableObject {
         if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }
         // "send this to my project …" works only from the user's words; Claude tells them the phrase.
         if ClickySettings.isProjectBridgeEnabled { promptFeatures.insert(.projectBridge) }
+        // P7: the ACTIONS section (open apps, click, type, highlight, summarize…).
+        if ClickySettings.isActionsEnabled { promptFeatures.insert(.actions) }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
     }
 
@@ -1372,6 +1387,8 @@ final class CompanionManager: ObservableObject {
         /// use instead of detecting one, and text added after the user's words.
         var forcedModeHint: ModeHint?
         var extraUserText: String?
+        /// P7 observe turns: the marks a highlight step drew stay up.
+        var keepsLiveScreenMarks = false
     }
 
     /// Reads the screens, streams Claude's answer and speaks it as it
@@ -1381,6 +1398,13 @@ final class CompanionManager: ObservableObject {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         let turnOptions = requestedTurnOptions ?? TurnOptions()
+        // P7: while an action task runs, the owner's own words are a yes/no to its
+        // confirm card, "stop", or a new request (which ends the task first).
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
+           actionTaskController.handleOwnerTranscript(transcript) {
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
         // "copy that" works with push-to-talk too, without asking Claude.
         if HandsFreeVoiceCommand.parse(transcript) == .copyLastAnswer {
             copyLastAnswerToPasteboard()
@@ -1412,8 +1436,9 @@ final class CompanionManager: ObservableObject {
         }
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
-        // Marks from the previous answer would be confusing next to a new one.
-        clearLiveScreenMarks()
+        // Marks from the previous answer would be confusing next to a new one
+        // (an action task's observe turn keeps what its highlight steps drew).
+        if !turnOptions.keepsLiveScreenMarks { clearLiveScreenMarks() }
 
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: turnOptions.keyUpDate)
         // Zoom checks still running for the last answer apply nothing now.
@@ -1530,6 +1555,8 @@ final class CompanionManager: ObservableObject {
             }
             finishBrainAgent(brainAgentID, turnError: turnError, wasCancelled: Task.isCancelled)
             turnOptions.onTurnFinished?(turnRecord?.turnDirectoryURL, turnError)
+            // P7: an action task waits for its answer to end before it looks at the screen again.
+            actionTaskController.answerTurnDidFinish(turnError: turnError, wasCancelled: Task.isCancelled || turnError is CancellationError)
 
             if !Task.isCancelled {
                 // The Haiku standby lives only while this answer can draw marks

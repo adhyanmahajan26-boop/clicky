@@ -411,3 +411,40 @@ reference-clip reload, renders in `~/Library/Logs/Clicky/renders/voice/`); these
    Mac voice (fallback) while Qwen warms up; the next answer should be in the cloned voice.
 5. Debug inbox: `{"cmd":"voiceGallery"}` lists entries + active; `{"cmd":"voiceSelect","index":3}` switches
    silently; `{"cmd":"ask","text":"next voice","speak":false}` switches without speaking.
+
+## P7 computer-use actions (`<actions>` blocks)
+
+Unit-tested in ClickyCore (`ActionsTests`: DSL parsing incl. invalid/oversized, tier classification,
+the 12-step limit, stale ids, the physical-input cancel state machine, the Return rule, confirm/stop
+replies, page-text and summary helpers, router/prompt/notch/settings, the debug AX allowlist). These need
+the running app (never with Netflix playing in Safari unless the test names Safari):
+1. "open chrome and google best ramen near me": Chrome comes forward (activation is expected), a Google
+   results tab opens, the notch's expanded pill lists "✓ open Google Chrome", "✓ search google for …",
+   and an Action task row is in the Agents dashboard. Default browser = Safari → Chrome is used instead.
+2. "…then open the second result": the observe turn (a second brain record) re-captures; the click on the
+   result link is free (AXPress, no cursor jump). Then "summarize the article for me on screen": a
+   summarize step with no text, another observe turn carrying PAGE TEXT, and a "Summary" board appears
+   with bullet points. Try a PDF / canvas page: the OCR fallback is used (actionsStatus shows `via ocr`).
+3. "highlight the important facts": boxes / underlines from Clicky's overlay only; the page is unchanged;
+   the marks survive the observe turn that follows.
+4. Typing: "type hello world in the search box" → the step shows "… in 1.5 s — move or press anything to
+   cancel" in the notch, then the text lands (AX value, else tagged key events). Move the mouse during the
+   countdown → "stopped — you moved the mouse.", nothing typed. Return is never pressed.
+5. "type hi in the chat and press enter" → confirm card + "should i …? say yes, or click confirm."; say
+   "yes" → typed + Return; say "no" → "okay, i won't."; click Confirm in the first 0.5 s does nothing.
+   A Send / Post / Delete button behaves the same. 60 s without an answer cancels.
+6. Refusals (spoken when no observe turn follows, else Claude says it): a password field, a card-number
+   field, Terminal / iTerm typing, Keychain Access, System Settings › Privacy & Security, anything in
+   Safari or a Netflix window when the request didn't say "safari" / "netflix", Clicky's own windows.
+7. Cancels: "stop" (push-to-talk or hands-free), Esc, the notch / dashboard Cancel, any key, click, scroll
+   or real mouse move while steps run. Clicky's own synthetic click must NOT cancel (tagged events, and an
+   untagged cursor warp within 0.15 s is excused) — watch for false cancels after a fallback click.
+8. Hands-free: say "yes" after the confirm question has finished playing (overlap with Clicky's voice is
+   dropped as echo); "stop" cancels a running batch even while Clicky is quiet.
+9. `code_task {project:"…"}` → the named-project lookup (alias / confident / pick card) and code mode's
+   own gates; without a project and code mode off → "code mode is off".
+10. Debug inbox: `{"cmd":"actionsRun","steps":[…]}` (dryRun defaults to true) returns each step's tier,
+    reason and facts on a fresh capture; `"dryRun":false` runs it (no observe turn); `actionsStatus`,
+    `actionsCancel`. Test-only `axSetPosition` / `axPerform` move / press in TextEdit or Notes only.
+11. Settings: `v2.actions.enabled false` → `<actions>` gets "I can't do that yet." and the prompt has no
+    ACTIONS section; `v2.actions.countdownSeconds 3` → a 3 s countdown.

@@ -73,10 +73,12 @@ public struct NotchContent: Equatable, Sendable {
     public var cancelTargetID: String?
     /// The code task whose review panel "Open review" shows.
     public var reviewTargetID: String?
+    /// P7: the running action task's newest step lines (at most NotchGeometry.maximumActionStepLines).
+    public var actionStepLines: [String]
 
     public init(phase: NotchCompanionPhase = .idle, statusText: String = "", orbitingAgentIDs: [String] = [], agentRows: [NotchAgentRow] = [],
                 hiddenAgentCount: Int = 0, agentRowsAreRecent: Bool = false, captionText: String? = nil, isCodeModeOn: Bool = false,
-                selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil) {
+                selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil, actionStepLines: [String] = []) {
         self.phase = phase
         self.statusText = statusText
         self.orbitingAgentIDs = orbitingAgentIDs
@@ -88,6 +90,7 @@ public struct NotchContent: Equatable, Sendable {
         self.selectedAgentID = selectedAgentID
         self.cancelTargetID = cancelTargetID
         self.reviewTargetID = reviewTargetID
+        self.actionStepLines = actionStepLines
     }
 
     /// True while the logo should move (spin, pulse or carry orbiting minis);
@@ -120,6 +123,7 @@ public enum NotchStatus {
         case 1:
             let onlyAgent = activeHelperAgents[0]
             if onlyAgent.kind == .codeTask { return "coding: \(codingName(onlyAgent))" }
+            if onlyAgent.kind == .actionTask { return "doing: \(codingName(onlyAgent))" }
             return "1 agent"
         default:
             return "\(activeHelperAgents.count) agents"
@@ -185,7 +189,16 @@ public enum NotchStatus {
 
         return NotchContent(phase: phase, statusText: statusText(phase: phase, activeHelperAgents: activeHelperAgents, projectStatusText: projectStatusText), orbitingAgentIDs: orbitingAgentIDs,
                             agentRows: Array(rows), hiddenAgentCount: hiddenAgentCount, agentRowsAreRecent: agentRowsAreRecent, captionText: captionText,
-                            isCodeModeOn: isCodeModeOn, selectedAgentID: selectedRow?.id, cancelTargetID: cancelTargetID, reviewTargetID: reviewTargetID)
+                            isCodeModeOn: isCodeModeOn, selectedAgentID: selectedRow?.id, cancelTargetID: cancelTargetID, reviewTargetID: reviewTargetID,
+                            actionStepLines: actionStepLines(store: store))
+    }
+
+    /// The live step list of the running action task (newest last), else none.
+    static func actionStepLines(store: AgentStore) -> [String] {
+        guard let actionRecord = store.runningRecords.first(where: { $0.kind == .actionTask }) else { return [] }
+        var lines = actionRecord.actionSteps ?? []
+        if let currentStep = actionRecord.currentStep, !currentStep.isEmpty { lines.append("▸ " + currentStep) }
+        return Array(lines.suffix(NotchGeometry.maximumActionStepLines))
     }
 
     /// The brain shows its phase ("Speaking"); code tasks their step; others their status.
@@ -193,7 +206,7 @@ public enum NotchStatus {
         if record.kind == .brain, record.status.isActive, let phase = record.phase, !phase.isEmpty {
             return phase.prefix(1).uppercased() + phase.dropFirst()
         }
-        if record.kind == .codeTask, record.status == .running, let currentStep = record.currentStep, !currentStep.isEmpty {
+        if record.kind == .codeTask || record.kind == .actionTask, record.status == .running, let currentStep = record.currentStep, !currentStep.isEmpty {
             return currentStep
         }
         if record.kind == .projectTask, let phaseDisplayText = record.phaseDisplayText {

@@ -60,6 +60,10 @@ public enum ClickySettings {
         public static let whiteboardFullScreen = "v2.whiteboard.fullScreen"
         public static let codeEnabled = "v2.code.enabled"
         public static let typeForMeEnabled = "v2.typeForMe.enabled"
+        /// Bool, default true: P7 computer-use actions (<actions> blocks: open apps, click, type, highlight, summarize).
+        public static let actionsEnabled = "v2.actions.enabled"
+        /// Double, default 1.5 (0.5–5): the on-screen countdown before typing or an ordinary click.
+        public static let actionsCountdownSeconds = "v2.actions.countdownSeconds"
         /// [String] bundle ids Clicky never types into (default: password managers, Keychain Access).
         public static let typeForMeBlockedBundleIDs = "v2.typeForMe.blockedBundleIDs"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
@@ -171,6 +175,11 @@ public enum ClickySettings {
     }
     public static var isCodeEnabled: Bool { defaults.object(forKey: Keys.codeEnabled) as? Bool ?? false }
     public static var isTypeForMeEnabled: Bool { defaults.object(forKey: Keys.typeForMeEnabled) as? Bool ?? false }
+    public static var isActionsEnabled: Bool { defaults.object(forKey: Keys.actionsEnabled) as? Bool ?? true }
+    /// Clamped to 0.5…5 s.
+    public static var actionsCountdownSeconds: Double {
+        min(5, max(0.5, defaults.object(forKey: Keys.actionsCountdownSeconds) as? Double ?? 1.5))
+    }
 
     /// Password managers and Keychain: never read their field values.
     public static let defaultValueBlockedBundleIDs = [

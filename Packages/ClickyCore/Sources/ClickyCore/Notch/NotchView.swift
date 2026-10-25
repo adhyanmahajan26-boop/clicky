@@ -108,7 +108,7 @@ public struct NotchView: View {
     public static func pillSize(content: NotchContent, layout: NotchLayout, isExpanded: Bool) -> CGSize {
         guard isExpanded else { return NotchGeometry.collapsedSize(layout: layout) }
         return NotchGeometry.expandedSize(layout: layout, agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0,
-                                          hasCaption: content.captionText != nil)
+                                          hasCaption: content.captionText != nil, actionStepLineCount: content.actionStepLines.count)
     }
 
     private var pillShape: NotchShape {
@@ -194,6 +194,10 @@ public struct NotchView: View {
                 captionCard(captionText).frame(height: NotchGeometry.captionHeight)
                 Spacer().frame(height: NotchGeometry.sectionSpacing)
             }
+            if !content.actionStepLines.isEmpty {
+                actionStepsCard.frame(height: NotchGeometry.actionStepsHeight(lineCount: content.actionStepLines.count))
+                Spacer().frame(height: NotchGeometry.sectionSpacing)
+            }
             agentsSection
                 .frame(height: NotchGeometry.agentsSectionHeight(agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0))
             Spacer().frame(height: NotchGeometry.sectionSpacing)
@@ -267,6 +271,26 @@ public struct NotchView: View {
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
+    }
+
+    /// P7: the running action task's steps, newest last ("✓ open Chrome", "▸ type … in 1.5 s").
+    private var actionStepsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(content.actionStepLines.suffix(NotchGeometry.maximumActionStepLines).enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(size: 11, weight: line.hasPrefix("▸") ? .semibold : .regular, design: .rounded))
+                    .foregroundColor(.white.opacity(line.hasPrefix("▸") ? 0.95 : 0.65))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(height: NotchGeometry.actionStepLineHeight)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, NotchGeometry.actionStepsVerticalPadding / 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Action steps")
     }
 
     private var agentsSection: some View {

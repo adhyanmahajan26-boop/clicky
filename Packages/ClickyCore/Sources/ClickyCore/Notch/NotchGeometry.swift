@@ -88,6 +88,16 @@ public enum NotchGeometry {
     public static let noAgentsLineHeight: CGFloat = 22
     public static let moreAgentsLineHeight: CGFloat = 16
     public static let actionsRowHeight: CGFloat = 28
+    /// P7: the action task's step list card (one line each, plus padding).
+    public static let maximumActionStepLines = 4
+    public static let actionStepLineHeight: CGFloat = 15
+    public static let actionStepsVerticalPadding: CGFloat = 12
+
+    /// Height of the step list card for this many lines (0 lines: no card).
+    public static func actionStepsHeight(lineCount: Int) -> CGFloat {
+        let visibleLineCount = min(max(0, lineCount), maximumActionStepLines)
+        return visibleLineCount == 0 ? 0 : CGFloat(visibleLineCount) * actionStepLineHeight + actionStepsVerticalPadding
+    }
 
     /// The notch on this screen: the hardware one when the screen reports a
     /// top safe-area inset and both auxiliary areas, otherwise the virtual one.
@@ -131,10 +141,11 @@ public enum NotchGeometry {
 
     /// The expanded panel including its flares: header, optional caption,
     /// agent rows (at most 4, plus a "+N more" line), the actions row.
-    public static func expandedSize(layout: NotchLayout, agentRowCount: Int, hasMoreAgentsLine: Bool, hasCaption: Bool) -> CGSize {
+    public static func expandedSize(layout: NotchLayout, agentRowCount: Int, hasMoreAgentsLine: Bool, hasCaption: Bool, actionStepLineCount: Int = 0) -> CGSize {
         let bodyWidth = max(expandedBodyWidth, collapsedBodySize(layout: layout).width)
         var height = layout.headerHeight + expandedTopPadding
         if hasCaption { height += captionHeight + sectionSpacing }
+        if actionStepLineCount > 0 { height += actionStepsHeight(lineCount: actionStepLineCount) + sectionSpacing }
         height += agentsSectionHeight(agentRowCount: agentRowCount, hasMoreAgentsLine: hasMoreAgentsLine)
         height += sectionSpacing + actionsRowHeight + expandedBottomPadding
         return CGSize(width: bodyWidth + 2 * topFlareRadius, height: height)

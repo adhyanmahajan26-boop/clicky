@@ -338,6 +338,7 @@ private struct AgentDetailView: View {
             if let usage = record.usage { usageCard(usage) }
             if record.kind == .codeTask { codeCard }
             if record.kind == .projectTask { projectCard }
+            if record.kind == .actionTask { actionCard }
             if !helpers.isEmpty { helpersCard }
             if let errorDescription = record.errorDescription { errorCard(errorDescription) }
             logCard
@@ -439,6 +440,24 @@ private struct AgentDetailView: View {
                 }
                 .padding(.leading, 110)
             }
+        }
+    }
+
+    /// P7: every step of the action task with its outcome, and the current one.
+    private var actionCard: some View {
+        AgentsDashboardCard(title: "Action task") {
+            if let currentStep = record.currentStep { AgentFactRow(label: "Now", value: currentStep) }
+            let steps = record.actionSteps ?? []
+            AgentFactRow(label: "Steps", value: steps.isEmpty ? "None yet" : "\(steps.count)")
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(AgentsDashboardColors.secondaryText)
+                        .lineLimit(2)
+                }
+            }
+            .padding(.leading, 110)
         }
     }
 
