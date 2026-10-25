@@ -3,7 +3,7 @@
 //  ClickyCore
 //
 //  The SwiftUI content of Code mode's review panel. Modes: "Opening o/n #N"
-//  (2 s, Esc cancels), live progress while the agent works (current step,
+//  (2 s, Esc cancels; the repo name big and its full path below it), live progress while the agent works (current step,
 //  files changed so far, elapsed time, tasks queued; Hide / Stop — neither
 //  sends anything), the top-4 repo chooser, a yes/no question (e.g.
 //  unpushed work before cleanup) and the review itself: header, CI status,
@@ -17,10 +17,34 @@
 import AppKit
 import SwiftUI
 
+/// What the "Opening …" card shows for 2 s before a task starts: the repo
+/// in big type and its full path, so a wrong pick is obvious before Esc.
+public struct OpeningCard: Equatable, Sendable {
+    /// "owner/name", or the folder name for a local-only repo.
+    public var repositoryName: String
+    /// The full local path (nil when there's no clone yet).
+    public var path: String?
+    public var pullRequestNumber: Int?
+    /// Shown as "Starting in N s"; nil hides the countdown.
+    public var secondsRemaining: Int?
+
+    public init(repositoryName: String, path: String?, pullRequestNumber: Int? = nil, secondsRemaining: Int? = nil) {
+        self.repositoryName = repositoryName
+        self.path = path
+        self.pullRequestNumber = pullRequestNumber
+        self.secondsRemaining = secondsRemaining
+    }
+
+    /// "acme/app #12".
+    public var titleText: String { repositoryName + (pullRequestNumber.map { " #\($0)" } ?? "") }
+    /// The full path as is (never abbreviated with ~), or a GitHub-only note.
+    public var pathText: String { path.map { ($0 as NSString).standardizingPath } ?? "GitHub only (no local clone yet)" }
+}
+
 @MainActor
 public final class ReviewPanelState: ObservableObject {
     public enum Mode: Equatable {
-        case opening(String)
+        case opening(OpeningCard)
         case chooser(title: String, candidates: [RepoCandidate])
         /// A yes/no prompt whose confirm is itself a gated button (clone, remove unpushed work).
         case question(title: String, detail: String, confirmTitle: String, gatedAction: GatedAction)
@@ -73,10 +97,8 @@ public struct ReviewPanelView: View {
     public var body: some View {
         Group {
             switch state.mode {
-            case .opening(let text):
-                compactCard(title: text, detail: "Press Esc to cancel.") {
-                    Button("Cancel") { state.onCancel() }.keyboardShortcut(.cancelAction)
-                }
+            case .opening(let card):
+                openingCard(card)
             case .chooser(let title, let candidates):
                 compactCard(title: title, detail: "Which repo did you mean?") {
                     VStack(alignment: .leading, spacing: 6) {
@@ -308,6 +330,36 @@ public struct ReviewPanelView: View {
             Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
             content()
         }
+    }
+
+    /// The repo name big and the full path clearly readable, then the countdown and Cancel.
+    private func openingCard(_ card: OpeningCard) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("OPENING").font(.system(size: 11, weight: .semibold)).foregroundColor(.secondary)
+            Text(card.titleText)
+                .font(.system(size: 26, weight: .bold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(card.pathText)
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundColor(.primary)
+                .lineLimit(3)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.14)))
+            HStack {
+                Text(card.secondsRemaining.map { "Starting in \($0) s. Press Esc to cancel." } ?? "Press Esc to cancel.")
+                    .font(.system(size: 12)).foregroundColor(.secondary)
+                Spacer()
+                Button("Cancel") { state.onCancel() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 540, alignment: .leading)
     }
 
     private func compactCard<Actions: View>(title: String, detail: String, @ViewBuilder actions: () -> Actions) -> some View {

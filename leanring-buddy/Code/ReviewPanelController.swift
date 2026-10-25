@@ -46,7 +46,12 @@ final class ReviewPanelController {
         let panel = panel ?? makePanel()
         self.panel = panel
         let isReview = mode == .review
-        let targetSize = isReview ? NSSize(width: 780, height: 760) : NSSize(width: 440, height: 220)
+        let targetSize: NSSize
+        switch mode {
+        case .review: targetSize = NSSize(width: 780, height: 760)
+        case .opening: targetSize = NSSize(width: 560, height: 260)
+        default: targetSize = NSSize(width: 440, height: 220)
+        }
         if !panel.isVisible || panel.frame.size != targetSize {
             let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
             let origin = NSPoint(x: screenFrame.midX - targetSize.width / 2, y: screenFrame.midY - targetSize.height / 2)

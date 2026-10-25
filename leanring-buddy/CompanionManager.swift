@@ -106,9 +106,18 @@ final class CompanionManager: ObservableObject {
     let speechOutputClient = CompanionSpeechOutput()
 
     /// P5 Code mode: `<codetask>` blocks, the review panel and click-gated sends.
-    private(set) lazy var codeModeController = CodeModeController { [weak self] text in
-        self?.speakCodeModeLine(text)
-    }
+    private(set) lazy var codeModeController: CodeModeController = {
+        let controller = CodeModeController { [weak self] text in
+            self?.speakCodeModeLine(text)
+        }
+        // A real click on the "Turn on code mode" chip: ask the same words again with Code mode on.
+        controller.onChipContinueRequest = { [weak self] transcript in
+            var continuationOptions = TurnOptions()
+            continuationOptions.extraUserText = "(code mode is on now. handle the request above with a codetask; don't say you're turning code mode on again.)"
+            self?.sendTranscriptToClaudeWithScreenshot(transcript: transcript, turnOptions: continuationOptions)
+        }
+        return controller
+    }()
 
     /// Set when an answer turned Code mode on by voice for a coding request:
     /// once that answer ends, the same words are asked again with the code

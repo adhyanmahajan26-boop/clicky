@@ -105,7 +105,7 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.codeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on Code mode. You can also say \"turn on code mode\" or \"turn off code mode\"."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeBashAllowed, kind: .toggle(defaultValue: false),
-                            explanation: "Let the code agent use Bash. Only a passing sandbox probe should turn this on."),
+                            explanation: "Let the code agent use Bash (allowlisted test/build/git commands only). Only a passing sandbox probe (Tools/codeprobe.sh --write-setting) should turn this on."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeRepoRoots, kind: .textList(defaultValue: ClickySettings.defaultCodeRepoRoots),
                             explanation: "Folders scanned for local clones. Comma separated."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeNarrateProgress, kind: .toggle(defaultValue: true),

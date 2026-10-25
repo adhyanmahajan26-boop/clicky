@@ -392,7 +392,13 @@ struct WorktreeTests {
         let messageURL = sandbox.rootURL.appendingPathComponent("msg.txt")
         try "Fix review comments\n".write(to: messageURL, atomically: true, encoding: .utf8)
         await #expect(throws: WorktreeError.nothingToCommit) { _ = try await manager.commitAgentChanges(worktree, commitMessageFileURL: messageURL, amend: false) }
+        #expect(try await manager.foldAgentCommits(worktree, headBeforeAgent: headOID) == 0)
         try "feature fixed\n".write(toFile: worktree.path + "/feature.txt", atomically: true, encoding: .utf8)
+        // The agent may `git commit` (allowlisted): its commits fold back into Clicky's one commit.
+        try await sandbox.git(["add", "feature.txt"], in: worktree.path)
+        try await sandbox.git(["commit", "--quiet", "-m", "agent's own commit"], in: worktree.path)
+        #expect(try await manager.foldAgentCommits(worktree, headBeforeAgent: headOID) == 1)
+        #expect(try await sandbox.git(["rev-parse", "HEAD"], in: worktree.path) == headOID)
         let commitOID = try await manager.commitAgentChanges(worktree, commitMessageFileURL: messageURL, amend: false)
         #expect(try await sandbox.git(["rev-parse", "HEAD~1"], in: worktree.path) == headOID)
         let diff = try await manager.reviewDiff(worktree)
@@ -908,5 +914,19 @@ struct CodeReviewUITests {
                                        content: content)
         let chooserImage = try #require(ImageRenderer(content: ReviewPanelView(state: chooser, usesStaticButtons: true)).nsImage)
         #expect(chooserImage.size.height > 50)
+
+        // "Opening": the repo name big, the full path (never ~-abbreviated) below it, the countdown.
+        let card = OpeningCard(repositoryName: "clicky-scratch", path: "/Users/me/Projects/clicky-scratch/", pullRequestNumber: nil, secondsRemaining: 2)
+        #expect(card.titleText == "clicky-scratch" && card.pathText == "/Users/me/Projects/clicky-scratch")
+        #expect(OpeningCard(repositoryName: "acme/app", path: nil, pullRequestNumber: 12).titleText == "acme/app #12")
+        #expect(OpeningCard(repositoryName: "acme/app", path: nil).pathText.contains("GitHub only"))
+        let opening = ReviewPanelState(mode: .opening(card), content: content)
+        let openingRenderer = ImageRenderer(content: ReviewPanelView(state: opening, usesStaticButtons: true))
+        openingRenderer.scale = 2
+        let openingImage = try #require(openingRenderer.nsImage)
+        #expect(openingImage.size.width >= 500 && openingImage.size.height > 120)
+        if let tiff = openingImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: outputDirectory.appendingPathComponent("opening-card.png"))
+        }
     }
 }

@@ -540,10 +540,13 @@ public final class CodeTaskEngine: @unchecked Sendable {
                                  session: AgentInvocation.Session? = nil) async throws -> EditingRun {
         let integrityPaths = try await worktreeManager.integrityPaths(for: worktree)
         let before = IntegritySnapshot.capture(paths: integrityPaths)
+        let headBeforeAgent = await worktreeManager.git.headOID(in: worktree.path)
         let report = try await runAgent(prompt: prompt, workspace: workspace, workingDirectory: worktree.path, ownership: ownership, isReadOnly: false, session: session)
         let after = IntegritySnapshot.capture(paths: integrityPaths)
         let changedPaths = before.changedPaths(comparedTo: after)
         guard changedPaths.isEmpty else { throw WorktreeError.integrityChanged(changedPaths) }
+        // `git commit` is allowed with Bash: fold the agent's commits back into Clicky's one reviewed commit.
+        try await worktreeManager.foldAgentCommits(worktree, headBeforeAgent: headBeforeAgent)
         return EditingRun(report: report, result: try requireResult(report), worktree: worktree)
     }
 

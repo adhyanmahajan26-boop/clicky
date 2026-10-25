@@ -42,6 +42,8 @@ public enum WorktreeError: Error, Equatable, Sendable, CustomStringConvertible {
     case nothingToCommit
     case mergeParentsWrong
     case notUnderWorktreeRoot(String)
+    case agentCommittedDuringMerge
+    case agentMovedHead
 
     public var description: String {
         switch self {
@@ -51,6 +53,8 @@ public enum WorktreeError: Error, Equatable, Sendable, CustomStringConvertible {
         case .nothingToCommit: return "the agent made no changes"
         case .mergeParentsWrong: return "the conflict commit doesn't have parents [HEAD, BASE]"
         case .notUnderWorktreeRoot(let path): return "\(path) isn't one of Clicky's worktrees"
+        case .agentCommittedDuringMerge: return "the agent committed while a conflict merge was in progress"
+        case .agentMovedHead: return "the agent moved HEAD to a commit that isn't on top of where it started"
         }
     }
 }
@@ -198,6 +202,21 @@ public struct WorktreeManager: Sendable {
     // MARK: - Committing
 
     /// `add -A` and one commit (or amend) from the message file. Returns the new HEAD.
+    /// The agent may run `git commit` (it's on the Bash allowlist), but the
+    /// change under review is always Clicky's one commit: commits the agent
+    /// made are folded back (soft reset to HEAD before it ran, the changes
+    /// stay in the worktree). During a merge that's refused instead.
+    /// Returns how many commits were folded.
+    @discardableResult
+    public func foldAgentCommits(_ worktree: ClickyWorktree, headBeforeAgent: String?) async throws -> Int {
+        guard let headBeforeAgent, let currentHead = await git.headOID(in: worktree.path), currentHead != headBeforeAgent else { return 0 }
+        guard worktree.mergeBaseOID == nil else { throw WorktreeError.agentCommittedDuringMerge }
+        let count = Int(await git.value(["rev-list", "--count", "\(headBeforeAgent)..\(currentHead)"], in: worktree.path) ?? "") ?? 0
+        guard count > 0 else { throw WorktreeError.agentMovedHead }
+        try await git.runChecked(["reset", "--soft", "--quiet", headBeforeAgent], in: worktree.path)
+        return count
+    }
+
     public func commitAgentChanges(_ worktree: ClickyWorktree, commitMessageFileURL: URL, amend: Bool) async throws -> String {
         try await git.runChecked(["add", "-A"], in: worktree.path)
         let stagedCheck = try await git.run(["diff", "--cached", "--quiet", "--no-ext-diff"], in: worktree.path)

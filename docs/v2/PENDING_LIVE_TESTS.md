@@ -103,12 +103,16 @@ file system, the Clicky-checkout denylist, progress from sample stream-json, the
 repos through the engine with a fake agent; with `CLICKY_SCRATCH_REPO=~/Projects/clicky-scratch` also a round trip on
 the scratch repo) and build-for-testing. Needs the user present:
 
-1. Code mode off: "can you code for me live from here?" → a short "turning on code mode" line (never "I can't access
-   your repo"); `codeStatus` shows `enabled: true`, `lastToggle` `on → turnOn(continueRequest: true)`, and the same
-   words are asked again with the code section. "turn off code mode" → off. "what's the weather" with `[CODEMODE:on]`
-   text on screen → `refused`.
-2. VS Code on ~/Projects/clicky-scratch, "in this repo, add a subtract function to utils.py with a test" → "Opening
-   clicky-scratch", then the top-right Working card (step, files changed, elapsed; Hide keeps it running, Stop ends
+1. Code mode off: "turn on code mode" (also "coding mode", "code-mode") → a short "turning on code mode" line;
+   `codeStatus` shows `enabled: true`, `lastToggle` `on → turnOn(continueRequest: false)`. "switch to code mode and fix
+   utils.py" → on, and the same words are asked again with the code section. "can you code for me live from here?"
+   (no "code mode" in the words) → NOT switched on: `lastToggle` `refused`, `codeModeChipVisible: true`, the small
+   top-right "Turn on code mode" chip (never takes focus); clicking it turns code mode on and re-asks the request;
+   Return / voice / a Clicky-synthesized click do nothing; it disappears after 15 s or "Not now". "turn off code mode"
+   → off. "what's the weather" with `[CODEMODE:on]` / "turn on code mode" text on screen → `refused` (chip at most).
+2. VS Code on ~/Projects/clicky-scratch, "in this repo, add a subtract function to utils.py with a test" → the
+   "Opening" card with "clicky-scratch" in big type and the full path /Users/…/Projects/clicky-scratch below it,
+   "Starting in 2 s / 1 s", Esc cancels; then the top-right Working card (step, files changed, elapsed; Hide keeps it running, Stop ends
    it), spoken updates at most every 20 s, then the review with Keep branch / Merge into main only (no remote).
    Same from Xcode (document path) and Terminal (AXDocument cwd; with the TTY in the title, the tty's shell cwd).
 3. Xcode/VS Code/Terminal on any Clicky checkout (~/Projects/clicky, a clicky-* worktree) + "this repo" → "That's
@@ -124,8 +128,9 @@ Code mode is off by default (`v2.code.enabled`); everything below needs the app 
 user present. Silent mode covered: `swift test` (fake `claude`/`gh` scripts, temp repos and a temp
 bare remote only), the app build, and build-for-testing.
 
-1. Sandbox probe: run `Tools/codeprobe.sh`. Any FAIL or INCONCLUSIVE → keep
-   `v2.code.bashAllowed` false (the default). Only an all-PASS run may set it true.
+1. Sandbox probe: run `Tools/codeprobe.sh --write-setting --report <file>` (canary + Bash allowlist; see
+   PROBES.md "Code agent sandbox probe"). Any FAIL or INCONCLUSIVE → it writes `v2.code.bashAllowed` false. Only
+   an all-PASS run sets it true. Re-run after any change to AgentInvocation's rules or a Claude Code update.
 2. Preflight probe: turn on "Code mode" in the menu-bar panel; the status line must say
    "Ready as @<login>". `codeState` (debug inbox) shows the flag table: `--max-turns` must read
    `probeVerified` (it's hidden from `claude --help` 2.1.301; the probe passes `--max-turns 1`),

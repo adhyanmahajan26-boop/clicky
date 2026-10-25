@@ -379,7 +379,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             case .worker(let title, let task):
                 spawnWorker(CompanionWorkerRequest(workerTitle: title, workerTaskPrompt: task))
             case .codeModeToggle(let isOn):
-                // The spoken switch: on only when the user's words ask for coding (CodeModeToggle).
+                // The spoken switch: on only when the user's words say "code mode" (CodeModeToggle); else the chip.
                 let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
                 if case .turnOn(let continueRequest) = decision {
                     router.blockConsumers.insert("codetask")

@@ -14,7 +14,8 @@
 //  panel showed must still match the disk before each command.
 //
 //  Live use: Code mode can be switched by voice ([CODEMODE:on]/[CODEMODE:off]
-//  from the main brain, honoured only when the user's words ask for coding);
+//  from the main brain, honoured only when the user's words say "code mode";
+//  otherwise a one-click "Turn on code mode" chip that only a real click works);
 //  "this repo" comes from the front Xcode / VS Code / Terminal window
 //  (FrontWindowProbe → FrontWindowRepoResolver); Clicky's own checkouts are
 //  never used (CodeRepoDenylist); while the agent runs the panel shows its
@@ -87,11 +88,18 @@ final class CodeModeController: ObservableObject {
 
     private let speak: (String) -> Void
     private let panelController: ReviewPanelController
+    /// "Turn on code mode": shown when [CODEMODE:on] came without the user saying "code mode".
+    private let chipController = CodeModeChipController()
+    private var pendingChipTranscript: String?
+    /// After a chip click: ask the refused request again, now with Code mode on.
+    var onChipContinueRequest: ((String) -> Void)?
 
     init(speak: @escaping (String) -> Void) {
         self.speak = speak
         self.panelController = ReviewPanelController(state: ReviewPanelState(content: CodeReviewContent(repositoryFullName: "")))
         wirePanelCallbacks()
+        chipController.onTurnOn = { [weak self] in self?.turnOnFromChip() }
+        chipController.onLog = { [weak self] line in self?.record(line) }
     }
 
     // MARK: - Settings
@@ -110,18 +118,40 @@ final class CodeModeController: ObservableObject {
     }
 
     /// [CODEMODE:on] / [CODEMODE:off] from the main brain. "on" is honoured
-    /// only when the user's own words ask for coding (CodeModeToggle).
+    /// only when the user's own words say "code mode" (CodeModeToggle);
+    /// otherwise the chip is offered.
     @discardableResult
     func handleSpokenToggle(isOn requestedOn: Bool, transcript: String) -> CodeModeToggle.Decision {
         let decision = CodeModeToggle.decide(isOn: requestedOn, isCurrentlyOn: isEnabled, transcript: transcript)
         lastToggleDescription = "\(requestedOn ? "on" : "off") → \(decision) from \"\(transcript.prefix(80))\""
         record("spoken toggle: \(lastToggleDescription ?? "")")
         switch decision {
-        case .turnOn: setEnabled(true)
-        case .turnOff: setEnabled(false)
-        case .unchanged, .refused: break
+        case .turnOn:
+            chipController.hide()
+            setEnabled(true)
+        case .turnOff:
+            chipController.hide()
+            setEnabled(false)
+        case .unchanged: break
+        case .refused:
+            // The tag alone never switches it on: offer the one-click chip (a real click only).
+            record("refused [CODEMODE:on]: the user didn't say \"code mode\"; showing the Turn on code mode chip")
+            pendingChipTranscript = transcript
+            chipController.show()
         }
         return decision
+    }
+
+    /// The chip's real click: Code mode on, then (if the words asked for
+    /// more than the switch) the same request again with Code mode on.
+    private func turnOnFromChip() {
+        let transcript = pendingChipTranscript
+        pendingChipTranscript = nil
+        lastToggleDescription = "on → chip click from \"\(transcript?.prefix(80) ?? "")\""
+        setEnabled(true)
+        if let transcript, CodeModeToggle.shouldContinueRequest(afterTurningOn: transcript) {
+            onChipContinueRequest?(transcript)
+        }
     }
 
     /// Runs the preflight once per launch (again when `force`).
@@ -445,7 +475,8 @@ final class CodeModeController: ObservableObject {
         }
         let chosenCandidate: RepoCandidate
         if matchResult.isConfident, let top = matchResult.top {
-            guard await showOpeningCountdown("Opening \(top.source == .localOnly ? (top.folderPath.map { ($0 as NSString).lastPathComponent } ?? top.fullName) : top.fullName)\(task.pr.map { " #\($0)" } ?? "")") else {
+            let openingName = top.source == .localOnly ? (top.folderPath.map { ($0 as NSString).lastPathComponent } ?? top.fullName) : top.fullName
+            guard await showOpeningCountdown(OpeningCard(repositoryName: openingName, path: top.folderPath, pullRequestNumber: task.pr)) else {
                 return nil
             }
             chosenCandidate = top
@@ -464,13 +495,21 @@ final class CodeModeController: ObservableObject {
                                   isLocalOnly: chosenCandidate.source == .localOnly)
     }
 
-    /// "Opening …" for 2 s; Esc or Cancel stops it. False when cancelled.
-    private func showOpeningCountdown(_ openingText: String) async -> Bool {
+    /// "Opening <repo>" with its full path for 2 s; Esc or Cancel stops it. False when cancelled.
+    private func showOpeningCountdown(_ card: OpeningCard) async -> Bool {
         isOpeningCancelled = false
-        panelController.show(mode: .opening(openingText))
+        var shownCard = card
+        shownCard.secondsRemaining = 2
+        panelController.show(mode: .opening(shownCard))
+        record("opening \(card.repositoryName) at \(card.path ?? "-")")
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline, !isOpeningCancelled, !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
+            let secondsRemaining = max(1, Int(ceil(deadline.timeIntervalSinceNow)))
+            if secondsRemaining != shownCard.secondsRemaining, case .opening = panelController.state.mode {
+                shownCard.secondsRemaining = secondsRemaining
+                panelController.state.mode = .opening(shownCard)
+            }
         }
         panelController.hide()
         guard !isOpeningCancelled, !Task.isCancelled else {
@@ -513,7 +552,8 @@ final class CodeModeController: ObservableObject {
         } else {
             repository = ResolvedRepository(remote: GitHubRemote(owner: RepoMatcher.localOnlyOwner, name: folderName), clonePath: rootPath, isLocalOnly: true)
         }
-        guard await showOpeningCountdown("Opening \(repository.isLocalOnly ? folderName : repository.remote.fullName)\(task.pr.map { " #\($0)" } ?? "")") else { return nil }
+        guard await showOpeningCountdown(OpeningCard(repositoryName: repository.isLocalOnly ? folderName : repository.remote.fullName, path: rootPath,
+                                                     pullRequestNumber: task.pr)) else { return nil }
         repository.clonePath = rootPath
         return repository
     }
@@ -902,6 +942,7 @@ final class CodeModeController: ObservableObject {
             "panelMode": Self.modeName(panelController.state.mode),
             "lastNarration": lastNarration.map { $0 as Any } ?? NSNull(),
             "lastToggle": lastToggleDescription.map { $0 as Any } ?? NSNull(),
+            "codeModeChipVisible": chipController.isVisible,
             "narrateProgress": ClickySettings.isCodeProgressNarrationEnabled
         ]
         if let activeQueuedTask {
