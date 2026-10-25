@@ -92,7 +92,7 @@ private struct MarkDrawingView: View {
             }
             if drawing.style == .box, let outline = drawing.outline {
                 OutlineShape(kind: outline.kind, rect: local(outline.rect), cornerRadius: outline.cornerRadius)
-                    .fill(MarkPalette.orange.opacity(0.12))
+                    .fill(MarkPalette.orange.opacity(0.04))
             }
             if let outline = drawing.outline, drawing.style != .spot {
                 haloed(OutlineShape(kind: outline.kind, rect: local(outline.rect), cornerRadius: outline.cornerRadius),

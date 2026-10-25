@@ -312,7 +312,7 @@ def screenshot_matches_window(png, window_points, dpr):
 def snapshot_paths(turn, started_at):
     """Paths the turn reports (a "snaps" array with "path"), else PNGs in the shots folder written since start."""
     paths = []
-    for snap in (turn or {}).get("snaps") or []:
+    for snap in ((turn or {}).get("snaps") or []) + ((turn or {}).get("snapshots") or []):
         if isinstance(snap, dict) and snap.get("path"):
             paths.append(snap["path"])
     if not paths and os.path.isdir(SHOTS_DIRECTORY):

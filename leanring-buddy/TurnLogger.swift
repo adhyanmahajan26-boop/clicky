@@ -104,6 +104,8 @@ final class TurnRecord {
     struct SpeechEntry: Encodable {
         var engine: String?
         var fallback: Bool
+        /// The Qwen reference clip the voice is cloned from (nil for Apple).
+        var voice: String? = nil
     }
 
     let turnDirectoryURL: URL

@@ -1315,7 +1315,9 @@ final class CompanionManager: ObservableObject {
                 }
                 turnRecord?.speech = TurnRecord.SpeechEntry(
                     engine: answerSession.coordinator.isSilent ? nil : answerSession.coordinator.spokenEngineName,
-                    fallback: answerSession.coordinator.didUseFallback
+                    fallback: answerSession.coordinator.didUseFallback,
+                    voice: answerSession.coordinator.spokenEngineName == "qwen"
+                        ? (ClickySettings.qwenReferenceClipPath as NSString).lastPathComponent : nil
                 )
             } catch is CancellationError {
                 // User spoke again — response was interrupted
