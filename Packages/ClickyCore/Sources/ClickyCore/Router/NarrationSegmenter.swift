@@ -160,6 +160,16 @@ public struct NarrationSegmenter: Sendable {
         for fenceSpan in fenceSpans where fenceSpan.upperBound != text.endIndex {
             sentenceEnds.append(fenceSpan.upperBound)
         }
+        // NLTokenizer won't split ". next" when the next sentence starts in
+        // lowercase (Clicky's prompt asks for all lowercase): split there too,
+        // unless the word before the stop is an abbreviation or an initial.
+        let lowercaseBoundaryPattern = try! NSRegularExpression(pattern: #"([A-Za-z0-9.]+)[.!?…]+["')\]]?(\s+)(?=[a-z0-9"'(\[])"#)
+        for match in lowercaseBoundaryPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let wordRange = Range(match.range(at: 1), in: text), let spaceRange = Range(match.range(at: 2), in: text) else { continue }
+            let word = text[wordRange].lowercased()
+            if abbreviations.contains(word) || (word.count == 1 && word.first?.isLetter == true) || word.contains(".") { continue }
+            sentenceEnds.append(spaceRange.upperBound)
+        }
         sentenceEnds = Array(Set(sentenceEnds)).sorted()
         let validEnds = sentenceEnds.filter { end in
             !fenceSpans.contains { $0.lowerBound < end && end < $0.upperBound }
@@ -199,6 +209,9 @@ public struct NarrationSegmenter: Sendable {
     }
 
     /// Letters or digits outside fences, placeholders and markup.
+    /// Words a "." doesn't end a sentence after (the stop itself excluded).
+    static let abbreviations: Set<String> = ["e.g", "i.e", "etc", "vs", "mr", "mrs", "ms", "dr", "st", "jr", "sr", "no", "fig", "approx", "inc", "ltd", "co"]
+
     static func hasSpeech(_ text: String) -> Bool {
         speechLength(of: text) > 0
     }

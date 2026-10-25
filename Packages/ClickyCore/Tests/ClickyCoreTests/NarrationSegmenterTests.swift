@@ -38,7 +38,9 @@ let segmenterVectors: [String] = [
     "This first sentence is quite long because it explains a lot of things, and it keeps going with more and more detail until the end.",
     "Sure. Click run. Then stop it when you're done testing everything here.",
     "Dr. Smith said the U.S. office opens at 9 a.m. tomorrow. Bring your badge with you to get in.",
-    "Point here \(P) and here \(P). Done with both of those now for sure."
+    "Point here \(P) and here \(P). Done with both of those now for sure.",
+    "a git rebase replays your commits on top of another branch. instead of a merge commit, it rewrites them so the history is one line. that's why you shouldn't rebase shared branches, e.g. main.",
+    "the build broke at step 3. fix the import, then rerun it. mr. smith wrote that part."
 ]
 
 @Test func segmenterCharByCharEqualsWhole() {
@@ -88,4 +90,10 @@ let segmenterVectors: [String] = [
     #expect(short.dropFirst().allSatisfy { NarrationSegmenter.speechLength(of: $0) >= 24 || $0 == short.last })
     // Decimals and abbreviations don't split sentences.
     #expect(segmentWhole(segmenterVectors[1]).first?.contains("1,284.50 dollars") == true)
+}
+
+@Test func lowercaseSentencesAreSplit() {
+    let segments = segmentWhole("a git rebase replays your commits on top of another branch. instead of a merge commit, it rewrites them so the history is one line. that's why you shouldn't rebase shared branches, e.g. main.")
+    #expect(segments.count >= 3, "\(segments)")
+    #expect(segments.contains { $0.contains("e.g. main") })
 }
