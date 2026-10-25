@@ -79,6 +79,8 @@ public enum ClickySettings {
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+        /// [String: String]: a spoken project name ("mahajan motor work") → the folder the owner picked for it.
+        public static let codeProjectAliases = "v2.code.projectAliases"
         /// Bool, default true: short spoken updates (at most every 20 s) while the code agent works.
         public static let codeNarrateProgress = "v2.code.narrateProgress"
         /// Bool, default false: keep the Qwen server running from a LaunchAgent (also needs keepWarmAgentApproved).
@@ -265,11 +267,22 @@ public enum ClickySettings {
 
     // MARK: - P5 Code mode
 
-    public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer"]
+    /// The home folder itself is scanned one level deep, ~/Projects and ~/Developer three, the rest two (LocalRepoIndexer.maximumDepth(forRoot:)).
+    public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads", "~/jstest"]
     public static var isKeepWarmAgentEnabled: Bool { defaults.object(forKey: Keys.keepWarmAgent) as? Bool ?? false }
     public static var isKeepWarmAgentApproved: Bool { defaults.object(forKey: Keys.keepWarmAgentApproved) as? Bool ?? false }
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
     public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+    /// The owner's project picks (ProjectAliasBook): an alias match wins outright.
+    public static var projectAliases: [String: String] {
+        (defaults.dictionary(forKey: Keys.codeProjectAliases) as? [String: String]) ?? [:]
+    }
+    public static func saveProjectAlias(spokenName: String, path: String) {
+        defaults.set(ProjectAliasBook.adding(spokenName: spokenName, path: path, to: projectAliases), forKey: Keys.codeProjectAliases)
+    }
+    public static func removeProjectAlias(key aliasKey: String) {
+        defaults.set(ProjectAliasBook.removing(key: aliasKey, from: projectAliases), forKey: Keys.codeProjectAliases)
+    }
     public static var isAgentsSparkClickEnabled: Bool { defaults.object(forKey: Keys.agentsSparkClickOpensDashboard) as? Bool ?? true }
     public static var agentsHistoryLimit: Int { min(500, max(10, defaults.object(forKey: Keys.agentsHistoryLimit) as? Int ?? AgentStore.defaultMaximumFinishedRecords)) }
     public static var isCodeProgressNarrationEnabled: Bool { defaults.object(forKey: Keys.codeNarrateProgress) as? Bool ?? true }

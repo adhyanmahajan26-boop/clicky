@@ -34,7 +34,7 @@ public enum ProjectSendTrigger {
 
     /// The prompt line: Claude can't send anything itself, so it tells the
     /// owner the words that do.
-    public static let promptLine = "project hand-off: you can't send anything to the user's project or project coordinator yourself. if they ask you to hand a task to their project but didn't say the phrase, tell them to say \"send this to my project\" followed by the task."
+    public static let promptLine = "project hand-off: you can't send anything to any project or project coordinator yourself. \"send this to my project\" followed by the task reaches only the Clicky project (this Claude Code project); if the user asks you to hand a task to it but didn't say the phrase, tell them to say \"send this to my project\" followed by the task. for a different project, tell them to say \"send this to the <project name> project\" followed by the task: clicky then finds that project on their mac and works on it in code mode, or offers to put the message into the Claude app for them to send."
 
     /// Phrases anywhere in the transcript.
     private static let phrasePatterns: [String] = [
@@ -52,7 +52,7 @@ public enum ProjectSendTrigger {
     private static let negatingWords: Set<String> = ["dont", "don't", "never", "not", "didnt", "didn't", "doesnt", "doesn't", "shouldnt", "shouldn't"]
 
     /// The transcript without anything in square brackets.
-    static func withoutBracketedText(_ transcript: String) -> String {
+    public static func withoutBracketedText(_ transcript: String) -> String {
         transcript.replacingOccurrences(of: #"\[[^\]]*\]?"#, with: " ", options: .regularExpression)
     }
 
@@ -100,7 +100,7 @@ public enum ProjectSendTrigger {
     }
 
     /// Whitespace runs collapsed, then whitespace and punctuation trimmed from both ends.
-    static func cleanedTaskText(_ text: String) -> String {
+    public static func cleanedTaskText(_ text: String) -> String {
         let collapsedText = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         return collapsedText.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
     }

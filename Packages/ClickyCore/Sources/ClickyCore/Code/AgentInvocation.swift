@@ -49,6 +49,12 @@ public struct AgentInvocation: Sendable {
     public enum Session: Equatable, Sendable {
         case new(identifier: String)
         case resume(identifier: String)
+        /// The owner's own latest Claude Code session in that repo, as a COPY:
+        /// `--resume <id> --fork-session` gives the run a new session id, so his
+        /// history is never appended to. Without --fork-session in the CLI it
+        /// falls back to a fresh `--session-id <fallbackNewIdentifier>` (never a
+        /// plain --resume of his session).
+        case forkOwnerSession(identifier: String, fallbackNewIdentifier: String)
     }
 
     public static let model = "sonnet"
@@ -208,8 +214,20 @@ public struct AgentInvocation: Sendable {
         switch session {
         case .new(let identifier): groups.append(FlagGroup(flag: "--session-id", tokens: ["--session-id", identifier]))
         case .resume(let identifier): groups.append(FlagGroup(flag: "--resume", tokens: ["--resume", identifier]))
+        case .forkOwnerSession(let identifier, _):
+            groups.append(FlagGroup(flag: "--resume", tokens: ["--resume", identifier]))
+            groups.append(FlagGroup(flag: "--fork-session", tokens: ["--fork-session"]))
         }
         return groups
+    }
+
+    /// The session kind the installed CLI can run safely: a fork needs
+    /// --fork-session listed, else it becomes a fresh session.
+    public func effectiveSession(supportedFlags: Set<String>) -> Session {
+        if case .forkOwnerSession(_, let fallbackNewIdentifier) = session, !Self.isSupported("--fork-session", by: supportedFlags) {
+            return .new(identifier: fallbackNewIdentifier)
+        }
+        return session
     }
 
     /// The full argv after `claude`, every flag included.
@@ -219,7 +237,10 @@ public struct AgentInvocation: Sendable {
     public func arguments(supportedFlags: Set<String>) -> (arguments: [String], droppedFlags: [String]) {
         var keptArguments: [String] = []
         var droppedFlags: [String] = []
-        for group in flagGroups {
+        var effectiveInvocation = self
+        effectiveInvocation.session = effectiveSession(supportedFlags: supportedFlags)
+        if effectiveInvocation.session != session { droppedFlags.append("--fork-session") }
+        for group in effectiveInvocation.flagGroups {
             if Self.isSupported(group.flag, by: supportedFlags) {
                 keptArguments += group.tokens
             } else if let fallbackTokens = fallbackTokens(for: group.flag, supportedFlags: supportedFlags) {

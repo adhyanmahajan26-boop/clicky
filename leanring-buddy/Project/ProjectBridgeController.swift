@@ -23,6 +23,11 @@
 //  v2.project.speakUpdates off. The note is shown and spoken only; the link
 //  is shown, never opened. Nothing here opens a window or takes focus.
 //
+//  A named OTHER project ("update it to the Claude Code project called X",
+//  "send this to the X project") goes to NamedProjectRouter first, before
+//  this project's trigger: a local repo match runs as a code-mode task,
+//  otherwise Clicky offers to put the message into the Claude app.
+//
 
 import AppKit
 import ClickyCore
@@ -41,6 +46,9 @@ final class ProjectBridgeController: ObservableObject {
         case disabled
         /// The phrase without a task: Clicky asked what to send.
         case askedForTask
+        /// A named other project ("… the project called X"), or the answer to
+        /// its offer / pick card: NamedProjectRouter handles it.
+        case namedProject
         case sent(id: String, path: String)
         case failed(reason: String)
 
@@ -48,7 +56,7 @@ final class ProjectBridgeController: ObservableObject {
         var isHandledLocally: Bool {
             switch self {
             case .notTriggered, .disabled: return false
-            case .askedForTask, .sent, .failed: return true
+            case .askedForTask, .namedProject, .sent, .failed: return true
             }
         }
     }
@@ -63,6 +71,8 @@ final class ProjectBridgeController: ObservableObject {
     private var lastReadReplyModificationDates: [String: Date] = [:]
     private var pollTimer: Timer?
     private var notchStatusClearTask: Task<Void, Never>?
+    /// "send this to the X project" for a project other than this one.
+    private(set) lazy var namedProjectRouter: NamedProjectRouter? = companionManager.map { NamedProjectRouter(companionManager: $0) }
 
     private static let pollIntervalSeconds: TimeInterval = 2
     private static let notchStatusSeconds: UInt64 = 4
@@ -95,6 +105,11 @@ final class ProjectBridgeController: ObservableObject {
     /// here; `speaks` false (a silent debug ask) says nothing now or later.
     @discardableResult
     func handleSpokenTranscript(_ transcript: String, speaks: Bool = true) -> SendOutcome {
+        // A named other project (or the answer to its offer / pick card) comes
+        // first: "send it to the project called X" must not reach this project.
+        if ClickySettings.isProjectBridgeEnabled, namedProjectRouter?.handleSpokenTranscript(transcript, speaks: speaks) == true {
+            return .namedProject
+        }
         guard let triggerMatch = ProjectSendTrigger.match(transcript: transcript) else { return .notTriggered }
         guard ClickySettings.isProjectBridgeEnabled else {
             print("📮 Project: trigger heard but v2.project.enabled is off")
@@ -240,6 +255,7 @@ final class ProjectBridgeController: ObservableObject {
             "inbox": inboxDirectoryURL.path,
             "notchStatus": notchStatusText ?? NSNull(),
             "pendingSpokenUpdates": spokenUpdateQueue.pendingLines.map(\.text),
+            "namedProject": namedProjectRouter?.statusSnapshot() ?? NSNull(),
             "tasks": tasks
         ]
     }

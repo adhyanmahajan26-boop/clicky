@@ -135,7 +135,9 @@ private struct AgentsDashboardHostView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timelineContext in
-            AgentsDashboardView(store: agentsCenter.store, selectedAgentID: $selection.selectedAgentID, now: timelineContext.date, actions: actions)
+            // The aliases are read on each tick, so a Remove (or a new pick) shows within a second.
+            AgentsDashboardView(store: agentsCenter.store, selectedAgentID: $selection.selectedAgentID, now: timelineContext.date, actions: actions,
+                                projectAliases: ClickySettings.projectAliases)
         }
     }
 }

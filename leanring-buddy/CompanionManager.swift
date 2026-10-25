@@ -116,7 +116,8 @@ final class CompanionManager: ObservableObject {
             copyLog: { record in
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(record.logText, forType: .string)
-            }
+            },
+            removeProjectAlias: { aliasKey in ClickySettings.removeProjectAlias(key: aliasKey) }
         )
     }
 
