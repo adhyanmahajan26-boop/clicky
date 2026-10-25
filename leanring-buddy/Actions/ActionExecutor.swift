@@ -449,6 +449,7 @@ final class ActionExecutor {
 
         case .key(let combo):
             guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return (.failed(reason: "a modifier key was held down"), nil) }
+            await bringTargetForward(target)
             postKey(combo)
             return (.done(detail: nil), nil)
 
@@ -615,6 +616,7 @@ final class ActionExecutor {
         }
         if pressesReturn {
             if isCancelled() { return .cancelled }
+            await bringTargetForward(target)
             // Only reached when the tier allowed it: the owner asked ("press enter" / "send it") or said yes.
             postKey(ActionKeyCombo(modifiers: [], key: "return", virtualKeyCode: 36))
         }
@@ -623,6 +625,16 @@ final class ActionExecutor {
     }
 
     // MARK: Keys and scrolling
+
+    /// Key events go to whatever app is in front: if a card, the bubble or another app took the front
+    /// since the step was planned (a "yes" left Return going nowhere), bring the target's app back first.
+    private func bringTargetForward(_ target: ResolvedActionTarget) async {
+        guard let processIdentifier = target.processIdentifier, processIdentifier != getpid(),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier,
+              let application = NSRunningApplication(processIdentifier: processIdentifier) else { return }
+        application.activate()
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
 
     private func postKey(_ combo: ActionKeyCombo) {
         var flags: CGEventFlags = []

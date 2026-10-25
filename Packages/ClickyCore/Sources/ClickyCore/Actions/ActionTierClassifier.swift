@@ -58,13 +58,17 @@ public struct ActionTierDecision: Equatable, Sendable {
     public var confirmQuestion: String?
     /// Confirm tier: how long the yes is waited for (nil = the usual minute).
     public var confirmWindowSeconds: TimeInterval?
+    /// P9 Enter policy: run the step but without its Return (typed, left unsent), saying `spokenLine` after.
+    public var dropsReturn: Bool
 
-    public init(_ tier: ActionTier, _ reason: String, spokenLine: String? = nil, confirmQuestion: String? = nil, confirmWindowSeconds: TimeInterval? = nil) {
+    public init(_ tier: ActionTier, _ reason: String, spokenLine: String? = nil, confirmQuestion: String? = nil, confirmWindowSeconds: TimeInterval? = nil,
+                dropsReturn: Bool = false) {
         self.tier = tier
         self.reason = reason
         self.spokenLine = spokenLine
         self.confirmQuestion = confirmQuestion
         self.confirmWindowSeconds = confirmWindowSeconds
+        self.dropsReturn = dropsReturn
     }
 
     /// What Clicky says when this step is refused.
@@ -148,6 +152,9 @@ public struct ActionTurnContext: Equatable, Sendable {
         ownerTranscripts.contains { ActionEnterIntent.ownerAsked($0, stepPressesReturn: forReturnStep) }
     }
 
+    /// "search / google / look up / find / go to / open <url>": the Return is implied (not a "send").
+    public var ownerImpliedSearch: Bool { ownerTranscripts.contains { ActionReturnRule.impliesSearch($0) } }
+
     /// Safari (not a Netflix window) the owner named recently, for this window.
     public func safariFollowUpCovers(_ target: ActionTargetFacts) -> Bool {
         safariFollowUp.covers(target, ownerNamedNetflix: ownerNamedNetflix, at: now)
@@ -177,20 +184,68 @@ public enum ActionWordMatch {
 }
 
 /// Return / Enter without a yes only when the owner said so (explicit phrases; see ActionEnterIntent).
+/// P9 Enter policy (the owner found the "press enter? say yes" loop annoying): no question, no countdown.
+/// - He said press enter / send / submit, or search / google / look up / go to → Enter, automatically.
+/// - Search fields, address bars and prompt boxes (Claude, chat assistants, Claude Code) → Enter, automatically.
+/// - Messaging other people (Messages, WhatsApp, Slack, Mail, Discord, social posts) when he didn't say
+///   send → typed and left unsent: "Typed it, say send to send." His "send" then presses Enter.
+/// - Anything else (a doc, an editor) → typed, no Enter.
 public enum ActionReturnRule {
     public static func ownerAskedToPressReturn(_ transcript: String) -> Bool {
         ActionEnterIntent.ownerAsked(transcript, stepPressesReturn: false)
     }
 
-    /// Spoken when the model planned a Return the owner didn't clearly ask for.
-    public static let confirmQuestion = "Press enter? Say yes."
-    /// How long that yes is waited for.
-    public static let confirmWindowSeconds: TimeInterval = 6
+    public static let typedNotSentLine = "Typed it, say send to send."
 
-    static func decision(ownerAsked: Bool, what: String) -> ActionTierDecision {
-        if ownerAsked { return ActionTierDecision(.countdown, "you asked me to \(what)") }
-        return ActionTierDecision(.confirm, "you didn't say \u{201C}press enter\u{201D}", confirmQuestion: confirmQuestion,
-                                  confirmWindowSeconds: confirmWindowSeconds)
+    static let searchVerbs = ["search", "google", "look up", "lookup", "find", "go to", "open", "search for", "bing", "youtube"]
+
+    public static func impliesSearch(_ transcript: String) -> Bool {
+        let text = " " + transcript.lowercased().replacingOccurrences(of: ",", with: " ") + " "
+        return searchVerbs.contains { text.contains(" \($0) ") } || text.range(of: #"\b[a-z0-9-]+\.(com|in|org|net|io|dev|ai|co)\b"#, options: .regularExpression) != nil
+    }
+
+    static let messagingBundleIdentifiers: Set<String> = ["com.apple.MobileSMS", "net.whatsapp.WhatsApp", "desktop.WhatsApp", "com.tinyspeck.slackmacgap",
+                                                          "com.apple.mail", "com.hnc.Discord", "ru.keepcoder.Telegram", "com.microsoft.teams2",
+                                                          "com.microsoft.teams", "com.facebook.archon", "org.whispersystems.signal-desktop"]
+    static let messagingURLHosts = ["web.whatsapp.com", "slack.com", "discord.com", "mail.google.com", "outlook.", "x.com", "twitter.com",
+                                    "linkedin.com", "facebook.com", "messenger.com", "instagram.com", "web.telegram.org", "teams.microsoft.com"]
+    static let promptBundleIdentifiers: Set<String> = ["com.anthropic.claudefordesktop", "com.openai.chat"]
+    static let searchFieldWords = ["search", "address", "url", "omnibox", "location", "query", "find"]
+    static let promptFieldWords = ["ask", "prompt", "message claude", "reply to claude", "how can i help", "chat with", "send a message to"]
+
+    /// A field where Enter is the obvious next step: search box, address bar, or an assistant's prompt box.
+    public static func isEnterField(_ target: ActionTargetFacts?) -> Bool {
+        guard let target else { return false }
+        if target.subrole == "AXSearchField" || target.role == "AXSearchField" { return true }
+        if target.terminalForeground == .claudeCode { return true }
+        if let bundle = target.bundleIdentifier, promptBundleIdentifiers.contains(bundle), !isMessaging(target) { return true }
+        let words = [target.label, target.placeholder, target.identifier].compactMap { $0?.lowercased() }.joined(separator: " ")
+        if searchFieldWords.contains(where: { words.contains($0) }) { return true }
+        if promptFieldWords.contains(where: { words.contains($0) }) { return true }
+        if let url = target.url?.lowercased(), url.contains("chatgpt.com") || url.contains("claude.ai") || url.contains("gemini.google") { return true }
+        return false
+    }
+
+    /// Typing that would reach other people.
+    public static func isMessaging(_ target: ActionTargetFacts?) -> Bool {
+        guard let target else { return false }
+        if let bundle = target.bundleIdentifier, messagingBundleIdentifiers.contains(bundle) { return true }
+        if let url = target.url?.lowercased(), messagingURLHosts.contains(where: { url.contains($0) }) { return true }
+        let words = [target.label, target.placeholder, target.windowTitle].compactMap { $0?.lowercased() }.joined(separator: " ")
+        return ["imessage", "whatsapp", "slack", "discord", "write a message", "type a message", "message #", "reply…", "compose"].contains { words.contains($0) }
+    }
+
+    static func decision(context: ActionTurnContext, target: ActionTargetFacts?, what: String) -> ActionTierDecision {
+        let saidSendOrEnter = context.ownerAskedToPressReturn(forReturnStep: true)
+        if isMessaging(target) {
+            return saidSendOrEnter ? ActionTierDecision(.free, "you said send")
+                                   : ActionTierDecision(.free, "a message to other people waits for your \u{201C}send\u{201D}",
+                                                        spokenLine: typedNotSentLine, dropsReturn: true)
+        }
+        if saidSendOrEnter || context.ownerImpliedSearch || isEnterField(target) {
+            return ActionTierDecision(.free, "enter is the next step (\(what))")
+        }
+        return ActionTierDecision(.free, "typed only: nothing asked for enter here", dropsReturn: true)
     }
 }
 
@@ -311,7 +366,7 @@ public enum ActionTierClassifier {
         case .type(_, _, let pressesReturn):
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
             if pressesReturn {
-                return ActionReturnRule.decision(ownerAsked: context.ownerAskedToPressReturn(forReturnStep: true), what: "type it and press enter")
+                return ActionReturnRule.decision(context: context, target: target, what: "type it and press enter")
             }
             return ActionTierDecision(.countdown, "typing into a field")
 
@@ -319,7 +374,7 @@ public enum ActionTierClassifier {
             let comboText = combo.displayText
             if combo.isReturnKey {
                 if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
-                return ActionReturnRule.decision(ownerAsked: context.ownerAskedToPressReturn(forReturnStep: true), what: "press enter")
+                return ActionReturnRule.decision(context: context, target: target, what: "press enter")
             }
             if confirmKeyCombos.contains(comboText) { return ActionTierDecision(.confirm, "\(comboText) can close, quit, save or delete") }
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }

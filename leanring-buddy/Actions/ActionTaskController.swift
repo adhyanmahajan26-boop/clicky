@@ -242,8 +242,16 @@ final class ActionTaskController {
             task.phase = .executing
             task.currentStepText = step.shortDescription
             publish()
-            let result = await executor.perform(step, target: target, groundedTurn: groundedTurn, session: session ?? companionManager.currentAnswerSession,
+            // P9 Enter policy: a message to other people (he didn't say send) or a plain field is typed without its Return.
+            let stepToRun = decision.dropsReturn ? step.withoutReturn : step
+            let result: ActionPerformResult
+            if decision.dropsReturn, case .key = step {
+                result = ActionPerformResult(.done(detail: "left unsent"))
+            } else {
+                result = await executor.perform(stepToRun, target: target, groundedTurn: groundedTurn, session: session ?? companionManager.currentAnswerSession,
                                                 ownerTranscript: task.loop.ownerTranscript, isCancelled: { [weak task] in task?.isCancelled ?? true })
+            }
+            if decision.dropsReturn, let line = decision.spokenLine, case .done = result.outcome { companionManager.speakCodeModeLine(line) }
             if task.isCancelled { return }
             task.loop.record(step, tier: decision.tier, tierReason: decision.reason, outcome: result.outcome)
             if case .refused(let reason) = result.outcome { speakRefusal("i didn't \(step.shortDescription): \(reason).") }

@@ -102,28 +102,42 @@ struct ActionEnterTierTests {
                                                                                        safariFollowUp: followUp, now: now))
     }
 
-    @Test func ownerSaidItRunsAfterTheCountdown() {
+    @Test func ownerSaidItPressesEnterRightAway() {
+        // P9: no countdown and no question when he asked.
         for target in [Self.chromeAddressBar, Self.claudeApp, Self.messages] {
-            #expect(decide(Self.returnKey, target, said: "press enter").tier == .countdown)
-            #expect(decide(Self.typeAndEnter, target, said: "type claude.ai and hit enter").tier == .countdown)
-            #expect(decide(Self.returnKey, target, said: "Press Centre").tier == .countdown)
-            #expect(decide(Self.returnKey, target, said: "Present for me too").tier == .countdown)
-            #expect(decide(Self.returnKey, target, said: "enter dabao").tier == .countdown)
+            for said in ["press enter", "Press Centre", "Present for me too", "enter dabao", "send it"] {
+                let decision = decide(Self.returnKey, target, said: said)
+                #expect(decision.tier == .free && !decision.dropsReturn, "\(said) on \(target.applicationName ?? "")")
+            }
+            #expect(decide(Self.typeAndEnter, target, said: "type claude.ai and hit enter").tier == .free)
         }
-        // The turn that started the task, or this turn's own words.
-        #expect(decide(Self.returnKey, Self.chromeAddressBar, said: "type claude.ai in chrome", current: "press enter").tier == .countdown)
+        #expect(decide(Self.returnKey, Self.chromeAddressBar, said: "type claude.ai in chrome", current: "press enter").tier == .free)
     }
 
-    @Test func modelGuessedReturnAsksFirst() {
-        let decision = decide(Self.returnKey, Self.chromeAddressBar, said: "type claude.ai in the address bar")
-        #expect(decision.tier == .confirm)
-        #expect(decision.confirmQuestion == "Press enter? Say yes.")
-        #expect(decision.confirmWindowSeconds == 6)
+    @Test func searchingImpliesEnterAndNoOneIsAsked() {
+        for said in ["search weather in delhi", "google swift actors", "look up the black hole article", "go to nasa.gov"] {
+            let decision = decide(Self.typeAndEnter, Self.chromeAddressBar, said: said)
+            #expect(decision.tier == .free && !decision.dropsReturn && decision.confirmQuestion == nil, "\(said)")
+        }
+        // A search box / address bar / prompt box gets its Enter even when he didn't say it.
+        #expect(!decide(Self.returnKey, Self.chromeAddressBar, said: "type claude.ai in the address bar").dropsReturn)
+        #expect(!decide(Self.typeAndEnter, Self.claudeApp, said: "ask claude what time it is in tokyo").dropsReturn)
+    }
+
+    @Test func messagesToPeopleWaitForSend() {
         let typed = decide(Self.typeAndEnter, Self.messages, said: "write hi to mom")
-        #expect(typed.tier == .confirm)
-        #expect(typed.confirmQuestion == "Press enter? Say yes.")
-        // A look-alike that isn't short isn't his yes.
-        #expect(decide(Self.returnKey, Self.chromeAddressBar, said: "present the slides").tier == .confirm)
+        #expect(typed.tier == .free && typed.dropsReturn)
+        #expect(typed.spokenLine == "Typed it, say send to send.")
+        #expect(!decide(Self.returnKey, Self.messages, said: "send").dropsReturn)
+        // Searching words aren't a "send" for a message.
+        #expect(decide(Self.typeAndEnter, Self.messages, said: "write find me later to mom").dropsReturn)
+    }
+
+    @Test func writingInADocumentNeverPressesEnter() {
+        let editor = ActionTargetFacts(bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", role: "AXTextArea", label: "text")
+        let decision = decide(Self.typeAndEnter, editor, said: "write a haiku about rain")
+        #expect(decision.tier == .free && decision.dropsReturn && decision.spokenLine == nil)
+        #expect(ActionStep.type(elementID: 3, text: "x", pressesReturn: true).withoutReturn == .type(elementID: 3, text: "x", pressesReturn: false))
     }
 
     @Test func typingWithoutReturnIsUnchangedAndSendButtonsNeedAYesUnlessHeSaidSend() {
@@ -157,12 +171,13 @@ struct ActionEnterTierTests {
 
     @Test func claudeCodeInATerminalIsAChatBox() {
         let claude = Self.terminal(.claudeCode)
-        #expect(decide(.type(elementID: nil, text: "fix the tests", pressesReturn: true), claude, said: "type fix the tests in claude code and press enter").tier == .countdown)
+        // Claude Code's prompt is a prompt box: its Enter is automatic.
+        #expect(decide(.type(elementID: nil, text: "fix the tests", pressesReturn: true), claude, said: "type fix the tests in claude code and press enter").tier == .free)
         #expect(decide(.type(elementID: nil, text: "fix the tests", pressesReturn: false), claude, said: "type fix the tests").tier == .countdown)
-        #expect(decide(Self.returnKey, claude, said: "Press Centre").tier == .countdown)
-        #expect(decide(Self.returnKey, claude, said: "type it into claude code").tier == .confirm)
+        #expect(decide(Self.returnKey, claude, said: "Press Centre").tier == .free)
+        #expect(!decide(Self.returnKey, claude, said: "type it into claude code").dropsReturn)
         let iterm = ActionTargetFacts(bundleIdentifier: "com.googlecode.iterm2", applicationName: "iTerm2", terminalForeground: .claudeCode)
-        #expect(decide(Self.returnKey, iterm, said: "hit enter").tier == .countdown)
+        #expect(decide(Self.returnKey, iterm, said: "hit enter").tier == .free)
     }
 
     @Test func aShellPromptIsRefusedWithTheCodeTaskOffer() {
@@ -202,7 +217,7 @@ struct ActionEnterTierTests {
     // MARK: Safari follow-ups
 
     @Test func safariNamedInTheSameTaskCovers() {
-        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "type claude.ai in safari and press enter").tier == .countdown)
+        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "type claude.ai in safari and press enter").tier == .free)
         #expect(decide(Self.returnKey, Self.safariAddressBar, said: "press enter").tier == .refused)
     }
 
@@ -211,8 +226,8 @@ struct ActionEnterTierTests {
         var followUp = ActionSafariFollowUp()
         followUp.noteOwnerNamedSafari(windowIdentifier: 41, at: start)
         // "type in Safari …" then "Present for me too" 30 s later.
-        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "Present for me too", followUp: followUp, now: start + 30).tier == .countdown)
-        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "Press Centre", followUp: followUp, now: start + 119).tier == .countdown)
+        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "Present for me too", followUp: followUp, now: start + 30).tier == .free)
+        #expect(decide(Self.returnKey, Self.safariAddressBar, said: "Press Centre", followUp: followUp, now: start + 119).tier == .free)
         // Past 2 minutes: refused again (with a reason).
         let late = decide(Self.returnKey, Self.safariAddressBar, said: "press enter", followUp: followUp, now: start + 125)
         #expect(late.tier == .refused)

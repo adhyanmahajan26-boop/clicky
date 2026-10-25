@@ -318,14 +318,13 @@ struct ActionTierTests {
         #expect(tier(.highlight(targets: [.element(1)], notes: []), ActionTargetFacts(isOwnApplication: true)) == .refused)
     }
 
-    @Test func returnRunsAfterTheCountdownWhenTheOwnerAskedElseAsksFirst() {
+    @Test func returnIsAutomaticWhenAskedOrImpliedAndNeverAQuestion() {
         let field = Self.chromeElement(.textField, "Message")
-        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: true), field, said: "type hi in the chat") == .confirm)
-        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: true), field, said: "type hi in the chat and press enter") == .countdown)
-        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: true), field, said: "tell him hi and send it") == .countdown)
-        #expect(tier(.key(ActionKeyCombo.parse("return")!), Self.chrome, said: "search for ramen") == .confirm)
-        #expect(tier(.key(ActionKeyCombo.parse("cmd+return")!), Self.chrome, said: "search for ramen") == .confirm)
-        #expect(tier(.key(ActionKeyCombo.parse("return")!), Self.chrome, said: "search for ramen then hit enter") == .countdown)
+        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: true), field, said: "type hi in the chat and press enter") == .free)
+        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: true), field, said: "tell him hi and send it") == .free)
+        #expect(tier(.key(ActionKeyCombo.parse("return")!), Self.chrome, said: "search for ramen") == .free)
+        #expect(tier(.key(ActionKeyCombo.parse("cmd+return")!), Self.chrome, said: "search for ramen") == .free)
+        #expect(tier(.key(ActionKeyCombo.parse("return")!), Self.chrome, said: "search for ramen then hit enter") == .free)
     }
 
     @Test func returnRulePhrases() {
@@ -673,7 +672,7 @@ struct ActionsIntegrationTests {
         let withActions = SystemPromptBuilder.mainSystemPrompt(features: SystemPromptFeatures.current.union(.actions), sectionTexts: [:])
         let without = SystemPromptBuilder.mainSystemPrompt(features: .current, sectionTexts: [:])
         #expect(withActions.contains("<actions>{\"goal\""))
-        #expect(withActions.contains("put the return in the same step list"))
+        #expect(withActions.contains("put the return in the step list"))
         #expect(withActions.contains("never say you pressed enter or sent anything until that step's result says done"))
         #expect(!without.contains("<actions>"))
         // Typing is an action step now, so it isn't listed as missing.

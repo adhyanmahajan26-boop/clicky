@@ -259,6 +259,12 @@ public enum ActionStep: Equatable, Sendable {
         return changesScreen
     }
 
+    /// The same step without its Return (a type step's "enter" dropped; other steps unchanged).
+    public var withoutReturn: ActionStep {
+        if case .type(let elementID, let text, true) = self { return .type(elementID: elementID, text: text, pressesReturn: false) }
+        return self
+    }
+
     /// A type step with "enter":true, or a key step that is Return / Enter.
     public var pressesReturn: Bool {
         switch self {
