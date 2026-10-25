@@ -65,6 +65,11 @@ final class MarkController {
         tracker.onLog = { [weak self] event in
             self?.turnRecord?.appendMarkEvent(event)
         }
+        // Where the caption bubble lands, for the evals' bubble/mark overlap check.
+        CaptionBubbleLayer.onPlacementChanged = { [weak self] rectCG in
+            self?.turnRecord?.appendMarkEvent(["event": "bubble", "t": (Date().timeIntervalSince1970 * 1000).rounded(),
+                                               "rectCG": [rectCG.minX, rectCG.minY, rectCG.width, rectCG.height]])
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -113,6 +118,27 @@ final class MarkController {
         }
         rebuild()
         tracker.track([mark])
+    }
+
+    /// Changes one live mark in place (P6.1 zoom check: made solid, or moved)
+    /// and, when it moved, tracks it again from its new element. Returns
+    /// false when the mark is gone.
+    @discardableResult
+    func updateMark(_ markID: UUID, retracks: Bool, _ change: (inout LiveScreenMark) -> Void) -> Bool {
+        guard let markIndex = marks.firstIndex(where: { $0.id == markID }) else { return false }
+        change(&marks[markIndex])
+        if retracks {
+            marks[markIndex].originalRectCG = marks[markIndex].rectCG
+            marks[markIndex].isHidden = false
+            tracker.stop(markID)
+            tracker.track([marks[markIndex]])
+        }
+        rebuild()
+        return true
+    }
+
+    func isLive(_ markID: UUID) -> Bool {
+        marks.contains { $0.id == markID && $0.opacity > 0 }
     }
 
     func clear() {
@@ -184,7 +210,8 @@ final class MarkController {
         }
         if drawing.style == .spot { kind = "spot" }
         return TurnRecord.DrawnEntry(kind: kind, rectCG: rectArray(drawnRect), radius: Double(drawing.outline?.cornerRadius ?? 0),
-                                     tip: tip, tentative: drawing.isTentative, recheck: nil)
+                                     tip: tip, tentative: drawing.isTentative, recheck: nil,
+                                     labelRectCG: drawing.labelText != nil || drawing.labelStepNumber != nil ? drawing.labelRect.map(rectArray) : nil)
     }
 
     // MARK: Tracking callbacks

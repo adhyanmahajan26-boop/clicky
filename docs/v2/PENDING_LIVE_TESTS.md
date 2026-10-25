@@ -165,3 +165,170 @@ PNGs in `~/Library/Logs/Clicky/renders/p4/`).
 11. Hosted tests compiled with build-for-testing, not run.
 
 SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for math images.
+
+## P6.4 (AEC echo mode)
+
+Opt-in: `defaults write com.personal.clicky v2.voice.echoMode aec` (default stays `open`; nothing changes
+unless it's set). Silent mode covered only the pure parts in `swift test` (`EchoCancellationTests`: 60 %
+partial-overlap echo filter, command phrases while playing, byteSampleOffset → frames → characters,
+headphone classification, throw → halfDuplex); no mic or speaker was opened. Everything below needs the user
+present, talking, with hands-free on. Watch the console for `🎙️ AEC:` / `🎧 AEC:` / `🔇 Hands-free:` lines.
+
+1. Speakers vs headphones: start hands-free on the built-in speakers → `listening (echo mode aec)` and
+   `shared engine on`; with AirPods / wired headphones → `🎧 … headphones` and `echo mode open` (no voice
+   processing). Hot-plugging mid-session isn't re-classified (restart hands-free).
+2. Both voices play through the shared engine (Qwen and, with Qwen off, the Mac voice): audible, no
+   clicks between segments, rate 0.85 / 1.15 / 1.3 sounds right (Qwen via the time pitch, Mac voice via its
+   utterance rate), music in another app is NOT ducked.
+3. Barge-in with TTS loud (volume ≥ 75 %): "stop", "wait", "clicky stop" each cut Clicky off ≤ 1 s;
+   "please wait for me" / "stop the build" don't (only the bare phrases count while playing); a "wait" that
+   Clicky itself just said doesn't stop it.
+4. False triggers over 10 spoken answers on speakers (no user speech): count barge-ins and utterances sent to
+   Claude — target 0; count `🔇 … echo … dropped` lines (leaks the canceller missed and the filter caught).
+5. Caption sync with Apple word markers (Mac voice): the caption reveals each word as it's heard (≤ 120 ms
+   lag, as P2); confirm `byteSampleOffset` really is bytes (if captions run ~2× ahead, it's frames: drop the
+   bytesPerFrame division in `SpeechWordMarkerTimeline.sampleOffset`). Qwen caption sync on the player-node
+   clock matches the AVAudioPlayer path (`v2.caption.avOffsetMs` still applies).
+6. Fallback: if voice processing throws (e.g. an aggregate device), the log says `falling back to halfDuplex`
+   and hands-free still hears the user when Clicky is quiet.
+7. Ending hands-free mid-answer: the segment playing ends, the rest of the answer continues on the normal
+   output path (no stuck caption, no overlap).
+
+## P6.2 (Type this for me)
+
+Off by default (`v2.typeForMe.enabled`); with it off a `<type>` block still opens the card, Copy
+only. Silent mode covered: `swift test` (chunker, refusal rules, clean-up + 5000 cap, terminals,
+plain-⌘V menu finder, clipboard restore, verification, the confirm gate's 0.5 s window, auto-repeat,
+tagged events, 30 s / focus expiry), the app build and build-for-testing. Nothing was ever typed:
+every confirm below needs the user's own physical Return (or click on Type) — never automate it.
+Compare the look with `~/Library/Logs/Clicky/renders/p6/type-card.png` (and `type-card-refused.png`).
+
+1. Turn on `v2.typeForMe.enabled`. Slack self-DM: "type 'testing clicky, ignore' into this
+   message" → card under the caret with Slack's icon, "text area · Message …", the preview and
+   "AX insert, else paste, else type". Return within 0.5 s of the card appearing does nothing;
+   holding Return (auto-repeat) does nothing; a real Return types it once. Don't send it — clear it.
+   The log line `⌨️ Type for me: Slack AXTextArea len=… method=… result=inserted` names the method.
+2. Safari: a draft in a web form (e.g. a GitHub comment box) → Type; check it landed once, then
+   clear the draft. Also click Type with the mouse (press + release on the button) instead of Return.
+3. TextEdit: a multi-line text → typed with its line breaks (method ax or paste); the clipboard
+   holds what it held before (~350 ms later), unless you copied something in between.
+4. A terminal (Terminal / iTerm2 / Warp / Ghostty): the card asks for a second Return, line breaks
+   are gone, and no Return is ever sent (the command is NOT run).
+5. A secure field (a password field in Safari, or System Settings' password prompt) → card says
+   it won't type, Copy only. Same with 1Password / Keychain Access focused.
+6. Expiry: wait 30 s → Type greys out; switch apps or click into another field → greys out; Esc
+   closes the card without stopping Clicky's speech; changing focus after confirming (during the
+   0.15 s settle) → "focus moved, nothing typed"; holding ⌘ after confirming for > 2 s → aborted.
+
+## P6.9 / P6.10 / P6.6
+
+### P6.9 Diagnostics (silent until you press a button)
+
+1. Open the menu bar panel and press Diagnostics (footer, left of Quit). The window shows permissions, the Qwen status and the newest turn's time to first audio. Nothing is requested.
+2. Press Check Claude and Check GitHub. Confirm no token text appears (only exit codes, `Logged in as`, and the scopes line).
+3. Press a self-test Run button only when you want that test to run (several open windows, play audio or drive the mouse). The result line shows Passed or Failed.
+4. Settings: change a v2 toggle, picker, stepper or list in the window and confirm the panel or the next turn behaves accordingly.
+5. Offscreen layout check: `~/Library/Logs/Clicky/renders/p6/diagnostics.png` (fake values; the toggles and pickers show placeholder glyphs in the render because AppKit controls don't draw offscreen).
+
+### P6.10 whiteboard PDF export
+
+1. Open a board and press `e` (or `boardCtl export`). Expect `~/Pictures/Clicky/whiteboard-<ts>.pdf` next to the PNG and the `.clickyboard`.
+2. Open the PDF in Preview: one page, the board's title and steps as selectable text, charts drawn (not blank).
+
+### P6.6 keep-warm LaunchAgent (generator only; nothing is installed or bootstrapped)
+
+1. The generator and decisions are covered by `swift test` (plist parses, plutil lint on a temp file, exact argv and env). No file is written to ~/Library/LaunchAgents and no launchctl is run by the app.
+2. Installing is not wired. It needs your yes: set `v2.voice.keepWarmAgent` and `v2.voice.keepWarmAgentApproved` (both in the Diagnostics settings list), then wire the install step before trying it.
+3. Not done yet: the app never calls `KeepWarmLaunchAgent.installPlanRequiringUserApproval`, and it doesn't adopt a running server through `adoptDecision` yet.
+
+## P6.7
+
+Progressive board (helper sections, bridge lines, plan-order narration). Hosted tests compiled with build-for-testing,
+not run; the narrator / filter / merge logic is covered by `swift test` (ProgressiveBoardTests).
+
+1. Ask a multi-part board question, e.g. "draw how https works, what a certificate is, and why https is slower"
+   (MODE: whiteboard). turn.json `rawResponse`: one `[WORKER:s<k> title:task]` line per helper section BEFORE the
+   `<whiteboard>` block, and inside it one `{"el":"text","id":"s<k>_wait",…,"text":"working on it…"}` placeholder
+   plus a silent step per helper section. The log shows `🛠️ Worker started (haiku): s1 …` and no
+   "final answer after workers" follow-up stream for these helpers.
+2. Helpers that finish while the agenda is spoken: their sections are drawn in place (the board re-lays out,
+   "working on it…" replaced), narrated in plan order (agenda, s1, s2, …, recap), with no bridge line.
+3. A slow helper (or a long agenda cut short): when the voice reaches its section the placeholder shows, Clicky says
+   ONE bridge line ("that part's still coming, i'll come back to it.") — back-to-back pending sections share it —
+   and goes on. When the helper lands, its steps are narrated right before the recap.
+4. A helper that hasn't landed when the voice reaches the recap (or the end, with no recap): one short line
+   ("that part didn't make it in time…"), its placeholder and empty section leave the board, then the recap.
+   A late reply is ignored (log: `came too late; ignored`).
+5. A helper that fails or replies with nothing of its section: log `drew nothing usable`; the section is dropped
+   with the short line when the voice gets there. Lines outside the section (no `s<k>_` id, header lines, other
+   `sec`, arrows leaving the section) are logged as rejected and never reach the board.
+6. Ordinary helpers (titles without `s<k>`) still get the follow-up stream; a section helper of an answer that
+   drew no board also falls back to the follow-up stream.
+7. After the narration: replay (r), next / back, export and the history's BOARD STATE all use the merged board.
+
+## P6.8 (grounding perf: AX cache + observers, OCR off AX coverage, enhanced UI)
+
+Not run live (the app was in use). Unit-tested: AX cache hit/miss/dirty/evict/race, tile coverage + bbox merge,
+enhanced-UI matching/transitions, alarm percentiles (`GroundingPerfTests`).
+
+1. `selftest groundingLatency` (20 warm + 20 cold, quiet machine): warm p95 ≤ 150 ms, cold p95 ≤ 300 ms (P1b: warm
+   p50 107 / p95 120, cold p95 177). Stage times: `frontAXCached` should be 1 on most warm turns (front app reused from
+   the prewarm), `frontAX` near 0 then. turn.json `grounding.axWalks` marks reused walks `(cached)`; no `latencyAlarm`.
+2. `selftest fixture_selftests` on each of the 3 displays (5K, ultrawide 1x, laptop), twice in a row (the first prewarm
+   verifies AX against full-ish OCR, the second uses AX coverage): ax 100 %, axtext 100 %, web ≥ 95 %, canvas ≥ 98 %
+   both times (the canvas has no AX, so it stays OCRed). `grounding.ocrCoverage` in turn.json shows the tiles skipped.
+3. Grounding eval (`Tools/eval/grounding_eval.py`) no worse than P1b; watch text targets on buttons (button labels
+   don't count as AX coverage, so they're still OCRed) and the shifted-band retry rate.
+4. Cache invalidation by hand: prewarm on Finder, move/resize a window or scroll a list during the hold → the key-up
+   re-walks (no `(cached)`); type in a text field → re-walk; quit an app → its entries go (`AXWalkCache`).
+5. Enhanced UI: bring Chrome / Slack / VS Code forward → their web content shows up in the element list on the first
+   turn; switch to Finder → Chrome's `AXEnhancedUserInterface` is false again (`osascript`/Accessibility Inspector);
+   Rectangle/window snapping on Chrome still behaves while it's frontmost. Quit Clicky with Chrome in front → flag
+   restored. Custom list: `defaults write com.personal.clicky v2.grounding.enhancedUIBundleIDs -array com.google.Chrome`
+   (drop `electron` to stop matching Electron apps).
+6. Alarm: with a forced slow path (e.g. 10 cold turns under load) the console shows "Grounding latency over limit"
+   and turn.json `grounding.latencyAlarm` is set.
+
+## P6.11 (final eval: harness and fixtures only, not run)
+
+Run only when the coordinator says so, with Addy away: it opens Finder, Safari, Xcode, System Settings,
+Preview, Notes, Slack, VS Code, Terminal and a throwaway Chrome, and `--spoken-rows` talks out loud.
+Harness: `Tools/eval/final_eval.py` (data in `Tools/eval/final/`, pages in `Tools/eval/canvas/`); results
+are resumable per row in `build/eval/final/<run>/results.jsonl` (rerun the same command after a stop; usage
+limits back off 30 s → 8 min, then the run stops). Before starting: relaunch Clicky at HEAD via Xcode Run,
+`Tools/clickyctl.sh '{"cmd":"ping"}'` (sha = HEAD), `Tools/GroundingFixture/build.sh`.
+
+1. Validate the data (touches no app):
+   `python3 -I Tools/eval/final_eval.py --dry-run` and `python3 -I Tools/eval/test_final_eval.py`
+2. Check the AX truths first (opens the apps, resolves every row with `axfind`, asks nothing):
+   `python3 -I Tools/eval/final_eval.py --probe-truth --run-name probe`
+   The "Not scored" list in `build/eval/final/probe/EVAL-P6.11.md` (and `results.jsonl`, with the labels
+   `axfind` saw) shows rows whose truth didn't resolve: fix `Tools/eval/final/ax_asks.tsv` (titles of the
+   real controls), `rm build/eval/final/probe/results.jsonl`, probe again. Rows that still don't resolve
+   are reported as truth-missing and left out of n. Slack / VS Code need `"electron"` (set automatically).
+3. Configs on the 40-row fixture (baseline, raw-hires, list, list+badges, verify):
+   `python3 -I Tools/eval/final_eval.py --sets fixture --configs baseline,raw-hires,list,list+badges,verify --displays 0,1,2 --run-name final`
+4. Full sets on the final config (add `,baseline` to `--set-configs` for a baseline arm on the full sets):
+   `python3 -I Tools/eval/final_eval.py --sets ax,canvas --set-configs verify --spoken-rows 10 --run-name final`
+5. Inputs for the board / code-probe lines: `python3 -I Tools/eval/gen_boards.py` (or `--check-only` if the
+   answers exist) and `Tools/codeprobe.sh | tee build/eval/codeprobe.txt`.
+6. Report into EVAL.md (reads results only):
+   `python3 -I Tools/eval/final_eval.py --report-only --run-name final --append-to docs/v2/EVAL.md`
+
+Notes:
+- Config arms are written with `defaults write com.personal.clicky` and restored afterwards. This build reads
+  `v2.grounding.badges` and `v2.grounding.imageTier` (cursor screen only; image tier is read per capture);
+  `v2.grounding.lists` and `v2.grounding.verifyWithHaiku` are written but not read here yet. The report's
+  "setting reached the turn" column checks every turn (`grounding.isBadged`, `elements.txt`,
+  `grounding.verifyWithHaiku`, image px/pt) and says when an arm did not take effect.
+- Truth: AX rows from `axfind` (a plain AX walk in the app, independent of the registry; truths below 50 %
+  visible are dropped as truth-hidden); canvas pages from the DevTools protocol on 127.0.0.1 (Chrome runs in
+  `--app` mode with a temp `--user-data-dir`, deleted afterwards), cross-checked against Chrome's AXWebArea;
+  the video (`canvas/video/dots.mp4`, regenerate with `python3 -I Tools/eval/canvas/make_video.py`); Terminal
+  text from AXBoundsForRange. Figma rows are skipped (not installed).
+- Caption checks need spoken rows (the bubble only shows while Clicky talks): bubble rects are logged as
+  `bubble` events in `<turn>/marks.jsonl`, label pills as `drawn.labelRectCG` in turn.json. RTF and caption
+  lag are reported only if turn.json carries them on the build under test.
+- Cleanup after the run: Terminal windows stay open with "[Process completed]"; Finder / Xcode / VS Code /
+  Preview windows show temporary copies under `build/eval/final/<run>/fixtures`; Safari keeps the
+  127.0.0.1 tabs. Close them by hand.

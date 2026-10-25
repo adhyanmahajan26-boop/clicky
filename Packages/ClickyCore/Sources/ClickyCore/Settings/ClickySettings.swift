@@ -25,8 +25,14 @@ public enum ClickySettings {
         public static let groundingProbe = "v2.grounding.probe"
         /// Bool, default true: draw id badges on the images (A/B switch).
         public static let groundingBadges = "v2.grounding.badges"
+        /// Bool, default false: P6.1 asks Haiku to check tentative marks on a zoomed crop
+        /// (and P6.3 keeps a Haiku process waiting for it from key-down).
+        public static let groundingVerifyWithHaiku = "v2.grounding.verifyWithHaiku"
         /// [String] bundle ids whose field values are never read.
         public static let groundingValueBlockedBundleIDs = "v2.grounding.valueBlockedBundleIDs"
+        /// [String] bundle ids that get AXEnhancedUserInterface while frontmost
+        /// ("electron" = any detected Electron app). See EnhancedUserInterfacePolicy.
+        public static let groundingEnhancedUIBundleIDs = "v2.grounding.enhancedUIBundleIDs"
         /// Int, most marks on screen at once (the oldest goes first). Default 9.
         public static let marksMax = "v2.marks.max"
         /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
@@ -34,7 +40,9 @@ public enum ClickySettings {
         /// "nearCursor" (default: numbered chips on the marks, their words in
         /// the caption bubble) or "column" (labels in a column with leaders).
         public static let marksLabelStyle = "v2.marks.labelStyle"
-        /// "open" (default: mic stays open while Clicky talks) or "halfDuplex".
+        /// "open" (default: mic stays open while Clicky talks), "halfDuplex",
+        /// or "aec" (P6.4: both voices play through the mic's engine with
+        /// voice processing on; headphones stay open, a failure → halfDuplex).
         public static let voiceEchoMode = "v2.voice.echoMode"
         /// Int, caption bubble lines (default 4).
         public static let captionMaxLines = "v2.caption.maxLines"
@@ -50,6 +58,8 @@ public enum ClickySettings {
         public static let whiteboardFullScreen = "v2.whiteboard.fullScreen"
         public static let codeEnabled = "v2.code.enabled"
         public static let typeForMeEnabled = "v2.typeForMe.enabled"
+        /// [String] bundle ids Clicky never types into (default: password managers, Keychain Access).
+        public static let typeForMeBlockedBundleIDs = "v2.typeForMe.blockedBundleIDs"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
         public static let claudeEffortOverride = "v2.claude.effortOverride"
         /// String, Qwen CustomVoice speaker (default "Ryan"; the Base model ignores it).
@@ -67,6 +77,10 @@ public enum ClickySettings {
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+        /// Bool, default false: keep the Qwen server running from a LaunchAgent (also needs keepWarmAgentApproved).
+        public static let keepWarmAgent = "v2.voice.keepWarmAgent"
+        /// Bool, default false: the user said yes to installing the keep-warm LaunchAgent.
+        public static let keepWarmAgentApproved = "v2.voice.keepWarmAgentApproved"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -102,6 +116,8 @@ public enum ClickySettings {
     public enum EchoMode: String, Sendable {
         case open
         case halfDuplex
+        /// Echo cancellation on the shared mic + voice engine (P6.4).
+        case aec
     }
 
     public static var echoMode: EchoMode {
@@ -144,8 +160,17 @@ public enum ClickySettings {
         Set(defaults.stringArray(forKey: Keys.groundingValueBlockedBundleIDs) ?? defaultValueBlockedBundleIDs)
     }
 
+    /// Chromium/Electron apps whose full AX tree is switched on while frontmost.
+    public static var enhancedUIBundleIDs: Set<String> {
+        Set(defaults.stringArray(forKey: Keys.groundingEnhancedUIBundleIDs) ?? EnhancedUserInterfacePolicy.defaultBundleIdentifiers)
+    }
+
     public static var areBadgesEnabled: Bool {
         defaults.object(forKey: Keys.groundingBadges) as? Bool ?? true
+    }
+
+    public static var isVerifyWithHaikuEnabled: Bool {
+        defaults.object(forKey: Keys.groundingVerifyWithHaiku) as? Bool ?? false
     }
 
     public static var maximumMarks: Int {
@@ -222,6 +247,16 @@ public enum ClickySettings {
     // MARK: - P5 Code mode
 
     public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer"]
+    public static var isKeepWarmAgentEnabled: Bool { defaults.object(forKey: Keys.keepWarmAgent) as? Bool ?? false }
+    public static var isKeepWarmAgentApproved: Bool { defaults.object(forKey: Keys.keepWarmAgentApproved) as? Bool ?? false }
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
     public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+
+    // MARK: - P6.2 Type this for me
+
+    /// Password managers and Keychain Access (the same list as valueBlockedBundleIDs).
+    public static let defaultTypeForMeBlockedBundleIDs = defaultValueBlockedBundleIDs
+    public static var typeForMeBlockedBundleIDs: Set<String> {
+        Set(defaults.stringArray(forKey: Keys.typeForMeBlockedBundleIDs) ?? defaultTypeForMeBlockedBundleIDs)
+    }
 }

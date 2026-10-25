@@ -15,6 +15,13 @@
 //  capture + AX now, OCR in the background — the list goes without OCR-only
 //  lines and text lookups wait up to 500 ms for it when resolving.
 //
+//  P6.8 perf: an app whose windows haven't changed (AXObserver events,
+//  AXWalkCache) reuses its last walk instead of walking again; OCR skips
+//  tiles that trusted AX text already covers or that are blank
+//  (OCRCoveragePlanner); listed Chromium/Electron apps get
+//  AXEnhancedUserInterface while frontmost; and a warning (plus a turn.json
+//  flag) fires when key-up p95 over 20 turns passes 150 ms warm / 300 ms cold.
+//
 
 import AppKit
 import ClickyCore
@@ -63,6 +70,8 @@ struct GroundedTurn {
     let isBadged: Bool
     /// Background OCR still running on the cold path.
     let pendingOCRTask: Task<[OCRLine], Never>?
+    /// Set when key-up p95 over the last 20 turns is over its limit.
+    var latencyAlarmWarning: String?
 
     var framesByScreenNumber: [Int: CaptureFrame] {
         Dictionary(uniqueKeysWithValues: screenCaptures.map { ($0.screenNumber, $0.frame) })
@@ -107,7 +116,42 @@ final class GroundingCoordinator {
         var droppedAXApplications: [String] = []
     }
 
+    /// One screen's OCR result in a full snapshot.
+    private nonisolated struct ScreenAnalysis: Sendable {
+        let displayID: CGDirectDisplayID
+        let ocrLines: [OCRLine]
+        let grayImage: GrayImage?
+        let ocrMilliseconds: Double
+        let coveragePlan: OCRCoveragePlanner.Plan
+    }
+
+    /// A walk to wait for, or the cache's copy of one (P6.8).
+    private struct PlannedAXWalk {
+        let request: AXEnumerationRequest
+        let windowStack: WindowStack
+        let liveWalk: AXAppWalk?
+        let cachedElements: [GroundingElement]?
+        let walkStartGeneration: Int
+
+        func elements(waitingUntil deadline: DispatchTime) -> (elements: [GroundingElement], didFinish: Bool, error: Error?) {
+            if let cachedElements { return (cachedElements, true, nil) }
+            return liveWalk?.elements(waitingUntil: deadline) ?? ([], true, nil)
+        }
+
+        func cancel() { liveWalk?.cancel() }
+    }
+
     let ax: AXQuerying = SystemAXQuerying()
+    /// Last finished walk per (pid, window), kept clean by AX observers.
+    private let axWalkCache = AXWalkCache()
+    private lazy var axObserverHub = AXObserverHub(cache: axWalkCache)
+    private lazy var enhancedUserInterfaceController = EnhancedUserInterfaceController(ax: ax)
+    /// Apps whose AX frames agreed with OCR: their text may replace OCR.
+    private var alignmentLedger = AXAlignmentLedger()
+    private var latencyAlarm = GroundingLatencyAlarm()
+    private var terminationObserver: NSObjectProtocol?
+    /// Per display in the last OCR pass: tiles skipped / planned regions.
+    private(set) var lastOCRCoverageStats: [String] = []
     /// The measured cap for the current model (tier probe), if any.
     var effectiveMaxEdgeProvider: () -> Int? = { nil }
     private var captureOptions: ScreenCaptureService.Options {
@@ -125,6 +169,19 @@ final class GroundingCoordinator {
     /// Shown in the panel when AX isn't available.
     var groundingLimitationReason: String? {
         AXIsProcessTrusted() ? nil : "Accessibility is off, so Clicky can only read the screen (OCR)."
+    }
+
+    /// Observers + enhanced-UI tracking (once, from the app's start).
+    func startBackgroundServices() {
+        guard terminationObserver == nil else { return }
+        _ = axObserverHub
+        enhancedUserInterfaceController.start()
+        terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let processIdentifier = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier else { return }
+            MainActor.assumeIsolated { self?.alignmentLedger.evict(processIdentifier) }
+        }
     }
 
     // MARK: - Prewarm
@@ -157,6 +214,16 @@ final class GroundingCoordinator {
 
     /// Builds the grounded content for a question asked at `keyUpDate`.
     func prepareTurn(keyUpDate: Date) async throws -> GroundedTurn {
+        var groundedTurn = try await prepareTurnContent(keyUpDate: keyUpDate)
+        let latencyStatus = latencyAlarm.record(keyUpToReadyMilliseconds: groundedTurn.keyUpToReadyMilliseconds, isWarm: groundedTurn.isWarm)
+        if let warningText = latencyStatus.warningText {
+            print("⚠️ Grounding latency over limit (last \(GroundingLatencyAlarm.windowTurnCount) turns): \(warningText)")
+            groundedTurn.latencyAlarmWarning = warningText
+        }
+        return groundedTurn
+    }
+
+    private func prepareTurnContent(keyUpDate: Date) async throws -> GroundedTurn {
         let preparationStart = Date()
         let cursorCG = ScreenTopology.cg(fromAppKit: NSEvent.mouseLocation, flipH: ScreenTopology.mainDisplayHeight)
         let currentDisplays = ScreenTopology.current()
@@ -180,10 +247,15 @@ final class GroundingCoordinator {
         // Cold path.
         var coldSnapshot = try await makeFullSnapshot(awaitsOCR: false)
         let capturesForOCR = coldSnapshot.screenCaptures
+        let coveredRectsByDisplay = coveredRectsCGByDisplay(axElements: coldSnapshot.axElements, captures: capturesForOCR, windowStack: coldSnapshot.windowStack)
         let pendingOCRTask = Task<[OCRLine], Never> {
             await withTaskGroup(of: [OCRLine].self) { taskGroup in
                 for screenCapture in capturesForOCR {
-                    taskGroup.addTask { await OCREngine.recognizeLines(in: screenCapture.nativeImage, frame: screenCapture.frame) }
+                    let coveredRectsCG = coveredRectsByDisplay[screenCapture.displayID] ?? []
+                    taskGroup.addTask {
+                        let grayImage = GrayImage(cgImage: screenCapture.nativeImage)
+                        return await Self.recognizeUncoveredLines(in: screenCapture, coveredRectsCG: coveredRectsCG, grayImage: grayImage, level: .accurate).lines
+                    }
                 }
                 var allLines: [OCRLine] = []
                 for await lines in taskGroup { allLines += lines }
@@ -204,41 +276,61 @@ final class GroundingCoordinator {
 
         let screenCaptures = try await ScreenCaptureService.captureAllScreens(options: captureOptions)
 
-        // OCR + grey images start right away; the AX walks run meanwhile.
-        let analysisTask: Task<[(CGDirectDisplayID, [OCRLine], GrayImage?, Double)], Never>? = awaitsOCR ? Task {
-            await withTaskGroup(of: (CGDirectDisplayID, [OCRLine], GrayImage?, Double).self) { taskGroup in
-                for screenCapture in screenCaptures {
-                    let isCursorScreen = screenCapture.isCursorScreen
-                    let displayID = screenCapture.displayID
-                    taskGroup.addTask {
-                        let ocrStart = Date()
+        // OCR reads only what trusted AX text doesn't cover. With no trusted
+        // app yet it starts right away (blank tiles still skipped) while the
+        // AX walks run; otherwise once their elements are in.
+        let trustedProcessIdentifiers = alignmentLedger.trustedProcessIdentifiers(at: Date())
+        func startAnalysis(coveredRectsByDisplay: [CGDirectDisplayID: [CGRect]]) -> Task<[ScreenAnalysis], Never> {
+            Task {
+                await withTaskGroup(of: ScreenAnalysis.self) { taskGroup in
+                    for screenCapture in screenCaptures {
+                        let coveredRectsCG = coveredRectsByDisplay[screenCapture.displayID] ?? []
+                        let displayID = screenCapture.displayID
                         // Accurate where the user is looking, fast elsewhere; a
-                        // missed text target triggers a retry pass later.
-                        let ocrLevel: OCREngine.Level = isCursorScreen ? .accurate : .fast
-                        let ocrLines = await OCREngine.recognizeLines(in: screenCapture.nativeImage, frame: screenCapture.frame, level: ocrLevel)
-                        let ocrMilliseconds = Date().timeIntervalSince(ocrStart) * 1000
-                        return (displayID, ocrLines, GrayImage(cgImage: screenCapture.nativeImage), ocrMilliseconds)
+                        // missed text target triggers a full retry pass later.
+                        let ocrLevel: OCREngine.Level = screenCapture.isCursorScreen ? .accurate : .fast
+                        taskGroup.addTask {
+                            let ocrStart = Date()
+                            let grayImage = GrayImage(cgImage: screenCapture.nativeImage)
+                            let recognized = await Self.recognizeUncoveredLines(in: screenCapture, coveredRectsCG: coveredRectsCG, grayImage: grayImage, level: ocrLevel)
+                            return ScreenAnalysis(displayID: displayID, ocrLines: recognized.lines, grayImage: grayImage,
+                                                  ocrMilliseconds: Date().timeIntervalSince(ocrStart) * 1000, coveragePlan: recognized.plan)
+                        }
                     }
+                    var results: [ScreenAnalysis] = []
+                    for await result in taskGroup { results.append(result) }
+                    return results
                 }
-                var results: [(CGDirectDisplayID, [OCRLine], GrayImage?, Double)] = []
-                for await result in taskGroup { results.append(result) }
-                return results
             }
-        } : nil
+        }
+        var analysisTask: Task<[ScreenAnalysis], Never>? = awaitsOCR && trustedProcessIdentifiers.isEmpty ? startAnalysis(coveredRectsByDisplay: [:]) : nil
         let axElements = collectAXElements(from: axWalks)
+        if awaitsOCR && analysisTask == nil {
+            analysisTask = startAnalysis(coveredRectsByDisplay: coveredRectsCGByDisplay(axElements: axElements, captures: screenCaptures,
+                                                                                         windowStack: windowStack, trustedProcessIdentifiers: trustedProcessIdentifiers))
+        }
 
         var ocrLinesByDisplay: [CGDirectDisplayID: [OCRLine]] = [:]
         var grayImagesByDisplay: [CGDirectDisplayID: GrayImage] = [:]
         if let analysisTask {
-            for (displayID, ocrLines, grayImage, ocrMilliseconds) in await analysisTask.value {
-                ocrLinesByDisplay[displayID] = ocrLines
-                grayImagesByDisplay[displayID] = grayImage
-                lastOCRMillisecondsByDisplay[displayID] = ocrMilliseconds
+            var coverageStats: [String] = []
+            for analysis in await analysisTask.value {
+                ocrLinesByDisplay[analysis.displayID] = analysis.ocrLines
+                grayImagesByDisplay[analysis.displayID] = analysis.grayImage
+                lastOCRMillisecondsByDisplay[analysis.displayID] = analysis.ocrMilliseconds
+                coverageStats.append(Self.coverageDescription(displayID: analysis.displayID, plan: analysis.coveragePlan, milliseconds: analysis.ocrMilliseconds))
             }
+            lastOCRCoverageStats = coverageStats
         }
 
         let cursorDisplayID = screenCaptures.first(where: \.isCursorScreen)?.displayID ?? displays.first?.displayID ?? 0
         let dropped = Self.dropMisalignedAXApplications(axElements: axElements, ocrLines: ocrLinesByDisplay.values.flatMap { $0 })
+        if awaitsOCR && !ocrLinesByDisplay.isEmpty {
+            // Apps OCRed in full this time that weren't dropped now agree with OCR.
+            let droppedProcessIdentifiers = Set(axElements.map(\.processIdentifier)).subtracting(dropped.keptElements.map(\.processIdentifier))
+            droppedProcessIdentifiers.forEach { alignmentLedger.recordMisaligned($0) }
+            alignmentLedger.recordVerified(Set(dropped.keptElements.map(\.processIdentifier)).subtracting(trustedProcessIdentifiers), at: Date())
+        }
         return Snapshot(screenCaptures: screenCaptures, axElements: dropped.keptElements, ocrLinesByDisplay: ocrLinesByDisplay,
                         grayImagesByDisplay: grayImagesByDisplay, windowStack: windowStack, cursorDisplayID: cursorDisplayID,
                         readyDate: Date(), droppedAXApplications: dropped.droppedApplications)
@@ -275,10 +367,12 @@ final class GroundingCoordinator {
             if walkResult.didFinish {
                 freshFrontElements += walkResult.elements
                 refreshedProcessIdentifiers.insert(walk.request.processIdentifier)
+                rememberFinishedWalk(walk, result: walkResult)
             } else {
                 walk.cancel()
             }
         }
+        lastTurnStageMilliseconds["frontAXCached"] = Double(frontApplicationWalks.filter { $0.cachedElements != nil && $0.request.scope == .frontApplication }.count)
         refreshedSnapshot.axElements = snapshot.axElements.filter { !refreshedProcessIdentifiers.contains($0.processIdentifier) } + freshFrontElements
 
         lastTurnStageMilliseconds["frontAX"] = (Double(DispatchTime.now().uptimeNanoseconds - walksStart.uptimeNanoseconds) / 1e6).rounded()
@@ -293,12 +387,11 @@ final class GroundingCoordinator {
                 let changedStripsCG = changedStripsPx.map { newCapture.frame.cgRect(fromNativePxRect: $0) }
                 let changedBlocksCG = blockDifferences.changedBlockRects.map { newCapture.frame.cgRect(fromNativePxRect: $0) }
                 let previousLines = snapshot.ocrLinesByDisplay[cursorDisplay.displayID] ?? []
+                // Changed strips, minus what trusted AX text covers or is blank.
+                let coveredRectsCG = coveredRectsCGByDisplay(axElements: refreshedSnapshot.axElements, captures: [newCapture], windowStack: windowStack)[cursorDisplay.displayID] ?? []
                 let reOCRTask = Task<[OCRLine], Never> {
-                    var newLines: [OCRLine] = []
-                    for stripPx in changedStripsPx {
-                        newLines += await OCREngine.recognizeLines(in: newCapture.nativeImage, frame: newCapture.frame, regionPx: stripPx)
-                    }
-                    return newLines
+                    await Self.recognizeUncoveredLines(in: newCapture, coveredRectsCG: coveredRectsCG, grayImage: newGray, level: .accurate,
+                                                       limitedToRegionsPx: changedStripsPx).lines
                 }
                 let reOCRLines = await awaitValue(of: reOCRTask, timeoutNanoseconds: 40_000_000)
                 if reOCRLines == nil { reOCRTask.cancel() }
@@ -320,22 +413,32 @@ final class GroundingCoordinator {
 
     // MARK: - AX
 
-    private func startAXWalks(windowStack: WindowStack, frontApplicationOnly: Bool = false) -> [AXAppWalk] {
+    private func startAXWalks(windowStack: WindowStack, frontApplicationOnly: Bool = false) -> [PlannedAXWalk] {
         guard ax.isProcessTrusted() else { return [] }
         let ownProcessIdentifier = getpid()
         let valueBlockedBundleIdentifiers = ClickySettings.valueBlockedBundleIDs
-        var walks: [AXAppWalk] = []
+        var walks: [PlannedAXWalk] = []
+        let now = Date()
 
         func request(for application: NSRunningApplication, scope: AXEnumerationRequest.Scope, maximumDepth: Int) -> AXEnumerationRequest {
             let bundleIdentifier = application.bundleIdentifier ?? ""
-            let isElectron = application.bundleURL.map {
-                FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
-            } ?? false
             return AXEnumerationRequest(processIdentifier: application.processIdentifier,
                                         applicationName: application.localizedName ?? bundleIdentifier,
                                         scope: scope, maximumDepth: maximumDepth,
                                         allowsValues: !valueBlockedBundleIdentifiers.contains(bundleIdentifier),
-                                        isElectron: isElectron)
+                                        isElectron: ElectronDetection.isElectron(application))
+        }
+
+        // A clean cache entry stands in for the walk (app windows only).
+        func walk(_ request: AXEnumerationRequest) -> PlannedAXWalk {
+            let walkStartGeneration = axWalkCache.generation(of: request.processIdentifier)
+            if let cachedElements = axWalkCache.lookup(processIdentifier: request.processIdentifier, scope: request.scope,
+                                                       windowStack: windowStack, at: now).elements {
+                return PlannedAXWalk(request: request, windowStack: windowStack, liveWalk: nil, cachedElements: cachedElements,
+                                     walkStartGeneration: walkStartGeneration)
+            }
+            return PlannedAXWalk(request: request, windowStack: windowStack, liveWalk: AXAppWalk(request: request, ax: ax, windowStack: windowStack),
+                                 cachedElements: nil, walkStartGeneration: walkStartGeneration)
         }
 
         // "The app you're looking at": the frontmost app, plus the owner of the
@@ -353,11 +456,11 @@ final class GroundingCoordinator {
         }
         for frontProcessIdentifier in frontProcessIdentifiers {
             guard let frontApplication = NSRunningApplication(processIdentifier: frontProcessIdentifier) else { continue }
-            walks.append(AXAppWalk(request: request(for: frontApplication, scope: .frontApplication, maximumDepth: 40), ax: ax, windowStack: windowStack))
+            walks.append(walk(request(for: frontApplication, scope: .frontApplication, maximumDepth: 40)))
         }
         // The menu bar belongs to the frontmost app.
         if let frontApplication = NSWorkspace.shared.frontmostApplication, frontApplication.processIdentifier != ownProcessIdentifier {
-            walks.append(AXAppWalk(request: request(for: frontApplication, scope: .menuBar, maximumDepth: 1), ax: ax, windowStack: windowStack))
+            walks.append(walk(request(for: frontApplication, scope: .menuBar, maximumDepth: 1)))
         }
         guard !frontApplicationOnly else { return walks }
 
@@ -365,17 +468,17 @@ final class GroundingCoordinator {
             .subtracting(Set(frontProcessIdentifiers + [ownProcessIdentifier]))
         for otherProcessIdentifier in otherProcessIdentifiers {
             guard let otherApplication = NSRunningApplication(processIdentifier: otherProcessIdentifier) else { continue }
-            walks.append(AXAppWalk(request: request(for: otherApplication, scope: .otherApplication, maximumDepth: 6), ax: ax, windowStack: windowStack))
+            walks.append(walk(request(for: otherApplication, scope: .otherApplication, maximumDepth: 6)))
         }
         if let dockApplication = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first {
-            walks.append(AXAppWalk(request: request(for: dockApplication, scope: .dock, maximumDepth: 3), ax: ax, windowStack: windowStack))
+            walks.append(walk(request(for: dockApplication, scope: .dock, maximumDepth: 3)))
         }
         return walks
     }
 
     /// Front app walks get 120 ms, everything else 40 ms (from when they
     /// started); whatever each found by then is used.
-    private func collectAXElements(from walks: [AXAppWalk]) -> [GroundingElement] {
+    private func collectAXElements(from walks: [PlannedAXWalk]) -> [GroundingElement] {
         let startTime = DispatchTime.now()
         var elements: [GroundingElement] = []
         var walkStats: [String] = []
@@ -384,10 +487,63 @@ final class GroundingCoordinator {
             let deadline = startTime + .milliseconds(budgetMilliseconds)
             let walkResult = walk.elements(waitingUntil: deadline)
             elements += walkResult.elements
-            walkStats.append("\(walk.request.applicationName) \(walk.request.scope) \(walkResult.elements.count)\(walkResult.didFinish ? "" : " (deadline)")\(walkResult.error.map { " error \($0)" } ?? "")")
+            rememberFinishedWalk(walk, result: walkResult)
+            let cachedNote = walk.cachedElements != nil ? " (cached)" : ""
+            walkStats.append("\(walk.request.applicationName) \(walk.request.scope) \(walkResult.elements.count)\(cachedNote)\(walkResult.didFinish ? "" : " (deadline)")\(walkResult.error.map { " error \($0)" } ?? "")")
         }
         lastAXWalkStats = walkStats
         return elements
+    }
+
+    /// A finished live walk of app windows goes into the cache, and its app
+    /// gets an observer (so the next turn can reuse it).
+    private func rememberFinishedWalk(_ walk: PlannedAXWalk, result: (elements: [GroundingElement], didFinish: Bool, error: Error?)) {
+        guard let liveWalk = walk.liveWalk, walk.request.scope == .frontApplication || walk.request.scope == .otherApplication else { return }
+        let processIdentifier = walk.request.processIdentifier
+        axObserverHub.track(processIdentifier: processIdentifier, windowNodes: liveWalk.windowNodesByWindowID)
+        guard result.didFinish, result.error == nil else { return }
+        axWalkCache.store(processIdentifier: processIdentifier, scope: walk.request.scope, elements: result.elements,
+                          windowStack: walk.windowStack, walkStartGeneration: walk.walkStartGeneration, at: Date())
+    }
+
+    // MARK: - OCR coverage
+
+    /// Trusted AX text frames per display (CG), for OCRCoveragePlanner.
+    private func coveredRectsCGByDisplay(axElements: [GroundingElement], captures: [ScreenCapture], windowStack: WindowStack,
+                                         trustedProcessIdentifiers: Set<pid_t>? = nil) -> [CGDirectDisplayID: [CGRect]] {
+        let trusted = trustedProcessIdentifiers ?? alignmentLedger.trustedProcessIdentifiers(at: Date())
+        guard !trusted.isEmpty else { return [:] }
+        var coveredRectsByDisplay: [CGDirectDisplayID: [CGRect]] = [:]
+        for capture in captures {
+            coveredRectsByDisplay[capture.displayID] = OCRCoveragePlanner.coveringFramesCG(axElements: axElements, displayID: capture.displayID,
+                                                                                         windowStack: windowStack, trustedProcessIdentifiers: trusted)
+        }
+        return coveredRectsByDisplay
+    }
+
+    /// Plans (tiles off AX coverage + blank) and runs OCR for one capture;
+    /// `limitedToRegionsPx` clips the plan (warm path: changed strips).
+    nonisolated private static func recognizeUncoveredLines(in capture: ScreenCapture, coveredRectsCG: [CGRect], grayImage: GrayImage?,
+                                                            level: OCREngine.Level, limitedToRegionsPx: [CGRect]? = nil) async -> (lines: [OCRLine], plan: OCRCoveragePlanner.Plan) {
+        let frame = capture.frame
+        let coveredRectsPx = coveredRectsCG.map { OCRCoveragePlanner.nativePxRect(fromCG: $0, frame: frame) }
+        let plan = OCRCoveragePlanner.plan(imageWidthPx: capture.nativeImage.width, imageHeightPx: capture.nativeImage.height,
+                                           coveredRectsPx: coveredRectsPx, grayImage: grayImage)
+        var regionsPx = plan.regionsPx
+        if let limitedToRegionsPx {
+            regionsPx = limitedToRegionsPx.flatMap { limit in
+                regionsPx.map { $0.intersection(limit) }.filter { !$0.isNull && $0.width >= 1 && $0.height >= 1 }
+            }
+        }
+        guard !regionsPx.isEmpty else { return ([], plan) }
+        let lines = await OCREngine.recognizeLines(in: capture.nativeImage, frame: frame, regionsPx: regionsPx, level: level)
+        return (lines, plan)
+    }
+
+    private static func coverageDescription(displayID: CGDirectDisplayID, plan: OCRCoveragePlanner.Plan, milliseconds: Double) -> String {
+        let skippedPercent = Int((plan.skippedFraction * 100).rounded())
+        let shape = plan.isFullImage ? "full" : "\(plan.regionsPx.count) regions"
+        return "display \(displayID): \(skippedPercent)% tiles skipped, \(shape), \(Int(milliseconds.rounded())) ms"
     }
 
     /// AX frames that disagree with what OCR sees (median offset > 3 pt over

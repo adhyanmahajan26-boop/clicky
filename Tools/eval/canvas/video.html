@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clip review</title>
+<style>
+  html, body { margin: 0; background: #111111; overflow: hidden; }
+  video { position: fixed; left: 40px; top: 40px; width: calc(100vw - 80px); height: calc(100vh - 80px); object-fit: contain; background: #000; }
+</style>
+<script src="common.js"></script>
+</head>
+<body>
+<video id="clip" muted playsinline preload="auto"></video>
+<script>
+// Plays nothing: loads video/dots.mp4 (make_video.py), seeks to ?t= and
+// stays paused. Truth: the squares of the segment containing t, mapped from
+// video pixels through object-fit: contain to viewport px.
+(async function () {
+  try {
+    const spec = await Fixture.manifest("video");
+    const time = parseFloat(Fixture.params.get("t") || "2");
+    const segment = spec.segments.find((s) => time >= s.start && time < s.end);
+    if (!segment) throw new Error("no segment for t=" + time);
+    const video = document.getElementById("clip");
+    await new Promise((resolve, reject) => {
+      video.addEventListener("loadeddata", resolve, { once: true });
+      video.addEventListener("error", () => reject(new Error("video failed to load")), { once: true });
+      video.src = spec.src;
+    });
+    await new Promise((resolve) => { video.addEventListener("seeked", resolve, { once: true }); video.currentTime = time; });
+    video.pause();
+    const box = video.getBoundingClientRect();
+    const scale = Math.min(box.width / spec.width, box.height / spec.height);
+    const offsetX = box.left + (box.width - spec.width * scale) / 2;
+    const offsetY = box.top + (box.height - spec.height * scale) / 2;
+    const items = {};
+    for (const square of segment.squares) {
+      const [x, y, w, h] = square.rect;
+      items[square.key] = [offsetX + x * scale, offsetY + y * scale, w * scale, h * scale].map((v) => Math.round(v * 100) / 100);
+    }
+    Fixture.publish("video", items, { t: time, scale });
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>

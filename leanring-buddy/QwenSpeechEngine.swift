@@ -26,6 +26,11 @@
 //  stopNow: epoch++, cancel every task, clear the queue, stop the player.
 //  Every async continuation checks the epoch it started in.
 //
+//  P6.4 "aec": while the AudioEngineHub's voice processing is on (decided
+//  per answer), the WAV becomes one AVAudioPCMBuffer on the hub's player
+//  node instead (rate via its time pitch, bypassed at 1); the clock is the
+//  player node's sample time, still driving WordTiming.
+//
 
 import AVFoundation
 import ClickyCore
@@ -38,6 +43,13 @@ final class QwenSpeechEngine: SpeechEngine {
 
     private let client: QwenLocalTTSClient
     private let supervisor: QwenServerSupervisor
+    private let audioEngineHub: AudioEngineHub?
+    private lazy var sharedPlayerChannel: SharedEnginePlayerChannel? = {
+        guard let audioEngineHub else { return nil }
+        let playerChannel = audioEngineHub.makePlayerChannel()
+        playerChannel.onSharedEngineStopped = { [weak self] in self?.sharedEngineDidStop() }
+        return playerChannel
+    }()
     private static let pointLeadSeconds: TimeInterval = 0.25
 
     private struct Prepared {
@@ -58,16 +70,27 @@ final class QwenSpeechEngine: SpeechEngine {
     private var isPaused = false
     private var isStartingNext = false
 
-    init(client: QwenLocalTTSClient, supervisor: QwenServerSupervisor) {
+    /// This answer plays through the hub's shared engine (AEC on at its start).
+    private var usesSharedEngineForAnswer = false
+    /// The current segment is on the shared player node (not an AVAudioPlayer).
+    private var isSharedPlaybackActive = false
+    private var currentSharedAudioDuration: TimeInterval = 0
+    private var currentSharedPlaybackRate: Double = 1
+    /// Bumped whenever shared playback ends, so a late "played back" is ignored.
+    private var sharedPlaybackGeneration = 0
+
+    init(client: QwenLocalTTSClient, supervisor: QwenServerSupervisor, audioEngineHub: AudioEngineHub? = nil) {
         self.client = client
         self.supervisor = supervisor
+        self.audioEngineHub = audioEngineHub
     }
 
-    var isPlaying: Bool { currentPlayer?.isPlaying == true || !queue.isEmpty || isStartingNext }
+    var isPlaying: Bool { currentPlayer?.isPlaying == true || isSharedPlaybackActive || !queue.isEmpty || isStartingNext }
 
     func begin(epoch: Int) {
         stopNow()
         hasEndedAnswer = false
+        usesSharedEngineForAnswer = audioEngineHub?.isVoiceProcessingActive == true
     }
 
     func enqueue(_ segment: CaptionSegment) {
@@ -89,6 +112,9 @@ final class QwenSpeechEngine: SpeechEngine {
         progressTimer = nil
         currentPlayer?.stop()
         currentPlayer = nil
+        if isSharedPlaybackActive { sharedPlayerChannel?.stop() }
+        isSharedPlaybackActive = false
+        sharedPlaybackGeneration += 1
         currentSegment = nil
         currentWordTimes = nil
         currentStopTime = nil
@@ -99,11 +125,13 @@ final class QwenSpeechEngine: SpeechEngine {
     func pause() {
         isPaused = true
         currentPlayer?.pause()
+        if isSharedPlaybackActive { sharedPlayerChannel?.pause() }
     }
 
     func resume() {
         isPaused = false
         currentPlayer?.play()
+        if isSharedPlaybackActive { sharedPlayerChannel?.resume() }
         startNextIfIdle()
     }
 
@@ -150,6 +178,10 @@ final class QwenSpeechEngine: SpeechEngine {
     }
 
     private func play(_ segment: CaptionSegment, audioData: Data) {
+        if usesSharedEngineForAnswer, audioEngineHub?.isVoiceProcessingActive == true,
+           playThroughSharedEngine(segment, audioData: audioData) {
+            return
+        }
         do {
             let player = try AVAudioPlayer(data: audioData)
             // Rate must be enabled before prepareToPlay.
@@ -171,40 +203,113 @@ final class QwenSpeechEngine: SpeechEngine {
             currentSegment = segment
             player.play()
             callbacks.onSegmentStart(segment.id)
-            progressTimer?.invalidate()
-            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.reportProgress() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            progressTimer = timer
+            startProgressTimer()
         } catch {
             fail(error, failedSegment: segment)
         }
     }
 
+    /// "aec": the WAV as one buffer on the shared engine's player node.
+    /// False (nothing started) if it can't be decoded or scheduled; the
+    /// AVAudioPlayer path then plays it.
+    private func playThroughSharedEngine(_ segment: CaptionSegment, audioData: Data) -> Bool {
+        guard let sharedPlayerChannel, let decodedAudio = PCMAudio(wavData: audioData) else { return false }
+        var spokenAudio = decodedAudio
+        if let cutTime = WordTiming.overrunCutTime(decodedAudio, characters: segment.speechLength) {
+            print("✂️ Qwen audio ran \(String(format: "%.1f", decodedAudio.duration)) s for \(segment.speechLength) chars; cut at \(String(format: "%.2f", cutTime)) s")
+            spokenAudio = decodedAudio.prefix(seconds: cutTime)
+        }
+        guard let audioBuffer = Self.makePCMBuffer(from: spokenAudio) else { return false }
+        let playbackRate = ClickySettings.voiceRate
+        sharedPlaybackGeneration += 1
+        let playbackGeneration = sharedPlaybackGeneration
+        sharedPlayerChannel.startSegment(rate: playbackRate)
+        let isScheduled = sharedPlayerChannel.schedule(audioBuffer) { [weak self] in
+            guard let self, self.sharedPlaybackGeneration == playbackGeneration else { return }
+            self.finishCurrentSegment()
+        }
+        guard isScheduled else { return false }
+        currentWordTimes = WordTiming.wordTimes(speech: segment.speech, wordRanges: segment.wordRanges, audio: spokenAudio)
+        currentStopTime = nil
+        currentSharedAudioDuration = spokenAudio.duration
+        currentSharedPlaybackRate = playbackRate
+        isSharedPlaybackActive = true
+        currentSegment = segment
+        callbacks.onSegmentStart(segment.id)
+        startProgressTimer()
+        return true
+    }
+
+    private static func makePCMBuffer(from audio: PCMAudio) -> AVAudioPCMBuffer? {
+        guard !audio.samples.isEmpty,
+              let sourceFormat = AVAudioFormat(standardFormatWithSampleRate: audio.sampleRate, channels: 1),
+              let audioBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(audio.samples.count)),
+              let channelSamples = audioBuffer.floatChannelData?[0] else { return nil }
+        audio.samples.withUnsafeBufferPointer { samplePointer in
+            guard let sampleBaseAddress = samplePointer.baseAddress else { return }
+            channelSamples.update(from: sampleBaseAddress, count: audio.samples.count)
+        }
+        audioBuffer.frameLength = AVAudioFrameCount(audio.samples.count)
+        return audioBuffer
+    }
+
+    /// The hub stopped under us (hands-free ended): this segment is over;
+    /// later ones play through AVAudioPlayer.
+    private func sharedEngineDidStop() {
+        guard isSharedPlaybackActive else { return }
+        finishCurrentSegment()
+    }
+
+    private func startProgressTimer() {
+        progressTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportProgress() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        progressTimer = timer
+    }
+
     private func reportProgress() {
-        guard let player = currentPlayer, let segment = currentSegment else { return }
-        if let currentStopTime, player.currentTime >= currentStopTime {
-            player.stop()
-            finishCurrentSegment()
-            return
+        guard let segment = currentSegment else { return }
+        let mediaTime: TimeInterval
+        let mediaDuration: TimeInterval
+        let playbackRate: Double
+        if isSharedPlaybackActive {
+            guard let sharedPlayerChannel, sharedPlayerChannel.isEngineRunning else {
+                finishCurrentSegment()
+                return
+            }
+            // The player node's sample time is media time too (before the time pitch).
+            mediaTime = min(sharedPlayerChannel.playedSeconds, currentSharedAudioDuration)
+            mediaDuration = currentSharedAudioDuration
+            playbackRate = currentSharedPlaybackRate
+        } else {
+            guard let player = currentPlayer else { return }
+            if let currentStopTime, player.currentTime >= currentStopTime {
+                player.stop()
+                finishCurrentSegment()
+                return
+            }
+            if !player.isPlaying && !isPaused {
+                finishCurrentSegment()
+                return
+            }
+            mediaTime = player.currentTime
+            mediaDuration = player.duration
+            playbackRate = Double(player.rate)
         }
-        if !player.isPlaying && !isPaused {
-            finishCurrentSegment()
-            return
-        }
-        // currentTime is media time: captions stay on the words at any rate.
-        let clock = player.currentTime + ClickySettings.captionAVOffsetMilliseconds / 1000
+        // Media time: captions stay on the words at any rate.
+        let clock = mediaTime + ClickySettings.captionAVOffsetMilliseconds / 1000
         let total = segment.speechLength
-        let leadSeconds = Self.pointLeadSeconds * Double(player.rate)
+        let leadSeconds = Self.pointLeadSeconds * playbackRate
         if let wordTimes = currentWordTimes {
             let spoken = wordTimes.spokenCharacters(at: clock, wordRanges: segment.wordRanges, totalCharacters: total)
             let leadSpoken = wordTimes.spokenCharacters(at: clock + leadSeconds, wordRanges: segment.wordRanges, totalCharacters: total)
             callbacks.onProgress(segment.id, spoken, leadSpoken, false)
-        } else if player.duration > 0 {
+        } else if mediaDuration > 0 {
             // No parsable WAV: proportional estimate.
-            let fraction = min(1, clock / player.duration)
-            callbacks.onProgress(segment.id, Int(Double(total) * fraction), Int(Double(total) * min(1, (clock + leadSeconds) / player.duration)), false)
+            let fraction = min(1, clock / mediaDuration)
+            callbacks.onProgress(segment.id, Int(Double(total) * fraction), Int(Double(total) * min(1, (clock + leadSeconds) / mediaDuration)), false)
         }
     }
 
@@ -213,6 +318,8 @@ final class QwenSpeechEngine: SpeechEngine {
         progressTimer?.invalidate()
         progressTimer = nil
         currentPlayer = nil
+        isSharedPlaybackActive = false
+        sharedPlaybackGeneration += 1
         currentSegment = nil
         currentWordTimes = nil
         currentStopTime = nil

@@ -6,7 +6,9 @@
 //  the Anthropic API, so requests run on the user's Claude subscription and
 //  no API key is needed. Each request launches `claude -p` in headless
 //  stream-json mode (arguments from ClickyCore's ClaudeArgs, shared with
-//  workers and probes), writes ONE user message to its stdin and closes it,
+//  workers and probes) — or, P6.3, takes the one pre-spawned at key-down
+//  when it was launched with the same settings (StandbyCLISlot) — writes
+//  ONE user message to its stdin and closes it,
 //  and reads streamed events from stdout, split on 0x0A only (LineReader:
 //  a U+2028 inside a delta must not break the JSON line). Every event is
 //  passed to `onStreamEvent`; 25 s without a text delta ends the request.
@@ -42,6 +44,25 @@ enum ClaudeCodeBridgeError: LocalizedError {
 enum ClaudeContentBlock {
     case text(String)
     case jpegImage(Data)
+    /// P6.1 zoom check: one lossless crop.
+    case pngImage(Data)
+
+    var isImage: Bool {
+        switch self {
+        case .text: return false
+        case .jpegImage, .pngImage: return true
+        }
+    }
+}
+
+/// How a request's CLI process came to be (turn.json `cli`, P6.3).
+struct ClaudeProcessOrigin: Sendable {
+    let spawnDate: Date
+    /// The pre-spawned process was used (no CLI start-up after key-up).
+    let usedStandbyProcess: Bool
+    /// What the standby slot said; nil when the request didn't ask for it.
+    let standbyOutcome: StandbyCLISlot.TakeOutcome?
+    let retriedAfterBrokenPipe: Bool
 }
 
 struct ClaudeTurnResult {
@@ -68,6 +89,11 @@ final class ClaudeCodeBridge {
     private static let sessionWorkingDirectoryURL: URL = {
         (try? ClaudeArgs.prepareSessionWorkingDirectory()) ?? ClaudeArgs.sessionWorkingDirectoryURL
     }()
+
+    /// The pre-spawned process waiting for this bridge's next request (P6.3).
+    let standbySlot = StandbyCLISlot(idleLimitSeconds: ClaudeCodeBridge.standbyIdleLimitSeconds)
+    /// A pre-spawned process not used within this long is reaped.
+    static let standbyIdleLimitSeconds: TimeInterval = 60
 
     init(model: String = "sonnet") {
         self.model = model
@@ -115,24 +141,9 @@ final class ClaudeCodeBridge {
         return URL(fileURLWithPath: resolvedPath)
     }
 
-    // MARK: - Requests
-
-    /// Runs one request: writes the system prompt file, launches the CLI,
-    /// builds and writes the single stdin line off the main actor, and
-    /// collects streamed deltas and the final result.
-    func runTurn(
-        systemPromptFileName: String,
-        systemPrompt: String,
-        contentBlocks: [ClaudeContentBlock],
-        effortLevel: String? = nil,
-        persistentSessionIdentifier: String? = nil,
-        oversizedImageErrorTransformationOverride: Bool? = nil,
-        onTextChunk: @MainActor @Sendable (String) -> Void = { _ in },
-        onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)? = nil,
-        onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil
-    ) async throws -> ClaudeTurnResult {
-        let startTime = Date()
-
+    /// The launch a request with these settings uses (writes the prompt file).
+    func makeLaunchSpec(systemPromptFileName: String, systemPrompt: String, effortLevel: String?,
+                        persistentSessionIdentifier: String? = nil, maximumTurns: Int? = nil) throws -> CLILaunchSpec {
         guard let claudeCodeExecutableURL = Self.locateClaudeCodeExecutable() else {
             throw ClaudeCodeBridgeError.claudeCodeNotInstalled
         }
@@ -141,47 +152,71 @@ final class ClaudeCodeBridge {
             model: model,
             systemPromptFileURL: systemPromptFileURL,
             effortLevel: effortLevel,
-            persistentSessionIdentifier: persistentSessionIdentifier
+            persistentSessionIdentifier: persistentSessionIdentifier,
+            maximumTurns: maximumTurns
         )
-
         let workingDirectoryURL = Self.sessionWorkingDirectoryURL
         try? FileManager.default.createDirectory(at: workingDirectoryURL, withIntermediateDirectories: true)
+        return CLILaunchSpec(executableURL: claudeCodeExecutableURL, arguments: claudeArgs.arguments, environment: ClaudeArgs.environment(),
+                             workingDirectoryURL: workingDirectoryURL, systemPromptText: systemPrompt)
+    }
 
-        let claudeCodeProcess = Process()
-        claudeCodeProcess.executableURL = claudeCodeExecutableURL
-        claudeCodeProcess.currentDirectoryURL = workingDirectoryURL
-        claudeCodeProcess.arguments = claudeArgs.arguments
-        claudeCodeProcess.environment = ClaudeArgs.environment()
+    // MARK: - Pre-spawn (P6.3)
 
-        let standardInputPipe = Pipe()
-        let standardOutputPipe = Pipe()
-        let standardErrorPipe = Pipe()
-        claudeCodeProcess.standardInput = standardInputPipe
-        claudeCodeProcess.standardOutput = standardOutputPipe
-        claudeCodeProcess.standardError = standardErrorPipe
-
-        // Launch first, then build the (large) message while the CLI starts up.
-        try claudeCodeProcess.run()
-
-        let sendsTransformation = oversizedImageErrorTransformationOverride ?? Self.sendsOversizedImageErrorTransformation
-        let userMessageLine = try await Task.detached(priority: .userInitiated) {
-            try Self.makeStreamJSONUserMessageLine(contentBlocks: contentBlocks, sendsOversizedImageErrorTransformation: sendsTransformation)
-        }.value
-        let imageCount = contentBlocks.filter { if case .jpegImage = $0 { return true } else { return false } }.count
-        print("🌐 Claude Code request: \(String(format: "%.1f", Double(userMessageLine.count) / 1_048_576.0))MB, \(imageCount) image(s), model \(model)")
-
-        // Write off the main actor: the payload is larger than the pipe
-        // buffer, so a blocking write would stall the UI until the CLI drains
-        // it. Closing stdin tells the CLI there are no more turns.
-        let standardInputFileHandle = standardInputPipe.fileHandleForWriting
-        onPipelineStage?("handedToWriter")
-        Task.detached {
-            try? standardInputFileHandle.write(contentsOf: userMessageLine)
-            try? standardInputFileHandle.close()
-            await MainActor.run {
-                onPipelineStage?("requestWritten")
-            }
+    /// Starts the CLI for the next request now (key-down) and leaves it
+    /// waiting on stdin; a request with the same settings then skips the
+    /// CLI's start-up. Already waiting with these settings: nothing to do.
+    @discardableResult
+    func prespawnStandbyProcess(systemPromptFileName: String, systemPrompt: String, effortLevel: String?, maximumTurns: Int? = nil) -> Bool {
+        do {
+            let launchSpec = try makeLaunchSpec(systemPromptFileName: systemPromptFileName, systemPrompt: systemPrompt,
+                                                effortLevel: effortLevel, maximumTurns: maximumTurns)
+            if standbySlot.hasHealthyProcess(matching: launchSpec) { return true }
+            standbySlot.install(try StandbyCLIProcess.spawn(launchSpec))
+            return true
+        } catch {
+            print("⚠️ Claude Code pre-spawn failed (\(model)): \(error)")
+            return false
         }
+    }
+
+    /// Reaps the waiting process, if any (turn end, setting turned off).
+    func reapStandbyProcess() {
+        standbySlot.reapWaiting()
+    }
+
+    // MARK: - Requests
+
+    /// Runs one request: writes the system prompt file, takes the waiting
+    /// pre-spawned CLI when it matches (else launches one), builds the single
+    /// stdin line off the main actor, writes it, and collects streamed
+    /// deltas and the final result.
+    func runTurn(
+        systemPromptFileName: String,
+        systemPrompt: String,
+        contentBlocks: [ClaudeContentBlock],
+        effortLevel: String? = nil,
+        persistentSessionIdentifier: String? = nil,
+        maximumTurns: Int? = nil,
+        allowsStandbyProcess: Bool = false,
+        oversizedImageErrorTransformationOverride: Bool? = nil,
+        onTextChunk: @MainActor @Sendable (String) -> Void = { _ in },
+        onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)? = nil,
+        onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil,
+        onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)? = nil
+    ) async throws -> ClaudeTurnResult {
+        let startTime = Date()
+
+        let launchSpec = try makeLaunchSpec(systemPromptFileName: systemPromptFileName, systemPrompt: systemPrompt, effortLevel: effortLevel,
+                                            persistentSessionIdentifier: persistentSessionIdentifier, maximumTurns: maximumTurns)
+
+        // A waiting process launched with exactly this spec skips start-up;
+        // a different model / effort / prompt is reaped and we spawn fresh.
+        let taken = allowsStandbyProcess ? standbySlot.take(matching: launchSpec) : nil
+        let standbyOutcome = taken?.outcome
+        let maybeStandbyProcess = taken?.process
+        let initialProcess = try maybeStandbyProcess ?? StandbyCLIProcess.spawn(launchSpec)
+        let activeProcess = ActiveCLIProcess(initialProcess)
 
         // 25 s without a text delta: stop the CLI and report it as stalled.
         let stallWatch = StallWatch()
@@ -190,7 +225,7 @@ final class ClaudeCodeBridge {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if stallWatch.secondsSinceLastActivity() > CLIStreamFailure.stallSeconds {
                     stallWatch.markStalled()
-                    claudeCodeProcess.terminate()
+                    activeProcess.current.reap()
                     return
                 }
             }
@@ -198,6 +233,36 @@ final class ClaudeCodeBridge {
         defer { stallWatchTask.cancel() }
 
         return try await withTaskCancellationHandler {
+            // Build the (large) message while a fresh CLI starts up.
+            let sendsTransformation = oversizedImageErrorTransformationOverride ?? Self.sendsOversizedImageErrorTransformation
+            let userMessageLine = try await Task.detached(priority: .userInitiated) {
+                try Self.makeStreamJSONUserMessageLine(contentBlocks: contentBlocks, sendsOversizedImageErrorTransformation: sendsTransformation)
+            }.value
+            let imageCount = contentBlocks.filter(\.isImage).count
+            print("🌐 Claude Code request: \(String(format: "%.1f", Double(userMessageLine.count) / 1_048_576.0))MB, \(imageCount) image(s), model \(model), standby \(standbyOutcome?.rawValue ?? "off")")
+
+            // Write off the main actor: the payload is larger than the pipe
+            // buffer, so a blocking write would stall the UI until the CLI
+            // drains it. Closing stdin tells the CLI there are no more turns.
+            // EPIPE (the process died): spawn once more and retry.
+            onPipelineStage?("handedToWriter")
+            let delivered = try await Task.detached(priority: .userInitiated) {
+                try StandbyCLIDelivery.deliver(userMessageLine, to: initialProcess) {
+                    guard !activeProcess.isCancelled else { throw CancellationError() }
+                    let respawnedProcess = try StandbyCLIProcess.spawn(launchSpec)
+                    activeProcess.replace(with: respawnedProcess)
+                    return respawnedProcess
+                }
+            }.value
+            let claudeCodeProcess = delivered.process
+            onPipelineStage?("requestWritten")
+            onProcessReady?(ClaudeProcessOrigin(
+                spawnDate: claudeCodeProcess.spawnDate,
+                usedStandbyProcess: claudeCodeProcess === maybeStandbyProcess,
+                standbyOutcome: standbyOutcome,
+                retriedAfterBrokenPipe: delivered.didRetryAfterBrokenPipe
+            ))
+
             var accumulatedResponseText = ""
             var finalResultText: String?
             var resolvedModelIdentifier: String?
@@ -231,7 +296,7 @@ final class ClaudeCodeBridge {
                 }
             }
 
-            for try await outputByte in standardOutputPipe.fileHandleForReading.bytes {
+            for try await outputByte in claudeCodeProcess.standardOutputHandle.bytes {
                 pendingBytes.append(outputByte)
                 guard outputByte == 0x0A || pendingBytes.count >= 65_536 else { continue }
                 let completedLines = lineReader.append(pendingBytes)
@@ -241,7 +306,7 @@ final class ClaudeCodeBridge {
             for lineData in lineReader.append(pendingBytes) { try await handle(lineData) }
             if let lastLine = lineReader.finish() { try await handle(lastLine) }
 
-            claudeCodeProcess.waitUntilExit()
+            await claudeCodeProcess.waitForExit()
 
             // A cancelled request was killed mid-stream; report it as a
             // cancellation so the caller doesn't treat it as a failure.
@@ -249,10 +314,10 @@ final class ClaudeCodeBridge {
             if stallWatch.isStalled { throw ClaudeCodeBridgeError.claudeCodeStalled }
 
             guard let finalResultText else {
-                let standardErrorData = standardErrorPipe.fileHandleForReading.readDataToEndOfFile()
+                let standardErrorData = claudeCodeProcess.standardErrorHandle.readDataToEndOfFile()
                 let standardErrorOutput = String(data: standardErrorData, encoding: .utf8) ?? ""
                 throw ClaudeCodeBridgeError.claudeCodeExitedWithoutResult(
-                    exitCode: claudeCodeProcess.terminationStatus,
+                    exitCode: claudeCodeProcess.process.terminationStatus,
                     standardErrorOutput: standardErrorOutput
                 )
             }
@@ -268,7 +333,7 @@ final class ClaudeCodeBridge {
             )
         } onCancel: {
             // The user spoke again — kill the in-flight request immediately.
-            claudeCodeProcess.terminate()
+            activeProcess.cancel()
         }
     }
 
@@ -278,13 +343,15 @@ final class ClaudeCodeBridge {
             switch contentBlock {
             case .text(let blockText):
                 return ["type": "text", "text": blockText]
-            case .jpegImage(let jpegData):
+            case .jpegImage(let imageData), .pngImage(let imageData):
+                let mediaType: String
+                if case .pngImage = contentBlock { mediaType = "image/png" } else { mediaType = "image/jpeg" }
                 var imageBlock: [String: Any] = [
                     "type": "image",
                     "source": [
                         "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": jpegData.base64EncodedString()
+                        "media_type": mediaType,
+                        "data": imageData.base64EncodedString()
                     ]
                 ]
                 if sendsOversizedImageErrorTransformation {
@@ -337,6 +404,45 @@ final class ClaudeCodeBridge {
             }
             return authStatus["loggedIn"] as? Bool ?? false
         }.value
+    }
+}
+
+/// The process a request is talking to: the standby, or its respawn after
+/// a broken pipe. Cancel and the stall watchdog stop whichever it is now.
+private nonisolated final class ActiveCLIProcess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: StandbyCLIProcess
+    private var cancelled = false
+
+    init(_ process: StandbyCLIProcess) {
+        self.process = process
+    }
+
+    var current: StandbyCLIProcess {
+        lock.lock(); defer { lock.unlock() }
+        return process
+    }
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    func replace(with newProcess: StandbyCLIProcess) {
+        lock.lock()
+        process = newProcess
+        let shouldReap = cancelled
+        lock.unlock()
+        if shouldReap { newProcess.reap() }
+    }
+
+    /// Stops (and reaps) the process now and any respawn after.
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let processToReap = process
+        lock.unlock()
+        processToReap.reap()
     }
 }
 

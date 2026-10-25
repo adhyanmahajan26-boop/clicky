@@ -65,9 +65,23 @@ public struct EchoGuard: Sendable {
     public init() {}
 
     /// What the voice is saying (call at segment start and end).
+    /// Recording the same text again refreshes its date (P6.4: a long
+    /// segment stays "recent" while it plays).
     public mutating func recordSpoken(_ text: String, at date: Date) {
         spokenEntries.removeAll { date.timeIntervalSince($0.date) > Self.windowSeconds }
-        spokenEntries.append((Self.words(in: text), date))
+        let spokenWords = Self.words(in: text)
+        if let existingIndex = spokenEntries.firstIndex(where: { $0.words == spokenWords }) {
+            spokenEntries[existingIndex].date = max(spokenEntries[existingIndex].date, date)
+        } else {
+            spokenEntries.append((spokenWords, date))
+        }
+    }
+
+    /// Every word Clicky said in the last 4 seconds before `date`.
+    public func recentSpokenWords(at date: Date) -> Set<String> {
+        spokenEntries
+            .filter { date.timeIntervalSince($0.date) <= Self.windowSeconds }
+            .reduce(into: Set<String>()) { $0.formUnion($1.words) }
     }
 
     /// Whether `heardText` is a real barge-in command at `date`.
@@ -81,10 +95,7 @@ public struct EchoGuard: Sendable {
         let heardWords = Self.words(in: heardText)
         let commandWordsHeard = heardWords.intersection(commandWords)
         guard !commandWordsHeard.isEmpty else { return false }
-        let recentWords = spokenEntries
-            .filter { date.timeIntervalSince($0.date) <= Self.windowSeconds }
-            .reduce(into: Set<String>()) { $0.formUnion($1.words) }
-        return commandWordsHeard.isDisjoint(with: recentWords)
+        return commandWordsHeard.isDisjoint(with: recentSpokenWords(at: date))
     }
 
     static func words(in text: String) -> Set<String> {

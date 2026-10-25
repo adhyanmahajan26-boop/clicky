@@ -124,6 +124,11 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// P6.2 "Type this for me": the <type> card, its confirm gate and the insertion.
+    private(set) lazy var typeForMeController = TypeForMeController { [weak self] text in
+        self?.speakCodeModeLine(text)
+    }
+
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
     /// The board panel is open: the caption bubble stays hidden (the board has its subtitle bar).
@@ -279,6 +284,9 @@ final class CompanionManager: ObservableObject {
         // The CODE prompt section exists from launch; it's only sent while Code mode is on.
         CodeModePrompt.register()
         escapeKeyConsumers.append { [weak self] in self?.codeModeController.handleEscapeKey() ?? false }
+        // P6.2: the TYPING prompt section (sent only while v2.typeForMe.enabled is on); the card takes Esc first.
+        TypeForMePrompt.register()
+        escapeKeyConsumers.insert({ [weak self] in self?.typeForMeController.handleEscapeKey() ?? false }, at: 0)
 
         // P4: the whiteboard prompt section exists now that boards are drawn.
         SystemPromptBuilder.gatedSectionTexts[.whiteboard] = WhiteboardPromptSection.text
@@ -289,6 +297,8 @@ final class CompanionManager: ObservableObject {
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
         }
+        // P6.8: AX observers (walk cache) and enhanced UI for Chromium/Electron.
+        groundingCoordinator.startBackgroundServices()
         // A model we haven't measured yet: check in the background what image
         // size it really sees (stored per resolved model id).
         onNewResolvedModelIdentifier = { [weak self] resolvedModelIdentifier in
@@ -608,6 +618,10 @@ final class CompanionManager: ObservableObject {
             speechOutputClient.stopPlayback()
             clearDetectedElementLocation()
 
+            // Start the CLI now so key-up only has to write the message.
+            prespawnMainBrainStandby()
+            zoomChecker.prespawnStandbyIfEnabled()
+
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
                 withAnimation(.easeOut(duration: 0.3)) {
@@ -736,6 +750,8 @@ final class CompanionManager: ObservableObject {
         }
 
         let handsFreeListeningSession = HandsFreeListeningSession(
+            requestedEchoMode: ClickySettings.echoMode,
+            audioEngineHub: speechOutputClient.audioEngineHub,
             onPartialTranscript: { [weak self] partialTranscript in
                 self?.handleHandsFreePartialTranscript(partialTranscript)
             },
@@ -767,6 +783,8 @@ final class CompanionManager: ObservableObject {
 
     func endHandsFreeSession() {
         guard isHandsFreeSessionActive else { return }
+        claudeCodeBridge.reapStandbyProcess()
+        zoomChecker.reapStandby()
 
         handsFreeListeningSession?.stopListening()
         handsFreeListeningSession = nil
@@ -795,19 +813,38 @@ final class CompanionManager: ObservableObject {
 
     private func handleHandsFreePartialTranscript(_ partialTranscript: String) {
         handsFreeLastHeardText = partialTranscript
-        // First words of an utterance: start reading the screens.
+        // First words of an utterance: start reading the screens and the CLI.
         groundingCoordinator.prewarm()
+        if claudeCodeBridge.standbySlot.currentProcess?.isHealthy != true {
+            prespawnMainBrainStandby()
+        }
+        zoomChecker.prespawnStandbyIfEnabled()
 
         // Until output latency + 0.25 s after the last audio, what the mic
         // hears is most likely Clicky itself.
         if speechOutputClient.isPlayingOrEchoTail {
+            // The mode that actually runs ("aec" may have resolved to open / halfDuplex).
+            let activeEchoMode = handsFreeListeningSession?.effectiveEchoMode ?? ClickySettings.echoMode
+            // AEC: Clicky's words that leaked past the canceller (last 4 words
+            // ≥ 60 % its own) are dropped, so they don't start an utterance.
+            if activeEchoMode == .aec, let activeCoordinator = speechOutputClient.activeCoordinator,
+               activeCoordinator.isLikelyEcho(partialTranscript) {
+                print("🔇 Hands-free: echo of Clicky's own words dropped: \(partialTranscript)")
+                handsFreeListeningSession?.discardCurrentUtterance()
+                currentUtteranceOverlappedBuddySpeech = false
+                return
+            }
             currentUtteranceOverlappedBuddySpeech = true
             // Half-duplex: nothing the mic hears while Clicky talks counts.
-            if ClickySettings.echoMode == .halfDuplex { return }
+            if activeEchoMode == .halfDuplex { return }
             // "stop" / "wait" / "clicky stop" barge in, unless Clicky itself
-            // just said that word (the mic heard the speaker).
+            // just said that word (the mic heard the speaker). AEC: only those
+            // exact phrases count while it plays.
             if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
-                if activeCoordinator.heardWhileSpeaking(partialTranscript) {
+                let isAcceptedBargeIn = activeEchoMode == .aec
+                    ? activeCoordinator.heardWhileSpeakingWithEchoCancellation(partialTranscript)
+                    : activeCoordinator.heardWhileSpeaking(partialTranscript)
+                if isAcceptedBargeIn {
                     handsFreeListeningSession?.discardCurrentUtterance()
                     currentUtteranceOverlappedBuddySpeech = false
                     isHandsFreeSessionPaused = true
@@ -1150,6 +1187,21 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - AI Response Pipeline
 
+    /// P6.3: launches the main CLI for the next answer and leaves it waiting
+    /// on stdin, with the settings a plain question uses (no MODE hint). A
+    /// question that needs another effort or prompt reaps it and spawns
+    /// fresh at key-up; one unused for 60 s is reaped.
+    private func prespawnMainBrainStandby() {
+        let defaultModeHint = ModeHint.detect("")
+        claudeCodeBridge.prespawnStandbyProcess(
+            systemPromptFileName: Self.mainSystemPromptFileName,
+            systemPrompt: companionSystemPrompt(modeHint: defaultModeHint),
+            effortLevel: ClickySettings.claudeEffortOverride ?? defaultModeHint.effort
+        )
+    }
+
+    private static let mainSystemPromptFileName = "system-prompt.md"
+
     /// Optional extras for one turn, used by the debug inbox's `ask`.
     struct TurnOptions {
         /// false = no TTS; tags still fire right away.
@@ -1191,6 +1243,8 @@ final class CompanionManager: ObservableObject {
         clearLiveScreenMarks()
 
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: turnOptions.keyUpDate)
+        // Zoom checks still running for the last answer apply nothing now.
+        zoomChecker.beginQuestion()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -1213,7 +1267,9 @@ final class CompanionManager: ObservableObject {
                     badgedCount: groundedTurn.registry.orderedIDs.filter { groundedTurn.registry.entries[$0]?.isBadged == true }.count,
                     isBadged: groundedTurn.isBadged,
                     droppedAXApplications: groundedTurn.droppedAXApplications,
-                    axWalks: groundingCoordinator.lastAXWalkStats
+                    axWalks: groundingCoordinator.lastAXWalkStats,
+                    ocrCoverage: groundingCoordinator.lastOCRCoverageStats,
+                    latencyAlarm: groundedTurn.latencyAlarmWarning
                 )
 
                 guard !Task.isCancelled else { throw CancellationError() }
@@ -1234,12 +1290,14 @@ final class CompanionManager: ObservableObject {
                 markController.startAnswer(turnRecord: turnRecord)
 
                 let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
-                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel, turnRecord: turnRecord)
+                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel,
+                                          allowsStandbyProcess: true, turnRecord: turnRecord)
 
                 // Helpers spawned while streaming: wait for them, then ask
                 // again with their results (same answer, same screens).
-                if answerSession.hasWorkers && !Task.isCancelled && !answerSession.isFinished {
-                    let workerResults = await answerSession.workerResults()
+                // Board-section helpers (P6.7) draw into the board instead: no follow-up for them.
+                if answerSession.hasFollowUpWorkers && !Task.isCancelled && !answerSession.isFinished {
+                    let workerResults = await answerSession.followUpWorkerResults()
                     try Task.checkCancellation()
                     print("🧠 Workers finished: \(workerResults.map(\.workerTitle))")
                     answerSession.beginFollowUpStream()
@@ -1276,6 +1334,9 @@ final class CompanionManager: ObservableObject {
             turnOptions.onTurnFinished?(turnRecord?.turnDirectoryURL, turnError)
 
             if !Task.isCancelled {
+                // The Haiku standby lives only while this answer can draw marks
+                // (a cancelled turn leaves it to the next question's key-down).
+                zoomChecker.reapStandby()
                 voiceState = .idle
                 scheduleLiveScreenMarksAutoClear()
                 scheduleTransientHideIfNeeded()
@@ -1285,18 +1346,32 @@ final class CompanionManager: ObservableObject {
 
     /// Runs one Claude stream into the answer: every event goes to the
     /// session; stream failures become something said out loud.
-    private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?, turnRecord: TurnRecord?) async throws {
+    /// `allowsStandbyProcess`: the first stream may take the CLI pre-spawned
+    /// at key-down (P6.3); worker follow-ups always spawn their own.
+    private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?,
+                                 allowsStandbyProcess: Bool = false, turnRecord: TurnRecord?) async throws {
         do {
             let mainBrainTurn = try await claudeCodeBridge.runTurn(
-                systemPromptFileName: "system-prompt.md",
+                systemPromptFileName: Self.mainSystemPromptFileName,
                 systemPrompt: systemPrompt,
                 contentBlocks: contentBlocks,
                 effortLevel: effortLevel,
+                allowsStandbyProcess: allowsStandbyProcess,
                 onStreamEvent: { streamEvent in
                     answerSession.handle(streamEvent)
                 },
                 onPipelineStage: { pipelineStageName in
                     turnRecord?.markTiming(pipelineStageName)
+                },
+                onProcessReady: { processOrigin in
+                    guard let turnRecord else { return }
+                    turnRecord.markTiming("cliSpawned", at: processOrigin.spawnDate)
+                    turnRecord.cli = TurnRecord.CLIProcessEntry(
+                        prespawned: processOrigin.usedStandbyProcess,
+                        standby: processOrigin.standbyOutcome?.rawValue,
+                        retriedAfterBrokenPipe: processOrigin.retriedAfterBrokenPipe
+                    )
+                    print("⏱️ CLI \(processOrigin.usedStandbyProcess ? "pre-spawned" : "spawned at key-up") (standby \(processOrigin.standbyOutcome?.rawValue ?? "off"))")
                 }
             )
             turnRecord?.markTiming("result")
@@ -1311,6 +1386,9 @@ final class CompanionManager: ObservableObject {
             refreshClaudeCodeSignInStatus()
         }
     }
+
+    /// P6.1: Haiku's second look at tentative marks (v2.grounding.verifyWithHaiku).
+    let zoomChecker = HaikuZoomChecker()
 
     /// The answer being spoken now.
     private(set) var currentAnswerSession: AnswerSession?

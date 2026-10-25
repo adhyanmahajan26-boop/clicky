@@ -17,6 +17,9 @@
 //    codeState                → Code mode's preflight, phase, review and recent events
 //    board {path}             → a .jsonl board or a raw answer file, drawn and narrated as if Claude said it
 //    boardCtl {action}        → next | back | replay | pause | export | close | state
+//    axfind {bundle, role, title, nth, …} → frameCG [x,y,w,h] of another app's
+//                               element from a plain AX walk (eval ground truth;
+//                               see AXFindWalker for every field)
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -326,6 +329,16 @@ final class DebugCommandInbox {
             }
             if action != "state" && action != "export" { result = boardController.stateSummary() }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
+
+        case "axfind":
+            // Eval ground truth: a plain AX walk of another app, independent of
+            // the grounding registry. Read-only (no actions, no focus changes).
+            switch AXFindWalker.find(commandObject) {
+            case .success(let findResult):
+                reply(commandIdentifier: commandIdentifier, isSuccess: true, result: findResult, errorMessage: nil)
+            case .failure(let findError):
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: findError.details, errorMessage: findError.message)
+            }
 
         default:
             reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "unknown cmd \(commandName)")
@@ -662,6 +675,302 @@ enum FixtureAccessibilityWalker {
 
     /// AX position is already CG global (top-left origin), same as the
     /// fixture's ground truth.
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var elementPosition = CGPoint.zero
+        var elementSize = CGSize.zero
+        AXValueGetValue(positionValue as! AXValue, .cgPoint, &elementPosition)
+        AXValueGetValue(sizeValue as! AXValue, .cgSize, &elementSize)
+        return CGRect(origin: elementPosition, size: elementSize)
+    }
+}
+
+/// `axfind`: the eval's ground truth for real apps. Walks one app's AX tree
+/// (no Clicky registry, no OCR, no actions) and returns the CG frame of the
+/// nth element matching a role and a title. Fields of the command:
+///
+///   bundle    (required) bundle id of a running app
+///   role      AX role ("AXButton"); omitted or "*" = any
+///   subrole   optional AX subrole
+///   title     matched (case-insensitive, trimmed, "..." = "…") against
+///             AXTitle, AXDescription, AXValue, AXPlaceholderValue, AXHelp,
+///             AXIdentifier and AXLabelValue
+///   match     "exact" (default) | "contains" | "prefix"
+///   nth       1-based (default 1), counted in `order`
+///   order     "tree" (default, depth first) | "x" | "y" (by minX / minY)
+///   all       true → every match's frame in `frames` (for "circle all X")
+///   ancestor  role: report the nearest ancestor with that role instead
+///             (e.g. a sidebar label's AXRow)
+///   within    {role, title, match, nth}: search only under that element
+///   text      substring: AXBoundsForRange of its nth occurrence inside the
+///             matching element's AXValue (Terminal text, text views)
+///   window    "main" (default: main/focused window, then the rest) |
+///             "only-main" | "menubar" (include the menu bar)
+///   electron  true → sets AXManualAccessibility first (Electron apps such
+///             as Slack / VS Code expose no tree otherwise; Clicky's own walk
+///             does the same)
+///
+/// Frames are CG global points (top-left origin). Each result carries the
+/// window frame and the fraction of the element visible inside its clipping
+/// scroll areas and window, so the eval can drop truths that are scrolled away.
+nonisolated enum AXFindWalker {
+    struct FindError: Error {
+        let message: String
+        var details: [String: Any] = [:]
+    }
+
+    private struct Query {
+        var role: String?
+        var subrole: String?
+        var title: String?
+        var matchMode = "exact"
+
+        init(object: [String: Any]) {
+            let roleText = (object["role"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            role = roleText.isEmpty || roleText == "*" ? nil : roleText
+            subrole = (object["subrole"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            title = (object["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            matchMode = object["match"] as? String ?? "exact"
+        }
+    }
+
+    private struct Node {
+        let element: AXUIElement
+        let role: String
+        let subrole: String
+        let labels: [String]
+        let frameCG: CGRect?
+        /// Clipping rects of the ancestors (scroll areas, the window).
+        let clips: [CGRect]
+        let ancestors: [(role: String, frame: CGRect?)]
+    }
+
+    private static let maximumDepth = 60
+    private static let maximumNodes = 40_000
+    private static let timeBudgetSeconds = 4.0
+    private static let labelAttributes = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXPlaceholderValueAttribute,
+                                          kAXHelpAttribute, kAXIdentifierAttribute, "AXLabelValue"]
+
+    static func find(_ object: [String: Any]) -> Result<[String: Any], FindError> {
+        guard let bundleIdentifier = object["bundle"] as? String, !bundleIdentifier.isEmpty else {
+            return .failure(FindError(message: "axfind needs \"bundle\""))
+        }
+        guard AXIsProcessTrusted() else { return .failure(FindError(message: "Clicky isn't trusted for Accessibility")) }
+        guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+            return .failure(FindError(message: "no running app with bundle \(bundleIdentifier)"))
+        }
+        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetMessagingTimeout(applicationElement, 0.5)
+        if object["electron"] as? Bool == true {
+            AXUIElementSetAttributeValue(applicationElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+
+        let windowMode = object["window"] as? String ?? "main"
+        let roots = rootElements(of: applicationElement, windowMode: windowMode)
+        guard !roots.isEmpty else { return .failure(FindError(message: "\(bundleIdentifier) has no windows")) }
+
+        var budget = WalkBudget()
+        var searchRoots = roots.map { (element: $0, clips: [CGRect](), ancestors: [(role: String, frame: CGRect?)]()) }
+        if let withinObject = object["within"] as? [String: Any] {
+            let withinQuery = Query(object: withinObject)
+            var containers: [Node] = []
+            for root in searchRoots { walk(root.element, depth: 0, clips: root.clips, ancestors: root.ancestors, query: withinQuery, budget: &budget, into: &containers) }
+            let withinIndex = max(1, withinObject["nth"] as? Int ?? 1) - 1
+            guard withinIndex < containers.count else {
+                return .failure(FindError(message: "no \"within\" container matched", details: ["nodesVisited": budget.visited]))
+            }
+            let container = containers[withinIndex]
+            searchRoots = [(element: container.element, clips: container.clips, ancestors: container.ancestors)]
+        }
+
+        let query = Query(object: object)
+        var matches: [Node] = []
+        for root in searchRoots { walk(root.element, depth: 0, clips: root.clips, ancestors: root.ancestors, query: query, budget: &budget, into: &matches) }
+        matches = matches.filter { $0.frameCG.map { $0.width > 0 && $0.height > 0 } ?? false }
+        switch object["order"] as? String ?? "tree" {
+        case "x": matches.sort { ($0.frameCG!.minX, $0.frameCG!.minY) < ($1.frameCG!.minX, $1.frameCG!.minY) }
+        case "y": matches.sort { ($0.frameCG!.minY, $0.frameCG!.minX) < ($1.frameCG!.minY, $1.frameCG!.minX) }
+        default: break
+        }
+
+        let windowFrame = mainWindowFrame(of: applicationElement)
+        var result: [String: Any] = ["pid": Int(application.processIdentifier), "count": matches.count, "nodesVisited": budget.visited,
+                                     "truncated": budget.isExhausted, "windowFrameCG": windowFrame.map(rectArray) ?? NSNull()]
+        guard !matches.isEmpty else {
+            result["sample"] = sampleLabels(roots: roots, role: query.role)
+            return .failure(FindError(message: "no match for role \(query.role ?? "*") title \(query.title ?? "-")", details: result))
+        }
+
+        let ancestorRole = object["ancestor"] as? String
+        func reportedFrame(_ node: Node) -> CGRect? {
+            guard let ancestorRole else { return node.frameCG }
+            return node.ancestors.last(where: { $0.role == ancestorRole })?.frame ?? nil
+        }
+
+        if object["all"] as? Bool == true {
+            let frames = matches.compactMap(reportedFrame)
+            result["frames"] = frames.map(rectArray)
+            result["visibleFractions"] = matches.map { visibleFraction(of: reportedFrame($0), clips: $0.clips) }
+            result["frameCG"] = frames.first.map(rectArray) ?? NSNull()
+            return .success(result)
+        }
+
+        let matchIndex = max(1, object["nth"] as? Int ?? 1) - 1
+        guard matchIndex < matches.count else {
+            return .failure(FindError(message: "only \(matches.count) match(es), nth \(matchIndex + 1) asked", details: result))
+        }
+        let node = matches[matchIndex]
+        var frame = reportedFrame(node)
+        if let searchText = object["text"] as? String, !searchText.isEmpty {
+            let occurrence = max(1, object["textNth"] as? Int ?? 1)
+            guard let textFrame = boundsOfText(searchText, occurrence: occurrence, in: node.element) else {
+                return .failure(FindError(message: "text \"\(searchText)\" not found in the matching element", details: result))
+            }
+            frame = textFrame
+        }
+        guard let frame else { return .failure(FindError(message: "matching element has no \(ancestorRole ?? "") frame", details: result)) }
+        result["frameCG"] = rectArray(frame)
+        result["role"] = node.role
+        result["subrole"] = node.subrole
+        result["labels"] = node.labels
+        result["visibleFraction"] = visibleFraction(of: frame, clips: node.clips)
+        return .success(result)
+    }
+
+    private struct WalkBudget {
+        var visited = 0
+        let deadline = Date().addingTimeInterval(AXFindWalker.timeBudgetSeconds)
+        var isExhausted: Bool { visited >= AXFindWalker.maximumNodes || Date() > deadline }
+    }
+
+    private static func rootElements(of applicationElement: AXUIElement, windowMode: String) -> [AXUIElement] {
+        var roots: [AXUIElement] = []
+        for attributeName in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            if let window = elementAttribute(applicationElement, attributeName), !roots.contains(where: { CFEqual($0, window) }) {
+                roots.append(window)
+                break
+            }
+        }
+        if windowMode != "only-main" {
+            for window in arrayAttribute(applicationElement, kAXWindowsAttribute) where !roots.contains(where: { CFEqual($0, window) }) {
+                roots.append(window)
+            }
+        }
+        if windowMode == "menubar", let menuBar = elementAttribute(applicationElement, kAXMenuBarAttribute) {
+            roots.append(menuBar)
+        }
+        return roots
+    }
+
+    private static func walk(_ element: AXUIElement, depth: Int, clips: [CGRect], ancestors: [(role: String, frame: CGRect?)],
+                             query: Query, budget: inout WalkBudget, into matches: inout [Node]) {
+        guard depth <= maximumDepth, !budget.isExhausted else { return }
+        budget.visited += 1
+        let role = stringAttribute(element, kAXRoleAttribute)
+        let subrole = stringAttribute(element, kAXSubroleAttribute)
+        let frameCG = frame(of: element)
+        let labels = labelAttributes.map { stringAttribute(element, $0) }.filter { !$0.isEmpty }
+        let node = Node(element: element, role: role, subrole: subrole, labels: labels, frameCG: frameCG, clips: clips, ancestors: ancestors)
+        if isMatch(node, query: query) { matches.append(node) }
+
+        var childClips = clips
+        if let frameCG, role == kAXScrollAreaRole as String || role == kAXWindowRole as String { childClips.append(frameCG) }
+        let childAncestors = ancestors + [(role: role, frame: frameCG)]
+        for child in arrayAttribute(element, kAXChildrenAttribute) {
+            walk(child, depth: depth + 1, clips: childClips, ancestors: childAncestors, query: query, budget: &budget, into: &matches)
+        }
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.replacingOccurrences(of: "...", with: "…").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isMatch(_ node: Node, query: Query) -> Bool {
+        if let role = query.role, node.role != role { return false }
+        if let subrole = query.subrole, node.subrole != subrole { return false }
+        guard let title = query.title else { return true }
+        let wanted = normalized(title)
+        return node.labels.map(normalized).contains { label in
+            switch query.matchMode {
+            case "contains": return label.contains(wanted)
+            case "prefix": return label.hasPrefix(wanted)
+            default: return label == wanted
+            }
+        }
+    }
+
+    private static func visibleFraction(of frame: CGRect?, clips: [CGRect]) -> Double {
+        guard let frame, frame.width > 0, frame.height > 0 else { return 0 }
+        var visible = frame
+        for clip in clips {
+            visible = visible.intersection(clip)
+            if visible.isNull { return 0 }
+        }
+        return (Double(visible.width * visible.height / (frame.width * frame.height)) * 100).rounded() / 100
+    }
+
+    private static func boundsOfText(_ searchText: String, occurrence: Int, in element: AXUIElement) -> CGRect? {
+        let value = stringAttribute(element, kAXValueAttribute) as NSString
+        var searchRange = NSRange(location: 0, length: value.length)
+        var foundRange = NSRange(location: NSNotFound, length: 0)
+        for _ in 0..<occurrence {
+            foundRange = value.range(of: searchText, options: [], range: searchRange)
+            guard foundRange.location != NSNotFound else { return nil }
+            searchRange = NSRange(location: foundRange.upperBound, length: value.length - foundRange.upperBound)
+        }
+        var cfRange = CFRange(location: foundRange.location, length: foundRange.length)
+        guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
+        var boundsValue: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &boundsValue) == .success,
+              let boundsValue, CFGetTypeID(boundsValue) == AXValueGetTypeID() else { return nil }
+        var bounds = CGRect.zero
+        AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds)
+        return bounds.width > 0 && bounds.height > 0 ? bounds : nil
+    }
+
+    private static func mainWindowFrame(of applicationElement: AXUIElement) -> CGRect? {
+        let window = elementAttribute(applicationElement, kAXMainWindowAttribute) ?? elementAttribute(applicationElement, kAXFocusedWindowAttribute)
+        return window.flatMap(frame(of:))
+    }
+
+    /// Up to 40 "role: label" pairs, to help fix a fixture row that missed.
+    private static func sampleLabels(roots: [AXUIElement], role: String?) -> [String] {
+        var budget = WalkBudget()
+        var nodes: [Node] = []
+        var sampleQuery = Query(object: [:])
+        sampleQuery.role = role
+        for root in roots { walk(root, depth: 0, clips: [], ancestors: [], query: sampleQuery, budget: &budget, into: &nodes) }
+        return nodes.filter { !$0.labels.isEmpty }.prefix(40).map { "\($0.role): \($0.labels.joined(separator: " | ").prefix(80))" }
+    }
+
+    private static func rectArray(_ rect: CGRect) -> [Double] {
+        [rect.minX, rect.minY, rect.width, rect.height].map { (Double($0) * 100).rounded() / 100 }
+    }
+
+    private static func stringAttribute(_ element: AXUIElement, _ attributeName: String) -> String {
+        var attributeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attributeName as CFString, &attributeValue) == .success else { return "" }
+        return attributeValue as? String ?? ""
+    }
+
+    private static func elementAttribute(_ element: AXUIElement, _ attributeName: String) -> AXUIElement? {
+        var attributeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attributeName as CFString, &attributeValue) == .success,
+              let attributeValue, CFGetTypeID(attributeValue) == AXUIElementGetTypeID() else { return nil }
+        return (attributeValue as! AXUIElement)
+    }
+
+    private static func arrayAttribute(_ element: AXUIElement, _ attributeName: String) -> [AXUIElement] {
+        var attributeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attributeName as CFString, &attributeValue) == .success else { return [] }
+        return attributeValue as? [AXUIElement] ?? []
+    }
+
     private static func frame(of element: AXUIElement) -> CGRect? {
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?

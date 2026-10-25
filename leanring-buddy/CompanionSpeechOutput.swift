@@ -13,6 +13,9 @@
 //  adopts it). The echo tail (isPlayingOrEchoTail) keeps the mic's words
 //  counted as Clicky's own until output latency + 0.25 s after the audio.
 //
+//  P6.4: owns the AudioEngineHub the hands-free mic shares with the voices
+//  in "aec" echo mode (each voice gets its own player node on it).
+//
 
 import ClickyCore
 import Combine
@@ -22,11 +25,13 @@ import Foundation
 final class CompanionSpeechOutput: ObservableObject {
     let systemVoiceClient = SystemVoiceTTSClient()
     let qwenLocalVoiceClient = QwenLocalTTSClient()
+    /// The mic + voices engine for "aec" (idle unless hands-free runs with AEC on).
+    let audioEngineHub = AudioEngineHub()
     private(set) lazy var qwenServerSupervisor = QwenServerSupervisor(client: qwenLocalVoiceClient)
-    private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient, supervisor: qwenServerSupervisor)
-    private(set) lazy var appleEngine = AppleSpeechEngine { [weak self] in self?.systemVoiceClient.voiceInUse }
+    private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient, supervisor: qwenServerSupervisor, audioEngineHub: audioEngineHub)
+    private(set) lazy var appleEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
     /// A second Mac-voice engine: the fallback behind Apple-as-primary.
-    private(set) lazy var appleFallbackEngine = AppleSpeechEngine { [weak self] in self?.systemVoiceClient.voiceInUse }
+    private(set) lazy var appleFallbackEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
 
     private static let usesQwenLocalVoiceUserDefaultsKey = "usesQwenLocalVoice"
     static let voicePreviewSentence = "Hey, I'm Clicky. This is how I'll sound when I answer you."

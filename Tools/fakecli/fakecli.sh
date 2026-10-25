@@ -14,6 +14,10 @@
 #   lines             print "one", "a<U+2028>b", "three"
 #   idle <seconds>    print "start", sleep <seconds>, print "end"
 #   stream-json       print three lines imitating Claude Code stream-json
+#   stream-json-stdin like `claude -p --input-format stream-json`: print nothing
+#                     until stdin closes, then the three stream-json lines (the
+#                     delta and result say how many bytes stdin carried)
+#   exit-now          exit 0 at once without reading stdin (a dead standby)
 set -eu
 
 mode=${1:-}
@@ -57,6 +61,17 @@ case "$mode" in
     printf '{"type":"system","subtype":"init","permissionMode":"acceptEdits","tools":["Read","Edit"],"mcp_servers":[],"cwd":"%s","apiKeySource":"none"}\n' "$cwd_json"
     printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}}'
     printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'
+    ;;
+
+  stream-json-stdin)
+    byte_count=$(wc -c | tr -d ' ')
+    printf '%s\n' '{"type":"system","subtype":"init","model":"fake-model"}'
+    printf '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"got %s"}}}\n' "$byte_count"
+    printf '{"type":"result","subtype":"success","is_error":false,"result":"got %s"}\n' "$byte_count"
+    ;;
+
+  exit-now)
+    exit 0
     ;;
 
   *)

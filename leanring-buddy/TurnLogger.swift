@@ -44,6 +44,17 @@ final class TurnRecord {
         var occludedByPID: Int32?
         /// v2 P1c: what was actually drawn for a MARK.
         var drawn: DrawnEntry?
+        /// v2 P6.1: Haiku's look at a tentative mark.
+        var zoomCheck: ZoomCheckEntry?
+    }
+
+    struct ZoomCheckEntry: Encodable {
+        /// Haiku's reply as received (nil: no reply).
+        var reply: String?
+        /// confirmed / movedToElement / movedToPoint / ignored… / skippedMovedOn / failed.
+        var action: String
+        /// From the mark being drawn to the result being applied.
+        var ms: Double
     }
 
     struct DrawnEntry: Encodable {
@@ -57,6 +68,8 @@ final class TurnRecord {
         var tip: [Double]?
         var tentative: Bool
         var recheck: RecheckEntry?
+        /// The mark's label pill, when it has one (evals check it sits in clear space).
+        var labelRectCG: [Double]? = nil
     }
 
     struct GroundingEntry: Encodable {
@@ -72,6 +85,10 @@ final class TurnRecord {
         var badgeMentionsInNarration: Int = 0
         var ocrLineCount: Int = 0
         var axWalks: [String] = []
+        /// P6.8: per display, how much OCR the AX coverage saved.
+        var ocrCoverage: [String] = []
+        /// P6.8: set when key-up p95 over 20 turns is over 150 ms warm / 300 ms cold.
+        var latencyAlarm: String?
     }
 
     struct SpeechEntry: Encodable {
@@ -85,9 +102,20 @@ final class TurnRecord {
     var screens: [ScreenEntry] = []
     var rawResponse = ""
     var tags: [TagEntry] = []
-    /// Unix timestamps (seconds) for keyUp, captureDone, handedToWriter,
-    /// requestWritten, firstDelta, firstAudio, result, end.
+    /// Unix timestamps (seconds) for keyUp, captureDone, cliSpawned,
+    /// handedToWriter, requestWritten, firstDelta, firstAudio, result, end.
+    /// cliSpawned is before keyUp when the turn used the pre-spawned CLI.
     var timings: [String: Double] = [:]
+
+    /// v2 P6.3: where the main answer's CLI process came from.
+    struct CLIProcessEntry: Encodable {
+        /// The process pre-spawned at key-down was used.
+        var prespawned: Bool
+        /// The standby slot's verdict: matched / mismatched / unhealthy / empty.
+        var standby: String?
+        var retriedAfterBrokenPipe: Bool
+    }
+    var cli: CLIProcessEntry?
     var speech = SpeechEntry(engine: nil, fallback: false)
     var errorDescription: String?
     var grounding: GroundingEntry?
@@ -156,6 +184,11 @@ final class TurnRecord {
         tags[tagIndex].drawn?.recheck = DrawnEntry.RecheckEntry(ok: isPassing, ms: (milliseconds * 10).rounded() / 10)
         tags[tagIndex].drawn?.tentative = isTentative
         if !isPassing { tags[tagIndex].confidence = tags[tagIndex].confidence.map { max(0, $0 - 0.3) } }
+    }
+
+    func recordZoomCheck(tagIndex: Int, entry: ZoomCheckEntry) {
+        guard tags.indices.contains(tagIndex) else { return }
+        tags[tagIndex].zoomCheck = entry
     }
 
     /// One line of <turn>/marks.jsonl (tracking events).
@@ -281,6 +314,7 @@ enum TurnLogger {
             let boardTitle: String?
             let boardStats: TurnRecord.BoardStatsEntry?
             let boardEvents: [TurnRecord.BoardEventEntry]
+            let cli: TurnRecord.CLIProcessEntry?
         }
 
         let turnFile = TurnFile(
@@ -298,7 +332,8 @@ enum TurnLogger {
             firedTags: turnRecord.firedTagIndexes,
             boardTitle: turnRecord.boardTitle,
             boardStats: turnRecord.boardStats,
-            boardEvents: turnRecord.boardEvents
+            boardEvents: turnRecord.boardEvents,
+            cli: turnRecord.cli
         )
 
         let jsonEncoder = JSONEncoder()

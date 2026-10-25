@@ -12,10 +12,15 @@
 //    buddy's own spoken replies are less likely to be heard as the user.
 //  - After each utterance the recognition request is restarted, which keeps
 //    transcripts short and avoids recognizer time limits.
+//  - P6.4 v2.voice.echoMode "aec": the mic runs on the AudioEngineHub's
+//    shared engine instead (the voices play through it, so the canceller
+//    has the reference). Headphones resolve to "open", a voice-processing
+//    throw to "halfDuplex" (both then use the session's own engine).
 //
 
 import AVFoundation
 import Foundation
+import ClickyCore
 import Speech
 
 /// Holds the currently active recognition request so the audio tap (which
@@ -52,6 +57,22 @@ final class HandsFreeListeningSession {
     private let onPartialTranscript: (String) -> Void
     private let onUtteranceFinished: (String) -> Void
 
+    /// The shared mic + voice engine ("aec" only).
+    private let audioEngineHub: AudioEngineHub?
+    private let requestedEchoMode: ClickySettings.EchoMode
+    /// The echo mode that actually runs once listening started.
+    private(set) var resolvedEchoMode: ClickySettings.EchoMode
+    /// What CompanionManager filters with: the resolved mode for "aec";
+    /// open / halfDuplex keep following the live setting (switching to
+    /// "aec" takes effect at the next hands-free start).
+    var effectiveEchoMode: ClickySettings.EchoMode {
+        if requestedEchoMode == .aec { return resolvedEchoMode }
+        let currentSetting = ClickySettings.echoMode
+        return currentSetting == .aec ? requestedEchoMode : currentSetting
+    }
+    /// The mic tap is on the hub's engine (AEC on), not ours.
+    private var usesSharedAudioEngine = false
+
     private let audioEngine = AVAudioEngine()
     private let recognitionRequestBox = HandsFreeRecognitionRequestBox()
     private var speechRecognizer: SFSpeechRecognizer?
@@ -68,9 +89,14 @@ final class HandsFreeListeningSession {
     private(set) var isListening = false
 
     init(
+        requestedEchoMode: ClickySettings.EchoMode = .open,
+        audioEngineHub: AudioEngineHub? = nil,
         onPartialTranscript: @escaping (String) -> Void,
         onUtteranceFinished: @escaping (String) -> Void
     ) {
+        self.requestedEchoMode = requestedEchoMode
+        self.resolvedEchoMode = requestedEchoMode
+        self.audioEngineHub = audioEngineHub
         self.onPartialTranscript = onPartialTranscript
         self.onUtteranceFinished = onUtteranceFinished
     }
@@ -100,6 +126,43 @@ final class HandsFreeListeningSession {
         }
         self.speechRecognizer = speechRecognizer
 
+        startMicrophoneCapture()
+        if !usesSharedAudioEngine {
+            audioEngine.prepare()
+            try audioEngine.start()
+        }
+
+        isListening = true
+        startNewRecognitionTask()
+
+        utteranceEndCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.finishUtteranceIfUserWentQuiet()
+            }
+        }
+        print("🎙️ Hands-free: listening (echo mode \(resolvedEchoMode.rawValue))")
+    }
+
+    /// "aec" → the hub's shared engine with voice processing (it starts the
+    /// engine itself); otherwise, or when that resolves to open/halfDuplex,
+    /// this session's own engine (started by the caller).
+    private func startMicrophoneCapture() {
+        let audioTapBlock = Self.makeAudioTapBlock(recognitionRequestBox: recognitionRequestBox)
+        if requestedEchoMode == .aec, let audioEngineHub {
+            let isHeadphoneRoute = AudioOutputRouteInspector.isDefaultOutputHeadphones()
+            resolvedEchoMode = EchoCancellationPolicy.resolvedMode(
+                requestedMode: .aec,
+                isHeadphoneRoute: isHeadphoneRoute,
+                enableVoiceProcessing: { _ = try audioEngineHub.startVoiceProcessingCapture(tapBlock: audioTapBlock) },
+                log: { print("🎙️ Hands-free: \($0)") }
+            )
+            usesSharedAudioEngine = resolvedEchoMode == .aec
+            if usesSharedAudioEngine { return }
+        }
+        installTapOnOwnAudioEngine(audioTapBlock: audioTapBlock)
+    }
+
+    private func installTapOnOwnAudioEngine(audioTapBlock: @escaping AVAudioNodeTapBlock) {
         let inputNode = audioEngine.inputNode
 
         // Echo cancellation: lets the mic stay open while the buddy talks
@@ -130,21 +193,8 @@ final class HandsFreeListeningSession {
             onBus: 0,
             bufferSize: 1024,
             format: inputFormat,
-            block: Self.makeAudioTapBlock(recognitionRequestBox: recognitionRequestBox)
+            block: audioTapBlock
         )
-
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        isListening = true
-        startNewRecognitionTask()
-
-        utteranceEndCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.finishUtteranceIfUserWentQuiet()
-            }
-        }
-        print("🎙️ Hands-free: listening")
     }
 
     func stopListening() {
@@ -160,9 +210,14 @@ final class HandsFreeListeningSession {
         activeRecognitionRequest = nil
         activeRecognitionTask = nil
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        try? audioEngine.inputNode.setVoiceProcessingEnabled(false)
+        if usesSharedAudioEngine {
+            audioEngineHub?.stopVoiceProcessingCapture()
+            usesSharedAudioEngine = false
+        } else {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+            try? audioEngine.inputNode.setVoiceProcessingEnabled(false)
+        }
 
         latestPartialTranscript = ""
         print("🎙️ Hands-free: stopped listening")
