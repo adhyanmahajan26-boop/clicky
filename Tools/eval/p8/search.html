@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local search</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #ffffff; --line: #c7c7cc; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f5f5f7; --bg: #1c1c1e; --line: #48484a; } }
+  :root[data-theme="dark"] { --fg: #f5f5f7; --bg: #1c1c1e; --line: #48484a; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.5 -apple-system, system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+  form { display: flex; gap: 8px; }
+  input[type="search"] { flex: 1; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); }
+  ol { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Local search</h1>
+  <form id="search" action="#" autocomplete="off">
+    <input id="q" type="search" name="q" aria-label="Search" placeholder="Search" autofocus>
+  </form>
+  <p>Submitted searches appear below.</p>
+  <ol id="submitted"></ol>
+</main>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  window.__submitted = [];
+  const form = document.getElementById("search");
+  const box = document.getElementById("q");
+  const list = document.getElementById("submitted");
+
+  // Every submit (Return in the box, or a submit button) is recorded and the page stays put.
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    const value = box.value;
+    window.__submitted.push(value);
+    const item = document.createElement("li");
+    item.textContent = value;
+    list.appendChild(item);
+  });
+
+  P8.publish("search", [{ id: "search-box", label: "Search" }], { submitted: window.__submitted });
+  box.focus();
+})();
+</script>
+</body>
+</html>

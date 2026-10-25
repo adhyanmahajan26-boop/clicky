@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swift concurrency, explained</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f5f5f7; --bg: #1c1c1e; } }
+  :root[data-theme="dark"] { --fg: #f5f5f7; --bg: #1c1c1e; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.55 Georgia, serif; }
+  article { max-width: 640px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font: 700 30px -apple-system, system-ui, sans-serif; }
+  p { margin: 0 0 18px; }
+</style>
+</head>
+<body>
+<article id="article">
+  <h1 id="title">Swift concurrency, explained</h1>
+  <p id="p1">Swift concurrency is built around the idea that work can wait without holding up the whole program. This guide walks through the parts that matter most in practice.</p>
+  <p id="p2" data-fact="1">Async functions can suspend without blocking a thread, so the system can run other work while they wait for results.</p>
+  <p id="p3">A small example helps: a function that downloads an image awaits the network and returns when the bytes arrive.</p>
+  <p id="p4" data-fact="2">Actors serialize access to their mutable state, so data races are caught by the compiler instead of appearing in production.</p>
+  <p id="p5">Actors do not remove the need to think about ordering, but they make the shape of shared state explicit and easier to review.</p>
+  <p id="p6" data-fact="3">Structured concurrency keeps child tasks inside the scope that created them, so cancellation and errors flow in a predictable way.</p>
+  <p id="p7">Many apps start with one task per screen and then discover that a task group is a clearer way to fan out repeated work.</p>
+  <p id="p8">Reading a long chain of callbacks is hard, and the await keyword turns the same logic into a straight line of code.</p>
+  <p id="p9" data-fact="4">Sendable is the protocol that marks values safe to pass across concurrency domains without copying hidden shared state.</p>
+  <p id="p10">The compiler checks Sendable conformance for most value types automatically, so you rarely write it by hand.</p>
+  <p id="p11">Migration is usually gradual: turn on the stricter checks for one module, fix the warnings, then move to the next module.</p>
+  <p id="p12" data-fact="5">Task groups let a function start many child tasks at once and collect their results as each one finishes.</p>
+  <p id="p13">Results can arrive in any order, so code that depends on sequence should sort or index the values it collects.</p>
+  <p id="p14">Timeouts are not built in, but a race between a sleep and the real work gives the same effect with a few lines.</p>
+  <p id="p15" data-fact="6">The main actor runs user interface updates, so code that touches views should be marked with that actor.</p>
+  <p id="p16">Moving slow work off the main actor keeps scrolling smooth, but every value that crosses back must be safe to send.</p>
+  <p id="p17" data-fact="7">Continuations bridge older callback APIs into async code, letting a completion handler resume a suspended function once.</p>
+  <p id="p18">Wrapping a callback API takes care: resuming twice is a runtime error, and never resuming leaves the caller waiting forever.</p>
+  <p id="p19">Logging inside actors is cheap, but avoid awaiting network calls while holding state that other callers need right away.</p>
+  <p id="p20" data-fact="8">Cancellation is cooperative: a task is told it was cancelled, and it must check that flag at safe points to stop early.</p>
+  <p id="p21">Checking cancellation in long loops keeps the app responsive when a user leaves a screen before the work finishes.</p>
+  <p id="p22">Testing concurrent code is easier when each actor is given its dependencies at creation time instead of reaching for globals.</p>
+  <p id="p23">In short, concurrency in Swift is a set of guarantees. Learn them one at a time and the rest of the model follows.</p>
+</article>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  const facts = Array.from(document.querySelectorAll("[data-fact]")).map(function (node) {
+    return { fact: Number(node.getAttribute("data-fact")), text: node.textContent.replace(/\s+/g, " ").trim() };
+  });
+  P8.publish("article", facts, { paragraphs: document.querySelectorAll("#article p").length });
+})();
+</script>
+</body>
+</html>
