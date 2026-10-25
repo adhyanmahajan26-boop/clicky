@@ -82,6 +82,8 @@ public enum SystemPromptBuilder {
         }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
+            // P6.7: on a board, helpers draw sections instead (the whiteboard section says how).
+            if isAvailable(.whiteboard, features: features, sectionTexts: sectionTexts) { sections.append(boardHelperWorkersSentence) }
             if features.contains(.grounding) { sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features, sectionTexts: sectionTexts))) }
         }
         return sections.joined(separator: "\n\n") + "\n"
@@ -202,6 +204,9 @@ public enum SystemPromptBuilder {
         live marks example:
         - user asks how to turn on dark mode in system settings: "click appearance in the sidebar, then pick dark at the top of the window. [MARK:1:160,320:appearance] [MARK:2:540,140:dark] [POINT:160,320:appearance]"
         """
+
+    /// With the whiteboard on: board helpers come before the board, not instead of the answer.
+    static let boardHelperWorkersSentence = "a whiteboard answer is the exception: there the WORKER lines go before the <whiteboard> block, each named after its section (s1, s2, …), and the helpers draw those sections into your board while you narrate, so you don't get their results back (see helpers on a board)."
 
     static let helperWorkersSection = """
         helper workers:

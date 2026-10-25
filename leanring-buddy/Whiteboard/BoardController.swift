@@ -12,6 +12,9 @@
 //  board dims to 25 % and lets clicks through while a step points at the
 //  real screen, keys, export (PNG at 2× + .clickyboard JSONL), the
 //  workers' shell, the history's BOARD STATE and turn.json timing.
+//  P6.7: helper sections merge into the live board as they arrive (the
+//  narrator remaps its steps, the scene is laid out again); the narrator's
+//  bridge and drop lines are spoken through whichever coordinator speaks.
 //
 
 import AppKit
@@ -49,6 +52,8 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     private var localKeyMonitor: Any?
     private var resizeWorkItem: DispatchWorkItem?
     private var segmenterOptions = NarrationSegmenter.Options()
+    /// Ids for bridge / drop lines on the board's own coordinator (clear of the scripts').
+    private var nextOwnLineSegmentID = 900_000_000
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -197,6 +202,35 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         publishState()
     }
 
+    // MARK: - Progressive sections (P6.7)
+
+    /// A helper's lines for one section: they replace its placeholder and
+    /// the board is laid out again (the narrator places its steps).
+    func mergeWorkerSection(_ sectionIdentifier: String, workerBoard: WBBoard, session: AnswerSession) {
+        guard session === presentingSession, narrator != nil else { return }
+        guard let merge = narrator?.mergeSection(sectionIdentifier, workerBoard: workerBoard, firstSegmentID: session.nextSegmentID,
+                                                 segmenterOptions: segmenterOptions, at: clockNow) else { return }
+        session.nextSegmentID = merge.nextSegmentID
+        if merge.actions.isEmpty { print("🧑‍🏫 Helper \(sectionIdentifier) came too late; ignored") }
+        apply(merge.actions)
+    }
+
+    /// A helper failed: the narrator drops its section when the voice gets there.
+    func markWorkerSectionFailed(_ sectionIdentifier: String, session: AnswerSession) {
+        guard session === presentingSession else { return }
+        narrator?.markSectionFailed(sectionIdentifier)
+    }
+
+    /// A short line of the board's own (bridge, drop) with whatever speaks the board.
+    private func speakBoardLine(_ text: String) {
+        if let liveSession, speakingCoordinator !== ownCoordinator {
+            liveSession.speakNow(text)
+        } else if let coordinator = speakingCoordinator {
+            coordinator.enqueue(CaptionParser.parse(text, id: nextOwnLineSegmentID, firstTagIndex: 0))
+            nextOwnLineSegmentID += 1
+        }
+    }
+
     // MARK: - Scene
 
     private var viewportSize: CGSize {
@@ -265,6 +299,20 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
                 // Anything no step showed appears at the end of the narration.
                 if narrator?.mode == .continuous, let narrator, narrator.revealTimes.count < narrator.board.elements.count {
                     self.narrator?.revealEverything()
+                }
+            case .bridge(let sectionIdentifier):
+                print("🧑‍🏫 Section \(sectionIdentifier) still coming; bridging")
+                speakBoardLine(ProgressiveBoard.bridgeLine)
+            case .dropSections(let sectionIdentifiers):
+                print("🧑‍🏫 Sections \(sectionIdentifiers) never came; dropped")
+                speakBoardLine(ProgressiveBoard.droppedLine(sectionCount: sectionIdentifiers.count))
+            case .boardChanged:
+                // A section merged or dropped: lay the new board out.
+                if let changedBoard = narrator?.board {
+                    board = changedBoard
+                    // Step indexes moved: a dimmed step follows the narrator's.
+                    if dimmedStepIndex != nil { dimmedStepIndex = narrator?.currentStepIndex }
+                    rebuildScene()
                 }
             }
         }

@@ -122,6 +122,7 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+    }
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -1236,8 +1237,9 @@ final class CompanionManager: ObservableObject {
 
                 // Helpers spawned while streaming: wait for them, then ask
                 // again with their results (same answer, same screens).
-                if answerSession.hasWorkers && !Task.isCancelled && !answerSession.isFinished {
-                    let workerResults = await answerSession.workerResults()
+                // Board-section helpers (P6.7) draw into the board instead: no follow-up for them.
+                if answerSession.hasFollowUpWorkers && !Task.isCancelled && !answerSession.isFinished {
+                    let workerResults = await answerSession.followUpWorkerResults()
                     try Task.checkCancellation()
                     print("🧠 Workers finished: \(workerResults.map(\.workerTitle))")
                     answerSession.beginFollowUpStream()

@@ -17,6 +17,13 @@
 //     next / back / replay / pause / resume steer it by hand.
 //  The narrator only emits actions; the app performs them (speak a step's
 //  segments, stop the voice, fly, end of speech).
+//  P6.7 progressive boards: helper sections arrive while the board is being
+//  narrated (mergeSection). A section still showing its placeholder is
+//  decided when the voice gets there: one bridge line and it's skipped;
+//  when it arrives later its steps go in just before the recap (in plan
+//  order among themselves). Whatever still hasn't come when the voice
+//  reaches the recap (or the end) is dropped with one short line. The
+//  recap and a pending section are never handed to the voice early.
 //
 
 import Foundation
@@ -49,6 +56,16 @@ public struct BoardStepScript: Equatable, Sendable {
     public var spokenText: String { segments.map(\.speech).joined().trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A rough speaking time (15 characters a second), for spreading reveals.
     public var estimatedDuration: TimeInterval { max(0.6, Double(spokenText.count) / BoardNarrator.estimatedCharactersPerSecond) }
+
+    /// The same script for a step that moved (a section was merged or dropped).
+    func reindexed(stepIndex newStepIndex: Int, stepNumber newStepNumber: Int) -> BoardStepScript {
+        let renumberedSegments = segments.map { segment -> CaptionSegment in
+            var renumberedSegment = segment
+            renumberedSegment.boardStep = newStepNumber
+            return renumberedSegment
+        }
+        return BoardStepScript(stepIndex: newStepIndex, stepNumber: newStepNumber, segments: renumberedSegments, tags: tags, cueAnchors: cueAnchors)
+    }
 }
 
 public enum BoardNarrationScript {
@@ -145,6 +162,12 @@ public enum BoardNarrationAction: Equatable, Sendable {
     case stepEnded(stepIndex: Int)
     /// Every step of the run has been shown and spoken.
     case finished
+    /// A helper section isn't there yet: say ProgressiveBoard.bridgeLine.
+    case bridge(sectionIdentifier: String)
+    /// Helper sections that never came: say ProgressiveBoard.droppedLine.
+    case dropSections(sectionIdentifiers: [String])
+    /// `board` changed (a section merged or dropped): lay it out again.
+    case boardChanged
 }
 
 public struct BoardNarrationLogEntry: Equatable, Sendable, Codable {
@@ -172,8 +195,10 @@ public struct BoardNarrator: Sendable {
         case single
     }
 
-    public let board: WBBoard
-    public let scripts: [BoardStepScript]
+    public private(set) var board: WBBoard
+    public private(set) var scripts: [BoardStepScript]
+    /// Helper sections whose lines haven't arrived (placeholder on the board).
+    public private(set) var pendingSectionIdentifiers: [String]
     /// Board element id → when it starts appearing (clock seconds).
     public private(set) var revealTimes: [String: TimeInterval] = [:]
     /// The step on the board now (the last one revealed).
@@ -194,10 +219,24 @@ public struct BoardNarrator: Sendable {
     private var pausedHoldRemaining: TimeInterval?
     private var stepIndexBySegmentID: [Int: Int] = [:]
     private var pendingCues: [Int: [BoardCueAnchor]] = [:]
+    /// Helpers that failed: their section is dropped when the voice gets there.
+    private var failedSectionIdentifiers: Set<String> = []
+    /// Pending sections the voice already passed (bridge line said).
+    private var bridgedSectionIdentifiers: Set<String> = []
+    /// Steps of late sections, planned just before the recap.
+    private var deferredStepIndexes: Set<Int> = []
+    private var nextTagIndex: Int
 
     public init(board: WBBoard, scripts: [BoardStepScript]) {
         self.board = board
         self.scripts = scripts
+        pendingSectionIdentifiers = ProgressiveBoard.pendingSectionIdentifiers(in: board)
+        nextTagIndex = (scripts.flatMap(\.tags).map(\.index).max() ?? (BoardNarrationScript.firstBoardTagIndex - 1)) + 1
+        rebuildSegmentIndex()
+    }
+
+    private mutating func rebuildSegmentIndex() {
+        stepIndexBySegmentID = [:]
         for script in scripts {
             for segment in script.segments { stepIndexBySegmentID[segment.id] = script.stepIndex }
         }
@@ -292,6 +331,8 @@ public struct BoardNarrator: Sendable {
         isPaused = false
         isFinished = false
         pendingCues = [:]
+        bridgedSectionIdentifiers = []
+        deferredStepIndexes = []
         return advance(at: now)
     }
 
@@ -299,8 +340,26 @@ public struct BoardNarrator: Sendable {
     /// is shown (and held) only once everything before it has been spoken.
     private mutating func advance(at now: TimeInterval) -> [BoardNarrationAction] {
         var actions: [BoardNarrationAction] = []
+        // Back-to-back pending sections share one bridge line.
+        var hasBridgedSinceLastStep = false
         while planPosition < plan.count, holdingStepIndex == nil {
             let stepIndex = plan[planPosition]
+            if let pendingSectionIdentifier = pendingSection(placeholderStepIndex: stepIndex) {
+                // Decided when the voice gets here: by then the helper may be done.
+                guard spokenUnendedSteps.isEmpty else { break }
+                planPosition += 1
+                let passActions = passPendingSection(pendingSectionIdentifier, placeholderStepIndex: stepIndex,
+                                                     saysBridge: !hasBridgedSinceLastStep, at: now)
+                if passActions.contains(where: { if case .bridge = $0 { return true } else { return false } }) { hasBridgedSinceLastStep = true }
+                actions += passActions
+                continue
+            }
+            if mode == .continuous, !pendingSectionIdentifiers.isEmpty, isRecapStep(stepIndex) {
+                // The recap waits for the voice; what hasn't come by then is dropped.
+                guard spokenUnendedSteps.isEmpty else { break }
+                actions += dropSections(pendingSectionIdentifiers)
+                continue
+            }
             if scripts[stepIndex].isSilent {
                 guard spokenUnendedSteps.isEmpty else { break }
                 actions += reveal(stepIndex: stepIndex, at: now)
@@ -315,7 +374,13 @@ public struct BoardNarrator: Sendable {
             }
             spokenUnendedSteps.append(stepIndex)
             planPosition += 1
+            hasBridgedSinceLastStep = false
             actions.append(.speak(stepIndex: stepIndex))
+        }
+        if planPosition >= plan.count, holdingStepIndex == nil, mode == .continuous, !pendingSectionIdentifiers.isEmpty {
+            // No recap: the end is where late sections are given up.
+            guard spokenUnendedSteps.isEmpty else { return actions }
+            actions += dropSections(pendingSectionIdentifiers)
         }
         if planPosition >= plan.count, holdingStepIndex == nil {
             if !hasSentEndOfSpeech {
@@ -383,6 +448,162 @@ public struct BoardNarrator: Sendable {
         pausedHoldRemaining = nil
         pendingCues = [:]
         isPaused = false
+    }
+
+    // MARK: Progressive sections (P6.7)
+
+    /// A helper's section arrived: it replaces the placeholder (in place when
+    /// the voice hasn't got there yet, else just before the recap). New
+    /// segments are numbered from `firstSegmentID`; returns the next free id.
+    public mutating func mergeSection(_ sectionIdentifier: String, workerBoard: WBBoard, firstSegmentID: Int,
+                                      segmenterOptions: NarrationSegmenter.Options = NarrationSegmenter.Options(),
+                                      at now: TimeInterval) -> (actions: [BoardNarrationAction], nextSegmentID: Int) {
+        guard pendingSectionIdentifiers.contains(sectionIdentifier),
+              let change = ProgressiveBoard.replacePlaceholder(ofSection: sectionIdentifier, in: board, with: workerBoard) else {
+            return ([], firstSegmentID)
+        }
+        var insertedBoard = change.board
+        insertedBoard.steps = change.insertedStepIndexes.map { change.board.steps[$0] }
+        let insertedScripts = BoardNarrationScript.make(board: insertedBoard, firstSegmentID: firstSegmentID, firstTagIndex: nextTagIndex,
+                                                        segmenterOptions: segmenterOptions)
+        let nextSegmentID = (insertedScripts.flatMap(\.segments).map(\.id).max() ?? (firstSegmentID - 1)) + 1
+        let wasBridged = bridgedSectionIdentifiers.contains(sectionIdentifier)
+        pendingSectionIdentifiers.removeAll { $0 == sectionIdentifier }
+        bridgedSectionIdentifiers.remove(sectionIdentifier)
+        failedSectionIdentifiers.remove(sectionIdentifier)
+        apply(change, insertedScripts: insertedScripts, placesLate: wasBridged)
+        var actions: [BoardNarrationAction] = [.boardChanged]
+        if mode != .idle, !isFinished { actions += advance(at: now) }
+        return (actions, nextSegmentID)
+    }
+
+    /// A helper failed: its section is dropped when the voice gets there.
+    public mutating func markSectionFailed(_ sectionIdentifier: String) {
+        guard pendingSectionIdentifiers.contains(sectionIdentifier) else { return }
+        failedSectionIdentifiers.insert(sectionIdentifier)
+    }
+
+    /// The pending section a step only shows the placeholder of (its placeholder step).
+    private func pendingSection(placeholderStepIndex stepIndex: Int) -> String? {
+        guard !pendingSectionIdentifiers.isEmpty else { return nil }
+        let step = board.steps[stepIndex]
+        let shownIdentifiers = step.shownIdentifiers + step.highlightedIdentifiers
+        guard !shownIdentifiers.isEmpty else { return nil }
+        let placeholdersBySection = Dictionary(uniqueKeysWithValues: pendingSectionIdentifiers.map {
+            (ProgressiveBoard.placeholderIdentifier(forSection: $0), $0)
+        })
+        guard shownIdentifiers.allSatisfy({ placeholdersBySection[$0] != nil }) else { return nil }
+        return placeholdersBySection[shownIdentifiers[0]]
+    }
+
+    /// The voice reached a pending section: bridge (placeholder shown) or, for a failed helper, drop.
+    private mutating func passPendingSection(_ sectionIdentifier: String, placeholderStepIndex: Int, saysBridge: Bool,
+                                             at now: TimeInterval) -> [BoardNarrationAction] {
+        if failedSectionIdentifiers.contains(sectionIdentifier) { return dropSections([sectionIdentifier]) }
+        var actions = reveal(stepIndex: placeholderStepIndex, at: now)
+        if !bridgedSectionIdentifiers.contains(sectionIdentifier) {
+            bridgedSectionIdentifiers.insert(sectionIdentifier)
+            if saysBridge { actions.append(.bridge(sectionIdentifier: sectionIdentifier)) }
+        }
+        return actions
+    }
+
+    private func isRecapStep(_ stepIndex: Int) -> Bool {
+        isRecapStep(stepIndex, in: board)
+    }
+
+    private mutating func dropSections(_ sectionIdentifiers: [String]) -> [BoardNarrationAction] {
+        var droppedIdentifiers: [String] = []
+        for sectionIdentifier in sectionIdentifiers {
+            pendingSectionIdentifiers.removeAll { $0 == sectionIdentifier }
+            bridgedSectionIdentifiers.remove(sectionIdentifier)
+            failedSectionIdentifiers.remove(sectionIdentifier)
+            guard let change = ProgressiveBoard.replacePlaceholder(ofSection: sectionIdentifier, in: board, with: nil) else { continue }
+            apply(change, insertedScripts: [], placesLate: false)
+            droppedIdentifiers.append(sectionIdentifier)
+        }
+        guard !droppedIdentifiers.isEmpty else { return [] }
+        return [.dropSections(sectionIdentifiers: droppedIdentifiers), .boardChanged]
+    }
+
+    /// Moves every step index through the change and plans the inserted steps.
+    private mutating func apply(_ change: ProgressiveBoard.SectionChange, insertedScripts: [BoardStepScript], placesLate: Bool) {
+        let mapping = change.stepIndexMapping
+        var newScripts = [BoardStepScript?](repeating: nil, count: change.board.steps.count)
+        for script in scripts {
+            guard let newIndex = mapping[script.stepIndex] else { continue }
+            newScripts[newIndex] = script.reindexed(stepIndex: newIndex, stepNumber: change.board.steps[newIndex].number)
+        }
+        for (offset, insertedIndex) in change.insertedStepIndexes.enumerated() where offset < insertedScripts.count {
+            newScripts[insertedIndex] = insertedScripts[offset].reindexed(stepIndex: insertedIndex, stepNumber: change.board.steps[insertedIndex].number)
+        }
+        nextTagIndex = max(nextTagIndex, (insertedScripts.flatMap(\.tags).map(\.index).max() ?? (nextTagIndex - 1)) + 1)
+
+        // The plan: remapped; a removed step not yet reached marks the in-place spot.
+        var newPlan: [Int] = []
+        var newPlanPosition = 0
+        var inPlacePosition: Int?
+        for (position, stepIndex) in plan.enumerated() {
+            guard let newIndex = mapping[stepIndex] else {
+                if position >= planPosition, inPlacePosition == nil { inPlacePosition = newPlan.count }
+                continue
+            }
+            if position < planPosition { newPlanPosition += 1 }
+            newPlan.append(newIndex)
+        }
+        let remappedDeferred = Set(deferredStepIndexes.compactMap { mapping[$0] })
+        let insertedIndexes = change.insertedStepIndexes
+        if mode != .idle, let lastInsertedIndex = insertedIndexes.last {
+            var insertionPosition: Int
+            if let inPlacePosition {
+                insertionPosition = inPlacePosition
+            } else {
+                insertionPosition = newPlan.count
+                for position in newPlanPosition..<newPlan.count {
+                    let plannedIndex = newPlan[position]
+                    let isRecap = isRecapStep(plannedIndex, in: change.board)
+                    let isLaterDeferred = remappedDeferred.contains(plannedIndex) && plannedIndex > lastInsertedIndex
+                    let isLaterInPlan = !placesLate && plannedIndex > lastInsertedIndex
+                    if isRecap || isLaterDeferred || isLaterInPlan {
+                        insertionPosition = position
+                        break
+                    }
+                }
+            }
+            insertionPosition = max(insertionPosition, newPlanPosition)
+            if mode == .continuous || inPlacePosition != nil { newPlan.insert(contentsOf: insertedIndexes, at: insertionPosition) }
+        }
+
+        func nearestSurvivingIndex(_ oldIndex: Int) -> Int? {
+            for candidate in stride(from: oldIndex, through: 0, by: -1) {
+                if let newIndex = mapping[candidate] { return newIndex }
+            }
+            return nil
+        }
+        board = change.board
+        scripts = newScripts.enumerated().map { index, script in
+            script ?? BoardStepScript(stepIndex: index, stepNumber: change.board.steps[index].number, segments: [], tags: [], cueAnchors: [])
+        }
+        plan = newPlan
+        planPosition = newPlanPosition
+        deferredStepIndexes = remappedDeferred.union(placesLate ? Set(insertedIndexes) : [])
+        revealedSteps = Set(revealedSteps.compactMap { mapping[$0] })
+        spokenUnendedSteps = spokenUnendedSteps.compactMap { mapping[$0] }
+        holdingStepIndex = holdingStepIndex.flatMap { mapping[$0] }
+        currentStepIndex = currentStepIndex.flatMap(nearestSurvivingIndex)
+        let elementIdentifiers = Set(board.elements.map(\.id))
+        revealTimes = revealTimes.filter { elementIdentifiers.contains($0.key) || isFlowInnerIdentifier($0.key) }
+        highlightedIdentifiers = highlightedIdentifiers.filter { elementIdentifiers.contains($0) }
+        rebuildSegmentIndex()
+    }
+
+    private func isRecapStep(_ stepIndex: Int, in someBoard: WBBoard) -> Bool {
+        guard let recapSectionIdentifier = someBoard.sections.first(where: { $0.id.lowercased() == "recap" || $0.title.lowercased() == "recap" })?.id else { return false }
+        return ProgressiveBoard.sectionIdentifier(of: someBoard.steps[stepIndex], in: someBoard) == recapSectionIdentifier
+    }
+
+    private func isFlowInnerIdentifier(_ identifier: String) -> Bool {
+        identifier.contains(".")
     }
 
     // MARK: Reveal

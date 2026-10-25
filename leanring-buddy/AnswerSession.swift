@@ -26,6 +26,15 @@
 //  step. A board too broken to use gets one repair call; if that fails the
 //  steps' words are spoken without a board.
 //
+//  P6.7 progressive boards: a [WORKER:s<k> title:task] line names a board
+//  section. That helper is asked for CWB lines of its section only
+//  (WhiteboardPromptSection.workerSectionSystemPrompt); its reply is
+//  filtered (WBWorkerSectionFilter) and merged straight into the board
+//  (BoardController.mergeWorkerSection, or into the board before it's
+//  presented when it's that quick), with no follow-up stream. Other helpers
+//  (and section helpers of an answer that drew no board) still get the
+//  follow-up stream with their results.
+//
 
 import ClickyCore
 import CoreGraphics
@@ -46,7 +55,8 @@ final class AnswerSession: SpeechCoordinatorHost {
     /// Global index of this stream's tag 0 (follow-up streams continue the numbering).
     private var tagIndexOffset = 0
     private var placeholdersSeen = 0
-    private var nextSegmentID = 1
+    /// The next free caption segment id (the board's scripts take theirs from here too).
+    var nextSegmentID = 1
     private(set) var rawResponse = ""
     private(set) var speechLeakCount = 0
     private(set) var badgeMentionCount = 0
@@ -87,6 +97,12 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private(set) var workerRequests: [CompanionWorkerRequest] = []
     private var workerTasks: [Task<CompanionWorkerResult, Never>] = []
+    /// Index into workerTasks → the board section that helper draws (P6.7).
+    private var boardSectionByWorkerIndex: [Int: (sectionIdentifier: String, title: String)] = [:]
+    /// Helper sections that came back before the board was presented.
+    private var earlyBoardSections: [(sectionIdentifier: String, board: WBBoard)] = []
+    /// Helper sections whose helper failed or drew nothing usable.
+    private var failedBoardSections: [String] = []
     private var finishContinuation: CheckedContinuation<Void, Never>?
     private(set) var isFinished = false
     private(set) var wasInterrupted = false
@@ -152,7 +168,7 @@ final class AnswerSession: SpeechCoordinatorHost {
         case .finish:
             route(router.finish())
             enqueue(segmenter.finish())
-            let spawnedWorkers = isFirstStream && !workerTasks.isEmpty
+            let spawnedWorkers = isFirstStream && hasFollowUpWorkers
             finishStream(spawnedWorkers: spawnedWorkers)
         case .reset:
             // A new message before anything was spoken: start the answer over.
@@ -300,8 +316,18 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private func presentBoard(_ board: WBBoard) {
         presentedBoard = true
-        nextSegmentID = companionManager.boardController.presentLive(board: board, session: self, coordinator: coordinator, turnRecord: turnRecord,
+        // Helper sections that were already back go straight into the board.
+        var boardWithEarlySections = board
+        for earlySection in earlyBoardSections {
+            if let change = ProgressiveBoard.replacePlaceholder(ofSection: earlySection.sectionIdentifier, in: boardWithEarlySections, with: earlySection.board) {
+                boardWithEarlySections = change.board
+            }
+        }
+        earlyBoardSections = []
+        nextSegmentID = companionManager.boardController.presentLive(board: boardWithEarlySections, session: self, coordinator: coordinator, turnRecord: turnRecord,
                                                                      firstSegmentID: nextSegmentID, segmenterOptions: segmenterOptions)
+        for failedSection in failedBoardSections { companionManager.boardController.markWorkerSectionFailed(failedSection, session: self) }
+        failedBoardSections = []
     }
 
     /// A step's `say` without its tags (spoken when the board couldn't be drawn).
@@ -560,6 +586,8 @@ final class AnswerSession: SpeechCoordinatorHost {
         isFinished = true
         captionTickTimer?.invalidate()
         captionTickTimer = nil
+        // Section helpers still drawing can't make it into this board any more.
+        for workerIndex in boardSectionByWorkerIndex.keys where workerTasks.indices.contains(workerIndex) { workerTasks[workerIndex].cancel() }
         companionManager.upcomingTargetRectsCG = []
         self.wasInterrupted = wasInterrupted
         companionManager.speechOutputClient.recordFinished(coordinator)
@@ -614,25 +642,75 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private func spawnWorker(_ request: CompanionWorkerRequest) {
         workerRequests.append(request)
-        if isWhiteboardTurn { companionManager.boardController.showShell(workerTitle: request.workerTitle, session: self) }
+        // "s2 The handshake": a helper that draws board section s2 (P6.7).
+        let boardSection = ProgressiveBoard.workerSection(fromWorkerTitle: request.workerTitle)
+        if isWhiteboardTurn { companionManager.boardController.showShell(workerTitle: boardSection?.title ?? request.workerTitle, session: self) }
         let screenBlocks = groundedTurn.contentBlocks
+        let systemPromptFileName = boardSection.map { "worker-board-\($0.sectionIdentifier)-prompt.md" } ?? "worker-prompt.md"
+        let systemPrompt = boardSection.map {
+            WhiteboardPromptSection.workerSectionSystemPrompt(sectionIdentifier: $0.sectionIdentifier, sectionTitle: $0.title)
+        } ?? CompanionManager.companionWorkerSystemPrompt
         let workerTask = companionManager.companionWorkerRunner.spawnWorker(request) { workerRequest in
             let workerTurn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
-                systemPromptFileName: "worker-prompt.md",
-                systemPrompt: CompanionManager.companionWorkerSystemPrompt,
+                systemPromptFileName: systemPromptFileName,
+                systemPrompt: systemPrompt,
                 contentBlocks: [.text(workerRequest.workerTaskPrompt)] + screenBlocks
             )
             return workerTurn.text
         }
+        if let boardSection {
+            boardSectionByWorkerIndex[workerTasks.count] = boardSection
+            Task { @MainActor [weak self] in
+                let result = await workerTask.value
+                self?.boardSectionWorkerFinished(result, sectionIdentifier: boardSection.sectionIdentifier, title: boardSection.title)
+            }
+        }
         workerTasks.append(workerTask)
     }
 
-    var hasWorkers: Bool { !workerTasks.isEmpty }
+    /// Section helpers feed the board directly, unless this answer drew no board.
+    private var drawsBoardFromHelpers: Bool {
+        WBBlockExtractor.containsWhiteboardBlock(rawResponse)
+    }
 
-    func workerResults() async -> [CompanionWorkerResult] {
+    /// Indexes of the helpers whose results go to a follow-up stream.
+    private var followUpWorkerIndexes: [Int] {
+        workerTasks.indices.filter { boardSectionByWorkerIndex[$0] == nil || !drawsBoardFromHelpers }
+    }
+
+    var hasFollowUpWorkers: Bool { !followUpWorkerIndexes.isEmpty }
+
+    func followUpWorkerResults() async -> [CompanionWorkerResult] {
         var results: [CompanionWorkerResult] = []
-        for workerTask in workerTasks { results.append(await workerTask.value) }
+        for workerIndex in followUpWorkerIndexes { results.append(await workerTasks[workerIndex].value) }
         return results
+    }
+
+    /// A section helper is back: its lines (filtered to its section) go into
+    /// the board, or wait for it; a failure lets the narrator drop the section.
+    private func boardSectionWorkerFinished(_ result: CompanionWorkerResult, sectionIdentifier: String, title: String) {
+        guard !isFinished, drawsBoardFromHelpers || !hasStreamEnded else { return }
+        let outcome = result.didWorkerSucceed
+            ? WBWorkerSectionFilter.filter(workerText: result.workerResultText, sectionIdentifier: sectionIdentifier, sectionTitle: title)
+            : nil
+        if let outcome, !outcome.rejectedReasons.isEmpty {
+            print("🧑‍🏫 Helper \(sectionIdentifier): \(outcome.rejectedReasons.count) line(s) rejected: \(outcome.rejectedReasons.prefix(6).joined(separator: "; "))")
+        }
+        guard let outcome, outcome.isUsable else {
+            print("🧑‍🏫 Helper \(sectionIdentifier) drew nothing usable; its section will be dropped")
+            if presentedBoard {
+                companionManager.boardController.markWorkerSectionFailed(sectionIdentifier, session: self)
+            } else {
+                failedBoardSections.append(sectionIdentifier)
+            }
+            return
+        }
+        print("🧑‍🏫 Helper \(sectionIdentifier) drew \(outcome.board.elements.count) elements, \(outcome.board.steps.count) steps")
+        if presentedBoard {
+            companionManager.boardController.mergeWorkerSection(sectionIdentifier, workerBoard: outcome.board, session: self)
+        } else {
+            earlyBoardSections.append((sectionIdentifier, outcome.board))
+        }
     }
 }
 
