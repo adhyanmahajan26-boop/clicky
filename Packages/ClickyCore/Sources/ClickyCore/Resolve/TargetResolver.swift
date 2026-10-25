@@ -97,7 +97,13 @@ public struct TargetResolver {
             guard resolved.method == .raw || resolved.method == .snapped else { return nil }
             return photoMatching(resolved.frameCG, displayID: resolved.displayID)
         }()
-        if !isOCRText, let image = photo, let productFrame = productStack(around: image) {
+        let rawPhotoStack: CGRect? = {
+            // A raw box over a photo whose element Chrome hadn't named yet: grow it over the
+            // product's call-to-action button stacked under it (it is in the list when the photo isn't).
+            guard photo == nil, resolved.method == .raw || resolved.method == .snapped else { return nil }
+            return productStack(anchor: resolved.frameCG, displayID: resolved.displayID, processIdentifier: nil, buttonGap: 80)
+        }()
+        if !isOCRText, let productFrame = photo.flatMap({ productStack(around: $0) }) ?? rawPhotoStack {
             // A box on a product photo covers the product: the photo plus the name / price / button
             // stacked with it (a live run boxed only the photos of three product cards).
             return ResolvedTarget(frameCG: productFrame, pointCG: productFrame.center, confidence: resolved.confidence, method: .imageCard,
@@ -115,22 +121,30 @@ public struct TargetResolver {
     /// starting within 24 pt of the one above, none wider than the photo + 16 pt): a product card
     /// whose container isn't an element. nil when nothing is stacked with it.
     func productStack(around image: GroundingElement) -> CGRect? {
-        let imageFrame = image.visibleFrameCG
+        productStack(anchor: image.visibleFrameCG, displayID: image.displayID, processIdentifier: image.processIdentifier, buttonGap: 24)
+    }
+
+    /// `buttonGap`: how far below the stack a button / link may start and still join it (a card's
+    /// "Add to cart" sits under the name and price, which may be missing from the list).
+    func productStack(anchor imageFrame: CGRect, displayID: CGDirectDisplayID, processIdentifier: pid_t?, buttonGap: CGFloat) -> CGRect? {
         func inColumn(_ frame: CGRect) -> Bool {
             abs(frame.minX - imageFrame.minX) <= 8 && frame.width <= imageFrame.width + 16
         }
-        let accessibilityFrames = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
-            element.source == .accessibility && !element.isBehind && element.displayID == image.displayID
-                && element.processIdentifier == image.processIdentifier && [.text, .button, .link].contains(element.role)
+        let accessibilityElements = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+            element.source == .accessibility && !element.isBehind && element.displayID == displayID
+                && (processIdentifier == nil || element.processIdentifier == processIdentifier) && [.text, .button, .link].contains(element.role)
                 && inColumn(element.visibleFrameCG)
-        }.map(\.visibleFrameCG)
+        }
+        let buttonFrames = Set(accessibilityElements.filter { $0.role != .text }.map { "\($0.visibleFrameCG)" })
         // OCR lines fill in text the element list left out (a price, a name).
-        let ocrFrames = registry.allOCRLines.filter { $0.displayID == image.displayID && inColumn($0.frameCG) }.map(\.frameCG)
-        let candidates = (accessibilityFrames + ocrFrames).sorted { $0.minY < $1.minY }
+        let ocrFrames = registry.allOCRLines.filter { $0.displayID == displayID && inColumn($0.frameCG) }.map(\.frameCG)
+        let candidates = (accessibilityElements.map(\.visibleFrameCG) + ocrFrames).sorted { $0.minY < $1.minY }
         var union = imageFrame
         for frame in candidates where frame.minY >= union.maxY - 2 {
-            guard frame.minY - union.maxY <= 24 else { break }
+            let gapLimit: CGFloat = buttonFrames.contains("\(frame)") ? buttonGap : 24
+            guard frame.minY - union.maxY <= gapLimit else { break }
             union = union.union(frame)
+            if buttonFrames.contains("\(frame)") && buttonGap > 24 { break }  // the CTA ends the card
         }
         return union == imageFrame ? nil : union
     }

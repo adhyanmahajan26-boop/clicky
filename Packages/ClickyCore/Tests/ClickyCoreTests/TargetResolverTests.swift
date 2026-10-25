@@ -358,3 +358,17 @@ private func resolvedTarget(pid: pid_t, node: MockNode, point: CGPoint, label: S
     #expect(resolver.photoMatching(CGRect(x: 1002, y: 402, width: 268, height: 86), displayID: 1) != nil)
     #expect(resolver.photoMatching(CGRect(x: 1000, y: 400, width: 600, height: 400), displayID: 1) == nil)
 }
+
+/// Seventh live run: Chrome hadn't named the Crimson Kettle's photo, name or price yet, only its
+/// "Add to cart" button; the model boxed the photo by raw coordinates.
+@Test func rawBoxOverAnUnnamedPhotoGrowsOverItsCartButton() throws {
+    var registry = ElementRegistry()
+    _ = registry.append(accessibilityElement("Add to cart", role: .button, frame: CGRect(x: 3838, y: 561, width: 272, height: 32)))
+    _ = registry.append(accessibilityElement("Scarlet Pitcher", role: .image, frame: CGRect(x: 3838, y: 636, width: 272, height: 90)))
+    let resolver = makeResolver(registry: registry)
+    let photoRect = CGRect(x: 3838, y: 405, width: 272, height: 90)
+    let grown = try #require(resolver.productStack(anchor: photoRect, displayID: 1, processIdentifier: nil, buttonGap: 80))
+    #expect(grown == CGRect(x: 3838, y: 405, width: 272, height: 188))
+    // Nothing stacked under a lone raw box: no product.
+    #expect(resolver.productStack(anchor: CGRect(x: 100, y: 100, width: 200, height: 100), displayID: 1, processIdentifier: nil, buttonGap: 80) == nil)
+}
