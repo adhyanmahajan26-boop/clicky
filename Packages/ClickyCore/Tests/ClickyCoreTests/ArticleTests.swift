@@ -635,3 +635,17 @@ struct ArticleRenderTests {
     #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 99, windows: [fullScreen, focused, other])?.windowNumber == 3)
     #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 10, windows: [fullScreen]) == nil)
 }
+
+@Test func notesStreamRevealsInOrderWithACaret() {
+    let notes = ArticleNotes(title: "T", summary: "Hello world.", items: [ArticleNoteItem(note: "First", quote: "Quote one")])
+    let reveal = NotesStreamReveal(notes: notes)
+    #expect(reveal.totalCharacters == 12 + 5 + 9)
+    let early = reveal.visible(segment: 0, revealed: 5)
+    #expect(early.settled + early.tail == "Hello" && early.hasCaret)
+    #expect(reveal.visible(segment: 1, revealed: 5).settled.isEmpty && !reveal.visible(segment: 1, revealed: 5).hasCaret)
+    let midNote = reveal.visible(segment: 1, revealed: 15)
+    #expect(midNote.settled + midNote.tail == "Fir" && midNote.hasCaret)
+    #expect(!reveal.visible(segment: 0, revealed: 15).hasCaret)
+    let done = reveal.visible(segment: 2, revealed: reveal.totalCharacters)
+    #expect(done.settled == "Quote one" && done.tail.isEmpty && !done.hasCaret)
+}

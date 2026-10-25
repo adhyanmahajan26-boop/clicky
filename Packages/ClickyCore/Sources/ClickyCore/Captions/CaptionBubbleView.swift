@@ -111,7 +111,9 @@ public struct CaptionBubbleView: View {
             let revealedCount = min(caption.revealedDisplayCharacters, current.display.count)
             let revealedText = String(current.display.prefix(revealedCount))
             let unrevealedText = String(current.display.dropFirst(revealedCount))
-            text = text + styled(revealedText, monospacedRanges: current.monospacedRanges, opacity: 1)
+            // P9: Clicky's orange caret at the reveal point while the voice is still going (like a streamed answer).
+            let caret = unrevealedText.isEmpty ? Text("") : Text("\u{258D}").foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+            text = text + styled(revealedText, monospacedRanges: current.monospacedRanges, opacity: 1) + caret
                 + styled(unrevealedText, monospacedRanges: current.monospacedRanges.map { ($0.lowerBound - revealedCount)..<($0.upperBound - revealedCount) },
                          opacity: CaptionBubbleMetrics.unrevealedOpacity)
         }

@@ -775,7 +775,7 @@ private struct ArticleNotesPanelRootView: View {
 
     var body: some View {
         if let state = model.state {
-            ArticleNotesView(state: state, actions: actions)
+            ArticleNotesView(state: state, actions: actions, animatesWriting: true)
         } else {
             Color.clear
         }

@@ -66,8 +66,16 @@ public struct ArticleNotesView: View {
     let state: ArticleNotesViewState
     let actions: ArticleNotesViewActions
     let isScrollable: Bool
+    /// P9 live writing: characters revealed so far (Int.max = all, e.g. offscreen renders and Reduce Motion).
+    @State private var revealedCharacters = Int.max
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    private var reveal: NotesStreamReveal { NotesStreamReveal(notes: state.notes) }
 
-    public init(state: ArticleNotesViewState, actions: ArticleNotesViewActions, isScrollable: Bool = true) {
+    /// The app's panel writes notes in live; offscreen renders show them finished.
+    let animatesWriting: Bool
+
+    public init(state: ArticleNotesViewState, actions: ArticleNotesViewActions, isScrollable: Bool = true, animatesWriting: Bool = false) {
+        self.animatesWriting = animatesWriting
         self.state = state
         self.actions = actions
         self.isScrollable = isScrollable
@@ -88,6 +96,7 @@ public struct ArticleNotesView: View {
             footer
         }
         .background(ArticleNotesColors.panelBackground)
+        .task(id: state.notes) { await streamIn() }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(ArticleNotesColors.separator, lineWidth: 0.5))
     }
@@ -118,7 +127,7 @@ public struct ArticleNotesView: View {
             if !state.notes.summary.isEmpty {
                 HStack(alignment: .top, spacing: 8) {
                     RoundedRectangle(cornerRadius: 1.5).fill(ArticleNotesColors.highlighterYellow).frame(width: 3)
-                    Text(state.notes.summary)
+                    StreamingText(visible: reveal.visible(segment: 0, revealed: revealedCharacters))
                         .font(.system(size: 12.5))
                         .foregroundColor(ArticleNotesColors.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -126,7 +135,10 @@ public struct ArticleNotesView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(state.notes.items.enumerated()), id: \.offset) { index, item in
-                    ArticleNoteRow(number: index + 1, item: item, isLinked: !state.unmatchedNumbers.contains(index + 1),
+                    ArticleNoteRow(number: index + 1, item: item,
+                                   noteText: reveal.visible(segment: 1 + index * 2, revealed: revealedCharacters),
+                                   quoteText: reveal.visible(segment: 2 + index * 2, revealed: revealedCharacters),
+                                   isLinked: !state.unmatchedNumbers.contains(index + 1),
                                    offscreenDirection: state.offscreenDirections[index + 1], select: { actions.selectNote(index + 1) })
                 }
             }
@@ -134,6 +146,24 @@ public struct ArticleNotesView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Writes the notes in at about 50 characters a second, like a streamed answer.
+    private func streamIn() async {
+        let total = reveal.totalCharacters
+        guard animatesWriting, !reducesMotion, total > 0 else {
+            revealedCharacters = Int.max
+            return
+        }
+        revealedCharacters = 0
+        let step = 3
+        let interval = UInt64(Double(step) / NotesStreamReveal.charactersPerSecond * 1_000_000_000)
+        while revealedCharacters < total {
+            try? await Task.sleep(nanoseconds: interval)
+            if Task.isCancelled { return }
+            revealedCharacters = min(total, revealedCharacters + step)
+        }
+        revealedCharacters = Int.max
     }
 
     private var footer: some View {
@@ -160,9 +190,24 @@ public struct ArticleNotesView: View {
     }
 }
 
+/// Settled text, the newest characters lighter, then Clicky's orange caret while writing.
+struct StreamingText: View {
+    let visible: NotesStreamReveal.Visible
+
+    var text: Text {
+        Text(visible.settled)
+            + Text(visible.tail).foregroundColor(ArticleNotesColors.primaryText.opacity(0.45))
+            + Text(visible.hasCaret ? "\u{258D}" : "").foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+    }
+
+    var body: some View { text }
+}
+
 private struct ArticleNoteRow: View {
     let number: Int
     let item: ArticleNoteItem
+    let noteText: NotesStreamReveal.Visible
+    let quoteText: NotesStreamReveal.Visible
     let isLinked: Bool
     let offscreenDirection: ArticleHighlightTickDirection?
     let select: () -> Void
@@ -177,12 +222,12 @@ private struct ArticleNoteRow: View {
                     .frame(width: 20, height: 20)
                     .background(Circle().fill(ArticleNotesColors.highlighterYellow.opacity(isLinked ? 0.9 : 0.35)))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.note)
+                    StreamingText(visible: noteText)
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundColor(ArticleNotesColors.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
-                    if !item.quote.isEmpty {
-                        Text("\u{201C}\(item.quote)\u{201D}")
+                    if !item.quote.isEmpty && !(quoteText.settled + quoteText.tail).isEmpty {
+                        (Text("\u{201C}") + StreamingText(visible: quoteText).text + Text(quoteText.hasCaret ? "" : "\u{201D}"))
                             .font(.system(size: 11).italic())
                             .foregroundColor(ArticleNotesColors.secondaryText)
                             .lineLimit(3)

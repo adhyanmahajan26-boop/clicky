@@ -297,3 +297,49 @@ public enum NotesTag {
         }
     }
 }
+
+/// P9 "Claude-style" live writing: the notes appear character by character with a caret, like a
+/// streamed answer. Segments in reading order: the summary, then each note and its quote.
+public struct NotesStreamReveal: Equatable, Sendable {
+    public static let charactersPerSecond: Double = 50
+    /// The newest characters are drawn lighter (a soft fade-in as they arrive).
+    public static let fadingTailCharacters = 6
+
+    public let segments: [String]
+    public init(notes: ArticleNotes) {
+        segments = [notes.summary] + notes.items.flatMap { [$0.note, $0.quote] }
+    }
+
+    public var totalCharacters: Int { segments.reduce(0) { $0 + $1.count } }
+
+    public struct Visible: Equatable, Sendable {
+        /// Fully revealed part, then the fading tail (both prefixes of the segment).
+        public var settled: String
+        public var tail: String
+        public var hasCaret: Bool
+    }
+
+    /// The segment the caret is in (where the next character goes); nil once everything is shown.
+    public func caretSegment(revealed: Int) -> Int? {
+        guard revealed < totalCharacters else { return nil }
+        var cumulative = 0
+        for (index, segment) in segments.enumerated() where !segment.isEmpty {
+            if revealed < cumulative + segment.count { return index }
+            cumulative += segment.count
+        }
+        return nil
+    }
+
+    /// What segment `index` shows after `revealed` characters overall.
+    public func visible(segment index: Int, revealed: Int) -> Visible {
+        guard segments.indices.contains(index) else { return Visible(settled: "", tail: "", hasCaret: false) }
+        let segment = segments[index]
+        guard revealed < totalCharacters else { return Visible(settled: segment, tail: "", hasCaret: false) }
+        let before = segments[..<index].reduce(0) { $0 + $1.count }
+        let shown = max(0, min(segment.count, revealed - before))
+        let prefix = String(segment.prefix(shown))
+        let tailCount = min(Self.fadingTailCharacters, prefix.count)
+        return Visible(settled: String(prefix.dropLast(tailCount)), tail: String(prefix.suffix(tailCount)),
+                       hasCaret: caretSegment(revealed: revealed) == index)
+    }
+}
