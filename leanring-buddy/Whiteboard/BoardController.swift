@@ -537,7 +537,7 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     }
 
     /// PNG (2×, whole board) in ~/Pictures/Clicky and on the pasteboard, plus
-    /// the board's JSONL as a .clickyboard file next to it.
+    /// a PDF of the same board and the board's JSONL as a .clickyboard file next to it.
     @discardableResult
     func exportBoard() -> URL? {
         guard let scene, let board, let image = WhiteboardExporter.exportImage(scene: scene, theme: theme),
@@ -550,9 +550,11 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
             try FileManager.default.createDirectory(at: exportDirectoryURL, withIntermediateDirectories: true)
             let pngURL = exportDirectoryURL.appendingPathComponent(baseName + ".png")
             try pngData.write(to: pngURL, options: .atomic)
+            // The same picture as a vector PDF (text stays selectable); the PNG stays the one on the pasteboard.
+            try WhiteboardExporter.exportPDF(scene: scene, theme: theme, to: exportDirectoryURL.appendingPathComponent(baseName + ".pdf"))
             try WBJSONLSerializer.serialize(board).write(to: exportDirectoryURL.appendingPathComponent(baseName + ".clickyboard"), atomically: true, encoding: .utf8)
             putOnPasteboard(pngData)
-            print("🧑‍🏫 Board exported to \(pngURL.path)")
+            print("🧑‍🏫 Board exported to \(pngURL.path) and \(baseName).pdf")
             return pngURL
         } catch {
             print("⚠️ Board export failed: \(error)")

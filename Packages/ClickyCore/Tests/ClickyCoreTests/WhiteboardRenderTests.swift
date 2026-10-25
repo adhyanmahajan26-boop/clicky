@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import PDFKit
 import SwiftUI
 import Testing
 @testable import ClickyCore
@@ -108,5 +109,17 @@ struct WhiteboardRenderTests {
         #expect(!chartRects.isEmpty)
         for chartRect in chartRects { #expect(!WhiteboardExporter.isBlank(image, rect: chartRect, scale: 2)) }
         try WhiteboardExporter.pngData(image)?.write(to: Self.outputDirectory.appendingPathComponent("export-db-index.png"))
+    }
+
+    /// The PDF export writes a one-page PDF whose text includes the board title (the title is real text, not a picture).
+    @Test func exportPDFWritesOnePageWithTheBoardTitle() throws {
+        let scene = try Self.scene(named: "db-index")
+        let temporaryPDFURL = FileManager.default.temporaryDirectory.appendingPathComponent("clicky-whiteboard-test-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: temporaryPDFURL) }
+        try WhiteboardExporter.exportPDF(scene: scene, theme: .paper, to: temporaryPDFURL)
+        #expect(FileManager.default.fileExists(atPath: temporaryPDFURL.path))
+        let document = try #require(PDFDocument(url: temporaryPDFURL))
+        #expect(document.pageCount == 1)
+        #expect(document.string?.contains(scene.board.title) == true, "the PDF text should contain \"\(scene.board.title)\"")
     }
 }

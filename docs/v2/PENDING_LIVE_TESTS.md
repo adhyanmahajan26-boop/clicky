@@ -175,3 +175,8 @@ SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for ma
 3. Press a self-test Run button only when you want that test to run (several open windows, play audio or drive the mouse). The result line shows Passed or Failed.
 4. Settings: change a v2 toggle, picker, stepper or list in the window and confirm the panel or the next turn behaves accordingly.
 5. Offscreen layout check: `~/Library/Logs/Clicky/renders/p6/diagnostics.png` (fake values; the toggles and pickers show placeholder glyphs in the render because AppKit controls don't draw offscreen).
+
+### P6.10 whiteboard PDF export
+
+1. Open a board and press `e` (or `boardCtl export`). Expect `~/Pictures/Clicky/whiteboard-<ts>.pdf` next to the PNG and the `.clickyboard`.
+2. Open the PDF in Preview: one page, the board's title and steps as selectable text, charts drawn (not blank).
