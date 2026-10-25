@@ -13,18 +13,23 @@
 //               keychain and security prompts (SecurityAgent, coreautha,
 //               Keychain Access, password managers), typing or keys into a
 //               terminal (code goes through code mode), System Settings'
-//               Privacy & Security panes, Return when the owner never said
-//               "press enter" / "send it", system-level key combos (force
-//               quit, log out, empty trash, lock), and Safari or any window
-//               showing Netflix unless the owner named it this turn.
+//               Privacy & Security panes, system-level key combos (force
+//               quit, log out, empty trash, lock), typing into a shell, and
+//               Safari or any window showing Netflix unless the owner named
+//               it (this task, or Safari within the last 2 minutes for the
+//               same window — ActionSafariFollowUp).
 //   confirm   — waits for the owner's spoken "yes" or a real click on the
 //               confirm card: anything that sends, posts, submits, buys,
 //               deletes, closes unsaved work or changes settings (classified
 //               by the button's label, the key combo, or System Settings as
-//               the app), and Return after the owner asked for it.
+//               the app), and a Return the model planned without the owner
+//               saying so ("Press enter? Say yes.", a 6 s window).
 //   countdown — 1.5 s on screen first (any key, mouse move or "stop"
 //               cancels): typing into a field, clicking a button / checkbox /
-//               pop-up / row or text that isn't a plain link, other keys.
+//               pop-up / row or text that isn't a plain link, other keys,
+//               and Return (or a Send button) when the owner asked for it
+//               (ActionEnterIntent: "press enter", "send it", ASR look-alikes).
+//   Every refusal carries a short spoken line (spokenLine) — never silent.
 //   free      — open an app / a link / a search, scroll, links, tabs and
 //               menu items, select & copy, highlight, summarize, switch
 //               window, wait, code tasks (code mode keeps its own gates).
@@ -47,10 +52,24 @@ public struct ActionTierDecision: Equatable, Sendable {
     public var tier: ActionTier
     /// Why ("password field", "button \"Send\" sends", "plain link").
     public var reason: String
+    /// Said as-is instead of the generic "i didn't … : reason." (refusals).
+    public var spokenLine: String?
+    /// Confirm tier: the question to speak instead of the generic one.
+    public var confirmQuestion: String?
+    /// Confirm tier: how long the yes is waited for (nil = the usual minute).
+    public var confirmWindowSeconds: TimeInterval?
 
-    public init(_ tier: ActionTier, _ reason: String) {
+    public init(_ tier: ActionTier, _ reason: String, spokenLine: String? = nil, confirmQuestion: String? = nil, confirmWindowSeconds: TimeInterval? = nil) {
         self.tier = tier
         self.reason = reason
+        self.spokenLine = spokenLine
+        self.confirmQuestion = confirmQuestion
+        self.confirmWindowSeconds = confirmWindowSeconds
+    }
+
+    /// What Clicky says when this step is refused.
+    public func refusalLine(for step: ActionStep) -> String {
+        spokenLine ?? "i didn't \(step.shortDescription): \(reason)."
     }
 }
 
@@ -73,10 +92,17 @@ public struct ActionTargetFacts: Equatable, Sendable {
     public var url: String?
     public var isOwnApplication: Bool
     public var isSecureEventInputOn: Bool
+    /// The target window's CGWindowID, when known (Safari follow-ups).
+    public var windowIdentifier: UInt32?
+    /// Terminals: what runs in the front tab (nil = couldn't tell).
+    public var terminalForeground: ActionTerminalForeground?
 
     public init(bundleIdentifier: String? = nil, applicationName: String? = nil, windowTitle: String? = nil, role: String? = nil, subrole: String? = nil,
                 groundingRole: GroundingRole? = nil, label: String? = nil, placeholder: String? = nil, identifier: String? = nil, url: String? = nil,
-                isOwnApplication: Bool = false, isSecureEventInputOn: Bool = false) {
+                isOwnApplication: Bool = false, isSecureEventInputOn: Bool = false, windowIdentifier: UInt32? = nil,
+                terminalForeground: ActionTerminalForeground? = nil) {
+        self.windowIdentifier = windowIdentifier
+        self.terminalForeground = terminalForeground
         self.bundleIdentifier = bundleIdentifier
         self.applicationName = applicationName
         self.windowTitle = windowTitle
@@ -92,16 +118,40 @@ public struct ActionTargetFacts: Equatable, Sendable {
     }
 }
 
-/// What the owner said this turn (the task's own request).
+/// What the owner said: the turn that started the task, this turn's words when
+/// they differ, and the recent Safari namings.
 public struct ActionTurnContext: Equatable, Sendable {
     public var ownerTranscript: String
+    /// This turn's own words when they aren't the task's first request.
+    public var currentTranscript: String?
+    public var safariFollowUp: ActionSafariFollowUp
+    public var now: Date
 
-    public init(ownerTranscript: String) {
+    public init(ownerTranscript: String, currentTranscript: String? = nil, safariFollowUp: ActionSafariFollowUp = ActionSafariFollowUp(), now: Date = Date()) {
         self.ownerTranscript = ownerTranscript
+        self.currentTranscript = currentTranscript
+        self.safariFollowUp = safariFollowUp
+        self.now = now
     }
 
-    public var ownerNamedSafariOrNetflix: Bool { ActionWordMatch.containsWord(in: ownerTranscript, anyOf: ["safari", "netflix"]) }
-    public var ownerAskedToPressReturn: Bool { ActionReturnRule.ownerAskedToPressReturn(ownerTranscript) }
+    public var ownerTranscripts: [String] {
+        [ownerTranscript] + [currentTranscript].compactMap { $0 }.filter { $0 != ownerTranscript }
+    }
+
+    public var ownerNamedSafariOrNetflix: Bool { ownerTranscripts.contains { ActionWordMatch.containsWord(in: $0, anyOf: ["safari", "netflix"]) } }
+    public var ownerNamedNetflix: Bool { ownerTranscripts.contains { ActionWordMatch.containsWord(in: $0, anyOf: ["netflix"]) } }
+    /// Explicit phrases only (no step context).
+    public var ownerAskedToPressReturn: Bool { ownerAskedToPressReturn(forReturnStep: false) }
+
+    /// `forReturnStep`: the step is a Return, so ASR look-alikes in a short utterance count too.
+    public func ownerAskedToPressReturn(forReturnStep: Bool) -> Bool {
+        ownerTranscripts.contains { ActionEnterIntent.ownerAsked($0, stepPressesReturn: forReturnStep) }
+    }
+
+    /// Safari (not a Netflix window) the owner named recently, for this window.
+    public func safariFollowUpCovers(_ target: ActionTargetFacts) -> Bool {
+        safariFollowUp.covers(target, ownerNamedNetflix: ownerNamedNetflix, at: now)
+    }
 }
 
 /// Whole-word, case-insensitive matching on labels and transcripts.
@@ -126,15 +176,21 @@ public enum ActionWordMatch {
     }
 }
 
-/// Return / Enter is pressed only when the owner said so in his own words.
+/// Return / Enter without a yes only when the owner said so (explicit phrases; see ActionEnterIntent).
 public enum ActionReturnRule {
-    static let phrases = [
-        "press enter", "press return", "hit enter", "hit return", "and enter", "then enter", "press the enter key", "press the return key",
-        "send it", "and send", "then send", "send the message", "send that", "submit it", "and submit", "then submit", "and post it", "post it"
-    ]
-
     public static func ownerAskedToPressReturn(_ transcript: String) -> Bool {
-        ActionWordMatch.containsWord(in: transcript, anyOf: phrases)
+        ActionEnterIntent.ownerAsked(transcript, stepPressesReturn: false)
+    }
+
+    /// Spoken when the model planned a Return the owner didn't clearly ask for.
+    public static let confirmQuestion = "Press enter? Say yes."
+    /// How long that yes is waited for.
+    public static let confirmWindowSeconds: TimeInterval = 6
+
+    static func decision(ownerAsked: Bool, what: String) -> ActionTierDecision {
+        if ownerAsked { return ActionTierDecision(.countdown, "you asked me to \(what)") }
+        return ActionTierDecision(.confirm, "you didn't say \u{201C}press enter\u{201D}", confirmQuestion: confirmQuestion,
+                                  confirmWindowSeconds: confirmWindowSeconds)
     }
 }
 
@@ -162,6 +218,9 @@ public enum ActionTierClassifier {
         "deploy", "install", "uninstall", "sign out", "log out", "sign in", "log in", "upload", "block", "report", "leave", "end call", "archive"
     ]
     /// Field labels that mean a payment form.
+    /// Button words the owner's "send it" / "submit" covers.
+    static let sendLabelPhrases: Set<String> = ["send", "send now", "submit"]
+    public static let shellRefusalLine = "I won't type into a shell \u{2014} want me to do that as a code task instead?"
     static let paymentFieldPhrases = [
         "card number", "credit card", "debit card", "cardnumber", "cc-number", "cc-csc", "cc-exp", "cvv", "cvv2", "cvc", "csc", "security code",
         "expiry", "expiration", "exp date", "mm/yy", "mm / yy", "iban", "routing number", "account number", "sort code", "bsb"
@@ -227,6 +286,11 @@ public enum ActionTierClassifier {
         case .click:
             let label = target?.label ?? ""
             if let word = ActionWordMatch.firstWord(in: label, of: confirmLabelPhrases) {
+                // "send it" said by the owner is his yes for the Send / Submit button.
+                if sendLabelPhrases.contains(word), context.ownerAskedToPressReturn(forReturnStep: false),
+                   !(target.map(isSystemSettings) ?? false) {
+                    return ActionTierDecision(.countdown, "you asked me to send it")
+                }
                 return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} \(confirmVerb(for: word))")
             }
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
@@ -241,16 +305,18 @@ public enum ActionTierClassifier {
             }
 
         case .type(_, _, let pressesReturn):
-            if pressesReturn {
-                // targetRefusal already refused Return the owner didn't ask for.
-                return ActionTierDecision(.confirm, "typing then pressing Return sends or submits")
-            }
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+            if pressesReturn {
+                return ActionReturnRule.decision(ownerAsked: context.ownerAskedToPressReturn(forReturnStep: true), what: "type it and press enter")
+            }
             return ActionTierDecision(.countdown, "typing into a field")
 
         case .key(let combo):
             let comboText = combo.displayText
-            if combo.isReturnKey { return ActionTierDecision(.confirm, "Return sends or submits") }
+            if combo.isReturnKey {
+                if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+                return ActionReturnRule.decision(ownerAsked: context.ownerAskedToPressReturn(forReturnStep: true), what: "press enter")
+            }
             if confirmKeyCombos.contains(comboText) { return ActionTierDecision(.confirm, "\(comboText) can close, quit, save or delete") }
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
             if freeKeyCombos.contains(comboText) { return ActionTierDecision(.free, "navigation key") }
@@ -260,14 +326,8 @@ public enum ActionTierClassifier {
 
     /// The refusal rules, safest first; nil when none applies.
     static func targetRefusal(for step: ActionStep, target: ActionTargetFacts?, context: ActionTurnContext) -> ActionTierDecision? {
-        // Return the owner never asked for: no tier makes it okay.
-        if case .type(_, _, true) = step, !context.ownerAskedToPressReturn {
-            return ActionTierDecision(.refused, "Return is pressed only when you say \u{201C}press enter\u{201D} or \u{201C}send it\u{201D}")
-        }
+        // (Return itself is never refused here: owner said it → countdown, else confirm.)
         if case .key(let combo) = step {
-            if combo.isReturnKey && !context.ownerAskedToPressReturn {
-                return ActionTierDecision(.refused, "Return is pressed only when you say \u{201C}press enter\u{201D} or \u{201C}send it\u{201D}")
-            }
             if refusedKeyCombos.contains(combo.displayText) { return ActionTierDecision(.refused, "\(combo.displayText) is a system-level shortcut") }
         }
         // Waiting and code tasks touch no app.
@@ -283,7 +343,7 @@ public enum ActionTierClassifier {
         }
         if target.isOwnApplication { return ActionTierDecision(.refused, "that's Clicky's own window") }
         if isSecurityApplication(target) { return ActionTierDecision(.refused, "keychain, password and security prompts are off limits") }
-        if isProtectedFromActions(target) && !context.ownerNamedSafariOrNetflix {
+        if isProtectedFromActions(target) && !context.ownerNamedSafariOrNetflix && !context.safariFollowUpCovers(target) {
             return ActionTierDecision(.refused, "Safari and Netflix are left alone unless you name them")
         }
         if isSystemSettings(target) && isPrivacyPane(target) {
@@ -303,7 +363,10 @@ public enum ActionTierClassifier {
         switch step {
         case .type, .key:
             if target.isSecureEventInputOn { return ActionTierDecision(.refused, "a password prompt has secure input on") }
-            if isTerminal(target) { return ActionTierDecision(.refused, "Clicky doesn't type into terminals — that goes through code mode") }
+            // Claude Code's prompt in a terminal is a chat box; anything else there is a shell.
+            if isTerminal(target) && target.terminalForeground != .claudeCode {
+                return ActionTierDecision(.refused, "Clicky doesn't type into a shell — that goes through code mode", spokenLine: shellRefusalLine)
+            }
             if isPasswordLabelled(target) { return ActionTierDecision(.refused, "that looks like a password field") }
         default:
             break

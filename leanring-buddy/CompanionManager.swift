@@ -1114,7 +1114,7 @@ final class CompanionManager: ObservableObject {
 
         // P7: a yes/no to an action's confirm card, or "stop" (not Clicky's own echo).
         if !utteranceOverlappedBuddySpeech, actionTaskController.isActive,
-           (actionTaskController.isAwaitingConfirmation && ActionConfirmReply.parse(finishedUtterance) != .notAReply) || ActionStopCommand.isStop(finishedUtterance) {
+           actionTaskController.isReplyToPendingConfirmation(finishedUtterance) || ActionStopCommand.isStop(finishedUtterance) {
             if actionTaskController.handleOwnerTranscript(finishedUtterance) { return }
         }
 
