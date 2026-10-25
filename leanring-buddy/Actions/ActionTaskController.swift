@@ -11,8 +11,10 @@
 //     (ActionTierClassifier) and then:
 //       free → run · countdown → 1.5 s in the notch first · confirm → the
 //       batch pauses on a confirm card + "should i …?" until the owner says
-//       yes (next utterance) or clicks Confirm · refused → not run, the
-//       rest of the batch is dropped, Claude hears why.
+//       yes (next utterance) or clicks Confirm (a Return he didn't ask for:
+//       "Press enter? Say yes.", 6 s) · refused → not run, Clicky says why
+//       out loud right away, the rest of the batch is dropped, Claude hears
+//       why.
 //     After a screen-changing step, later steps naming ids are skipped as
 //     stale (ActionTaskLoop.gate).
 //  3. Unless the block said "done", once the batch has run AND the answer
@@ -47,6 +49,10 @@ final class ActionTaskController {
         var screenChangedEarlier: Bool
         var question: String
         var createdAt: Date
+        /// The held step is a Return: "press enter" said again also counts as the yes.
+        var isReturnStep: Bool
+        /// Said when the window runs out without a yes.
+        var expiryLine: String
     }
 
     final class ActiveTask {
@@ -61,6 +67,8 @@ final class ActionTaskController {
         var needsObserveTurn = false
         var isCancelled = false
         var currentStepText: String?
+        /// The owner's words of the turn that carried the current block.
+        var currentTranscript: String?
         /// Every tier decision, for actionsStatus.
         var tierDecisions: [[String: Any]] = []
         let speaks: Bool
@@ -90,6 +98,8 @@ final class ActionTaskController {
     private var confirmationExpiryTask: Task<Void, Never>?
     /// The last finished task's summary (actionsStatus after it ended).
     private var lastFinishedSummary: [String: Any]?
+    /// "type it in Safari" covers that Safari window for 2 minutes of follow-ups (across tasks).
+    private var safariFollowUp = ActionSafariFollowUp()
     private(set) var recentEvents: [String] = []
 
     var isActive: Bool { task != nil }
@@ -133,6 +143,7 @@ final class ActionTaskController {
                 return
             }
             task.didReceiveBlockThisTurn = true
+            task.currentTranscript = session.transcript
             companionManager.agentsCenter.log(task.agentID, "next batch: \(plan.steps.count) steps\(plan.isDone ? " (done)" : "")")
             startBatch(plan: plan, steps: plan.steps, groundedTurn: session.groundedTurn, session: session, screenChangedEarlier: false, approvedFirstStep: false)
             return
@@ -172,7 +183,8 @@ final class ActionTaskController {
         defer { if self.task === task { inputMonitor.disarm() } }
         var screenChanged = screenChangedEarlier
         var stoppedEarly = false
-        let context = ActionTurnContext(ownerTranscript: task.loop.ownerTranscript)
+        let context = ActionTurnContext(ownerTranscript: task.loop.ownerTranscript, currentTranscript: task.currentTranscript,
+                                        safariFollowUp: safariFollowUp, now: Date())
 
         for (offset, step) in steps.enumerated() {
             if task.isCancelled || Task.isCancelled { return }
@@ -196,11 +208,16 @@ final class ActionTaskController {
             let decision = target.refusal.map { ActionTierDecision(.refused, $0) }
                 ?? ActionTierClassifier.classify(step, target: target.facts, context: context)
             recordDecision(step: step, decision: decision, target: target)
+            // He named Safari in this task: that Safari window stays covered for follow-ups.
+            if decision.tier != .refused, let facts = target.facts, ActionTierClassifier.isSafari(facts), context.ownerNamedSafariOrNetflix {
+                safariFollowUp.noteOwnerNamedSafari(windowIdentifier: facts.windowIdentifier, at: Date())
+            }
 
             switch decision.tier {
             case .refused:
                 task.loop.record(step, tier: .refused, tierReason: decision.reason, outcome: .refused(reason: decision.reason))
                 publish()
+                speakRefusal(decision.refusalLine(for: step))
                 stoppedEarly = true
                 continue
             case .confirm where !(approvedFirstStep && offset == 0):
@@ -229,6 +246,7 @@ final class ActionTaskController {
                                                 ownerTranscript: task.loop.ownerTranscript, isCancelled: { [weak task] in task?.isCancelled ?? true })
             if task.isCancelled { return }
             task.loop.record(step, tier: decision.tier, tierReason: decision.reason, outcome: result.outcome)
+            if case .refused(let reason) = result.outcome { speakRefusal("i didn't \(step.shortDescription): \(reason).") }
             if let pageText = result.pageText { task.loop.pendingPageText = pageText }
             task.currentStepText = nil
             companionManager.agentsCenter.log(task.agentID, task.loop.records.last?.resultLine ?? "")
@@ -251,13 +269,20 @@ final class ActionTaskController {
         }
         // No observe turn follows: say what was refused, or that the limit was hit.
         var closingLine: String?
-        if let refused = task.loop.records.last(where: { if case .refused = $0.outcome { return true } else { return false } }),
-           case .refused(let reason) = refused.outcome {
-            closingLine = "i didn't \(refused.step.shortDescription): \(reason)."
+        if task.loop.records.contains(where: { if case .refused = $0.outcome { return true } else { return false } }) {
+            // Already said out loud when it was refused.
+            closingLine = nil
         } else if task.loop.isStepBudgetExhausted && !plan.isDone {
             closingLine = task.loop.limitReachedLine
         }
         finish(status: .done, line: closingLine)
+    }
+
+    /// A refused step is never silent: one short spoken line, right away.
+    private func speakRefusal(_ line: String) {
+        guard let task else { return }
+        note("refused: \(line)")
+        if task.speaks { companionManager.speakCodeModeLine(line) }
     }
 
     private func recordDecision(step: ActionStep, decision: ActionTierDecision, target: ResolvedActionTarget) {
@@ -280,9 +305,13 @@ final class ActionTaskController {
         guard let task else { return }
         inputMonitor.disarm()
         let appName = target.facts?.applicationName.map { " in \($0)" } ?? ""
-        let question = "should i \(step.shortDescription)\(appName)? \(decision.reason). say yes, or click confirm."
+        let question = decision.confirmQuestion ?? "should i \(step.shortDescription)\(appName)? \(decision.reason). say yes, or click confirm."
+        let isReturnStep = step.pressesReturn
+        let lifetime = decision.confirmWindowSeconds ?? Self.confirmationLifetime
         task.pendingConfirmation = PendingConfirmation(steps: remainingSteps, plan: plan, groundedTurn: groundedTurn, session: session,
-                                                       screenChangedEarlier: screenChangedEarlier, question: question, createdAt: Date())
+                                                       screenChangedEarlier: screenChangedEarlier, question: question, createdAt: Date(),
+                                                       isReturnStep: isReturnStep,
+                                                       expiryLine: isReturnStep ? "okay, i didn't press enter." : "stopped — no answer to the confirmation.")
         task.phase = .awaitingConfirmation
         task.isBatchRunning = false
         task.currentStepText = "waiting for your yes: \(step.shortDescription)"
@@ -291,10 +320,19 @@ final class ActionTaskController {
         if task.speaks { companionManager.speakCodeModeLine(question) }
         note("waiting for confirmation: \(step.shortDescription)")
         confirmationExpiryTask?.cancel()
+        let speaks = task.speaks
         confirmationExpiryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.confirmationLifetime * 1_000_000_000))
+            // The window starts once the question has been said.
+            if speaks {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                let giveUpDate = Date().addingTimeInterval(20)
+                while let self, self.companionManager.speechOutputClient.isPlaying, Date() < giveUpDate, !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(lifetime * 1_000_000_000))
             guard !Task.isCancelled, let self, self.task === task, task.phase == .awaitingConfirmation else { return }
-            self.cancel(reason: "no answer to the confirmation", stopsSpeech: false)
+            self.expirePendingStep()
         }
     }
 
@@ -307,6 +345,16 @@ final class ActionTaskController {
         companionManager.agentsCenter.log(task.agentID, "confirmed by \(how)")
         startBatch(plan: pending.plan, steps: pending.steps, groundedTurn: pending.groundedTurn, session: pending.session,
                    screenChangedEarlier: pending.screenChangedEarlier, approvedFirstStep: true)
+    }
+
+    /// No yes in time: the step isn't done, and Clicky says so.
+    private func expirePendingStep() {
+        guard let task, task.phase == .awaitingConfirmation, let pending = task.pendingConfirmation, let step = pending.steps.first else { return }
+        confirmCard.hide()
+        task.loop.record(step, tier: .confirm, tierReason: nil, outcome: .cancelled)
+        task.pendingConfirmation = nil
+        note("no answer to the confirmation: \(step.shortDescription)")
+        finish(status: .cancelled, line: pending.expiryLine)
     }
 
     private func declinePendingStep(how: String) {
@@ -327,8 +375,14 @@ final class ActionTaskController {
     /// True when it was answered here (a yes/no to a confirm card, or
     /// "stop"); any other words end the task and the turn goes ahead.
     func handleOwnerTranscript(_ transcript: String) -> Bool {
+        noteSafariNaming(in: transcript)
         guard let task else { return false }
         if task.phase == .awaitingConfirmation {
+            // "Press enter? Say yes." — "press enter" (or its ASR look-alikes) again is a yes too.
+            if task.pendingConfirmation?.isReturnStep == true, ActionEnterIntent.ownerAsked(transcript, stepPressesReturn: true) {
+                approvePendingStep(how: "voice")
+                return true
+            }
             switch ActionConfirmReply.parse(transcript) {
             case .yes:
                 approvePendingStep(how: "voice")
@@ -346,6 +400,21 @@ final class ActionTaskController {
         }
         cancel(reason: "you asked for something else", stopsSpeech: false, speaksLine: false)
         return false
+    }
+
+    /// True when these words answer the confirm card that's waiting (hands-free routing).
+    func isReplyToPendingConfirmation(_ transcript: String) -> Bool {
+        guard let task, task.phase == .awaitingConfirmation else { return false }
+        if task.pendingConfirmation?.isReturnStep == true, ActionEnterIntent.ownerAsked(transcript, stepPressesReturn: true) { return true }
+        return ActionConfirmReply.parse(transcript) != .notAReply
+    }
+
+    /// The owner named Safari (conversation or task): its front window is covered for 2 minutes.
+    private func noteSafariNaming(in transcript: String) {
+        guard ActionWordMatch.containsWord(in: transcript, anyOf: ["safari"]) else { return }
+        let safari = ActionExecutor.frontSafariWindowIdentifier()
+        guard safari.isRunning else { return }
+        safariFollowUp.noteOwnerNamedSafari(windowIdentifier: safari.windowIdentifier, at: Date())
     }
 
     /// Esc while no batch runs (a running batch is cancelled by the input monitor).
@@ -502,7 +571,7 @@ final class ActionTaskController {
         guard let groundedTurn = try? await companionManager.groundingCoordinator.prepareTurn(keyUpDate: Date()) else {
             return (false, ["error": "couldn't capture the screen"])
         }
-        let context = ActionTurnContext(ownerTranscript: ownerTranscript)
+        let context = ActionTurnContext(ownerTranscript: ownerTranscript, safariFollowUp: safariFollowUp, now: Date())
         if isDryRun {
             var screenChanged = false
             let loop = ActionTaskLoop(goal: plan.goal, ownerTranscript: ownerTranscript)

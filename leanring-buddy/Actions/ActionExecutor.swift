@@ -13,7 +13,8 @@
 //     synthetic event only as the fallback — every event made through
 //     SyntheticEvents, so it carries SyntheticEventTag and the physical-
 //     input monitor never mistakes it for the owner. Return is only ever
-//     posted for a type step the owner asked for and confirmed.
+//     posted for a step the tier allowed: the owner asked for it (after the
+//     countdown) or said yes to "Press enter?".
 //
 
 import AppKit
@@ -224,6 +225,10 @@ final class ActionExecutor {
         facts.groundingRole = groundingElement?.role
         facts.windowTitle = groundingElement?.windowTitle
             ?? focusedWindow(processIdentifier: processIdentifier).flatMap { TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0) }
+        facts.windowIdentifier = groundingElement?.windowID ?? frontWindowIdentifier(processIdentifier: processIdentifier)
+        if ActionTierClassifier.isTerminal(facts) {
+            facts.terminalForeground = terminalForeground(processIdentifier: processIdentifier, windowTitle: facts.windowTitle)
+        }
         if let element {
             facts.role = TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element)
             facts.subrole = TypeForMeAccessibility.stringAttribute(kAXSubroleAttribute, of: element)
@@ -238,6 +243,43 @@ final class ActionExecutor {
             facts.label = groundingElement?.label ?? groundingElement?.value
         }
         return facts
+    }
+
+    /// The app's frontmost normal window (CGWindowID), front to back. Numbers only: no titles, no pixels.
+    static func frontWindowIdentifier(processIdentifier: pid_t) -> UInt32? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == processIdentifier,
+                  (window[kCGWindowLayer as String] as? Int) == 0,
+                  let number = window[kCGWindowNumber as String] as? Int else { continue }
+            return UInt32(number)
+        }
+        return nil
+    }
+
+    /// Safari's front window right now (for "type it in Safari" follow-ups), or nil when Safari isn't open.
+    static func frontSafariWindowIdentifier() -> (isRunning: Bool, windowIdentifier: UInt32?) {
+        for bundleIdentifier in ActionTierClassifier.safariBundleIdentifiers {
+            if let safari = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
+                return (true, frontWindowIdentifier(processIdentifier: safari.processIdentifier))
+            }
+        }
+        return (false, nil)
+    }
+
+    /// What runs in the terminal's front tab: the tty from the window title
+    /// (Terminal can show it), else the only tty under the app — or, with
+    /// several tabs, Claude Code only when every tab's foreground job is it.
+    /// Read-only (libproc, like `ps -t <tty> -o comm=`); nil = couldn't tell.
+    static func terminalForeground(processIdentifier: pid_t, windowTitle: String?) -> ActionTerminalForeground? {
+        if let ttyName = FrontWindowRepoResolver.ttyName(fromTitle: windowTitle) {
+            return TerminalTTYLookup.foreground(ttyName: ttyName)
+        }
+        let kinds = TerminalTTYLookup.ttyNames(underApplication: processIdentifier).compactMap(TerminalTTYLookup.foreground(ttyName:))
+        if kinds.count == 1 { return kinds[0] }
+        if !kinds.isEmpty && kinds.allSatisfy({ $0 == .claudeCode }) { return .claudeCode }
+        if !kinds.isEmpty && kinds.allSatisfy({ $0 == .shell }) { return .shell }
+        return nil
     }
 
     /// Running apps plus the usual app folders (names and bundle ids only; nothing is launched).
@@ -461,7 +503,7 @@ final class ActionExecutor {
         }
         if pressesReturn {
             if isCancelled() { return .cancelled }
-            // Only reached for a type step the owner asked for ("press enter" / "send it") and confirmed.
+            // Only reached when the tier allowed it: the owner asked ("press enter" / "send it") or said yes.
             postKey(ActionKeyCombo(modifiers: [], key: "return", virtualKeyCode: 36))
         }
         let detail = (verification == .verified ? "typed" : "typed, unverified") + " (\(method))" + (pressesReturn ? " + return" : "")

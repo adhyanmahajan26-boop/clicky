@@ -163,6 +163,9 @@ public struct ActionTaskLoop: Equatable, Sendable {
             lines.append("now reply with {\"do\":\"summarize\",\"text\":\"- point one\\n- point two …\"} (short bullet points) and \"done\":true, and say one short line.")
         }
         lines.append("")
+        if records.contains(where: { if case .refused = $0.outcome { return true } else { return false } }) {
+            lines.append("clicky already told the user out loud why a step was refused; don't repeat that at length.")
+        }
         lines.append("the screen lists and screenshots below are fresh: the element ids are new. reply with the next <actions> block, or, when the goal is reached, say so in one short line with no actions block. don't repeat steps that are done, and don't retry refused ones.")
         return lines.joined(separator: "\n")
     }
@@ -183,11 +186,15 @@ public enum ActionConfirmReply: Equatable, Sendable {
     static let yesPhrases: Set<String> = [
         "yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "do it", "go ahead", "go for it", "send it", "press it", "click it", "yes do it",
         "yes please", "yes send it", "yes go ahead", "yes confirm", "approved", "approve", "affirmative", "correct", "thats right", "yes thats right",
-        "submit it", "post it", "delete it", "buy it", "ok do it", "okay do it", "yes press it"
+        "submit it", "post it", "delete it", "buy it", "ok do it", "okay do it", "yes press it",
+        // Hindi / Hinglish
+        "haan", "ha", "haa", "han", "haan ji", "haanji", "ha ji", "ji", "ji haan", "theek hai", "thik hai", "kar do", "kardo", "haan kar do",
+        "haan karo", "karo", "bilkul", "haan bhai", "chalo"
     ]
     static let noPhrases: Set<String> = [
         "no", "nope", "nah", "cancel", "cancel it", "stop", "dont", "do not", "never mind", "nevermind", "abort", "no thanks", "no dont",
-        "dont do it", "dont send it", "no stop", "wait no", "hold on", "dont press it", "skip it", "skip"
+        "dont do it", "dont send it", "no stop", "wait no", "hold on", "dont press it", "skip it", "skip",
+        "nahi", "nahin", "na", "mat karo", "mat", "ruko", "rehne do", "nahi karo"
     ]
 
     public static func parse(_ transcript: String) -> ActionConfirmReply {

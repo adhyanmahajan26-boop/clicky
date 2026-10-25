@@ -224,6 +224,15 @@ public enum ActionStep: Equatable, Sendable {
         }
     }
 
+    /// A type step with "enter":true, or a key step that is Return / Enter.
+    public var pressesReturn: Bool {
+        switch self {
+        case .type(_, _, let pressesReturn): return pressesReturn
+        case .key(let combo): return combo.isReturnKey
+        default: return false
+        }
+    }
+
     /// Steps that read or mark the screen only (they never send an event to an app).
     public var isReadOnly: Bool {
         switch self {
