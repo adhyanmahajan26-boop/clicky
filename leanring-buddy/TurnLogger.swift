@@ -44,6 +44,17 @@ final class TurnRecord {
         var occludedByPID: Int32?
         /// v2 P1c: what was actually drawn for a MARK.
         var drawn: DrawnEntry?
+        /// v2 P6.1: Haiku's look at a tentative mark.
+        var zoomCheck: ZoomCheckEntry?
+    }
+
+    struct ZoomCheckEntry: Encodable {
+        /// Haiku's reply as received (nil: no reply).
+        var reply: String?
+        /// confirmed / movedToElement / movedToPoint / ignored… / skippedMovedOn / failed.
+        var action: String
+        /// From the mark being drawn to the result being applied.
+        var ms: Double
     }
 
     struct DrawnEntry: Encodable {
@@ -167,6 +178,11 @@ final class TurnRecord {
         tags[tagIndex].drawn?.recheck = DrawnEntry.RecheckEntry(ok: isPassing, ms: (milliseconds * 10).rounded() / 10)
         tags[tagIndex].drawn?.tentative = isTentative
         if !isPassing { tags[tagIndex].confidence = tags[tagIndex].confidence.map { max(0, $0 - 0.3) } }
+    }
+
+    func recordZoomCheck(tagIndex: Int, entry: ZoomCheckEntry) {
+        guard tags.indices.contains(tagIndex) else { return }
+        tags[tagIndex].zoomCheck = entry
     }
 
     /// One line of <turn>/marks.jsonl (tracking events).

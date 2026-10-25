@@ -62,6 +62,8 @@ final class AnswerSession: SpeechCoordinatorHost {
     }
 
     private var preparedTags: [Int: PreparedTag] = [:]
+    /// Marks already sent to the P6.1 Haiku zoom check (once each).
+    private var zoomCheckedMarkIDs: Set<UUID> = []
     private var recheckOutcomes: [Int: MarkRecheck.Outcome] = [:]
     private var shownMarkIDsByTag: [Int: UUID] = [:]
     private var pendingFires: Set<Int> = []
@@ -483,8 +485,95 @@ final class AnswerSession: SpeechCoordinatorHost {
     private func recheckFinished(_ outcome: MarkRecheck.Outcome, tagIndex: Int) {
         if let markID = shownMarkIDsByTag[tagIndex] {
             companionManager.markController.applyLateRecheck(outcome, markID: markID, turnRecord: turnRecord)
+            // A drawn mark that just failed its re-check gets the zoom check too.
+            if let mark = companionManager.markController.marks.first(where: { $0.id == markID }) { startZoomCheckIfNeeded(mark) }
         } else {
             recheckOutcomes[tagIndex] = outcome
+        }
+    }
+
+    // MARK: - Zoom check (P6.1)
+
+    /// A tentative mark, once drawn, gets one Haiku look at a zoomed crop
+    /// (v2.grounding.verifyWithHaiku). Needs a name to ask about.
+    private func startZoomCheckIfNeeded(_ mark: LiveScreenMark) {
+        let zoomChecker = companionManager.zoomChecker
+        guard zoomChecker.isEnabled, mark.isTentative, !zoomCheckedMarkIDs.contains(mark.id),
+              let name = mark.recheckName ?? mark.displayText, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        zoomCheckedMarkIDs.insert(mark.id)
+        let markID = mark.id
+        let tagIndex = mark.tagIndex
+        let questionNumber = zoomChecker.questionNumber
+        let startDate = Date()
+        let registry = groundedTurn.registry
+        Task { @MainActor [weak self] in
+            let outcome = await zoomChecker.check(name: name, currentRectCG: mark.rectCG, registry: registry) { [weak self] in
+                // Keep a Haiku process waiting while this answer can still draw marks.
+                guard let self else { return false }
+                return !self.isFinished && !self.companionManager.markController.marks.isEmpty
+            }
+            self?.applyZoomCheck(outcome, markID: markID, tagIndex: tagIndex, name: name, questionNumber: questionNumber, startDate: startDate)
+        }
+    }
+
+    private func applyZoomCheck(_ outcome: HaikuZoomChecker.Outcome, markID: UUID, tagIndex: Int?, name: String, questionNumber: Int, startDate: Date) {
+        let markController = companionManager.markController
+        var action = outcome.decision.action
+        if case .ignore = outcome.decision {
+            // Nothing to change.
+        } else if !ZoomCheck.shouldApply(startedForQuestion: questionNumber, currentQuestion: companionManager.zoomChecker.questionNumber,
+                                         isMarkStillLive: markController.isLive(markID)) {
+            action = .skippedMovedOn
+        } else {
+            switch outcome.decision {
+            case .confirm:
+                markController.updateMark(markID, retracks: false) { mark in
+                    mark.isTentative = false
+                    mark.confidence = max(mark.confidence, ZoomCheck.checkedConfidence)
+                }
+            case .moveToElement(let candidate):
+                let element = groundedTurn.registry[candidate.elementID]
+                let ax = companionManager.groundingCoordinator.ax
+                let refreshedFrame = element.flatMap { AXGroundingLiveLookup(ax: ax).refreshedFrame(of: $0) } ?? candidate.frameCG
+                moveMark(markID, to: refreshedFrame, axNode: element?.axNode)
+            case .moveToPoint(let pointCG):
+                guard let frame = outcome.frame else { break }
+                let ax = companionManager.groundingCoordinator.ax
+                let snappedTarget = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: groundedTurn.framesByScreenNumber,
+                                                   cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
+                                                   lookup: AXGroundingLiveLookup(ax: ax)).snapPoint(pointCG, name: name, frame: frame)
+                moveMark(markID, to: snappedTarget.frameCG, axNode: snappedTarget.method == .snapped ? snappedTarget.axNode : nil)
+            case .ignore:
+                break
+            }
+        }
+
+        let milliseconds = (Date().timeIntervalSince(startDate) * 1000).rounded()
+        guard let turnRecord, let tagIndex else { return }
+        turnRecord.recordZoomCheck(tagIndex: tagIndex, entry: TurnRecord.ZoomCheckEntry(
+            reply: outcome.replyText.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)) },
+            action: action.rawValue,
+            ms: milliseconds
+        ))
+        // A check that finished after turn.json was written: write it again.
+        if turnRecord.timings["end"] != nil { TurnLogger.finishTurn(turnRecord) }
+    }
+
+    /// Moves a mark onto the element / point the zoom check found; it's solid now.
+    private func moveMark(_ markID: UUID, to rectCG: CGRect, axNode: AXNodeReference?) {
+        let ax = companionManager.groundingCoordinator.ax
+        let context = MarkTracker.trackingContext(for: axNode, rectCG: rectCG, ax: ax)
+        companionManager.markController.updateMark(markID, retracks: true) { mark in
+            mark.rectCG = rectCG
+            mark.ax = axNode
+            mark.source = axNode != nil ? .accessibility : .snapped
+            mark.windowID = context.windowID
+            mark.windowFrameCG = context.windowFrame
+            mark.clipAX = context.clip
+            mark.labelAX = context.label
+            mark.originalLabel = context.originalLabel
+            mark.isTentative = false
+            mark.confidence = ZoomCheck.checkedConfidence
         }
     }
 
@@ -510,6 +599,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             }
             shownMarkIDsByTag[index] = mark.id
             companionManager.markController.add(mark)
+            startZoomCheckIfNeeded(mark)
         case .point(let target, let frame)?:
             companionManager.flyCompanion(to: target, frame: frame)
         case .boardPoint(let elementIdentifier)?:

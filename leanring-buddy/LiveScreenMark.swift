@@ -32,9 +32,10 @@ struct LiveScreenMark: Identifiable {
     var rectCG: CGRect
     /// The note, else the name for arrow and step marks, else nil.
     let displayText: String?
-    let source: LiveScreenMarkSource
+    /// var: a P6.1 zoom check can move the mark onto another element.
+    var source: LiveScreenMarkSource
     /// The element, for tracking (AX marks only).
-    let ax: AXNodeReference?
+    var ax: AXNodeReference?
     var confidence: Double
     /// Drawn dashed and faded: low confidence, occluded, or failed its re-check.
     var isTentative: Bool

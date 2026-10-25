@@ -609,6 +609,7 @@ final class CompanionManager: ObservableObject {
 
             // Start the CLI now so key-up only has to write the message.
             prespawnMainBrainStandby()
+            zoomChecker.prespawnStandbyIfEnabled()
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -770,6 +771,7 @@ final class CompanionManager: ObservableObject {
     func endHandsFreeSession() {
         guard isHandsFreeSessionActive else { return }
         claudeCodeBridge.reapStandbyProcess()
+        zoomChecker.reapStandby()
 
         handsFreeListeningSession?.stopListening()
         handsFreeListeningSession = nil
@@ -803,6 +805,7 @@ final class CompanionManager: ObservableObject {
         if claudeCodeBridge.standbySlot.currentProcess?.isHealthy != true {
             prespawnMainBrainStandby()
         }
+        zoomChecker.prespawnStandbyIfEnabled()
 
         // Until output latency + 0.25 s after the last audio, what the mic
         // hears is most likely Clicky itself.
@@ -1212,6 +1215,8 @@ final class CompanionManager: ObservableObject {
         clearLiveScreenMarks()
 
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: turnOptions.keyUpDate)
+        // Zoom checks still running for the last answer apply nothing now.
+        zoomChecker.beginQuestion()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -1298,6 +1303,9 @@ final class CompanionManager: ObservableObject {
             turnOptions.onTurnFinished?(turnRecord?.turnDirectoryURL, turnError)
 
             if !Task.isCancelled {
+                // The Haiku standby lives only while this answer can draw marks
+                // (a cancelled turn leaves it to the next question's key-down).
+                zoomChecker.reapStandby()
                 voiceState = .idle
                 scheduleLiveScreenMarksAutoClear()
                 scheduleTransientHideIfNeeded()
@@ -1347,6 +1355,9 @@ final class CompanionManager: ObservableObject {
             refreshClaudeCodeSignInStatus()
         }
     }
+
+    /// P6.1: Haiku's second look at tentative marks (v2.grounding.verifyWithHaiku).
+    let zoomChecker = HaikuZoomChecker()
 
     /// The answer being spoken now.
     private(set) var currentAnswerSession: AnswerSession?

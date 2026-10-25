@@ -97,6 +97,27 @@ final class MarkController {
         tracker.track([mark])
     }
 
+    /// Changes one live mark in place (P6.1 zoom check: made solid, or moved)
+    /// and, when it moved, tracks it again from its new element. Returns
+    /// false when the mark is gone.
+    @discardableResult
+    func updateMark(_ markID: UUID, retracks: Bool, _ change: (inout LiveScreenMark) -> Void) -> Bool {
+        guard let markIndex = marks.firstIndex(where: { $0.id == markID }) else { return false }
+        change(&marks[markIndex])
+        if retracks {
+            marks[markIndex].originalRectCG = marks[markIndex].rectCG
+            marks[markIndex].isHidden = false
+            tracker.stop(markID)
+            tracker.track([marks[markIndex]])
+        }
+        rebuild()
+        return true
+    }
+
+    func isLive(_ markID: UUID) -> Bool {
+        marks.contains { $0.id == markID && $0.opacity > 0 }
+    }
+
     func clear() {
         tracker.stopAll()
         marks = []
