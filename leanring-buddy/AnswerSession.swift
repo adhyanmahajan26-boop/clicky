@@ -328,8 +328,11 @@ final class AnswerSession: SpeechCoordinatorHost {
     /// Blocks with a consumer this turn: <codetask> only while Code mode is
     /// on (otherwise the router says "I can't do that yet").
     /// Blocks with a consumer: boards always (P4), code tasks while Code mode is on (P5).
+    /// P6.2: <type> always goes to the Type card. With v2.typeForMe.enabled
+    /// off the card offers Copy only (harmless), and the prompt doesn't ask
+    /// for <type> then anyway.
     static func blockConsumers() -> Set<String> {
-        ClickySettings.isCodeEnabled ? ["whiteboard", "codetask"] : ["whiteboard"]
+        ClickySettings.isCodeEnabled ? ["whiteboard", "codetask", "type"] : ["whiteboard", "type"]
     }
 
     // MARK: - Routing
@@ -351,6 +354,8 @@ final class AnswerSession: SpeechCoordinatorHost {
                 }
             case .block(let name, let body) where name == "whiteboard":
                 handleWhiteboardBlock(body: body)
+            case .block(let name, let body) where name == "type":
+                companionManager.typeForMeController.present(blockBody: body)
             case .block(let name, _):
                 print("🧱 Block <\(name)> has no consumer yet")
             case .unsupportedBlock(let name):

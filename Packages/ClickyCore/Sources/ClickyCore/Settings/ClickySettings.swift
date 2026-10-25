@@ -49,6 +49,8 @@ public enum ClickySettings {
         public static let whiteboardFullScreen = "v2.whiteboard.fullScreen"
         public static let codeEnabled = "v2.code.enabled"
         public static let typeForMeEnabled = "v2.typeForMe.enabled"
+        /// [String] bundle ids Clicky never types into (default: password managers, Keychain Access).
+        public static let typeForMeBlockedBundleIDs = "v2.typeForMe.blockedBundleIDs"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
         public static let claudeEffortOverride = "v2.claude.effortOverride"
         /// String, Qwen CustomVoice speaker (default "Ryan"; the Base model ignores it).
@@ -214,4 +216,12 @@ public enum ClickySettings {
     public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer"]
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
     public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+
+    // MARK: - P6.2 Type this for me
+
+    /// Password managers and Keychain Access (the same list as valueBlockedBundleIDs).
+    public static let defaultTypeForMeBlockedBundleIDs = defaultValueBlockedBundleIDs
+    public static var typeForMeBlockedBundleIDs: Set<String> {
+        Set(defaults.stringArray(forKey: Keys.typeForMeBlockedBundleIDs) ?? defaultTypeForMeBlockedBundleIDs)
+    }
 }
