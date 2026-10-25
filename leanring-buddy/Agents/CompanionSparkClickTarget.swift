@@ -32,6 +32,9 @@ final class CompanionSparkClickTarget {
     static let hitSquareSide: CGFloat = 46
     /// Pointer movement below this (per tick) doesn't count as moving.
     static let movementThreshold: CGFloat = 1.5
+    /// The spark's visible radius: the panel takes clicks only while the pointer has rested this
+    /// close to the spark's centre for `restSecondsBeforeHolding`; otherwise it is click-through.
+    static let visibleSparkRadius: CGFloat = 16
 
     private var lastMouseLocation: CGPoint?
     private var lastMovementDate = Date()
@@ -40,6 +43,8 @@ final class CompanionSparkClickTarget {
     private var clickPanel: SparkClickPanel?
     private var isEnabledCache = ClickySettings.isAgentsSparkClickEnabled
     private var isEnabledCheckedAt = Date.distantPast
+    private var fullScreenMediaCache = false
+    private var fullScreenMediaCheckedAt = Date.distantPast
 
     /// Called every tick by the overlay of the screen the pointer is on,
     /// while the spark follows the pointer. Coordinates are global AppKit
@@ -60,9 +65,14 @@ final class CompanionSparkClickTarget {
                 reset()
                 return nil
             }
+            // Click-through unless the pointer has rested on the spark itself.
+            let isOnSpark = hypot(mouseLocation.x - heldSparkCenter.x, mouseLocation.y - heldSparkCenter.y) <= Self.visibleSparkRadius
+            clickPanel?.ignoresMouseEvents = !(isOnSpark && now.timeIntervalSince(lastMovementDate) >= Self.restSecondsBeforeHolding)
             return heldSparkCenter
         }
         guard now.timeIntervalSince(lastMovementDate) >= Self.restSecondsBeforeHolding else { return nil }
+        // Never over a full-screen browser or video player (the same rule as the notch): a show plays there.
+        guard !isFullScreenMediaUnderPointer(mouseLocation, now: now) else { return nil }
         restingPointerLocation = mouseLocation
         heldSparkCenter = followingSparkCenter
         showClickPanel(centeredAt: followingSparkCenter)
@@ -75,6 +85,22 @@ final class CompanionSparkClickTarget {
         restingPointerLocation = nil
         heldSparkCenter = nil
         clickPanel?.orderOut(nil)
+    }
+
+    /// Whether a full-screen browser / video player covers the pointer's display (re-checked at most once a second).
+    private func isFullScreenMediaUnderPointer(_ mouseLocation: CGPoint, now: Date) -> Bool {
+        guard now.timeIntervalSince(fullScreenMediaCheckedAt) > 1 else { return fullScreenMediaCache }
+        fullScreenMediaCheckedAt = now
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }),
+              let displayNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            fullScreenMediaCache = false
+            return false
+        }
+        let windowStack = WindowListReader.read(displays: ScreenTopology.current())
+        fullScreenMediaCache = NotchFullScreenPolicy.isFullScreenAppCovering(
+            displayBoundsCG: CGDisplayBounds(displayNumber.uint32Value), windows: windowStack.windows,
+            frontmostProcessIdentifier: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+        return fullScreenMediaCache
     }
 
     /// The setting is re-read at most once a second (this runs at 60 Hz).
@@ -91,6 +117,7 @@ final class CompanionSparkClickTarget {
         clickPanel = panel
         let side = Self.hitSquareSide
         panel.setFrame(NSRect(x: sparkCenter.x - side / 2, y: sparkCenter.y - side / 2, width: side, height: side), display: false)
+        panel.ignoresMouseEvents = true  // until the pointer rests on the spark
         // Ordered front without activating Clicky or taking key focus.
         panel.orderFrontRegardless()
     }
@@ -102,8 +129,8 @@ final class CompanionSparkClickTarget {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = .screenSaver
-        // Set explicitly so the transparent panel still receives the click.
-        panel.ignoresMouseEvents = false
+        // Click-through by default; it takes clicks only while the pointer rests on the spark.
+        panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.becomesKeyOnlyIfNeeded = true
