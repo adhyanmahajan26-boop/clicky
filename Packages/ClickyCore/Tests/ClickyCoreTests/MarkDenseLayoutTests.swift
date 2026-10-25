@@ -179,17 +179,21 @@ enum IsolatedButtonFixture {
     }
 }
 
-@Test func circleCoveringANeighbourDowngradesToUnderline() {
-    // A control right under a line of text: its outline would cover > 15 %.
+@Test func outlineNextToANeighbourShrinksItsPadInsteadOfBecomingAnUnderline() {
+    // A control right under a line of text: the outline stays, its pad shrinks.
     let display = IsolatedButtonFixture.display
     let target = CGRect(x: 200, y: 200, width: 120, height: 40)
-    let neighbour = CGRect(x: 200, y: 183, width: 120, height: 14)
     let input = MarkSceneInput(id: UUID(), style: .box, rectCG: target, displayText: nil, isTentative: false, order: 0, targetRole: .control)
-    let lightlyCovered = MarkSceneBuilder.build(inputs: [input], displays: [display], textObstacles: [neighbour])[0]
-    #expect(lightlyCovered.outline != nil, "a 3 pt pad only clips the neighbour's bottom (≤ 15 %)")
-    let closeNeighbour = CGRect(x: 200, y: 191, width: 120, height: 14)
-    let covered = MarkSceneBuilder.build(inputs: [input], displays: [display], textObstacles: [closeNeighbour])[0]
-    #expect(covered.outline == nil && covered.underline != nil)
+    let farNeighbour = CGRect(x: 200, y: 180, width: 120, height: 14)
+    let roomy = MarkSceneBuilder.build(inputs: [input], displays: [display], textObstacles: [farNeighbour])[0]
+    #expect(roomy.outline?.rect == target.insetBy(dx: -3, dy: -3), "nothing close: the full 3 pt pad")
+    let closeNeighbour = CGRect(x: 200, y: 184, width: 120, height: 14)
+    let tight = MarkSceneBuilder.build(inputs: [input], displays: [display], textObstacles: [closeNeighbour])[0]
+    let outline = try! #require(tight.outline, "an explicit box never becomes an underline")
+    #expect(tight.underline == nil)
+    let pad = target.minY - outline.rect.minY
+    #expect(pad >= 0 && pad < 3, "pad \(pad) didn't shrink")
+    #expect(!outline.rect.insetBy(dx: -MarkPalette.fineLineWidth / 2, dy: -MarkPalette.fineLineWidth / 2).intersects(closeNeighbour))
 }
 
 @Test func labellessIsolatedStepKeepsItsDisc() {

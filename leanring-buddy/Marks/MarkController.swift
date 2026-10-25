@@ -14,9 +14,11 @@
 //  can underline dense rows and keep labels off text. When tracked marks
 //  scroll, the bounds inside their window are shifted by the same amount.
 //
-//  Labels follow v2.marks.labelStyle: `nearCursor` (default) puts numbered
-//  chips on the marks and publishes their words as the caption bubble's
-//  legend (onLegendChanged); `column` keeps the clear-space label column.
+//  Labels follow v2.marks.labelStyle: `attached` (default) puts each note in
+//  a small pill beside its mark, and only marks with no room for it get a
+//  chip + a line in the caption bubble's legend (onLegendChanged);
+//  `nearCursor` puts numbered chips on all marks and every note in the
+//  legend; `column` keeps the clear-space label column.
 //
 
 import AppKit
@@ -28,7 +30,7 @@ final class MarkController {
     private(set) var drawings: [MarkDrawing] = []
     /// Called whenever the drawings change (CompanionManager publishes them).
     var onDrawingsChanged: (([MarkDrawing]) -> Void)?
-    /// nearCursor: the bubble's "1  …" lines for the marks on screen.
+    /// nearCursor / attached fallbacks: the bubble's "1  …" lines for the marks on screen.
     private(set) var legend: [MarkLegendEntry] = []
     /// Called when the legend changes (CompanionManager puts it in the bubble).
     var onLegendChanged: (([MarkLegendEntry]) -> Void)?
@@ -48,6 +50,10 @@ final class MarkController {
         }
     }
     private var leafTextObstaclesCG: [CGRect] = []
+    /// This answer's image / card frames (CG): attached notes keep off them when they can.
+    var visualObstaclesCG: [CGRect] = [] {
+        didSet { if !marks.isEmpty && visualObstaclesCG != oldValue { rebuild() } }
+    }
 
     private let tracker = MarkTracker()
     /// Kept strongly: tracking keeps logging to marks.jsonl after the turn's
@@ -154,9 +160,12 @@ final class MarkController {
         let labelStyle = ClickySettings.markLabelStyle
         let inputs = marks.map(\.sceneInput)
         drawings = MarkSceneBuilder.build(inputs: inputs, displays: displays, companionRect: companionRect,
-                                          textObstacles: currentTextObstacles(), labelStyle: labelStyle, expectedMarkCount: expectedMarkCount)
+                                          textObstacles: currentTextObstacles(), labelStyle: labelStyle, expectedMarkCount: expectedMarkCount,
+                                          visualObstacles: shiftedWithTrackedMarks(visualObstaclesCG))
         onDrawingsChanged?(drawings)
-        let newLegend = MarkChips.legend(for: inputs, labelStyle: labelStyle, expectedMarkCount: expectedMarkCount)
+        let newLegend = labelStyle == .attached
+            ? MarkChips.legend(forFallbacks: drawings)
+            : MarkChips.legend(for: inputs, labelStyle: labelStyle, expectedMarkCount: expectedMarkCount)
         if newLegend != legend {
             legend = newLegend
             onLegendChanged?(newLegend)
@@ -168,6 +177,10 @@ final class MarkController {
     /// window move by however far that window's first moved mark has moved
     /// (a scroll or window drag carries its text along).
     private func currentTextObstacles() -> [CGRect] {
+        shiftedWithTrackedMarks(leafTextObstaclesCG)
+    }
+
+    private func shiftedWithTrackedMarks(_ bounds: [CGRect]) -> [CGRect] {
         var shiftsByWindow: [(frame: CGRect, dx: CGFloat, dy: CGFloat)] = []
         var seenWindowIDs: Set<CGWindowID> = []
         for mark in marks {
@@ -178,8 +191,8 @@ final class MarkController {
             let dy = mark.rectCG.minY - originalRect.minY
             if dx != 0 || dy != 0 { shiftsByWindow.append((windowFrame, dx, dy)) }
         }
-        guard !shiftsByWindow.isEmpty else { return leafTextObstaclesCG }
-        return leafTextObstaclesCG.map { bound in
+        guard !shiftsByWindow.isEmpty else { return bounds }
+        return bounds.map { bound in
             guard let shift = shiftsByWindow.first(where: { $0.frame.contains(bound.center) }) else { return bound }
             return bound.offsetBy(dx: shift.dx, dy: shift.dy)
         }
@@ -189,29 +202,27 @@ final class MarkController {
         guard let turnRecord else { return }
         for drawing in drawings {
             guard let mark = marks.first(where: { $0.id == drawing.id }), let tagIndex = mark.tagIndex else { continue }
-            turnRecord.recordDrawn(tagIndex: tagIndex, drawn: Self.drawnEntry(for: drawing))
+            turnRecord.recordDrawn(tagIndex: tagIndex, drawn: Self.drawnEntry(for: drawing, isStyleExplicit: mark.isStyleExplicit))
         }
     }
 
-    static func drawnEntry(for drawing: MarkDrawing) -> TurnRecord.DrawnEntry {
+    static func drawnEntry(for drawing: MarkDrawing, isStyleExplicit: Bool? = nil) -> TurnRecord.DrawnEntry {
         func rounded(_ value: CGFloat) -> Double { (Double(value) * 100).rounded() / 100 }
         func rectArray(_ rect: CGRect) -> [Double] { [rect.minX, rect.minY, rect.width, rect.height].map(rounded) }
-        var kind = drawing.outline?.kind.rawValue ?? drawing.style.name
         var drawnRect = drawing.outline?.rect ?? drawing.targetCG
         var tip: [Double]?
         if let arrow = drawing.arrow {
-            kind = "arrow"
             drawnRect = CGRect(origin: arrow.tip, size: .zero).union(CGRect(origin: arrow.tail, size: .zero))
             tip = [arrow.tip.x, arrow.tip.y].map(rounded)
         }
         if let underline = drawing.underline {
-            kind = "underline"
             drawnRect = CGRect(x: underline.start.x, y: underline.start.y, width: underline.end.x - underline.start.x, height: 0)
         }
-        if drawing.style == .spot { kind = "spot" }
-        return TurnRecord.DrawnEntry(kind: kind, rectCG: rectArray(drawnRect), radius: Double(drawing.outline?.cornerRadius ?? 0),
+        return TurnRecord.DrawnEntry(kind: drawing.drawnKind, rectCG: rectArray(drawnRect), radius: Double(drawing.outline?.cornerRadius ?? 0),
                                      tip: tip, tentative: drawing.isTentative, recheck: nil,
-                                     labelRectCG: drawing.labelText != nil || drawing.labelStepNumber != nil ? drawing.labelRect.map(rectArray) : nil)
+                                     labelRectCG: drawing.labelText != nil || drawing.labelStepNumber != nil ? drawing.labelRect.map(rectArray) : nil,
+                                     style: drawing.style.name, styleExplicit: isStyleExplicit, note: drawing.notePlacement,
+                                     chip: drawing.chipCenter == nil ? nil : drawing.chipNumber)
     }
 
     // MARK: Tracking callbacks

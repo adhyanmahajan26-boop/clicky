@@ -500,18 +500,21 @@ final class AnswerSession: SpeechCoordinatorHost {
             order: preparedTags.count,
             tagIndex: tagIndexInRecord,
             targetRole: MarkTextObstacles.targetRole(for: resolvedTarget.elementID.flatMap { groundedTurn.registry[$0] },
-                                                     isTextMatch: resolvedTarget.method == .textExact || resolvedTarget.method == .textFuzzy)
+                                                     isTextMatch: resolvedTarget.method == .textExact || resolvedTarget.method == .textFuzzy),
+            isStyleExplicit: tag.hasExplicitStyle
         ))
     }
 
     /// The registry's text bounds (AX text-ish elements and OCR lines) for
     /// this answer: marks underline dense rows and keep labels off them, and
     /// the caption bubble skips slots that cover them. Re-sent when OCR
-    /// lines arrive; only sent when they changed.
+    /// lines arrive; only sent when they changed. Also the image / card
+    /// frames that attached notes keep off when they can.
     private func publishTextObstacles() {
         let registry = groundedTurn.registry
         let textBounds = MarkTextObstacles.collect(elements: registry.orderedIDs.compactMap { registry[$0] }, ocrLines: registry.allOCRLines)
         if companionManager.screenTextObstaclesCG != textBounds { companionManager.screenTextObstaclesCG = textBounds }
+        companionManager.markController.visualObstaclesCG = MarkTextObstacles.collectVisual(elements: registry.orderedIDs.compactMap { registry[$0] })
     }
 
     private func recheckFinished(_ outcome: MarkRecheck.Outcome, tagIndex: Int) {

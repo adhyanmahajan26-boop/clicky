@@ -4,9 +4,9 @@
 //
 //  Decides how loud a mark may be, from the text around its target. On a
 //  dense UI (a Notion table, a file list) a fat ring around a 22 pt row
-//  covers the rows above and below, so there the mark becomes a thin
-//  underline under the row's TEXT (not the whole row). Rings and boxes are
-//  kept for isolated controls, drawn tight (3 pt pad, 2 pt stroke).
+//  covers the rows above and below, so there an UNSTYLED mark becomes a thin
+//  underline under the row's TEXT (not the whole row). Everything else keeps
+//  its outline, drawn tight (≤ 3 pt pad, 2 pt stroke).
 //
 //  Text obstacles are every text bound in the region, CG global points: AX
 //  text / cell / row frames and OCR line frames. Containers (a row frame
@@ -16,11 +16,18 @@
 //   - text inside the target = leaf bounds with ≥ 60 % of their area in it;
 //     every other leaf is a neighbour.
 //   - text-like target: role .text, or (role unknown, text inside, and
-//     width ≥ 4 × height). Controls are never text-like.
+//     width ≥ 4 × height). Controls and visual elements never are.
+//   - single text row: text-like and height ≤ max(1.6 × line, line + 12),
+//     line = the tallest text inside (else min(height, 20)). A 237 pt photo
+//     card or a 587 pt post is never a row.
 //   - dense: text-like and (height ≤ 32 pt, or a neighbour within 1.5 × its
 //     height above or below, overlapping it horizontally).
-//   - circle / box / step: dense → underline; else the tight outline, unless
-//     it would cover > 15 % of any neighbour's text → underline too.
+//   - explicit style wins: a box / circle the model wrote is drawn as that.
+//     Only an unstyled mark (circle by default) or a step on a single text
+//     row becomes an underline: when the row is dense, or when its tight
+//     outline would cover > 15 % of a neighbour's text.
+//   - outline pad: 3 pt, shrunk 1 pt at a time (to 0) until the stroke
+//     clears every neighbour that the bare target doesn't already touch.
 //   - underline: 2 pt below the text span (centre 3 pt below), never past
 //     halfway to the next line below; spans the union of the text inside.
 //
@@ -33,6 +40,8 @@ import Foundation
 public enum MarkTargetRole: String, Sendable, Equatable {
     case text
     case control
+    /// Images, cards, groups, web regions: never a text row.
+    case visual
     case unknown
 }
 
@@ -108,7 +117,7 @@ public enum MarkDensity {
         let isTextLike: Bool
         switch role {
         case .text: isTextLike = true
-        case .control: isTextLike = false
+        case .control, .visual: isTextLike = false
         case .unknown: isTextLike = !textInside.isEmpty && target.width >= textLikeAspectRatio * target.height
         }
 
@@ -131,11 +140,56 @@ public enum MarkDensity {
         return neighbour.intersection(rect).area / neighbour.area
     }
 
-    /// Underline or tight outline for a circle / box / step mark.
-    public static func form(for analysis: MarkDensityAnalysis, tightOutline: MarkShapeSpec) -> MarkDrawnForm {
+    /// The line height of the target's text: its tallest text inside, else
+    /// min(height, 20) (a row with no known text).
+    public static func lineHeight(of analysis: MarkDensityAnalysis, target: CGRect) -> CGFloat {
+        analysis.textInside.map(\.height).max() ?? min(target.height, 20)
+    }
+
+    /// Text-like and no taller than one line plus its row padding.
+    public static func isSingleTextRow(_ analysis: MarkDensityAnalysis, target: CGRect) -> Bool {
+        guard analysis.isTextLike else { return false }
+        let line = lineHeight(of: analysis, target: target)
+        return target.height <= max(singleRowFactor * line, line + singleRowSlack)
+    }
+    public static let singleRowFactor: CGFloat = 1.6
+    public static let singleRowSlack: CGFloat = 12
+
+    /// Whether a mark of `style` may become an underline at all: only
+    /// unstyled marks (the circle default) and steps.
+    public static func isDowngradable(_ style: MarkStyleKind, isStyleExplicit: Bool) -> Bool {
+        switch style {
+        case .step: return true
+        case .circle: return !isStyleExplicit
+        default: return false
+        }
+    }
+
+    /// Underline or tight outline for a circle / box / step mark: an
+    /// explicit box or circle always keeps its outline.
+    public static func form(for analysis: MarkDensityAnalysis, style: MarkStyleKind, isStyleExplicit: Bool, target: CGRect,
+                            tightOutline: MarkShapeSpec) -> MarkDrawnForm {
+        guard isDowngradable(style, isStyleExplicit: isStyleExplicit), isSingleTextRow(analysis, target: target) else { return .tightOutline }
         if analysis.isDense { return .underline }
         let coversNeighbour = analysis.neighbours.contains { coverage(of: $0, by: tightOutline.rect) > maximumNeighbourCoverage }
         return coversNeighbour ? .underline : .tightOutline
+    }
+
+    /// The outline's pad: `tightPad`, shrunk 1 pt at a time down to 0 until
+    /// the stroke (pad + half the 2 pt line) clears every neighbour that the
+    /// bare target doesn't already overlap.
+    public static func outlinePad(target: CGRect, neighbours: [CGRect]) -> CGFloat {
+        let reach = tightPad + underlineStrokeWidth / 2 + 1
+        let grownTarget = target.insetBy(dx: -reach, dy: -reach)
+        let blockers = neighbours.filter { $0.intersects(grownTarget) && !$0.intersects(target) }
+        guard !blockers.isEmpty else { return tightPad }
+        var pad = tightPad
+        while pad > 0 {
+            let strokeOuter = target.insetBy(dx: -(pad + underlineStrokeWidth / 2), dy: -(pad + underlineStrokeWidth / 2))
+            if !blockers.contains(where: { $0.intersects(strokeOuter) }) { return pad }
+            pad -= 1
+        }
+        return 0
     }
 
     /// The underline under the target's text: from the span's left to right
@@ -177,13 +231,30 @@ public enum MarkTextObstacles {
         return bounds
     }
 
+    /// Card-like roles whose frames notes would rather not cover.
+    public static let visualRoles: Set<GroundingRole> = [.image, .link, .button, .cell]
+
+    /// Soft obstacles for attached notes: visible images, and links /
+    /// buttons / cells taller than two text lines (photo cards, posts),
+    /// up to 400×400 pt (bigger ones are regions, not things).
+    public static func collectVisual(elements: [GroundingElement]) -> [CGRect] {
+        elements.compactMap { element in
+            guard !element.isBehind, element.source == .accessibility, visualRoles.contains(element.role) else { return nil }
+            let frame = element.visibleFrameCG
+            guard frame.area > 0, frame.width <= 400, frame.height <= 400 else { return nil }
+            guard element.role == .image || frame.height > 40 else { return nil }
+            return frame
+        }
+    }
+
     /// The role hint for a mark on `element` (nil: an OCR-only or raw target).
     public static func targetRole(for element: GroundingElement?, isTextMatch: Bool) -> MarkTargetRole {
         if isTextMatch { return .text }
         guard let element else { return .unknown }
         if element.source == .ocr || textRoles.contains(element.role) { return .text }
         switch element.role {
-        case .window, .image: return .unknown
+        case .image: return .visual
+        case .window: return .unknown
         default: return .control
         }
     }

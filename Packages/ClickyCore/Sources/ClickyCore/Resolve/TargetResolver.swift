@@ -14,6 +14,10 @@
 //             fuzzy; ~k picks the k-th in front-window/reading order, else
 //             the one nearest the cursor; "in #n" limits the search. (0.95 /
 //             0.8 fuzzy)
+//   box on text  an explicit box on OCR text ("text", or an ocr element)
+//             snaps to the smallest AX element holding it (a card, image,
+//             button or cell ≤ 20 % of the display): the model named the
+//             card, not the words. (textCard)
 //   x,y / box the smallest small element containing the point (+6 pt), else
 //             the nearest within R; snap when 0.6·sim + 0.4·(1 − d/R) ≥ 0.55
 //             (0.85), else the raw point (0.5).
@@ -24,7 +28,7 @@ import Foundation
 
 public struct ResolvedTarget: Sendable {
     public enum Method: String, Sendable {
-        case element, elementResnapped, elementAlternative, span, textExact, textFuzzy, snapped, raw
+        case element, elementResnapped, elementAlternative, span, textExact, textFuzzy, textCard, snapped, raw
     }
 
     public var frameCG: CGRect
@@ -65,6 +69,39 @@ public struct TargetResolver {
     }
 
     public func resolve(_ tag: ParsedTag) -> ResolvedTarget? {
+        guard let resolved = resolveTarget(tag) else { return nil }
+        guard tag.kind == .mark, tag.style == .box, tag.hasExplicitStyle else { return resolved }
+        let isOCRText: Bool
+        switch resolved.method {
+        case .textExact, .textFuzzy: isOCRText = resolved.axNode == nil
+        case .element, .elementResnapped, .elementAlternative: isOCRText = resolved.elementID.flatMap { registry[$0] }?.source == .ocr
+        default: isOCRText = false
+        }
+        guard isOCRText, let (cardID, card) = containingCard(of: resolved.frameCG, displayID: resolved.displayID) else { return resolved }
+        let cardFrame = lookup.refreshedFrame(of: card) ?? card.visibleFrameCG
+        return ResolvedTarget(frameCG: cardFrame, pointCG: cardFrame.center, confidence: resolved.confidence, method: .textCard, elementID: cardID,
+                              displayID: card.displayID, label: resolved.label ?? card.label, processIdentifier: card.processIdentifier,
+                              axNode: card.axNode)
+    }
+
+    /// Roles that make a card-like box around text.
+    static let cardRoles: Set<GroundingRole> = [.link, .button, .image, .cell, .row, .tab, .menuItem]
+
+    /// The smallest visible AX element (card roles) whose frame holds
+    /// `textFrame`, bigger than it and at most 20 % of the display.
+    func containingCard(of textFrame: CGRect, displayID: CGDirectDisplayID) -> (Int, GroundingElement)? {
+        let displayArea = frame(forDisplay: displayID)?.display.boundsCG.area ?? .greatestFiniteMagnitude
+        return registry.orderedIDs.compactMap { elementID -> (Int, GroundingElement)? in
+            guard let element = registry[elementID], element.source == .accessibility, !element.isBehind, element.displayID == displayID,
+                  Self.cardRoles.contains(element.role) else { return nil }
+            let cardFrame = element.visibleFrameCG
+            guard cardFrame.insetBy(dx: -2, dy: -2).contains(textFrame), cardFrame.area >= 1.3 * textFrame.area,
+                  cardFrame.area <= 0.2 * displayArea else { return nil }
+            return (elementID, element)
+        }.min { $0.1.visibleFrameCG.area < $1.1.visibleFrameCG.area }
+    }
+
+    func resolveTarget(_ tag: ParsedTag) -> ResolvedTarget? {
         switch tag.target {
         case .none:
             return nil

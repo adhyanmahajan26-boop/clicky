@@ -15,7 +15,15 @@
 //  number rides inside its label pill; a separate numbered disc is kept only
 //  for an outlined step with no label. That is the `column` label style.
 //
-//  The `nearCursor` style (the default, MarkChips): same shapes, but no text
+//  Explicit style wins: a box / circle the model wrote keeps its outline,
+//  tight to the element (pad ≤ 3 pt, shrunk to clear neighbouring text);
+//  only unstyled marks and steps on a single dense text row are underlined.
+//
+//  The `attached` style (the default, AttachedNotes): each note is a small
+//  pill right beside its mark, no leaders; a mark with no clean spot within
+//  40 pt gets a numbered chip and its note goes to the bubble's legend.
+//
+//  The `nearCursor` style (MarkChips): same shapes, but no text
 //  on screen. With 2+ marks each gets a small numbered chip at its
 //  underline's start / outline's top-left / arrow's tail, and the words go
 //  to the caption bubble's legend; a single mark gets neither.
@@ -59,9 +67,14 @@ public struct MarkSceneInput: Identifiable, Equatable, Sendable {
     public var windowFrameCG: CGRect?
     /// What the target is, when the caller knows.
     public var targetRole: MarkTargetRole
+    /// The model wrote the style (box, circle…); false for unstyled marks,
+    /// which may become underlines on dense text rows.
+    public var isStyleExplicit: Bool
 
     public init(id: UUID, style: MarkStyleKind, rectCG: CGRect, displayText: String?, isTentative: Bool,
-                isHidden: Bool = false, opacity: Double = 1, order: Int, windowFrameCG: CGRect? = nil, targetRole: MarkTargetRole = .unknown) {
+                isHidden: Bool = false, opacity: Double = 1, order: Int, windowFrameCG: CGRect? = nil, targetRole: MarkTargetRole = .unknown,
+                isStyleExplicit: Bool = false) {
+        self.isStyleExplicit = isStyleExplicit
         self.windowFrameCG = windowFrameCG
         self.targetRole = targetRole
         self.id = id
@@ -112,9 +125,13 @@ public struct MarkDrawing: Identifiable, Equatable, Sendable {
     public let labelStepNumber: Int?
     /// Thin arrow from a label placed away from its mark.
     public let leader: LeaderSpec?
-    /// nearCursor style: the small numbered chip on the mark.
+    /// nearCursor style (and attached fallbacks): the small numbered chip on the mark.
     public let chipCenter: CGPoint?
     public let chipNumber: Int?
+    /// attached style: the label is the small note pill beside the mark.
+    public let isLabelAttached: Bool
+    /// attached style: no clean spot, so the note is in the bubble's legend.
+    public let isNoteInLegend: Bool
     /// The target sat on a dense text row (diagnostics).
     public let isDense: Bool
     public let isTentative: Bool
@@ -189,6 +206,24 @@ public struct MarkDrawing: Identifiable, Equatable, Sendable {
             && first.isHidden == second.isHidden && first.opacity == second.opacity && first.displayID == second.displayID
             && first.labelStepNumber == second.labelStepNumber && first.leader == second.leader && first.isDense == second.isDense
             && first.chipCenter == second.chipCenter && first.chipNumber == second.chipNumber
+            && first.isLabelAttached == second.isLabelAttached && first.isNoteInLegend == second.isNoteInLegend
+    }
+
+    /// The final drawn form, for turn.json: rbox / pill / ellipse /
+    /// underline / arrow / spot.
+    public var drawnKind: String {
+        if style == .spot { return "spot" }
+        if arrow != nil { return "arrow" }
+        if underline != nil { return "underline" }
+        return outline?.kind.rawValue ?? style.name
+    }
+
+    /// Where the note went, for turn.json: attached / legend / column /
+    /// nil (no note on screen, or nearCursor's legend).
+    public var notePlacement: String? {
+        if isNoteInLegend { return "legend" }
+        guard labelRect != nil, labelText != nil || labelStepNumber != nil else { return nil }
+        return isLabelAttached ? "attached" : "column"
     }
 }
 
@@ -215,6 +250,8 @@ public enum MarkSceneBuilder {
         var leader: LeaderSpec?
         var chipCenter: CGPoint?
         var chipNumber: Int?
+        var isLabelAttached = false
+        var isNoteInLegend = false
         /// Where the chip goes before nudging.
         var chipSpot: CGPoint?
         var isDense = false
@@ -230,11 +267,14 @@ public enum MarkSceneBuilder {
     /// `labelStyle`: `.column` (the default here) keeps 2dfbab2's labels;
     /// `.nearCursor` draws chips only (see MarkChips). `expectedMarkCount`:
     /// marks already parsed for this answer, so the first one gets its chip
-    /// before the second is spoken.
+    /// before the second is spoken. `visualObstacles`: image / card frames
+    /// (MarkTextObstacles.collectVisual) an attached note avoids when it can.
     public static func build(inputs: [MarkSceneInput], displays: [MarkSceneDisplay], companionRect: CGRect? = nil,
-                             textObstacles: [CGRect] = [], labelStyle: MarkLabelStyle = .column, expectedMarkCount: Int = 0) -> [MarkDrawing] {
+                             textObstacles: [CGRect] = [], labelStyle: MarkLabelStyle = .column, expectedMarkCount: Int = 0,
+                             visualObstacles: [CGRect] = []) -> [MarkDrawing] {
         let leafTexts = MarkDensity.leafTextBounds(textObstacles)
         let isNearCursor = labelStyle == .nearCursor
+        let isAttached = labelStyle == .attached
         let hasChips = isNearCursor && MarkChips.isMultiTarget(markCount: inputs.count, expectedMarkCount: expectedMarkCount)
         var planned: [Planned] = []
         var previousStepDisc: CGPoint?
@@ -252,8 +292,11 @@ public enum MarkSceneBuilder {
 
             switch input.style {
             case .circle, .box, .step:
-                let tight = MarkLayout.tightOutline(target: target, display: markDisplay.bounds)
-                if MarkDensity.form(for: analysis, tightOutline: tight) == .underline {
+                let pad = MarkDensity.outlinePad(target: target, neighbours: analysis.neighbours)
+                let tight = MarkLayout.tightOutline(target: target, display: markDisplay.bounds, pad: pad, isBox: input.style == .box)
+                let fullPadOutline = MarkLayout.tightOutline(target: target, display: markDisplay.bounds)
+                if MarkDensity.form(for: analysis, style: input.style, isStyleExplicit: input.isStyleExplicit, target: target,
+                                    tightOutline: fullPadOutline) == .underline {
                     plan.isDense = analysis.isDense
                     let line = MarkDensity.underline(for: analysis, target: target, display: markDisplay.bounds)
                     plan.underline = line
@@ -285,7 +328,9 @@ public enum MarkSceneBuilder {
                 plan.chipSpot = plan.outline.map { MarkChips.outlineSpot($0.rect) }
             case .arrow:
                 // nearCursor: the words go to the bubble, so no label space is reserved.
-                let labelSize = isNearCursor ? nil : input.displayText.map(LabelPlacer.size(for:))
+                let labelSize = isNearCursor ? nil
+                    : isAttached ? input.displayText.map { AttachedNotes.size(for: AttachedNotes.noteText($0)) }
+                    : input.displayText.map(LabelPlacer.size(for:))
                 let arrow = MarkLayout.arrow(target: target, visible: markDisplay.visible, labelSize: labelSize, obstacles: arrowObstacles)
                 plan.arrow = arrow
                 plan.labelRect = arrow.labelRect
@@ -295,6 +340,12 @@ public enum MarkSceneBuilder {
                 plan.labelStepNumber = nil
                 plan.labelRect = nil
                 if hasChips { plan.chipNumber = MarkChips.number(for: input.style, index: answerIndex) }
+            } else if isAttached {
+                // The fallback chip's number, used only when the note finds no spot.
+                plan.chipNumber = MarkChips.number(for: input.style, index: answerIndex)
+                if input.displayText != nil || plan.labelStepNumber != nil {
+                    plan.labelSize = AttachedNotes.size(for: input.displayText.map(AttachedNotes.noteText), stepNumber: plan.labelStepNumber)
+                }
             } else if input.displayText != nil || plan.labelStepNumber != nil {
                 plan.labelSize = LabelPlacer.size(for: input.displayText, stepNumber: plan.labelStepNumber)
             }
@@ -312,7 +363,7 @@ public enum MarkSceneBuilder {
             }
             if !input.isHidden {
                 arrowObstacles += plan.geometry
-                if let labelRect = plan.labelRect { arrowObstacles.append(labelRect) }
+                if let labelRect = plan.labelRect, !isAttached { arrowObstacles.append(labelRect) }
             }
             planned.append(plan)
         }
@@ -320,6 +371,11 @@ public enum MarkSceneBuilder {
         let visibleIndexes = planned.indices.filter { !planned[$0].input.isHidden }
         if isNearCursor {
             placeChips(&planned, visibleIndexes: visibleIndexes, leafTexts: leafTexts, companionRect: companionRect)
+            return planned.map(drawing(for:))
+        }
+        if isAttached {
+            placeAttachedNotes(&planned, visibleIndexes: visibleIndexes, leafTexts: leafTexts, companionRect: companionRect,
+                               visualObstacles: visualObstacles)
             return planned.map(drawing(for:))
         }
 
@@ -383,7 +439,7 @@ public enum MarkSceneBuilder {
             stepDiscCenter: plan.stepDiscCenter, connectorFrom: plan.connectorFrom, labelRect: plan.labelRect,
             labelText: plan.input.displayText, labelStepNumber: plan.labelRect == nil ? nil : plan.labelStepNumber,
             leader: plan.leader, chipCenter: plan.chipCenter, chipNumber: plan.chipCenter == nil ? nil : plan.chipNumber,
-            isDense: plan.isDense, isTentative: plan.input.isTentative, isHidden: plan.input.isHidden,
+            isLabelAttached: plan.isLabelAttached, isNoteInLegend: plan.isNoteInLegend, isDense: plan.isDense, isTentative: plan.input.isTentative, isHidden: plan.input.isHidden,
             opacity: plan.input.opacity, order: plan.input.order
         )
     }
@@ -392,8 +448,9 @@ public enum MarkSceneBuilder {
     /// mark's geometry, the chips placed so far and the companion. A mark's
     /// own underline is an obstacle too (the chip sits beside it); its own
     /// outline and arrow are not (the chip rides on the corner / the tail).
-    static func placeChips(_ planned: inout [Planned], visibleIndexes: [Int], leafTexts: [CGRect], companionRect: CGRect?) {
-        var placedChips: [CGRect] = []
+    static func placeChips(_ planned: inout [Planned], visibleIndexes: [Int], leafTexts: [CGRect], companionRect: CGRect?,
+                           extraObstacles: [CGRect] = []) {
+        var placedChips: [CGRect] = extraObstacles
         for index in visibleIndexes {
             guard planned[index].chipNumber != nil, let spot = planned[index].chipSpot else { continue }
             var obstacles = leafTexts + placedChips + (companionRect.map { [$0] } ?? [])
@@ -408,6 +465,66 @@ public enum MarkSceneBuilder {
             planned[index].chipCenter = center
             placedChips.append(MarkChips.rect(center: center).insetBy(dx: -2, dy: -2))
         }
+    }
+
+    /// attached: each visible mark's note beside it (AttachedNotes), in
+    /// answer order, clear of text, every mark's geometry, the notes placed
+    /// so far and the companion. An arrow's note keeps its spot past the
+    /// tail when that is clean. A mark whose note finds no spot keeps a
+    /// numbered chip and its note goes to the legend; marks without words
+    /// get neither. Neighbouring photos / cards (`visualObstacles`) are
+    /// avoided when a spot clear of them exists.
+    static func placeAttachedNotes(_ planned: inout [Planned], visibleIndexes: [Int], leafTexts: [CGRect], companionRect: CGRect?,
+                                   visualObstacles: [CGRect] = []) {
+        let baseObstacles = (companionRect.map { [$0] } ?? []) + leafTexts
+        var placedNotes: [CGRect] = []
+        var fallbackIndexes: Set<Int> = []
+        for index in planned.indices where !visibleIndexes.contains(index) { planned[index].labelRect = nil }
+        for index in visibleIndexes {
+            let plan = planned[index]
+            guard let size = plan.labelSize else {
+                planned[index].labelRect = nil
+                continue
+            }
+            var otherGeometry: [CGRect] = []
+            for otherIndex in visibleIndexes where otherIndex != index { otherGeometry += planned[otherIndex].geometry }
+            let obstacles = baseObstacles + otherGeometry + placedNotes
+            let visible = plan.display.visible.insetBy(dx: AttachedNotes.screenMargin, dy: AttachedNotes.screenMargin)
+            var noteRect: CGRect?
+            if let arrow = plan.arrow {
+                if let labelRect = arrow.labelRect, visible.contains(labelRect), !labelRect.intersects(MarkLayout.padded(plan.input.rectCG)),
+                   !obstacles.contains(where: { $0.intersects(labelRect) }) {
+                    noteRect = labelRect
+                }
+            } else {
+                let anchor: CGRect
+                if let outline = plan.outline, plan.input.style != .spot {
+                    anchor = outline.rect.insetBy(dx: -MarkPalette.fineHaloWidth / 2, dy: -MarkPalette.fineHaloWidth / 2)
+                } else {
+                    anchor = plan.attachRect
+                }
+                // First keep off neighbouring photos / cards too (not the
+                // mark's own element or anything holding it), then only the
+                // hard obstacles.
+                let softObstacles = visualObstacles.filter { !$0.intersects(plan.input.rectCG) && !$0.intersects(anchor) }
+                noteRect = AttachedNotes.place(size: size, around: anchor, visible: plan.display.visible,
+                                               obstacles: obstacles + plan.geometry + softObstacles)?.rect
+                    ?? AttachedNotes.place(size: size, around: anchor, visible: plan.display.visible,
+                                           obstacles: obstacles + plan.geometry)?.rect
+            }
+            if let noteRect {
+                planned[index].labelRect = noteRect
+                planned[index].isLabelAttached = true
+                placedNotes.append(noteRect.insetBy(dx: -2, dy: -2))
+            } else {
+                planned[index].labelRect = nil
+                planned[index].isNoteInLegend = plan.input.displayText != nil
+                fallbackIndexes.insert(index)
+            }
+        }
+        // Chips only for the fallbacks.
+        for index in planned.indices where !fallbackIndexes.contains(index) { planned[index].chipNumber = nil }
+        placeChips(&planned, visibleIndexes: visibleIndexes, leafTexts: leafTexts, companionRect: companionRect, extraObstacles: placedNotes)
     }
 
     /// The underline's drawn band (stroke plus halo).

@@ -193,12 +193,15 @@ public enum MarkLayout {
         return MarkShapeSpec(kind: .roundedBox, rect: clippedRect, cornerRadius: clippedCornerRadius(clippedRect, keeping: target.center))
     }
 
-    /// Isolated controls on a density-aware scene: a rounded box only
-    /// `MarkDensity.tightPad` (3 pt) outside the target, radius
-    /// min(8, short side / 2) (a pill for short targets), with the edge rule.
+    /// Outlines on a density-aware scene: a rounded box `pad` (default
+    /// `MarkDensity.tightPad`, 3 pt; never more than 4) outside the target,
+    /// with the edge rule. The circle style: radius min(8, short side / 2)
+    /// (a pill for short targets). The box style: rounded corners, radius
+    /// min(6, short side / 4), so a card or photo reads as a box.
     /// Radius ≤ 8 with a 3 pt pad keeps the target's corners inside.
-    public static func tightOutline(target: CGRect, display: CGRect) -> MarkShapeSpec {
-        let paddedRect = target.insetBy(dx: -MarkDensity.tightPad, dy: -MarkDensity.tightPad)
+    public static func tightOutline(target: CGRect, display: CGRect, pad: CGFloat = MarkDensity.tightPad, isBox: Bool = false) -> MarkShapeSpec {
+        let clampedPad = min(max(pad, 0), 4)
+        let paddedRect = target.insetBy(dx: -clampedPad, dy: -clampedPad)
         let allowedRect = display.insetBy(dx: edgeInset, dy: edgeInset)
         var shapeRect = paddedRect
         if !allowedRect.contains(paddedRect) {
@@ -206,8 +209,12 @@ public enum MarkLayout {
             guard !clippedRect.isNull, clippedRect.width > 0, clippedRect.height > 0 else { return ring(target: target, display: display) }
             shapeRect = clippedRect
         }
-        let radius = min(8, min(shapeRect.width, shapeRect.height) / 2)
-        let kind: MarkShapeKind = radius >= min(shapeRect.width, shapeRect.height) / 2 - 1e-6 ? .pill : .roundedBox
+        let shortSide = min(shapeRect.width, shapeRect.height)
+        if isBox {
+            return MarkShapeSpec(kind: .roundedBox, rect: shapeRect, cornerRadius: max(2, min(6, shortSide / 4)))
+        }
+        let radius = min(8, shortSide / 2)
+        let kind: MarkShapeKind = radius >= shortSide / 2 - 1e-6 ? .pill : .roundedBox
         return MarkShapeSpec(kind: kind, rect: shapeRect, cornerRadius: radius)
     }
 

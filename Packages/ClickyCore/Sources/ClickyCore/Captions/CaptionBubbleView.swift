@@ -7,7 +7,8 @@
 //  is drawn at 25 % opacity in place, so revealing words never re-wraps the
 //  bubble. Fence contents are monospaced.
 //
-//  Below the caption, the marks' legend (nearCursor label style): one line
+//  Below the caption, the marks' legend (nearCursor label style, and attached
+//  notes that found no room beside their mark): one line
 //  per numbered mark, its chip then its words (13 pt, one line each, cut
 //  with "…"), each row a fixed height so the size is known up front.
 //

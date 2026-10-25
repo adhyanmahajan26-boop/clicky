@@ -60,6 +60,11 @@ public struct ParsedTag: Equatable, Sendable {
     public let note: String?
     public let screenNumber: Int?
     public let raw: String
+    /// The model wrote a style keyword (circle, box, arrow, underline, spot
+    /// or a step number). False for [MARK:#57:Share] and unknown styles,
+    /// which fall back to circle: only those (and steps) may be turned into
+    /// an underline on a dense text row.
+    public var hasExplicitStyle: Bool = false
 
     /// What to write on screen next to the mark: the note, else the name for
     /// arrows and numbered steps, else nothing.
@@ -204,13 +209,14 @@ public enum MarkTagParser {
         }
 
         var style: MarkStyle?
+        var hasExplicitStyle = false
         if keyword == .mark {
             guard let styleField = fields.first else { return nil }
             if parseTarget(styleField) != nil {
                 // [MARK:#57:Share] — no style given, a target in its slot.
                 style = .circle
             } else {
-                style = parseStyle(styleField)
+                (style, hasExplicitStyle) = parseStyle(styleField)
                 fields.removeFirst()
             }
         }
@@ -234,7 +240,7 @@ public enum MarkTagParser {
         }
 
         return ParsedTag(kind: keyword == .point ? .point : .mark, style: style, target: target,
-                         name: name, note: note, screenNumber: screenNumber, raw: rawTag)
+                         name: name, note: note, screenNumber: screenNumber, raw: rawTag, hasExplicitStyle: hasExplicitStyle)
     }
 
     /// Splits on ":" outside quotes; nil if a quote is left open.
@@ -274,20 +280,21 @@ public enum MarkTagParser {
         return Int(lowercasedField.dropFirst("screen".count))
     }
 
-    private static func parseStyle(_ field: String) -> MarkStyle {
+    /// The style and whether it was a known keyword (unknown → circle, not explicit).
+    private static func parseStyle(_ field: String) -> (MarkStyle, Bool) {
         let lowercasedField = field.lowercased().trimmingCharacters(in: .whitespaces)
         switch lowercasedField {
-        case "circle": return .circle
-        case "box": return .box
-        case "arrow": return .arrow
-        case "underline": return .underline
-        case "spot": return .spot
+        case "circle": return (.circle, true)
+        case "box": return (.box, true)
+        case "arrow": return (.arrow, true)
+        case "underline": return (.underline, true)
+        case "spot": return (.spot, true)
         default:
             let stepText = lowercasedField.hasPrefix("step") ? String(lowercasedField.dropFirst(4)) : lowercasedField
             if let stepNumber = Int(stepText.trimmingCharacters(in: .whitespaces)), (1...9).contains(stepNumber) {
-                return .step(stepNumber)
+                return (.step(stepNumber), true)
             }
-            return .circle
+            return (.circle, false)
         }
     }
 

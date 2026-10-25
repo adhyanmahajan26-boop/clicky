@@ -288,3 +288,25 @@ private func resolvedTarget(pid: pid_t, node: MockNode, point: CGPoint, label: S
     #expect(target.verified == false)
     #expect(target.occludedByPID == 700)
 }
+
+// MARK: - Explicit box on text inside a card
+
+@Test func explicitBoxOnOCRTextSnapsToTheContainingCard() throws {
+    var registry = ElementRegistry()
+    let card = CGRect(x: 985, y: 774, width: 237, height: 237)
+    _ = registry.append(accessibilityElement("View M2N3G9024", role: .link, frame: card))
+    _ = registry.append(accessibilityElement("Page", role: .window, frame: CGRect(x: 0, y: 0, width: 3440, height: 1440)))
+    let printedLabel = CGRect(x: 1040, y: 920, width: 110, height: 14)
+    registry.allOCRLines = [ocrLine("M2N3G9024", frame: printedLabel)]
+    let resolver = makeResolver(registry: registry)
+
+    let boxed = try #require(resolver.resolve(try parseTag("[MARK:box:\"M2N3G9024\":M2N3G9024|wrong photo]")))
+    #expect(boxed.method == .textCard)
+    #expect(boxed.frameCG == card && boxed.elementID == 1)
+
+    // Not for other styles, an unstyled mark or a point: those keep the words.
+    for raw in ["[MARK:underline:\"M2N3G9024\"]", "[MARK:circle:\"M2N3G9024\"]", "[POINT:\"M2N3G9024\":photo]"] {
+        let resolved = try #require(resolver.resolve(try parseTag(raw)))
+        #expect(resolved.method == .textExact && resolved.frameCG == printedLabel, "\(raw)")
+    }
+}

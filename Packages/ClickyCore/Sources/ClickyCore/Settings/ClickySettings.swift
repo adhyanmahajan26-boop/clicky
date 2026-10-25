@@ -37,8 +37,10 @@ public enum ClickySettings {
         public static let marksMax = "v2.marks.max"
         /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
         public static let marksTrackAX = "v2.marks.trackAX"
-        /// "nearCursor" (default: numbered chips on the marks, their words in
-        /// the caption bubble) or "column" (labels in a column with leaders).
+        /// "attached" (default: each note in a small pill right beside its
+        /// mark, chip + bubble legend when there's no room), "nearCursor"
+        /// (numbered chips on the marks, their words in the caption bubble)
+        /// or "column" (labels in a column with leaders).
         public static let marksLabelStyle = "v2.marks.labelStyle"
         /// "open" (default: mic stays open while Clicky talks), "halfDuplex",
         /// or "aec" (P6.4: both voices play through the mic's engine with
@@ -182,7 +184,7 @@ public enum ClickySettings {
     }
 
     public static var markLabelStyle: MarkLabelStyle {
-        defaults.string(forKey: Keys.marksLabelStyle).flatMap(MarkLabelStyle.init(rawValue:)) ?? .nearCursor
+        defaults.string(forKey: Keys.marksLabelStyle).flatMap(MarkLabelStyle.init(rawValue:)) ?? .attached
     }
 
     public enum ImageTierSetting: String, Sendable {

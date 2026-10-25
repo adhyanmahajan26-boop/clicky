@@ -124,9 +124,15 @@ private struct MarkDrawingView: View {
             }
             if let labelRect = drawing.labelRect, drawing.labelText != nil || drawing.labelStepNumber != nil {
                 let labelText = drawing.labelText
-                labelPill(labelText, stepNumber: drawing.labelStepNumber, size: labelRect.size)
-                    .position(x: local(labelRect).midX, y: local(labelRect).midY)
-                    .opacity(Double(drawProgress))
+                Group {
+                    if drawing.isLabelAttached {
+                        attachedNotePill(labelText.map(AttachedNotes.noteText), stepNumber: drawing.labelStepNumber, size: labelRect.size)
+                    } else {
+                        labelPill(labelText, stepNumber: drawing.labelStepNumber, size: labelRect.size)
+                    }
+                }
+                .position(x: local(labelRect).midX, y: local(labelRect).midY)
+                .opacity(Double(drawProgress))
             }
         }
         .frame(width: displaySize.width, height: displaySize.height, alignment: .topLeading)
@@ -153,6 +159,30 @@ private struct MarkDrawingView: View {
             .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 2))
             .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
             .scaleEffect(drawProgress)
+    }
+
+    /// attached style: the small single-line note beside its mark.
+    private func attachedNotePill(_ text: String?, stepNumber: Int?, size: CGSize) -> some View {
+        HStack(spacing: AttachedNotes.stepBadgeSpacing) {
+            if let stepNumber {
+                Text("\(stepNumber)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(MarkPalette.orange)
+                    .frame(width: AttachedNotes.stepBadgeDiameter, height: AttachedNotes.stepBadgeDiameter)
+                    .background(Circle().fill(Color.white))
+            }
+            if let text {
+                Text(text)
+                    .font(.system(size: AttachedNotes.fontSize, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .padding(.horizontal, AttachedNotes.horizontalPadding)
+        .frame(width: size.width, height: size.height, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: AttachedNotes.cornerRadius, style: .continuous).fill(MarkPalette.orange))
+        .shadow(color: Color.black.opacity(0.22), radius: 2, x: 0, y: 1)
     }
 
     private func labelPill(_ text: String?, stepNumber: Int?, size: CGSize) -> some View {

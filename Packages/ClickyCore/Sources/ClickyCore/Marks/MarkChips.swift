@@ -2,7 +2,7 @@
 //  MarkChips.swift
 //  ClickyCore
 //
-//  The `nearCursor` label style (v2.marks.labelStyle, the default): marks
+//  The `nearCursor` label style (v2.marks.labelStyle): marks
 //  carry no text on screen. With two or more marks in an answer each mark
 //  gets only a small numbered chip (14 pt orange circle, white number: the
 //  mark's place in the answer, or a step's own number) and the words go to
@@ -23,7 +23,10 @@ import Foundation
 
 /// How mark labels are shown.
 public enum MarkLabelStyle: String, Sendable, Equatable {
-    /// Numbered chips on the marks, words in the caption bubble (default).
+    /// Each note in a small pill right beside its mark (default); a mark
+    /// with no clean spot falls back to a chip + legend line (AttachedNotes).
+    case attached
+    /// Numbered chips on the marks, words in the caption bubble.
     case nearCursor
     /// Text pills in a clear-space column with leader arrows (2dfbab2).
     case column
@@ -72,6 +75,16 @@ public enum MarkChips {
         return inputs.sorted { $0.order < $1.order }.enumerated().compactMap { index, input in
             guard let text = input.displayText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
             return MarkLegendEntry(number: number(for: input.style, index: index), text: text)
+        }
+    }
+
+    /// The attached style's legend: only the marks whose note found no
+    /// clean spot beside them (chip number + full note), in answer order.
+    public static func legend(forFallbacks drawings: [MarkDrawing]) -> [MarkLegendEntry] {
+        drawings.filter { $0.isNoteInLegend && !$0.isHidden }.sorted { $0.order < $1.order }.compactMap { drawing in
+            guard let number = drawing.chipNumber, let text = drawing.labelText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return nil }
+            return MarkLegendEntry(number: number, text: text)
         }
     }
 

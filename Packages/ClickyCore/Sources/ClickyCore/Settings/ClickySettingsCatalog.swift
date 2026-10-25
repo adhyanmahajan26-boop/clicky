@@ -63,8 +63,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Most marks on screen at once; the oldest goes first."),
         ClickySettingsEntry(key: ClickySettings.Keys.marksTrackAX, kind: .toggle(defaultValue: true),
                             explanation: "Follow marks on accessibility elements as they scroll or move."),
-        ClickySettingsEntry(key: ClickySettings.Keys.marksLabelStyle, kind: .choice(options: ["nearCursor", "column"], defaultValue: "nearCursor"),
-                            explanation: "nearCursor: numbered chips on the marks, their words in the caption bubble. column: labels in a column with leaders."),
+        ClickySettingsEntry(key: ClickySettings.Keys.marksLabelStyle, kind: .choice(options: ["attached", "nearCursor", "column"], defaultValue: "attached"),
+                            explanation: "attached: each mark's note in a small pill right beside it (chip + bubble legend when there's no room). nearCursor: numbered chips on the marks, their words in the caption bubble. column: labels in a column with leaders."),
 
         // Voice.
         ClickySettingsEntry(key: ClickySettings.Keys.voiceEchoMode, kind: .choice(options: ["open", "halfDuplex", "aec"], defaultValue: "open"),

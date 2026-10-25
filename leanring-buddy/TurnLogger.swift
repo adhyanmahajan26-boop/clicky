@@ -70,6 +70,16 @@ final class TurnRecord {
         var recheck: RecheckEntry?
         /// The mark's label pill, when it has one (evals check it sits in clear space).
         var labelRectCG: [Double]? = nil
+        /// The style the tag asked for (box, circle, underline, step2…) and
+        /// whether the model wrote it; `kind` is what was finally drawn.
+        var style: String? = nil
+        var styleExplicit: Bool? = nil
+        /// Where the note went: "attached" (pill beside the mark, labelRectCG),
+        /// "legend" (no room: chip on the mark + the bubble's legend),
+        /// "column", or nil when the mark has no note on screen.
+        var note: String? = nil
+        /// The fallback / nearCursor chip's number, when one is drawn.
+        var chip: Int? = nil
     }
 
     struct GroundingEntry: Encodable {

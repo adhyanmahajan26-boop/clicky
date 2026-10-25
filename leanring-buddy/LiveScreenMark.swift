@@ -58,6 +58,8 @@ struct LiveScreenMark: Identifiable {
     var opacity = 1.0
     /// Text / control / unknown, from the element's role (decides underline vs ring on dense UI).
     var targetRole: MarkTargetRole = .unknown
+    /// The model wrote the style ([MARK:box:…]): never downgraded to an underline.
+    var isStyleExplicit = false
     /// Where the target was when first drawn: MarkController shifts the
     /// answer's text obstacles by how far a tracked mark has since moved.
     var originalRectCG: CGRect?
@@ -66,7 +68,8 @@ struct LiveScreenMark: Identifiable {
 
     var sceneInput: MarkSceneInput {
         MarkSceneInput(id: id, style: style, rectCG: rectCG, displayText: displayText, isTentative: isTentative,
-                       isHidden: isHidden, opacity: opacity, order: order, windowFrameCG: windowFrameCG, targetRole: targetRole)
+                       isHidden: isHidden, opacity: opacity, order: order, windowFrameCG: windowFrameCG, targetRole: targetRole,
+                       isStyleExplicit: isStyleExplicit)
     }
 
     static func source(for target: ResolvedTarget) -> LiveScreenMarkSource {

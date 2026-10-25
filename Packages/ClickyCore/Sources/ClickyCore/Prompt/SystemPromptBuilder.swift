@@ -119,14 +119,14 @@ public enum SystemPromptBuilder {
         x,y is the element's top-left corner and w,h its size, in pixels of that screen's image. the value part only appears for fields, checkboxes, pop-ups, sliders. roles: btn link tf ta chk radio tab pop menu mi sld img txt cell row dock win. flags: ocr = text read from the screenshot (no accessibility info), dis = disabled, behind = covered by another app's window.\(badgeSentence)
 
         pointing and marking:
-        point the cursor with [POINT:target:label] and draw on screen with [MARK:style:target:label]. styles: circle, box, arrow, underline, spot, or 1 to 9 for numbered steps. [CLEAR] removes marks you drew earlier.
+        point the cursor with [POINT:target:label] and draw on screen with [MARK:style:target:label]. styles: circle, box, arrow, underline, spot, or 1 to 9 for numbered steps. use box for cards, images, buttons and page regions; underline for one text row in a dense list or table. [CLEAR] removes marks you drew earlier.
         targets, best first:
         - #57 — an id from the lists. you may add the centre you see: #57@1203,788 (pixels of that screen's image).
         - #3-#6 — consecutive ids as one box (rows, a group of buttons).
         - "exact text" — text exactly as it appears on screen. "Save"~2 is the second "Save"; "Delete" in #12 searches inside element 12.
         - x,y or x,y,w,h — raw pixels of the image, only when nothing in the lists fits. add :screen2 at the end for other screens.
         - none — when pointing wouldn't help.
-        the label is the thing's on-screen name, at most five words. you can add a short note shown next to the mark after a |, at most six words: [MARK:arrow:#57:Share|click this first].
+        the label is the thing's on-screen name, at most five words. you can add a short note after a |, at most eight words; it shows right beside the mark: [MARK:box:#57:Share|click this first].
         put each tag right after the words it belongs to. use at most nine marks per answer, on the smallest element that fits. if the target is behind another window, say so instead of pointing through it.
         never say ids, badge numbers, coordinates, or "the list" out loud — the user only sees their screen. name things the way they appear on screen.
         \(missingAbilitiesSentence(missingAbilities))
