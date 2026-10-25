@@ -10,6 +10,7 @@
 import ClickyCore
 import AppKit
 import AVFoundation
+import Combine
 import SwiftUI
 
 class OverlayWindow: NSWindow {
@@ -103,7 +104,15 @@ struct BlueCursorView: View {
     let isFirstAppearance: Bool
     @ObservedObject var companionManager: CompanionManager
 
-    @State private var cursorPosition: CGPoint
+    /// Where the companion sits (overlay-local SwiftUI points). Held in a
+    /// plain @State reference that this view does NOT observe: only the small
+    /// CursorFollowReader leaves re-render when it moves, never the whole
+    /// full-screen overlay body.
+    @State private var cursorFollow: CursorFollowPosition
+    private var cursorPosition: CGPoint {
+        get { cursorFollow.position }
+        nonmutating set { cursorFollow.position = newValue }
+    }
     @State private var isCursorOnThisScreen: Bool
 
     init(screenFrame: CGRect, isFirstAppearance: Bool, companionManager: CompanionManager) {
@@ -116,10 +125,13 @@ struct BlueCursorView: View {
         let mouseLocation = NSEvent.mouseLocation
         let localX = mouseLocation.x - screenFrame.origin.x
         let localY = screenFrame.height - (mouseLocation.y - screenFrame.origin.y)
-        _cursorPosition = State(initialValue: CGPoint(x: localX + 35, y: localY + 25))
+        _cursorFollow = State(initialValue: CursorFollowPosition(CGPoint(x: localX + 35, y: localY + 25)))
         _isCursorOnThisScreen = State(initialValue: screenFrame.contains(mouseLocation))
     }
-    @State private var timer: Timer?
+    /// This view's subscription to the shared CursorFollowDriver loop.
+    @State private var cursorFollowSubscription: CursorFollowDriver.Subscription?
+    /// How long the spark's opacity fades take (2 s for the first-launch fade-in).
+    @State private var sparkOpacityFadeSeconds: Double = 0.25
     @State private var welcomeText: String = ""
     @State private var showWelcome: Bool = true
     @State private var bubbleSize: CGSize = .zero
@@ -155,6 +167,7 @@ struct BlueCursorView: View {
     private let fullWelcomeMessage = "hey! i'm clicky"
 
     var body: some View {
+        let _ = OverlayPerfMonitor.shared.note(.overlayBodyEvaluations)
         ZStack {
             // Nearly transparent background (helps with compositing)
             Color.black.opacity(0.001)
@@ -168,19 +181,23 @@ struct BlueCursorView: View {
 
             // The answer's caption, word-synced to the voice, next to the companion.
             if buddyIsVisibleOnThisScreen && companionManager.captionState.isVisible {
-                CaptionBubbleLayer(
-                    caption: companionManager.captionState,
-                    displayBoundsCG: ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight),
-                    companionLocalCenter: cursorPosition,
-                    isCompanionFlying: buddyNavigationMode == .navigatingToTarget,
-                    obstaclesCG: companionManager.markDrawings.filter { $0.style != .spot && !$0.isHidden }.flatMap(\.paintedRects)
-                        + [companionManager.pointTargetCG].compactMap { $0 } + companionManager.upcomingTargetRectsCG,
-                    textObstaclesCG: companionManager.screenTextObstaclesCG
-                )
+                let captionObstaclesCG = companionManager.markDrawings.filter { $0.style != .spot && !$0.isHidden }.flatMap(\.paintedRects)
+                    + [companionManager.pointTargetCG].compactMap { $0 } + companionManager.upcomingTargetRectsCG
+                CursorFollowReader(follow: cursorFollow) { cursorPosition in
+                    CaptionBubbleLayer(
+                        caption: companionManager.captionState,
+                        displayBoundsCG: ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight),
+                        companionLocalCenter: cursorPosition,
+                        isCompanionFlying: buddyNavigationMode == .navigatingToTarget,
+                        obstaclesCG: captionObstaclesCG,
+                        textObstaclesCG: companionManager.screenTextObstaclesCG
+                    )
+                }
             }
 
             // Welcome speech bubble (first launch only)
             if isCursorOnThisScreen && showWelcome && !welcomeText.isEmpty {
+              CursorFollowReader(follow: cursorFollow) { cursorPosition in
                 Text(welcomeText)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white)
@@ -205,10 +222,12 @@ struct BlueCursorView: View {
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
                     }
+              }
             }
 
             // Onboarding prompt — "press control + option and say hi" streamed after video ends
             if isCursorOnThisScreen && companionManager.showOnboardingPrompt && !companionManager.onboardingPromptText.isEmpty {
+              CursorFollowReader(follow: cursorFollow) { cursorPosition in
                 Text(companionManager.onboardingPromptText)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white)
@@ -233,6 +252,7 @@ struct BlueCursorView: View {
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
                     }
+              }
             }
 
             // Claude spark companion — shown when idle, thinking, or while TTS is
@@ -246,29 +266,44 @@ struct BlueCursorView: View {
             // During cursor following: fast spring animation for snappy tracking.
             // During navigation: NO implicit animation — the frame-by-frame bezier
             // timer controls position directly at 60fps for a smooth arc flight.
-            ClaudeCompanionView(
+            // Opacity, flight scale and glow are applied by the Core Animation
+            // view itself (its idle breathing / thinking spin / orbit run in the
+            // render server, so a still pointer costs no SwiftUI updates).
+            let isFollowingCursor = buddyNavigationMode == .followingCursor
+            let companionView = ClaudeCompanionView(
                 isCoordinatorThinking: companionManager.voiceState == .processing || companionManager.isCompanionCoordinatorThinking,
                 activeCompanionWorkers: companionManager.visibleCompanionWorkers,
-                isAnimationRunning: buddyIsVisibleOnThisScreen
+                isAnimationRunning: buddyIsVisibleOnThisScreen,
+                opacity: buddyIsVisibleOnThisScreen && companionManager.voiceState != .listening ? cursorOpacity : 0,
+                opacityFadeSeconds: sparkOpacityFadeSeconds,
+                flightScale: buddyFlightScale
             )
-                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.8), radius: (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
-                .scaleEffect(buddyFlightScale)
-                .opacity(buddyIsVisibleOnThisScreen && companionManager.voiceState != .listening ? cursorOpacity : 0)
-                .position(cursorPosition)
-                .animation(
-                    buddyNavigationMode == .followingCursor
-                        ? .spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0)
-                        : nil,
-                    value: cursorPosition
-                )
-                .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
+            CursorFollowReader(follow: cursorFollow) { cursorPosition in
+                companionView
+                    .frame(width: ClaudeCompanionView.companionFrameDiameter, height: ClaudeCompanionView.companionFrameDiameter)
+                    .position(cursorPosition)
+                    .animation(
+                        isFollowingCursor
+                            ? .spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0)
+                            : nil,
+                        value: cursorPosition
+                    )
+            }
+            .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
 
-            // Waveform — replaces the spark while listening
-            BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
+            // Waveform — replaces the spark while listening. Its animation
+            // clock only runs while it's the one showing.
+            let waveformView = BlueCursorWaveformView(
+                audioPowerLevel: companionManager.currentAudioPowerLevel,
+                isAnimating: buddyIsVisibleOnThisScreen && companionManager.voiceState == .listening
+            )
                 .opacity(buddyIsVisibleOnThisScreen && companionManager.voiceState == .listening ? cursorOpacity : 0)
-                .position(cursorPosition)
-                .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
-                .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
+            CursorFollowReader(follow: cursorFollow) { cursorPosition in
+                waveformView
+                    .position(cursorPosition)
+                    .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
+            }
+            .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
 
         }
         .frame(width: screenFrame.width, height: screenFrame.height)
@@ -287,8 +322,12 @@ struct BlueCursorView: View {
             // Only show welcome message on first appearance (app start)
             // and only if the cursor starts on this screen
             if isFirstAppearance && isCursorOnThisScreen {
+                self.sparkOpacityFadeSeconds = 2.0
                 withAnimation(.easeIn(duration: 2.0)) {
                     self.cursorOpacity = 1.0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.1) {
+                    self.sparkOpacityFadeSeconds = 0.25
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     self.bubbleOpacity = 0.0
@@ -299,7 +338,8 @@ struct BlueCursorView: View {
             }
         }
         .onDisappear {
-            timer?.invalidate()
+            CursorFollowDriver.shared.unsubscribe(cursorFollowSubscription)
+            cursorFollowSubscription = nil
             navigationAnimationTimer?.invalidate()
             companionManager.sparkClickTarget.reset()
         }
@@ -343,10 +383,19 @@ struct BlueCursorView: View {
 
     // MARK: - Cursor Tracking
 
+    /// One tick of cursor following, driven by the shared CursorFollowDriver
+    /// (60 Hz while the pointer moves, a 10 Hz poll while it's still). Every
+    /// SwiftUI state write is skipped when the value is unchanged, so a still
+    /// pointer causes no view updates at all.
     private func startTrackingCursor() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
+        CursorFollowDriver.shared.unsubscribe(cursorFollowSubscription)
+        cursorFollowSubscription = CursorFollowDriver.shared.subscribe {
             let mouseLocation = NSEvent.mouseLocation
-            self.isCursorOnThisScreen = self.screenFrame.contains(mouseLocation)
+            let isOnThisScreenNow = self.screenFrame.contains(mouseLocation)
+            if self.isCursorOnThisScreen != isOnThisScreenNow {
+                self.isCursorOnThisScreen = isOnThisScreenNow
+                OverlayPerfMonitor.shared.note(.cursorStateWrites)
+            }
 
             // During forward flight or pointing, the buddy is NOT interrupted by
             // mouse movement — it completes its full animation and return flight.
@@ -379,25 +428,32 @@ struct BlueCursorView: View {
             // Agents dashboard: once the pointer rests, the spark holds still
             // so it can be clicked (CompanionSparkClickTarget). Only the
             // screen the pointer is on drives it, and only while the spark shows.
-            guard self.isCursorOnThisScreen else {
-                self.cursorPosition = followingPosition
+            guard isOnThisScreenNow else {
+                self.setCursorPositionIfChanged(followingPosition)
                 return
             }
             let isSparkShowing = self.buddyIsVisibleOnThisScreen && self.companionManager.voiceState != .listening && self.cursorOpacity > 0
             guard isSparkShowing else {
                 self.companionManager.sparkClickTarget.reset()
-                self.cursorPosition = followingPosition
+                self.setCursorPositionIfChanged(followingPosition)
                 return
             }
             let followingSparkCenterAppKit = CGPoint(x: self.screenFrame.origin.x + followingPosition.x,
                                                      y: self.screenFrame.origin.y + self.screenFrame.height - followingPosition.y)
             if let heldSparkCenterAppKit = self.companionManager.sparkClickTarget.sparkCenterWhileHolding(
                 mouseLocation: mouseLocation, followingSparkCenter: followingSparkCenterAppKit) {
-                self.cursorPosition = self.convertScreenPointToSwiftUICoordinates(heldSparkCenterAppKit)
+                self.setCursorPositionIfChanged(self.convertScreenPointToSwiftUICoordinates(heldSparkCenterAppKit))
             } else {
-                self.cursorPosition = followingPosition
+                self.setCursorPositionIfChanged(followingPosition)
             }
         }
+    }
+
+    /// Writing an equal value would still invalidate the overlay's view graph.
+    private func setCursorPositionIfChanged(_ newPosition: CGPoint) {
+        guard newPosition != cursorPosition else { return }
+        cursorPosition = newPosition
+        OverlayPerfMonitor.shared.note(.cursorStateWrites)
     }
 
     /// Converts a macOS screen point (AppKit, bottom-left origin) to SwiftUI
@@ -598,18 +654,41 @@ struct BlueCursorView: View {
     }
 }
 
+// MARK: - Cursor follow position
+
+/// The companion's position, published only to the CursorFollowReader leaves.
+@MainActor
+final class CursorFollowPosition: ObservableObject {
+    @Published var position: CGPoint
+    init(_ position: CGPoint) { self.position = position }
+}
+
+/// Re-renders just its content when the position moves (60 Hz while the
+/// pointer moves), leaving the full-screen overlay body alone.
+private struct CursorFollowReader<Content: View>: View {
+    @ObservedObject var follow: CursorFollowPosition
+    @ViewBuilder let content: (CGPoint) -> Content
+
+    var body: some View {
+        content(follow.position)
+    }
+}
+
 // MARK: - Blue Cursor Waveform
 
 /// A small blue waveform that replaces the triangle cursor while
 /// the user is holding the push-to-talk shortcut and speaking.
 private struct BlueCursorWaveformView: View {
     let audioPowerLevel: CGFloat
+    /// False while the waveform is hidden: its 36 fps clock stops (it used to
+    /// run on every screen all the time, even at opacity 0).
+    let isAnimating: Bool
 
     private let barCount = 5
     private let listeningBarProfile: [CGFloat] = [0.4, 0.7, 1.0, 0.7, 0.4]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 36.0)) { timelineContext in
+        TimelineView(.animation(minimumInterval: 1.0 / 36.0, paused: !isAnimating)) { timelineContext in
             HStack(alignment: .center, spacing: 2) {
                 ForEach(0..<barCount, id: \.self) { barIndex in
                     RoundedRectangle(cornerRadius: 1.5, style: .continuous)
@@ -683,7 +762,10 @@ class OverlayWindowManager {
             )
 
             let hostingView = NSHostingView(rootView: contentView)
-            hostingView.frame = screen.frame
+            // The overlay always exactly covers its screen: SwiftUI never sizes
+            // the window, so skip its min/max/intrinsic size work on every update.
+            hostingView.sizingOptions = []
+            hostingView.frame = CGRect(origin: .zero, size: screen.frame.size)
             window.contentView = hostingView
 
             overlayWindows.append(window)

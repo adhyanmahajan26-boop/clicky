@@ -358,6 +358,7 @@ struct NotchRootView: View {
     let actions: NotchActions
 
     var body: some View {
+        let _ = OverlayPerfMonitor.shared.note(.notchBodyEvaluations)
         NotchView(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded, actions: actions)
     }
 }

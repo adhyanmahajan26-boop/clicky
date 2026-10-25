@@ -67,7 +67,12 @@ final class CompanionSparkClickTarget {
             }
             // Click-through unless the pointer has rested on the spark itself.
             let isOnSpark = hypot(mouseLocation.x - heldSparkCenter.x, mouseLocation.y - heldSparkCenter.y) <= Self.visibleSparkRadius
-            clickPanel?.ignoresMouseEvents = !(isOnSpark && now.timeIntervalSince(lastMovementDate) >= Self.restSecondsBeforeHolding)
+            // Only when it changes: each set is a window-server round trip and
+            // forced a Core Animation commit on every 60 Hz tick.
+            let shouldIgnoreMouseEvents = !(isOnSpark && now.timeIntervalSince(lastMovementDate) >= Self.restSecondsBeforeHolding)
+            if let clickPanel, clickPanel.ignoresMouseEvents != shouldIgnoreMouseEvents {
+                clickPanel.ignoresMouseEvents = shouldIgnoreMouseEvents
+            }
             return heldSparkCenter
         }
         guard now.timeIntervalSince(lastMovementDate) >= Self.restSecondsBeforeHolding else { return nil }
@@ -84,7 +89,9 @@ final class CompanionSparkClickTarget {
     func reset() {
         restingPointerLocation = nil
         heldSparkCenter = nil
-        clickPanel?.orderOut(nil)
+        // Called on every tick while the spark isn't following: don't hit the
+        // window server unless the panel is actually up.
+        if let clickPanel, clickPanel.isVisible { clickPanel.orderOut(nil) }
     }
 
     /// Whether a full-screen browser / video player covers the pointer's display (re-checked at most once a second).
