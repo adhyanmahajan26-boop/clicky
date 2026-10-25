@@ -25,10 +25,18 @@ public enum NotchFullScreenPolicy {
     /// has a layer-0 window covering it (a picture-in-picture or other small
     /// window of the same app on top doesn't change that). `windows` are
     /// front to back without Clicky's own (WindowStack.windows).
-    public static func isFullScreenAppCovering(displayBoundsCG: CGRect, windows: [WindowInfo], frontmostProcessIdentifier: pid_t?) -> Bool {
+    /// Apps whose full-screen windows hide the pill: browsers and video players (a show or a film).
+    /// A full-screen editor or chat app (the owner keeps Claude full screen) keeps the pill.
+    public static let mediaOwnerNames: Set<String> = [
+        "Safari", "Google Chrome", "Chrome", "Arc", "Firefox", "Brave Browser", "Microsoft Edge", "Opera", "Orion",
+        "QuickTime Player", "TV", "IINA", "VLC", "Infuse", "Plex", "Netflix", "YouTube", "Prime Video", "Disney+", "Music"
+    ]
+
+    public static func isFullScreenAppCovering(displayBoundsCG: CGRect, windows: [WindowInfo], frontmostProcessIdentifier: pid_t?,
+                                               onlyOwners: Set<String>? = mediaOwnerNames) -> Bool {
         let appWindowsOnDisplay = windows.filter { window in
             window.layer == 0 && window.alpha > 0.01 && window.boundsCG.intersection(displayBoundsCG).area > 0
-        }
+        }.filter { window in onlyOwners.map { $0.contains(window.ownerName) } ?? true }
         if let topmostWindow = appWindowsOnDisplay.first, covers(topmostWindow.boundsCG, displayBoundsCG) {
             return true
         }

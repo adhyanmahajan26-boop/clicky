@@ -191,36 +191,45 @@ struct NotchFullScreenPolicyTests {
 
     @Test func fullScreenVideoCoversTheDisplay() {
         let windows = [Self.window(1, pid: 10, bounds: Self.display)]
-        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 10))
+        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 10, onlyOwners: nil))
         // Also when the user is working in another app on the other display.
-        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 99))
+        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 99, onlyOwners: nil))
     }
 
     @Test func zoomedWindowBelowTheMenuBarIsNotFullScreen() {
         let zoomed = Self.window(1, pid: 10, bounds: CGRect(x: 0, y: 25, width: 3440, height: 1415))
-        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [zoomed], frontmostProcessIdentifier: 10))
+        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [zoomed], frontmostProcessIdentifier: 10, onlyOwners: nil))
     }
 
     @Test func menuBarAndOverlayLayersDontCount() {
         let menuBar = Self.window(1, pid: 5, layer: 24, bounds: CGRect(x: 0, y: 0, width: 3440, height: 25))
         let tint = Self.window(2, pid: 6, layer: 30, bounds: Self.display)
         let normal = Self.window(3, pid: 10, bounds: CGRect(x: 100, y: 100, width: 1200, height: 800))
-        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [menuBar, tint, normal], frontmostProcessIdentifier: 10))
+        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [menuBar, tint, normal], frontmostProcessIdentifier: 10, onlyOwners: nil))
     }
 
     @Test func pictureInPictureOverTheFrontmostAppsFullScreenWindow() {
         let pictureInPicture = Self.window(1, pid: 10, bounds: CGRect(x: 3000, y: 1100, width: 400, height: 225))
         let fullScreen = Self.window(2, pid: 10, bounds: Self.display)
-        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [pictureInPicture, fullScreen], frontmostProcessIdentifier: 10))
+        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [pictureInPicture, fullScreen], frontmostProcessIdentifier: 10, onlyOwners: nil))
         // A full-display window of some other app behind a normal window isn't full screen.
         let other = Self.window(3, pid: 11, bounds: Self.display)
-        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [pictureInPicture, other], frontmostProcessIdentifier: 10))
+        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [pictureInPicture, other], frontmostProcessIdentifier: 10, onlyOwners: nil))
+    }
+
+    /// Only browsers and video players hide the pill: the owner keeps the Claude app full screen on the
+    /// main display and watches Netflix (Safari) full screen on another.
+    @Test func onlyMediaAppsInFullScreenHideThePill() {
+        let claude = WindowInfo(windowID: 1, processIdentifier: 10, layer: 0, boundsCG: Self.display, alpha: 1, ownerName: "Claude", title: nil)
+        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [claude], frontmostProcessIdentifier: 10))
+        let safari = WindowInfo(windowID: 2, processIdentifier: 11, layer: 0, boundsCG: Self.display, alpha: 1, ownerName: "Safari", title: nil)
+        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: [safari], frontmostProcessIdentifier: 10))
     }
 
     @Test func fullScreenOnTheOtherDisplayDoesntHideThisOne() {
         let windows = [Self.window(1, pid: 10, bounds: Self.secondDisplay), Self.window(2, pid: 11, bounds: CGRect(x: 10, y: 40, width: 800, height: 600))]
-        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 10))
-        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.secondDisplay, windows: windows, frontmostProcessIdentifier: 10))
+        #expect(!NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.display, windows: windows, frontmostProcessIdentifier: 10, onlyOwners: nil))
+        #expect(NotchFullScreenPolicy.isFullScreenAppCovering(displayBoundsCG: Self.secondDisplay, windows: windows, frontmostProcessIdentifier: 10, onlyOwners: nil))
     }
 
     @Test func showDecision() {
