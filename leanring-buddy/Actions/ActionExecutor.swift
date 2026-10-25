@@ -582,12 +582,23 @@ final class ActionExecutor {
         var method = "ax"
         let valueBefore = TypeForMeAccessibility.value(of: element)
         var verification = InsertionVerification.unchanged
+        // Web fields update their AX value asynchronously: an immediate read-back looked "unchanged",
+        // the fallback inserted the text again, and a live search got "weather in delhiweather in delhi".
+        // So re-read for up to ~250 ms before trying the next method.
+        func settledVerification() async -> InsertionVerification {
+            for attempt in 0..<4 {
+                let current = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: TypeForMeAccessibility.value(of: element), insertedText: text)
+                if current != .unchanged || attempt == 3 { return current }
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+            return .unchanged
+        }
         if valueBefore?.isEmpty ?? true,
            AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString) == .success {
-            verification = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: TypeForMeAccessibility.value(of: element), insertedText: text)
+            verification = await settledVerification()
         }
         if verification == .unchanged, TypeForMeAccessibility.setSelectedText(text, of: element) {
-            verification = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: TypeForMeAccessibility.value(of: element), insertedText: text)
+            verification = await settledVerification()
         }
         if verification == .unchanged {
             method = "keys"

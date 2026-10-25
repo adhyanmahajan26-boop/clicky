@@ -488,7 +488,7 @@ struct ArticleActionsTests {
         let prompt = ActionsPromptSection.text
         #expect(prompt.contains("read_article {}"))
         #expect(prompt.contains("notes {title, summary, items: [{note, quote}]}"))
-        #expect(prompt.contains("5–8 most important sentences"))
+        #expect(prompt.contains("7–8 most important sentences"))
         #expect(prompt.contains("word for word"))
         #expect(prompt.contains("at most 15 words"))
         #expect(prompt.contains("[NOTES:save]"))

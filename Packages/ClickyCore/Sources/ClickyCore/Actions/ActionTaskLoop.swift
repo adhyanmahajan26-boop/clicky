@@ -180,7 +180,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
     }
 
     /// What the model does with the article it just read.
-    public static let articleFollowUpInstruction = "now reply with ONE <actions> block with \"done\":true: a highlight step whose targets are the 5 to 8 most important sentences copied WORD FOR WORD from the article above (whole sentences, exactly as written, no paraphrase), then a notes step {\"do\":\"notes\",\"title\":\"…\",\"summary\":\"one or two sentences\",\"items\":[{\"note\":\"at most 15 words\",\"quote\":\"the same sentence, verbatim\"}]} with one item per highlighted sentence in the same order; for a plain summary request use summarize instead. say the summary as your one spoken line."
+    public static let articleFollowUpInstruction = "now reply with ONE <actions> block with \"done\":true: a highlight step whose targets are the 7 to 8 most important sentences (5 to 6 only for a short page) copied WORD FOR WORD from the article above (whole sentences, exactly as written, no paraphrase), then a notes step {\"do\":\"notes\",\"title\":\"…\",\"summary\":\"one or two sentences\",\"items\":[{\"note\":\"at most 15 words\",\"quote\":\"the same sentence, verbatim\"}]} with one item per highlighted sentence in the same order; for a plain summary request use summarize instead. say the summary as your one spoken line."
 
     /// The final spoken line when the loop stops on its own.
     public var limitReachedLine: String {
