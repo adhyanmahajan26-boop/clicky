@@ -447,6 +447,11 @@ final class DebugCommandInbox {
             result["selected"] = failureReason == nil ? (chosenEntry?.id ?? NSNull()) : NSNull()
             reply(commandIdentifier: commandIdentifier, isSuccess: failureReason == nil, result: result, errorMessage: failureReason)
 
+        case "codeCloseReview":
+            // Test only: the review panel's Close (nothing outward; worktree and branch stay).
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["closed": companionManager.codeModeController.closeReviewForTest()], errorMessage: nil)
+
         case "markRegion":
             // Test-only: drop marks outside this CG rect ({"rectCG": [x, y, w, h]}) or allow all again ({"clear": true}).
             if commandObject["clear"] as? Bool == true {

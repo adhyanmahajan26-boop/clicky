@@ -488,9 +488,12 @@ def code_progress(reply, since=None):
     snap = status_snapshot(reply)
     review = current_review(snap, since)
     busy = bool(snap.get("busy"))
+    if review and review.get("worktree"):
+        # A review with a worktree means the agent is done (the panel stays "busy" waiting for a click).
+        return "finished", "review ready in %s" % review.get("worktree")
     if busy or (snap.get("task") and not review):
         return "running", "busy: phase %s" % snap.get("phase")
-    if reports_finished(snap) or (not busy and review and review.get("worktree")):
+    if reports_finished(snap):
         return "finished", "review ready in %s" % (review or {}).get("worktree")
     return "waiting", "phase %s, panel %s, task %s" % (snap.get("phase"), snap.get("panelMode"), "set" if snap.get("task") else "none")
 

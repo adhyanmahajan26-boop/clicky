@@ -456,6 +456,14 @@ final class CodeModeController: ObservableObject {
         }
     }
 
+    /// Test only (debug inbox codeCloseReview): the review panel's Close, exactly as its Close button —
+    /// nothing outward happens; the worktree and branch stay.
+    func closeReviewForTest() -> Bool {
+        guard panelController.isVisible else { return false }
+        panelController.state.onCancel()
+        return true
+    }
+
     private func finishTask(hidePanel: Bool) {
         finishActiveAgentRecord()
         stopProgress()
