@@ -224,7 +224,12 @@ runaway audio is handled client-side (cut at the last pause past 3x chars/15 s).
 - Clone test (one silent curl to a file, the loaded Base model supports `ref_audio`): 200, a different voice,
   ttfb **2.98 s and 2.53 s** for "Okay, found it." vs 0.37 s plain, i.e. **+2.2–2.6 s prefill per request**
   (the reference is re-encoded on every request).
-- **Decision: the Base model's stock voice, no cloning.** Cloning would add ~2.4 s to every segment (it breaks
+- **Superseded (later the same day, 737fa8d):** mlx-serve ignores `speaker` on Qwen3-TTS, so the stock voice varied
+  between answers. The final voice is the Base model cloned from one fixed reference clip,
+  `~/.clicky/voice/clicky-voice.wav` (`ref_audio`, no `ref_text`); the first segment is capped at 32 chars to keep
+  first audio near the old target. Live: synth 1.1 s (15 chars) to 2.5 s (63 chars); app-path median f0 220-255 Hz vs
+  218 Hz reference; every turn logs `speech.voice = clicky-voice.wav`.
+- (Original, now superseded) **Decision: the Base model's stock voice, no cloning.** Cloning would add ~2.4 s to every segment (it breaks
   the first-segment target) and would make Clicky speak in the user's own voice from a Hindi reference. The
   CustomVoice model (speaker "Ryan" + the warm instruct) isn't loaded and no downloads are allowed, so Clicky keeps
   requesting the loaded Base model; it still sends `speaker`/`instruct` from the picker (ignored by Base) so a

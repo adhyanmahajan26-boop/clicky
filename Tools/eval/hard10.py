@@ -200,7 +200,10 @@ def dedupe_bubbles(events):
 
 
 def attached_label(tag):
-    label = (tag.get("drawn") or {}).get("label") or tag.get("label")
+    drawn = tag.get("drawn") or {}
+    if drawn.get("labelRectCG"):
+        return drawn["labelRectCG"]
+    label = drawn.get("label") or tag.get("label")
     if isinstance(label, dict) and label.get("rectCG"):
         return label["rectCG"]
     return None
@@ -432,16 +435,26 @@ def preflight_failed(line):
     return any(word in text for word in PREFLIGHT_FAILURE_WORDS if word != "off")
 
 
-def code_progress(reply):
+def current_review(snap, since=None):
+    """The open review, else the last one shown after `since` (the panel may already have closed)."""
+    if isinstance(snap.get("review"), dict):
+        return snap["review"]
+    last = snap.get("lastReview")
+    if isinstance(last, dict) and last.get("worktree") and (since is None or (last.get("shownAt") or 0) >= since):
+        return last
+    return None
+
+
+def code_progress(reply, since=None):
     """(verdict, reason) for one codeStatus poll. verdict is "finished" (not busy, the review panel
     shows a task whose worktree is ready), "running" (busy or a task is live), or "waiting".
     A finished review needs a worktree path, so an idle panel with no task is still "waiting"."""
     snap = status_snapshot(reply)
-    review = snap.get("review") if isinstance(snap.get("review"), dict) else None
+    review = current_review(snap, since)
     busy = bool(snap.get("busy"))
     if busy or (snap.get("task") and not review):
         return "running", "busy: phase %s" % snap.get("phase")
-    if reports_finished(snap) or (not busy and snap.get("panelMode") == "review" and review and review.get("worktree")):
+    if reports_finished(snap) or (not busy and review and review.get("worktree")):
         return "finished", "review ready in %s" % (review or {}).get("worktree")
     return "waiting", "phase %s, panel %s, task %s" % (snap.get("phase"), snap.get("panelMode"), "set" if snap.get("task") else "none")
 
@@ -889,7 +902,7 @@ def test_9_code_mode(ctx):
         if status.get("ok") is False and "unknown" in str(status.get("error", "")).lower():
             raise TruthMissing("codeStatus is not in this build: %s" % str(status.get("error"))[:120])
         last_snap = status_snapshot(status)
-        verdict, last_reason = code_progress(status)
+        verdict, last_reason = code_progress(status, since=asked_at - 5)
         if verdict == "running":
             started = True
         if verdict == "finished":
@@ -900,7 +913,7 @@ def test_9_code_mode(ctx):
                 preflight_reason = "preflight: %s" % last_snap.get("preflight")
             break
         time.sleep(5)
-    review = last_snap.get("review") if isinstance(last_snap.get("review"), dict) else {}
+    review = current_review(last_snap, since=asked_at - 5) or {}
     worktree = review.get("worktree") if finished else None
     branch = None
     if worktree and os.path.isdir(worktree):

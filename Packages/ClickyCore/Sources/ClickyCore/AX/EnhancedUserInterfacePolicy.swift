@@ -93,6 +93,10 @@ public enum EnhancedUserInterfacePolicy {
     /// window shows no web content after repeated tries are backed off for a
     /// while (time-based, not a per-pid ask count).
     public static let askTimeWaitSeconds = 0.6
+    /// Until an app's page has been seen once, an ask waits up to this long
+    /// after the write (Chrome 155 built its tree ~2.1 s after the flag; a
+    /// live test pointed at another app's "Share" because it wasn't there yet).
+    public static let firstPageWaitSeconds = 2.5
     public static let askTimePollSeconds = 0.025
 
     /// The background follow-up after a flag write, per app. Pure: the clock
@@ -145,7 +149,13 @@ public enum EnhancedUserInterfacePolicy {
 
         /// How long the ask waits for the page (0 while backed off).
         public func askWaitSeconds(at now: Date) -> TimeInterval {
-            isBackedOff(at: now) ? 0 : EnhancedUserInterfacePolicy.askTimeWaitSeconds
+            if isBackedOff(at: now) { return 0 }
+            let usual = EnhancedUserInterfacePolicy.askTimeWaitSeconds
+            // Only for an app whose page has never shown and hasn't already failed a cycle.
+            guard lastReadyAt == nil, failedCycles == 0 else { return usual }
+            // Never seen this app's page: wait out the tree build, measured from the write.
+            let sinceWrite = cycleStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
+            return min(EnhancedUserInterfacePolicy.firstPageWaitSeconds, max(usual, EnhancedUserInterfacePolicy.firstPageWaitSeconds - sinceWrite))
         }
 
         /// A flag write was sent. A fresh write (activation, ask) starts a new

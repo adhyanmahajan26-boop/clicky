@@ -29,8 +29,10 @@ private let t0 = Date(timeIntervalSince1970: 1_000)
 @Test func askTimeWritesUnlessAWriteIsStillBeingBuilt() {
     var activation = Activation()
     #expect(activation.shouldWriteAtAsk(at: t0))
-    #expect(activation.askWaitSeconds(at: t0) == EnhancedUserInterfacePolicy.askTimeWaitSeconds)
+    // Page never seen: the ask waits out the ~2 s tree build.
+    #expect(activation.askWaitSeconds(at: t0) == EnhancedUserInterfacePolicy.firstPageWaitSeconds)
     activation.recordWrite(at: t0)
+    #expect(abs(activation.askWaitSeconds(at: t0.addingTimeInterval(1)) - (EnhancedUserInterfacePolicy.firstPageWaitSeconds - 1)) < 0.001)
     // Chrome needs ~2 s: an ask 1 s later waits for that write, it doesn't restart it.
     #expect(!activation.shouldWriteAtAsk(at: t0.addingTimeInterval(1)))
     #expect(activation.isWritePending(at: t0.addingTimeInterval(1)))
@@ -235,4 +237,12 @@ private func chromeTree(webAreaChildren: [MockNode]) -> (app: MockNode, webArea:
     #expect(totalArea == 9600)
     #expect(!pieces.contains { $0.intersects(CGRect(x: 41, y: 41, width: 18, height: 18)) })
     #expect(OCRCoveragePlanner.subtract([CGRect(x: -10, y: -10, width: 200, height: 200)], from: CGRect(x: 0, y: 0, width: 50, height: 50)).isEmpty)
+}
+
+@Test func onceThePageWasSeenAsksWaitTheUsualShortTime() {
+    var activation = Activation()
+    activation.recordWrite(at: t0)
+    #expect(activation.followUpStep(webContentState: .ready, at: t0.addingTimeInterval(2.1)) == .ready)
+    activation.recordWrite(at: t0.addingTimeInterval(30))
+    #expect(activation.askWaitSeconds(at: t0.addingTimeInterval(30)) == EnhancedUserInterfacePolicy.askTimeWaitSeconds)
 }

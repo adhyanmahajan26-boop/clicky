@@ -58,6 +58,8 @@ final class CodeModeController: ObservableObject {
     private var activeTask: Task<Void, Never>?
     private var activeEngine: CodeTaskEngine?
     private var activeReview: PreparedReview?
+    /// The last review shown (kept after it closes, for codeStatus / tests).
+    private var lastReviewSummary: [String: Any]?
     private var acks: Set<String> = []
     /// The ApprovalKey of each button as the panel shows it right now.
     private var displayedApprovalKeys: [String: ApprovalKey] = [:]
@@ -600,6 +602,9 @@ final class CodeModeController: ObservableObject {
 
     private func presentReview(_ review: PreparedReview) async {
         activeReview = review
+        lastReviewSummary = ["repo": review.task.repo, "worktree": review.worktree.map { $0.path as Any } ?? NSNull(),
+                             "branch": review.worktree.map { $0.branch as Any } ?? NSNull(), "reviewOID": review.reviewOID,
+                             "changedFiles": review.content.diffFiles.map(\.displayPath), "shownAt": Date().timeIntervalSince1970]
         acks = []
         panelController.state.content = review.content
         panelController.show(mode: .review)
@@ -978,6 +983,7 @@ final class CodeModeController: ObservableObject {
             status["review"] = ["header": review.content.headerText, "worktree": review.worktree.map { $0.path as Any } ?? NSNull(), "buttons": review.content.buttons.map(\.id),
                                 "changedFiles": review.content.diffFiles.map(\.displayPath), "blockers": panelController.state.content.approveBlockers] as [String: Any]
         }
+        status["lastReview"] = lastReviewSummary.map { $0 as Any } ?? NSNull()
         return status
     }
 
