@@ -376,6 +376,7 @@ final class DebugCommandInbox {
             case .notTriggered: result = ["sent": false, "reason": "no trigger phrase in the transcript"]
             case .disabled: result = ["sent": false, "reason": "v2.project.enabled is off"]
             case .askedForTask: result = ["sent": false, "reason": "no task after the trigger phrase (asked what to send)"]
+            case .namedProject: result = ["sent": false, "namedProject": true, "reason": "a named other project (or its offer / pick answer): see projectStatus.namedProject"]
             case .failed(let reason): result = ["sent": false, "reason": reason]
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)

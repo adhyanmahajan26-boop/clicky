@@ -109,7 +109,9 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.codeBashAllowed, kind: .toggle(defaultValue: false),
                             explanation: "Let the code agent use Bash (allowlisted test/build/git commands only). Only a passing sandbox probe (Tools/codeprobe.sh --write-setting) should turn this on."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeRepoRoots, kind: .textList(defaultValue: ClickySettings.defaultCodeRepoRoots),
-                            explanation: "Folders scanned for local clones. Comma separated."),
+                            explanation: "Folders scanned for local clones (~ one level deep, ~/Projects and ~/Developer three, others two). Comma separated."),
+        ClickySettingsEntry(key: ClickySettings.Keys.codeProjectAliases, kind: .internalData,
+                            explanation: "Project names you picked a folder for (\"send this to the X project\"). Change them in the Agents window."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeNarrateProgress, kind: .toggle(defaultValue: true),
                             explanation: "Say short progress updates (at most every 20 seconds) while the code agent works."),
 

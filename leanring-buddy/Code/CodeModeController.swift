@@ -43,6 +43,13 @@ struct QueuedCodeTask {
     var context: CodeTurnContext
     /// Its record in the Agents dashboard.
     var agentID: String? = nil
+    /// "send this to the X project": the folder the owner's named project
+    /// resolved to (alias, confident match or his pick). The repo name in
+    /// `task` is then only a label; this path is used, after the same
+    /// denylist checks and the same 2 s "Opening" card.
+    var pinnedRootPath: String? = nil
+    /// The screenshot / session extras for this run (never from the model's block).
+    var launchOptions = CodeTaskLaunchOptions()
 }
 
 @MainActor
@@ -59,6 +66,25 @@ final class CodeModeController: ObservableObject {
     /// The clones indexed so far (empty until a code task has run): the project
     /// bridge's front-window repo lookup uses them for title-only matches.
     var indexedLocalReposForFrontWindow: [LocalRepoEntry] { cachedLocalRepos ?? [] }
+
+    /// Every clone under the repo roots (indexed once and cached, like a
+    /// code task's lookup), Clicky's own checkouts left out. Read-only:
+    /// a folder walk plus `git config --get` for the remotes.
+    func localRepositoriesForProjectLookup() async -> [LocalRepoEntry] {
+        if cachedLocalRepos == nil {
+            let tools: CodeToolPaths
+            if let toolPaths {
+                tools = toolPaths
+            } else {
+                guard let locatedTools = try? await CodeToolPaths.locate() else { return [] }
+                tools = locatedTools
+                toolPaths = locatedTools
+            }
+            let git = HardenedGit(gitPath: tools.git, ghPath: tools.gh, runner: ChildProcessCommandRunner())
+            cachedLocalRepos = await LocalRepoIndexer(git: git, roots: ClickySettings.codeRepoRoots).index()
+        }
+        return (cachedLocalRepos ?? []).filter { !CodeRepoDenylist.isDeniedLocalRoot($0.folderPath) }
+    }
     private var cachedAccountRepos: [String]?
     private var activeTask: Task<Void, Never>?
     private var activeEngine: CodeTaskEngine?
@@ -207,16 +233,36 @@ final class CodeModeController: ObservableObject {
     }
 
     func start(_ task: CodeTask, context: CodeTurnContext) {
+        start(task, context: context, pinnedRootPath: nil, launchOptions: CodeTaskLaunchOptions())
+    }
+
+    /// "update it to the X project": the owner named the project and asked
+    /// for the change in his own words, so that counts as asking for code
+    /// mode for it (said aloud and saved on, like "turn on code mode").
+    /// Everything after is the normal repo_change path: the 2 s "Opening"
+    /// card, a worktree, the review panel, outward steps only on a click.
+    func startNamedProjectTask(rootPath: String, displayName: String, instructions: String, transcript: String, launchOptions: CodeTaskLaunchOptions) {
+        if !isEnabled {
+            record("named project \(displayName): turning code mode on (the owner asked for the change in \(displayName))")
+            lastToggleDescription = "on → named project \"\(displayName)\" from \"\(transcript.prefix(80))\""
+            speak(NamedProjectSpeech.turningOnCodeModeLine(repositoryName: displayName))
+            setEnabled(true)
+        }
+        let task = CodeTask(action: .repoChange, repo: displayName, instructions: instructions)
+        start(task, context: CodeTurnContext(transcript: transcript), pinnedRootPath: rootPath, launchOptions: launchOptions)
+    }
+
+    private func start(_ task: CodeTask, context: CodeTurnContext, pinnedRootPath: String?, launchOptions: CodeTaskLaunchOptions) {
         guard isEnabled else {
             speak("Code mode is off. Say \"turn on code mode\" first.")
             return
         }
         var context = context
         // "this repo": remember the front window now, before any panel takes focus.
-        if context.frontWindow == nil, FrontWindowRepoResolver.isDeicticRepoName(task.repo) {
+        if pinnedRootPath == nil, context.frontWindow == nil, FrontWindowRepoResolver.isDeicticRepoName(task.repo) {
             context.frontWindow = FrontWindowProbe.capture()
         }
-        var queuedTask = QueuedCodeTask(task: task, context: context)
+        var queuedTask = QueuedCodeTask(task: task, context: context, pinnedRootPath: pinnedRootPath, launchOptions: launchOptions)
         guard !isBusy else {
             guard queuedTasks.count < Self.maximumQueuedTasks else {
                 speak("I already have \(Self.maximumQueuedTasks) code tasks waiting. Let me finish those first.")
@@ -256,7 +302,8 @@ final class CodeModeController: ObservableObject {
         let runIdentifier = UUID()
         activeRunIdentifier = runIdentifier
         activeTask = Task { [weak self] in
-            await self?.run(task, frontWindow: queuedTask.context.frontWindow, runIdentifier: runIdentifier)
+            await self?.run(task, frontWindow: queuedTask.context.frontWindow, pinnedRootPath: queuedTask.pinnedRootPath,
+                            launchOptions: queuedTask.launchOptions, runIdentifier: runIdentifier)
         }
     }
 
@@ -303,7 +350,8 @@ final class CodeModeController: ObservableObject {
 
     // MARK: - Running a task
 
-    private func run(_ task: CodeTask, frontWindow: FrontWindowContext?, runIdentifier: UUID) async {
+    private func run(_ task: CodeTask, frontWindow: FrontWindowContext?, pinnedRootPath: String?, launchOptions: CodeTaskLaunchOptions,
+                     runIdentifier: UUID) async {
         defer { if activeRunIdentifier == runIdentifier && activeReview == nil && !isExecuting { finishTask(hidePanel: true) } }
         setPhase("Checking code mode")
         let report = await ensurePreflight()
@@ -312,7 +360,13 @@ final class CodeModeController: ObservableObject {
             return
         }
         setPhase("Finding \(task.repo)")
-        guard var repository = await resolveRepository(for: task, frontWindow: frontWindow, tools: toolPaths), !Task.isCancelled else { return }
+        let foundRepository: ResolvedRepository?
+        if let pinnedRootPath {
+            foundRepository = await resolvePinnedRepository(rootPath: pinnedRootPath, task: task, tools: toolPaths)
+        } else {
+            foundRepository = await resolveRepository(for: task, frontWindow: frontWindow, tools: toolPaths)
+        }
+        guard var repository = foundRepository, !Task.isCancelled else { return }
         activeRepository = repository
         if repository.clonePath == nil, Self.needsLocalClone(task) {
             guard let clonePath = await offerClone(repository.remote, tools: toolPaths) else { return }
@@ -341,6 +395,14 @@ final class CodeModeController: ObservableObject {
                 Task { @MainActor in controller?.applyAgentProgress(progressEvent) }
             }
             let usageAgentID = activeQueuedTask?.agentID
+            engine.launchOptions = launchOptions
+            engine.onNote = { [weak self] note in
+                let controller = self
+                Task { @MainActor in
+                    controller?.record(note)
+                    controller?.agentsCenter?.log(usageAgentID, note)
+                }
+            }
             engine.onAgentUsage = { [weak self] agentUsage in
                 let controller = self
                 Task { @MainActor in
@@ -690,6 +752,29 @@ final class CodeModeController: ObservableObject {
             speak("I couldn't tell which repo is in front. Say its name, or bring it up in Xcode, VS Code or Terminal.")
             return nil
         }
+        return await resolveLocalRoot(rootPath: rootPath, task: task, deniedFullNames: deniedFullNames, git: git)
+    }
+
+    /// A named project's folder (alias, confident match or the owner's pick):
+    /// the same denylist checks and "Opening" card as "this repo".
+    private func resolvePinnedRepository(rootPath: String, task: CodeTask, tools: CodeToolPaths) async -> ResolvedRepository? {
+        let git = HardenedGit(gitPath: tools.git, ghPath: tools.gh, runner: ChildProcessCommandRunner())
+        guard !CodeRepoDenylist.isDeniedLocalRoot(rootPath) else {
+            speak("That's Clicky's own code, and I don't work on that one.")
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: (rootPath as NSString).appendingPathComponent(".git")) else {
+            speak(NamedProjectSpeech.notAGitRepositoryLine(folderName: (rootPath as NSString).lastPathComponent))
+            return nil
+        }
+        let deniedFullNames = Set((cachedLocalRepos ?? []).filter { CodeRepoDenylist.isDeniedLocalRoot($0.folderPath) }
+            .flatMap { [$0.originURL, $0.upstreamURL] }.compactMap { $0.flatMap(GitHubRemote.parse)?.fullName.lowercased() })
+        record("named project → \(rootPath)")
+        return await resolveLocalRoot(rootPath: rootPath, task: task, deniedFullNames: deniedFullNames, git: git)
+    }
+
+    /// A local git root → its identity (origin, else upstream, else local-only), after the 2 s "Opening" card.
+    private func resolveLocalRoot(rootPath: String, task: CodeTask, deniedFullNames: Set<String>, git: HardenedGit) async -> ResolvedRepository? {
         let originURL = await git.remoteURL(named: "origin", in: rootPath)
         let upstreamURL = await git.remoteURL(named: "upstream", in: rootPath)
         let folderName = (rootPath as NSString).lastPathComponent

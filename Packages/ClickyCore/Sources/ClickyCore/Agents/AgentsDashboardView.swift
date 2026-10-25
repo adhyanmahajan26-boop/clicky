@@ -23,10 +23,13 @@ public struct AgentsDashboardActions {
     public var openReview: (AgentRecord) -> Void
     public var revealWorktree: (AgentRecord) -> Void
     public var copyLog: (AgentRecord) -> Void
+    /// Removes one saved project alias (its key in v2.code.projectAliases).
+    public var removeProjectAlias: (String) -> Void
 
     public init(canCancel: @escaping (AgentRecord) -> Bool, canOpenReview: @escaping (AgentRecord) -> Bool, canRevealWorktree: @escaping (AgentRecord) -> Bool,
                 cancel: @escaping (AgentRecord) -> Void, openReview: @escaping (AgentRecord) -> Void, revealWorktree: @escaping (AgentRecord) -> Void,
-                copyLog: @escaping (AgentRecord) -> Void) {
+                copyLog: @escaping (AgentRecord) -> Void, removeProjectAlias: @escaping (String) -> Void = { _ in }) {
+        self.removeProjectAlias = removeProjectAlias
         self.canCancel = canCancel
         self.canOpenReview = canOpenReview
         self.canRevealWorktree = canRevealWorktree
@@ -52,8 +55,12 @@ public struct AgentsDashboardView: View {
     let actions: AgentsDashboardActions
     /// False for offscreen renders (ImageRenderer can't draw a ScrollView).
     let isScrollable: Bool
+    /// Saved project aliases (spoken name → folder), shown under "Project aliases" when there are any.
+    let projectAliases: [String: String]
 
-    public init(store: AgentStore, selectedAgentID: Binding<String?>, now: Date, actions: AgentsDashboardActions, isScrollable: Bool = true) {
+    public init(store: AgentStore, selectedAgentID: Binding<String?>, now: Date, actions: AgentsDashboardActions, isScrollable: Bool = true,
+                projectAliases: [String: String] = [:]) {
+        self.projectAliases = projectAliases
         self.store = store
         self._selectedAgentID = selectedAgentID
         self.now = now
@@ -95,6 +102,7 @@ public struct AgentsDashboardView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     sidebarSection(title: "Running", records: store.runningRecords, emptyText: "Nothing running")
                     sidebarSection(title: "Recent", records: store.recentRecords, emptyText: "No agents yet")
+                    if !projectAliases.isEmpty { projectAliasesSection }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
@@ -151,6 +159,36 @@ public struct AgentsDashboardView: View {
                 AgentSidebarRow(record: record, now: now, isSelected: record.id == displayedRecord?.id) {
                     selectedAgentID = record.id
                 }
+            }
+        }
+    }
+
+    /// "send this to the X project" picks the owner made: name → folder, each with Remove.
+    private var projectAliasesSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("PROJECT ALIASES")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(AgentsDashboardColors.tertiaryText)
+                .padding(.horizontal, 6)
+                .padding(.top, 14)
+            ForEach(ProjectAliasBook.rows(projectAliases), id: \.key) { aliasRow in
+                HStack(alignment: .center, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\u{201C}\(aliasRow.key)\u{201D}")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AgentsDashboardColors.primaryText)
+                            .lineLimit(1)
+                        Text((aliasRow.path as NSString).abbreviatingWithTildeInPath)
+                            .font(.system(size: 10))
+                            .foregroundColor(AgentsDashboardColors.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    AgentsDashboardButton(title: "Remove", systemImage: "xmark", role: .normal) { actions.removeProjectAlias(aliasRow.key) }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
             }
         }
     }

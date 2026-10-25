@@ -118,6 +118,56 @@ public enum CodeTaskEngineError: Error, Equatable, Sendable, CustomStringConvert
     }
 }
 
+/// Extras for one run that the `<codetask>` block can never carry (it is
+/// decoded strictly from the model's text): set by the app from the
+/// owner's own turn.
+public struct CodeTaskLaunchOptions: Equatable, Sendable {
+    /// PNGs (Clicky's own screenshot) copied into the worktree under
+    /// .clicky-attachments/ for the agent to Read; removed before the commit.
+    public var attachmentFileURLs: [URL]
+    /// The owner's newest Claude Code session in that repo: the agent
+    /// resumes a fork of it (`--resume <id> --fork-session`).
+    public var ownerSessionIdentifier: String?
+
+    public init(attachmentFileURLs: [URL] = [], ownerSessionIdentifier: String? = nil) {
+        self.attachmentFileURLs = attachmentFileURLs
+        self.ownerSessionIdentifier = ownerSessionIdentifier
+    }
+}
+
+/// The pure parts of attaching a screenshot to a code task.
+public enum CodeTaskAttachments {
+    public static let directoryName = ".clicky-attachments"
+    public static let excludeLine = "/.clicky-attachments/"
+    public static let maximumFileBytes = 25 * 1024 * 1024
+
+    /// info/exclude with the attachments line added once.
+    public static func excludeFileText(adding existingText: String) -> String {
+        let lines = existingText.components(separatedBy: "\n")
+        if lines.contains(where: { $0.trimmingCharacters(in: .whitespaces) == excludeLine }) { return existingText }
+        var text = existingText
+        if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+        return text + "# Clicky: screenshots for the code agent (never committed)\n" + excludeLine + "\n"
+    }
+
+    /// "screenshot.png", "screenshot-2.png", …
+    public static func attachmentFileName(index: Int) -> String {
+        index == 0 ? "screenshot.png" : "screenshot-\(index + 1).png"
+    }
+
+    /// The prompt lines that point the agent at the copied files (relative paths).
+    public static func promptLines(fileNames: [String]) -> String {
+        guard !fileNames.isEmpty else { return "" }
+        let paths = fileNames.map { "\(directoryName)/\($0)" }
+        return "\n\nThe user's screenshot from just before this request is at \(paths.joined(separator: ", ")) (relative to the working directory). Read it to see what they saw. Don't edit, move or commit anything in \(directoryName)/."
+    }
+
+    /// The prompt line for a run that resumes a fork of the owner's own session.
+    public static func forkedSessionPromptLine(originalClonePath: String) -> String {
+        "\n\nThe earlier conversation above happened in \(originalClonePath). This run works in a separate git worktree of it: the current working directory. Use paths relative to it and never edit files under \(originalClonePath) directly."
+    }
+}
+
 public final class CodeTaskEngine: @unchecked Sendable {
     public var tools: CodeToolPaths
     public var preflight: CodePreflightReport
@@ -135,6 +185,10 @@ public final class CodeTaskEngine: @unchecked Sendable {
     public var onAgentProgress: @Sendable (AgentProgressEvent) -> Void = { _ in }
     /// Each agent run's tokens and cost, once it ends (from its `result` event).
     public var onAgentUsage: @Sendable (AgentUsage) -> Void = { _ in }
+    /// Screenshot and session extras for repo changes (see CodeTaskLaunchOptions).
+    public var launchOptions = CodeTaskLaunchOptions()
+    /// One line per notable decision (the session fork, attachments), for the app's log.
+    public var onNote: @Sendable (String) -> Void = { _ in }
 
     private let lock = NSLock()
     private var currentAgentRunner: CodeAgentRunner?
@@ -409,8 +463,23 @@ public final class CodeTaskEngine: @unchecked Sendable {
         onProgress("Making a worktree in \(repository.remote.fullName)")
         let worktree = try await worktreeManager.prepareForBranch(clonePath: clonePath, owner: repository.remote.owner, name: repository.remote.name,
                                                                   slug: task.instructions, baseRevision: baseRevision)
-        let prompt = "Make this change in \(repository.remote.fullName) (working directory, branched from \(baseBranch)): \(task.instructions)"
-        let result = try await runEditingAgent(prompt: prompt, worktree: worktree, workspace: workspace, ownership: .own)
+        var prompt = "Make this change in \(repository.remote.fullName) (working directory, branched from \(baseBranch)): \(task.instructions)"
+        let attachedFileNames = try await copyAttachments(into: worktree)
+        prompt += CodeTaskAttachments.promptLines(fileNames: attachedFileNames)
+        var session: AgentInvocation.Session?
+        if let ownerSessionIdentifier = launchOptions.ownerSessionIdentifier {
+            session = .forkOwnerSession(identifier: ownerSessionIdentifier, fallbackNewIdentifier: UUID().uuidString.lowercased())
+            prompt += CodeTaskAttachments.forkedSessionPromptLine(originalClonePath: clonePath)
+            onNote("resuming a fork of the owner's session \(ownerSessionIdentifier) (--resume --fork-session)")
+        }
+        let result: EditingRun
+        do {
+            result = try await runEditingAgent(prompt: prompt, worktree: worktree, workspace: workspace, ownership: .own, session: session)
+        } catch {
+            removeAttachments(from: worktree)
+            throw error
+        }
+        removeAttachments(from: worktree)
         let (commitOID, diffText) = try await commitAndDiff(worktree: worktree, workspace: workspace, result: result.result)
 
         let commitLines = result.result.commitMessage.components(separatedBy: "\n")
@@ -543,13 +612,65 @@ public final class CodeTaskEngine: @unchecked Sendable {
         let integrityPaths = try await worktreeManager.integrityPaths(for: worktree)
         let before = IntegritySnapshot.capture(paths: integrityPaths)
         let headBeforeAgent = await worktreeManager.git.headOID(in: worktree.path)
-        let report = try await runAgent(prompt: prompt, workspace: workspace, workingDirectory: worktree.path, ownership: ownership, isReadOnly: false, session: session)
+        var report = try await runAgent(prompt: prompt, workspace: workspace, workingDirectory: worktree.path, ownership: ownership, isReadOnly: false, session: session)
+        if case .forkOwnerSession = session, Self.shouldRetryFresh(after: report) {
+            // The owner's session couldn't be opened from the worktree (the CLI
+            // never got to its init): nothing ran, so start a fresh session.
+            onNote("the owner's session didn't open (\(report.outcome.failureDescription ?? "?")); starting a fresh session")
+            report = try await runAgent(prompt: prompt, workspace: workspace, workingDirectory: worktree.path, ownership: ownership, isReadOnly: false, session: nil)
+        }
         let after = IntegritySnapshot.capture(paths: integrityPaths)
         let changedPaths = before.changedPaths(comparedTo: after)
         guard changedPaths.isEmpty else { throw WorktreeError.integrityChanged(changedPaths) }
         // `git commit` is allowed with Bash: fold the agent's commits back into Clicky's one reviewed commit.
         try await worktreeManager.foldAgentCommits(worktree, headBeforeAgent: headBeforeAgent)
         return EditingRun(report: report, result: try requireResult(report), worktree: worktree)
+    }
+
+    /// A forked-session run that never reached its init event (no session id, not cancelled).
+    static func shouldRetryFresh(after report: AgentRunReport) -> Bool {
+        guard report.sessionIdentifier == nil else { return false }
+        switch report.outcome {
+        case .reportedError, .endedWithoutResult, .initTimedOut, .launchFailed, .timedOut: return true
+        case .completed, .initRejected, .cancelled, .refusedForbiddenFlags: return false
+        }
+    }
+
+    /// Copies the launch options' PNGs into <worktree>/.clicky-attachments/
+    /// and adds that folder to the clone's info/exclude. Returns the file names.
+    private func copyAttachments(into worktree: ClickyWorktree) async throws -> [String] {
+        let sourceURLs = launchOptions.attachmentFileURLs.filter { sourceURL in
+            guard sourceURL.pathExtension.lowercased() == "png",
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: sourceURL.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = (attributes[.size] as? NSNumber)?.intValue, size > 0, size <= CodeTaskAttachments.maximumFileBytes else { return false }
+            return true
+        }
+        guard !sourceURLs.isEmpty else { return [] }
+        if let commonDirectory = await git.commonGitDirectory(in: worktree.path) {
+            let excludeURL = URL(fileURLWithPath: commonDirectory).appendingPathComponent("info", isDirectory: true).appendingPathComponent("exclude")
+            try? FileManager.default.createDirectory(at: excludeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let existingText = (try? String(contentsOf: excludeURL, encoding: .utf8)) ?? ""
+            let updatedText = CodeTaskAttachments.excludeFileText(adding: existingText)
+            if updatedText != existingText { try updatedText.write(to: excludeURL, atomically: true, encoding: .utf8) }
+        }
+        let attachmentsURL = URL(fileURLWithPath: worktree.path).appendingPathComponent(CodeTaskAttachments.directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: attachmentsURL, withIntermediateDirectories: true)
+        var fileNames: [String] = []
+        for (index, sourceURL) in sourceURLs.enumerated() {
+            let fileName = CodeTaskAttachments.attachmentFileName(index: index)
+            let destinationURL = attachmentsURL.appendingPathComponent(fileName)
+            try? FileManager.default.removeItem(at: destinationURL)
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            fileNames.append(fileName)
+        }
+        onNote("attached \(fileNames.count) screenshot(s) under \(CodeTaskAttachments.directoryName)/")
+        return fileNames
+    }
+
+    private func removeAttachments(from worktree: ClickyWorktree) {
+        let attachmentsURL = URL(fileURLWithPath: worktree.path).appendingPathComponent(CodeTaskAttachments.directoryName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: attachmentsURL.path) { try? FileManager.default.removeItem(at: attachmentsURL) }
     }
 
     /// Re-runs the agent in the same session with follow-up instructions and amends the commit.
