@@ -18,6 +18,7 @@ import argparse
 import json
 import math
 import os
+import signal
 import subprocess
 import time
 
@@ -59,6 +60,14 @@ def start_fixture(display_index, extra_arguments):
 
 
 def stop_fixture(process):
+    """Stops the fixture AND its --cover helper (a separate process that
+    would otherwise stay on screen as a grey box)."""
+    try:
+        helper_pid = (read_ground_truth() or {}).get("helperPid")
+        if helper_pid:
+            os.kill(helper_pid, signal.SIGTERM)
+    except OSError:
+        pass
     if process:
         process.terminate()
         try:

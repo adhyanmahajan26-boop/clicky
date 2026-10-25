@@ -151,7 +151,8 @@ func writeGroundTruth(_ document: GroundTruthDocument) {
 // MARK: - Cover helper (separate process)
 
 /// Shows a single opaque grey window over a global CoreGraphics rect.
-/// Writes nothing and runs until killed.
+/// Writes nothing; runs until killed, or until its parent fixture is gone
+/// (an orphaned cover must never stay on the user's screen).
 final class CoverHelperDelegate: NSObject, NSApplicationDelegate {
     private let coverRect: CGRect
     private var coverWindow: NSWindow?
@@ -162,6 +163,10 @@ final class CoverHelperDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let parentProcessIdentifier = getppid()
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            if getppid() != parentProcessIdentifier { exit(0) }
+        }
         let appKitFrame = NSRect(
             x: coverRect.minX,
             y: primaryScreenHeight - coverRect.minY - coverRect.height,
