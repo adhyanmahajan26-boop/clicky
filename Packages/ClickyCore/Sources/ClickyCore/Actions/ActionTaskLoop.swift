@@ -90,6 +90,8 @@ public struct ActionTaskLoop: Equatable, Sendable {
     public private(set) var observeTurnCount = 0
     /// Page text read by a summarize step without text, for the next observe turn.
     public var pendingPageText: String?
+    /// P8: the whole article read by read_article (title, URL, source and text), for the next observe turn.
+    public var pendingArticleText: String?
 
     public init(goal: String, ownerTranscript: String) {
         self.goal = goal
@@ -137,7 +139,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
         if wasCancelled { return false }
         if observeTurnCount >= Self.maximumObserveTurns { return false }
         // A summarize step read the page: Claude still has to write the summary.
-        if pendingPageText != nil && !isStepBudgetExhausted { return true }
+        if (pendingPageText != nil || pendingArticleText != nil) && !isStepBudgetExhausted { return true }
         if planWasDone { return false }
         return !isStepBudgetExhausted
     }
@@ -162,6 +164,13 @@ public struct ActionTaskLoop: Equatable, Sendable {
             lines.append("END PAGE TEXT")
             lines.append("now reply with {\"do\":\"summarize\",\"text\":\"- point one\\n- point two …\"} (short bullet points) and \"done\":true, and say one short line.")
         }
+        if let pendingArticleText {
+            lines.append("")
+            lines.append("ARTICLE (read from the front browser window):")
+            lines.append(pendingArticleText)
+            lines.append("END ARTICLE")
+            lines.append(Self.articleFollowUpInstruction)
+        }
         lines.append("")
         if records.contains(where: { if case .refused = $0.outcome { return true } else { return false } }) {
             lines.append("clicky already told the user out loud why a step was refused; don't repeat that at length.")
@@ -169,6 +178,9 @@ public struct ActionTaskLoop: Equatable, Sendable {
         lines.append("the screen lists and screenshots below are fresh: the element ids are new. reply with the next <actions> block, or, when the goal is reached, say so in one short line with no actions block. don't repeat steps that are done, and don't retry refused ones.")
         return lines.joined(separator: "\n")
     }
+
+    /// What the model does with the article it just read.
+    public static let articleFollowUpInstruction = "now reply with ONE <actions> block with \"done\":true: a highlight step whose targets are the 5 to 8 most important sentences copied WORD FOR WORD from the article above (whole sentences, exactly as written, no paraphrase), then a notes step {\"do\":\"notes\",\"title\":\"…\",\"summary\":\"one or two sentences\",\"items\":[{\"note\":\"at most 15 words\",\"quote\":\"the same sentence, verbatim\"}]} with one item per highlighted sentence in the same order; for a plain summary request use summarize instead. say the summary as your one spoken line."
 
     /// The final spoken line when the loop stops on its own.
     public var limitReachedLine: String {

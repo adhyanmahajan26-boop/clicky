@@ -11,7 +11,7 @@
 //    [SNAP:screen|window|marks[+marks]]   (SnapshotTag.swift says what each covers)
 //    [SNAP:board]                          (save the open whiteboard, PDF + PNG)
 //
-//    style   circle | box | arrow | underline | spot | 1..9   (unknown → circle;
+//    style   circle | box | arrow | underline | spot | highlight | 1..9   (unknown → circle;
 //            a target in the style slot also means circle: [MARK:#57:Share])
 //    target  #n[@x,y] | #a-#b | "text"[~k][ in #n] | x,y | x,y,r (legacy → box)
 //            | x,y,w,h | none
@@ -32,6 +32,9 @@ public enum MarkStyle: Equatable, Sendable {
     case arrow
     case underline
     case spot
+    /// P8: a soft highlighter fill over exact text (sentences drawn by the
+    /// article highlighter; elsewhere drawn like an underline).
+    case highlight
     /// Numbered step badge 1...9.
     case step(Int)
 }
@@ -323,6 +326,7 @@ public enum MarkTagParser {
         case "arrow": return (.arrow, true)
         case "underline": return (.underline, true)
         case "spot": return (.spot, true)
+        case "highlight", "highlighter": return (.highlight, true)
         default:
             let stepText = lowercasedField.hasPrefix("step") ? String(lowercasedField.dropFirst(4)) : lowercasedField
             if let stepNumber = Int(stepText.trimmingCharacters(in: .whitespaces)), (1...9).contains(stepNumber) {

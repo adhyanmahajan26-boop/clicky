@@ -541,8 +541,23 @@ def open_page(ctx, number, page):
 
 
 def ask_text(ctx, prompt, target_pid=None):
-    """hard10.ask: owner gate, Safari check, throwaway Chrome frontmost for the ask only, usage backoff."""
-    return H10.ask(ctx, prompt, target_pid)
+    """Like hard10.ask (owner gate, Safari check, usage backoff), but with an action task the throwaway
+    Chrome stays frontmost until Clicky's task for this prompt has finished: restoring the owner's app
+    right after the first answer left later steps (read page, highlight) acting on a background Chrome."""
+    if target_pid is None:
+        return H10.ask(ctx, prompt, target_pid)
+    H10.owner_gate(ctx, "ask")
+    holder = {}
+
+    def ask_and_wait(_):
+        holder["reply"] = FE.clickyctl({"cmd": "ask", "text": prompt, "speak": H10.ASK_SPEAK}, H10.ASK_TIMEOUT_SECONDS)
+        holder["task"] = finished_task(prompt, timeout=150)
+        return holder["reply"]
+
+    reply, front = ctx.guard.focus(target_pid, ask_and_wait, "ask")
+    ctx.guard.check_safari("after ask")
+    ctx.last_focus = {"targetPid": target_pid, "frontmost": front}
+    return reply, FE.read_turn(reply.get("turnDir"))
 
 
 def turn_steps_or_status(turn, prompt=None, timeout=150):

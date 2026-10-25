@@ -46,6 +46,12 @@
 //                             → a step list as if Claude sent it, on a fresh capture;
 //                               dryRun returns every step's tier decision and facts
 //                               without running anything
+//    articleRead {scroll=false}  → P8: reads the front browser's article now (AX, or with
+//                               scroll: true also the scroll + OCR fallback): {length, title,
+//                               url, source AX|OCR, runs, milliseconds, preview}
+//    notesStatus              → P8: notes panel visible, items, linked highlights (lines,
+//                               method, source), dock side/frame, saved paths
+//    notesSave                → P8: "save my notes" without speaking: {line, savedPaths}
 //    axSetPosition {bundle, windowIndex|windowTitle, x, y [, w, h], dryRun?}
 //                             → TEST ONLY: AXPosition/AXSize of a TextEdit or Notes
 //                               window (CG top-left coords); dryRun lists the windows
@@ -549,6 +555,30 @@ final class DebugCommandInbox {
                 let (isSuccess, result) = await self.companionManager.actionTaskController.debugRun(planObject: planObject, ownerTranscript: ownerTranscript, isDryRun: isDryRun)
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: isSuccess ? nil : result["error"] as? String)
             }
+
+        case "articleRead":
+            // P8: read the article in the front browser now (no scrolling unless {scroll: true}).
+            guard let articleWindow = ArticleReader.findArticleWindow() else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "no browser window is on screen")
+                return
+            }
+            let allowsScrolling = commandObject["scroll"] as? Bool ?? false
+            Task {
+                _ = await self.companionManager.articleController.readArticle(target: articleWindow, scroll: allowsScrolling ? { point, pixels in
+                    SyntheticEvents.mouseEvent(.mouseMoved, at: point)?.post(tap: .cghidEventTap)
+                    ArticleHighlightController.postScroll(at: point, pixels: pixels)
+                } : nil, isCancelled: { false })
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: self.companionManager.articleController.articleReadSnapshot(), errorMessage: nil)
+            }
+
+        case "notesStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.articleController.notesStatusSnapshot(), errorMessage: nil)
+
+        case "notesSave":
+            let line = companionManager.articleController.saveNotesAndDescribe()
+            let status = companionManager.articleController.notesStatusSnapshot()
+            reply(commandIdentifier: commandIdentifier, isSuccess: status["saveError"] is NSNull && companionManager.articleController.hasNotes,
+                  result: ["line": line, "savedPaths": status["savedPaths"] ?? []], errorMessage: nil)
 
         case "axSetPosition":
             // TEST ONLY (P7 harness): move/resize a TextEdit or Notes window. Nothing else, ever.

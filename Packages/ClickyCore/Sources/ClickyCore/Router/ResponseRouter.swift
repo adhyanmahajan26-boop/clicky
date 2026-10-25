@@ -12,6 +12,8 @@
 //     (CodeModeToggle), emitted at once and never spoken;
 //   - [AGENTS:open]: open the Agents dashboard (AgentsDashboardTag),
 //     emitted at once and never spoken;
+//   - [NOTES:save] / [NOTES:close]: P8 article notes (NotesTag), emitted at
+//     once and never spoken;
 //   - [WORKER:title:task]: on its own line, ending at the line's last "]";
 //     emitted at once (spawned unanchored);
 //   - <whiteboard>, <code>, <type>, <codetask>, <actions> blocks: handed to
@@ -38,6 +40,8 @@ public enum ResponseRouterOutput: Equatable, Sendable {
     case codeModeToggle(isOn: Bool)
     /// [AGENTS:open]: open the Agents dashboard.
     case agentsDashboard(AgentsDashboardTag.Command)
+    /// [NOTES:save] / [NOTES:close]: the article notes panel.
+    case notesCommand(NotesTag.Command)
     case block(name: String, body: String)
     /// A block nobody consumes yet ("I can't do that yet" is in the narration).
     case unsupportedBlock(name: String)
@@ -52,7 +56,7 @@ public struct ResponseRouter: Sendable {
     public static let blockNames = ["whiteboard", "code", "type", "codetask", "actions"]
     public static let unsupportedBlockSentence = "I can't do that yet."
 
-    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:", "AGENTS:"]
+    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:", "AGENTS:", "NOTES:"]
 
     /// Block names that have a consumer (P4+ register theirs).
     public var blockConsumers: Set<String>
@@ -218,6 +222,15 @@ public struct ResponseRouter: Sendable {
                         outputs.append(.agentsDashboard(command))
                     } else {
                         record(&outputs, reason: "malformed agents tag", raw: rawTag)
+                    }
+                    continue
+                }
+                if rawTag.dropFirst().trimmingCharacters(in: .whitespaces).uppercased().hasPrefix("NOTES:") {
+                    if let command = NotesTag.parse(rawTag) {
+                        flushNarration()
+                        outputs.append(.notesCommand(command))
+                    } else {
+                        record(&outputs, reason: "malformed notes tag", raw: rawTag)
                     }
                     continue
                 }

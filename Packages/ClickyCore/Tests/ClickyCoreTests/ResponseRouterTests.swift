@@ -19,6 +19,7 @@ private func summarize(_ outputs: [ResponseRouterOutput], into summary: inout Ro
         case .dropped(let reason, _): summary.events.append("dropped:\(reason)")
         case .codeModeToggle(let isOn): summary.events.append("codemode:\(isOn ? "on" : "off")")
         case .agentsDashboard(let command): summary.events.append("agents:\(command.rawValue)")
+        case .notesCommand(let command): summary.events.append("notes:\(command.rawValue)")
         }
     }
 }

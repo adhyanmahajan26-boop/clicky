@@ -60,7 +60,7 @@ public enum ActionAppNameMatcher {
 }
 
 public enum ActionHighlightTags {
-    /// One [MARK:…] tag per target: an element gets a box, text an underline,
+    /// One [MARK:…] tag per target: an element gets a box, short text an underline, a sentence a highlight,
     /// with the matching note (if any) as the mark's note.
     public static func tags(targets: [ActionHighlightTarget], notes: [String]) -> [String] {
         targets.enumerated().map { index, target in
@@ -72,7 +72,9 @@ public enum ActionHighlightTags {
             case .text(let text):
                 let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
                 let label = sanitizedLabel(String(text.prefix(40)))
-                return "[MARK:underline:\"\(escapedText)\":\(label)\(note.isEmpty ? "" : "|" + note)]"
+                // A sentence is a highlighter stroke; a short label stays an underline.
+                let style = target.isSentence ? "highlight" : "underline"
+                return "[MARK:\(style):\"\(escapedText)\":\(label)\(note.isEmpty ? "" : "|" + note)]"
             }
         }
     }

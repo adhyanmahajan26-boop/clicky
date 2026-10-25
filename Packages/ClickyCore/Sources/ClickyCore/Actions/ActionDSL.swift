@@ -22,6 +22,13 @@
 //    switch_window {app | title}
 //    highlight {targets: [id | "#id" | "exact text"], notes?: [String]}
 //    summarize {text?, title?}           code_task {project?, instructions}
+//    read_article {}                     (P8: the whole article's text comes back)
+//    notes {title?, summary, items: [{note, quote}]}   (P8: the notes panel)
+//
+//  A highlight target that is a sentence (ActionHighlightTarget.isSentence)
+//  is drawn as a highlighter stroke over the exact text runs, per line,
+//  that follows the page as it scrolls (the app's ArticleHighlightController);
+//  an element id or a short label is still an underline / box mark.
 //
 //  `id` is an element id of the screen the answer was given for (the
 //  grounding lists, #n). "done": true says these are the last steps (no
@@ -61,6 +68,18 @@ public enum ActionScrollDirection: String, Equatable, Sendable, CaseIterable {
 public enum ActionHighlightTarget: Equatable, Sendable {
     case element(Int)
     case text(String)
+
+    /// Text long enough to be a sentence (≥ 5 words or ≥ 40 characters):
+    /// drawn as a highlighter stroke over the text, not as a mark.
+    public var isSentence: Bool {
+        guard case .text(let text) = self else { return false }
+        return text.count >= 40 || text.split(whereSeparator: \.isWhitespace).count >= 5
+    }
+
+    public var text: String? {
+        if case .text(let text) = self { return text }
+        return nil
+    }
 }
 
 public enum ActionKeyModifier: String, Equatable, Hashable, Sendable, CaseIterable, Comparable {
@@ -180,6 +199,10 @@ public enum ActionStep: Equatable, Sendable {
     case highlight(targets: [ActionHighlightTarget], notes: [String])
     case summarize(text: String?, title: String?)
     case codeTask(project: String?, instructions: String)
+    /// P8: read the whole article in the front browser (the text goes back to the model).
+    case readArticle
+    /// P8: show the notes panel beside the article.
+    case notes(ArticleNotes)
 
     /// The DSL verb ("open_app").
     public var verb: String {
@@ -197,6 +220,8 @@ public enum ActionStep: Equatable, Sendable {
         case .highlight: return "highlight"
         case .summarize: return "summarize"
         case .codeTask: return "code_task"
+        case .readArticle: return "read_article"
+        case .notes: return "notes"
         }
     }
 
@@ -220,7 +245,7 @@ public enum ActionStep: Equatable, Sendable {
         case .openApp, .openURL, .search, .click, .key, .switchWindow, .codeTask: return true
         case .type(_, _, let pressesReturn): return pressesReturn
         case .scroll: return true
-        case .selectCopy, .wait, .highlight, .summarize: return false
+        case .selectCopy, .wait, .highlight, .summarize, .readArticle, .notes: return false
         }
     }
 
@@ -236,7 +261,7 @@ public enum ActionStep: Equatable, Sendable {
     /// Steps that read or mark the screen only (they never send an event to an app).
     public var isReadOnly: Bool {
         switch self {
-        case .highlight, .summarize, .selectCopy, .wait: return true
+        case .highlight, .summarize, .selectCopy, .wait, .readArticle, .notes: return true
         default: return false
         }
     }
@@ -262,6 +287,8 @@ public enum ActionStep: Equatable, Sendable {
         case .highlight(let targets, _): return "highlight \(targets.count) thing\(targets.count == 1 ? "" : "s")"
         case .summarize(let text, _): return text == nil ? "read the page for a summary" : "show the summary"
         case .codeTask(let project, _): return "code task" + (project.map { " in \($0)" } ?? "")
+        case .readArticle: return "read the article"
+        case .notes(let notes): return "show \(notes.items.count) note\(notes.items.count == 1 ? "" : "s")"
         }
     }
 }
@@ -329,6 +356,8 @@ public enum ActionDSL {
     public static let maximumURLLength = 2_048
     public static let maximumNameLength = 120
     public static let maximumNoteLength = 60
+    /// A highlight target sentence copied from the article.
+    public static let maximumHighlightTextLength = 400
 
     public static func parse(_ blockBody: String) -> Result<ActionPlan, ActionPlanParseError> {
         var body = blockBody.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -470,6 +499,12 @@ public enum ActionDSL {
             }
             return .success(.summarize(text: nil, title: title))
 
+        case "read_article", "readarticle", "read_page", "read":
+            return .success(.readArticle)
+
+        case "notes", "make_notes", "show_notes", "note":
+            return parseNotes(object).map { .success(.notes($0)) } ?? reject("notes needs a summary or items [{note, quote}]")
+
         case "code_task", "codetask", "code":
             guard let instructions = string("instructions", limit: 4_000) ?? string("task", limit: 4_000) else { return reject("code_task needs instructions") }
             return .success(.codeTask(project: string("project") ?? string("repo"), instructions: instructions))
@@ -500,8 +535,31 @@ public enum ActionDSL {
         guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         // Quotes around exact text are optional.
         let unquoted = text.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{201C}\u{201D}"))
-        guard !unquoted.isEmpty, unquoted.count <= 200 else { return nil }
+        guard !unquoted.isEmpty, unquoted.count <= maximumHighlightTextLength else { return nil }
         return .text(unquoted)
+    }
+
+    /// {title?, summary, items: [{note, quote}] | ["note", …]} → notes (≤ 10, notes ≤ 15 words).
+    static func parseNotes(_ object: [String: Any]) -> ArticleNotes? {
+        func trimmed(_ value: Any?, limit: Int) -> String? {
+            guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return text.count > limit ? String(text.prefix(limit - 1)) + "…" : text
+        }
+        let title = trimmed(object["title"], limit: 160) ?? ""
+        let summary = trimmed(object["summary"] ?? object["text"], limit: ArticleNotes.maximumSummaryLength) ?? ""
+        let rawItems = (object["items"] as? [Any]) ?? (object["notes"] as? [Any]) ?? []
+        var items: [ArticleNoteItem] = []
+        for rawItem in rawItems.prefix(ArticleNotes.maximumItemCount) {
+            if let itemObject = rawItem as? [String: Any] {
+                guard let note = trimmed(itemObject["note"] ?? itemObject["text"], limit: 200) else { continue }
+                let quote = trimmed(itemObject["quote"] ?? itemObject["sentence"], limit: ArticleNotes.maximumQuoteLength) ?? ""
+                items.append(ArticleNoteItem(note: ArticleNotes.clippedNote(note), quote: quote.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{201C}\u{201D}"))))
+            } else if let note = trimmed(rawItem, limit: 200) {
+                items.append(ArticleNoteItem(note: ArticleNotes.clippedNote(note), quote: ""))
+            }
+        }
+        guard !summary.isEmpty || !items.isEmpty else { return nil }
+        return ArticleNotes(title: title, url: nil, summary: summary, items: items)
     }
 
     static func cleanNote(_ note: String) -> String {

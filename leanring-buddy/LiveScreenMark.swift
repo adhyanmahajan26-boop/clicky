@@ -86,7 +86,7 @@ struct LiveScreenMark: Identifiable {
         switch markStyle {
         case .box?: return .box
         case .arrow?: return .arrow
-        case .underline?: return .underline
+        case .underline?, .highlight?: return .underline
         case .spot?: return .spot
         case .step(let stepNumber)?: return .step(stepNumber)
         default: return .circle

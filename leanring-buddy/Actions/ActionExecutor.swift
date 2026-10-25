@@ -42,6 +42,23 @@ struct ResolvedActionTarget {
     var failure: String?
     /// A refusal decided while resolving (no browser but Safari).
     var refusal: String?
+    /// P8 read_article / notes / sentence highlights: the article window.
+    var articleWindow: ArticleWindowTarget?
+}
+
+/// What performing a step produced.
+struct ActionPerformResult {
+    var outcome: ActionStepOutcome
+    /// summarize without text: the page text for the observe turn.
+    var pageText: String?
+    /// read_article: the article for the observe turn.
+    var articleText: String?
+
+    init(_ outcome: ActionStepOutcome, pageText: String? = nil, articleText: String? = nil) {
+        self.outcome = outcome
+        self.pageText = pageText
+        self.articleText = articleText
+    }
 }
 
 /// An AXUIElement handed to a background walk (AX calls are thread-safe).
@@ -107,7 +124,17 @@ final class ActionExecutor {
             for target in targets {
                 if case .element(let elementID) = target, groundedTurn.registry[elementID] != nil { return resolveElement(elementID, in: groundedTurn) }
             }
+            // Sentences go on the article (the front browser), even when Clicky or a terminal is frontmost.
+            if targets.contains(where: \.isSentence) { return resolveArticleWindow() }
             return resolveFrontmost(includingFocusedElement: false)
+
+        case .readArticle:
+            return resolveArticleWindow()
+
+        case .notes:
+            // Notes can still be shown with no browser on screen (docked at the display edge).
+            let articleTarget = resolveArticleWindow()
+            return articleTarget.failure == nil ? articleTarget : resolveFrontmost(includingFocusedElement: false)
 
         case .switchWindow(let app, let title):
             return resolveWindow(app: app, title: title)
@@ -137,6 +164,15 @@ final class ActionExecutor {
         return ResolvedActionTarget(facts: facts, axElement: focusedElement, processIdentifier: processIdentifier,
                                     frameCG: focusedElement.flatMap(TypeForMeAccessibility.frameCG) ?? windowFrame,
                                     runningApplication: frontmostApplication)
+    }
+
+    /// P8: the article window (the frontmost browser's front window, ArticleWindowChoice).
+    private func resolveArticleWindow() -> ResolvedActionTarget {
+        guard let articleWindow = ArticleReader.findArticleWindow() else { return ResolvedActionTarget(failure: "no browser window with an article is on screen") }
+        var facts = Self.facts(processIdentifier: articleWindow.processIdentifier, element: nil, groundingElement: nil)
+        if let windowElement = articleWindow.windowElement { facts.windowTitle = TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: windowElement) ?? facts.windowTitle }
+        return ResolvedActionTarget(facts: facts, processIdentifier: articleWindow.processIdentifier, frameCG: articleWindow.windowFrameCG,
+                                    runningApplication: NSRunningApplication(processIdentifier: articleWindow.processIdentifier), articleWindow: articleWindow)
     }
 
     private func resolveBrowser(for url: URL, ownerTranscript: String) -> ResolvedActionTarget {
@@ -309,7 +345,75 @@ final class ActionExecutor {
 
     /// Runs a step whose tier allowed it. `session`: the answer on screen (highlights draw through it).
     func perform(_ step: ActionStep, target: ResolvedActionTarget, groundedTurn: GroundedTurn, session: AnswerSession?,
-                 ownerTranscript: String, isCancelled: @escaping () -> Bool) async -> (outcome: ActionStepOutcome, pageText: String?) {
+                 ownerTranscript: String, isCancelled: @escaping () -> Bool) async -> ActionPerformResult {
+        switch step {
+        case .highlight(let targets, let notes):
+            return ActionPerformResult(await highlight(targets: targets, notes: notes, target: target, session: session))
+        case .readArticle:
+            guard let articleWindow = target.articleWindow else { return ActionPerformResult(.failed(reason: "no article window")) }
+            let result = await companionManager.articleController.readArticle(target: articleWindow, scroll: { [weak self] point, pixels in
+                self?.postPixelScroll(at: point, pixels: pixels)
+            }, isCancelled: isCancelled)
+            guard result.document.utf16Length > 0 else { return ActionPerformResult(.failed(reason: "couldn't read any text in the article window")) }
+            let detail = "read \(result.document.utf16Length) characters via \(result.document.source.rawValue)" + (result.document.isTruncated ? ", cut at the limit" : "")
+            return ActionPerformResult(.done(detail: detail), articleText: ArticleModelText.text(for: result.document))
+        case .notes(let notes):
+            companionManager.articleController.showNotes(notes, target: target.articleWindow)
+            // The model normally says the summary as its spoken line; say it here only if it didn't.
+            if let session, !session.coordinator.isSilent, ArticleSummarySpeech.needsSpeaking(summary: notes.summary, rawResponse: session.rawResponse) {
+                companionManager.speakCodeModeLine(notes.summary)
+            } else if session == nil {
+                companionManager.speakCodeModeLine(notes.summary)
+            }
+            return ActionPerformResult(.done(detail: "notes panel shown with \(notes.items.count) notes"))
+        default:
+            let legacy = await performOther(step, target: target, groundedTurn: groundedTurn, session: session, ownerTranscript: ownerTranscript, isCancelled: isCancelled)
+            return ActionPerformResult(legacy.outcome, pageText: legacy.pageText)
+        }
+    }
+
+    /// P8 highlight: sentences become highlighter strokes on the article (tracked as it scrolls);
+    /// element ids and short labels stay overlay marks (box / underline) as before.
+    private func highlight(targets: [ActionHighlightTarget], notes: [String], target: ResolvedActionTarget, session: AnswerSession?) async -> ActionStepOutcome {
+        let sentenceTargets = targets.enumerated().filter { $0.element.isSentence }
+        var markTargets = targets.enumerated().filter { !$0.element.isSentence }.map { (target: $0.element, note: $0.offset < notes.count ? notes[$0.offset] : "") }
+        var details: [String] = []
+        if !sentenceTargets.isEmpty {
+            guard let articleWindow = target.articleWindow ?? ArticleReader.findArticleWindow() else { return .failed(reason: "no browser window with an article is on screen") }
+            let sentences = sentenceTargets.compactMap { $0.element.text }
+            let outcome = await companionManager.articleController.highlight(sentences: sentences, target: articleWindow)
+            details.append("\(outcome.matchedCount) of \(sentences.count) sentences highlighted" + (outcome.methods.isEmpty ? "" : " (\(outcome.methods.joined(separator: ", ")))"))
+            if !outcome.unmatchedSentences.isEmpty {
+                details.append("not found on the page: " + outcome.unmatchedSentences.map { "\u{201C}\($0.prefix(50))…\u{201D}" }.joined(separator: "; ") + " — copy sentences word for word")
+            }
+            if outcome.matchedCount == 0 && markTargets.isEmpty {
+                // Last chance: the old on-screen text marks (they match OCR on screen).
+                markTargets = outcome.unmatchedSentences.map { (target: ActionHighlightTarget.text($0), note: "") }
+                if session == nil { return .failed(reason: details.joined(separator: "; ")) }
+            }
+        }
+        if !markTargets.isEmpty {
+            guard let session else { return details.isEmpty ? .failed(reason: "no answer on screen to draw marks with") : .done(detail: details.joined(separator: "; ")) }
+            let parsedTags = ActionHighlightTags.tags(targets: markTargets.map(\.target), notes: markTargets.map(\.note)).compactMap(MarkTagParser.parse)
+            if !parsedTags.isEmpty {
+                session.showActionHighlights(parsedTags)
+                details.append("\(parsedTags.count) marked")
+            }
+        }
+        guard !details.isEmpty else { return .failed(reason: "couldn't make marks for those targets") }
+        return .done(detail: details.joined(separator: "; "))
+    }
+
+    /// One tagged pixel scroll over the article (positive = further down the page), pointer moved there first like `scroll`.
+    func postPixelScroll(at point: CGPoint, pixels: Int) {
+        onSyntheticPointerEvent()
+        SyntheticEvents.mouseEvent(.mouseMoved, at: point)?.post(tap: .cghidEventTap)
+        ArticleHighlightController.postScroll(at: point, pixels: pixels)
+        onSyntheticPointerEvent()
+    }
+
+    private func performOther(_ step: ActionStep, target: ResolvedActionTarget, groundedTurn: GroundedTurn, session: AnswerSession?,
+                              ownerTranscript: String, isCancelled: @escaping () -> Bool) async -> (outcome: ActionStepOutcome, pageText: String?) {
         switch step {
         case .openApp:
             if let runningApplication = target.runningApplication, !runningApplication.isTerminated {
@@ -395,12 +499,9 @@ final class ActionExecutor {
             }
             return (.failed(reason: "nothing to switch to"), nil)
 
-        case .highlight(let targets, let notes):
-            guard let session else { return (.failed(reason: "no answer on screen to draw marks with"), nil) }
-            let parsedTags = ActionHighlightTags.tags(targets: targets, notes: notes).compactMap(MarkTagParser.parse)
-            guard !parsedTags.isEmpty else { return (.failed(reason: "couldn't make marks for those targets"), nil) }
-            session.showActionHighlights(parsedTags)
-            return (.done(detail: "\(parsedTags.count) marked"), nil)
+        case .highlight, .readArticle, .notes:
+            // Handled in perform.
+            return (.failed(reason: "internal: handled elsewhere"), nil)
 
         case .summarize(let text, let title):
             if let text {

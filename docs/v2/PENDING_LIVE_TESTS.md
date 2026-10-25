@@ -477,3 +477,40 @@ the running app (never with Netflix playing in Safari unless the test names Safa
     `actionsCancel`. Test-only `axSetPosition` / `axPerform` move / press in TextEdit or Notes only.
 11. Settings: `v2.actions.enabled false` → `<actions>` gets "I can't do that yet." and the prompt has no
     ACTIONS section; `v2.actions.countdownSeconds 3` → a 3 s countdown.
+
+## P8 article highlights and notes (`read_article`, sentence highlights, `notes`)
+
+Unit-tested in ClickyCore (`ArticleTests`: sentence → range matching incl. quotes / case / whitespace /
+hyphenation / OCR misreads, run maps, OCR lines → one rect per line, line fragments, off-screen ticks and
+scroll tracking math, notes Markdown / file naming / save to a temp folder with PDF, dock side choice, the
+DSL steps, tiers, the observe-turn text, `[NOTES:save]`, "save my notes", the prompt; renders of the notes
+panel and a highlight overlay sample in `~/Library/Logs/Clicky/renders/article/`). These need the running app:
+1. Chrome, a long local article, the owner says "highlight the important things and make notes": a
+   `read_article` step ("read N characters via AX"), an observe turn carrying ARTICLE, then ONE block with
+   highlight (5–8 verbatim sentences) + notes. Soft yellow strokes sit exactly on the sentences, one per
+   line for wrapped sentences (no boxes); `notesStatus` shows each highlight's `method`
+   (boundsForRange / textMarkers / elementFrame / ocr) and its line rects.
+2. Scroll the page: the strokes follow within ~0.1 s; highlights scrolled away become numbered ticks at the
+   top / bottom of the page's right edge, and the matching notes show ↑ / ↓. Resize the window: strokes are
+   re-measured (≤ 0.75 s). Navigate to another page: the highlights clear.
+3. The notes panel docks on the side of the Chrome window with the most free space on that display; with
+   Chrome full-width it sits in the margin beside the article column, never over it. Move the window → the
+   panel follows. Switch to another app → strokes and panel hide; back to Chrome → they return. Clicking the
+   panel never activates Clicky or takes focus from Chrome.
+4. Click a note: the page scrolls that highlight into view (AXScrollToVisible; nothing on the page is clicked,
+   selected or edited). A note whose sentence wasn't found is dimmed and not clickable.
+5. The summary at the top of the panel is spoken once (by the answer's line, or by Clicky if the answer
+   didn't say it — never twice).
+6. "save my notes" (push-to-talk and hands-free) → `~/Clicky Notes/<title>.md` + `.pdf`; Clicky says where;
+   the panel footer shows the path. Saving again in the same session overwrites the same files; a file of
+   that name from elsewhere gets "<title> 2.md". `[NOTES:save]` in an answer does the same and isn't spoken.
+   `notesSave` in the debug inbox returns `{line, savedPaths}`.
+7. Fallbacks: a page whose web area has no text (canvas / image) → with `v2.article.scrollOCRFallback` on,
+   `read_article` scrolls the article page by page (tagged scroll events only), OCRs it and scrolls back;
+   `articleRead {scroll:true}` reports `source: OCR`. Highlights on such a page come from OCR of the visible
+   viewport only.
+8. The live failure this fixes: with a terminal (the harness) frontmost and Chrome behind it, read_article /
+   highlight still target Chrome's front window (ArticleWindowChoice), not the terminal. Safari is refused
+   unless the request names it.
+9. Debug inbox: `articleRead` → {length, title, url, source AX|OCR, runs, milliseconds, preview};
+   `notesStatus` → panel visible, items, linked notes, highlights, dock side/frame, saved paths.
