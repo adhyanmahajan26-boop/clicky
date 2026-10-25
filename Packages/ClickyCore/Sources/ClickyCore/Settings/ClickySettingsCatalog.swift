@@ -104,6 +104,8 @@ public enum ClickySettingsCatalog {
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),
+        ClickySettingsEntry(key: ClickySettings.Keys.typeForMeBlockedBundleIDs, kind: .textList(defaultValue: Array(ClickySettings.defaultTypeForMeBlockedBundleIDs)),
+                            explanation: "Apps Clicky never types into (Copy only). Comma separated bundle ids."),
         ClickySettingsEntry(key: ClickySettings.Keys.claudeEffortOverride, kind: .choice(options: ["", "low", "medium", "high"], defaultValue: ""),
                             explanation: "Forces --effort for every answer (evals). Empty means no override."),
     ]
