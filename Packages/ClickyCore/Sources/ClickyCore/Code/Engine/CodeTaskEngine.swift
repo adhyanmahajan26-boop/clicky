@@ -585,9 +585,10 @@ public final class CodeTaskEngine: @unchecked Sendable {
                          session: AgentInvocation.Session? = nil) async throws -> AgentRunReport {
         let invocation = AgentInvocation(prompt: prompt, contextDirectoryPath: workspace.contextDirectoryURL.path, outboxDirectoryPath: workspace.outboxDirectoryURL.path,
                                          emptyGHConfigDirectoryPath: workspace.emptyGHConfigDirectoryURL.path, ownership: ownership, isReadOnly: isReadOnly,
-                                         bashAllowed: isBashAllowed, session: session ?? .new(identifier: UUID().uuidString.lowercased()))
+                                         bashAllowed: isBashAllowed, session: session ?? .new(identifier: UUID().uuidString.lowercased()),
+                                         disabledPluginSources: preflight.disabledPluginSources)
         try workspace.writeContextFile("rules.md", invocation.rulesMarkdown)
-        let expectation = AgentInitExpectation(expectedTools: Set(invocation.tools), unremovableTools: Set(preflight.unremovableTools),
+        let expectation = AgentInitExpectation(expectedTools: Set(invocation.expectedInitTools(supportedFlags: Set(preflight.effectiveSupportedFlags))), unremovableTools: Set(preflight.unremovableTools),
                                                apiKeySource: preflight.apiKeySource ?? "none", worktreePath: workingDirectory)
         let configuration = AgentRunConfiguration(claudePath: tools.claude, invocation: invocation, supportedFlags: Set(preflight.effectiveSupportedFlags),
                                                   expectation: expectation, workingDirectory: workingDirectory, baseEnvironment: agentBaseEnvironment,

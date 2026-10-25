@@ -6,7 +6,9 @@
 //  "init") against what we asked for: acceptEdits, exactly the expected
 //  tools (plus whatever the preflight probe showed can't be removed), no
 //  MCP servers, no plugins, the same apiKeySource as the probe and the
-//  worktree as cwd. Any failure — or no init within 30 s — and the app
+//  worktree as cwd. Any plugin at all fails it: AgentInvocation switches
+//  them off, and one that still loads could add tools, hooks or MCP
+//  servers. Any failure — or no init within 30 s — and the app
 //  SIGKILLs the agent before it does anything.
 //
 
@@ -45,7 +47,7 @@ public enum AgentInitFailure: Equatable, Sendable, CustomStringConvertible {
         case .permissionMode(let found): return "permissionMode is \(found ?? "missing")"
         case .tools(let unexpected, let missing): return "tools differ (unexpected: \(unexpected.joined(separator: ", ")); missing: \(missing.joined(separator: ", ")))"
         case .mcpServers(let names): return "MCP servers loaded: \(names.joined(separator: ", "))"
-        case .plugins(let names): return "plugins loaded: \(names.joined(separator: ", "))"
+        case .plugins(let names): return "plugins loaded: \(names.joined(separator: ", ")) (Clicky's coding agent only runs with no plugins; if this repo's .claude/settings.json turns plugins on, remove them there)"
         case .apiKeySource(let found): return "apiKeySource is \(found ?? "missing")"
         case .workingDirectory(let found): return "cwd is \(found ?? "missing")"
         }
@@ -93,6 +95,15 @@ public enum AgentInitValidator {
             if let name = entry as? String { return name }
             if let object = entry as? [String: Any], let name = object["name"] as? String { return name }
             return "<unnamed>"
+        }
+    }
+
+    /// "name@marketplace" per plugin entry (its "source"; the name when there is none).
+    public static func pluginSources(_ value: Any?) -> [String] {
+        guard let entries = value as? [Any] else { return namedEntries(value) }
+        return entries.map { entry in
+            if let object = entry as? [String: Any] { return (object["source"] as? String) ?? (object["name"] as? String) ?? "<unnamed>" }
+            return (entry as? String) ?? "<unnamed>"
         }
     }
 

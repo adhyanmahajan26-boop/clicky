@@ -604,12 +604,61 @@ private final class MockStepRunner: OutwardStepRunner {
         #expect(argv.contains("--disallowedTools=mcp__*"))
         #expect(value(after: "--tools", in: argv) == "Read,Edit,Write,Glob,Grep")
         #expect(value(after: "--append-system-prompt-file", in: argv) == "/Users/me/.clicky/code/task1/ctx/rules.md")
-        #expect(value(after: "--setting-sources", in: argv) == "user,project")
+        #expect(value(after: "--setting-sources", in: argv) == "project")
         #expect(value(after: "--session-id", in: argv) == "11111111-2222-3333-4444-555555555555")
         #expect(!argv.contains("--resume"))
         let resumed = invocation(session: .resume(identifier: "abc")).arguments
         #expect(value(after: "--resume", in: resumed) == "abc" && !resumed.contains("--session-id"))
         #expect(value(after: "--json-schema", in: argv) == AgentInvocation.outputJSONSchema)
+    }
+
+    /// The plugin isolation: no "user" setting source, every known plugin
+    /// switched off in --settings, skills off, and still no forbidden token.
+    @Test func argvSwitchesPluginsOff() throws {
+        let variants = [invocation(), invocation(bash: true), invocation(ownership: .external, bash: true), invocation(readOnly: true), invocation(session: .resume(identifier: "abc"))]
+        for agentInvocation in variants {
+            let argv = agentInvocation.arguments
+            let sources = try #require(value(after: "--setting-sources", in: argv))
+            #expect(!sources.split(separator: ",").contains("user"), "\(sources)")
+            #expect(argv.contains("--disable-slash-commands"))
+            #expect(argv.contains("--strict-mcp-config"))
+            let agentSettings = try settings(of: agentInvocation)
+            let enabledPlugins = try #require(agentSettings["enabledPlugins"] as? [String: Bool])
+            #expect(enabledPlugins == ["cc-plugin-agents-md@builtin": false, "cc-plugin-telemetry@builtin": false, "cc-plugin-plugin-authoring@builtin": false])
+            #expect(try settings(of: agentInvocation)["disableAllHooks"] as? Bool == true)
+            #expect(AgentInvocation.forbiddenTokens(in: argv).isEmpty)
+        }
+        // Plugins the preflight probe found are switched off too.
+        var withProbeFindings = invocation(bash: true)
+        withProbeFindings.disabledPluginSources = AgentInvocation.builtinPluginSources + ["hyperframes@hyperframes"]
+        let probeFindingSettings = try settings(of: withProbeFindings)
+        let enabledPlugins = try #require(probeFindingSettings["enabledPlugins"] as? [String: Bool])
+        #expect(enabledPlugins["hyperframes@hyperframes"] == false && enabledPlugins.values.allSatisfy { !$0 })
+        // --disable-slash-commands is optional: an older CLI without it drops it (and says so).
+        var supported = Set(invocation().flagGroups.map(\.flag))
+        supported.remove("--disable-slash-commands")
+        let (argv, dropped) = invocation().arguments(supportedFlags: supported)
+        #expect(dropped == ["--disable-slash-commands"] && !argv.contains("--disable-slash-commands"))
+        #expect(invocation().missingRequiredFlags(supportedFlags: supported).isEmpty)
+    }
+
+    @Test func expectedInitToolsAddStructuredOutputOnlyWithJSONSchema() {
+        let allFlags = Set(invocation().flagGroups.map(\.flag))
+        #expect(invocation().expectedInitTools(supportedFlags: allFlags) == ["Read", "Edit", "Write", "Glob", "Grep", "StructuredOutput"])
+        #expect(invocation().expectedInitTools(supportedFlags: allFlags.subtracting(["--json-schema"])) == ["Read", "Edit", "Write", "Glob", "Grep"])
+        #expect(invocation(bash: true).expectedInitTools(supportedFlags: allFlags) == ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "StructuredOutput"])
+    }
+
+    @Test func preflightProbeUsesTheSameIsolation() throws {
+        let probe = ClaudeArgs.preflightProbeArguments(disabling: AgentInvocation.builtinPluginSources + ["x@y"])
+        #expect(value(after: "--setting-sources", in: probe) == "")
+        #expect(probe.contains("--disable-slash-commands") && probe.contains("--strict-mcp-config"))
+        let probeSettingsJSON = try #require(value(after: "--settings", in: probe))
+        let probeSettings = try #require(JSONSerialization.jsonObject(with: Data(probeSettingsJSON.utf8)) as? [String: Any])
+        #expect(probeSettings["disableAllHooks"] as? Bool == true)
+        #expect((probeSettings["enabledPlugins"] as? [String: Bool])?["x@y"] == false)
+        #expect(!ClaudeArgs.preflightProbeArguments(disabling: [], disablesSkills: false).contains("--disable-slash-commands"))
+        #expect(AgentInvocation.forbiddenTokens(in: probe).isEmpty)
     }
 
     @Test func dropsUnsupportedFlagsAndReportsThem() {
@@ -635,10 +684,11 @@ private final class MockStepRunner: OutwardStepRunner {
         #expect(invocation(bash: true).tools == ["Read", "Edit", "Write", "Glob", "Grep", "Bash"])
         let external = invocation(ownership: .external, bash: true)
         #expect(!external.tools.contains("Bash"))
-        #expect(external.settingSources == "user")
+        // Never the user's settings (their plugins, skills and allow rules).
+        #expect(external.settingSources == "")
         // Project settings could widen the Bash allowlist: never loaded with Bash on.
-        #expect(invocation(bash: true).settingSources == "user")
-        #expect(invocation().settingSources == "user,project")
+        #expect(invocation(bash: true).settingSources == "")
+        #expect(invocation().settingSources == "project")
         #expect(invocation(readOnly: true, bash: true).tools == ["Read", "Grep", "Glob"])
         #expect(AgentInvocation.Ownership.forPullRequest(authorLogin: "Me", viewerLogin: "me") == .own)
         #expect(AgentInvocation.Ownership.forPullRequest(authorLogin: nil, viewerLogin: "me") == .own)
@@ -757,10 +807,23 @@ private final class MockStepRunner: OutwardStepRunner {
         #expect(failures { $0["tools"] = ["Read"] } == [.tools(unexpected: [], missing: ["Edit", "Glob", "Grep", "TodoWrite", "Write"])])
         #expect(failures { $0["mcp_servers"] = [["name": "github", "status": "connected"]] } == [.mcpServers(["github"])])
         #expect(failures { $0["plugins"] = [["name": "evil", "path": "/x"]] } == [.plugins(["evil"])])
+        // Any plugin is rejected: the user's, a built-in one that wasn't switched off, or an unreadable list.
+        #expect(failures { $0["plugins"] = [["name": "hyperframes", "path": "/Users/me/.claude/plugins/cache/hyperframes", "source": "hyperframes@hyperframes"]] } == [.plugins(["hyperframes"])])
+        #expect(failures { $0["plugins"] = [["name": "cc-plugin-telemetry", "path": "builtin", "source": "cc-plugin-telemetry@builtin"]] } == [.plugins(["cc-plugin-telemetry"])])
+        #expect(failures { $0["plugins"] = "hyperframes" } == [.plugins(["<unreadable>"])])
+        #expect(failures { $0["plugins"] = [] }.isEmpty)
+        #expect(failures { $0["mcp_servers"] = [["name": "github", "status": "connected"]]; $0["plugins"] = [["name": "p"]]; $0["tools"] = ["Read", "Edit", "Write", "Glob", "Grep", "TodoWrite", "mcp__github__x"] }
+                == [.tools(unexpected: ["mcp__github__x"], missing: []), .mcpServers(["github"]), .plugins(["p"])])
         #expect(failures { $0["apiKeySource"] = "ANTHROPIC_API_KEY" } == [.apiKeySource(found: "ANTHROPIC_API_KEY")])
         #expect(failures { $0["cwd"] = "/tmp/clicky-wt/other" } == [.workingDirectory(found: "/tmp/clicky-wt/other")])
         #expect(failures { $0["subtype"] = "result" } == [.notAnInitEvent])
         #expect(failures { $0.removeValue(forKey: "permissionMode") } == [.permissionMode(found: nil)])
+    }
+
+    @Test func readsPluginSources() {
+        let plugins: [Any] = [["name": "hyperframes", "source": "hyperframes@hyperframes"], ["name": "bare"], "named"]
+        #expect(AgentInitValidator.pluginSources(plugins) == ["hyperframes@hyperframes", "bare", "named"])
+        #expect(AgentInitValidator.pluginSources(nil).isEmpty)
     }
 }
 
