@@ -23,12 +23,93 @@ private func textElement(_ label: String?, value: String? = nil, pid: pid_t, win
 
 // MARK: - Ask-time enhanced UI
 
-@Test func askTimeEnablesListedAppsUntilWebContentWasSeen() {
-    #expect(EnhancedUserInterfacePolicy.askTimeAction(isListed: true, isVerified: false, attemptCount: 0) == .enableAndWait)
-    #expect(EnhancedUserInterfacePolicy.askTimeAction(isListed: true, isVerified: false, attemptCount: 2) == .enableAndWait)
-    #expect(EnhancedUserInterfacePolicy.askTimeAction(isListed: true, isVerified: false, attemptCount: 3) == .none)
-    #expect(EnhancedUserInterfacePolicy.askTimeAction(isListed: true, isVerified: true, attemptCount: 0) == .none)
-    #expect(EnhancedUserInterfacePolicy.askTimeAction(isListed: false, isVerified: false, attemptCount: 0) == .none)
+private typealias Activation = EnhancedUserInterfacePolicy.WebContentActivation
+private let t0 = Date(timeIntervalSince1970: 1_000)
+
+@Test func askTimeWritesUnlessAWriteIsStillBeingBuilt() {
+    var activation = Activation()
+    #expect(activation.shouldWriteAtAsk(at: t0))
+    #expect(activation.askWaitSeconds(at: t0) == EnhancedUserInterfacePolicy.askTimeWaitSeconds)
+    activation.recordWrite(at: t0)
+    // Chrome needs ~2 s: an ask 1 s later waits for that write, it doesn't restart it.
+    #expect(!activation.shouldWriteAtAsk(at: t0.addingTimeInterval(1)))
+    #expect(activation.isWritePending(at: t0.addingTimeInterval(1)))
+    // Long after the cycle: write again.
+    #expect(activation.shouldWriteAtAsk(at: t0.addingTimeInterval(Activation.followUpDuration + 1)))
+}
+
+@Test func followUpPollsRewritesOnceAndReportsTheReadyPage() {
+    var activation = Activation()
+    activation.recordWrite(at: t0)
+    #expect(activation.followUpStep(webContentState: .noWebArea, at: t0.addingTimeInterval(0.3)) == .poll(after: Activation.pollInterval))
+    // Launch-time write lost: nothing by 3 s → write again, once.
+    #expect(activation.followUpStep(webContentState: .noWebArea, at: t0.addingTimeInterval(3.1)) == .rewrite)
+    activation.recordWrite(at: t0.addingTimeInterval(3.1), isRewrite: true)
+    #expect(activation.followUpStep(webContentState: .emptyWebArea, at: t0.addingTimeInterval(3.4)) == .poll(after: Activation.pollInterval))
+    #expect(activation.followUpStep(webContentState: .ready, at: t0.addingTimeInterval(5.2)) == .ready)
+    #expect(activation.lastReadyAt == t0.addingTimeInterval(5.2))
+    #expect(!activation.isWritePending(at: t0.addingTimeInterval(5.3)))
+}
+
+@Test func repeatedEmptyCyclesBackOffForAWhileNotForever() {
+    var activation = Activation()
+    var clock = t0
+    for _ in 0..<Activation.failedCyclesBeforeBackoff {
+        activation.recordWrite(at: clock)
+        clock = clock.addingTimeInterval(Activation.followUpDuration)
+        #expect(activation.followUpStep(webContentState: .noWebArea, at: clock) == .gaveUp)
+        clock = clock.addingTimeInterval(1)
+    }
+    // Backed off: asks don't wait (they still write).
+    #expect(activation.isBackedOff(at: clock))
+    #expect(activation.askWaitSeconds(at: clock) == 0)
+    #expect(activation.shouldWriteAtAsk(at: clock))
+    // Time-based: after the backoff the ask waits again.
+    let later = clock.addingTimeInterval(Activation.backoffSeconds + 1)
+    #expect(!activation.isBackedOff(at: later))
+    #expect(activation.askWaitSeconds(at: later) == EnhancedUserInterfacePolicy.askTimeWaitSeconds)
+    // Coming forward again lifts it at once.
+    activation.recordWrite(at: clock, clearsBackoff: true)
+    #expect(!activation.isBackedOff(at: clock))
+}
+
+@Test func followUpWithoutAWriteStops() {
+    var activation = Activation()
+    #expect(activation.followUpStep(webContentState: .noWebArea, at: t0) == .gaveUp)
+}
+
+/// Chrome 155 as axfind saw it (2026-10-25): the page hangs off six nested
+/// AXGroups under the window; buttons are named by aria-label (AXDescription).
+@Test func walkerReachesChromePageButtonsUnderTheNestedGroups() throws {
+    let windowFrame = CGRect(x: 400, y: 300, width: 900, height: 600)
+    let contentFrame = CGRect(x: 400, y: 332, width: 900, height: 568)
+    let webArea = MockNode(role: "AXWebArea", title: "AX Probe", frame: contentFrame, children: [
+        MockNode(role: "AXHeading", title: "Probe heading", frame: CGRect(x: 420, y: 350, width: 300, height: 37)),
+        MockNode(role: "AXButton", desc: "Share this page", frame: CGRect(x: 428, y: 439, width: 25, height: 22)),
+        MockNode(role: "AXButton", title: "Add to cart", frame: CGRect(x: 457, y: 439, width: 90, height: 22)),
+        MockNode(role: "AXLink", desc: "Read the docs", frame: CGRect(x: 551, y: 441, width: 100, height: 18)),
+    ])
+    var content: MockNode = webArea
+    for _ in 0..<6 { content = MockNode(role: "AXGroup", frame: contentFrame, children: [content]) }
+    let window = MockNode(role: "AXWindow", title: "AX Probe", frame: windowFrame, children: [
+        MockNode(role: "AXButton", desc: "close", frame: CGRect(x: 408, y: 308, width: 16, height: 16)), content,
+    ])
+    let app = MockNode(role: "AXApplication", title: "Google Chrome", pid: 501, children: [window])
+    let ax = MockAXQuerying(apps: [app])
+    #expect(EnhancedUserInterfacePolicy.webContentState(ax: ax, applicationNode: ax.applicationNode(processIdentifier: 501)) == .ready)
+
+    let display = DisplayInfo(displayID: 1, localizedName: "Main", boundsCG: CGRect(x: 0, y: 0, width: 3440, height: 1440),
+                              visibleCG: CGRect(x: 0, y: 0, width: 3440, height: 1440),
+                              frameAppKit: CGRect(x: 0, y: 0, width: 3440, height: 1440), isMain: true)
+    let stack = WindowStack(windows: [WindowInfo(windowID: 9, processIdentifier: 501, layer: 0, boundsCG: windowFrame, alpha: 1,
+                                                 ownerName: "Google Chrome", title: "AX Probe")],
+                            ownProcessIdentifier: 1, displays: [display])
+    var published: [GroundingElement] = []
+    try AXEnumerator.walk(request: AXEnumerationRequest(processIdentifier: 501, applicationName: "Google Chrome", scope: .frontApplication,
+                                                        maximumDepth: 40, allowsValues: true),
+                          ax: ax, windowStack: stack, shouldStop: { false }, publish: { published.append($0) })
+    let labels = Set(published.compactMap(\.label))
+    #expect(labels.isSuperset(of: ["Probe heading", "Share this page", "Add to cart", "Read the docs"]))
 }
 
 private func chromeTree(webAreaChildren: [MockNode]) -> (app: MockNode, webArea: MockNode) {
@@ -75,6 +156,8 @@ private func chromeTree(webAreaChildren: [MockNode]) -> (app: MockNode, webArea:
 }
 
 @Test func waitForWebContentGivesUpAtTheDeadline() {
+    // The ask-time wait is now 0.6 s (Chrome needs ~2 s; the rest is polled in the background).
+    #expect(EnhancedUserInterfacePolicy.askTimeWaitSeconds == 0.6)
     let (app, _) = chromeTree(webAreaChildren: [])
     let ax = MockAXQuerying(apps: [app])
     var clock = Date(timeIntervalSince1970: 0)

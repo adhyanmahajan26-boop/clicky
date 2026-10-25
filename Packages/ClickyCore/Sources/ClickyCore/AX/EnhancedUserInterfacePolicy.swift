@@ -74,26 +74,120 @@ public enum EnhancedUserInterfacePolicy {
     // MARK: - Ask time
 
     /// Setting the flag only when an app is activated misses cases seen live
-    /// (turn 20261025-161216-42555df1: a second Chrome instance launched
-    /// frontmost had no web content in its tree on the first ask): the
-    /// write can land before the app is ready for it and its result isn't
-    /// checked, the window can come forward without an activation change,
-    /// and Chromium builds the web tree a moment after the flag is set. So
-    /// on each ask the frontmost listed app is checked until its web
-    /// content shows up once (up to `maximumAskAttempts` asks per pid).
-    public static let maximumAskAttempts = 3
-    public static let askTimeWaitSeconds = 0.25
+    /// (turns 20261025-161216-42555df1, -165812-50f54d40: a frontmost Chrome
+    /// had only its 15 toolbar elements on the first and second ask). Measured
+    /// with a throwaway Chrome 155 and axfind (2026-10-25):
+    ///  - a write sent while Chrome is still launching is lost: no AXWebArea
+    ///    10 s later;
+    ///  - AXManualAccessibility on the app element alone never builds the web
+    ///    tree in Chrome (8 s+ polled), unlike Electron;
+    ///  - AXEnhancedUserInterface false → true on a running Chrome builds it
+    ///    after ~2.0 s (Chromium delays enabling, so window managers that
+    ///    flip the flag around a window move don't switch accessibility on).
+    /// The old 250 ms ask-time wait could never see it, and after three such
+    /// asks per pid the check gave up for good. Now: every ask checks whether
+    /// the page is in the tree (cheap); if not it (re)writes the flag (false
+    /// → true, so Chromium sees a change) unless a write is still pending,
+    /// waits up to `askTimeWaitSeconds`, and keeps polling in the background
+    /// (`WebContentActivation`) so the next ask has the page. Apps whose
+    /// window shows no web content after repeated tries are backed off for a
+    /// while (time-based, not a per-pid ask count).
+    public static let askTimeWaitSeconds = 0.6
     public static let askTimePollSeconds = 0.025
 
-    public enum AskTimeAction: Sendable, Equatable {
-        case none
-        /// Set the flag (again) and wait up to `askTimeWaitSeconds` for web content.
-        case enableAndWait
-    }
+    /// The background follow-up after a flag write, per app. Pure: the clock
+    /// is passed in.
+    public struct WebContentActivation: Sendable, Equatable {
+        /// Measured Chromium delay between the flag and the page's tree.
+        public static let chromiumEnableDelay: TimeInterval = 2.0
+        /// Write again (false → true) once if nothing showed up by then.
+        public static let rewriteAfter: TimeInterval = 3.0
+        /// Background polling per write cycle.
+        public static let followUpDuration: TimeInterval = 7.0
+        public static let pollInterval: TimeInterval = 0.25
+        /// Failed cycles in a row before the app is backed off.
+        public static let failedCyclesBeforeBackoff = 2
+        public static let backoffSeconds: TimeInterval = 60
 
-    public static func askTimeAction(isListed: Bool, isVerified: Bool, attemptCount: Int) -> AskTimeAction {
-        guard isListed, !isVerified, attemptCount < maximumAskAttempts else { return .none }
-        return .enableAndWait
+        public enum FollowUpStep: Sendable, Equatable {
+            /// The page is in the tree.
+            case ready
+            /// Check again after this many seconds.
+            case poll(after: TimeInterval)
+            /// Write the flag again (then `recordWrite(isRewrite: true)`).
+            case rewrite
+            /// Nothing this cycle; stop polling.
+            case gaveUp
+        }
+
+        public private(set) var cycleStartedAt: Date?
+        public private(set) var didRewrite = false
+        public private(set) var failedCycles = 0
+        public private(set) var backoffUntil: Date?
+        public private(set) var lastReadyAt: Date?
+
+        public init() {}
+
+        /// A cycle is running: a write was sent less than `followUpDuration` ago.
+        public func isWritePending(at now: Date) -> Bool {
+            guard let cycleStartedAt else { return false }
+            return now.timeIntervalSince(cycleStartedAt) < Self.followUpDuration
+        }
+
+        public func isBackedOff(at now: Date) -> Bool {
+            backoffUntil.map { now < $0 } ?? false
+        }
+
+        /// At ask time the page wasn't in the tree: write the flag now?
+        public func shouldWriteAtAsk(at now: Date) -> Bool {
+            !isWritePending(at: now)
+        }
+
+        /// How long the ask waits for the page (0 while backed off).
+        public func askWaitSeconds(at now: Date) -> TimeInterval {
+            isBackedOff(at: now) ? 0 : EnhancedUserInterfacePolicy.askTimeWaitSeconds
+        }
+
+        /// A flag write was sent. A fresh write (activation, ask) starts a new
+        /// cycle; an activation (`clearsBackoff`) also lifts a backoff.
+        public mutating func recordWrite(at now: Date, isRewrite: Bool = false, clearsBackoff: Bool = false) {
+            if clearsBackoff { backoffUntil = nil; failedCycles = 0 }
+            if isRewrite {
+                didRewrite = true
+            } else {
+                cycleStartedAt = now
+                didRewrite = false
+            }
+        }
+
+        /// The page was seen in the tree (at ask time or in the background).
+        public mutating func recordReady(at now: Date) {
+            cycleStartedAt = nil
+            didRewrite = false
+            failedCycles = 0
+            backoffUntil = nil
+            lastReadyAt = now
+        }
+
+        /// One background poll result → what to do next.
+        public mutating func followUpStep(webContentState: WebContentState, at now: Date) -> FollowUpStep {
+            if webContentState == .ready {
+                recordReady(at: now)
+                return .ready
+            }
+            guard let cycleStartedAt else { return .gaveUp }
+            let elapsed = now.timeIntervalSince(cycleStartedAt)
+            if elapsed >= Self.followUpDuration {
+                self.cycleStartedAt = nil
+                failedCycles += 1
+                if failedCycles >= Self.failedCyclesBeforeBackoff {
+                    backoffUntil = now.addingTimeInterval(Self.backoffSeconds)
+                }
+                return .gaveUp
+            }
+            if !didRewrite, elapsed >= Self.rewriteAfter { return .rewrite }
+            return .poll(after: min(Self.pollInterval, Self.followUpDuration - elapsed))
+        }
     }
 
     public enum WebContentState: Sendable, Equatable {

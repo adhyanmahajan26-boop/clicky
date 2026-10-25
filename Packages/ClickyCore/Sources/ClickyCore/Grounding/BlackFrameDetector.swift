@@ -13,6 +13,15 @@
 //  least 60 % of the window area is black the frame is bad and the caller
 //  captures again. Pure: the app supplies the grey image and window rects.
 //
+//  Each display is judged on its own (FrameVerdict): turn
+//  20261025-165737-d8803941 had every window black on the 3440x1440 main
+//  display while the two 4K side displays were fine, and summed over all
+//  three (4K displays weigh ~1.7x per display in native pixels) only ~20 %
+//  of the window area was black, so no retry fired. The window rects come
+//  straight from CGWindowListCopyWindowInfo, read when the frame is judged
+//  (`windowRectsCG(fromWindowList:…)`): it lists other apps' windows even
+//  when ScreenCaptureKit can't show their content.
+//
 
 import CoreGraphics
 import Foundation
@@ -100,6 +109,59 @@ public enum BlackFrameDetector {
             }
         }
         return verdict
+    }
+
+    /// All displays of one capture, each judged on its own: the frame is bad
+    /// when any display's app windows are black (the black-out can hit one
+    /// display only).
+    public struct FrameVerdict: Sendable, Equatable {
+        public var displayVerdicts: [Verdict]
+
+        public init(displayVerdicts: [Verdict]) {
+            self.displayVerdicts = displayVerdicts
+        }
+
+        public var isBlackFrame: Bool { displayVerdicts.contains(where: \.isBlackFrame) }
+        public var blackDisplayCount: Int { displayVerdicts.filter(\.isBlackFrame).count }
+        /// Displays with app windows big enough to judge.
+        public var judgedDisplayCount: Int { displayVerdicts.filter { $0.judgedWindowCount > 0 }.count }
+        /// No display had an app window to judge.
+        public var hasNoAppWindows: Bool { judgedDisplayCount == 0 }
+        /// The black displays added up (all displays when none is black).
+        public var summary: Verdict {
+            let black = displayVerdicts.filter(\.isBlackFrame)
+            return (black.isEmpty ? displayVerdicts : black).reduce(Verdict.empty, +)
+        }
+    }
+
+    /// App windows of a `CGWindowListCopyWindowInfo(.optionOnScreenOnly,
+    /// kCGNullWindowID)` list on one display, front to back, in CG global
+    /// points clipped to the display: layer 0, alpha > 0, not Clicky's pid,
+    /// at least 40x40 pt. Dictionaries without a pid, layer or bounds are
+    /// skipped.
+    public static func windowRectsCG(fromWindowList windowList: [[String: Any]], ownProcessIdentifier: pid_t,
+                                     displayBoundsCG: CGRect) -> [CGRect] {
+        windowList.compactMap { windowInfo -> CGRect? in
+            guard let processIdentifier = (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let layer = (windowInfo[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary,
+                  let boundsCG = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary) else { return nil }
+            let alpha = (windowInfo[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            guard layer == 0, alpha > 0, processIdentifier != ownProcessIdentifier,
+                  boundsCG.width >= 40, boundsCG.height >= 40 else { return nil }
+            let visibleCG = boundsCG.intersection(displayBoundsCG)
+            guard !visibleCG.isNull, visibleCG.width > 0, visibleCG.height > 0 else { return nil }
+            return visibleCG
+        }
+    }
+
+    /// CG rects (on the capture's region) → the capture's native px.
+    public static func windowRectsNativePx(windowRectsCG: [CGRect], frame: CaptureFrame) -> [CGRect] {
+        windowRectsCG.compactMap { rectCG -> CGRect? in
+            let visibleCG = rectCG.intersection(frame.regionCG)
+            guard !visibleCG.isNull, visibleCG.width > 0, visibleCG.height > 0 else { return nil }
+            return OCRCoveragePlanner.nativePxRect(fromCG: visibleCG, frame: frame)
+        }
     }
 
     /// The app windows of `windowStack` on a capture, front to back, in its

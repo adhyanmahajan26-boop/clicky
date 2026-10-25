@@ -22,6 +22,12 @@
 //  AXEnhancedUserInterface while frontmost; and a warning (plus a turn.json
 //  flag) fires when key-up p95 over 20 turns passes 150 ms warm / 300 ms cold.
 //
+//  Capture warm-up: right after launch (and after a display change or wake)
+//  ScreenCaptureKit can return every other app's window solid black. Throwaway
+//  captures run in the background until one passes the black check
+//  (CaptureWarmUp); an ask waits up to 1 s for a warm-up still running, and
+//  a black frame at ask time is still retaken (captureCheckingForBlackWindows).
+//
 
 import AppKit
 import ClickyCore
@@ -154,6 +160,11 @@ final class GroundingCoordinator {
     private var latencyAlarm = GroundingLatencyAlarm()
     private var terminationObserver: NSObjectProtocol?
     private var shareableContentInvalidationObservers: [NSObjectProtocol] = []
+    private var captureWarmUpObservers: [NSObjectProtocol] = []
+    private var captureWarmUp = CaptureWarmUp()
+    private var captureWarmUpTask: Task<Void, Never>?
+    /// How the last capture warm-up went (diagnostics / turn log).
+    private(set) var lastCaptureWarmUpDescription: String?
     /// Per display in the last OCR pass: tiles skipped / planned regions.
     private(set) var lastOCRCoverageStats: [String] = []
     /// The measured cap for the current model (tier probe), if any.
@@ -179,7 +190,23 @@ final class GroundingCoordinator {
     func startBackgroundServices() {
         guard terminationObserver == nil else { return }
         _ = axObserverHub
+        // A page that showed up after the ask-time wait (Chrome takes ~2 s):
+        // the next ask walks the app afresh instead of reusing the toolbar.
+        enhancedUserInterfaceController.onWebContentReady = { [weak self] processIdentifier, _ in
+            self?.axWalkCache.apply(.applicationChanged(processIdentifier))
+        }
         enhancedUserInterfaceController.start()
+        startCaptureWarmUp(reason: "launch")
+        let restartWarmUp: @Sendable (Notification) -> Void = { [weak self] notification in
+            let reason = notification.name.rawValue
+            Task { @MainActor in self?.startCaptureWarmUp(reason: reason) }
+        }
+        captureWarmUpObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: restartWarmUp))
+        for notificationName in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            captureWarmUpObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                forName: notificationName, object: nil, queue: .main, using: restartWarmUp))
+        }
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
         ) { [weak self] notification in
@@ -287,10 +314,11 @@ final class GroundingCoordinator {
     private func makeFullSnapshot(awaitsOCR: Bool) async throws -> Snapshot {
         let displays = ScreenTopology.current()
         let windowStack = WindowListReader.read(displays: displays)
-        let enhancedUINote = await prepareFrontmostApplicationForAsk()
+        let enhancedUINote = await prepareFrontmostApplicationForAsk()?.note
         let axWalks = startAXWalks(windowStack: windowStack)
 
-        let (screenCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows(windowStack: windowStack) { options in
+        await waitForCaptureWarmUp()
+        let (screenCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows { options in
             try await ScreenCaptureService.captureAllScreens(options: options)
         }
 
@@ -361,14 +389,18 @@ final class GroundingCoordinator {
         var refreshedSnapshot = snapshot
         let windowStack = WindowListReader.read(displays: ScreenTopology.current())
         refreshedSnapshot.windowStack = windowStack
-        let enhancedUINote = await prepareFrontmostApplicationForAsk()
-        if let enhancedUINote { lastAXWalkStats.insert(enhancedUINote, at: 0) }
+        let enhancedUIResult = await prepareFrontmostApplicationForAsk()
+        if let enhancedUINote = enhancedUIResult?.note { lastAXWalkStats.insert(enhancedUINote, at: 0) }
         let frontApplicationWalks = startAXWalks(windowStack: windowStack, frontApplicationOnly: true)
         let walksStart = DispatchTime.now()
+        // The page just appeared: the prewarm's copy is toolbar-only, so give
+        // the fresh walk of the page time to finish.
+        let frontWalkBudgetMilliseconds = enhancedUIResult?.pageBecameReady == true ? 300 : 60
 
         guard let previousCapture = snapshot.screenCaptures.first(where: { $0.displayID == cursorDisplay.displayID }) else { return snapshot }
         let mainBoundsCG = ScreenTopology.current().first(where: \.isMain)?.boundsCG ?? cursorDisplay.boundsCG
-        let (newCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows(windowStack: windowStack) { options in
+        await waitForCaptureWarmUp()
+        let (newCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows { options in
             [try await ScreenCaptureService.captureScreen(
                 display: cursorDisplay,
                 screenNumber: previousCapture.screenNumber,
@@ -384,11 +416,12 @@ final class GroundingCoordinator {
         lastTurnStageMilliseconds["capture"] = (Double(DispatchTime.now().uptimeNanoseconds - walksStart.uptimeNanoseconds) / 1e6).rounded()
 
         // Front app AX: fresh when its walk finishes within 60 ms of starting
-        // (ran in parallel with the capture); otherwise the prewarm's copy.
+        // (300 ms when the page just appeared; ran in parallel with the
+        // capture); otherwise the prewarm's copy.
         var freshFrontElements: [GroundingElement] = []
         var refreshedProcessIdentifiers = Set<pid_t>()
         for walk in frontApplicationWalks {
-            let walkResult = walk.elements(waitingUntil: walksStart + .milliseconds(60))
+            let walkResult = walk.elements(waitingUntil: walksStart + .milliseconds(frontWalkBudgetMilliseconds))
             if walkResult.didFinish {
                 freshFrontElements += walkResult.elements
                 refreshedProcessIdentifiers.insert(walk.request.processIdentifier)
@@ -438,64 +471,144 @@ final class GroundingCoordinator {
 
     // MARK: - Black frames
 
-    /// Runs `capture`; when the on-screen app windows came back near-uniform
-    /// black (BlackFrameDetector: ≥ 60 % of their area) while the window
-    /// list says they're there, drops the cached shareable content and
-    /// captures again after 200 ms; if still black, once more with a fresh
-    /// SCShareableContent and a window-based SCContentFilter. The retry is
-    /// returned for turn.json (grounding.blackFrameRetry).
+    /// Runs `capture`; when any display's on-screen app windows came back
+    /// near-uniform black (BlackFrameDetector: ≥ 60 % of their area, judged
+    /// per display) drops the cached shareable content and captures again
+    /// after 200 ms; if still black, once more with a fresh
+    /// SCShareableContent and a window-based SCContentFilter. The window
+    /// rects come from CGWindowListCopyWindowInfo read at judging time, not
+    /// from SCShareableContent (which may not list other apps' windows in
+    /// the very state that blacks them out). The retry is returned for
+    /// turn.json (grounding.blackFrameRetry).
     private func captureCheckingForBlackWindows(
-        windowStack: WindowStack,
         capture: (ScreenCaptureService.Options) async throws -> [ScreenCapture]
     ) async throws -> (captures: [ScreenCapture], retry: TurnRecord.BlackFrameRetryEntry?) {
         let firstCaptures = try await capture(captureOptions)
-        let firstVerdict = await Self.blackFrameVerdict(of: firstCaptures, windowStack: windowStack)
+        let firstVerdict = await Self.blackFrameVerdict(of: firstCaptures)
         guard firstVerdict.isBlackFrame else { return (firstCaptures, nil) }
-        let firstFraction = (firstVerdict.blackFraction * 100).rounded() / 100
-        print("⚠️ Capture: \(firstVerdict.blackWindowCount)/\(firstVerdict.judgedWindowCount) app windows black (\(Int(firstFraction * 100))% of window area); recapturing")
+        let firstSummary = firstVerdict.summary
+        let firstFraction = (firstSummary.blackFraction * 100).rounded() / 100
+        print("⚠️ Capture: \(firstVerdict.blackDisplayCount)/\(firstVerdict.displayVerdicts.count) displays with black app windows (\(firstSummary.blackWindowCount)/\(firstSummary.judgedWindowCount) windows, \(Int(firstFraction * 100))% of their area); recapturing")
+        func entry(count: Int, result: String) -> TurnRecord.BlackFrameRetryEntry {
+            TurnRecord.BlackFrameRetryEntry(count: count, result: result, firstBlackFraction: firstFraction,
+                                            blackDisplays: firstVerdict.blackDisplayCount, source: "cgWindowList",
+                                            warmUp: lastCaptureWarmUpDescription)
+        }
 
         await ShareableContentCache.shared.invalidate()
         try? await Task.sleep(nanoseconds: 200_000_000)
         let secondCaptures = try await capture(captureOptions)
-        let secondVerdict = await Self.blackFrameVerdict(of: secondCaptures, windowStack: windowStack)
+        let secondVerdict = await Self.blackFrameVerdict(of: secondCaptures)
         if !secondVerdict.isBlackFrame {
             print("✅ Capture: black windows gone after 1 retry")
-            return (secondCaptures, TurnRecord.BlackFrameRetryEntry(count: 1, result: "recovered", firstBlackFraction: firstFraction))
+            return (secondCaptures, entry(count: 1, result: "recovered"))
         }
 
         var freshOptions = captureOptions
         freshOptions.forcesFreshContentAndWindowFilter = true
         await ShareableContentCache.shared.invalidate()
         let thirdCaptures = try await capture(freshOptions)
-        let thirdVerdict = await Self.blackFrameVerdict(of: thirdCaptures, windowStack: windowStack)
+        let thirdVerdict = await Self.blackFrameVerdict(of: thirdCaptures)
         let result = thirdVerdict.isBlackFrame ? "stillBlack" : "recoveredFreshFilter"
         print("\(thirdVerdict.isBlackFrame ? "⚠️" : "✅") Capture: after a fresh SCShareableContent + filter: \(result)")
-        return (thirdCaptures, TurnRecord.BlackFrameRetryEntry(count: 2, result: result, firstBlackFraction: firstFraction))
+        if thirdVerdict.isBlackFrame { startCaptureWarmUp(reason: "stillBlack") }
+        return (thirdCaptures, entry(count: 2, result: result))
     }
 
-    /// All captures' app windows judged together (off the main actor).
-    nonisolated private static func blackFrameVerdict(of captures: [ScreenCapture], windowStack: WindowStack) async -> BlackFrameDetector.Verdict {
-        let inputs = captures.map { (image: $0.nativeImage, frame: $0.frame) }
-        return await Task.detached(priority: .userInitiated) {
-            inputs.reduce(BlackFrameDetector.Verdict.empty) { verdict, input in
-                let windowRects = BlackFrameDetector.windowRectsNativePx(windowStack: windowStack, frame: input.frame)
-                guard !windowRects.isEmpty, let gray = GrayImage(cgImage: input.image) else { return verdict }
-                return verdict + BlackFrameDetector.analyze(gray: gray, windowRectsNativePx: windowRects)
-            }
+    /// Each capture's app windows judged on their own display (off the main
+    /// actor), against the CG window list as it is now.
+    nonisolated private static func blackFrameVerdict(of captures: [ScreenCapture]) async -> BlackFrameDetector.FrameVerdict {
+        await blackFrameVerdict(of: captures.map { (image: $0.nativeImage, frame: $0.frame) })
+    }
+
+    nonisolated private static func blackFrameVerdict(of inputs: [(image: CGImage, frame: CaptureFrame)]) async -> BlackFrameDetector.FrameVerdict {
+        await Task.detached(priority: .userInitiated) {
+            let windowList = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
+            let ownProcessIdentifier = getpid()
+            return BlackFrameDetector.FrameVerdict(displayVerdicts: inputs.map { input in
+                let windowRectsCG = BlackFrameDetector.windowRectsCG(fromWindowList: windowList, ownProcessIdentifier: ownProcessIdentifier,
+                                                                     displayBoundsCG: input.frame.display.boundsCG)
+                let windowRects = BlackFrameDetector.windowRectsNativePx(windowRectsCG: windowRectsCG, frame: input.frame)
+                guard !windowRects.isEmpty, let gray = GrayImage(cgImage: input.image) else { return .empty }
+                return BlackFrameDetector.analyze(gray: gray, windowRectsNativePx: windowRects)
+            })
         }.value
+    }
+
+    // MARK: - Capture warm-up
+
+    /// (Re)starts the background warm-up: throwaway captures every 1.5 s
+    /// (first after 0.5 s) until one passes the black check or there are no
+    /// app windows to judge, for at most 30 s.
+    func startCaptureWarmUp(reason: String) {
+        captureWarmUp.start(at: Date())
+        captureWarmUpTask?.cancel()
+        let startDate = Date()
+        captureWarmUpTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                switch self.captureWarmUp.nextStep(at: Date()) {
+                case .done:
+                    let description = "\(reason): \(self.captureWarmUp.description) in \(Int((Date().timeIntervalSince(startDate) * 1000).rounded())) ms"
+                    self.lastCaptureWarmUpDescription = description
+                    print("📸 Capture warm-up \(description)")
+                    return
+                case .wait(let seconds):
+                    try? await Task.sleep(nanoseconds: UInt64(max(0.01, seconds) * 1e9))
+                case .captureNow:
+                    let outcome = await self.warmUpCaptureOutcome()
+                    guard !Task.isCancelled else { return }
+                    if outcome == .black { print("📸 Capture warm-up (\(reason)): app windows still black") }
+                    self.captureWarmUp.record(outcome, at: Date())
+                }
+            }
+        }
+    }
+
+    /// An ask while the warm-up is still running waits for it (≤ 1 s).
+    private func waitForCaptureWarmUp() async {
+        guard captureWarmUp.isRunning, let captureWarmUpTask else { return }
+        let waitStart = Date()
+        _ = await awaitValue(of: captureWarmUpTask, timeoutNanoseconds: UInt64(CaptureWarmUp.askWaitSeconds * 1e9))
+        lastTurnStageMilliseconds["warmUpWait"] = (Date().timeIntervalSince(waitStart) * 1000).rounded()
+    }
+
+    /// One throwaway capture of every display (native pixels, nothing
+    /// encoded or kept), judged like an ask's. A fresh SCShareableContent
+    /// each time, and it isn't cached (it may describe the bad state).
+    private func warmUpCaptureOutcome() async -> CaptureWarmUp.Outcome {
+        guard CGPreflightScreenCaptureAccess() else { return .failed }
+        let displays = ScreenTopology.current()
+        guard !displays.isEmpty else { return .failed }
+        do {
+            let shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            var inputs: [(image: CGImage, frame: CaptureFrame)] = []
+            for (displayIndex, display) in displays.enumerated() {
+                let (image, regionCG) = try await ScreenCaptureService.captureNativeImage(of: display, includesOwnWindows: false,
+                                                                                          shareableContent: shareableContent)
+                let nativeSize = PixelSize(width: image.width, height: image.height)
+                inputs.append((image, CaptureFrame(display: display, screenNumber: displayIndex + 1, regionCG: regionCG, native: nativeSize, model: nativeSize)))
+            }
+            let verdict = await Self.blackFrameVerdict(of: inputs)
+            if verdict.isBlackFrame { return .black }
+            return verdict.hasNoAppWindows ? .noAppWindows : .good
+        } catch {
+            return .failed
+        }
     }
 
     // MARK: - AX
 
     /// P6.8 fix: the frontmost Chromium/Electron app's page must be in its
     /// tree on the first ask (EnhancedUserInterfaceController). When the
-    /// flag was (re)set, its cached walk (toolbar only) is dropped so the
-    /// walk that follows reads the page. Returns a note for turn.json.
-    private func prepareFrontmostApplicationForAsk() async -> String? {
+    /// flag was (re)set or the page was just seen for the first time, its
+    /// cached walk (toolbar only) is dropped so the walk that follows reads
+    /// the page. The result's note goes to turn.json.
+    private func prepareFrontmostApplicationForAsk() async -> EnhancedUserInterfaceController.AskTimeResult? {
         guard ax.isProcessTrusted(), let result = await enhancedUserInterfaceController.prepareFrontmostApplicationForAsk() else { return nil }
         axWalkCache.apply(.applicationChanged(result.processIdentifier))
         print("🌐 \(result.note)")
-        return result.note
+        return result
     }
 
     private func startAXWalks(windowStack: WindowStack, frontApplicationOnly: Bool = false) -> [PlannedAXWalk] {
