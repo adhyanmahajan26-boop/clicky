@@ -91,10 +91,21 @@ final class MarkController {
 
     /// Replaces the marks with this answer's (keeping the newest
     /// v2.marks.max) and starts tracking them.
+    /// Test-only (debug inbox "markRegion"): marks whose centre is outside this CG rect are dropped,
+    /// so a live test can never draw on the owner's other displays. Never set from a model answer.
+    static var debugAllowedRegionCG: CGRect?
+
+    private static func isAllowedByDebugRegion(_ mark: LiveScreenMark) -> Bool {
+        guard let region = debugAllowedRegionCG else { return true }
+        let isInside = region.contains(CGPoint(x: mark.rectCG.midX, y: mark.rectCG.midY))
+        if !isInside { print("🎯 MarkController: dropped a mark outside the debug region at \(mark.rectCG)") }
+        return isInside
+    }
+
     func show(_ newMarks: [LiveScreenMark], turnRecord: TurnRecord?) {
         tracker.stopAll()
         self.turnRecord = turnRecord
-        marks = Array(newMarks.suffix(ClickySettings.maximumMarks))
+        marks = Array(newMarks.filter(Self.isAllowedByDebugRegion).suffix(ClickySettings.maximumMarks))
         for markIndex in marks.indices where marks[markIndex].originalRectCG == nil { marks[markIndex].originalRectCG = marks[markIndex].rectCG }
         rebuild()
         tracker.track(marks)
@@ -114,6 +125,7 @@ final class MarkController {
 
     /// One mark, drawn as its words are spoken (the oldest goes past the max).
     func add(_ mark: LiveScreenMark) {
+        guard Self.isAllowedByDebugRegion(mark) else { return }
         var mark = mark
         if mark.originalRectCG == nil { mark.originalRectCG = mark.rectCG }
         marks.append(mark)

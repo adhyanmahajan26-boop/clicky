@@ -32,7 +32,7 @@ import Foundation
 
 public struct ResolvedTarget: Sendable {
     public enum Method: String, Sendable {
-        case element, elementResnapped, elementAlternative, span, textExact, textFuzzy, textCard, snapped, raw
+        case element, elementResnapped, elementAlternative, span, textExact, textFuzzy, textCard, imageCard, snapped, raw
     }
 
     public var frameCG: CGRect
@@ -91,11 +91,37 @@ public struct TargetResolver {
         case .element, .elementResnapped, .elementAlternative: isOCRText = resolved.elementID.flatMap { registry[$0] }?.source == .ocr
         default: isOCRText = false
         }
+        if !isOCRText, let elementID = resolved.elementID, let image = registry[elementID], image.role == .image,
+           let productFrame = productStack(around: image) {
+            // A box on a product photo covers the product: the photo plus the name / price / button
+            // stacked with it (a live run boxed only the photos of three product cards).
+            return ResolvedTarget(frameCG: productFrame, pointCG: productFrame.center, confidence: resolved.confidence, method: .imageCard,
+                                  elementID: elementID, displayID: resolved.displayID, label: resolved.label,
+                                  processIdentifier: resolved.processIdentifier, axNode: resolved.axNode)
+        }
         guard isOCRText, let (cardID, card) = containingCard(of: resolved.frameCG, displayID: resolved.displayID) else { return resolved }
         let cardFrame = lookup.refreshedFrame(of: card) ?? card.visibleFrameCG
         return ResolvedTarget(frameCG: cardFrame, pointCG: cardFrame.center, confidence: resolved.confidence, method: .textCard, elementID: cardID,
                               displayID: card.displayID, label: resolved.label ?? card.label, processIdentifier: card.processIdentifier,
                               axNode: card.axNode)
+    }
+
+    /// The photo plus the AX text / buttons stacked in its column (left edges within 8 pt, each
+    /// starting within 24 pt of the one above, none wider than the photo + 16 pt): a product card
+    /// whose container isn't an element. nil when nothing is stacked with it.
+    func productStack(around image: GroundingElement) -> CGRect? {
+        let imageFrame = image.visibleFrameCG
+        let candidates = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+            element.source == .accessibility && !element.isBehind && element.displayID == image.displayID
+                && element.processIdentifier == image.processIdentifier && [.text, .button, .link].contains(element.role)
+                && abs(element.visibleFrameCG.minX - imageFrame.minX) <= 8 && element.visibleFrameCG.width <= imageFrame.width + 16
+        }.map(\.visibleFrameCG).sorted { $0.minY < $1.minY }
+        var union = imageFrame
+        for frame in candidates where frame.minY >= union.maxY - 2 {
+            guard frame.minY - union.maxY <= 24 else { break }
+            union = union.union(frame)
+        }
+        return union == imageFrame ? nil : union
     }
 
     /// Roles that make a card-like box around text.

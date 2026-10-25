@@ -235,6 +235,13 @@ public enum MarkTagParser {
         guard let targetField = fields.first, let target = parseTarget(targetField) else { return nil }
         fields.removeFirst()
 
+        // ":screenN" right after the target ([MARK:box:302,507,206,68:screen3:Cherry Lamp]). Missing it
+        // put a mark on SCREEN 1 (the cursor's display) instead of screen 3.
+        if let screenField = fields.first, let parsedScreenNumber = screenNumberField(screenField) {
+            if screenNumber == nil { screenNumber = parsedScreenNumber }
+            fields.removeFirst()
+        }
+
         // The label is everything left (it may contain ":").
         let labelText = String(fields.joined(separator: ":").trimmingCharacters(in: .whitespaces).prefix(maximumLabelLength))
         var name: String?

@@ -70,6 +70,7 @@ header { padding: 20px 28px; font-size: 22px; font-weight: 700; }
       grid.appendChild(card);
       items["card_" + index] = Hard10.rectOf(card);
       items["price_" + index] = Hard10.rectOf(price);
+      items["image_" + index] = Hard10.rectOf(image);
       if (product.red) red.push("card_" + index);
     });
     Promise.all(images.map(function (image) {

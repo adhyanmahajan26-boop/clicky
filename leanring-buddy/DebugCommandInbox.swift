@@ -358,6 +358,19 @@ final class DebugCommandInbox {
             let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["decision": String(describing: decision),
                                                                                   "enabled": companionManager.codeModeController.isEnabled], errorMessage: nil)
+        case "markRegion":
+            // Test-only: drop marks outside this CG rect ({"rectCG": [x, y, w, h]}) or allow all again ({"clear": true}).
+            if commandObject["clear"] as? Bool == true {
+                MarkController.debugAllowedRegionCG = nil
+            } else if let values = commandObject["rectCG"] as? [Double], values.count == 4 {
+                MarkController.debugAllowedRegionCG = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+            } else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "markRegion needs \"rectCG\" [x,y,w,h] or \"clear\"")
+                return
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["rectCG": MarkController.debugAllowedRegionCG.map { [$0.minX, $0.minY, $0.width, $0.height] as Any } ?? NSNull()], errorMessage: nil)
+
         case "boardDisplay":
             // Test-only: open boards on this display ({"displayID": n}) or back to the mouse's ({"clear": true}).
             if commandObject["clear"] as? Bool == true {

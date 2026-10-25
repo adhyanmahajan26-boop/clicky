@@ -181,6 +181,24 @@ def box_tight(tag, frame, tolerance=BOX_EDGE_TOLERANCE_PT):
     return rect_edges_within(drawn_rect(tag), frame, tolerance)
 
 
+def rect_contains(outer, inner, slack=4):
+    return (outer[0] - slack <= inner[0] and outer[1] - slack <= inner[1]
+            and outer[0] + outer[2] + slack >= inner[0] + inner[2] and outer[1] + outer[3] + slack >= inner[1] + inner[3])
+
+
+def box_covers_product(tag, product):
+    """A box/rbox that covers the product's photo and price and stays inside its card (+8 pt),
+    or one tight to the card. product: {"card": rect, "image": rect, "price": rect}."""
+    if box_tight(tag, product["card"]):
+        return True
+    if drawn_kind(tag) not in BOX_KINDS or not drawn_rect(tag) or not product.get("image") or not product.get("price"):
+        return False
+    box = drawn_rect(tag)
+    card = product["card"]
+    inside = rect_contains([card[0] - 8, card[1] - 8, card[2] + 16, card[3] + 16], box, slack=0)
+    return inside and rect_contains(box, product["image"]) and rect_contains(box, product["price"])
+
+
 def match_frames(frames, tags, rule):
     """Maximum bipartite match: frame index -> tag index, each tag used at most once."""
     candidates = [[index for index, tag in enumerate(tags) if rule(tag, frame)] for frame in frames]
@@ -279,9 +297,10 @@ def check_boxes(tags, red_frames, bubbles):
     boxes = [tag for tag in tags if drawn_kind(tag) in BOX_KINDS]
     if len(boxes) != len(red_frames):
         return False, "%d box marks, want %d" % (len(boxes), len(red_frames))
-    mapping = match_frames(red_frames, boxes, box_tight)
+    products = [frame if isinstance(frame, dict) else {"card": frame} for frame in red_frames]
+    mapping = match_frames(products, boxes, box_covers_product)
     if len(mapping) != len(red_frames):
-        return False, "%d of %d red cards boxed within 8 pt" % (len(mapping), len(red_frames))
+        return False, "%d of %d red products boxed (photo + price inside the card)" % (len(mapping), len(red_frames))
     chosen = [boxes[mapping[index]] for index in range(len(red_frames))]
     labels = assign_labels([drawn_rect(tag) for tag in chosen], chosen, bubbles)
     for index, tag in enumerate(chosen):
@@ -1063,7 +1082,14 @@ def test_2_product_boxes(ctx):
     harness, _, window, truth = open_chrome_page(ctx, 2, "product_grid.html")
     try:
         red_keys = truth.get("red") or []
-        red_frames = [FE.css_to_cg(truth["items"][key], window) for key in red_keys]
+        red_frames = []
+        for key in red_keys:
+            index = key.split("_", 1)[1]
+            product = {"card": FE.css_to_cg(truth["items"][key], window)}
+            for part in ("image", "price"):
+                if truth["items"].get("%s_%s" % (part, index)):
+                    product[part] = FE.css_to_cg(truth["items"]["%s_%s" % (part, index)], window)
+            red_frames.append(product)
         reply, turn = ask_in_chrome(ctx, harness, 2)
         return score(ctx, 2, reply, turn, lambda t, b: check_boxes(t.get("tags") or [], red_frames, b))
     finally:
@@ -1434,6 +1460,11 @@ def run_selected(selected, run_name, side_origin):
         print("refusing to start: --side-origin %s is not on the test display" % (side_origin,), file=sys.stderr)
         return 1
     print_layout(snapshot, layout)
+    # Test-only guards in Clicky: marks and boards stay on the test display for this run.
+    bounds = layout["testDisplay"]["bounds"]
+    FE.clickyctl({"cmd": "markRegion", "rectCG": [float(value) for value in bounds]}, 10)
+    if layout["testDisplay"].get("id") is not None:
+        FE.clickyctl({"cmd": "boardDisplay", "displayID": int(layout["testDisplay"]["id"])}, 10)
     with open(os.path.join(run_directory, "preflight.json"), "w", encoding="utf-8") as handle:
         json.dump({"snapshot": snapshot, "layout": layout}, handle, indent=2, sort_keys=True)
     server = PageServer(SERVER_PORT)
@@ -1482,6 +1513,8 @@ def run_selected(selected, run_name, side_origin):
             print("end-of-run check failed: %s" % error, flush=True)
     finally:
         server.stop()
+        FE.clickyctl({"cmd": "markRegion", "clear": True}, 10)
+        FE.clickyctl({"cmd": "boardDisplay", "clear": True}, 10)
         try:
             guard.settle("interrupted or stopped")
         except RunStop as error:

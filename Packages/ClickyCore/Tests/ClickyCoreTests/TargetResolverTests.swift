@@ -310,3 +310,34 @@ private func resolvedTarget(pid: pid_t, node: MockNode, point: CGPoint, label: S
         #expect(resolved.method == .textExact && resolved.frameCG == printedLabel, "\(raw)")
     }
 }
+
+/// A live run boxed only the photos of three product cards ([MARK:box:#106:Crimson Kettle|$129]):
+/// a box on a product photo now covers the photo plus the name / price / button stacked under it.
+@Test func explicitBoxOnAProductPhotoCoversTheStackedProduct() throws {
+    var registry = ElementRegistry()
+    let photo = CGRect(x: 3838, y: 405, width: 272, height: 90)
+    _ = registry.append(accessibilityElement("Crimson Kettle", role: .image, frame: photo))
+    _ = registry.append(accessibilityElement("Crimson Kettle", role: .text, frame: CGRect(x: 3838, y: 505, width: 107, height: 17)))
+    _ = registry.append(accessibilityElement("$129", role: .text, frame: CGRect(x: 3838, y: 532, width: 36, height: 18)))
+    _ = registry.append(accessibilityElement("Add to cart", role: .button, frame: CGRect(x: 3838, y: 561, width: 272, height: 32)))
+    // The next card's photo, further down, and a neighbour column: not part of it.
+    _ = registry.append(accessibilityElement("Scarlet Pitcher", role: .image, frame: CGRect(x: 3838, y: 636, width: 272, height: 90)))
+    _ = registry.append(accessibilityElement("$32", role: .text, frame: CGRect(x: 3522, y: 532, width: 27, height: 18)))
+    let resolver = makeResolver(registry: registry)
+
+    let boxed = try #require(resolver.resolve(try parseTag("[MARK:box:#1:Crimson Kettle|$129]")))
+    #expect(boxed.method == .imageCard)
+    #expect(boxed.frameCG == CGRect(x: 3838, y: 405, width: 272, height: 188))
+
+    // A point or circle on the photo keeps the photo.
+    let pointed = try #require(resolver.resolve(try parseTag("[POINT:#1:Crimson Kettle]")))
+    #expect(pointed.frameCG == photo)
+}
+
+@Test func explicitBoxOnALonePhotoKeepsThePhoto() throws {
+    var registry = ElementRegistry()
+    let photo = CGRect(x: 100, y: 100, width: 300, height: 200)
+    _ = registry.append(accessibilityElement("Sunset", role: .image, frame: photo))
+    let boxed = try #require(makeResolver(registry: registry).resolve(try parseTag("[MARK:box:#1:Sunset]")))
+    #expect(boxed.frameCG == photo)
+}

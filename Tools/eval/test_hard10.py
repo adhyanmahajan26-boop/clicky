@@ -836,5 +836,32 @@ class PromptAndSkipTests(unittest.TestCase):
             self.assertNotIn(forbidden, script)
 
 
+
+
+class ProductCoverTests(unittest.TestCase):
+    """The fifth live run boxed product photos; a box over photo + price inside the card counts."""
+    card = [3822, 391, 300, 215]
+    image = [3836, 405, 272, 90]
+    price = [3836, 532, 36, 18]
+
+    def tag(self, rect):
+        return {"raw": "[MARK:box:#1:Crimson Kettle|$129]", "drawn": {"kind": "rbox", "rectCG": rect}}
+
+    def product(self):
+        return {"card": self.card, "image": self.image, "price": self.price}
+
+    def test_photo_only_box_fails(self):
+        self.assertFalse(hard10.box_covers_product(self.tag([3835, 402, 278, 96]), self.product()))
+
+    def test_photo_plus_stack_box_passes(self):
+        self.assertTrue(hard10.box_covers_product(self.tag([3835, 402, 278, 194]), self.product()))
+
+    def test_card_tight_box_passes(self):
+        self.assertTrue(hard10.box_covers_product(self.tag([3820, 389, 304, 219]), self.product()))
+
+    def test_box_spilling_past_the_card_fails(self):
+        self.assertFalse(hard10.box_covers_product(self.tag([3800, 380, 360, 300]), self.product()))
+
+
 if __name__ == "__main__":
     unittest.main()
