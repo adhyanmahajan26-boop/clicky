@@ -370,7 +370,7 @@ final class DebugCommandInbox {
                 return
             }
             Task {
-                let turnDirectoryURL = await self.companionManager.playDebugAnswer(answerText)
+                let turnDirectoryURL = await self.companionManager.playDebugAnswer(answerText, speaks: commandObject["speak"] as? Bool ?? true)
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: self.companionManager.boardController.hasBoard,
                            result: self.companionManager.boardController.stateSummary(),
                            errorMessage: self.companionManager.boardController.hasBoard ? nil : "no board was drawn",

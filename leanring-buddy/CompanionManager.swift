@@ -1154,7 +1154,7 @@ final class CompanionManager: ObservableObject {
     #if DEBUG
     /// The debug inbox's `board`: an answer text (or a bare board's JSONL)
     /// played as if Claude had just said it, through the real answer path.
-    func playDebugAnswer(_ answerText: String) async -> URL? {
+    func playDebugAnswer(_ answerText: String, speaks: Bool = true) async -> URL? {
         let fullAnswerText = WBBlockExtractor.containsWhiteboardBlock(answerText) ? answerText : "Here's the board.\n<whiteboard>\n\(answerText)\n</whiteboard>"
         let turnRecord = TurnLogger.beginTurn(transcript: "debug board", keyUpDate: Date())
         guard let groundedTurn = try? await groundingCoordinator.prepareTurn(keyUpDate: Date()) else { return nil }
@@ -1162,7 +1162,7 @@ final class CompanionManager: ObservableObject {
         speechOutputClient.stopPlayback()
         markController.startAnswer(turnRecord: turnRecord)
         let answerSession = AnswerSession(transcript: "debug board", groundedTurn: groundedTurn, turnRecord: turnRecord,
-                                          companionManager: self, speaksResponse: true)
+                                          companionManager: self, speaksResponse: speaks)
         currentAnswerSession = answerSession
         turnRecord?.rawResponse = fullAnswerText
         answerSession.handle(.textDelta(fullAnswerText))
