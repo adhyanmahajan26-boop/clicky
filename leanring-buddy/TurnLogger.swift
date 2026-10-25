@@ -108,8 +108,15 @@ final class TurnRecord {
         var count: Int
         /// "recovered", "recoveredFreshFilter" or "stillBlack".
         var result: String
-        /// Share of the app-window area that was black in the first capture.
+        /// Share of the app-window area that was black in the first capture
+        /// (over the displays judged black).
         var firstBlackFraction: Double
+        /// Displays whose app windows were black in the first capture.
+        var blackDisplays: Int = 1
+        /// Where the window rects came from ("cgWindowList").
+        var source: String = "cgWindowList"
+        /// How the last capture warm-up went, e.g. "launch: good after 2 attempts in 2010 ms".
+        var warmUp: String? = nil
     }
 
     struct SpeechEntry: Encodable {
