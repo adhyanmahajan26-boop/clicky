@@ -34,6 +34,29 @@ final class TurnRecord {
         let modelPx: [Double]
         let appKitPoint: [Double]
         let cgPoint: [Double]
+        /// v2: the resolved frame for marks (CG), how it was resolved and checked.
+        var box: [Double]?
+        var kind: String?
+        var method: String?
+        var confidence: Double?
+        var elementID: Int?
+        var verified: Bool?
+        var occludedByPID: Int32?
+    }
+
+    struct GroundingEntry: Encodable {
+        var isWarm: Bool
+        var keyUpToReadyMs: Double
+        var prewarmReadyBeforeKeyUp: Bool?
+        var registryCount: Int
+        var badgedCount: Int
+        var isBadged: Bool
+        var droppedAXApplications: [String]
+        var malformedTagCount: Int = 0
+        var speechLeakCount: Int = 0
+        var badgeMentionsInNarration: Int = 0
+        var ocrLineCount: Int = 0
+        var axWalks: [String] = []
     }
 
     struct SpeechEntry: Encodable {
@@ -52,6 +75,32 @@ final class TurnRecord {
     var timings: [String: Double] = [:]
     var speech = SpeechEntry(engine: nil, fallback: false)
     var errorDescription: String?
+    var grounding: GroundingEntry?
+
+    /// The element lists exactly as sent, saved next to the screenshots.
+    func recordElementLists(_ elementListTexts: [String]) {
+        try? elementListTexts.joined(separator: "\n\n").write(to: turnDirectoryURL.appendingPathComponent("elements.txt"), atomically: true, encoding: .utf8)
+    }
+
+    /// A v2 tag after resolution and verification.
+    func recordResolvedTag(raw rawTag: String, kind: String, screenNumber: Int, modelPixel: CGPoint?, target: ResolvedTarget) {
+        let appKitPoint = ScreenTopology.appKit(fromCG: target.pointCG, flipH: TurnLogger.mainDisplayHeight)
+        let hasBox = target.frameCG.width > 0 && target.frameCG.height > 0
+        tags.append(TagEntry(
+            raw: rawTag,
+            screen: screenNumber,
+            modelPx: modelPixel.map { [$0.x, $0.y] } ?? [],
+            appKitPoint: [appKitPoint.x, appKitPoint.y],
+            cgPoint: [target.pointCG.x, target.pointCG.y],
+            box: (hasBox && kind == "mark") ? [target.frameCG.minX, target.frameCG.minY, target.frameCG.width, target.frameCG.height] : nil,
+            kind: kind,
+            method: target.method.rawValue,
+            confidence: target.confidence,
+            elementID: target.elementID,
+            verified: target.verified,
+            occludedByPID: target.occludedByPID
+        ))
+    }
 
     fileprivate init(turnDirectoryURL: URL, transcript: String) {
         self.turnDirectoryURL = turnDirectoryURL
@@ -155,6 +204,7 @@ enum TurnLogger {
             let timings: [String: Double]
             let speech: TurnRecord.SpeechEntry
             let error: String?
+            let grounding: TurnRecord.GroundingEntry?
         }
 
         let turnFile = TurnFile(
@@ -166,7 +216,8 @@ enum TurnLogger {
             tags: turnRecord.tags,
             timings: turnRecord.timings,
             speech: turnRecord.speech,
-            error: turnRecord.errorDescription
+            error: turnRecord.errorDescription,
+            grounding: turnRecord.grounding
         )
 
         let jsonEncoder = JSONEncoder()

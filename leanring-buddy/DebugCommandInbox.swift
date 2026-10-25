@@ -134,22 +134,16 @@ final class DebugCommandInbox {
                 return
             }
             let speaksResponse = commandObject["speak"] as? Bool ?? true
-            companionManager.sendTranscriptToClaudeWithScreenshot(
-                transcript: questionText,
-                turnOptions: CompanionManager.TurnOptions(
-                    speaksResponse: speaksResponse,
-                    keyUpDate: Date(),
-                    onTurnFinished: { [weak self] turnDirectoryURL, turnError in
-                        self?.reply(
-                            commandIdentifier: commandIdentifier,
-                            isSuccess: turnError == nil,
-                            result: ["speak": speaksResponse],
-                            errorMessage: turnError.map { String(describing: $0) },
-                            turnDirectoryURL: turnDirectoryURL
-                        )
-                    }
-                )
-            )
+            // prewarmMs simulates holding the hotkey that long before key-up.
+            if let prewarmMilliseconds = commandObject["prewarmMs"] as? Int, prewarmMilliseconds > 0 {
+                companionManager.groundingCoordinator.prewarm()
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(prewarmMilliseconds) * 1_000_000)
+                    self.startAsk(questionText: questionText, speaksResponse: speaksResponse, commandIdentifier: commandIdentifier)
+                }
+            } else {
+                startAsk(questionText: questionText, speaksResponse: speaksResponse, commandIdentifier: commandIdentifier)
+            }
 
         case "marks":
             guard let tagText = commandObject["tags"] as? String else {
@@ -206,14 +200,34 @@ final class DebugCommandInbox {
 
         case "selftest":
             let selfTestName = commandObject["name"] as? String ?? ""
+            let selfTestMode = commandObject["mode"] as? String
             Task {
-                let (isPassing, selfTestResult) = await self.runSelfTest(named: selfTestName)
+                let (isPassing, selfTestResult) = await self.runSelfTest(named: selfTestName, mode: selfTestMode)
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: isPassing, result: selfTestResult, errorMessage: isPassing ? nil : "selftest \(selfTestName) failed")
             }
 
         default:
             reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "unknown cmd \(commandName)")
         }
+    }
+
+    private func startAsk(questionText: String, speaksResponse: Bool, commandIdentifier: String) {
+        companionManager.sendTranscriptToClaudeWithScreenshot(
+            transcript: questionText,
+            turnOptions: CompanionManager.TurnOptions(
+                speaksResponse: speaksResponse,
+                keyUpDate: Date(),
+                onTurnFinished: { [weak self] turnDirectoryURL, turnError in
+                    self?.reply(
+                        commandIdentifier: commandIdentifier,
+                        isSuccess: turnError == nil,
+                        result: ["speak": speaksResponse],
+                        errorMessage: turnError.map { String(describing: $0) },
+                        turnDirectoryURL: turnDirectoryURL
+                    )
+                }
+            )
+        )
     }
 
     private func pingResult() -> [String: Any] {
@@ -230,16 +244,34 @@ final class DebugCommandInbox {
 
     /// Captures the screens, runs `tagText` through the same legacy
     /// parse → map → draw path as a real answer, and logs it as a turn.
+    /// Fresh grounded capture (lists, registry), then the tags go through the
+    /// v2 parser, resolver and verifier exactly like an answer's.
     private func presentTagsOnFreshCapture(tagText: String, transcript: String) async throws -> (tags: [[String: Any]], turnDirectoryURL: URL?, screenCaptures: [ScreenCapture]) {
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: Date())
-        let screenCaptures = try await ScreenCaptureService.captureAllScreens()
+        var groundedTurn = try await companionManager.groundingCoordinator.prepareTurn(keyUpDate: Date())
+        let screenCaptures = groundedTurn.screenCaptures
         turnRecord?.markTiming("captureDone")
         turnRecord?.recordScreens(screenCaptures)
+        turnRecord?.recordElementLists(groundedTurn.elementListTexts)
+        turnRecord?.grounding = TurnRecord.GroundingEntry(
+            isWarm: groundedTurn.isWarm, keyUpToReadyMs: groundedTurn.keyUpToReadyMilliseconds, prewarmReadyBeforeKeyUp: nil,
+            registryCount: groundedTurn.registry.orderedIDs.count, badgedCount: 0, isBadged: groundedTurn.isBadged,
+            droppedAXApplications: groundedTurn.droppedAXApplications, axWalks: companionManager.groundingCoordinator.lastAXWalkStats
+        )
         turnRecord?.rawResponse = tagText
-        companionManager.presentLegacyTags(responseText: tagText, screenCaptures: screenCaptures, turnRecord: turnRecord)
+        await groundedTurn.ensureOCRLines()
+        await companionManager.presentGroundedTags(responseText: tagText, groundedTurn: &groundedTurn, turnRecord: turnRecord)
 
         let loggedTags: [[String: Any]] = (turnRecord?.tags ?? []).map { tagEntry in
-            ["raw": tagEntry.raw, "screen": tagEntry.screen, "modelPx": tagEntry.modelPx, "appKitPoint": tagEntry.appKitPoint, "cgPoint": tagEntry.cgPoint]
+            var tagObject: [String: Any] = ["raw": tagEntry.raw, "screen": tagEntry.screen, "modelPx": tagEntry.modelPx,
+                                            "appKitPoint": tagEntry.appKitPoint, "cgPoint": tagEntry.cgPoint]
+            tagObject["box"] = tagEntry.box ?? NSNull()
+            tagObject["method"] = tagEntry.method ?? NSNull()
+            tagObject["confidence"] = tagEntry.confidence ?? NSNull()
+            tagObject["elementID"] = tagEntry.elementID ?? NSNull()
+            tagObject["verified"] = tagEntry.verified ?? NSNull()
+            tagObject["occludedByPID"] = tagEntry.occludedByPID.map { Int($0) } ?? NSNull()
+            return tagObject
         }
         if let turnRecord {
             TurnLogger.finishTurn(turnRecord)
@@ -249,12 +281,50 @@ final class DebugCommandInbox {
 
     // MARK: - Self-tests
 
-    private func runSelfTest(named selfTestName: String) async -> (Bool, [String: Any]) {
+    private func runSelfTest(named selfTestName: String, mode: String?) async -> (Bool, [String: Any]) {
         switch selfTestName {
         case "legacyCenter":
             return await runLegacyCenterSelfTest()
         case "fixtureAX":
             return runFixtureAccessibilitySelfTest()
+        case "fixtureAXWalkDebug":
+            // Walks the fixture with the same AXQuerying calls the enumerator uses.
+            guard let groundTruth = GroundingSelfTests.readFixtureGroundTruth() else { return (false, ["error": "no fixture"]) }
+            let ax = companionManager.groundingCoordinator.ax
+            var lines: [String] = []
+            func walk(_ node: AXNodeReference, depth: Int) {
+                guard depth < 14, lines.count < 200 else { return }
+                let nodeAttributes = ax.attributes(of: node)
+                let role = nodeAttributes?.role ?? "nil"
+                let frame = nodeAttributes?.frameCG
+                if let frame, frame.minX > 700, frame.minY > 240, frame.minY < 480 || role == "AXWindow" {
+                    lines.append(String(repeating: " ", count: depth) + "\(role) \(nodeAttributes?.title ?? "") \(frame)")
+                }
+                let children = ax.children(of: node, role: nodeAttributes?.role, limit: 400)
+                if role.contains("Web") || role == "AXScrollArea" || (role == "AXGroup" && (frame?.minX ?? 0) > 700) {
+                    let axElement = node.underlyingObject as! AXUIElement
+                    var rangedValues: CFArray?
+                    let rangedError = AXUIElementCopyAttributeValues(axElement, kAXChildrenAttribute as CFString, 0, 400, &rangedValues)
+                    var plainValue: CFTypeRef?
+                    let plainError = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &plainValue)
+                    var countValue: CFIndex = -1
+                    let countError = AXUIElementGetAttributeValueCount(axElement, kAXChildrenAttribute as CFString, &countValue)
+                    lines.append(String(repeating: " ", count: depth) + "  -> \(children.count) children of \(role); ranged \(rangedError.rawValue) \((rangedValues as? [AnyObject])?.count ?? -1), plain \(plainError.rawValue) \((plainValue as? [AnyObject])?.count ?? -1), count \(countError.rawValue) \(countValue)")
+                }
+                for child in children { walk(child, depth: depth + 1) }
+            }
+            let applicationNode = ax.applicationNode(processIdentifier: groundTruth.processIdentifier)
+            for window in ax.windows(of: applicationNode) { walk(window, depth: 0) }
+            return (true, ["lines": lines])
+        case "fixtureAXDump":
+            // Diagnostics: every AX node of the fixture with role and frame.
+            guard let groundTruth = GroundingSelfTests.readFixtureGroundTruth() else { return (false, ["error": "no fixture"]) }
+            let snapshots = FixtureAccessibilityWalker.collectElements(processIdentifier: groundTruth.processIdentifier)
+            return (true, ["count": snapshots.count, "nodes": snapshots.filter { $0.frameCG.minX > 700 && $0.frameCG.minY < 520 }.prefix(60).map {
+                "\($0.role) t=\($0.title) d=\($0.elementDescription) v=\($0.value.prefix(20)) f=\($0.frameCG)"
+            }])
+        case "fixtureResolve", "verifyHitTest", "groundingLatency":
+            return await GroundingSelfTests.run(named: selfTestName, mode: mode, companionManager: companionManager)
         case "calibration", "overlayExclusion", "transportProbe", "tierProbe":
             return await DiagnosticSelfTests.run(named: selfTestName, companionManager: companionManager)
         default:

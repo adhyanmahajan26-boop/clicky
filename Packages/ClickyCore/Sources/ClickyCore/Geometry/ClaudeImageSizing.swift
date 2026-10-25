@@ -40,6 +40,11 @@ public struct PixelSize: Equatable, Hashable, Sendable, CustomStringConvertible 
 }
 
 public enum ClaudeImageSizing {
+    /// Claude Code itself downsizes images above this long edge (measured by
+    /// the P1a transport probe: 2576x1078 was stored as 1999x837), so sending
+    /// more only adds payload. Applied to every image as "CLI downscale".
+    public static let claudeCodeCLIMaxLongEdge = 2000
+
     private static func tileCount(_ length: Int) -> Int {
         (length + 27) / 28
     }
@@ -115,9 +120,7 @@ public enum ClaudeImageSizing {
             height: min(Int(regionInPoints.height.rounded()), nativePixels.height)
         )
         var modelSize = claudeResizedSize(baseSize, tier: isCursorScreen ? tierForCursorScreen : .standard)
-        if let effectiveMaxEdge {
-            modelSize = capLongEdge(modelSize, cap: effectiveMaxEdge)
-        }
+        modelSize = capLongEdge(modelSize, cap: min(effectiveMaxEdge ?? claudeCodeCLIMaxLongEdge, claudeCodeCLIMaxLongEdge))
         return modelSize
     }
 }

@@ -21,10 +21,12 @@ import UniformTypeIdentifiers
 /// One captured screen, ready to send.
 struct ScreenCapture {
     let frame: CaptureFrame
-    /// The full-resolution capture (kept for self-tests and future crops).
+    /// The full-resolution capture (OCR, block diffs, self-tests).
     let nativeImage: CGImage
-    /// The image sent to the model, already at `frame.modelSize`, JPEG q0.9.
-    let modelJPEGData: Data
+    /// `nativeImage` resized to `frame.modelSize` (badges are drawn on this).
+    let modelImage: CGImage
+    /// The image sent to the model, JPEG q0.9 (badged when grounding drew them).
+    var modelJPEGData: Data
     /// `SCREEN n "<name>" (<position>[, cursor here]) image WxH px`
     let header: String
 
@@ -67,6 +69,7 @@ enum ScreenCaptureService {
             .sorted { $0.boundsCG.minX < $1.boundsCG.minX }
 
         let shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        await ShareableContentCache.shared.store(shareableContent)
 
         // Start every display's capture before awaiting any of them; the
         // captures (and the resize + JPEG work) then overlap.
@@ -128,9 +131,28 @@ enum ScreenCaptureService {
         return (cropLetterboxing(from: capturedImage, regionAspectRatio: regionCG.width / regionCG.height), regionCG)
     }
 
+    /// One screen only (the warm key-up path recaptures just the cursor screen).
+    /// One screen, for the key-up refresh. Reuses the shareable-content list
+    /// from the last full capture when it's under 3 s old (fetching it costs
+    /// ~30 ms; displays and Clicky's own app entry don't change in between).
+    /// `encodesJPEG: false` skips the model JPEG when the caller re-encodes
+    /// anyway (badges).
+    static func captureScreen(display: DisplayInfo, screenNumber: Int, isCursorScreen: Bool, positionDescription: String,
+                              options requestedOptions: Options? = nil, encodesJPEG: Bool = true) async throws -> ScreenCapture {
+        let shareableContent: SCShareableContent
+        if let cachedContent = await ShareableContentCache.shared.recentContent(maximumAge: 3) {
+            shareableContent = cachedContent
+        } else {
+            shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        }
+        return try await captureScreen(display: display, screenNumber: screenNumber, isCursorScreen: isCursorScreen,
+                                       positionDescription: positionDescription, shareableContent: shareableContent,
+                                       options: requestedOptions ?? Options(), encodesJPEG: encodesJPEG)
+    }
+
     // MARK: - Private
 
-    private static func captureScreen(display: DisplayInfo, screenNumber: Int, isCursorScreen: Bool, positionDescription: String, shareableContent: SCShareableContent, options: Options) async throws -> ScreenCapture {
+    private static func captureScreen(display: DisplayInfo, screenNumber: Int, isCursorScreen: Bool, positionDescription: String, shareableContent: SCShareableContent, options: Options, encodesJPEG: Bool = true) async throws -> ScreenCapture {
         let (nativeImage, regionCG) = try await captureNativeImage(
             of: display,
             includesOwnWindows: options.includesOwnWindows,
@@ -144,8 +166,9 @@ enum ScreenCaptureService {
             tierForCursorScreen: options.cursorScreenTier,
             effectiveMaxEdge: options.effectiveMaxEdge
         )
-        let modelJPEGData = try await Task.detached(priority: .userInitiated) {
-            try encodeModelJPEG(from: nativeImage, modelSize: modelSize, quality: modelJPEGQuality)
+        let (modelImage, modelJPEGData) = try await Task.detached(priority: .userInitiated) {
+            let resizedImage = try resizeToModelSize(nativeImage, modelSize: modelSize)
+            return (resizedImage, encodesJPEG ? try encodeJPEG(resizedImage, quality: modelJPEGQuality) : Data())
         }.value
 
         let frame = CaptureFrame(display: display, screenNumber: screenNumber, regionCG: regionCG, native: nativeSize, model: modelSize)
@@ -156,7 +179,7 @@ enum ScreenCaptureService {
             isCursorScreen: isCursorScreen,
             imageSize: modelSize
         )
-        return ScreenCapture(frame: frame, nativeImage: nativeImage, modelJPEGData: modelJPEGData, header: header)
+        return ScreenCapture(frame: frame, nativeImage: nativeImage, modelImage: modelImage, modelJPEGData: modelJPEGData, header: header)
     }
 
     /// Excludes Clicky by application (all its windows, present and future).
@@ -195,43 +218,56 @@ enum ScreenCaptureService {
     }
 }
 
-/// Resizes (sRGB, high-quality interpolation) and encodes JPEG. Runs off the
-/// main actor.
-nonisolated func encodeModelJPEG(from nativeImage: CGImage, modelSize: PixelSize, quality: CGFloat) throws -> Data {
-    guard let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
-        throw ScreenCaptureError(message: "No sRGB colour space")
+/// Resizes (sRGB, high-quality interpolation) to the model size.
+nonisolated func resizeToModelSize(_ nativeImage: CGImage, modelSize: PixelSize) throws -> CGImage {
+    if nativeImage.width == modelSize.width && nativeImage.height == modelSize.height { return nativeImage }
+    guard let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let resizeContext = CGContext(data: nil, width: modelSize.width, height: modelSize.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                        space: sRGBColorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+        throw ScreenCaptureError(message: "Couldn't create a resize context")
     }
-
-    let imageToEncode: CGImage
-    if nativeImage.width == modelSize.width && nativeImage.height == modelSize.height {
-        imageToEncode = nativeImage
-    } else {
-        guard let resizeContext = CGContext(
-            data: nil,
-            width: modelSize.width,
-            height: modelSize.height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: sRGBColorSpace,
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-        ) else {
-            throw ScreenCaptureError(message: "Couldn't create a resize context")
-        }
-        resizeContext.interpolationQuality = .high
-        resizeContext.draw(nativeImage, in: CGRect(x: 0, y: 0, width: modelSize.width, height: modelSize.height))
-        guard let resizedImage = resizeContext.makeImage() else {
-            throw ScreenCaptureError(message: "Couldn't resize the capture")
-        }
-        imageToEncode = resizedImage
+    resizeContext.interpolationQuality = .high
+    resizeContext.draw(nativeImage, in: CGRect(x: 0, y: 0, width: modelSize.width, height: modelSize.height))
+    guard let resizedImage = resizeContext.makeImage() else {
+        throw ScreenCaptureError(message: "Couldn't resize the capture")
     }
+    return resizedImage
+}
 
+/// JPEG-encodes an image as is. Runs off the main actor.
+nonisolated func encodeJPEG(_ image: CGImage, quality: CGFloat) throws -> Data {
     let jpegData = NSMutableData()
     guard let imageDestination = CGImageDestinationCreateWithData(jpegData, UTType.jpeg.identifier as CFString, 1, nil) else {
         throw ScreenCaptureError(message: "Couldn't create a JPEG encoder")
     }
-    CGImageDestinationAddImage(imageDestination, imageToEncode, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    CGImageDestinationAddImage(imageDestination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
     guard CGImageDestinationFinalize(imageDestination) else {
         throw ScreenCaptureError(message: "JPEG encoding failed")
     }
     return jpegData as Data
+}
+
+/// Resize + JPEG in one go (probes, self-tests).
+nonisolated func encodeModelJPEG(from nativeImage: CGImage, modelSize: PixelSize, quality: CGFloat) throws -> Data {
+    try encodeJPEG(try resizeToModelSize(nativeImage, modelSize: modelSize), quality: quality)
+}
+
+/// The last full capture's shareable-content list, kept only when it lists
+/// Clicky's own app (so the cached filter still excludes all Clicky windows).
+actor ShareableContentCache {
+    static let shared = ShareableContentCache()
+    private var content: SCShareableContent?
+    private var fetchDate: Date?
+
+    func store(_ shareableContent: SCShareableContent) {
+        let ownProcessIdentifier = getpid()
+        guard shareableContent.applications.contains(where: { $0.processID == ownProcessIdentifier }) else { return }
+        content = shareableContent
+        fetchDate = Date()
+    }
+
+    func recentContent(maximumAge: TimeInterval) -> SCShareableContent? {
+        guard let fetchDate, Date().timeIntervalSince(fetchDate) < maximumAge else { return nil }
+        return content
+    }
 }

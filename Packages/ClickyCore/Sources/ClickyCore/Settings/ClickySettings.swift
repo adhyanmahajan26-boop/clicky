@@ -23,6 +23,25 @@ public enum ClickySettings {
         public static let groundingEnabled = "v2.grounding.enabled"
         public static let groundingImageTier = "v2.grounding.imageTier"
         public static let groundingProbe = "v2.grounding.probe"
+        /// Bool, default true: draw id badges on the images (A/B switch).
+        public static let groundingBadges = "v2.grounding.badges"
+        /// [String] bundle ids whose field values are never read.
+        public static let groundingValueBlockedBundleIDs = "v2.grounding.valueBlockedBundleIDs"
+    }
+
+    /// Password managers and Keychain: never read their field values.
+    public static let defaultValueBlockedBundleIDs = [
+        "com.apple.keychainaccess", "com.apple.Passwords", "com.agilebits.onepassword7", "com.1password.1password",
+        "com.bitwarden.desktop", "com.lastpass.LastPass", "com.dashlane.dashlanephonefinal", "org.keepassxc.keepassxc",
+        "com.callpod.keepermac.lite", "com.nordpass.macos.NordPass", "in.sinew.Enpass-Desktop"
+    ]
+
+    public static var valueBlockedBundleIDs: Set<String> {
+        Set(defaults.stringArray(forKey: Keys.groundingValueBlockedBundleIDs) ?? defaultValueBlockedBundleIDs)
+    }
+
+    public static var areBadgesEnabled: Bool {
+        defaults.object(forKey: Keys.groundingBadges) as? Bool ?? true
     }
 
     public enum ImageTierSetting: String, Sendable {
@@ -43,12 +62,15 @@ public enum ClickySettings {
         /// Worst error in pixels across the probes that passed.
         public var error: Double
         public var date: Date
+        /// Why effectiveMaxEdge is set (e.g. "CLI downscale").
+        public var reason: String?
 
-        public init(effectiveMaxEdge: Int?, sizes: [String], error: Double, date: Date) {
+        public init(effectiveMaxEdge: Int?, sizes: [String], error: Double, date: Date, reason: String? = nil) {
             self.effectiveMaxEdge = effectiveMaxEdge
             self.sizes = sizes
             self.error = error
             self.date = date
+            self.reason = reason
         }
     }
 

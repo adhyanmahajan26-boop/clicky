@@ -390,11 +390,14 @@ enum DiagnosticSelfTests {
 
         if isPassing, let resolvedModelIdentifier {
             var probeRecords = ClickySettings.probeRecords
+            // The CLI downsizes above 2000 px anyway; record that cap even when
+            // the probe needed no correction.
             probeRecords[resolvedModelIdentifier] = ClickySettings.ProbeRecord(
-                effectiveMaxEdge: effectiveMaxEdge,
+                effectiveMaxEdge: min(effectiveMaxEdge ?? ClaudeImageSizing.claudeCodeCLIMaxLongEdge, ClaudeImageSizing.claudeCodeCLIMaxLongEdge),
                 sizes: probeSizes.map(\.description),
                 error: worstPassingError,
-                date: Date()
+                date: Date(),
+                reason: effectiveMaxEdge == nil ? "CLI downscale" : "measured"
             )
             ClickySettings.probeRecords = probeRecords
         }

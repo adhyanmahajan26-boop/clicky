@@ -177,11 +177,14 @@ final class DrawnCanvasView: NSView {
 
     private static let dotDiameter: CGFloat = 14
 
-    private let textLines: [(key: String, text: String, origin: NSPoint)] = [
-        ("canvas_rate_limit", "rate limit exceeded (429)", NSPoint(x: 20, y: 20)),
-        ("canvas_total", "Total: 1,284", NSPoint(x: 20, y: 60)),
-        ("canvas_x42", "x = 42", NSPoint(x: 20, y: 100)),
-        ("canvas_deploy_failed", "Deploy failed", NSPoint(x: 20, y: 140)),
+    private let textLines: [(key: String, text: String, origin: NSPoint, fontSize: CGFloat)] = [
+        ("canvas_rate_limit", "rate limit exceeded (429)", NSPoint(x: 20, y: 20), 16),
+        ("canvas_total", "Total: 1,284", NSPoint(x: 20, y: 60), 16),
+        ("canvas_x42", "x = 42", NSPoint(x: 20, y: 100), 16),
+        ("canvas_deploy_failed", "Deploy failed", NSPoint(x: 20, y: 140), 16),
+        ("canvas_size_10", "Build 10pt", NSPoint(x: 20, y: 240), 10),
+        ("canvas_size_11", "Retry 11pt", NSPoint(x: 20, y: 265), 11),
+        ("canvas_size_13", "Queued 13pt", NSPoint(x: 20, y: 290), 13),
     ]
 
     private let dots: [(key: String, color: NSColor, origin: NSPoint)] = [
@@ -193,8 +196,8 @@ final class DrawnCanvasView: NSView {
 
     private(set) var items: [DrawnItem] = []
 
-    private var textAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.labelColor]
+    private func textAttributes(fontSize: CGFloat) -> [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: NSColor.labelColor]
     }
 
     override var isFlipped: Bool { true }
@@ -211,7 +214,7 @@ final class DrawnCanvasView: NSView {
     private func computeItems() -> [DrawnItem] {
         var result: [DrawnItem] = []
         for line in textLines {
-            let size = (line.text as NSString).size(withAttributes: textAttributes)
+            let size = (line.text as NSString).size(withAttributes: textAttributes(fontSize: line.fontSize))
             result.append(DrawnItem(key: line.key, kind: "canvas", rect: NSRect(origin: line.origin, size: size)))
         }
         for dot in dots {
@@ -226,7 +229,7 @@ final class DrawnCanvasView: NSView {
         bounds.fill()
 
         for line in textLines {
-            (line.text as NSString).draw(at: line.origin, withAttributes: textAttributes)
+            (line.text as NSString).draw(at: line.origin, withAttributes: textAttributes(fontSize: line.fontSize))
         }
         for dot in dots {
             dot.color.setFill()
@@ -286,6 +289,7 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
     static let rowCount = 40
     static let rowHeight: CGFloat = 24
     static let webKeys = ["web_subscribe", "web_read_more", "web_sign_in", "web_pricing", "web_docs"]
+    static let statusText = "Status: rate limit reached for this hour"
 
     private static let webRectsScript = """
     (function () {
@@ -367,6 +371,7 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
     private var webView: WKWebView!
     private var webFrames: [String: CGRect] = [:]
     private var canvasView: DrawnCanvasView!
+    private var statusTextView: NSTextView!
 
     private var isReady = false
     private var coveredKey: String?
@@ -421,7 +426,9 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
 
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-        NSApp.activate()
+        // Become the frontmost app (what Clicky treats as "the app you're
+        // looking at"); plain activate() is refused for background launches.
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -515,6 +522,15 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
         // Right half bottom: drawn canvas with no accessibility children.
         canvasView = DrawnCanvasView(frame: NSRect(x: 620, y: 400, width: 560, height: 360))
         contentView.addSubview(canvasView)
+
+        // Left column below the table: selectable, read-only status text.
+        statusTextView = NSTextView(frame: NSRect(x: 20, y: 530, width: 560, height: 60))
+        statusTextView.string = Self.statusText
+        statusTextView.font = NSFont.systemFont(ofSize: 13)
+        statusTextView.isEditable = false
+        statusTextView.isSelectable = true
+        statusTextView.drawsBackground = true
+        contentView.addSubview(statusTextView)
     }
 
     // MARK: Table
@@ -657,7 +673,33 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
             ))
         }
 
+        elements.append(MeasuredElement(
+            key: "textview_rate_limit",
+            kind: "axtext",
+            frame: statusTextRateLimitFrame(),
+            inScrollView: true
+        ))
+
         return elements
+    }
+
+    /// Global CoreGraphics frame of the "rate limit" substring in the status text view.
+    /// firstRect(forCharacterRange:) returns AppKit screen coordinates (y up), so flip them.
+    private func statusTextRateLimitFrame() -> CGRect {
+        let substringRange = (Self.statusText as NSString).range(of: "rate limit")
+        guard substringRange.location != NSNotFound else { fail("status text has no \"rate limit\" substring") }
+        guard let textContainer = statusTextView.textContainer else { fail("status text view has no text container") }
+        statusTextView.layoutManager?.ensureLayout(for: textContainer)
+        let screenRect = statusTextView.firstRect(
+            forCharacterRange: NSRange(location: substringRange.location, length: 10),
+            actualRange: nil
+        )
+        return CGRect(
+            x: screenRect.minX,
+            y: primaryScreenHeight - screenRect.maxY,
+            width: screenRect.width,
+            height: screenRect.height
+        )
     }
 
     /// Writes the current state. Before ready this is only {ready: false, pid}.

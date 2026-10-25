@@ -2,12 +2,10 @@
 //  LiveScreenMarksOverlayView.swift
 //  leanring-buddy
 //
-//  Draws Claude's live marks (circles, arrows, numbered steps) inside each
-//  screen's full-screen overlay. The overlay window is already click-through,
-//  so marks never block the element they point at.
-//
-//  Marks draw in one after another (staggered by their order in the response)
-//  so a 1-2-3 walkthrough reads in sequence.
+//  Draws Claude's live marks inside each screen's full-screen overlay, around
+//  the resolved element frames. The overlay window is already click-through,
+//  so marks never block the element they point at. Marks draw in one after
+//  another (staggered by their order in the response).
 //
 
 import ClickyCore
@@ -22,7 +20,7 @@ struct LiveScreenMarksOverlayView: View {
             ForEach(liveScreenMarksOnThisScreen) { liveScreenMark in
                 LiveScreenMarkView(
                     liveScreenMark: liveScreenMark,
-                    markLocationInThisScreen: ScreenTopology.overlayLocal(fromCG: liveScreenMark.locationCG, displayBoundsCG: displayBoundsCG),
+                    targetRectInThisScreen: overlayLocalRect(for: liveScreenMark.frameCG),
                     screenSize: screenFrame.size
                 )
                 .transition(.opacity)
@@ -33,45 +31,54 @@ struct LiveScreenMarksOverlayView: View {
         .allowsHitTesting(false)
     }
 
-    private var liveScreenMarksOnThisScreen: [LiveScreenMark] {
-        liveScreenMarks.filter { displayBoundsCG.contains($0.locationCG) }
-    }
-
     /// This overlay's display in CG global points. Marks are stored in CG
     /// and drawn at overlay-local = CG − display origin (top-left, y down).
     private var displayBoundsCG: CGRect {
         ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight)
     }
+
+    private var liveScreenMarksOnThisScreen: [LiveScreenMark] {
+        liveScreenMarks.filter { displayBoundsCG.contains($0.locationCG) }
+    }
+
+    private func overlayLocalRect(for frameCG: CGRect) -> CGRect {
+        CGRect(origin: ScreenTopology.overlayLocal(fromCG: frameCG.origin, displayBoundsCG: displayBoundsCG), size: frameCG.size)
+    }
 }
 
 private struct LiveScreenMarkView: View {
     let liveScreenMark: LiveScreenMark
-    let markLocationInThisScreen: CGPoint
+    let targetRectInThisScreen: CGRect
     let screenSize: CGSize
 
     /// 0 → 1 as the mark draws itself in.
     @State private var drawInProgress: CGFloat = 0
 
-    private let circleMarkRadius: CGFloat = 34
-    private let numberedStepBadgeDiameter: CGFloat = 26
     private let markLineWidth: CGFloat = 3.5
-    /// How far the arrow's tail sits from its head.
+    private let numberedStepBadgeDiameter: CGFloat = 26
     private let arrowTailOffset = CGSize(width: 90, height: 70)
-    /// Gap between the arrow head and the element so the head doesn't cover it.
-    private let arrowHeadGapFromTarget: CGFloat = 10
     private let staggerDelayBetweenMarksSeconds: Double = 0.35
+
+    private var targetCenter: CGPoint { CGPoint(x: targetRectInThisScreen.midX, y: targetRectInThisScreen.midY) }
 
     var body: some View {
         ZStack {
             switch liveScreenMark.markKind {
             case .circle:
                 circleMark
+            case .box:
+                boxMark
             case .arrow:
                 arrowMark
+            case .underline:
+                underlineMark
+            case .spot:
+                spotMark
             case .numberedStep(let stepNumber):
                 numberedStepMark(stepNumber: stepNumber)
             }
         }
+        .frame(width: screenSize.width, height: screenSize.height)
         .onAppear {
             let drawInDelaySeconds = Double(liveScreenMark.orderInResponse) * staggerDelayBetweenMarksSeconds
             withAnimation(.easeOut(duration: 0.45).delay(drawInDelaySeconds)) {
@@ -80,47 +87,74 @@ private struct LiveScreenMarkView: View {
         }
     }
 
-    // MARK: - Circle
+    // MARK: - Shapes
 
+    /// A ring a little larger than the target (at least 40 pt across).
     private var circleMark: some View {
-        ZStack {
-            Circle()
+        let ringRect = targetRectInThisScreen.insetBy(dx: -8, dy: -8)
+        let ringSize = CGSize(width: max(40, ringRect.width), height: max(40, ringRect.height))
+        return ZStack {
+            Ellipse()
                 .trim(from: 0, to: drawInProgress)
                 .stroke(DS.Colors.overlayCompanionOrange, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .frame(width: circleMarkRadius * 2, height: circleMarkRadius * 2)
+                .frame(width: ringSize.width, height: ringSize.height)
                 .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 6)
-                .position(markLocationInThisScreen)
-
-            if let markLabel = liveScreenMark.markLabel {
-                markLabelPill(markLabel)
-                    .position(x: markLocationInThisScreen.x, y: markLocationInThisScreen.y + circleMarkRadius + 16)
-            }
+                .position(targetCenter)
+            labelBelow(offsetFromCenter: ringSize.height / 2 + 16)
         }
     }
 
-    // MARK: - Arrow
-
-    /// The arrow comes in from the upper-left like a cursor, flipping to the
-    /// other side when the tail would land off-screen.
-    private var arrowTailLocation: CGPoint {
-        let tailXFromLeft = markLocationInThisScreen.x - arrowTailOffset.width
-        let tailYFromAbove = markLocationInThisScreen.y - arrowTailOffset.height
-        return CGPoint(
-            x: tailXFromLeft < 20 ? markLocationInThisScreen.x + arrowTailOffset.width : tailXFromLeft,
-            y: tailYFromAbove < 20 ? markLocationInThisScreen.y + arrowTailOffset.height : tailYFromAbove
-        )
+    private var boxMark: some View {
+        let boxRect = targetRectInThisScreen.insetBy(dx: -4, dy: -4)
+        let boxSize = CGSize(width: max(16, boxRect.width), height: max(16, boxRect.height))
+        return ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .trim(from: 0, to: drawInProgress)
+                .stroke(DS.Colors.overlayCompanionOrange, style: StrokeStyle(lineWidth: markLineWidth, lineCap: .round, lineJoin: .round))
+                .frame(width: boxSize.width, height: boxSize.height)
+                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 6)
+                .position(targetCenter)
+            labelBelow(offsetFromCenter: boxSize.height / 2 + 16)
+        }
     }
 
+    private var underlineMark: some View {
+        let lineWidth = max(20, targetRectInThisScreen.width)
+        let lineY = targetRectInThisScreen.maxY + 3
+        return ZStack {
+            Capsule()
+                .fill(DS.Colors.overlayCompanionOrange)
+                .frame(width: lineWidth * drawInProgress, height: 3)
+                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.6), radius: 4)
+                .position(x: targetRectInThisScreen.minX + lineWidth * drawInProgress / 2, y: lineY)
+            labelBelow(offsetFromCenter: targetRectInThisScreen.height / 2 + 18)
+        }
+    }
+
+    private var spotMark: some View {
+        ZStack {
+            Circle()
+                .fill(DS.Colors.overlayCompanionOrange.opacity(0.45))
+                .frame(width: 22, height: 22)
+                .scaleEffect(drawInProgress)
+                .shadow(color: DS.Colors.overlayCompanionOrange.opacity(0.8), radius: 8)
+                .position(targetCenter)
+            labelBelow(offsetFromCenter: 26)
+        }
+    }
+
+    /// The arrow comes in from the upper-left like a cursor, flipping to the
+    /// other side when the tail would land off-screen, and stops at the
+    /// target's edge.
     private var arrowMark: some View {
-        let tailLocation = arrowTailLocation
-        let distanceFromTailToTarget = hypot(markLocationInThisScreen.x - tailLocation.x, markLocationInThisScreen.y - tailLocation.y)
-        let directionX = (markLocationInThisScreen.x - tailLocation.x) / distanceFromTailToTarget
-        let directionY = (markLocationInThisScreen.y - tailLocation.y) / distanceFromTailToTarget
-        let headLocation = CGPoint(
-            x: markLocationInThisScreen.x - directionX * arrowHeadGapFromTarget,
-            y: markLocationInThisScreen.y - directionY * arrowHeadGapFromTarget
+        let tailXFromLeft = targetCenter.x - arrowTailOffset.width
+        let tailYFromAbove = targetCenter.y - arrowTailOffset.height
+        let tailLocation = CGPoint(
+            x: tailXFromLeft < 20 ? targetCenter.x + arrowTailOffset.width : tailXFromLeft,
+            y: tailYFromAbove < 20 ? targetCenter.y + arrowTailOffset.height : tailYFromAbove
         )
+        let headLocation = edgePoint(of: targetRectInThisScreen.insetBy(dx: -6, dy: -6), towards: tailLocation)
 
         return ZStack {
             LiveScreenArrowShape(tailLocation: tailLocation, headLocation: headLocation)
@@ -131,18 +165,17 @@ private struct LiveScreenMarkView: View {
             if let markLabel = liveScreenMark.markLabel {
                 markLabelPill(markLabel)
                     .opacity(Double(drawInProgress))
-                    .position(x: tailLocation.x, y: tailLocation.y + (tailLocation.y < markLocationInThisScreen.y ? -16 : 16))
+                    .position(x: tailLocation.x, y: tailLocation.y + (tailLocation.y < targetCenter.y ? -16 : 16))
             }
         }
-        .frame(width: screenSize.width, height: screenSize.height)
     }
 
-    // MARK: - Numbered Step
-
-    /// The badge sits just up-left of the target so the element itself stays readable.
+    /// The badge sits just outside the target's top-left corner.
     private func numberedStepMark(stepNumber: Int) -> some View {
-        let badgeCenter = CGPoint(x: markLocationInThisScreen.x - 18, y: markLocationInThisScreen.y - 18)
-
+        let badgeCenter = CGPoint(
+            x: max(numberedStepBadgeDiameter / 2, targetRectInThisScreen.minX - 6),
+            y: max(numberedStepBadgeDiameter / 2, targetRectInThisScreen.minY - 6)
+        )
         return ZStack {
             Text("\(stepNumber)")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -165,7 +198,28 @@ private struct LiveScreenMarkView: View {
         }
     }
 
-    // MARK: - Label
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func labelBelow(offsetFromCenter: CGFloat) -> some View {
+        if let markLabel = liveScreenMark.markLabel {
+            markLabelPill(markLabel)
+                .opacity(Double(drawInProgress))
+                .position(x: targetCenter.x, y: targetCenter.y + offsetFromCenter)
+        }
+    }
+
+    /// Where the line from the rect's centre to `point` crosses its edge.
+    private func edgePoint(of rect: CGRect, towards point: CGPoint) -> CGPoint {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let deltaX = point.x - center.x
+        let deltaY = point.y - center.y
+        guard rect.width > 0 || rect.height > 0, deltaX != 0 || deltaY != 0 else { return center }
+        let scaleX = deltaX != 0 ? (rect.width / 2) / abs(deltaX) : .greatestFiniteMagnitude
+        let scaleY = deltaY != 0 ? (rect.height / 2) / abs(deltaY) : .greatestFiniteMagnitude
+        let scale = min(scaleX, scaleY, 1)
+        return CGPoint(x: center.x + deltaX * scale, y: center.y + deltaY * scale)
+    }
 
     private func markLabelPill(_ markLabel: String) -> some View {
         Text(markLabel)

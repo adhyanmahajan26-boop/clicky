@@ -143,6 +143,7 @@ final class ClaudeCodeBridge {
         claudeCodeProcess.executableURL = claudeCodeExecutableURL
         claudeCodeProcess.currentDirectoryURL = workingDirectoryURL
         claudeCodeProcess.arguments = claudeArgs.arguments
+        claudeCodeProcess.environment = ClaudeArgs.environment()
 
         let standardInputPipe = Pipe()
         let standardOutputPipe = Pipe()

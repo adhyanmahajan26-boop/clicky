@@ -127,6 +127,9 @@ final class CompanionManager: ObservableObject {
     private(set) var isGroundingActiveThisSession = ClickySettings.isGroundingEnabled
     /// The model id the CLI last resolved the selected alias to.
     private(set) var lastResolvedModelIdentifier: String?
+    /// Element lists, badges and tag resolution (v2 grounding).
+    let groundingCoordinator = GroundingCoordinator()
+
     /// Called with each newly resolved model id (the tier probe uses it).
     var onNewResolvedModelIdentifier: ((String) -> Void)?
 
@@ -245,6 +248,9 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         runStartupGeometryCheck()
+        groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
+            ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
+        }
         // A model we haven't measured yet: check in the background what image
         // size it really sees (stored per resolved model id).
         onNewResolvedModelIdentifier = { [weak self] resolvedModelIdentifier in
@@ -539,6 +545,9 @@ final class CompanionManager: ObservableObject {
             guard !isHandsFreeSessionActive else { return }
             guard !buddyDictationManager.isDictationInProgress else { return }
 
+            // Start reading the screens while the user is still talking.
+            groundingCoordinator.prewarm()
+
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
             transientHideTask = nil
@@ -740,6 +749,8 @@ final class CompanionManager: ObservableObject {
 
     private func handleHandsFreePartialTranscript(_ partialTranscript: String) {
         handsFreeLastHeardText = partialTranscript
+        // First words of an utterance: start reading the screens.
+        groundingCoordinator.prewarm()
 
         if speechOutputClient.isPlaying {
             currentUtteranceOverlappedBuddySpeech = true
@@ -908,8 +919,11 @@ final class CompanionManager: ObservableObject {
     /// requested while grounding is trusted this session.
     private var companionSystemPrompt: String {
         var promptFeatures = SystemPromptFeatures.current
+        if !ClickySettings.areBadgesEnabled {
+            promptFeatures.remove(.badges)
+        }
         if !isGroundingActiveThisSession {
-            promptFeatures.remove([.pointing, .liveMarks])
+            promptFeatures.remove([.grounding, .badges])
         }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
     }
@@ -933,14 +947,6 @@ final class CompanionManager: ObservableObject {
         conversationLines.append("USER SAID: \"\(transcript)\"")
         return conversationLines.joined(separator: "\n")
     }
-
-    /// Each screen as its SCREEN header followed by its image.
-    private static func screenContentBlocks(for screenCaptures: [ScreenCapture]) -> [ClaudeContentBlock] {
-        screenCaptures.flatMap { screenCapture in
-            [ClaudeContentBlock.text(screenCapture.header), .jpegImage(screenCapture.modelJPEGData)]
-        }
-    }
-
 
     // MARK: - AI Response Pipeline
 
@@ -977,17 +983,27 @@ final class CompanionManager: ObservableObject {
             var turnError: Error?
 
             do {
-                // Capture every display at native resolution, sized to exactly
-                // what the model will see (SCREEN 1 = cursor screen).
-                let screenCaptures = try await ScreenCaptureService.captureAllScreens(options: ScreenCaptureService.Options(
-                    effectiveMaxEdge: ClickySettings.effectiveMaxEdge(forModelIdentifier: lastResolvedModelIdentifier)
-                ))
+                // Every screen's element list + badged screenshot (warm from the
+                // key-down prewarm when possible). SCREEN 1 = cursor screen.
+                let prewarmReadyDate = groundingCoordinator.lastPrewarmReadyDate
+                var groundedTurn = try await groundingCoordinator.prepareTurn(keyUpDate: turnOptions.keyUpDate)
                 turnRecord?.markTiming("captureDone")
-                turnRecord?.recordScreens(screenCaptures)
+                turnRecord?.recordScreens(groundedTurn.screenCaptures)
+                turnRecord?.recordElementLists(groundedTurn.elementListTexts)
+                turnRecord?.grounding = TurnRecord.GroundingEntry(
+                    isWarm: groundedTurn.isWarm,
+                    keyUpToReadyMs: groundedTurn.keyUpToReadyMilliseconds,
+                    prewarmReadyBeforeKeyUp: prewarmReadyDate.map { $0 <= turnOptions.keyUpDate },
+                    registryCount: groundedTurn.registry.orderedIDs.count,
+                    badgedCount: groundedTurn.registry.orderedIDs.filter { groundedTurn.registry.entries[$0]?.isBadged == true }.count,
+                    isBadged: groundedTurn.isBadged,
+                    droppedAXApplications: groundedTurn.droppedAXApplications,
+                    axWalks: groundingCoordinator.lastAXWalkStats
+                )
 
                 guard !Task.isCancelled else { throw CancellationError() }
 
-                let screenBlocks = Self.screenContentBlocks(for: screenCaptures)
+                let screenBlocks = groundedTurn.contentBlocks
                 let conversationText = makeConversationText(transcript: transcript)
 
                 let mainBrainTurn = try await claudeCodeBridge.runTurn(
@@ -1027,9 +1043,9 @@ final class CompanionManager: ObservableObject {
 
                 guard !Task.isCancelled else { throw CancellationError() }
 
-                let spokenText = presentLegacyTags(
+                let spokenText = await presentGroundedTags(
                     responseText: mainBrainResponseText,
-                    screenCaptures: screenCaptures,
+                    groundedTurn: &groundedTurn,
                     turnRecord: turnRecord
                 )
 
@@ -1091,92 +1107,95 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Handles the tags at the end of an answer: draws its [MARK:...] live
-    /// marks and flies the buddy to its [POINT:...] target, logging each tag
-    /// to the turn record. Returns the text to speak (tags removed). Shared by
-    /// normal answers and the debug inbox's `marks` command.
+    /// Handles the tags in an answer (v2 grammar): resolves each target to a
+    /// real frame, verifies it with a hit test, draws the marks in order and
+    /// flies the buddy to the POINT. Returns the text to speak (tags removed,
+    /// leaked ids stripped). Shared by answers and the debug inbox's `marks`.
     @discardableResult
-    func presentLegacyTags(
-        responseText: String,
-        screenCaptures: [ScreenCapture],
-        turnRecord: TurnRecord?
-    ) -> String {
-        // Pull out the [MARK:...] tags first. They sit before the
-        // [POINT:...] tag, which must be last for its parser to find it.
-        let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: responseText)
-
-        // Parse the [POINT:...] tag from Claude's response
-        let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
+    func presentGroundedTags(responseText: String, groundedTurn: inout GroundedTurn, turnRecord: TurnRecord?) async -> String {
+        let extraction = MarkTagParser.extractAll(responseText)
+        let liveElementIDs = groundedTurn.registry.liveElementIDs
+        let cleanedSpeech = SpeechSafetyNet.clean(extraction.speechText, liveElementIDs: liveElementIDs)
+        turnRecord?.grounding?.malformedTagCount = extraction.malformedTagCount
+        turnRecord?.grounding?.speechLeakCount = cleanedSpeech.leakCount
+        turnRecord?.grounding?.badgeMentionsInNarration = SpeechSafetyNet.countBadgeMentions(in: extraction.speechText, liveElementIDs: liveElementIDs)
 
         // With grounding off this session (geometry self-check failed), tags
         // are stripped from speech but never drawn.
-        guard isGroundingActiveThisSession else {
-            return parseResult.spokenText
+        guard isGroundingActiveThisSession, !extraction.tags.isEmpty else {
+            return cleanedSpeech.speechText
         }
 
-        // Handle element pointing if Claude returned coordinates.
-        // Switch to idle BEFORE setting the location so the triangle
-        // becomes visible and can fly to the target. Without this, the
-        // spinner hides the triangle and the flight animation is invisible.
-        if parseResult.coordinate != nil {
-            voiceState = .idle
+        if extraction.tags.contains(where: { if case .text = $0.target { return true } else { return false } }) {
+            await groundedTurn.ensureOCRLines()
         }
+        turnRecord?.grounding?.ocrLineCount = groundedTurn.registry.allOCRLines.count
 
-        // Pick the screen capture matching Claude's screen number,
-        // falling back to the cursor screen if not specified.
-        let pointScreenIndex: Int? = {
-            if let screenNumber = parseResult.screenNumber,
-               screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                return screenNumber - 1
+        let framesByScreenNumber = groundedTurn.framesByScreenNumber
+        let resolver = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
+                                      cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
+                                      lookup: AXGroundingLiveLookup(ax: groundingCoordinator.ax))
+
+        var newLiveScreenMarks: [LiveScreenMark] = []
+        var pointTarget: ResolvedTarget?
+        for parsedTag in extraction.tags {
+            if parsedTag.kind == .clear {
+                newLiveScreenMarks.removeAll()
+                continue
             }
-            return screenCaptures.firstIndex(where: { $0.isCursorScreen })
-        }()
+            var maybeResolvedTarget = resolver.resolve(parsedTag)
+            if maybeResolvedTarget == nil, case .text = parsedTag.target, !groundedTurn.hasRetriedOCR {
+                // Text not found: one retry pass of OCR with shifted bands.
+                await groundedTurn.retryOCRWithShiftedBands()
+                maybeResolvedTarget = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
+                                                     cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
+                                                     lookup: AXGroundingLiveLookup(ax: groundingCoordinator.ax)).resolve(parsedTag)
+            }
+            guard var resolvedTarget = maybeResolvedTarget else { continue }
+            HitTestVerifier.verify(&resolvedTarget, ax: groundingCoordinator.ax, ownProcessIdentifier: getpid(), windowStack: groundedTurn.windowStack)
 
-        // The POINT is logged after the MARKs so the turn log lists tags in
-        // the order Claude wrote them (MARKs come before the final POINT).
-        var pointTagForTurnLog: (screenNumber: Int, modelPixel: CGPoint, cgPoint: CGPoint)?
+            let screenNumber = framesByScreenNumber.first { $0.value.display.displayID == resolvedTarget.displayID }?.key ?? parsedTag.effectiveScreenNumber
+            let modelPixel = framesByScreenNumber[screenNumber]?.modelPx(fromCG: resolvedTarget.pointCG)
+            turnRecord?.recordResolvedTag(raw: parsedTag.raw, kind: parsedTag.kind == .point ? "point" : "mark",
+                                          screenNumber: screenNumber, modelPixel: modelPixel, target: resolvedTarget)
 
-        if let pointCoordinate = parseResult.coordinate, let pointScreenIndex {
-            let targetScreenCapture = screenCaptures[pointScreenIndex]
-            // Claude's coordinates are pixels of the image named in that
-            // SCREEN header; one CaptureFrame maps them to CG, and the
-            // AppKit flip happens only for the legacy flight animation.
-            let pointCG = targetScreenCapture.frame.cg(fromModelPx: pointCoordinate)
-            let globalLocation = ScreenTopology.appKit(fromCG: pointCG, flipH: ScreenTopology.mainDisplayHeight)
+            // Never point through another app's window.
+            if resolvedTarget.verified == false && resolvedTarget.occludedByPID != nil { continue }
 
-            detectedElementScreenLocation = globalLocation
-            detectedElementDisplayFrame = targetScreenCapture.frame.display.frameAppKit
-            pointTagForTurnLog = (pointScreenIndex + 1, pointCoordinate, pointCG)
-            ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-            print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-        } else {
-            print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+            if parsedTag.kind == .point {
+                pointTarget = resolvedTarget
+            } else if newLiveScreenMarks.count < 9 {
+                newLiveScreenMarks.append(LiveScreenMark(
+                    markKind: Self.liveScreenMarkKind(for: parsedTag.style),
+                    frameCG: resolvedTarget.frameCG,
+                    markLabel: parsedTag.displayText,
+                    orderInResponse: newLiveScreenMarks.count
+                ))
+            }
         }
 
-        liveScreenMarks = Self.makeLiveScreenMarks(
-            from: parsedLiveScreenMarkTags,
-            screenCaptures: screenCaptures,
-            turnRecord: turnRecord
-        )
-        if !liveScreenMarks.isEmpty {
-            print("✏️ Live marks: \(liveScreenMarks.map { "\($0.markKind) \($0.markLabel ?? "")" })")
+        liveScreenMarks = newLiveScreenMarks
+        if let pointTarget, let pointFrame = framesByScreenNumber.values.first(where: { $0.display.displayID == pointTarget.displayID }) {
+            // Switch to idle BEFORE setting the location so the buddy is
+            // visible and can fly to the target.
+            voiceState = .idle
+            detectedElementScreenLocation = ScreenTopology.appKit(fromCG: pointTarget.pointCG, flipH: ScreenTopology.mainDisplayHeight)
+            detectedElementDisplayFrame = pointFrame.display.frameAppKit
+            ClickyAnalytics.trackElementPointed(elementLabel: pointTarget.label)
         }
-        if let pointTagForTurnLog {
-            turnRecord?.recordTag(
-                raw: Self.rawPointTag(in: responseTextWithoutMarkTags) ?? "[POINT]",
-                screenNumber: pointTagForTurnLog.screenNumber,
-                modelPixel: pointTagForTurnLog.modelPixel,
-                cgPoint: pointTagForTurnLog.cgPoint
-            )
-        }
-
-        return parseResult.spokenText
+        print("🎯 Grounded tags: \(extraction.tags.count) (\(newLiveScreenMarks.count) marks, point: \(pointTarget?.label ?? "none"))")
+        return cleanedSpeech.speechText
     }
 
-    /// The literal [POINT:...] tag at the end of the text, for the turn log.
-    private static func rawPointTag(in responseText: String) -> String? {
-        guard let pointTagRange = responseText.range(of: #"\[POINT:[^\]]*\]\s*$"#, options: .regularExpression) else { return nil }
-        return responseText[pointTagRange].trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func liveScreenMarkKind(for style: MarkStyle?) -> LiveScreenMarkKind {
+        switch style {
+        case .box?: return .box
+        case .arrow?: return .arrow
+        case .underline?: return .underline
+        case .spot?: return .spot
+        case .step(let stepNumber)?: return .numberedStep(stepNumber: stepNumber)
+        default: return .circle
+        }
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -1259,9 +1278,7 @@ final class CompanionManager: ObservableObject {
 
         // The heads-up shouldn't carry marks or a point, but strip them in
         // case it does so they're never read aloud.
-        let spokenWorkerHeadsUpText = Self.parsePointingCoordinates(
-            from: LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: workerHeadsUpText).textWithoutMarkTags
-        ).spokenText
+        let spokenWorkerHeadsUpText = MarkTagParser.extractAll(workerHeadsUpText).speechText
         if !spokenWorkerHeadsUpText.isEmpty {
             try? await speechOutputClient.speakText(spokenWorkerHeadsUpText)
         }
@@ -1313,105 +1330,6 @@ final class CompanionManager: ObservableObject {
     private static let companionWorkerSystemPrompt = """
     you're a fast helper working for clicky, a voice assistant. clicky's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
-
-    // MARK: - Live Screen Marks
-
-    /// Turns Claude's [MARK:...] tags into drawable marks, mapping each from
-    /// its screenshot's pixel space onto the matching display. Marks that name
-    /// a screen that doesn't exist fall back to the cursor's screen.
-    private static func makeLiveScreenMarks(
-        from parsedLiveScreenMarkTags: [ParsedLiveScreenMarkTag],
-        screenCaptures: [ScreenCapture],
-        turnRecord: TurnRecord? = nil
-    ) -> [LiveScreenMark] {
-        var liveScreenMarks: [LiveScreenMark] = []
-
-        for parsedLiveScreenMarkTag in parsedLiveScreenMarkTags {
-            // SCREEN n from the tag, falling back to the cursor screen.
-            let targetScreenIndex: Int? = {
-                if let screenNumber = parsedLiveScreenMarkTag.screenNumber,
-                   screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                    return screenNumber - 1
-                }
-                return screenCaptures.firstIndex(where: \.isCursorScreen)
-            }()
-            guard let targetScreenIndex else { continue }
-
-            let markCG = screenCaptures[targetScreenIndex].frame.cg(fromModelPx: parsedLiveScreenMarkTag.screenshotPixelCoordinate)
-            turnRecord?.recordTag(
-                raw: "[MARK:\(parsedLiveScreenMarkTag.markKind):\(parsedLiveScreenMarkTag.markLabel ?? "")]",
-                screenNumber: targetScreenIndex + 1,
-                modelPixel: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
-                cgPoint: markCG
-            )
-
-            liveScreenMarks.append(LiveScreenMark(
-                markKind: parsedLiveScreenMarkTag.markKind,
-                locationCG: markCG,
-                markLabel: parsedLiveScreenMarkTag.markLabel,
-                orderInResponse: liveScreenMarks.count
-            ))
-        }
-
-        return liveScreenMarks
-    }
-
-    // MARK: - Point Tag Parsing
-
-    /// Result of parsing a [POINT:...] tag from Claude's response.
-    struct PointingParseResult {
-        /// The response text with the [POINT:...] tag removed — this is what gets spoken.
-        let spokenText: String
-        /// The parsed pixel coordinate, or nil if Claude said "none" or no tag was found.
-        let coordinate: CGPoint?
-        /// Short label describing the element (e.g. "run button"), or "none".
-        let elementLabel: String?
-        /// Which screen the coordinate refers to (1-based), or nil to default to cursor screen.
-        let screenNumber: Int?
-    }
-
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
-    /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
-    static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
-        let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
-
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) else {
-            // No tag found at all
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
-        }
-
-        // Remove the tag from the spoken text
-        let tagRange = Range(match.range, in: responseText)!
-        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Check if it's [POINT:none]
-        guard match.numberOfRanges >= 3,
-              let xRange = Range(match.range(at: 1), in: responseText),
-              let yRange = Range(match.range(at: 2), in: responseText),
-              let x = Double(responseText[xRange]),
-              let y = Double(responseText[yRange]) else {
-            return PointingParseResult(spokenText: spokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
-        }
-
-        var elementLabel: String? = nil
-        if match.numberOfRanges >= 4, let labelRange = Range(match.range(at: 3), in: responseText) {
-            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
-        }
-
-        var screenNumber: Int? = nil
-        if match.numberOfRanges >= 5, let screenRange = Range(match.range(at: 4), in: responseText) {
-            screenNumber = Int(responseText[screenRange])
-        }
-
-        return PointingParseResult(
-            spokenText: spokenText,
-            coordinate: CGPoint(x: x, y: y),
-            elementLabel: elementLabel,
-            screenNumber: screenNumber
-        )
-    }
 
     // MARK: - Onboarding Prompt
 

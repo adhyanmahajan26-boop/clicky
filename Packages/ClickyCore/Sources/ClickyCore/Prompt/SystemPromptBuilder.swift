@@ -21,19 +21,75 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
     public static let liveMarks = SystemPromptFeatures(rawValue: 1 << 1)
     /// [WORKER:title:task] Haiku helpers.
     public static let helperWorkers = SystemPromptFeatures(rawValue: 1 << 2)
+    /// v2 set-of-marks grounding: element lists, #ids, "text" targets.
+    /// Replaces the legacy pointing and live-marks sections.
+    public static let grounding = SystemPromptFeatures(rawValue: 1 << 3)
+    /// The images carry magenta id badges (A/B switch).
+    public static let badges = SystemPromptFeatures(rawValue: 1 << 4)
 
-    /// Everything the app consumes as of P1a.
-    public static let current: SystemPromptFeatures = [.pointing, .liveMarks, .helperWorkers]
+    /// Everything the app consumes as of P1b.
+    public static let current: SystemPromptFeatures = [.grounding, .badges, .helperWorkers]
+    /// The pre-v2 legacy prompt (raw-pixel POINT/MARK).
+    public static let legacy: SystemPromptFeatures = [.pointing, .liveMarks, .helperWorkers]
 }
 
 public enum SystemPromptBuilder {
     public static func mainSystemPrompt(features: SystemPromptFeatures = .current) -> String {
         var sections = [coreSection]
-        if features.contains(.pointing) { sections.append(pointingSection) }
-        if features.contains(.liveMarks) { sections.append(liveMarksSection) }
-        if features.contains(.helperWorkers) { sections.append(helperWorkersSection) }
+        if features.contains(.grounding) {
+            sections.append(groundingSection(withBadges: features.contains(.badges)))
+        } else {
+            if features.contains(.pointing) { sections.append(pointingSection) }
+            if features.contains(.liveMarks) { sections.append(liveMarksSection) }
+        }
+        if features.contains(.helperWorkers) {
+            sections.append(helperWorkersSection)
+            if features.contains(.grounding) { sections.append(workerScopeSection) }
+        }
         return sections.joined(separator: "\n\n") + "\n"
     }
+
+    /// Set-of-marks grounding: describes exactly the lines Clicky sends.
+    static func groundingSection(withBadges: Bool) -> String {
+        let badgeSentence = withBadges
+            ? "\nthe images show small magenta number tags next to elements; they are the same ids as the lists. they're drawn for you only — the user can't see them."
+            : ""
+        return """
+        what you see:
+        each screen comes as a text block followed by its screenshot. the block starts with a header like
+        SCREEN 1 "DELL S3425DW" (main, cursor here) image 2000x837 px
+        SCREEN 1 is always the screen the cursor is on. on that screen the next line looks like
+        cursor 1203,788 over #57; focus #2
+        (where the cursor is, what it's over, and what has keyboard focus). then come the elements, grouped under lines like
+        window "<title>" (<app>)
+        menubar (<app>)
+        dock
+        other
+        each element is one line:
+        <id> <role> "<label>" ="<value>" x,y,w,h <flags>
+        for example: 57 btn "Share" 1188,776,30,28
+        x,y is the element's top-left corner and w,h its size, in pixels of that screen's image. the value part only appears for fields, checkboxes, pop-ups, sliders. roles: btn link tf ta chk radio tab pop menu mi sld img txt cell row dock win. flags: ocr = text read from the screenshot (no accessibility info), dis = disabled, behind = covered by another app's window.\(badgeSentence)
+
+        pointing and marking:
+        point the cursor with [POINT:target:label] and draw on screen with [MARK:style:target:label]. styles: circle, box, arrow, underline, spot, or 1 to 9 for numbered steps. [CLEAR] removes marks you drew earlier.
+        targets, best first:
+        - #57 — an id from the lists. you may add the centre you see: #57@1203,788 (pixels of that screen's image).
+        - #3-#6 — consecutive ids as one box (rows, a group of buttons).
+        - "exact text" — text exactly as it appears on screen. "Save"~2 is the second "Save"; "Delete" in #12 searches inside element 12.
+        - x,y or x,y,w,h — raw pixels of the image, only when nothing in the lists fits. add :screen2 at the end for other screens.
+        - none — when pointing wouldn't help.
+        the label is the thing's on-screen name, at most five words. you can add a short note shown next to the mark after a |, at most six words: [MARK:arrow:#57:Share|click this first].
+        put each tag right after the words it belongs to. use at most nine marks per answer, on the smallest element that fits. if the target is behind another window, say so instead of pointing through it.
+        never say ids, badge numbers, coordinates, or "the list" out loud — the user only sees their screen. name things the way they appear on screen.
+        you can't draw on a whiteboard, run coding tasks, or type for the user yet.
+
+        example — user asks how to turn on dark mode with system settings open: "click appearance in the sidebar [MARK:1:#12:Appearance], then pick dark at the top [MARK:2:#40:Dark]. [POINT:#12:Appearance]"
+        """
+    }
+
+    static let workerScopeSection = """
+        helpers see only your task text plus the element lists; they have no internet, files or GitHub. for a repo, PR or file not on screen, say you can't look that up yet.
+        """
 
     static let coreSection = """
         you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.

@@ -62,6 +62,17 @@ public struct ClaudeArgs: Sendable {
         return commandArguments
     }
 
+    /// The process environment for every call: the app's own, plus
+    /// CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 so the user's ~/.claude/CLAUDE.md (and
+    /// any project/auto memory) is not injected into Clicky's context.
+    /// Documented: code.claude.com/docs/en/env-vars ("prevent loading any
+    /// CLAUDE.md memory files into context"); unlike --bare it keeps OAuth.
+    public static func environment(base baseEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var callEnvironment = baseEnvironment
+        callEnvironment["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+        return callEnvironment
+    }
+
     /// `$TMPDIR/clicky-session`: the working directory for every call.
     public static var sessionWorkingDirectoryURL: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("clicky-session", isDirectory: true)

@@ -17,12 +17,17 @@ Hit rules (CG global points):
 Also measures keyUp -> firstAudio for --latency-asks spoken asks.
 
 Usage: python3 Tools/eval/grounding_eval.py [--displays 0,1,2] [--rows N]
-       [--latency-asks 10] [--out docs/v2/EVAL.md]
+       [--latency-asks 10] [--badges on|off|ab] [--out docs/v2/EVAL.md]
+
+With --badges ab every row is asked twice (badges on, then off, toggled
+through the v2.grounding.badges default) and both arms are reported with
+Wilson 95% intervals.
 Python 3.9, standard library only.
 """
 
 import argparse
 import json
+import math
 import os
 import signal
 import statistics
@@ -218,17 +223,19 @@ def score_cover_row(keys, tags, frames_by_key, raw_response):
     return False, "guessed through the cover" if tags else "no tag and no can't-see"
 
 
-def run_grounding(display_indexes, row_limit):
+def run_grounding(display_indexes, row_limit, badge_arms):
     rows = read_prompt_rows()[:row_limit] if row_limit else read_prompt_rows()
     results = []
     for display_index in display_indexes:
+      for badge_arm in badge_arms:
+        set_badges(badge_arm == "on")
         for row_number, row in enumerate(rows, start=1):
             keys = [k.strip() for k in row["keys"].split(",") if k.strip()]
             # Each row starts fresh: no conversation history from earlier rows.
             clickyctl({"cmd": "reset"}, 10)
             process, ground_truth = start_fixture(display_index, row.get("flags", ""))
             record = {"display": display_index, "row": row_number, "prompt": row["prompt"], "keys": keys,
-                      "kind": row["kind"], "flags": row.get("flags", ""), "hit": False, "reason": ""}
+                      "kind": row["kind"], "flags": row.get("flags", ""), "hit": False, "reason": "", "badges": badge_arm}
             try:
                 if not ground_truth:
                     record["reason"] = "fixture not ready"
@@ -245,6 +252,9 @@ def run_grounding(display_indexes, row_limit):
                     turn = json.load(turn_file)
                 record["turnDir"] = turn_directory
                 record["tags"] = [t["raw"] for t in turn.get("tags", [])]
+                grounding = turn.get("grounding") or {}
+                record["badgeMentions"] = grounding.get("badgeMentionsInNarration", 0)
+                record["speechLeaks"] = grounding.get("speechLeakCount", 0)
                 screens = turn.get("screens", [])
                 if not screens or screens[0].get("displayID") != ground_truth.get("displayID"):
                     record["reason"] = "SCREEN 1 is not the fixture display"
@@ -257,7 +267,7 @@ def run_grounding(display_indexes, row_limit):
                 results.append(record)
             finally:
                 stop_fixture(process, ground_truth)
-            print("display %d row %2d %-5s %s" % (display_index, row_number, "HIT" if record["hit"] else "miss", row["prompt"]), flush=True)
+            print("display %d badges %-3s row %2d %-5s %s" % (display_index, badge_arm, row_number, "HIT" if record["hit"] else "miss", row["prompt"]), flush=True)
     return results
 
 
@@ -283,6 +293,29 @@ def run_latency(ask_count):
         time.sleep(8)
         clickyctl({"cmd": "stop"}, 10)
     return samples
+
+
+def wilson_interval(hits, total, z=1.96):
+    """Wilson score 95% interval for hits/total, as (low, high)."""
+    if total == 0:
+        return (0.0, 0.0)
+    proportion = hits / total
+    denominator = 1 + z * z / total
+    centre = (proportion + z * z / (2 * total)) / denominator
+    margin = z * math.sqrt(proportion * (1 - proportion) / total + z * z / (4 * total * total)) / denominator
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def set_badges(enabled):
+    subprocess.run(["defaults", "write", "com.personal.clicky", "v2.grounding.badges", "-bool", "YES" if enabled else "NO"], check=False)
+
+
+def bucket_of(kind):
+    if kind in ("ax", "web"):
+        return "ax+web"
+    if kind in ("canvas", "dot"):
+        return "canvas+dot"
+    return kind
 
 
 def percentile(values, fraction):
@@ -319,6 +352,29 @@ def write_report(output_path, ping_result, grounding_results, latency_samples):
     lines.append("")
     lines.append("Total (excluding cover rows): **%d/%d** (%.0f%%)" % (total_hits, len(grounding_results), 100.0 * total_hits / max(1, len(grounding_results))))
     lines.append("")
+    arms = sorted({r.get("badges", "on") for r in grounding_results + cover_results})
+    lines.append("### Buckets with Wilson 95% intervals")
+    lines.append("")
+    lines.append("| badges | bucket | hits/n | rate | Wilson 95% |")
+    lines.append("|---|---|---|---|---|")
+    for arm in arms:
+        for bucket in ["ax+web", "canvas+dot", "mixed", "cover"]:
+            subset = [r for r in grounding_results + cover_results if r.get("badges", "on") == arm and bucket_of(r["kind"]) == bucket]
+            if not subset:
+                continue
+            hits = sum(r["hit"] for r in subset)
+            low, high = wilson_interval(hits, len(subset))
+            lines.append("| %s | %s | %d/%d | %.1f%% | %.1f–%.1f%% |" % (arm, bucket, hits, len(subset), 100.0 * hits / len(subset), 100 * low, 100 * high))
+        for display_index in displays:
+            subset = [r for r in grounding_results if r.get("badges", "on") == arm and r["display"] == display_index and bucket_of(r["kind"]) == "canvas+dot"]
+            if subset:
+                hits = sum(r["hit"] for r in subset)
+                lines.append("| %s | canvas+dot d%d | %d/%d | %.1f%% | |" % (arm, display_index, hits, len(subset), 100.0 * hits / len(subset)))
+    mentions = sum(r.get("badgeMentions", 0) for r in grounding_results + cover_results)
+    leaks = sum(r.get("speechLeaks", 0) for r in grounding_results + cover_results)
+    lines.append("")
+    lines.append("Badge/id mentions in raw narration (before the speech net): **%d**; ids stripped by the net: %d." % (mentions, leaks))
+    lines.append("")
     if cover_results:
         lines.append("Cover rows (hit = says it can't see it, or points at the covering window): **%d/%d**" % (
             sum(r["hit"] for r in cover_results), len(cover_results)))
@@ -342,8 +398,8 @@ def write_report(output_path, ping_result, grounding_results, latency_samples):
     lines.append("")
     for result in grounding_results:
         if not result["hit"]:
-            lines.append("- d%d r%d `%s` (%s) -> %s; tags: %s" % (
-                result["display"], result["row"], result["prompt"], ",".join(result["keys"]), result["reason"],
+            lines.append("- d%d r%d [badges %s] `%s` (%s) -> %s; tags: %s" % (
+                result["display"], result["row"], result.get("badges", "on"), result["prompt"], ",".join(result["keys"]), result["reason"],
                 " ".join(result.get("tags", [])) or "none"))
     with open(output_path, "w", encoding="utf-8") as report_file:
         report_file.write("\n".join(lines) + "\n")
@@ -354,6 +410,7 @@ def main():
     parser.add_argument("--displays", default="0,1,2")
     parser.add_argument("--rows", type=int, default=0, help="only the first N prompt rows (0 = all)")
     parser.add_argument("--latency-asks", type=int, default=10)
+    parser.add_argument("--badges", default="on", choices=["on", "off", "ab"])
     parser.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "v2", "EVAL.md"))
     arguments = parser.parse_args()
 
@@ -364,9 +421,11 @@ def main():
     clickyctl({"cmd": "handsfree", "on": False}, 10)
     try:
         display_indexes = [int(d) for d in arguments.displays.split(",") if d != ""]
-        grounding_results = run_grounding(display_indexes, arguments.rows)
+        badge_arms = ["on", "off"] if arguments.badges == "ab" else [arguments.badges]
+        grounding_results = run_grounding(display_indexes, arguments.rows, badge_arms)
         latency_samples = run_latency(arguments.latency_asks) if arguments.latency_asks else []
     finally:
+        set_badges(True)
         clickyctl({"cmd": "handsfree", "on": was_hands_free}, 10)
         clickyctl({"cmd": "clear"}, 10)
 

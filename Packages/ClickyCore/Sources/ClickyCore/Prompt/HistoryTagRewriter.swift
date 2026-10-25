@@ -12,14 +12,13 @@ import Foundation
 public enum HistoryTagRewriter {
     public static func wordsForHistory(_ responseText: String) -> String {
         var rewrittenText = responseText
-
-        rewrittenText = replace(#"\[POINT:none\]"#, in: rewrittenText) { _ in "" }
-        rewrittenText = replace(#"\[POINT:[^\]]*\]"#, in: rewrittenText) { tag in
-            label(fromTag: tag, fieldIndex: 2).map { "(pointed at \($0))" } ?? "(pointed)"
+        // Each tag (any v2 or legacy form) becomes words; unknown ones vanish.
+        for parsedTag in MarkTagParser.extractAll(responseText).tags {
+            guard let tagRange = rewrittenText.range(of: parsedTag.raw) else { continue }
+            rewrittenText.replaceSubrange(tagRange, with: words(for: parsedTag))
         }
-        rewrittenText = replace(#"\[MARK:[^\]]*\]"#, in: rewrittenText) { tag in
-            label(fromTag: tag, fieldIndex: 3).map { "(marked \($0))" } ?? "(marked something)"
-        }
+        // Malformed POINT/MARK tags are dropped like in speech.
+        rewrittenText = MarkTagParser.extractAll(rewrittenText).speechText
         rewrittenText = replace(#"\[WORKER:[^\]]*\]"#, in: rewrittenText) { _ in "" }
 
         return rewrittenText
@@ -27,18 +26,20 @@ public enum HistoryTagRewriter {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The label field of a tag, skipping coordinates and screenN fields.
-    /// POINT: [POINT:x,y:label:screenN]  MARK: [MARK:kind:x,y:label:screenN]
-    private static func label(fromTag tag: String, fieldIndex: Int) -> String? {
-        let innerText = tag.dropFirst().dropLast()
-        let fields = innerText.split(separator: ":", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
-        guard fields.count > fieldIndex - 1 else { return nil }
-        let candidates = fields.dropFirst(fieldIndex - 1).filter { field in
-            !field.isEmpty
-                && field.range(of: #"^screen\s*\d+$"#, options: [.regularExpression, .caseInsensitive]) == nil
-                && field.range(of: #"^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$"#, options: .regularExpression) == nil
+    /// "(pointed at Share)", "(marked file menu)"; the name, else the quoted
+    /// text the tag searched for, never an id or a coordinate.
+    static func words(for parsedTag: ParsedTag) -> String {
+        if parsedTag.kind == .clear { return "" }
+        if case .none = parsedTag.target { return "" }
+        var thingName = parsedTag.name
+        if thingName == nil, case .text(let searchedText, _, _) = parsedTag.target {
+            thingName = searchedText
         }
-        return candidates.first
+        let verb = parsedTag.kind == .point ? "pointed at" : "marked"
+        if let thingName, !thingName.isEmpty {
+            return "(\(verb) \(thingName))"
+        }
+        return parsedTag.kind == .point ? "(pointed)" : "(marked something)"
     }
 
     private static func replace(_ pattern: String, in text: String, with makeReplacement: (String) -> String) -> String {

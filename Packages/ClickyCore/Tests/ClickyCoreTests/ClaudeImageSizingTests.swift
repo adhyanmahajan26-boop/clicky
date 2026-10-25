@@ -76,7 +76,10 @@ private struct SeededGenerator {
     let region = CGSize(width: 3440, height: 1440)
     let native = PixelSize(width: 3440, height: 1440)
 
-    #expect(ClaudeImageSizing.modelImageSize(regionInPoints: region, nativePixels: native, isCursorScreen: true, tierForCursorScreen: .high, effectiveMaxEdge: nil) == PixelSize(width: 2576, height: 1078))
+    // The high tier would give 2576x1078, but Claude Code downsizes anything
+    // above 2000 px, so the CLI cap applies even without a probe record.
+    #expect(ClaudeImageSizing.claudeResizedSize(PixelSize(width: 3440, height: 1440), tier: .high) == PixelSize(width: 2576, height: 1078))
+    #expect(ClaudeImageSizing.modelImageSize(regionInPoints: region, nativePixels: native, isCursorScreen: true, tierForCursorScreen: .high, effectiveMaxEdge: nil) == PixelSize(width: 2000, height: 837))
     #expect(ClaudeImageSizing.modelImageSize(regionInPoints: region, nativePixels: native, isCursorScreen: false, tierForCursorScreen: .high, effectiveMaxEdge: nil) == PixelSize(width: 1568, height: 656))
     #expect(ClaudeImageSizing.modelImageSize(regionInPoints: region, nativePixels: native, isCursorScreen: true, tierForCursorScreen: .high, effectiveMaxEdge: 2000) == PixelSize(width: 2000, height: 837))
 }

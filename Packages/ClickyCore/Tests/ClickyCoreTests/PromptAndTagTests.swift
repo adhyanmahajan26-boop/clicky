@@ -86,12 +86,36 @@ private func containsInOrder(_ needles: [String], in haystack: [String]) -> Bool
 
 // MARK: - 3. Prompt gating
 
-@Test func currentPromptIncludesAllFeatureSections() {
-    let prompt = SystemPromptBuilder.mainSystemPrompt(features: .current)
+@Test func legacyPromptIncludesAllLegacySections() {
+    let prompt = SystemPromptBuilder.mainSystemPrompt(features: .legacy)
     #expect(prompt.contains("element pointing:"))
     #expect(prompt.contains("live marks:"))
     #expect(prompt.contains("helper workers:"))
     #expect(prompt.contains("SCREEN header"))
+}
+
+@Test func currentPromptUsesGroundingInsteadOfLegacySections() {
+    let prompt = SystemPromptBuilder.mainSystemPrompt(features: .current)
+    #expect(!prompt.contains("element pointing:"))
+    #expect(!prompt.contains("live marks:"))
+    #expect(prompt.contains("helper workers:"))
+    // Describes exactly the lines sent.
+    #expect(prompt.contains(#"SCREEN 1 "DELL S3425DW" (main, cursor here) image 2000x837 px"#))
+    #expect(prompt.contains("cursor 1203,788 over #57; focus #2"))
+    #expect(prompt.contains(#"window "<title>" (<app>)"#))
+    #expect(prompt.contains("57 btn \"Share\" 1188,776,30,28"))
+    #expect(prompt.contains("top-left corner"))
+    #expect(prompt.contains("the centre you see"))
+    #expect(prompt.contains("magenta number tags"))
+    // Worker scope wording.
+    #expect(prompt.contains("helpers see only your task text plus the element lists; they have no internet, files or GitHub."))
+    #expect(prompt.contains("say you can't look that up yet"))
+    #expect(prompt.contains("never say ids"))
+}
+
+@Test func badgesOffPromptDoesNotMentionTags() {
+    let prompt = SystemPromptBuilder.mainSystemPrompt(features: [.grounding, .helperWorkers])
+    #expect(!prompt.contains("magenta number tags"))
 }
 
 @Test func emptyFeaturesPromptHasNoTagSyntax() {
