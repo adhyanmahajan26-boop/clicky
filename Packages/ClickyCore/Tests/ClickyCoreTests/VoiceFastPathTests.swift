@@ -195,6 +195,6 @@ struct VoiceFastPathPolicyTests {
 
 /// en-IN heard "new tab" as "New time" in a live follow-up feed.
 @Test func newTimeIsNewTab() {
-    #expect(VoiceFastPath.parse("New time") == .key(.newTab))
-    #expect(VoiceFastPath.parse("what time is it") == nil)
+    #expect(VoiceFastPathParser.parse("New time") == .key(.newTab))
+    #expect(VoiceFastPathParser.parse("what time is it") == nil)
 }
