@@ -12,6 +12,8 @@
 //    ask {text, speak=true}   → runs the full answer pipeline; replies at turn end
 //    marks {tags}             → fresh capture, parse/map/draw the tags (legacy parser)
 //    say {text}, stop, clear, reset, handsfree {on}, selftest {name}
+//    board {path}             → a .jsonl board or a raw answer file, drawn and narrated as if Claude said it
+//    boardCtl {action}        → next | back | replay | pause | export | close | state
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -205,6 +207,44 @@ final class DebugCommandInbox {
                 let (isPassing, selfTestResult) = await self.runSelfTest(named: selfTestName, mode: selfTestMode)
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: isPassing, result: selfTestResult, errorMessage: isPassing ? nil : "selftest \(selfTestName) failed")
             }
+
+        case "board":
+            guard let path = commandObject["path"] as? String, !path.isEmpty else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "board needs \"path\"")
+                return
+            }
+            let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard let answerText = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "can't read \(fileURL.path)")
+                return
+            }
+            Task {
+                let turnDirectoryURL = await self.companionManager.playDebugAnswer(answerText)
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: self.companionManager.boardController.hasBoard,
+                           result: self.companionManager.boardController.stateSummary(),
+                           errorMessage: self.companionManager.boardController.hasBoard ? nil : "no board was drawn",
+                           turnDirectoryURL: turnDirectoryURL)
+            }
+
+        case "boardCtl":
+            let action = commandObject["action"] as? String ?? "state"
+            let boardController = companionManager.boardController
+            var result = boardController.stateSummary()
+            switch action {
+            case "next": boardController.next()
+            case "back": boardController.back()
+            case "replay": boardController.replay()
+            case "pause": boardController.togglePause()
+            case "export": result["exported"] = boardController.exportBoard()?.path ?? NSNull()
+            case "close": boardController.close()
+            case "state": break
+            default:
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil,
+                      errorMessage: "unknown boardCtl action \(action); known: next, back, replay, pause, export, close, state")
+                return
+            }
+            if action != "state" && action != "export" { result = boardController.stateSummary() }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
 
         default:
             reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "unknown cmd \(commandName)")

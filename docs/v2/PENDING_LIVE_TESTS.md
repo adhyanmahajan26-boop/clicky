@@ -94,3 +94,39 @@ Questions for the user:
   still comfortable to follow?
 - If the first-segment latency misses (p50 > 600 ms): try an 8-bit Qwen3-TTS build (needs a download, not done).
 - Load the CustomVoice model so speaker "Ryan" + the instruct take effect (the Base model ignores them)?
+
+## P4 (CWB v1 whiteboard)
+
+Silent-mode work: everything below draws a window, talks or flies the companion. Renders and narrator
+logic are covered offscreen by `swift test` (goldens in `Packages/ClickyCore/Tests/ClickyCoreTests/Goldens/p4`,
+PNGs in `~/Library/Logs/Clicky/renders/p4/`).
+
+1. `Tools/clickyctl.sh '{"cmd":"board","path":"'$PWD'/Tools/eval/boards/https.jsonl"}'`: the panel opens on the
+   mouse screen (visible frame inset 6 %), "Drawing…", then the board narrates step by step in the voice; the
+   reply has `hasBoard: true`, `steps: 10`. Then `boardCtl {action: export}` → `~/Pictures/Clicky/whiteboard-<ts>.png`
+   (whole board, 2×, charts not blank) + `.clickyboard` (the JSONL) next to it, PNG on the pasteboard.
+   Also `boardCtl` next / back / replay / pause / state / close.
+2. Ask "how does https work, why is it slower than http, and what's a certificate" ×10 (spoken, MODE hint off,
+   `v2.whiteboard.auto` on): ≥ 9 answers draw a board with an agenda, 3 question sections in the order asked, and a
+   recap (`boardTitle`, `boardStats` in turn.json; sections in `boardCtl state`). Repeat once with "draw a diagram
+   of …" (MODE: whiteboard, `--effort medium`).
+3. Reveal timing from turn.json `boardEvents`: for every step, `reveal.t − first segmentStart.t` of that step is
+   ≥ 0 (never before) and ≤ 50 ms; a step without words holds 1.2 s (`hold` → `stepEnd`).
+4. `selftest overlayExclusion` with the board open: the panel must not reach screenshots (Clicky is excluded by app).
+5. A step whose `say` points at the real screen (e.g. `[POINT:"Safari":Safari]`): the board drops to 25 % and clicks
+   pass through until that step ends; a `point` id / POINT at a board element flies the companion onto the board.
+6. Keys, checked by the user (panel key): Esc closes (before any other Esc consumer), ←/→ step, Space pauses and
+   resumes the voice mid-sentence, r replays from step 1, e exports, c copies the PNG, f toggles full screen
+   (`v2.whiteboard.fullScreen`), 0 fits, +/− zoom. Themes: `defaults write com.personal.clicky v2.whiteboard.theme chalk`
+   (and `dark`, `paper`).
+7. Hands-free with the board open: "next", "back", "repeat", "pause", "continue", "close board", "save board"; while
+   Clicky is speaking a command word Clicky itself just said is ignored (EchoGuard). Always: "whiteboard that" after a
+   normal answer (a board of it), "go deeper on two" (a new page for the second question section).
+8. Several questions with helpers: a MODE: whiteboard turn that spawns workers shows the shell (one frame per worker,
+   orbiting spark) and replaces it with the board; the shell closes if no board follows.
+9. A deliberately broken board (`board` with a file of mangled JSONL) → one repair call (main model, $TMPDIR/clicky-session)
+   then the board, or, if that fails, the steps' words spoken with no board.
+10. History: the next turn's "earlier in this conversation" carries `BOARD STATE` (≤ 4 KB).
+11. Hosted tests compiled with build-for-testing, not run.
+
+SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for math images.

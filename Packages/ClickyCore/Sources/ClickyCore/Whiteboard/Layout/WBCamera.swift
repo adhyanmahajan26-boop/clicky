@@ -35,6 +35,12 @@ public struct WBCameraTransform: Equatable, Sendable {
     public let scale: CGFloat
     public let translation: CGVector
 
+    public init(framedRect: CGRect, scale: CGFloat, translation: CGVector) {
+        self.framedRect = framedRect
+        self.scale = scale
+        self.translation = translation
+    }
+
     public func viewPoint(for boardPoint: CGPoint) -> CGPoint {
         CGPoint(x: boardPoint.x * scale + translation.dx, y: boardPoint.y * scale + translation.dy)
     }

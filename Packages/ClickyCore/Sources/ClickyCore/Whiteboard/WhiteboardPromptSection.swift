@@ -14,7 +14,7 @@ import Foundation
 public enum WhiteboardPromptSection {
     public static let text = #"""
         whiteboard:
-        you can draw a whiteboard next to your spoken answer. draw one when the user's message has "MODE: whiteboard" or they ask you to draw, diagram or visualize something, and the subject is a concept: how something works, a process, a comparison, math, an idea in code. questions about doing something in the on-screen ui (how do i…, where is…, show me how…) never get a board: answer those in speech with marks on the real screen.
+        you can draw a whiteboard next to your spoken answer. draw one when the user's message has "MODE: whiteboard" or they ask you to draw, diagram or visualize something, and the subject is a concept: how something works, a process, a comparison, math, an idea in code. boards are for concepts only. questions about doing something in the on-screen ui (how do i…, where is…, show me how…) never get a board: answer those in speech with numbered marks on the real screen.
 
         how to answer with a board: one short spoken sentence, then the board in a single <whiteboard> … </whiteboard> block, and nothing after it. the explanation itself goes in the steps' "say" lines, which are spoken while the board draws, in your usual spoken style.
 

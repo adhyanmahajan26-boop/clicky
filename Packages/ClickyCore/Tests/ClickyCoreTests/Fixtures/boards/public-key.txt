@@ -1,0 +1,33 @@
+Public key cryptography uses a pair of keys, one you share and one you keep secret, so strangers can send you private messages.
+
+<whiteboard>
+{"wb":1,"title":"Public key cryptography","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"How public key cryptography works","q":"explain how public key cryptography works"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["The key pair","Encrypting a message","Why eavesdroppers fail","Signatures: the reverse direction"],"ordered":true}
+{"el":"box","id":"bob","sec":"q1","text":"Bob generates a key pair","shape":"round","color":"blue","icon":"person.fill"}
+{"el":"box","id":"pub","sec":"q1","text":"Public key: share with everyone","shape":"rect","color":"green","icon":"lock.open.fill"}
+{"el":"box","id":"priv","sec":"q1","text":"Private key: never leaves Bob","shape":"rect","color":"red","icon":"key.fill"}
+{"el":"arrow","id":"a1","sec":"q1","from":"bob","to":"pub"}
+{"el":"arrow","id":"a2","sec":"q1","from":"bob","to":"priv"}
+{"el":"box","id":"msg","sec":"q1","text":"Alice's message","shape":"note","color":"gray","icon":"envelope.fill"}
+{"el":"box","id":"enc","sec":"q1","text":"Encrypt with Bob's public key","shape":"pill","color":"orange"}
+{"el":"box","id":"ct","sec":"q1","text":"Ciphertext (scrambled)","shape":"rect","color":"gray","icon":"eye.slash.fill"}
+{"el":"arrow","id":"a3","sec":"q1","from":"msg","to":"enc"}
+{"el":"arrow","id":"a4","sec":"q1","from":"pub","to":"enc","text":"used by Alice","style":"dashed"}
+{"el":"arrow","id":"a5","sec":"q1","from":"enc","to":"ct","text":"sent over the internet"}
+{"el":"box","id":"dec","sec":"q1","text":"Decrypt with Bob's private key","shape":"pill","color":"orange"}
+{"el":"box","id":"out","sec":"q1","text":"Original message","shape":"note","color":"green","icon":"envelope.open.fill"}
+{"el":"arrow","id":"a6","sec":"q1","from":"ct","to":"dec"}
+{"el":"arrow","id":"a7","sec":"q1","from":"priv","to":"dec","style":"dashed"}
+{"el":"arrow","id":"a8","sec":"q1","from":"dec","to":"out"}
+{"el":"callout","id":"co1","sec":"q1","target":"ct","style":"warning","text":"An eavesdropper sees this, but the public key can't undo it."}
+{"el":"table","id":"tb","sec":"q1","cols":["Goal","Lock with","Unlock with"],"rows":[["Secrecy","Receiver's public key","Receiver's private key"],["Signature","Sender's private key","Sender's public key"]]}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Two linked keys: public and private","Public key locks, private key unlocks","Private key never gets shared","Reverse the roles and you get signatures","Security rests on math that is easy one way and hard to reverse"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"Here's the plan: the key pair, how a message is encrypted, why snoopers fail, and then signatures.","focus":"agenda"}
+{"step":2,"show":["bob","pub","priv","a1","a2"],"hl":["pub","priv"],"say":"Bob generates two mathematically linked keys. The public key he hands out to anyone, and the private key he keeps secret.","cue":{"pub":"public","priv":"private"},"focus":"q1"}
+{"step":3,"show":["msg","enc","a3","a4"],"hl":["enc"],"say":"When Alice wants to write to Bob, she locks her message using Bob's public key.","cue":{"msg":"message","enc":"locks"},"point":"enc"}
+{"step":4,"show":["ct","a5"],"hl":["ct"],"say":"What travels across the internet is just scrambled ciphertext.","cue":{"ct":"scrambled"},"point":"ct"}
+{"step":5,"show":["dec","out","a6","a7","a8"],"hl":["dec"],"say":"Only Bob's private key can reverse that lock, so Bob alone gets the original message back.","cue":{"dec":"private","out":"original"},"point":"dec"}
+{"step":6,"show":["co1"],"hl":["co1"],"say":"Anyone listening can see the ciphertext and even Bob's public key, but that's not enough to unscramble it. Working out the private key would take impractically long.","point":"ct"}
+{"step":7,"show":["tb"],"hl":["tb"],"say":"Flip the roles and you get digital signatures. The sender signs with their private key, and anyone can check it with the matching public key.","cue":{"tb":"signatures"},"point":"tb"}
+{"step":8,"show":["rc"],"hl":["rc"],"say":"So remember: the public key locks, the private key unlocks, and the private key never gets shared.","focus":"recap"}
+</whiteboard>

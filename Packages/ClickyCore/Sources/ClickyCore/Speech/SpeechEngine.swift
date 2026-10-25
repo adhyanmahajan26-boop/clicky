@@ -72,8 +72,14 @@ public struct EchoGuard: Sendable {
 
     /// Whether `heardText` is a real barge-in command at `date`.
     public func accepts(_ heardText: String, at date: Date) -> Bool {
+        accepts(heardText, commandWords: Self.commandWords, at: date)
+    }
+
+    /// The same check for other command words (P4 board: "next", "back"…):
+    /// the command counts only if Clicky didn't just say those words.
+    public func accepts(_ heardText: String, commandWords: Set<String>, at date: Date) -> Bool {
         let heardWords = Self.words(in: heardText)
-        let commandWordsHeard = heardWords.intersection(Self.commandWords)
+        let commandWordsHeard = heardWords.intersection(commandWords)
         guard !commandWordsHeard.isEmpty else { return false }
         let recentWords = spokenEntries
             .filter { date.timeIntervalSince($0.date) <= Self.windowSeconds }

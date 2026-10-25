@@ -217,6 +217,12 @@ public struct ModeHint: Equatable, Sendable {
     private static let noBoardPattern = try! NSRegularExpression(pattern: #"\bno (white ?)?board\b"#, options: [.caseInsensitive])
     private static let boardPattern = try! NSRegularExpression(pattern: #"\b(white ?board|diagram|visuali[sz]e)\b"#, options: [.caseInsensitive])
 
+    /// A turn that must answer with a board ("whiteboard that", "go deeper on 2").
+    public static let whiteboard = ModeHint(line: "MODE: whiteboard", effort: "medium")
+
+    public var isWhiteboard: Bool { line == "MODE: whiteboard" }
+    public var isAnswerOnly: Bool { line == "MODE: answer" }
+
     public static func detect(_ transcript: String) -> ModeHint {
         let range = NSRange(transcript.startIndex..., in: transcript)
         if noBoardPattern.firstMatch(in: transcript, range: range) != nil { return ModeHint(line: "MODE: answer", effort: nil) }

@@ -1,0 +1,23 @@
+Indexes let the database jump straight to the rows you want instead of reading every row.
+
+<whiteboard>
+{"wb":1,"title":"How database indexes speed up queries","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Why indexes are faster","q":"how do database indexes make queries faster?"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Searching without an index","Searching with an index","The speed difference","Creating one, and the cost"],"ordered":true}
+{"el":"box","id":"q","sec":"q1","text":"SELECT * FROM users WHERE email = 'a@b.com'","shape":"pill","color":"blue","icon":"magnifyingglass"}
+{"el":"box","id":"scan","sec":"q1","text":"No index: check every row, one by one (O(n))","shape":"rect","color":"orange","icon":"list.bullet"}
+{"el":"box","id":"idx","sec":"q1","text":"Index (B-tree): sorted, jump down a few levels (O(log n))","shape":"rect","color":"green","icon":"arrow.down.right.circle"}
+{"el":"arrow","id":"a1","sec":"q1","from":"q","to":"scan","text":"slow path","style":"dashed","head":"end"}
+{"el":"arrow","id":"a2","sec":"q1","from":"q","to":"idx","text":"fast path","style":"thick","head":"end"}
+{"el":"chart","id":"ch","sec":"q1","kind":"bar","title":"Rows examined, 1,000,000-row table","data":[["No index",1000000],["With index",20]]}
+{"el":"code","id":"cd","sec":"q1","lang":"sql","text":"CREATE INDEX idx_users_email\\n  ON users (email);","hl":[1]}
+{"el":"callout","id":"co","sec":"q1","target":"idx","style":"warning","text":"Costs disk space, and every insert or update must also update the index."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Without an index, the database scans every row","An index keeps values sorted in a tree, so lookups skip most data","Millions of rows become about 20 steps","Indexes make reads faster but writes and storage heavier"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"here's the plan: what happens without an index, what changes with one, and what it costs.","focus":"agenda"}
+{"step":2,"show":["q"],"hl":["q"],"say":"say you run a query that looks up one user by email.","cue":{"q":"query"},"focus":"q1"}
+{"step":3,"show":["scan","a1"],"hl":["scan"],"say":"with no index, the database has to read every single row and compare it, so the work grows with the table size.","cue":{"scan":"every"},"point":"scan"}
+{"step":4,"show":["idx","a2"],"hl":["idx"],"say":"an index keeps those emails sorted in a tree, so the database can hop down a few levels straight to the match, like using a book's index instead of reading every page.","cue":{"idx":"tree"},"point":"idx"}
+{"step":5,"show":["ch"],"hl":["ch"],"say":"on a million rows, that's the difference between examining everything and examining about twenty entries.","cue":{"ch":"million"},"point":"ch"}
+{"step":6,"show":["cd"],"hl":["cd"],"say":"you create one with a single statement on the column you search by.","cue":{"cd":"statement"},"point":"cd"}
+{"step":7,"show":["co"],"hl":["co"],"say":"the tradeoff is that the index takes space, and every write has to keep it up to date, so index the columns you actually filter on.","cue":{"co":"tradeoff"},"point":"co"}
+{"step":8,"show":["rc"],"hl":["rc"],"say":"so indexes turn full scans into quick tree lookups, in exchange for extra storage and slightly slower writes.","focus":"recap"}
+</whiteboard>

@@ -95,6 +95,28 @@ final class TurnRecord {
     var segmentTexts: [String] = []
     var firedTagIndexes: [Int] = []
 
+    /// v2 P4: the board's narration, as it happened. `t` is a Unix timestamp:
+    /// segmentStart (a step's segment began playing), reveal (a step appeared,
+    /// never before its first segmentStart), stepEnd, hold (a silent step).
+    struct BoardEventEntry: Encodable {
+        let kind: String
+        let step: Int
+        let segment: Int?
+        let t: Double
+    }
+
+    struct BoardStatsEntry: Encodable {
+        var elements: Int
+        var steps: Int
+        var dropped: Int
+        var usable: Bool
+        var repaired: Bool
+    }
+
+    var boardTitle: String?
+    var boardStats: BoardStatsEntry?
+    var boardEvents: [BoardEventEntry] = []
+
     /// The element lists exactly as sent, saved next to the screenshots.
     func recordElementLists(_ elementListTexts: [String]) {
         try? elementListTexts.joined(separator: "\n\n").write(to: turnDirectoryURL.appendingPathComponent("elements.txt"), atomically: true, encoding: .utf8)
@@ -256,6 +278,9 @@ enum TurnLogger {
             let grounding: TurnRecord.GroundingEntry?
             let segments: [String]
             let firedTags: [Int]
+            let boardTitle: String?
+            let boardStats: TurnRecord.BoardStatsEntry?
+            let boardEvents: [TurnRecord.BoardEventEntry]
         }
 
         let turnFile = TurnFile(
@@ -270,7 +295,10 @@ enum TurnLogger {
             error: turnRecord.errorDescription,
             grounding: turnRecord.grounding,
             segments: turnRecord.segmentTexts,
-            firedTags: turnRecord.firedTagIndexes
+            firedTags: turnRecord.firedTagIndexes,
+            boardTitle: turnRecord.boardTitle,
+            boardStats: turnRecord.boardStats,
+            boardEvents: turnRecord.boardEvents
         )
 
         let jsonEncoder = JSONEncoder()

@@ -1,0 +1,31 @@
+Photosynthesis turns light, water, and CO2 into sugar and oxygen in two linked stages, and here's the picture.
+
+<whiteboard>
+{"wb":1,"title":"How photosynthesis works","dir":"LR","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Photosynthesis","q":"how does photosynthesis work?"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"What's coming","items":["The overall equation","Stage 1: light reactions","Stage 2: Calvin cycle","Recap"],"ordered":true}
+{"el":"math","id":"eq","sec":"q1","tex":"6CO_2 + 6H_2O \\xrightarrow{light} C_6H_{12}O_6 + 6O_2"}
+{"el":"box","id":"sun","sec":"q1","text":"Sunlight","shape":"pill","color":"yellow","icon":"sun.max"}
+{"el":"box","id":"water","sec":"q1","text":"Water (H2O)","shape":"pill","color":"blue","icon":"drop"}
+{"el":"box","id":"lr","sec":"q1","text":"Light reactions (thylakoid membranes)","shape":"round","color":"green"}
+{"el":"box","id":"o2","sec":"q1","text":"Oxygen (O2) released","shape":"pill","color":"gray"}
+{"el":"box","id":"atp","sec":"q1","text":"ATP + NADPH (stored energy)","shape":"round","color":"orange"}
+{"el":"box","id":"co2","sec":"q1","text":"Carbon dioxide (CO2)","shape":"pill","color":"purple"}
+{"el":"box","id":"cc","sec":"q1","text":"Calvin cycle (stroma)","shape":"round","color":"green"}
+{"el":"box","id":"glu","sec":"q1","text":"Glucose (sugar)","shape":"pill","color":"red"}
+{"el":"arrow","id":"a1","sec":"q1","from":"sun","to":"lr"}
+{"el":"arrow","id":"a2","sec":"q1","from":"water","to":"lr"}
+{"el":"arrow","id":"a3","sec":"q1","from":"lr","to":"o2","text":"water is split"}
+{"el":"arrow","id":"a4","sec":"q1","from":"lr","to":"atp"}
+{"el":"arrow","id":"a5","sec":"q1","from":"atp","to":"cc","style":"thick"}
+{"el":"arrow","id":"a6","sec":"q1","from":"co2","to":"cc"}
+{"el":"arrow","id":"a7","sec":"q1","from":"cc","to":"glu"}
+{"el":"callout","id":"c1","sec":"q1","target":"lr","style":"info","text":"Both stages happen inside the chloroplast."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Light + water + CO2 become sugar + oxygen","Light reactions capture light energy as ATP and NADPH","Splitting water releases the oxygen","The Calvin cycle uses that energy to build glucose from CO2"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at the overall equation, then the two stages, light reactions and the Calvin cycle.","focus":"agenda"}
+{"step":2,"show":["eq"],"hl":["eq"],"say":"Overall, plants take carbon dioxide and water, add light energy, and make glucose and oxygen.","focus":"q1"}
+{"step":3,"show":["sun","water","lr","a1","a2"],"hl":["lr"],"say":"In the first stage, sunlight and water arrive at the light reactions, in the thylakoid membranes of the chloroplast.","cue":{"sun":"sunlight","water":"water","lr":"light reactions"},"point":"lr"}
+{"step":4,"show":["o2","atp","a3","a4","c1"],"hl":["o2","atp"],"say":"The light energy splits water, which releases oxygen, and the energy is stored in the carriers ATP and NADPH.","cue":{"o2":"oxygen","atp":"ATP"},"point":"atp"}
+{"step":5,"show":["co2","cc","a5","a6"],"hl":["cc"],"say":"In the second stage, the Calvin cycle in the stroma uses that stored energy to fix carbon dioxide.","cue":{"co2":"carbon dioxide","cc":"Calvin cycle"},"point":"cc"}
+{"step":6,"show":["glu","a7"],"hl":["glu"],"say":"The result is glucose, which the plant uses for energy and to build new tissue.","cue":{"glu":"glucose"},"point":"glu"}
+{"step":7,"show":["rc"],"hl":["rc"],"say":"So light energy gets captured first, and then it's spent turning carbon dioxide into sugar.","focus":"recap"}
+</whiteboard>

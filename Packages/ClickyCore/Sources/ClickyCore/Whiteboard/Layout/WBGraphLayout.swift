@@ -18,7 +18,9 @@
 //      constraints (isotonic regression)
 //   6. edges: Catmull-Rom through the dummy points, clipped exactly to both
 //      node outlines; label on the middle segment, nudged ±12 pt on
-//      collision
+//      collision. Parallel edges (the same two nodes in adjacent layers,
+//      e.g. a request and its reply) sit 24 pt apart side by side, their
+//      labels stacked in a gap grown to fit them all
 //  Everything is index arrays; no Dictionary/Set order reaches the output.
 //
 
@@ -34,6 +36,7 @@ enum WBGraphLayout {
     static let coordinatePassCount = 4
     static let transposeRoundLimit = 12
     static let labelGapMargin: CGFloat = 12
+    static let parallelEdgeSpacing: CGFloat = 24
 
     struct Node: Equatable {
         let id: String
@@ -68,6 +71,28 @@ enum WBGraphLayout {
             scaledResult.scale = self.scale * scale
             return scaledResult
         }
+    }
+
+    /// Where the segment from `start` (inside the outline) toward `target`
+    /// (outside it) crosses the outline; nil when `start` isn't inside.
+    static func exitPoint(from start: CGPoint, toward target: CGPoint, rect: CGRect, shape: WBNodeShape) -> CGPoint? {
+        func isInside(_ point: CGPoint) -> Bool {
+            switch shape {
+            case .rectangle:
+                return point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY
+            case .ellipse:
+                let normalizedX = (point.x - rect.midX) / (rect.width / 2), normalizedY = (point.y - rect.midY) / (rect.height / 2)
+                return normalizedX * normalizedX + normalizedY * normalizedY <= 1
+            }
+        }
+        guard isInside(start), !isInside(target) else { return nil }
+        var insideFraction: CGFloat = 0, outsideFraction: CGFloat = 1
+        for _ in 0..<48 {
+            let middleFraction = (insideFraction + outsideFraction) / 2
+            let middlePoint = CGPoint(x: start.x + (target.x - start.x) * middleFraction, y: start.y + (target.y - start.y) * middleFraction)
+            if isInside(middlePoint) { insideFraction = middleFraction } else { outsideFraction = middleFraction }
+        }
+        return CGPoint(x: start.x + (target.x - start.x) * insideFraction, y: start.y + (target.y - start.y) * insideFraction)
     }
 
     // MARK: Layered graph
@@ -407,6 +432,30 @@ enum WBGraphLayout {
             return isTopToBottom ? nodes[realNode].size.height : nodes[realNode].size.width
         }
 
+        // Parallel edges: the same two nodes in adjacent layers (lookups only;
+        // groups and positions follow edge order).
+        var parallelGroups: [[Int]] = []
+        var parallelGroupIndexByPair: [String: Int] = [:]
+        for (edgeIndex, edge) in edges.enumerated() where graph.chainOfEdge[edgeIndex].count == 2 {
+            let pairKey = "\(min(edge.from, edge.to))-\(max(edge.from, edge.to))"
+            if let groupIndex = parallelGroupIndexByPair[pairKey] {
+                parallelGroups[groupIndex].append(edgeIndex)
+            } else {
+                parallelGroupIndexByPair[pairKey] = parallelGroups.count
+                parallelGroups.append([edgeIndex])
+            }
+        }
+        parallelGroups = parallelGroups.filter { $0.count > 1 }
+        var parallelGroupOfEdge = [Int](repeating: -1, count: edges.count)
+        var parallelPositionOfEdge = [Int](repeating: 0, count: edges.count)
+        for (groupIndex, group) in parallelGroups.enumerated() {
+            for (position, edgeIndex) in group.enumerated() {
+                parallelGroupOfEdge[edgeIndex] = groupIndex
+                parallelPositionOfEdge[edgeIndex] = position
+            }
+        }
+        func labelDepth(of edge: Edge) -> CGFloat { isTopToBottom ? edge.labelSize.height : edge.labelSize.width }
+
         // Gap after each layer: 64, or wider for the label that sits in it.
         var gapAfterLayer = [CGFloat](repeating: layerGap, count: graph.layerCount)
         for (edgeIndex, edge) in edges.enumerated() where edge.label != nil {
@@ -415,8 +464,14 @@ enum WBGraphLayout {
             let outputHop = WBLayoutGeometry.labelSegmentIndex(segmentCount: hopCount)
             let topDownHop = graph.edgeIsReversed[edgeIndex] ? hopCount - 1 - outputHop : outputHop
             let gapLayer = graph.layerOfVertex[chain[topDownHop]]
-            let labelDepth = isTopToBottom ? edge.labelSize.height : edge.labelSize.width
-            gapAfterLayer[gapLayer] = max(gapAfterLayer[gapLayer], labelDepth + 2 * labelGapMargin)
+            gapAfterLayer[gapLayer] = max(gapAfterLayer[gapLayer], labelDepth(of: edge) + 2 * labelGapMargin)
+        }
+        for group in parallelGroups {
+            let labeledEdges = group.filter { edges[$0].label != nil }
+            guard !labeledEdges.isEmpty else { continue }
+            let gapLayer = graph.layerOfVertex[graph.chainOfEdge[group[0]][0]]
+            let stackedDepth = labeledEdges.reduce(CGFloat(0)) { $0 + labelDepth(of: edges[$1]) } + CGFloat(labeledEdges.count + 1) * labelGapMargin
+            gapAfterLayer[gapLayer] = max(gapAfterLayer[gapLayer], stackedDepth)
         }
         var layerCenterAcross = [CGFloat](repeating: 0, count: graph.layerCount)
         var acrossCursor: CGFloat = 0
@@ -477,10 +532,45 @@ enum WBGraphLayout {
             let lowerNode = chain[chain.count - 1]
             knots[0] = WBLayoutGeometry.borderPoint(of: nodeRects[upperNode], shape: nodes[upperNode].shape, toward: knots[1])
             knots[knots.count - 1] = WBLayoutGeometry.borderPoint(of: nodeRects[lowerNode], shape: nodes[lowerNode].shape, toward: knots[knots.count - 2])
+            let parallelGroupIndex = parallelGroupOfEdge[edgeIndex]
+            var stackedLabelAnchor: CGPoint?
+            if parallelGroupIndex >= 0 {
+                // Side by side, and this edge's label in its own slot of the gap.
+                let group = parallelGroups[parallelGroupIndex]
+                let shift = (CGFloat(parallelPositionOfEdge[edgeIndex]) - CGFloat(group.count - 1) / 2) * parallelEdgeSpacing
+                let shiftVector = isTopToBottom ? CGVector(dx: shift, dy: 0) : CGVector(dx: 0, dy: shift)
+                // Clipped exactly where the shifted line leaves each outline.
+                let upperCenter = center(of: upperNode), lowerCenter = center(of: lowerNode)
+                let shiftedUpper = CGPoint(x: upperCenter.x + shiftVector.dx, y: upperCenter.y + shiftVector.dy)
+                let shiftedLower = CGPoint(x: lowerCenter.x + shiftVector.dx, y: lowerCenter.y + shiftVector.dy)
+                if let upperEnd = exitPoint(from: shiftedUpper, toward: shiftedLower, rect: nodeRects[upperNode], shape: nodes[upperNode].shape),
+                   let lowerEnd = exitPoint(from: shiftedLower, toward: shiftedUpper, rect: nodeRects[lowerNode], shape: nodes[lowerNode].shape) {
+                    knots = [upperEnd, lowerEnd]
+                }
+                if edge.label != nil {
+                    let gapLayer = graph.layerOfVertex[upperNode]
+                    let layerDepth = layers[gapLayer].map(depth).max() ?? 0
+                    var acrossCursor = layerCenterAcross[gapLayer] + layerDepth / 2 + labelGapMargin
+                    for groupEdgeIndex in group where edges[groupEdgeIndex].label != nil {
+                        let slotDepth = labelDepth(of: edges[groupEdgeIndex])
+                        if groupEdgeIndex == edgeIndex {
+                            let acrossCenter = acrossCursor + slotDepth / 2
+                            let startAcross = isTopToBottom ? knots[0].y : knots[0].x
+                            let endAcross = isTopToBottom ? knots[1].y : knots[1].x
+                            let fraction = endAcross == startAcross ? 0.5 : (acrossCenter - startAcross) / (endAcross - startAcross)
+                            let alongCenter = isTopToBottom ? knots[0].x + (knots[1].x - knots[0].x) * fraction
+                                                            : knots[0].y + (knots[1].y - knots[0].y) * fraction
+                            stackedLabelAnchor = isTopToBottom ? CGPoint(x: alongCenter, y: acrossCenter) : CGPoint(x: acrossCenter, y: alongCenter)
+                            break
+                        }
+                        acrossCursor += slotDepth + labelGapMargin
+                    }
+                }
+            }
             if graph.edgeIsReversed[edgeIndex] { knots.reverse() }
             let segments = WBLayoutGeometry.catmullRomSegments(through: knots)
             var labelRect: CGRect?
-            if edge.label != nil, let anchor = WBLayoutGeometry.labelAnchor(of: segments) {
+            if edge.label != nil, let anchor = stackedLabelAnchor ?? WBLayoutGeometry.labelAnchor(of: segments) {
                 let placedLabel = WBLayoutGeometry.placeLabel(size: edge.labelSize, at: anchor, obstacles: labelObstacles)
                 labelObstacles.append(placedLabel)
                 labelRect = placedLabel
