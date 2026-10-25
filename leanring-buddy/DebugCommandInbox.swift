@@ -327,8 +327,10 @@ final class DebugCommandInbox {
             return await GroundingSelfTests.run(named: selfTestName, mode: mode, companionManager: companionManager)
         case "calibration", "overlayExclusion", "transportProbe", "tierProbe":
             return await DiagnosticSelfTests.run(named: selfTestName, companionManager: companionManager)
+        case "recheckExclusion", "markRoundTrip":
+            return await MarkSelfTests.run(named: selfTestName, companionManager: companionManager)
         default:
-            return (false, ["error": "unknown selftest \(selfTestName); known: legacyCenter, fixtureAX, calibration, overlayExclusion, transportProbe, tierProbe"])
+            return (false, ["error": "unknown selftest \(selfTestName); known: legacyCenter, fixtureAX, calibration, overlayExclusion, transportProbe, tierProbe, fixtureResolve, verifyHitTest, groundingLatency, recheckExclusion, markRoundTrip"])
         }
     }
 

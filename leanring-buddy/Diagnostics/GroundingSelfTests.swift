@@ -215,9 +215,21 @@ enum GroundingSelfTests {
     static func runVerifyHitTest(mode: String, companionManager: CompanionManager) async -> (Bool, [String: Any]) {
         guard let groundTruth = readFixtureGroundTruth() else { return (false, ["error": "no ready fixture groundtruth"]) }
         let coordinator = companionManager.groundingCoordinator
-        let targetKey = mode == "park" ? "run" : "share"
+        // "park" / "cover", optionally "+marks": live marks drawn on the target
+        // first (they must not change the verdict; Clicky's overlay is excluded).
+        let isParkMode = mode.hasPrefix("park")
+        let targetKey = isParkMode ? "run" : "share"
+        if mode.hasSuffix("+marks"), let targetFrame = groundTruth.items.first(where: { $0.key == targetKey })?.frameCG {
+            companionManager.markController.show([LiveScreenMark(
+                style: .circle, rectCG: targetFrame, displayText: "Here", source: .raw, ax: nil, confidence: 1, isTentative: false,
+                createdAt: Date(), windowID: nil, windowFrameCG: nil, clipAX: nil, labelAX: nil, originalLabel: nil,
+                recheckName: nil, order: 0, tagIndex: nil
+            )], turnRecord: nil)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        defer { if mode.hasSuffix("+marks") { companionManager.clearLiveScreenMarks() } }
 
-        if mode == "park", let runFrame = groundTruth.items.first(where: { $0.key == "run" })?.frameCG {
+        if isParkMode, let runFrame = groundTruth.items.first(where: { $0.key == "run" })?.frameCG {
             // Park the companion right on top of Run.
             companionManager.detectedElementScreenLocation = ScreenTopology.appKit(fromCG: runFrame.center, flipH: ScreenTopology.mainDisplayHeight)
             companionManager.detectedElementDisplayFrame = ScreenTopology.current().first { $0.boundsCG.contains(runFrame.center) }?.frameAppKit
@@ -239,7 +251,7 @@ enum GroundingSelfTests {
         companionManager.clearDetectedElementLocation()
 
         let isPassing: Bool
-        if mode == "park" {
+        if isParkMode {
             isPassing = resolvedTarget.verified == true
         } else {
             isPassing = resolvedTarget.verified == false && resolvedTarget.occludedByPID != nil

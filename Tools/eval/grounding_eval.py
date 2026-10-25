@@ -14,6 +14,14 @@ Hit rules (CG global points):
   - multi-key rows need one hitting tag per key, in order;
   - a span key "row_3..row_5" is scored against the union of those frames.
 
+Stricter "drawn" rule (P1c on, from each MARK's logged `drawn` shape;
+POINTs keep the rule above):
+  - rings / boxes / spots: the drawn outline contains every corner of the
+    truth frame inset by 1 pt;
+  - arrows: the tip is <= pad + 8 pt from the truth and the tail->tip ray
+    hits it;
+  - underlines: span >= 80% of the truth's width, at y in [maxY, maxY + 6].
+
 Also measures keyUp -> firstAudio for --latency-asks spoken asks.
 
 Usage: python3 Tools/eval/grounding_eval.py [--displays 0,1,2] [--rows N]
@@ -190,14 +198,83 @@ def tag_hits_target(tag, frame):
     return (x - grow) <= point_x <= (x + width + grow) and (y - grow) <= point_y <= (y + height + grow)
 
 
-def score_row(keys, tags, frames_by_key):
+def mark_pad(frame):
+    return min(max(0.18 * min(frame[2], frame[3]), 4.0), 10.0)
+
+
+def outline_contains(kind, rect, radius, point):
+    x, y, width, height = rect
+    px, py = point
+    if kind == "ellipse":
+        if width <= 0 or height <= 0:
+            return False
+        nx = (px - (x + width / 2.0)) / (width / 2.0)
+        ny = (py - (y + height / 2.0)) / (height / 2.0)
+        return nx * nx + ny * ny <= 1.0 + 1e-9
+    r = min(radius, width / 2.0, height / 2.0)
+    half_w, half_h = width / 2.0 - r, height / 2.0 - r
+    dx = abs(px - (x + width / 2.0)) - half_w
+    dy = abs(py - (y + height / 2.0)) - half_h
+    outside = math.hypot(max(dx, 0.0), max(dy, 0.0))
+    return outside + min(max(dx, dy), 0.0) - r <= 1e-9
+
+
+def rect_distance(point, frame):
+    x, y, width, height = frame
+    dx = max(x - point[0], 0.0, point[0] - (x + width))
+    dy = max(y - point[1], 0.0, point[1] - (y + height))
+    return math.hypot(dx, dy)
+
+
+def ray_hits_rect(start, through, frame):
+    """Does the ray start -> through (and beyond) cross the frame?"""
+    x, y, width, height = frame
+    direction = (through[0] - start[0], through[1] - start[1])
+    t_enter, t_exit = 0.0, float("inf")
+    for origin, delta, low, high in ((start[0], direction[0], x, x + width), (start[1], direction[1], y, y + height)):
+        if abs(delta) < 1e-9:
+            if not (low <= origin <= high):
+                return False
+        else:
+            first, second = (low - origin) / delta, (high - origin) / delta
+            t_enter, t_exit = max(t_enter, min(first, second)), min(t_exit, max(first, second))
+    return t_enter <= t_exit
+
+
+def tag_hits_target_drawn(tag, frame):
+    drawn = tag.get("drawn")
+    if not drawn:
+        return tag_hits_target(tag, frame)
+    kind = drawn.get("kind")
+    rect = drawn.get("rectCG") or [0, 0, 0, 0]
+    x, y, width, height = frame
+    if kind == "arrow":
+        tip = drawn.get("tip")
+        if not tip:
+            return False
+        # rectCG spans tip..tail; the tail is the corner that isn't the tip.
+        tail_x = rect[0] if abs(rect[0] - tip[0]) > 1e-6 else rect[0] + rect[2]
+        tail_y = rect[1] if abs(rect[1] - tip[1]) > 1e-6 else rect[1] + rect[3]
+        return rect_distance(tip, frame) <= mark_pad(frame) + 8 and ray_hits_rect((tail_x, tail_y), tip, frame)
+    if kind == "underline":
+        line_y = rect[1]
+        overlap = min(rect[0] + rect[2], x + width) - max(rect[0], x)
+        return width > 0 and overlap >= 0.8 * width and (y + height) <= line_y <= (y + height + 6)
+    inset = [x + 1, y + 1, max(0.0, width - 2), max(0.0, height - 2)]
+    corners = [(inset[0], inset[1]), (inset[0] + inset[2], inset[1]), (inset[0], inset[1] + inset[3]), (inset[0] + inset[2], inset[1] + inset[3])]
+    outline_kind = "ellipse" if kind == "ellipse" else "rbox"
+    return all(outline_contains(outline_kind, rect, drawn.get("radius", 0), corner) for corner in corners)
+
+
+def score_row(keys, tags, frames_by_key, hit_rule=None):
     """One hitting tag per key, in order (greedy in-order match)."""
+    hit_rule = hit_rule or tag_hits_target
     tag_index = 0
     for key in keys:
         frame = target_frame(key, frames_by_key)
         if frame is None:
             return False, "unknown key %s" % key
-        while tag_index < len(tags) and not tag_hits_target(tags[tag_index], frame):
+        while tag_index < len(tags) and not hit_rule(tags[tag_index], frame):
             tag_index += 1
         if tag_index >= len(tags):
             return False, "no tag hit %s" % key
@@ -264,6 +341,7 @@ def run_grounding(display_indexes, row_limit, badge_arms):
                     record["hit"], record["reason"] = score_cover_row(keys, turn.get("tags", []), frames_by_key, turn.get("rawResponse", ""))
                 else:
                     record["hit"], record["reason"] = score_row(keys, turn.get("tags", []), frames_by_key)
+                    record["hitDrawn"], record["reasonDrawn"] = score_row(keys, turn.get("tags", []), frames_by_key, tag_hits_target_drawn)
                 results.append(record)
             finally:
                 stop_fixture(process, ground_truth)
@@ -365,6 +443,12 @@ def write_report(output_path, ping_result, grounding_results, latency_samples):
             hits = sum(r["hit"] for r in subset)
             low, high = wilson_interval(hits, len(subset))
             lines.append("| %s | %s | %d/%d | %.1f%% | %.1f–%.1f%% |" % (arm, bucket, hits, len(subset), 100.0 * hits / len(subset), 100 * low, 100 * high))
+            drawn_subset = [r for r in subset if "hitDrawn" in r]
+            if drawn_subset:
+                drawn_hits = sum(r["hitDrawn"] for r in drawn_subset)
+                low, high = wilson_interval(drawn_hits, len(drawn_subset))
+                lines.append("| %s | %s (drawn rule) | %d/%d | %.1f%% | %.1f–%.1f%% |" % (
+                    arm, bucket, drawn_hits, len(drawn_subset), 100.0 * drawn_hits / len(drawn_subset), 100 * low, 100 * high))
         for display_index in displays:
             subset = [r for r in grounding_results if r.get("badges", "on") == arm and r["display"] == display_index and bucket_of(r["kind"]) == "canvas+dot"]
             if subset:

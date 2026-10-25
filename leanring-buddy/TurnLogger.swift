@@ -42,6 +42,21 @@ final class TurnRecord {
         var elementID: Int?
         var verified: Bool?
         var occludedByPID: Int32?
+        /// v2 P1c: what was actually drawn for a MARK.
+        var drawn: DrawnEntry?
+    }
+
+    struct DrawnEntry: Encodable {
+        struct RecheckEntry: Encodable {
+            var ok: Bool
+            var ms: Double
+        }
+        var kind: String
+        var rectCG: [Double]
+        var radius: Double
+        var tip: [Double]?
+        var tentative: Bool
+        var recheck: RecheckEntry?
     }
 
     struct GroundingEntry: Encodable {
@@ -83,7 +98,8 @@ final class TurnRecord {
     }
 
     /// A v2 tag after resolution and verification.
-    func recordResolvedTag(raw rawTag: String, kind: String, screenNumber: Int, modelPixel: CGPoint?, target: ResolvedTarget) {
+    @discardableResult
+    func recordResolvedTag(raw rawTag: String, kind: String, screenNumber: Int, modelPixel: CGPoint?, target: ResolvedTarget) -> Int {
         let appKitPoint = ScreenTopology.appKit(fromCG: target.pointCG, flipH: TurnLogger.mainDisplayHeight)
         let hasBox = target.frameCG.width > 0 && target.frameCG.height > 0
         tags.append(TagEntry(
@@ -100,6 +116,36 @@ final class TurnRecord {
             verified: target.verified,
             occludedByPID: target.occludedByPID
         ))
+        return tags.count - 1
+    }
+
+    func recordDrawn(tagIndex: Int, drawn: DrawnEntry) {
+        guard tags.indices.contains(tagIndex) else { return }
+        let previousRecheck = tags[tagIndex].drawn?.recheck
+        tags[tagIndex].drawn = drawn
+        if drawn.recheck == nil { tags[tagIndex].drawn?.recheck = previousRecheck }
+    }
+
+    func recordRecheck(tagIndex: Int, isPassing: Bool, milliseconds: Double, isTentative: Bool) {
+        guard tags.indices.contains(tagIndex) else { return }
+        tags[tagIndex].drawn?.recheck = DrawnEntry.RecheckEntry(ok: isPassing, ms: (milliseconds * 10).rounded() / 10)
+        tags[tagIndex].drawn?.tentative = isTentative
+        if !isPassing { tags[tagIndex].confidence = tags[tagIndex].confidence.map { max(0, $0 - 0.3) } }
+    }
+
+    /// One line of <turn>/marks.jsonl (tracking events).
+    func appendMarkEvent(_ event: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(event),
+              var lineData = try? JSONSerialization.data(withJSONObject: event, options: [.sortedKeys]) else { return }
+        lineData.append(0x0A)
+        let fileURL = turnDirectoryURL.appendingPathComponent("marks.jsonl")
+        if let fileHandle = try? FileHandle(forWritingTo: fileURL) {
+            fileHandle.seekToEndOfFile()
+            fileHandle.write(lineData)
+            try? fileHandle.close()
+        } else {
+            try? lineData.write(to: fileURL)
+        }
     }
 
     fileprivate init(turnDirectoryURL: URL, transcript: String) {

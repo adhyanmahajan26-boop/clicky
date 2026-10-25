@@ -27,6 +27,10 @@ public enum ClickySettings {
         public static let groundingBadges = "v2.grounding.badges"
         /// [String] bundle ids whose field values are never read.
         public static let groundingValueBlockedBundleIDs = "v2.grounding.valueBlockedBundleIDs"
+        /// Int, most marks on screen at once (the oldest goes first). Default 9.
+        public static let marksMax = "v2.marks.max"
+        /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
+        public static let marksTrackAX = "v2.marks.trackAX"
     }
 
     /// Password managers and Keychain: never read their field values.
@@ -42,6 +46,14 @@ public enum ClickySettings {
 
     public static var areBadgesEnabled: Bool {
         defaults.object(forKey: Keys.groundingBadges) as? Bool ?? true
+    }
+
+    public static var maximumMarks: Int {
+        max(1, defaults.object(forKey: Keys.marksMax) as? Int ?? 9)
+    }
+
+    public static var isMarkTrackingEnabled: Bool {
+        defaults.object(forKey: Keys.marksTrackAX) as? Bool ?? true
     }
 
     public enum ImageTierSetting: String, Sendable {

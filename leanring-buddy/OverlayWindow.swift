@@ -186,9 +186,9 @@ struct BlueCursorView: View {
 
             // Claude's live marks (circles, arrows, numbered steps), drawn
             // under the buddy so the cursor stays on top.
-            LiveScreenMarksOverlayView(
-                screenFrame: screenFrame,
-                liveScreenMarks: companionManager.liveScreenMarks
+            MarkSceneView(
+                drawings: companionManager.markDrawings,
+                displayBoundsCG: ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight)
             )
 
             // Welcome speech bubble (first launch only)
@@ -439,20 +439,12 @@ struct BlueCursorView: View {
         // Don't interrupt welcome animation
         guard !showWelcome || welcomeText.isEmpty else { return }
 
-        // Convert the AppKit screen location to SwiftUI coordinates for this screen
+        // The location is already the landing spot beside the target
+        // (CompanionLanding: clear of it, inside the visible area).
         let targetInSwiftUI = convertScreenPointToSwiftUICoordinates(screenLocation)
-
-        // Offset the target so the buddy sits beside the element rather than
-        // directly on top of it — 8px to the right, 12px below.
-        let offsetTarget = CGPoint(
-            x: targetInSwiftUI.x + 8,
-            y: targetInSwiftUI.y + 12
-        )
-
-        // Clamp target to screen bounds with padding
         let clampedTarget = CGPoint(
-            x: max(20, min(offsetTarget.x, screenFrame.width - 20)),
-            y: max(20, min(offsetTarget.y, screenFrame.height - 20))
+            x: max(14, min(targetInSwiftUI.x, screenFrame.width - 14)),
+            y: max(14, min(targetInSwiftUI.y, screenFrame.height - 14))
         )
 
         // Record the current cursor position so we can detect if the user

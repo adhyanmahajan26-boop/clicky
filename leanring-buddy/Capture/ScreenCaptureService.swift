@@ -100,6 +100,8 @@ enum ScreenCaptureService {
         let content: SCShareableContent
         if let shareableContent {
             content = shareableContent
+        } else if let cachedContent = await ShareableContentCache.shared.recentContent(maximumAge: 3) {
+            content = cachedContent
         } else {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         }
@@ -109,19 +111,14 @@ enum ScreenCaptureService {
 
         let contentFilter = makeContentFilter(display: screenCaptureKitDisplay, shareableContent: content, includesOwnWindows: includesOwnWindows)
         let regionCG = requestedRegionCG ?? display.boundsCG
-        // Display-local points, top-left origin.
-        let sourceRect = CGRect(
-            x: regionCG.minX - display.boundsCG.minX,
-            y: regionCG.minY - display.boundsCG.minY,
-            width: regionCG.width,
-            height: regionCG.height
-        )
         let pointPixelScale = CGFloat(SCShareableContent.info(for: contentFilter).pointPixelScale)
+        let outputSize = RecheckMath.pixelSize(region: regionCG, pointPixelScale: pointPixelScale)
 
         let configuration = SCStreamConfiguration()
-        configuration.sourceRect = sourceRect
-        configuration.width = Int((regionCG.width * pointPixelScale).rounded())
-        configuration.height = Int((regionCG.height * pointPixelScale).rounded())
+        // Display-local points, top-left origin.
+        configuration.sourceRect = RecheckMath.sourceRect(region: regionCG, displayBounds: display.boundsCG)
+        configuration.width = outputSize.width
+        configuration.height = outputSize.height
         configuration.showsCursor = false
         configuration.captureResolution = .best
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
@@ -131,7 +128,6 @@ enum ScreenCaptureService {
         return (cropLetterboxing(from: capturedImage, regionAspectRatio: regionCG.width / regionCG.height), regionCG)
     }
 
-    /// One screen only (the warm key-up path recaptures just the cursor screen).
     /// One screen, for the key-up refresh. Reuses the shareable-content list
     /// from the last full capture when it's under 3 s old (fetching it costs
     /// ~30 ms; displays and Clicky's own app entry don't change in between).

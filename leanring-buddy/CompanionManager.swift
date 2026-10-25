@@ -44,10 +44,12 @@ final class CompanionManager: ObservableObject {
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
 
-    /// Circles, arrows, and numbered steps Claude drew for the current answer
-    /// (global AppKit coords). Cleared when the user asks something new, says
-    /// "clear", presses Escape, or a little while after the answer finishes.
-    @Published private(set) var liveScreenMarks: [LiveScreenMark] = []
+    /// Rings, arrows, steps etc. Claude drew for the current answer, laid out
+    /// in CG points (MarkController). Cleared when the user asks something
+    /// new, says "clear", presses Escape, or a little while after the answer.
+    @Published private(set) var markDrawings: [MarkDrawing] = []
+    let markController = MarkController()
+    var hasLiveScreenMarks: Bool { !markController.marks.isEmpty }
     private var liveScreenMarksAutoClearTask: Task<Void, Never>?
     /// How long marks stay up after the buddy finishes talking, so the user
     /// has time to actually follow the steps.
@@ -248,6 +250,7 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         runStartupGeometryCheck()
+        markController.onDrawingsChanged = { [weak self] drawings in self?.markDrawings = drawings }
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
         }
@@ -311,14 +314,14 @@ final class CompanionManager: ObservableObject {
     func clearLiveScreenMarks() {
         liveScreenMarksAutoClearTask?.cancel()
         liveScreenMarksAutoClearTask = nil
-        liveScreenMarks = []
+        markController.clear()
     }
 
     /// Keeps the marks up while the buddy is still talking, then for a short
     /// grace period so the user can follow them, then clears them.
     private func scheduleLiveScreenMarksAutoClear() {
         liveScreenMarksAutoClearTask?.cancel()
-        guard !liveScreenMarks.isEmpty else { return }
+        guard hasLiveScreenMarks else { return }
 
         liveScreenMarksAutoClearTask = Task {
             while speechOutputClient.isPlaying {
@@ -327,7 +330,7 @@ final class CompanionManager: ObservableObject {
             }
             try? await Task.sleep(nanoseconds: Self.liveScreenMarksSecondsToKeepAfterSpeech * 1_000_000_000)
             guard !Task.isCancelled else { return }
-            liveScreenMarks = []
+            markController.clear()
         }
     }
 
@@ -906,7 +909,7 @@ final class CompanionManager: ObservableObject {
     /// cancels any answer in flight, and ends a hands-free session.
     private func handleEscapeKeyPressed() {
         let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
-        let hasLiveScreenMarksShowing = !liveScreenMarks.isEmpty
+        let hasLiveScreenMarksShowing = hasLiveScreenMarks
         guard isHandsFreeSessionActive || isBuddyBusy || hasLiveScreenMarksShowing else { return }
 
         stopBuddySpeechAndCancelResponse()
@@ -1156,46 +1159,63 @@ final class CompanionManager: ObservableObject {
 
             let screenNumber = framesByScreenNumber.first { $0.value.display.displayID == resolvedTarget.displayID }?.key ?? parsedTag.effectiveScreenNumber
             let modelPixel = framesByScreenNumber[screenNumber]?.modelPx(fromCG: resolvedTarget.pointCG)
-            turnRecord?.recordResolvedTag(raw: parsedTag.raw, kind: parsedTag.kind == .point ? "point" : "mark",
-                                          screenNumber: screenNumber, modelPixel: modelPixel, target: resolvedTarget)
+            let tagIndex = turnRecord?.recordResolvedTag(raw: parsedTag.raw, kind: parsedTag.kind == .point ? "point" : "mark",
+                                                         screenNumber: screenNumber, modelPixel: modelPixel, target: resolvedTarget)
 
             // Never point through another app's window.
             if resolvedTarget.verified == false && resolvedTarget.occludedByPID != nil { continue }
 
             if parsedTag.kind == .point {
                 pointTarget = resolvedTarget
-            } else if newLiveScreenMarks.count < 9 {
+            } else {
+                let source = LiveScreenMark.source(for: resolvedTarget)
+                let context = MarkTracker.trackingContext(for: source == .accessibility ? resolvedTarget.axNode : nil,
+                                                          rectCG: resolvedTarget.frameCG, ax: groundingCoordinator.ax)
+                var recheckName: String?
+                if case .text(let query, _, _) = parsedTag.target { recheckName = query } else { recheckName = resolvedTarget.label }
                 newLiveScreenMarks.append(LiveScreenMark(
-                    markKind: Self.liveScreenMarkKind(for: parsedTag.style),
-                    frameCG: resolvedTarget.frameCG,
-                    markLabel: parsedTag.displayText,
-                    orderInResponse: newLiveScreenMarks.count
+                    style: LiveScreenMark.style(for: parsedTag.style),
+                    rectCG: resolvedTarget.frameCG,
+                    displayText: parsedTag.displayText,
+                    source: source,
+                    ax: source == .accessibility ? resolvedTarget.axNode : nil,
+                    confidence: resolvedTarget.confidence,
+                    isTentative: resolvedTarget.confidence < LiveScreenMark.tentativeConfidence || resolvedTarget.occludedByPID != nil,
+                    createdAt: Date(),
+                    windowID: context.windowID,
+                    windowFrameCG: context.windowFrame,
+                    clipAX: context.clip,
+                    labelAX: context.label,
+                    originalLabel: context.originalLabel,
+                    recheckName: recheckName,
+                    order: newLiveScreenMarks.count,
+                    tagIndex: tagIndex
                 ))
             }
         }
 
-        liveScreenMarks = newLiveScreenMarks
+        // OCR re-check (≤ 150 ms; late results apply when they arrive).
+        await markController.recheck(&newLiveScreenMarks, displays: ScreenTopology.current(), turnRecord: turnRecord)
+
+        // The companion parks beside the POINT target, clear of it and of the marks.
+        var companionLanding: CGRect?
         if let pointTarget, let pointFrame = framesByScreenNumber.values.first(where: { $0.display.displayID == pointTarget.displayID }) {
+            let markObstacles = newLiveScreenMarks.map { MarkLayout.padded($0.rectCG) }
+            companionLanding = CompanionLanding.landing(target: pointTarget.frameCG, visible: pointFrame.display.visibleCG, obstacles: markObstacles)
+        }
+        markController.companionRect = companionLanding
+        markController.show(newLiveScreenMarks, turnRecord: turnRecord)
+        if let pointTarget, let companionLanding,
+           let pointFrame = framesByScreenNumber.values.first(where: { $0.display.displayID == pointTarget.displayID }) {
             // Switch to idle BEFORE setting the location so the buddy is
             // visible and can fly to the target.
             voiceState = .idle
-            detectedElementScreenLocation = ScreenTopology.appKit(fromCG: pointTarget.pointCG, flipH: ScreenTopology.mainDisplayHeight)
+            detectedElementScreenLocation = ScreenTopology.appKit(fromCG: companionLanding.center, flipH: ScreenTopology.mainDisplayHeight)
             detectedElementDisplayFrame = pointFrame.display.frameAppKit
             ClickyAnalytics.trackElementPointed(elementLabel: pointTarget.label)
         }
         print("🎯 Grounded tags: \(extraction.tags.count) (\(newLiveScreenMarks.count) marks, point: \(pointTarget?.label ?? "none"))")
         return cleanedSpeech.speechText
-    }
-
-    private static func liveScreenMarkKind(for style: MarkStyle?) -> LiveScreenMarkKind {
-        switch style {
-        case .box?: return .box
-        case .arrow?: return .arrow
-        case .underline?: return .underline
-        case .spot?: return .spot
-        case .step(let stepNumber)?: return .numberedStep(stepNumber: stepNumber)
-        default: return .circle
-        }
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -1222,7 +1242,7 @@ final class CompanionManager: ObservableObject {
 
             // Keep the overlay up while live marks are showing, otherwise
             // they'd vanish the moment the buddy stops talking.
-            while !liveScreenMarks.isEmpty {
+            while hasLiveScreenMarks {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }

@@ -9,6 +9,10 @@
 // Flags:
 //   --display <i>          0-based index into NSScreen.screens (default 0)
 //   --scroll-after <N>     N seconds after ready, scroll the table down 120 pt
+//   --scroll-duration <S>  with --scroll-after, animate that scroll over S seconds
+//                          (ease-in-out) instead of jumping; sets scrollEndedAt
+//   --move-after <N>       N seconds after ready, move the window 40 pt right;
+//                          sets movedAt in groundtruth.json
 //   --cover <KEY>          2 s after ready, spawn a helper that covers KEY
 //   --cover-rect x,y,w,h   helper mode: show only an opaque grey cover window
 //   --park-cursor          move the cursor to an empty spot before ready
@@ -38,6 +42,8 @@ func fail(_ message: String) -> Never {
 struct LaunchOptions {
     var displayIndex = 0
     var scrollAfterSeconds: Double?
+    var scrollDurationSeconds: Double?
+    var moveAfterSeconds: Double?
     var coverKey: String?
     var coverRect: CGRect?
     var parkCursor = false
@@ -72,6 +78,16 @@ func parseLaunchOptions(_ arguments: [String]) -> LaunchOptions {
                 fail("--scroll-after expects a number of seconds")
             }
             options.scrollAfterSeconds = seconds
+        case "--scroll-duration":
+            guard let seconds = Double(nextValue()), seconds > 0 else {
+                fail("--scroll-duration expects a number of seconds greater than 0")
+            }
+            options.scrollDurationSeconds = seconds
+        case "--move-after":
+            guard let seconds = Double(nextValue()), seconds >= 0 else {
+                fail("--move-after expects a number of seconds")
+            }
+            options.moveAfterSeconds = seconds
         case "--cover":
             options.coverKey = nextValue()
         case "--cover-rect":
@@ -101,6 +117,15 @@ struct GroundTruthDocument: Encodable {
     let helperPid: Int32?
     let displayID: UInt32?
     let items: [GroundTruthItem]?
+    /// Epoch milliseconds when the table scroll finished; nil if no scroll happened.
+    let scrollEndedAt: Int64?
+    /// Epoch milliseconds when the window was moved; nil if it was not moved.
+    let movedAt: Int64?
+}
+
+/// Current time as epoch milliseconds.
+func currentEpochMilliseconds() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
 }
 
 /// Writes the document to ~/.clicky/fixture/groundtruth.json via a temp file
@@ -378,6 +403,10 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
     private var helperProcess: Process?
     private var helperPid: Int32?
 
+    private var scrollTimer: Timer?
+    private var scrollEndedAt: Int64?
+    private var movedAt: Int64?
+
     init(options: LaunchOptions) {
         self.options = options
         super.init()
@@ -550,10 +579,62 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
         tableScrollView.reflectScrolledClipView(clipView)
     }
 
+    /// Scrolls the table by delta over duration seconds with ease-in-out, stepping at 60 Hz.
+    private func animateTableScroll(by delta: CGFloat, duration: Double, completion: @escaping () -> Void) {
+        let clipView = tableScrollView.contentView
+        let startY = clipView.bounds.origin.y
+        let startDate = Date()
+        scrollTimer?.invalidate()
+        scrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            let progress = min(Date().timeIntervalSince(startDate) / duration, 1)
+            let eased = Self.easeInOut(progress)
+            clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: startY + delta * CGFloat(eased)))
+            self.tableScrollView.reflectScrolledClipView(clipView)
+            if progress >= 1 {
+                timer.invalidate()
+                self.scrollTimer = nil
+                completion()
+            }
+        }
+    }
+
+    static func easeInOut(_ t: Double) -> Double {
+        t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+    }
+
+    /// Records the scroll end time and rewrites groundtruth.json with re-measured frames.
+    private func finishScroll() {
+        scrollEndedAt = currentEpochMilliseconds()
+        publish()
+    }
+
+    /// Moves the main window right by delta (y unchanged), then rewrites groundtruth.json.
+    /// Web frames are cached in global coordinates, so they are re-measured first.
+    private func moveWindowRight(by delta: CGFloat) {
+        let origin = window.frame.origin
+        window.setFrameOrigin(NSPoint(x: origin.x + delta, y: origin.y))
+        movedAt = currentEpochMilliseconds()
+        measureWebFrames {
+            self.publish()
+        }
+    }
+
     // MARK: Web view
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        webView.evaluateJavaScript(Self.webRectsScript) { result, error in
+        measureWebFrames {
+            self.markReady()
+        }
+    }
+
+    /// Re-reads the web page's element rects into webFrames as global CoreGraphics frames,
+    /// then calls next. Needed again after the window moves.
+    private func measureWebFrames(then next: @escaping () -> Void) {
+        self.webView.evaluateJavaScript(Self.webRectsScript) { result, error in
             if let error {
                 fail("web rect script failed: \(error.localizedDescription)")
             }
@@ -563,7 +644,7 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
             else {
                 fail("web rect script returned unexpected data")
             }
-            let webOrigin = cgFrame(of: webView.bounds, in: webView)
+            let webOrigin = cgFrame(of: self.webView.bounds, in: self.webView)
             for key in Self.webKeys {
                 guard let rect = rects[key] else { continue }
                 self.webFrames[key] = CGRect(
@@ -573,7 +654,7 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
                     height: rect.height
                 )
             }
-            self.markReady()
+            next()
         }
     }
 
@@ -588,8 +669,19 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
 
         if let delay = options.scrollAfterSeconds {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                self.scrollTableDown(by: 120)
-                self.publish()
+                if let duration = self.options.scrollDurationSeconds {
+                    self.animateTableScroll(by: 120, duration: duration) {
+                        self.finishScroll()
+                    }
+                } else {
+                    self.scrollTableDown(by: 120)
+                    self.finishScroll()
+                }
+            }
+        }
+        if let delay = options.moveAfterSeconds {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                self.moveWindowRight(by: 40)
             }
         }
         if let key = options.coverKey {
@@ -711,10 +803,20 @@ final class FixtureController: NSObject, NSApplicationDelegate, NSTableViewDataS
                 pid: getpid(),
                 helperPid: helperPid,
                 displayID: displayID,
-                items: measuredElements().map { $0.groundTruthItem(coveredKey: coveredKey) }
+                items: measuredElements().map { $0.groundTruthItem(coveredKey: coveredKey) },
+                scrollEndedAt: scrollEndedAt,
+                movedAt: movedAt
             )
         } else {
-            document = GroundTruthDocument(ready: false, pid: getpid(), helperPid: nil, displayID: nil, items: nil)
+            document = GroundTruthDocument(
+                ready: false,
+                pid: getpid(),
+                helperPid: nil,
+                displayID: nil,
+                items: nil,
+                scrollEndedAt: nil,
+                movedAt: nil
+            )
         }
         writeGroundTruth(document)
     }

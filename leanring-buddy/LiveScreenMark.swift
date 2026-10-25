@@ -2,41 +2,83 @@
 //  LiveScreenMark.swift
 //  leanring-buddy
 //
-//  Live marks are circles, boxes, arrows, underlines, spots and numbered
-//  step badges drawn on top of the user's screen while Clicky answers. Tags
-//  are parsed by ClickyCore's MarkTagParser and resolved to real element
-//  frames by its TargetResolver; this is just what the overlay draws.
+//  A live mark (ring, box, arrow, underline, spot or numbered step) drawn on
+//  top of the user's screen while Clicky answers. Tags are parsed by
+//  ClickyCore's MarkTagParser and resolved to real element frames by its
+//  TargetResolver; MarkController lays these out (MarkLayout) and
+//  MarkTracker keeps AX-backed ones on their element.
 //
 
+import ClickyCore
 import CoreGraphics
 import Foundation
 
-enum LiveScreenMarkKind: Equatable {
-    /// A ring around the target.
-    case circle
-    /// A rectangle around the target.
-    case box
-    /// An arrow whose head points at the target.
-    case arrow
-    /// A line under the target (text).
-    case underline
-    /// A soft dot on the target's centre.
-    case spot
-    /// A numbered badge for multi-step instructions.
-    case numberedStep(stepNumber: Int)
+/// Where a mark's rect came from, which decides how it can be followed.
+enum LiveScreenMarkSource: String {
+    /// An AX element: tracked as it scrolls or moves.
+    case accessibility
+    /// OCR text: re-checked once, cleared when its window scrolls or moves.
+    case ocr
+    /// A model coordinate snapped to a nearby element.
+    case snapped
+    /// A bare model coordinate.
+    case raw
 }
 
-/// A mark ready to draw. `frameCG` is the resolved target in CG global
-/// points (main display top-left, y down); a raw point has zero size.
-struct LiveScreenMark: Identifiable, Equatable {
+struct LiveScreenMark: Identifiable {
     let id = UUID()
-    let markKind: LiveScreenMarkKind
-    let frameCG: CGRect
-    /// Text shown next to the mark (the tag's note, or the name for arrows and steps).
-    let markLabel: String?
-    /// Position in the response, used to stagger the draw-in animation so
-    /// marks appear one after another instead of all at once.
-    let orderInResponse: Int
+    let style: MarkStyleKind
+    /// The target in CG global points (main display top-left, y down).
+    var rectCG: CGRect
+    /// The note, else the name for arrow and step marks, else nil.
+    let displayText: String?
+    let source: LiveScreenMarkSource
+    /// The element, for tracking (AX marks only).
+    let ax: AXNodeReference?
+    var confidence: Double
+    /// Drawn dashed and faded: low confidence, occluded, or failed its re-check.
+    var isTentative: Bool
+    let createdAt: Date
+    /// The topmost app window at the mark's centre when it was made.
+    var windowID: CGWindowID?
+    var windowFrameCG: CGRect?
+    /// Nearest scroll/web area above the element (the mark hides when scrolled out).
+    var clipAX: AXNodeReference?
+    /// The element whose text named it (self or a static text child).
+    var labelAX: AXNodeReference?
+    var originalLabel: String?
+    /// The text the OCR re-check looks for (OCR / snapped / raw marks with a name).
+    let recheckName: String?
+    /// Position in the answer (draw-on stagger, step order).
+    let order: Int
+    /// Index of its tag in turn.json, for the `drawn` record.
+    let tagIndex: Int?
+    var isHidden = false
+    var opacity = 1.0
 
-    var locationCG: CGPoint { CGPoint(x: frameCG.midX, y: frameCG.midY) }
+    static let tentativeConfidence = 0.7
+
+    var sceneInput: MarkSceneInput {
+        MarkSceneInput(id: id, style: style, rectCG: rectCG, displayText: displayText, isTentative: isTentative,
+                       isHidden: isHidden, opacity: opacity, order: order)
+    }
+
+    static func source(for target: ResolvedTarget) -> LiveScreenMarkSource {
+        switch target.method {
+        case .snapped: return .snapped
+        case .raw: return .raw
+        default: return target.axNode != nil ? .accessibility : .ocr
+        }
+    }
+
+    static func style(for markStyle: MarkStyle?) -> MarkStyleKind {
+        switch markStyle {
+        case .box?: return .box
+        case .arrow?: return .arrow
+        case .underline?: return .underline
+        case .spot?: return .spot
+        case .step(let stepNumber)?: return .step(stepNumber)
+        default: return .circle
+        }
+    }
 }
