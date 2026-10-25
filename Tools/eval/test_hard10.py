@@ -640,12 +640,12 @@ class SafariTests(unittest.TestCase):
 
 
 class PlanRunTests(unittest.TestCase):
-    def test_plan_with_safari_frontmost_puts_tests_on_right_display_and_skips_chrome_tests(self):
+    def test_plan_with_safari_frontmost_puts_tests_on_right_display(self):
         plan = hard10.plan_run(fake_snapshot())
         self.assertEqual(plan["testDisplay"]["id"], 5)
         self.assertEqual(plan["windowOrigin"], (3480, 238))
         self.assertEqual(plan["place"], "right monitor")
-        self.assertFalse(plan["focusAllowed"])
+        self.assertTrue(plan["focusAllowed"])
         self.assertEqual(plan["problems"], [])
 
     def test_plan_with_another_app_frontmost_allows_focus(self):
@@ -805,10 +805,11 @@ class PromptAndSkipTests(unittest.TestCase):
         self.assertTrue(hard10.SKIPS[8].startswith("skipped: can't place on the test display"))
         self.assertTrue(hard10.SKIPS[10].startswith("skipped: silent run"))
 
-    def test_chrome_tests_are_skipped_while_safari_is_frontmost(self):
+    def test_chrome_tests_run_while_safari_is_frontmost_and_restore_it(self):
+        # The owner allowed a plain re-activate of their frontmost app (Safari included).
         layout = hard10.plan_run(fake_snapshot())
         for number in hard10.FOCUS_TESTS:
-            self.assertIn("Safari", hard10.skip_reason(number, layout))
+            self.assertIsNone(hard10.skip_reason(number, layout))
         self.assertIsNone(hard10.skip_reason(9, layout))
         self.assertEqual(hard10.skip_reason(4, layout), hard10.SKIPS[4])
 

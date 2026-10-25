@@ -698,7 +698,9 @@ def plan_run(snapshot):
         problems.append("no frontmost app recorded")
     if safari["pid"] is None:
         problems.append("Safari is not running, so there is no Safari baseline to protect")
-    focus_allowed = not is_safari(frontmost)
+    # The owner's rules allow a plain re-activate of their own frontmost app (Safari included) right
+    # after a test app was briefly frontmost; the harness still never opens, raises or uses Safari.
+    focus_allowed = True
     return {"testDisplay": test_display, "windowOrigin": origin, "windowSize": size,
             "place": place_phrase(displays), "frontmost": frontmost, "safari": safari,
             "focusAllowed": focus_allowed, "problems": problems}
