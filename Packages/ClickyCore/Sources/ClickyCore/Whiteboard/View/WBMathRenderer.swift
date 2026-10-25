@@ -48,6 +48,8 @@ public enum WBMathRenderer {
             failedSources.insert(tex)
             return nil
         }
+        // Never cache a bitmap of it: drawn into a PDF the handler runs again (vector glyphs).
+        renderedImage.cacheMode = .never
         imageCache[cacheKey] = renderedImage
         return renderedImage
     }

@@ -19,6 +19,7 @@ struct WBElementContentView: View {
     /// Seconds since the element started appearing (.infinity = finished).
     let elapsed: TimeInterval
     let palette: WhiteboardPalette
+    @Environment(\.wbDrawsMathExternally) private var drawsMathExternally
 
     var body: some View {
         let scale = placed.contentScale
@@ -155,10 +156,15 @@ struct WBElementContentView: View {
         let opacity = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.mathFade)
         Group {
             if let image = WBMathRenderer.image(tex: math.tex, fontSize: WBMeasure.mathFontSize, color: palette.mathInk) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: image.size.width, height: image.size.height)
+                if drawsMathExternally {
+                    // The PDF exporter draws it (WhiteboardExporter.drawMath).
+                    Color.clear.frame(width: image.size.width, height: image.size.height)
+                } else {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: image.size.width, height: image.size.height)
+                }
             } else {
                 Text(plain(math.tex))
                     .font(WBViewFonts.mono(WBMeasure.mathFontSize))
@@ -263,6 +269,43 @@ struct WBElementContentView: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(labelOpacity)
+    }
+}
+
+/// PDF export: the exporter draws formulas itself, straight into the PDF
+/// context (vectors), so the view leaves their place empty.
+struct WBDrawsMathExternallyKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var wbDrawsMathExternally: Bool {
+        get { self[WBDrawsMathExternallyKey.self] }
+        set { self[WBDrawsMathExternallyKey.self] = newValue }
+    }
+}
+
+/// Invisible text (PDF text render mode 3) fitted to a rect of a y-up context:
+/// a formula's TeX source over it, selectable and searchable, never visible
+/// (the way OCR'd PDFs carry their text layer).
+enum WBInvisibleText {
+    static func draw(_ text: String, fittingYUp rect: CGRect, in cgContext: CGContext) {
+        guard !text.isEmpty, rect.width > 1, rect.height > 1 else { return }
+        let baseSize: CGFloat = 12
+        func line(size: CGFloat) -> CTLine {
+            let attributes: [NSAttributedString.Key: Any] = [.font: WBMeasure.monospacedFont(size: size)]
+            return CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        }
+        let measuredWidth = CTLineGetTypographicBounds(line(size: baseSize), nil, nil, nil)
+        guard measuredWidth > 0 else { return }
+        // As wide as the formula (a selection lines up with it), never taller than it.
+        let fontSize = max(1, min(rect.height * 0.8, baseSize * rect.width / CGFloat(measuredWidth)))
+        cgContext.saveGState()
+        cgContext.textMatrix = .identity
+        cgContext.setTextDrawingMode(.invisible)
+        cgContext.textPosition = CGPoint(x: rect.minX, y: rect.midY - fontSize * 0.35)
+        CTLineDraw(line(size: fontSize), cgContext)
+        cgContext.restoreGState()
     }
 }
 
