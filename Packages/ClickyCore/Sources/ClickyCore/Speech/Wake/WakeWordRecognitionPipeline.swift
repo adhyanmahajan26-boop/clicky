@@ -65,11 +65,16 @@ public struct WakeWordPipelineStatistics: Equatable, Sendable {
     public var isRequestActive = false
     public var isCapturing = false
     public var usedRecognizerWordTimes = false
+    /// Feed (test file) runs only: the latest transcript per request, to see what the recognizer heard.
+    /// Never filled from the live mic.
+    public var heardTexts: [String] = []
 
     public init() {}
 }
 
 public final class WakeWordRecognitionPipeline: @unchecked Sendable {
+    /// Set by the file feeder only (never for the live mic).
+    public var recordsHeardText = false
     public static let requestRestartSeconds: TimeInterval = 50
     public static let preRollSeconds: TimeInterval = 0.6
     /// A capture still running this late in its request is finished (the recognizer stops at ~60 s).
@@ -351,6 +356,10 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
         if let result {
             let words = transcriptWords(from: result.bestTranscription, requestState: requestState)
             requestState.latestWords = words
+            if recordsHeardText {
+                if statistics.heardTexts.count <= requestSerial { statistics.heardTexts.append(contentsOf: Array(repeating: "", count: requestSerial + 1 - statistics.heardTexts.count)) }
+                statistics.heardTexts[requestSerial] = result.bestTranscription.formattedString
+            }
             if capture?.requestSerial == requestSerial {
                 updateCapture(words: words)
             } else if let capture, capture.candidate.requestSerial == requestSerial {
@@ -577,6 +586,7 @@ public enum WakeWordFileFeeder {
             return report
         }
         collector.pipeline = pipeline
+        pipeline.recordsHeardText = true
         report.localeIdentifier = pipeline.localeIdentifier
 
         let audioFile: AVAudioFile

@@ -499,7 +499,9 @@ final class WakeWordController: ObservableObject {
             "requestsStarted": report.statistics.requestsStarted,
             "restarts": report.statistics.restarts,
             "recognizedAudioSeconds": (report.statistics.recognizedAudioSeconds * 100).rounded() / 100,
-            "recognizerWordTimes": report.statistics.usedRecognizerWordTimes
+            "recognizerWordTimes": report.statistics.usedRecognizerWordTimes,
+            // What the recognizer heard in this test file (feed only; never the mic).
+            "heard": report.statistics.heardTexts.filter { !$0.isEmpty }
         ]
         return (report.errorMessage == nil, result, report.errorMessage)
     }
