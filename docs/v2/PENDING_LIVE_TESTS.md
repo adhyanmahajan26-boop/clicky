@@ -165,3 +165,13 @@ PNGs in `~/Library/Logs/Clicky/renders/p4/`).
 11. Hosted tests compiled with build-for-testing, not run.
 
 SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for math images.
+
+## P6.9 / P6.10 / P6.6
+
+### P6.9 Diagnostics (silent until you press a button)
+
+1. Open the menu bar panel and press Diagnostics (footer, left of Quit). The window shows permissions, the Qwen status and the newest turn's time to first audio. Nothing is requested.
+2. Press Check Claude and Check GitHub. Confirm no token text appears (only exit codes, `Logged in as`, and the scopes line).
+3. Press a self-test Run button only when you want that test to run (several open windows, play audio or drive the mouse). The result line shows Passed or Failed.
+4. Settings: change a v2 toggle, picker, stepper or list in the window and confirm the panel or the next turn behaves accordingly.
+5. Offscreen layout check: `~/Library/Logs/Clicky/renders/p6/diagnostics.png` (fake values; the toggles and pickers show placeholder glyphs in the render because AppKit controls don't draw offscreen).
