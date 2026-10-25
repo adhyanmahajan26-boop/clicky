@@ -140,6 +140,11 @@ public enum ClickySettingsCatalog {
                             explanation: "Listen on-device for the wake phrase. Say \"stop listening\" to turn it off, \"start listening\" (push-to-talk) or the menu to turn it back on."),
         ClickySettingsEntry(key: ClickySettings.Keys.wakePhrases, kind: .textList(defaultValue: WakeWordMatcher.defaultPhrases),
                             explanation: "Wake phrases: a greeting and a name (\"hey claudia\"). Close spellings and hi/okay count too. Comma separated."),
+        // Actions (P7).
+        ClickySettingsEntry(key: ClickySettings.Keys.actionsEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Let Clicky do things on screen when asked: open apps and links, search, click, type, highlight, summarize (with safety tiers)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.actionsCountdownSeconds, kind: .number(defaultValue: 1.5, range: 0.5...5, step: 0.5),
+                            explanation: "Seconds Clicky shows a typing or click step before doing it (any key, mouse move or \"stop\" cancels)."),
 
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),

@@ -31,6 +31,10 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
     /// project …"). It runs outside Clicky: phase is a ProjectTaskPhase
     /// (queued → received → threadStarted → done / failed), from the inbox replies.
     case projectTask
+    /// P7: an <actions> task Clicky runs on the owner's screen (open, click,
+    /// type, highlight, summarize…), step by step with an observe turn
+    /// between batches. `actionSteps` holds the live step list.
+    case actionTask
 
     public var displayName: String {
         switch self {
@@ -40,6 +44,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .boardRepair: return "Board repair"
         case .codeTask: return "Code task"
         case .projectTask: return "Project task"
+        case .actionTask: return "Action task"
         }
     }
 
@@ -52,6 +57,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .boardRepair: return "wrench.and.screwdriver"
         case .codeTask: return "chevron.left.forwardslash.chevron.right"
         case .projectTask: return "paperplane"
+        case .actionTask: return "cursorarrow.click.2"
         }
     }
 }
@@ -212,11 +218,14 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
     public var note: String?
     public var link: String?
 
+    // Action tasks (P7): one display line per step ("✓ open Chrome", "▸ type “hi” in 1.5 s").
+    public var actionSteps: [String]?
+
     public init(id: String = UUID().uuidString.lowercased(), kind: AgentKind, title: String, model: String? = nil, status: AgentStatus = .running,
                 phase: String? = nil, startedAt: Date = Date(), endedAt: Date? = nil, usage: AgentUsage? = nil, logLines: [AgentLogLine] = [],
                 parentID: String? = nil, errorDescription: String? = nil, repository: String? = nil, clonePath: String? = nil, branch: String? = nil,
                 worktreePath: String? = nil, currentStep: String? = nil, changedFiles: [String] = [], queuedBehindCount: Int? = nil,
-                note: String? = nil, link: String? = nil) {
+                note: String? = nil, link: String? = nil, actionSteps: [String]? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -238,6 +247,7 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
         self.queuedBehindCount = queuedBehindCount
         self.note = note
         self.link = link
+        self.actionSteps = actionSteps
     }
 
     /// The phase as the status badge shows it ("Thread started", "Speaking").
@@ -273,6 +283,7 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
         if let errorDescription { lines.append("error: \(errorDescription)") }
         if let note { lines.append("note: \(note)") }
         if let link { lines.append("link: \(link)") }
+        if let actionSteps, !actionSteps.isEmpty { lines.append("steps:"); lines += actionSteps.map { "  \($0)" } }
         lines.append("")
         lines += logLines.map { "\(formatter.string(from: $0.date)) \($0.text)" }
         return lines.joined(separator: "\n")

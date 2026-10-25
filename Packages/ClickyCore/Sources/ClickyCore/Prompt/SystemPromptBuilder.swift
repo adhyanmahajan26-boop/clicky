@@ -38,6 +38,8 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
     /// "send this to my project …": Claude can't send, so it tells the user
     /// the phrase (ProjectSendTrigger.promptLine). Sent while v2.project.enabled is on.
     public static let projectBridge = SystemPromptFeatures(rawValue: 1 << 9)
+    /// P7 computer-use actions (<actions> blocks), while v2.actions.enabled is on.
+    public static let actions = SystemPromptFeatures(rawValue: 1 << 10)
 
     /// Everything the app consumes as of P1b.
     public static let current: SystemPromptFeatures = [.grounding, .badges, .helperWorkers]
@@ -91,6 +93,7 @@ public enum SystemPromptBuilder {
             sections.append(isAvailable(.code, features: features, sectionTexts: sectionTexts) ? CodeModeToggle.onPromptLine : CodeModeToggle.offPromptLine)
         }
         if features.contains(.projectBridge) { sections.append(ProjectSendTrigger.promptLine) }
+        if features.contains(.actions) { sections.append(ActionsPromptSection.text) }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
             // P6.7: on a board, helpers draw sections instead (the whiteboard section says how).
@@ -108,7 +111,9 @@ public enum SystemPromptBuilder {
 
     static func missingAbilities(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]? = nil) -> [String] {
         // With the spoken switch, coding is never "missing": Claude offers [CODEMODE:on] instead.
-        GatedSection.allCases.filter { !isAvailable($0, features: features, sectionTexts: sectionTexts) && !($0 == .code && features.contains(.codeToggle)) }
+        // With actions on, typing into fields is an action step: not "missing" either.
+        GatedSection.allCases.filter { !isAvailable($0, features: features, sectionTexts: sectionTexts) && !($0 == .code && features.contains(.codeToggle))
+            && !($0 == .typing && features.contains(.actions)) }
             .map(\.missingAbilityName)
     }
 

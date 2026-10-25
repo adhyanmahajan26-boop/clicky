@@ -358,6 +358,19 @@ final class AnswerSession: SpeechCoordinatorHost {
         }.joined()
     }
 
+    /// P7 highlight steps: MARK tags drawn now (not tied to spoken words),
+    /// resolved against this answer's grounding like any other tag.
+    private var actionHighlightTagCount = 0
+
+    func showActionHighlights(_ tags: [ParsedTag]) {
+        for tag in tags {
+            let index = ActionTaskController.firstHighlightTagIndex + actionHighlightTagCount
+            actionHighlightTagCount += 1
+            prepare(tag, index: index)
+            fireTag(index: index)
+        }
+    }
+
     /// A tag inside a board step's `say` (BoardController registers it).
     func prepareBoardTag(_ tag: ParsedTag, index: Int) {
         prepare(tag, index: index)
@@ -376,8 +389,11 @@ final class AnswerSession: SpeechCoordinatorHost {
     /// P6.2: <type> always goes to the Type card. With v2.typeForMe.enabled
     /// off the card offers Copy only (harmless), and the prompt doesn't ask
     /// for <type> then anyway.
+    /// P7: <actions> while v2.actions.enabled is on.
     static func blockConsumers() -> Set<String> {
-        ClickySettings.isCodeEnabled ? ["whiteboard", "codetask", "type"] : ["whiteboard", "type"]
+        var consumers: Set<String> = ClickySettings.isCodeEnabled ? ["whiteboard", "codetask", "type"] : ["whiteboard", "type"]
+        if ClickySettings.isActionsEnabled { consumers.insert(ActionDSL.blockName) }
+        return consumers
     }
 
     // MARK: - Routing
@@ -412,6 +428,12 @@ final class AnswerSession: SpeechCoordinatorHost {
                 handleWhiteboardBlock(body: body)
             case .block(let name, let body) where name == "type":
                 companionManager.typeForMeController.present(blockBody: body)
+            case .block(let name, let body) where name == ActionDSL.blockName:
+                // The words before the steps are spoken first; the steps run while they play.
+                enqueue(segmenter.finish())
+                segmenter = NarrationSegmenter(options: segmenterOptions)
+                agentsCenter.log(brainAgentID, "actions block (\(body.count) chars)")
+                companionManager.actionTaskController.handleActionsBlock(body, session: self)
             case .block(let name, _):
                 print("🧱 Block <\(name)> has no consumer yet")
             case .unsupportedBlock(let name):

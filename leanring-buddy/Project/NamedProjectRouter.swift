@@ -128,6 +128,16 @@ final class NamedProjectRouter {
         return true
     }
 
+    /// P7 actions: a code_task step naming a project ("choose this project
+    /// folder"). Same lookup as the spoken trigger (alias, confident match, or
+    /// the pick card), with the step's instructions as the task.
+    func startActionCodeTask(projectName: String, instructions: String, transcript: String) {
+        note("action code_task for \"\(projectName)\" (from \"\(transcript.prefix(80))\")")
+        let request = NamedRequest(projectName: projectName, taskText: instructions, spokenWords: instructions, speaks: true)
+        resolutionTask?.cancel()
+        resolutionTask = Task { [weak self] in await self?.resolve(request) }
+    }
+
     // MARK: - Finding the project
 
     private func resolve(_ request: NamedRequest) async {

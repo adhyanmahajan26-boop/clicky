@@ -37,6 +37,20 @@
 //    axfind {bundle, role, title, nth, …} → frameCG [x,y,w,h] of another app's
 //                               element from a plain AX walk (eval ground truth;
 //                               see AXFindWalker for every field)
+//    actionsStatus            → P7: the current action task (goal, steps with outcomes,
+//                               tier decisions, pending confirm, phase) and the last one
+//    actionsCancel {reason?}  → ends the current action task
+//    actionsRun {steps, goal?, done=true, transcript?, dryRun=true}
+//                             → a step list as if Claude sent it, on a fresh capture;
+//                               dryRun returns every step's tier decision and facts
+//                               without running anything
+//    axSetPosition {bundle, windowIndex|windowTitle, x, y [, w, h], dryRun?}
+//                             → TEST ONLY: AXPosition/AXSize of a TextEdit or Notes
+//                               window (CG top-left coords); dryRun lists the windows
+//    axPerform {bundle, role, title, action: press|delete}
+//                             → TEST ONLY: AXPress the first exact (role, title) in that
+//                               app's front window, or Notes' Edit ▸ Delete; never types
+//                               (both: TextEdit / Notes only; Safari and Clicky refused)
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -492,6 +506,50 @@ final class DebugCommandInbox {
                 reply(commandIdentifier: commandIdentifier, isSuccess: true, result: findResult, errorMessage: nil)
             case .failure(let findError):
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: findError.details, errorMessage: findError.message)
+            }
+
+        case "actionsStatus":
+            // P7: the current action task (steps, tier decisions, pending confirm), the last one, settings.
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.actionTaskController.statusSnapshot(), errorMessage: nil)
+
+        case "actionsCancel":
+            let wasActive = companionManager.actionTaskController.isActive
+            companionManager.actionTaskController.cancel(reason: commandObject["reason"] as? String ?? "cancelled by the debug inbox", stopsSpeech: false, speaksLine: false)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["cancelled": wasActive], errorMessage: nil)
+
+        case "actionsRun":
+            // {steps:[…], goal?, done?, transcript?, dryRun=true}: dryRun resolves + classifies only.
+            guard let steps = commandObject["steps"] as? [Any] else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "actionsRun needs \"steps\"")
+                return
+            }
+            var planObject: [String: Any] = ["steps": steps, "done": commandObject["done"] as? Bool ?? true]
+            if let goal = commandObject["goal"] as? String { planObject["goal"] = goal }
+            let isDryRun = commandObject["dryRun"] as? Bool ?? true
+            let ownerTranscript = commandObject["transcript"] as? String ?? "debug actionsRun"
+            Task {
+                let (isSuccess, result) = await self.companionManager.actionTaskController.debugRun(planObject: planObject, ownerTranscript: ownerTranscript, isDryRun: isDryRun)
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: isSuccess ? nil : result["error"] as? String)
+            }
+
+        case "axSetPosition":
+            // TEST ONLY (P7 harness): move/resize a TextEdit or Notes window. Nothing else, ever.
+            switch ActionsDebugAXCommand.parseSetPosition(commandObject, ownBundleIdentifier: Bundle.main.bundleIdentifier) {
+            case .failure(let error):
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.message)
+            case .success(let request):
+                let (isSuccess, result, errorMessage) = DebugAXTestCommands.setPosition(request)
+                reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
+            }
+
+        case "axPerform":
+            // TEST ONLY (P7 harness): AXPress one (role, title) in TextEdit / Notes, or Notes' Edit ▸ Delete. Never types.
+            switch ActionsDebugAXCommand.parsePerform(commandObject, ownBundleIdentifier: Bundle.main.bundleIdentifier) {
+            case .failure(let error):
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.message)
+            case .success(let request):
+                let (isSuccess, result, errorMessage) = DebugAXTestCommands.perform(request)
+                reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
             }
 
         default:
@@ -1138,6 +1196,92 @@ nonisolated enum AXFindWalker {
         AXValueGetValue(positionValue as! AXValue, .cgPoint, &elementPosition)
         AXValueGetValue(sizeValue as! AXValue, .cgSize, &elementSize)
         return CGRect(origin: elementPosition, size: elementSize)
+    }
+}
+
+// MARK: - TEST-ONLY AX commands (P7 harness)
+
+/// axSetPosition / axPerform. Argument checks and the TextEdit / Notes
+/// allowlist are ClickyCore's ActionsDebugAXCommand (unit-tested); this only
+/// talks to AX. Apps are never launched or activated here.
+@MainActor
+enum DebugAXTestCommands {
+    static func application(_ bundleIdentifier: String) -> NSRunningApplication? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first { !$0.isTerminated }
+    }
+
+    static func windowList(_ applicationElement: AXUIElement) -> [(element: AXUIElement, info: [String: Any])] {
+        TypeForMeAccessibility.elementArrayAttribute(kAXWindowsAttribute, of: applicationElement).enumerated().map { index, window in
+            let frame = TypeForMeAccessibility.frameCG(of: window)
+            return (window, ["index": index, "title": TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: window) ?? "",
+                             "frame": frame.map { [$0.minX, $0.minY, $0.width, $0.height] } ?? NSNull()])
+        }
+    }
+
+    static func setPosition(_ request: ActionsDebugAXCommand.SetPositionRequest) -> (Bool, [String: Any]?, String?) {
+        guard let runningApplication = application(request.bundleIdentifier) else { return (false, nil, "\(request.bundleIdentifier) isn't running") }
+        let applicationElement = TypeForMeAccessibility.applicationElement(processIdentifier: runningApplication.processIdentifier)
+        let windows = windowList(applicationElement)
+        if request.isDryRun { return (true, ["dryRun": true, "windows": windows.map(\.info)], nil) }
+        let chosen: AXUIElement?
+        switch request.window {
+        case .index(let index): chosen = windows.indices.contains(index) ? windows[index].element : nil
+        case .title(let title):
+            chosen = windows.first { ($0.info["title"] as? String) == title }?.element
+                ?? windows.first { ($0.info["title"] as? String)?.localizedCaseInsensitiveContains(title) == true }?.element
+        }
+        guard let window = chosen else { return (false, ["windows": windows.map(\.info)], "no such window") }
+        var position = CGPoint(x: request.x, y: request.y)
+        guard let positionValue = AXValueCreate(.cgPoint, &position),
+              AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success else {
+            return (false, nil, "AXPosition couldn't be set")
+        }
+        if let width = request.width, let height = request.height {
+            var size = CGSize(width: width, height: height)
+            if let sizeValue = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) }
+        }
+        let newFrame = TypeForMeAccessibility.frameCG(of: window)
+        return (true, ["frame": newFrame.map { [$0.minX, $0.minY, $0.width, $0.height] } ?? NSNull()], nil)
+    }
+
+    static func perform(_ request: ActionsDebugAXCommand.PerformRequest) -> (Bool, [String: Any]?, String?) {
+        guard let runningApplication = application(request.bundleIdentifier) else { return (false, nil, "\(request.bundleIdentifier) isn't running") }
+        let processIdentifier = runningApplication.processIdentifier
+        if request.action == "delete" {
+            // Notes only (checked in ClickyCore): the menu bar's Edit ▸ Delete, pressed through AX.
+            let menu = TypeForMeAccessibility.applicationElement(processIdentifier: processIdentifier)
+            var menuBarValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(menu, kAXMenuBarAttribute as CFString, &menuBarValue) == .success, let menuBarValue,
+                  CFGetTypeID(menuBarValue) == AXUIElementGetTypeID() else { return (false, nil, "no menu bar") }
+            // swiftlint:disable:next force_cast
+            let menuBar = menuBarValue as! AXUIElement
+            guard let editItem = TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: menuBar)
+                    .first(where: { TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0) == "Edit" }),
+                  let editMenu = TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: editItem).first,
+                  let deleteItem = TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: editMenu)
+                    .first(where: { TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0) == "Delete" }) else {
+                return (false, nil, "no Edit ▸ Delete menu item")
+            }
+            guard TypeForMeAccessibility.boolAttribute(kAXEnabledAttribute, of: deleteItem) == true else { return (false, nil, "Edit ▸ Delete is disabled (no note selected?)") }
+            let didPress = TypeForMeAccessibility.press(deleteItem)
+            return (didPress, ["did": didPress ? "pressed Edit ▸ Delete" : "nothing"], didPress ? nil : "AXPress failed")
+        }
+        guard let role = request.role, let title = request.title, let window = ActionExecutor.focusedWindow(processIdentifier: processIdentifier) else {
+            return (false, nil, "no front window")
+        }
+        var queue: [AXUIElement] = [window]
+        var visitedCount = 0
+        while !queue.isEmpty && visitedCount < 3_000 {
+            let element = queue.removeFirst()
+            visitedCount += 1
+            let elementTitle = TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: element) ?? TypeForMeAccessibility.stringAttribute(kAXDescriptionAttribute, of: element)
+            if TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element) == role, elementTitle == title {
+                let didPress = TypeForMeAccessibility.press(element)
+                return (didPress, ["did": didPress ? "pressed \(role) \"\(title)\"" : "nothing", "visited": visitedCount], didPress ? nil : "AXPress failed")
+            }
+            queue += TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element)
+        }
+        return (false, ["visited": visitedCount], "no \(role) titled \"\(title)\" in the front window")
     }
 }
 
