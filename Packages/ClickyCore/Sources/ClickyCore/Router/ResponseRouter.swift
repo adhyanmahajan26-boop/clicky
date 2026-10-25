@@ -4,7 +4,7 @@
 //
 //  Splits Claude's streamed answer, as it arrives, into narration and
 //  everything that must never be spoken:
-//   - [POINT:…] [MARK:…] [CLEAR] (any case, optional space after "["):
+//   - [POINT:…] [MARK:…] [CLEAR] [SNAP:…] (any case, optional space after "["):
 //     replaced in the narration by U+E000 plus an index into `tags`, parsed
 //     the moment they close (so they can be resolved early and drawn when
 //     their words are spoken);
@@ -43,7 +43,7 @@ public struct ResponseRouter: Sendable {
     public static let blockNames = ["whiteboard", "code", "type", "codetask"]
     public static let unsupportedBlockSentence = "I can't do that yet."
 
-    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]"]
+    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]"]
 
     /// Block names that have a consumer (P4+ register theirs).
     public var blockConsumers: Set<String>
@@ -292,7 +292,7 @@ public struct ResponseRouter: Sendable {
     // MARK: - Narration clean-up
 
     private static let strayCoordinatePattern = try! NSRegularExpression(pattern: #"@\d+(\.\d+)?,\d+(\.\d+)?"#)
-    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER):[^\s\]]*\]"#, options: [.caseInsensitive])
+    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER|SNAP):[^\s\]]*\]"#, options: [.caseInsensitive])
 
     /// Removes "@x,y" and tag heads that lost their "[" ("POINT:#5]").
     static func cleanNarration(_ text: String) -> String {

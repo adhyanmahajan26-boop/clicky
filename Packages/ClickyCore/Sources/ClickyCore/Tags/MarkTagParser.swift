@@ -8,6 +8,7 @@
 //    [POINT:target[:label][:screenN]]
 //    [MARK:style:target[:label][:screenN]]
 //    [CLEAR]
+//    [SNAP:screen|window|marks[+marks]]   (SnapshotTag.swift says what each covers)
 //
 //    style   circle | box | arrow | underline | spot | 1..9   (unknown → circle;
 //            a target in the style slot also means circle: [MARK:#57:Share])
@@ -51,6 +52,7 @@ public struct ParsedTag: Equatable, Sendable {
         case point
         case mark
         case clear
+        case snap
     }
 
     public let kind: Kind
@@ -59,6 +61,8 @@ public struct ParsedTag: Equatable, Sendable {
     public let name: String?
     public let note: String?
     public let screenNumber: Int?
+    /// What a [SNAP:…] asks for (nil for every other kind).
+    public let snapshot: SnapshotRequest?
     public let raw: String
     /// The model wrote a style keyword (circle, box, arrow, underline, spot
     /// or a step number). False for [MARK:#57:Share] and unknown styles,
@@ -139,7 +143,7 @@ public enum MarkTagParser {
     // MARK: - Scanning
 
     private enum Keyword {
-        case point, mark, clear
+        case point, mark, clear, snap
     }
 
     private static func keywordAfterBracket(_ characters: [Character], from openingIndex: Int) -> Keyword? {
@@ -159,6 +163,7 @@ public enum MarkTagParser {
         if matches("point") { return .point }
         if matches("mark") { return .mark }
         if matches("clear") { return .clear }
+        if matches("snap") { return .snap }
         return nil
     }
 
@@ -190,11 +195,16 @@ public enum MarkTagParser {
         case .point: keywordLength = 5
         case .mark: keywordLength = 4
         case .clear: keywordLength = 5
+        case .snap: keywordLength = 4
         }
         body = String(body.dropFirst(keywordLength)).trimmingCharacters(in: .whitespaces)
 
         if keyword == .clear {
-            return body.isEmpty ? ParsedTag(kind: .clear, style: nil, target: .none, name: nil, note: nil, screenNumber: nil, raw: rawTag) : nil
+            return body.isEmpty ? ParsedTag(kind: .clear, style: nil, target: .none, name: nil, note: nil, screenNumber: nil, snapshot: nil, raw: rawTag) : nil
+        }
+        if keyword == .snap {
+            guard body.hasPrefix(":"), let snapshotRequest = parseSnapshotRequest(String(body.dropFirst())) else { return nil }
+            return ParsedTag(kind: .snap, style: nil, target: .none, name: nil, note: nil, screenNumber: nil, snapshot: snapshotRequest, raw: rawTag)
         }
         guard body.hasPrefix(":") else { return nil }
         body = String(body.dropFirst())
@@ -240,7 +250,23 @@ public enum MarkTagParser {
         }
 
         return ParsedTag(kind: keyword == .point ? .point : .mark, style: style, target: target,
-                         name: name, note: note, screenNumber: screenNumber, raw: rawTag, hasExplicitStyle: hasExplicitStyle)
+                         name: name, note: note, screenNumber: screenNumber, snapshot: nil, raw: rawTag, hasExplicitStyle: hasExplicitStyle)
+    }
+
+    /// The field after "SNAP:": "screen", "window+marks", "marks" (spaces
+    /// allowed around "+"). Anything else, including a second "+", is invalid.
+    static func parseSnapshotRequest(_ field: String) -> SnapshotRequest? {
+        let compactField = field.lowercased().filter { !$0.isWhitespace }
+        let parts = compactField.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+        guard let target = parts.first.flatMap({ SnapshotTarget(rawValue: $0) }) else { return nil }
+        switch parts.count {
+        case 1:
+            return SnapshotRequest(target: target)
+        case 2 where parts[1] == "marks":
+            return SnapshotRequest(target: target, includesClickyOverlay: true)
+        default:
+            return nil
+        }
     }
 
     /// Splits on ":" outside quotes; nil if a quote is left open.

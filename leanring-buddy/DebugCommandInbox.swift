@@ -12,6 +12,8 @@
 //    ask {text, speak=true}   → runs the full answer pipeline; replies at turn end
 //    marks {tags}             → fresh capture, parse/map/draw the tags (legacy parser)
 //    say {text}, stop, clear, reset, handsfree {on}, selftest {name}
+//    snap {target, marks}     → the [SNAP:…] path: target screen|window|marks, marks=true keeps
+//                               Clicky's overlay in the shot; replies with the saved path
 //    codeTask {task | json}   → runs a CodeTask through the CodeModeController
 //                               (the review panel still needs a real click)
 //    codeState                → Code mode's preflight, phase, review and recent events
@@ -175,6 +177,33 @@ final class DebugCommandInbox {
                  "tracked": mark.ax != nil, "label": mark.originalLabel ?? NSNull()]
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: markObjects, errorMessage: nil)
+
+        case "snap":
+            guard let targetName = commandObject["target"] as? String, let snapshotTarget = SnapshotTarget(rawValue: targetName) else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "snap needs \"target\": screen, window or marks")
+                return
+            }
+            let includesClickyOverlay = commandObject["marks"] as? Bool ?? false
+            let snapshotRequest = SnapshotRequest(target: snapshotTarget, includesClickyOverlay: includesClickyOverlay)
+            let markRectsCG = companionManager.markController.marks.map(\.rectCG)
+            let turnRecordForSnap = TurnLogger.beginTurn(transcript: "debug snap \(targetName)\(includesClickyOverlay ? "+marks" : "")", keyUpDate: Date())
+            Task {
+                do {
+                    let snapshotResult = try await SnapshotCapture.capture(request: snapshotRequest, markRectsCG: markRectsCG)
+                    turnRecordForSnap?.recordSnapshot(snapshotResult)
+                    if let turnRecordForSnap { TurnLogger.finishTurn(turnRecordForSnap) }
+                    let snapResult: [String: Any] = [
+                        "path": snapshotResult.fileURL.path,
+                        "target": snapshotResult.target.rawValue,
+                        "includesClickyOverlay": snapshotResult.includesClickyOverlay,
+                        "width": snapshotResult.pixelWidth,
+                        "height": snapshotResult.pixelHeight,
+                    ]
+                    self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: snapResult, errorMessage: nil, turnDirectoryURL: turnRecordForSnap?.turnDirectoryURL)
+                } catch {
+                    self.reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.localizedDescription)
+                }
+            }
 
         case "bargeIn":
             // Barge-in exactly as a trigger would (escape | pushToTalk | voiceCommand).
