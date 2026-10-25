@@ -68,6 +68,8 @@ final class AnswerSession: SpeechCoordinatorHost {
         /// A POINT at an element of the board on screen.
         case boardPoint(String)
         case clear
+        /// A [SNAP:…] screenshot, taken when its words are spoken.
+        case snapshot(SnapshotRequest)
         case unusable
     }
 
@@ -440,6 +442,8 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private func resolve(_ tag: ParsedTag) async -> PreparedTag {
         if tag.kind == .clear { return .clear }
+        // A snapshot needs no grounding: it's taken from the screen when it fires.
+        if tag.kind == .snap, let snapshotRequest = tag.snapshot { return .snapshot(snapshotRequest) }
         if presentedBoard, let boardElementIdentifier = companionManager.boardController.boardElementIdentifier(for: tag) {
             return .boardPoint(boardElementIdentifier)
         }
@@ -638,6 +642,8 @@ final class AnswerSession: SpeechCoordinatorHost {
             companionManager.boardController.point(atElement: elementIdentifier)
         case .clear?:
             companionManager.markController.clear()
+        case .snapshot(let snapshotRequest)?:
+            fireSnapshot(snapshotRequest)
         case .unusable?, nil:
             break
         }
@@ -646,6 +652,36 @@ final class AnswerSession: SpeechCoordinatorHost {
             switch prepared {
             case .mark, .point: companionManager.boardController.realScreenTagFired()
             default: break
+            }
+        }
+    }
+
+    /// Takes the [SNAP:…] shot now (the marks on screen are the ones up at this moment),
+    /// then says where it went. Runs in its own task: the capture can take a moment and
+    /// the speech queue must not wait on it.
+    private func fireSnapshot(_ snapshotRequest: SnapshotRequest) {
+        let markRectsCG = companionManager.markController.marks.map(\.rectCG)
+        let turnRecordForSnapshot = turnRecord
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let snapshotResult = try await SnapshotCapture.capture(request: snapshotRequest, markRectsCG: markRectsCG)
+                turnRecordForSnapshot?.recordSnapshot(snapshotResult)
+                // A shot that finished after turn.json was written: write it again.
+                if let turnRecordForSnapshot, turnRecordForSnapshot.timings["end"] != nil { TurnLogger.finishTurn(turnRecordForSnapshot) }
+                let savedLine = "saved to Clicky Screenshots on your Desktop"
+                if self.isFinished {
+                    self.companionManager.speakCodeModeLine(savedLine)
+                } else {
+                    self.speakNow(savedLine)
+                }
+            } catch {
+                print("📸 SnapshotCapture failed: \(error.localizedDescription)")
+                if self.isFinished {
+                    self.companionManager.speakCodeModeLine("I couldn't take that screenshot.")
+                } else {
+                    self.speakNow("I couldn't take that screenshot.")
+                }
             }
         }
     }

@@ -111,7 +111,7 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Code-mode results arrive long after the answer; wait for any speech to end first.
-    private func speakCodeModeLine(_ text: String) {
+    func speakCodeModeLine(_ text: String) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
         Task { [weak self] in

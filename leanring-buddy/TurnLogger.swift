@@ -123,6 +123,26 @@ final class TurnRecord {
     var segmentTexts: [String] = []
     var firedTagIndexes: [Int] = []
 
+    /// A [SNAP:…] screenshot taken for this turn (or a debug snap), saved to `path`.
+    struct SnapshotEntry: Encodable {
+        let path: String
+        let target: String
+        let includesClickyOverlay: Bool
+        let width: Int
+        let height: Int
+    }
+    var snapshots: [SnapshotEntry] = []
+
+    func recordSnapshot(_ snapshotResult: SnapshotResult) {
+        snapshots.append(SnapshotEntry(
+            path: snapshotResult.fileURL.path,
+            target: snapshotResult.target.rawValue,
+            includesClickyOverlay: snapshotResult.includesClickyOverlay,
+            width: snapshotResult.pixelWidth,
+            height: snapshotResult.pixelHeight
+        ))
+    }
+
     /// v2 P4: the board's narration, as it happened. `t` is a Unix timestamp:
     /// segmentStart (a step's segment began playing), reveal (a step appeared,
     /// never before its first segmentStart), stepEnd, hold (a silent step).
@@ -315,6 +335,7 @@ enum TurnLogger {
             let boardStats: TurnRecord.BoardStatsEntry?
             let boardEvents: [TurnRecord.BoardEventEntry]
             let cli: TurnRecord.CLIProcessEntry?
+            let snapshots: [TurnRecord.SnapshotEntry]
         }
 
         let turnFile = TurnFile(
@@ -333,7 +354,8 @@ enum TurnLogger {
             boardTitle: turnRecord.boardTitle,
             boardStats: turnRecord.boardStats,
             boardEvents: turnRecord.boardEvents,
-            cli: turnRecord.cli
+            cli: turnRecord.cli,
+            snapshots: turnRecord.snapshots
         )
 
         let jsonEncoder = JSONEncoder()

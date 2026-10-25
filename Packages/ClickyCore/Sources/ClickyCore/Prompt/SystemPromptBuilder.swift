@@ -70,7 +70,7 @@ public enum SystemPromptBuilder {
 
     /// The same, with the gated texts passed in (tests don't touch the global).
     public static func mainSystemPrompt(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]) -> String {
-        var sections = [coreSection]
+        var sections = [coreSection, snapshotSection]
         if features.contains(.grounding) {
             sections.append(groundingSection(withBadges: features.contains(.badges), missingAbilities: missingAbilities(features: features, sectionTexts: sectionTexts)))
         } else {
@@ -189,6 +189,13 @@ public enum SystemPromptBuilder {
         - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
         - user asks how to commit in xcode: "see that source control menu up top? click that and hit commit, or you can use command option c as a shortcut. [POINT:285,11:source control]"
         - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
+        """
+
+    /// Screenshots are always on offer (they don't depend on pointing or grounding).
+    static let snapshotSection = """
+        screenshots:
+        you can take a screenshot for the user and save it to their Desktop. put one tag right after the words that ask for it: [SNAP:screen] for the whole screen the cursor is on, [SNAP:window] for the frontmost app's window, or [SNAP:marks] for just the area around the marks you've drawn. without "+marks" the shot is the user's content only, with no marks or Clicky's notes. add +marks, like [SNAP:window+marks], only when the user wants the marks or notes in the picture too.
+        the app tells the user where the screenshot was saved, so don't repeat the path or the folder. never say you can't take or save a screenshot.
         """
 
     static let liveMarksSection = """
