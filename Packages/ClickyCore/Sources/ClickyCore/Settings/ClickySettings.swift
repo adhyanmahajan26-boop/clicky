@@ -58,10 +58,17 @@ public enum ClickySettings {
         /// Int, debug only: send Qwen requests to this port instead of 11234
         /// (a closed port tests the Apple fallback). Clicky never spawns on it.
         public static let ttsPortOverride = "v2.debug.ttsPortOverride"
+        /// String path, the WAV every Qwen segment clones (default ~/.clicky/voice/clicky-voice.wav).
+        public static let qwenReferenceClip = "v2.voice.qwen.referenceClip"
         /// Bool, default false: the code agent may get Bash (set true only by a passing sandbox probe).
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+    }
+
+    public static var qwenReferenceClipPath: String {
+        let path = (defaults.string(forKey: Keys.qwenReferenceClip) ?? "").trimmingCharacters(in: .whitespaces)
+        return path.isEmpty ? QwenTuning.referenceClipDefaultPath : path
     }
 
     public static var qwenSpeaker: String {

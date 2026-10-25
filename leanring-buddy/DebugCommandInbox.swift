@@ -198,6 +198,31 @@ final class DebugCommandInbox {
                 "lastHistory": companionManager.lastHistoryEntryForDebug ?? NSNull()
             ], errorMessage: nil)
 
+        case "ttsToFile":
+            // The app's real Qwen request (model, reference clip, lexicon) → WAV files; no playback.
+            let texts = commandObject["texts"] as? [String] ?? []
+            let directoryPath = ((commandObject["dir"] as? String) ?? "~/Library/Logs/Clicky/tts-check") as NSString
+            let directoryURL = URL(fileURLWithPath: directoryPath.expandingTildeInPath, isDirectory: true)
+            Task {
+                try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+                let client = self.companionManager.speechOutputClient.qwenLocalVoiceClient
+                var written: [[String: Any]] = []
+                for (index, text) in texts.enumerated() {
+                    let start = Date()
+                    do {
+                        let audioData = try await client.synthesizeSpeech(for: text)
+                        let fileURL = directoryURL.appendingPathComponent("app-\(index + 1).wav")
+                        try audioData.write(to: fileURL)
+                        written.append(["path": fileURL.path, "ms": (Date().timeIntervalSince(start) * 1000).rounded()])
+                    } catch {
+                        written.append(["error": String(describing: error)])
+                    }
+                }
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: [
+                    "model": client.modelIdentifier, "usesReferenceClip": client.referenceClipBase64 != nil, "files": written
+                ], errorMessage: nil)
+            }
+
         case "say":
             let sayText = commandObject["text"] as? String ?? ""
             Task {

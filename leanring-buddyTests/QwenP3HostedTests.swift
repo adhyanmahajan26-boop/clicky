@@ -87,7 +87,10 @@ struct QwenP3HostedTests {
         #expect(request.url?.path == "/v1/audio/speech")
         #expect(request.httpMethod == "POST")
         let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
-        #expect(Set(body.keys) == ["model", "input", "speaker", "instruct", "language", "response_format", "max_tokens"])
+        // One fixed voice: the reference clip when present; never speaker/instruct.
+        var expectedKeys: Set<String> = ["model", "input", "language", "response_format", "max_tokens"]
+        if client.referenceClipBase64 != nil { expectedKeys.insert("ref_audio") }
+        #expect(Set(body.keys) == expectedKeys)
         #expect(body["input"] as? String == "Open P R number 12 in X code.")
         #expect(body["response_format"] as? String == "wav")
         #expect(body["language"] as? String == "English")

@@ -22,10 +22,14 @@ public enum QwenTuning {
     public static let serverPort = 11234
     /// The model Clicky asks for when the server has no TTS model loaded yet.
     public static let defaultModelIdentifier = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
-    /// Preferred whenever mlx-serve lists it: one fixed named speaker, so
-    /// every segment is the same voice (the Base model, given no reference
-    /// clip, picks a different voice per request).
+    /// Listed by mlx-serve but NOT used: its Qwen3-TTS backend has no named
+    /// speakers (the `speaker`/`voice` fields are ignored, live 25 Oct), and
+    /// CustomVoice has no speaker encoder to clone with.
     public static let customVoiceModelIdentifier = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
+    /// One fixed voice = the Base model cloning one reference clip
+    /// (`ref_audio`, base64 WAV, no `ref_text`). Without it Qwen improvises
+    /// a different voice for every text. Live: ~1.7–2.1 s per sentence vs 0.7–0.9 s.
+    public static let referenceClipDefaultPath = "~/.clicky/voice/clicky-voice.wav"
     public static let mlxServeExecutablePath = "/Applications/MLX Core.app/Contents/MacOS/mlx-serve"
 
     /// Segments synthesized ahead of the one playing (probe: L = 1).
@@ -79,19 +83,26 @@ public enum QwenTuning {
 
     /// The JSON body for one segment: the TTS text gets the lexicon, the
     /// caption keeps the original words.
-    public static func requestBody(model: String, speech: String, speaker: String, instruct: String) -> [String: Any] {
+    /// The JSON body for one segment. With a reference clip (base64 WAV) the
+    /// Base model clones that one voice for every segment; the `speaker` and
+    /// `instruct` fields are never sent (mlx-serve ignores them).
+    public static func requestBody(model: String, speech: String, referenceClipBase64: String?) -> [String: Any] {
         let ttsText = Lexicon.apply(speech)
         var body: [String: Any] = [
             "model": model,
             "input": ttsText,
-            "speaker": speaker,
             "language": language,
             "response_format": "wav",
             "max_tokens": maxTokens(characters: ttsText.count)
         ]
-        // No instruct unless the user set one: the speaker's own delivery.
-        if !instruct.isEmpty { body["instruct"] = instruct }
+        if let referenceClipBase64 { body["ref_audio"] = referenceClipBase64 }
         return body
+    }
+
+    /// The model to request: Base whenever a reference clip exists (only it can
+    /// clone), else whatever TTS model the server has loaded.
+    public static func modelIdentifier(hasReferenceClip: Bool, loadedModelIdentifier: String) -> String {
+        hasReferenceClip ? defaultModelIdentifier : loadedModelIdentifier
     }
 
     // MARK: Speed

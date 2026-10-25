@@ -123,7 +123,7 @@ final class QwenServerSupervisor: ObservableObject {
             markUnavailable("Qwen unavailable: server didn't answer")
             return
         }
-        client.modelIdentifier = QwenSupervisor.ttsModelIdentifier(fromModels: models)
+        client.loadedModelIdentifier = QwenSupervisor.ttsModelIdentifier(fromModels: models)
 
         status = "Qwen warming up…"
         do {
@@ -140,7 +140,7 @@ final class QwenServerSupervisor: ObservableObject {
 
     /// The speaker, or "Base voice" when the loaded model ignores speakers.
     var voiceLabel: String {
-        QwenSupervisor.supportsSpeakers(modelIdentifier: client.modelIdentifier) ? ClickySettings.qwenSpeaker : "Base voice"
+        client.referenceClipBase64 != nil ? "fixed voice" : "no reference clip — voice varies"
     }
 
     /// Refreshes "ready (speaker)" after the picker changes.

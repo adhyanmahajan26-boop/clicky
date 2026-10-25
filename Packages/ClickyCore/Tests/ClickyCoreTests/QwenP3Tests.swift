@@ -101,9 +101,10 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
         ["id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16", "loaded": false],
         ["id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", "loaded": true]
     ]
-    // CustomVoice (one fixed speaker) wins whenever the server lists it, loaded or not.
-    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: models) == QwenTuning.customVoiceModelIdentifier)
-    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: Array(models.prefix(1)) + [models[2]]) == "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
+    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: models) == "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
+    // With a reference clip Clicky always asks for Base (the only model that clones).
+    #expect(QwenTuning.modelIdentifier(hasReferenceClip: true, loadedModelIdentifier: QwenTuning.customVoiceModelIdentifier) == QwenTuning.defaultModelIdentifier)
+    #expect(QwenTuning.modelIdentifier(hasReferenceClip: false, loadedModelIdentifier: QwenTuning.customVoiceModelIdentifier) == QwenTuning.customVoiceModelIdentifier)
     #expect(QwenSupervisor.ttsModelIdentifier(fromModels: []) == QwenTuning.defaultModelIdentifier)
     #expect(!QwenSupervisor.supportsSpeakers(modelIdentifier: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"))
     #expect(QwenSupervisor.supportsSpeakers(modelIdentifier: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"))
@@ -137,13 +138,14 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
 
 @Test func requestBodyHasExactlyTheProbedKeys() throws {
     let body = QwenTuning.requestBody(model: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", speech: "Open PR #12 on GitHub.",
-                                      speaker: "Ryan", instruct: QwenTuning.instructPresets[0].instruct)
-    #expect(Set(body.keys) == ["model", "input", "speaker", "instruct", "language", "response_format", "max_tokens"])
+                                      referenceClipBase64: "UklGRg==")
+    // One fixed voice: Base + the reference clip; never speaker/instruct (mlx-serve ignores them).
+    #expect(Set(body.keys) == ["model", "input", "ref_audio", "language", "response_format", "max_tokens"])
+    #expect(body["model"] as? String == QwenTuning.defaultModelIdentifier)
+    #expect(body["ref_audio"] as? String == "UklGRg==")
     #expect(body["input"] as? String == "Open P R number 12 on Git Hub.")
     #expect(body["response_format"] as? String == "wav")
     #expect(body["language"] as? String == "English")
-    #expect(body["speaker"] as? String == "Ryan")
-    #expect(body["instruct"] as? String == "Speak in a warm, friendly, natural conversational tone.")
     #expect(body["max_tokens"] as? Int == 50 + 2 * "Open P R number 12 on Git Hub.".count)
     // Serializable as sent.
     let json = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -362,8 +364,8 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
     #expect(host.history == "One. Two.Three.")
 }
 
-@Test func requestBodyOmitsAnEmptyInstruct() {
-    let body = QwenTuning.requestBody(model: QwenTuning.customVoiceModelIdentifier, speech: "Hi.", speaker: "Ryan", instruct: "")
-    #expect(body["instruct"] == nil)
-    #expect(body["speaker"] as? String == "Ryan")
+@Test func requestBodyWithoutAClipHasNoReference() {
+    let body = QwenTuning.requestBody(model: QwenTuning.defaultModelIdentifier, speech: "Hi.", referenceClipBase64: nil)
+    #expect(body["ref_audio"] == nil)
+    #expect(body["speaker"] == nil && body["instruct"] == nil)
 }

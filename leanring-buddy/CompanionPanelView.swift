@@ -1111,8 +1111,8 @@ private struct CompanionVoicePickerRow: View {
                 .pointerCursor()
             }
 
-            if !QwenSupervisor.supportsSpeakers(modelIdentifier: qwenServerSupervisor.client.modelIdentifier) {
-                Text("The loaded Base model has one voice; speakers and style need the CustomVoice model.")
+            if qwenServerSupervisor.client.referenceClipBase64 == nil {
+                Text("No reference voice clip at ~/.clicky/voice/clicky-voice.wav, so the voice may change between answers.")
                     .font(.system(size: 10))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)

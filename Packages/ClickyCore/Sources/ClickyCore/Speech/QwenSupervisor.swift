@@ -92,10 +92,6 @@ public enum QwenSupervisor {
     /// The TTS model to request: one the server has loaded, else the default.
     /// `models` is the `data` array of GET /v1/models.
     public static func ttsModelIdentifier(fromModels models: [[String: Any]]) -> String {
-        // CustomVoice (one fixed speaker) whenever the server has it, loaded or not.
-        if models.contains(where: { ($0["id"] as? String) == QwenTuning.customVoiceModelIdentifier }) {
-            return QwenTuning.customVoiceModelIdentifier
-        }
         let loadedTTSModels = models.filter { model in
             let identifier = model["id"] as? String ?? ""
             let isLoaded = model["loaded"] as? Bool ?? false

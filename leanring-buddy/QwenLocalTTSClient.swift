@@ -49,7 +49,23 @@ final class QwenLocalTTSClient {
 
     private let urlSession: URLSession
     /// The TTS model the server has loaded (set by the supervisor).
-    var modelIdentifier = QwenTuning.defaultModelIdentifier
+    var loadedModelIdentifier = QwenTuning.defaultModelIdentifier
+
+    /// The one voice every segment clones (v2.voice.qwen.referenceClip), read
+    /// once and kept as base64; nil when the clip is missing.
+    private(set) lazy var referenceClipBase64: String? = {
+        let path = (ClickySettings.qwenReferenceClipPath as NSString).expandingTildeInPath
+        guard let clipData = FileManager.default.contents(atPath: path), PCMAudio(wavData: clipData) != nil else {
+            print("⚠️ Qwen voice: no reference clip at \(path); each answer may sound different")
+            return nil
+        }
+        return clipData.base64EncodedString()
+    }()
+
+    /// Base (cloning the reference clip) whenever a clip exists.
+    var modelIdentifier: String {
+        QwenTuning.modelIdentifier(hasReferenceClip: referenceClipBase64 != nil, loadedModelIdentifier: loadedModelIdentifier)
+    }
 
     init(urlSession: URLSession = .shared) {
         self.urlSession = urlSession
@@ -64,8 +80,7 @@ final class QwenLocalTTSClient {
         speechRequest.httpBody = try JSONSerialization.data(withJSONObject: QwenTuning.requestBody(
             model: modelIdentifier,
             speech: speech,
-            speaker: ClickySettings.qwenSpeaker,
-            instruct: ClickySettings.qwenInstruct
+            referenceClipBase64: referenceClipBase64
         ), options: [.sortedKeys])
         return speechRequest
     }
