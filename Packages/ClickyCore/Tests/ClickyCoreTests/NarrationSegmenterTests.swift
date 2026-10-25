@@ -97,3 +97,17 @@ let segmenterVectors: [String] = [
     #expect(segments.count >= 3, "\(segments)")
     #expect(segments.contains { $0.contains("e.g. main") })
 }
+
+@Test func qwenFirstSegmentIsCappedAtAWordBoundary() {
+    let text = "one button i can see is the share button in the toolbar at the top right of the window. then more."
+    var whole = NarrationSegmenter(options: .qwen)
+    let wholeSegments = whole.feed(text) + whole.finish()
+    var streamed = NarrationSegmenter(options: .qwen)
+    var streamedSegments: [String] = []
+    for character in text { streamedSegments += streamed.feed(String(character)) }
+    streamedSegments += streamed.finish()
+    #expect(wholeSegments == streamedSegments)
+    #expect(wholeSegments.first!.count <= 48)
+    #expect(wholeSegments.first!.hasSuffix(" "))
+    #expect(wholeSegments.joined() == text)
+}

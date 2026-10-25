@@ -34,15 +34,21 @@ public struct NarrationSegmenter: Sendable {
         public var firstCutMinChars: Int
         /// Only first sentences longer than this are cut.
         public var firstCutMinSentenceLen: Int
+        /// If set, a first segment with no clause cut by this length is cut at
+        /// the last space before it (a short first WAV starts the voice sooner).
+        public var firstCutMaxChars: Int?
 
         public init(firstCutMinChars: Int = NarrationSegmenter.minimumSentenceLength,
-                    firstCutMinSentenceLen: Int = NarrationSegmenter.longFirstSentenceLength) {
+                    firstCutMinSentenceLen: Int = NarrationSegmenter.longFirstSentenceLength,
+                    firstCutMaxChars: Int? = nil) {
             self.firstCutMinChars = firstCutMinChars
             self.firstCutMinSentenceLen = firstCutMinSentenceLen
+            self.firstCutMaxChars = firstCutMaxChars
         }
 
-        /// For the Qwen voice: its first WAV arrives only when it's complete.
-        public static let qwen = Options(firstCutMinChars: 16, firstCutMinSentenceLen: 0)
+        /// For the Qwen voice: its first WAV arrives only when it's complete,
+        /// and synthesis time grows with length (live: ~1.1 s per 65 chars).
+        public static let qwen = Options(firstCutMinChars: 16, firstCutMinSentenceLen: 0, firstCutMaxChars: 48)
     }
 
     public let options: Options
@@ -79,7 +85,7 @@ public struct NarrationSegmenter: Sendable {
             // A long first sentence: cut early at a comma, even mid-stream.
             if releasedCount == 0, let firstUnit = units.first, firstUnit.hasSpeech,
                firstUnit.text.count > options.firstCutMinSentenceLen,
-               let cutOffset = Self.firstClauseCut(in: firstUnit.text, minimumOffset: options.firstCutMinChars) {
+               let cutOffset = Self.firstCut(in: firstUnit.text, options: options) {
                 let head = String(firstUnit.text.prefix(cutOffset))
                 released.append(head)
                 releasedCount += 1
@@ -230,6 +236,18 @@ public struct NarrationSegmenter: Sendable {
             if !isInsideFence && (character.isLetter || character.isNumber) { length += 1 }
         }
         return length
+    }
+
+    /// The first segment's cut: a clause boundary, else (with a max length)
+    /// the last space before the max, once the text is longer than that.
+    static func firstCut(in sentence: String, options: Options) -> Int? {
+        let clauseCut = firstClauseCut(in: sentence, minimumOffset: options.firstCutMinChars)
+        guard let maximumLength = options.firstCutMaxChars else { return clauseCut }
+        if let clauseCut, clauseCut <= maximumLength { return clauseCut }
+        guard sentence.count > maximumLength, !sentence.prefix(maximumLength).contains("```") else { return clauseCut }
+        let characters = Array(sentence.prefix(maximumLength))
+        guard let lastSpace = characters.lastIndex(of: " "), lastSpace >= options.firstCutMinChars else { return clauseCut }
+        return lastSpace + 1
     }
 
     /// Offset just after the first ", " or "; " at least `minimumOffset`
