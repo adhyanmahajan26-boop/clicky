@@ -159,6 +159,15 @@ final class DebugCommandInbox {
                 }
             }
 
+        case "markState":
+            // Where each live mark is right now (tracking checks).
+            let markObjects: [[String: Any]] = companionManager.markController.marks.map { mark in
+                ["rectCG": [mark.rectCG.minX, mark.rectCG.minY, mark.rectCG.width, mark.rectCG.height],
+                 "hidden": mark.isHidden, "opacity": mark.opacity, "source": mark.source.rawValue,
+                 "tracked": mark.ax != nil, "label": mark.originalLabel ?? NSNull()]
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: markObjects, errorMessage: nil)
+
         case "say":
             let sayText = commandObject["text"] as? String ?? ""
             Task {

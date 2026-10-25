@@ -25,7 +25,9 @@ final class MarkController {
     }
 
     private let tracker = MarkTracker()
-    private weak var turnRecord: TurnRecord?
+    /// Kept strongly: tracking keeps logging to marks.jsonl after the turn's
+    /// own record is finished (the debug `marks` turn ends immediately).
+    private var turnRecord: TurnRecord?
     private var screenObserver: NSObjectProtocol?
 
     init() {
