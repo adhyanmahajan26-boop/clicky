@@ -1,0 +1,57 @@
+here's the whole compiler pipeline.
+
+<whiteboard>
+{"wb": 1, "title": "From source code to a running program", "dir": "TB", "sections": [{"id": "agenda", "title": "Agenda"}, {"id": "q1", "title": "Parsing", "q": "parsing"}, {"id": "q2", "title": "Type checking", "q": "type checking"}, {"id": "q3", "title": "Optimisation", "q": "optimisation"}, {"id": "q4", "title": "Code generation", "q": "code generation"}, {"id": "q5", "title": "Linking", "q": "linking"}, {"id": "q6", "title": "Loading", "q": "loading"}, {"id": "recap", "title": "Recap"}]}
+{"el": "list", "id": "ag", "sec": "agenda", "title": "Stages", "items": ["Parsing", "Type checking", "Optimisation", "Code generation", "Linking", "Loading"], "ordered": true}
+{"el": "box", "id": "q1in", "sec": "q1", "text": "Parsing input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q1out", "sec": "q1", "text": "Parsing output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q1a", "sec": "q1", "from": "q1in", "to": "q1out", "text": "transforms"}
+{"el": "list", "id": "q1l", "sec": "q1", "title": "Parsing notes", "items": ["Parsing step one", "Parsing step two", "Parsing step three"], "ordered": false}
+{"el": "text", "id": "q1t", "sec": "q1", "text": "Why parsing matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q1tb", "sec": "q1", "cols": ["Input", "Output", "Cost"], "rows": [["Parsing a", "result a", "low"], ["Parsing b", "result b", "medium"], ["Parsing c", "result c", "high"], ["Parsing d", "result d", "low"]]}
+{"el": "callout", "id": "q1c", "sec": "q1", "target": "q1out", "style": "info", "text": "Parsing errors are reported with a line number."}
+{"el": "box", "id": "q2in", "sec": "q2", "text": "Type checking input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q2out", "sec": "q2", "text": "Type checking output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q2a", "sec": "q2", "from": "q2in", "to": "q2out", "text": "transforms"}
+{"el": "list", "id": "q2l", "sec": "q2", "title": "Type checking notes", "items": ["Type checking step one", "Type checking step two", "Type checking step three"], "ordered": false}
+{"el": "text", "id": "q2t", "sec": "q2", "text": "Why type checking matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q2tb", "sec": "q2", "cols": ["Input", "Output", "Cost"], "rows": [["Type checking a", "result a", "low"], ["Type checking b", "result b", "medium"], ["Type checking c", "result c", "high"], ["Type checking d", "result d", "low"]]}
+{"el": "callout", "id": "q2c", "sec": "q2", "target": "q2out", "style": "info", "text": "Type checking errors are reported with a line number."}
+{"el": "box", "id": "q3in", "sec": "q3", "text": "Optimisation input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q3out", "sec": "q3", "text": "Optimisation output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q3a", "sec": "q3", "from": "q3in", "to": "q3out", "text": "transforms"}
+{"el": "list", "id": "q3l", "sec": "q3", "title": "Optimisation notes", "items": ["Optimisation step one", "Optimisation step two", "Optimisation step three"], "ordered": false}
+{"el": "text", "id": "q3t", "sec": "q3", "text": "Why optimisation matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q3tb", "sec": "q3", "cols": ["Input", "Output", "Cost"], "rows": [["Optimisation a", "result a", "low"], ["Optimisation b", "result b", "medium"], ["Optimisation c", "result c", "high"], ["Optimisation d", "result d", "low"]]}
+{"el": "callout", "id": "q3c", "sec": "q3", "target": "q3out", "style": "info", "text": "Optimisation errors are reported with a line number."}
+{"el": "box", "id": "q4in", "sec": "q4", "text": "Code generation input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q4out", "sec": "q4", "text": "Code generation output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q4a", "sec": "q4", "from": "q4in", "to": "q4out", "text": "transforms"}
+{"el": "list", "id": "q4l", "sec": "q4", "title": "Code generation notes", "items": ["Code generation step one", "Code generation step two", "Code generation step three"], "ordered": false}
+{"el": "text", "id": "q4t", "sec": "q4", "text": "Why code generation matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q4tb", "sec": "q4", "cols": ["Input", "Output", "Cost"], "rows": [["Code generation a", "result a", "low"], ["Code generation b", "result b", "medium"], ["Code generation c", "result c", "high"], ["Code generation d", "result d", "low"]]}
+{"el": "callout", "id": "q4c", "sec": "q4", "target": "q4out", "style": "info", "text": "Code generation errors are reported with a line number."}
+{"el": "box", "id": "q5in", "sec": "q5", "text": "Linking input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q5out", "sec": "q5", "text": "Linking output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q5a", "sec": "q5", "from": "q5in", "to": "q5out", "text": "transforms"}
+{"el": "list", "id": "q5l", "sec": "q5", "title": "Linking notes", "items": ["Linking step one", "Linking step two", "Linking step three"], "ordered": false}
+{"el": "text", "id": "q5t", "sec": "q5", "text": "Why linking matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q5tb", "sec": "q5", "cols": ["Input", "Output", "Cost"], "rows": [["Linking a", "result a", "low"], ["Linking b", "result b", "medium"], ["Linking c", "result c", "high"], ["Linking d", "result d", "low"]]}
+{"el": "callout", "id": "q5c", "sec": "q5", "target": "q5out", "style": "info", "text": "Linking errors are reported with a line number."}
+{"el": "box", "id": "q6in", "sec": "q6", "text": "Loading input", "shape": "round", "color": "blue"}
+{"el": "box", "id": "q6out", "sec": "q6", "text": "Loading output", "shape": "rect", "color": "green"}
+{"el": "arrow", "id": "q6a", "sec": "q6", "from": "q6in", "to": "q6out", "text": "transforms"}
+{"el": "list", "id": "q6l", "sec": "q6", "title": "Loading notes", "items": ["Loading step one", "Loading step two", "Loading step three"], "ordered": false}
+{"el": "text", "id": "q6t", "sec": "q6", "text": "Why loading matters: it keeps the next stage simple.", "size": "s"}
+{"el": "table", "id": "q6tb", "sec": "q6", "cols": ["Input", "Output", "Cost"], "rows": [["Loading a", "result a", "low"], ["Loading b", "result b", "medium"], ["Loading c", "result c", "high"], ["Loading d", "result d", "low"]]}
+{"el": "callout", "id": "q6c", "sec": "q6", "target": "q6out", "style": "info", "text": "Loading errors are reported with a line number."}
+{"el": "list", "id": "rc", "sec": "recap", "title": "Key points", "items": ["Each stage has one job", "Errors surface early", "The linker joins the pieces"], "ordered": false}
+{"step": 1, "show": ["ag"], "say": "six stages from source to a running program.", "focus": "agenda"}
+{"step": 2, "show": ["q1in", "q1out", "q1a", "q1l", "q1t", "q1tb", "q1c"], "say": "parsing turns its input into output.", "focus": "q1"}
+{"step": 3, "show": ["q2in", "q2out", "q2a", "q2l", "q2t", "q2tb", "q2c"], "say": "type checking turns its input into output.", "focus": "q2"}
+{"step": 4, "show": ["q3in", "q3out", "q3a", "q3l", "q3t", "q3tb", "q3c"], "say": "optimisation turns its input into output.", "focus": "q3"}
+{"step": 5, "show": ["q4in", "q4out", "q4a", "q4l", "q4t", "q4tb", "q4c"], "say": "code generation turns its input into output.", "focus": "q4"}
+{"step": 6, "show": ["q5in", "q5out", "q5a", "q5l", "q5t", "q5tb", "q5c"], "say": "linking turns its input into output.", "focus": "q5"}
+{"step": 7, "show": ["q6in", "q6out", "q6a", "q6l", "q6t", "q6tb", "q6c"], "say": "loading turns its input into output.", "focus": "q6"}
+{"step": 8, "show": ["rc"], "say": "each stage has one job.", "focus": "recap"}
+</whiteboard>

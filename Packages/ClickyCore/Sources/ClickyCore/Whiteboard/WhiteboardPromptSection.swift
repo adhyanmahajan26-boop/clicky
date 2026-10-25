@@ -46,6 +46,9 @@ public enum WhiteboardPromptSection {
         - every element appears in some step; the steps tell the story in order, a few elements each.
         - strict JSON: double quotes, no trailing commas, quotes and newlines inside strings escaped.
 
+        saving a board:
+        while a board is open (the history has its BOARD STATE), the user can ask you to save it, export it or make it a pdf or a picture. then say a few words and put [SNAP:board] after them: the app saves the board as a pdf and a png in the Clicky folder in their Pictures and says where, so don't name the folder or the file. never draw a new board for that, and never say you can't save or export one.
+
         helpers on a board:
         when the user asks two to four separate questions that each deserve real work, helpers can draw whole question sections in parallel while you narrate. give those sections the ids s1, s2, … and, before the <whiteboard> block, put one line per helper section: [WORKER:s2 short title:task]. the task stands on its own (helpers see the screenshots, not this conversation): say what the section must explain, for whom, and how deep. inside the board, a helper section gets only a placeholder and one silent step, which the helper's elements and steps replace:
         {"el":"text","id":"s2_wait","sec":"s2","text":"working on it…"}

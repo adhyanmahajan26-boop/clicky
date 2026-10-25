@@ -1099,13 +1099,26 @@ final class CompanionManager: ObservableObject {
         case .resume: boardController.resume()
         case .close: boardController.close()
         case .save:
-            let savedURL = boardController.exportBoard()
-            showHandsFreeStatusMessage(savedURL == nil ? "Couldn't save the board" : "Saved the board")
+            // "save the board" / "save this as a pdf": says where it went.
+            speakCodeModeLine(saveBoardAndDescribe())
         case .whiteboardThat:
             whiteboardLastAnswer()
         case .goDeeper(let sectionNumber):
             goDeeper(onSection: sectionNumber)
         }
+    }
+
+    /// Saves the open board (PNG, PDF and .clickyboard in BoardExportLocation) and returns
+    /// the line to say: where it went, that it failed, or that there's no board.
+    /// Used by the "save board" / "save this as a pdf" voice commands and the model's [SNAP:board].
+    func saveBoardAndDescribe() -> String {
+        guard boardController.hasBoard else {
+            showHandsFreeStatusMessage("No board to save")
+            return BoardExportLocation.noBoardLine
+        }
+        let savedURL = boardController.exportBoard()
+        showHandsFreeStatusMessage(savedURL == nil ? "Couldn't save the board" : "Saved the board to Pictures/Clicky")
+        return savedURL == nil ? BoardExportLocation.failedLine : BoardExportLocation.savedLine
     }
 
     /// "whiteboard that": the last answer again, drawn as a board.

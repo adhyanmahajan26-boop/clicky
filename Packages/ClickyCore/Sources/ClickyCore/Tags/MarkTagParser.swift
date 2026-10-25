@@ -9,6 +9,7 @@
 //    [MARK:style:target[:label][:screenN]]
 //    [CLEAR]
 //    [SNAP:screen|window|marks[+marks]]   (SnapshotTag.swift says what each covers)
+//    [SNAP:board]                          (save the open whiteboard, PDF + PNG)
 //
 //    style   circle | box | arrow | underline | spot | 1..9   (unknown → circle;
 //            a target in the style slot also means circle: [MARK:#57:Share])
@@ -262,7 +263,7 @@ public enum MarkTagParser {
         switch parts.count {
         case 1:
             return SnapshotRequest(target: target)
-        case 2 where parts[1] == "marks":
+        case 2 where parts[1] == "marks" && target != .board:
             return SnapshotRequest(target: target, includesClickyOverlay: true)
         default:
             return nil

@@ -1,0 +1,14 @@
+here are three formulas worth knowing.
+
+<whiteboard>
+{"wb": 1, "title": "Three formulas", "dir": "TB", "sections": [{"id": "q1", "title": "Quadratic formula", "q": "quadratic formula"}, {"id": "q2", "title": "An integral", "q": "integral"}, {"id": "q3", "title": "A matrix product", "q": "matrix"}]}
+{"el": "math", "id": "quad", "sec": "q1", "tex": "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}"}
+{"el": "text", "id": "qt", "sec": "q1", "text": "Roots of ax^2 + bx + c = 0", "size": "m"}
+{"el": "math", "id": "integ", "sec": "q2", "tex": "\\int_0^1 x^2 \\, dx = \\frac{1}{3}"}
+{"el": "text", "id": "it", "sec": "q2", "text": "Area under the parabola from 0 to 1", "size": "m"}
+{"el": "math", "id": "mat", "sec": "q3", "tex": "\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix} \\begin{pmatrix} x \\\\ y \\end{pmatrix} = \\begin{pmatrix} x + 2y \\\\ 3x + 4y \\end{pmatrix}"}
+{"el": "text", "id": "mt", "sec": "q3", "text": "Each row times the column vector", "size": "m"}
+{"step": 1, "show": ["quad", "qt"], "say": "the quadratic formula gives both roots.", "focus": "q1"}
+{"step": 2, "show": ["integ", "it"], "say": "this integral is the area under x squared.", "focus": "q2"}
+{"step": 3, "show": ["mat", "mt"], "say": "and a matrix times a vector.", "focus": "q3"}
+</whiteboard>

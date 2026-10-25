@@ -580,12 +580,13 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
 
     // MARK: - Export
 
-    private var exportDirectoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures/Clicky", isDirectory: true)
-    }
+    private var exportDirectoryURL: URL { BoardExportLocation.directory() }
 
     /// PNG (2×, whole board) in ~/Pictures/Clicky and on the pasteboard, plus
-    /// a PDF of the same board and the board's JSONL as a .clickyboard file next to it.
+    /// a PDF of the same board (vector, paged when taller than A4 proportions;
+    /// WhiteboardExporter.exportPDFData) and the board's JSONL as a .clickyboard
+    /// file next to it. Keys: `e`; voice: "save board", "save this as a pdf";
+    /// the model: [SNAP:board].
     @discardableResult
     func exportBoard() -> URL? {
         guard let scene, let board, let image = WhiteboardExporter.exportImage(scene: scene, theme: theme),
