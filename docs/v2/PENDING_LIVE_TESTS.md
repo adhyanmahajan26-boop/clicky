@@ -265,3 +265,26 @@ not run; the narrator / filter / merge logic is covered by `swift test` (Progres
 6. Ordinary helpers (titles without `s<k>`) still get the follow-up stream; a section helper of an answer that
    drew no board also falls back to the follow-up stream.
 7. After the narration: replay (r), next / back, export and the history's BOARD STATE all use the merged board.
+
+## P6.8 (grounding perf: AX cache + observers, OCR off AX coverage, enhanced UI)
+
+Not run live (the app was in use). Unit-tested: AX cache hit/miss/dirty/evict/race, tile coverage + bbox merge,
+enhanced-UI matching/transitions, alarm percentiles (`GroundingPerfTests`).
+
+1. `selftest groundingLatency` (20 warm + 20 cold, quiet machine): warm p95 ≤ 150 ms, cold p95 ≤ 300 ms (P1b: warm
+   p50 107 / p95 120, cold p95 177). Stage times: `frontAXCached` should be 1 on most warm turns (front app reused from
+   the prewarm), `frontAX` near 0 then. turn.json `grounding.axWalks` marks reused walks `(cached)`; no `latencyAlarm`.
+2. `selftest fixture_selftests` on each of the 3 displays (5K, ultrawide 1x, laptop), twice in a row (the first prewarm
+   verifies AX against full-ish OCR, the second uses AX coverage): ax 100 %, axtext 100 %, web ≥ 95 %, canvas ≥ 98 %
+   both times (the canvas has no AX, so it stays OCRed). `grounding.ocrCoverage` in turn.json shows the tiles skipped.
+3. Grounding eval (`Tools/eval/grounding_eval.py`) no worse than P1b; watch text targets on buttons (button labels
+   don't count as AX coverage, so they're still OCRed) and the shifted-band retry rate.
+4. Cache invalidation by hand: prewarm on Finder, move/resize a window or scroll a list during the hold → the key-up
+   re-walks (no `(cached)`); type in a text field → re-walk; quit an app → its entries go (`AXWalkCache`).
+5. Enhanced UI: bring Chrome / Slack / VS Code forward → their web content shows up in the element list on the first
+   turn; switch to Finder → Chrome's `AXEnhancedUserInterface` is false again (`osascript`/Accessibility Inspector);
+   Rectangle/window snapping on Chrome still behaves while it's frontmost. Quit Clicky with Chrome in front → flag
+   restored. Custom list: `defaults write com.personal.clicky v2.grounding.enhancedUIBundleIDs -array com.google.Chrome`
+   (drop `electron` to stop matching Electron apps).
+6. Alarm: with a forced slow path (e.g. 10 cold turns under load) the console shows "Grounding latency over limit"
+   and turn.json `grounding.latencyAlarm` is set.
