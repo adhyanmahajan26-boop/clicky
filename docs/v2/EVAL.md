@@ -292,3 +292,16 @@ Silent ask after relaunch → agentsStatus: 1 brain agent, done, claude-sonnet-5
 projectSend (silent) → ~/.clicky/project-outbox/…dfe8060b….json (7 keys only) → RC watcher → coordinator → inbox
 received / thread_started / done → projectStatus + Agents dashboard showed each status; notch "project: thread started" →
 "project: done". No spoken updates (silent send).
+
+## P7 / P8 live tests (Netflix-safe, far-right display, silent), 2026-10-25
+
+P7 actions: T1 article open+highlight+summary PASS (after keeping the test Chrome frontmost until the task ends),
+T3 Notes PASS, T4 YouTube search PASS, T5 password refused PASS, T6 confirm-before-send PASS, T7 code via project name
+PASS (subtract + test, unittest OK), T8 cancel PASS; T2 TextEdit skipped (window can't be placed without scripting).
+
+P8: T1 "google weather in delhi and press enter" PASS (bugs fixed: a click into a text field marked later ids stale;
+typing read back too early and doubled the text); T1b garbled "press centre" PASS; T2 article: 8 highlights
+(AXBoundsForRange), still present after scrolling, notes panel with 8 verbatim quotes, saved .md + .pdf PASS;
+T3 fast path 10 commands < 1 s each + 3 negatives PASS; T4 wake + follow-up chain (one wake, 2 commands, ended by
+"that's all") PASS; T5 shell refusal skipped live (unit-tested in ActionEnterPolicyTests).
+Wake rate on 10 quiet `say` clips (wakeFeedBatch): en-IN 9/10, en-US 10/10. Idle CPU with wake on: 1.6–2.3 %.
