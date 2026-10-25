@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swift concurrency, explained</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f5f5f7; --bg: #1c1c1e; } }
+  :root[data-theme="dark"] { --fg: #f5f5f7; --bg: #1c1c1e; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.55 Georgia, serif; }
+  article { max-width: 640px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font: 700 30px -apple-system, system-ui, sans-serif; }
+  p { margin: 0 0 18px; }
+</style>
+</head>
+<body>
+<article id="article">
+  <h1 id="title">Swift concurrency, explained</h1>
+  <p id="p1">Concurrency in Swift starts from the idea that work can wait without holding up the whole program.</p>
+  <p id="p2" data-fact="1">Async functions can suspend without blocking a thread, so the system can run other work while they wait.</p>
+  <p id="p3">A small example helps: a function that downloads an image awaits the network and returns when the bytes arrive.</p>
+  <p id="p4" data-fact="2">Actors serialize access to their mutable state, so data races are caught at compile time instead of in production.</p>
+  <p id="p5">Actors do not remove the need to think about ordering, but they make the shape of shared state explicit.</p>
+  <p id="p6" data-fact="3">Structured concurrency keeps child tasks inside the scope that started them, so cancellation and errors flow outward.</p>
+  <p id="p7" data-fact="4">Sendable marks types that are safe to pass across concurrency domains, and the compiler checks the conformance for you.</p>
+  <p id="p8">Start with async and await in your own code, add actors where state is shared, and let the compiler guide the rest.</p>
+</article>
+<script src="common.js"></script>
+<script>
+try {
+  const facts = {};
+  Array.from(document.querySelectorAll("[data-fact]")).forEach(function (p) {
+    const box = p.getBoundingClientRect();
+    facts["fact_" + p.dataset.fact] = [box.left, box.top, box.width, box.height].map(function (v) { return Math.round(v * 100) / 100; });
+  });
+  window.P7.publish("article", Object.assign({
+    title: [0, 0, 0, 0],
+    paragraphs: [document.querySelectorAll("#article p").length, 0, 0, 0]
+  }, facts), { factCount: Object.keys(facts).length, paragraphCount: document.querySelectorAll("#article p").length });
+} catch (error) { window.P7.fail(error); }
+</script>
+</body>
+</html>

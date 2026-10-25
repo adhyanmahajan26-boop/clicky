@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fake video results (local)</title>
+<style>
+  body { margin: 0; font: 16px -apple-system, system-ui, sans-serif; background: #fff; color: #111; }
+  header { padding: 14px 18px; border-bottom: 1px solid #ddd; }
+  main { padding: 14px 18px; max-width: 720px; }
+  .video { display: block; padding: 10px 0; border-bottom: 1px solid #eee; color: #0645ad; text-decoration: none; }
+  .video small { display: block; color: #666; }
+</style>
+</head>
+<body>
+<header><strong>Fake Video</strong> results for <span id="query"></span></header>
+<main id="results">
+  <a class="video" id="video-1" href="watch.html?v=fake1">SwiftUI tutorial for beginners<small>Fake channel - 12 min</small></a>
+  <a class="video" id="video-2" href="watch.html?v=fake2">SwiftUI tutorial: lists and navigation<small>Fake channel - 22 min</small></a>
+  <a class="video" id="video-3" href="watch.html?v=fake3">SwiftUI layout cheat sheet<small>Fake channel - 4 min</small></a>
+</main>
+<script src="common.js"></script>
+<script>
+try {
+  const query = new URLSearchParams(location.search).get("search_query") || "";
+  document.getElementById("query").textContent = query;
+  const box = (sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map((v) => Math.round(v * 100) / 100); };
+  window.P7.publish("youtube_results", {
+    video_1: box("#video-1"),
+    video_2: box("#video-2")
+  }, { query: query, videoCount: document.querySelectorAll(".video").length });
+} catch (error) { window.P7.fail(error); }
+</script>
+</body>
+</html>

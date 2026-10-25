@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search results: swift concurrency</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #ffffff; --muted: #6e6e73; --link: #1a0dab; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --fg: #f5f5f7; --bg: #1c1c1e; --muted: #98989d; --link: #8ab4ff; } }
+  :root[data-theme="dark"] { --fg: #f5f5f7; --bg: #1c1c1e; --muted: #98989d; --link: #8ab4ff; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px -apple-system, system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+  .result { margin: 0 0 22px; }
+  .result a { color: var(--link); font-size: 19px; text-decoration: none; }
+  .result a:hover { text-decoration: underline; }
+  .result p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main id="results">
+  <h2>swift concurrency</h2>
+  <div class="result" id="r1"><a href="#r1">Swift concurrency overview: a quick tour</a><p>Short notes on tasks and the main actor.</p></div>
+  <div class="result" id="r2"><a id="second-link" href="article.html">Swift concurrency explained: async, actors and Sendable</a><p>A long read on how Swift's concurrency model fits together.</p></div>
+  <div class="result" id="r3"><a href="#r3">Migrating a project to Swift 6 concurrency</a><p>Checklist for strict concurrency checking.</p></div>
+  <div class="result" id="r4"><a href="#r4">Async sequences in practice</a><p>Examples with AsyncStream and for-await loops.</p></div>
+  <div class="result" id="r5"><a href="#r5">Concurrency FAQ for iOS developers</a><p>Answers to common questions about tasks and threads.</p></div>
+</main>
+<script src="common.js"></script>
+<script>
+try {
+  const links = Array.from(document.querySelectorAll("#results a"));
+  window.P7.publish("results", {
+    link_1: [0, 0, 0, 0],
+    link_2: Array.from(document.querySelectorAll("#second-link")).map(function (a) {
+      const box = a.getBoundingClientRect();
+      return [box.left, box.top, box.width, box.height].map(function (v) { return Math.round(v * 100) / 100; });
+    })[0],
+    link_count: [links.length, 0, 0, 0]
+  }, { resultCount: links.length, secondHref: "article.html" });
+} catch (error) { window.P7.fail(error); }
+</script>
+</body>
+</html>
