@@ -43,10 +43,17 @@ final class WhiteboardPanel: NSPanel {
         super.keyDown(with: event)
     }
 
-    /// The board's frame on the screen the mouse is on.
+    /// Test-only (debug inbox "boardDisplay"): the display the board opens on, instead of the mouse's.
+    /// Never set from a model answer.
+    static var debugForcedDisplayID: CGDirectDisplayID?
+
+    /// The board's frame on the screen the mouse is on (or the debug-forced display).
     static func frame(fullScreen: Bool) -> NSRect {
         let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.screens.first
+        let forcedScreen = debugForcedDisplayID.flatMap { displayID in
+            NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID }
+        }
+        let screen = forcedScreen ?? NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         guard !fullScreen else { return visibleFrame }
         return visibleFrame.insetBy(dx: visibleFrame.width * 0.06, dy: visibleFrame.height * 0.06)

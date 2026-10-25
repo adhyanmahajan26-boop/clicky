@@ -346,6 +346,19 @@ final class DebugCommandInbox {
             let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["decision": String(describing: decision),
                                                                                   "enabled": companionManager.codeModeController.isEnabled], errorMessage: nil)
+        case "boardDisplay":
+            // Test-only: open boards on this display ({"displayID": n}) or back to the mouse's ({"clear": true}).
+            if commandObject["clear"] as? Bool == true {
+                WhiteboardPanel.debugForcedDisplayID = nil
+            } else if let displayID = commandObject["displayID"] as? Int {
+                WhiteboardPanel.debugForcedDisplayID = CGDirectDisplayID(displayID)
+            } else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "boardDisplay needs \"displayID\" or \"clear\"")
+                return
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["displayID": WhiteboardPanel.debugForcedDisplayID.map { Int($0) as Any } ?? NSNull()], errorMessage: nil)
+
         case "board":
             guard let path = commandObject["path"] as? String, !path.isEmpty else {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "board needs \"path\"")
