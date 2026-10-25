@@ -1214,6 +1214,10 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Debug inbox: the newest history entry, and Esc as if pressed.
+    var lastHistoryEntryForDebug: String? { conversationHistory.last?.assistantResponse }
+    func handleEscapeKeyPressedForDebug() { handleEscapeKeyPressed() }
+
     func copyLastAnswerToPasteboard() {
         guard let lastAnswerText, !lastAnswerText.isEmpty else { return }
         NSPasteboard.general.clearContents()

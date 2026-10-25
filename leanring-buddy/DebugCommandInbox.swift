@@ -168,6 +168,31 @@ final class DebugCommandInbox {
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: markObjects, errorMessage: nil)
 
+        case "bargeIn":
+            // Barge-in exactly as a trigger would (escape | pushToTalk | voiceCommand).
+            let trigger = SpeechCoordinator.BargeInTrigger(rawValue: commandObject["trigger"] as? String ?? "") ?? .voiceCommand
+            let wasSpeaking = companionManager.speechOutputClient.activeCoordinator?.isSpeaking ?? false
+            if trigger == .escape { companionManager.handleEscapeKeyPressedForDebug() } else { companionManager.speechOutputClient.activeCoordinator?.bargeIn(trigger) }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["wasSpeaking": wasSpeaking], errorMessage: nil)
+
+        case "heard":
+            // Words the open mic heard while Clicky talks (EchoGuard decides).
+            let heardText = commandObject["text"] as? String ?? ""
+            let accepted = companionManager.speechOutputClient.activeCoordinator?.heardWhileSpeaking(heardText) ?? false
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["bargedIn": accepted], errorMessage: nil)
+
+        case "speechState":
+            let caption = companionManager.captionState
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: [
+                "isPlaying": companionManager.speechOutputClient.isPlaying,
+                "isSpeaking": companionManager.speechOutputClient.activeCoordinator?.isSpeaking ?? false,
+                "captionVisible": caption.isVisible,
+                "captionFrozen": caption.isFrozen,
+                "captionCurrent": caption.current?.display ?? NSNull(),
+                "captionRevealed": caption.revealedDisplayCharacters,
+                "lastHistory": companionManager.lastHistoryEntryForDebug ?? NSNull()
+            ], errorMessage: nil)
+
         case "say":
             let sayText = commandObject["text"] as? String ?? ""
             Task {
