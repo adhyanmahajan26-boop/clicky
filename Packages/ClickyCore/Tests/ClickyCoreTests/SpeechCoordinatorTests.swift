@@ -395,3 +395,44 @@ private struct SeededPlacerRandom: RandomNumberGenerator {
     let docked = BubblePlacer.place(BubblePlacer.Input(companionRect: companion, bubbleSize: bubbleSize, visibleFrames: [visible], textObstacles: everywhere))
     #expect(docked.slot == .dockedTop)
 }
+
+// MARK: - What played before a barge-in (turn 20261025-163019-07ff9351)
+
+@MainActor
+@Test func playedEngineSurvivesABargeIn() {
+    let (coordinator, qwen, _, _) = makeCoordinator()
+    coordinator.beginAnswer()
+    #expect(coordinator.playedEngineName == nil)
+    coordinator.enqueue(segment("first part is spoken. ", id: 1))
+    coordinator.enqueue(segment("second part never.", id: 2))
+    qwen.playNext()
+    coordinator.bargeIn(.newQuestion)
+    #expect(coordinator.playedEngineName == "qwen")
+    #expect(coordinator.playedSegmentCount == 1)
+    #expect(!coordinator.playedOnFallback)
+}
+
+@MainActor
+@Test func nothingPlayedBeforeAnEarlyBargeIn() {
+    let (coordinator, _, _, _) = makeCoordinator()
+    coordinator.beginAnswer()
+    coordinator.enqueue(segment("never heard.", id: 1))
+    coordinator.bargeIn(.newQuestion)
+    #expect(coordinator.playedEngineName == nil)
+    #expect(coordinator.playedSegmentCount == 0)
+    #expect(coordinator.primaryEngineName == "qwen")
+}
+
+@MainActor
+@Test func playedOnFallbackWhenTheFallbackSpoke() {
+    let (coordinator, qwen, apple, _) = makeCoordinator()
+    coordinator.beginAnswer()
+    let first = segment("first sentence here.", id: 1)
+    coordinator.enqueue(first)
+    qwen.queued.removeAll()
+    qwen.callbacks.onFailure([first], false)
+    apple.playNext()
+    coordinator.bargeIn(.newQuestion)
+    #expect(coordinator.playedEngineName == "apple")
+    #expect(coordinator.playedOnFallback)
+}

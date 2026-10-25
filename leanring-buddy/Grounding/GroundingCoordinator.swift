@@ -72,6 +72,8 @@ struct GroundedTurn {
     let pendingOCRTask: Task<[OCRLine], Never>?
     /// Set when key-up p95 over the last 20 turns is over its limit.
     var latencyAlarmWarning: String?
+    /// Set when a capture came back with every app window black and was retaken.
+    var blackFrameRetry: TurnRecord.BlackFrameRetryEntry?
 
     var framesByScreenNumber: [Int: CaptureFrame] {
         Dictionary(uniqueKeysWithValues: screenCaptures.map { ($0.screenNumber, $0.frame) })
@@ -114,6 +116,7 @@ final class GroundingCoordinator {
         var cursorDisplayID: CGDirectDisplayID
         var readyDate: Date
         var droppedAXApplications: [String] = []
+        var blackFrameRetry: TurnRecord.BlackFrameRetryEntry?
     }
 
     /// One screen's OCR result in a full snapshot.
@@ -150,6 +153,7 @@ final class GroundingCoordinator {
     private var alignmentLedger = AXAlignmentLedger()
     private var latencyAlarm = GroundingLatencyAlarm()
     private var terminationObserver: NSObjectProtocol?
+    private var shareableContentInvalidationObservers: [NSObjectProtocol] = []
     /// Per display in the last OCR pass: tiles skipped / planned regions.
     private(set) var lastOCRCoverageStats: [String] = []
     /// The measured cap for the current model (tier probe), if any.
@@ -182,6 +186,17 @@ final class GroundingCoordinator {
             guard let processIdentifier = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier else { return }
             MainActor.assumeIsolated { self?.alignmentLedger.evict(processIdentifier) }
         }
+        // The cached shareable-content list (≤ 3 s, warm path) describes the
+        // apps and displays of when it was fetched: drop it when they change.
+        let invalidateShareableContent: @Sendable (Notification) -> Void = { _ in
+            Task { await ShareableContentCache.shared.invalidate() }
+        }
+        for notificationName in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            shareableContentInvalidationObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                forName: notificationName, object: nil, queue: .main, using: invalidateShareableContent))
+        }
+        shareableContentInvalidationObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: invalidateShareableContent))
     }
 
     // MARK: - Prewarm
@@ -272,9 +287,12 @@ final class GroundingCoordinator {
     private func makeFullSnapshot(awaitsOCR: Bool) async throws -> Snapshot {
         let displays = ScreenTopology.current()
         let windowStack = WindowListReader.read(displays: displays)
+        let enhancedUINote = await prepareFrontmostApplicationForAsk()
         let axWalks = startAXWalks(windowStack: windowStack)
 
-        let screenCaptures = try await ScreenCaptureService.captureAllScreens(options: captureOptions)
+        let (screenCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows(windowStack: windowStack) { options in
+            try await ScreenCaptureService.captureAllScreens(options: options)
+        }
 
         // OCR reads only what trusted AX text doesn't cover. With no trusted
         // app yet it starts right away (blank tiles still skipped) while the
@@ -305,6 +323,7 @@ final class GroundingCoordinator {
         }
         var analysisTask: Task<[ScreenAnalysis], Never>? = awaitsOCR && trustedProcessIdentifiers.isEmpty ? startAnalysis(coveredRectsByDisplay: [:]) : nil
         let axElements = collectAXElements(from: axWalks)
+        if let enhancedUINote { lastAXWalkStats.insert(enhancedUINote, at: 0) }
         if awaitsOCR && analysisTask == nil {
             analysisTask = startAnalysis(coveredRectsByDisplay: coveredRectsCGByDisplay(axElements: axElements, captures: screenCaptures,
                                                                                          windowStack: windowStack, trustedProcessIdentifiers: trustedProcessIdentifiers))
@@ -333,7 +352,7 @@ final class GroundingCoordinator {
         }
         return Snapshot(screenCaptures: screenCaptures, axElements: dropped.keptElements, ocrLinesByDisplay: ocrLinesByDisplay,
                         grayImagesByDisplay: grayImagesByDisplay, windowStack: windowStack, cursorDisplayID: cursorDisplayID,
-                        readyDate: Date(), droppedAXApplications: dropped.droppedApplications)
+                        readyDate: Date(), droppedAXApplications: dropped.droppedApplications, blackFrameRetry: blackFrameRetry)
     }
 
     /// Warm path: new capture of the cursor screen only; re-OCR changed strips
@@ -342,19 +361,25 @@ final class GroundingCoordinator {
         var refreshedSnapshot = snapshot
         let windowStack = WindowListReader.read(displays: ScreenTopology.current())
         refreshedSnapshot.windowStack = windowStack
+        let enhancedUINote = await prepareFrontmostApplicationForAsk()
+        if let enhancedUINote { lastAXWalkStats.insert(enhancedUINote, at: 0) }
         let frontApplicationWalks = startAXWalks(windowStack: windowStack, frontApplicationOnly: true)
         let walksStart = DispatchTime.now()
 
         guard let previousCapture = snapshot.screenCaptures.first(where: { $0.displayID == cursorDisplay.displayID }) else { return snapshot }
         let mainBoundsCG = ScreenTopology.current().first(where: \.isMain)?.boundsCG ?? cursorDisplay.boundsCG
-        let newCapture = try await ScreenCaptureService.captureScreen(
-            display: cursorDisplay,
-            screenNumber: previousCapture.screenNumber,
-            isCursorScreen: true,
-            positionDescription: cursorDisplay.positionDescription(relativeTo: mainBoundsCG),
-            options: captureOptions,
-            encodesJPEG: encodesJPEG
-        )
+        let (newCaptures, blackFrameRetry) = try await captureCheckingForBlackWindows(windowStack: windowStack) { options in
+            [try await ScreenCaptureService.captureScreen(
+                display: cursorDisplay,
+                screenNumber: previousCapture.screenNumber,
+                isCursorScreen: true,
+                positionDescription: cursorDisplay.positionDescription(relativeTo: mainBoundsCG),
+                options: options,
+                encodesJPEG: encodesJPEG
+            )]
+        }
+        guard let newCapture = newCaptures.first else { return snapshot }
+        if let blackFrameRetry { refreshedSnapshot.blackFrameRetry = blackFrameRetry }
         refreshedSnapshot.screenCaptures = snapshot.screenCaptures.map { $0.displayID == cursorDisplay.displayID ? newCapture : $0 }
         lastTurnStageMilliseconds["capture"] = (Double(DispatchTime.now().uptimeNanoseconds - walksStart.uptimeNanoseconds) / 1e6).rounded()
 
@@ -411,7 +436,67 @@ final class GroundingCoordinator {
         return refreshedSnapshot
     }
 
+    // MARK: - Black frames
+
+    /// Runs `capture`; when the on-screen app windows came back near-uniform
+    /// black (BlackFrameDetector: ≥ 60 % of their area) while the window
+    /// list says they're there, drops the cached shareable content and
+    /// captures again after 200 ms; if still black, once more with a fresh
+    /// SCShareableContent and a window-based SCContentFilter. The retry is
+    /// returned for turn.json (grounding.blackFrameRetry).
+    private func captureCheckingForBlackWindows(
+        windowStack: WindowStack,
+        capture: (ScreenCaptureService.Options) async throws -> [ScreenCapture]
+    ) async throws -> (captures: [ScreenCapture], retry: TurnRecord.BlackFrameRetryEntry?) {
+        let firstCaptures = try await capture(captureOptions)
+        let firstVerdict = await Self.blackFrameVerdict(of: firstCaptures, windowStack: windowStack)
+        guard firstVerdict.isBlackFrame else { return (firstCaptures, nil) }
+        let firstFraction = (firstVerdict.blackFraction * 100).rounded() / 100
+        print("⚠️ Capture: \(firstVerdict.blackWindowCount)/\(firstVerdict.judgedWindowCount) app windows black (\(Int(firstFraction * 100))% of window area); recapturing")
+
+        await ShareableContentCache.shared.invalidate()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        let secondCaptures = try await capture(captureOptions)
+        let secondVerdict = await Self.blackFrameVerdict(of: secondCaptures, windowStack: windowStack)
+        if !secondVerdict.isBlackFrame {
+            print("✅ Capture: black windows gone after 1 retry")
+            return (secondCaptures, TurnRecord.BlackFrameRetryEntry(count: 1, result: "recovered", firstBlackFraction: firstFraction))
+        }
+
+        var freshOptions = captureOptions
+        freshOptions.forcesFreshContentAndWindowFilter = true
+        await ShareableContentCache.shared.invalidate()
+        let thirdCaptures = try await capture(freshOptions)
+        let thirdVerdict = await Self.blackFrameVerdict(of: thirdCaptures, windowStack: windowStack)
+        let result = thirdVerdict.isBlackFrame ? "stillBlack" : "recoveredFreshFilter"
+        print("\(thirdVerdict.isBlackFrame ? "⚠️" : "✅") Capture: after a fresh SCShareableContent + filter: \(result)")
+        return (thirdCaptures, TurnRecord.BlackFrameRetryEntry(count: 2, result: result, firstBlackFraction: firstFraction))
+    }
+
+    /// All captures' app windows judged together (off the main actor).
+    nonisolated private static func blackFrameVerdict(of captures: [ScreenCapture], windowStack: WindowStack) async -> BlackFrameDetector.Verdict {
+        let inputs = captures.map { (image: $0.nativeImage, frame: $0.frame) }
+        return await Task.detached(priority: .userInitiated) {
+            inputs.reduce(BlackFrameDetector.Verdict.empty) { verdict, input in
+                let windowRects = BlackFrameDetector.windowRectsNativePx(windowStack: windowStack, frame: input.frame)
+                guard !windowRects.isEmpty, let gray = GrayImage(cgImage: input.image) else { return verdict }
+                return verdict + BlackFrameDetector.analyze(gray: gray, windowRectsNativePx: windowRects)
+            }
+        }.value
+    }
+
     // MARK: - AX
+
+    /// P6.8 fix: the frontmost Chromium/Electron app's page must be in its
+    /// tree on the first ask (EnhancedUserInterfaceController). When the
+    /// flag was (re)set, its cached walk (toolbar only) is dropped so the
+    /// walk that follows reads the page. Returns a note for turn.json.
+    private func prepareFrontmostApplicationForAsk() async -> String? {
+        guard ax.isProcessTrusted(), let result = await enhancedUserInterfaceController.prepareFrontmostApplicationForAsk() else { return nil }
+        axWalkCache.apply(.applicationChanged(result.processIdentifier))
+        print("🌐 \(result.note)")
+        return result.note
+    }
 
     private func startAXWalks(windowStack: WindowStack, frontApplicationOnly: Bool = false) -> [PlannedAXWalk] {
         guard ax.isProcessTrusted() else { return [] }
@@ -658,7 +743,8 @@ final class GroundingCoordinator {
             droppedAXApplications: droppedApplications,
             keyUpToReadyMilliseconds: Date().timeIntervalSince(keyUpDate) * 1000,
             isBadged: isBadged,
-            pendingOCRTask: pendingOCRTask
+            pendingOCRTask: pendingOCRTask,
+            blackFrameRetry: snapshot.blackFrameRetry
         )
     }
 }

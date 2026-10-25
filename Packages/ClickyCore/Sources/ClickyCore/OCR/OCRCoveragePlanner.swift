@@ -11,7 +11,8 @@
 //  needs reading anyway, one full-image pass is planned instead.
 //
 //  Only frames whose text the resolver can look up live (static text,
-//  text fields, text areas) count as coverage, and only from apps whose AX
+//  text fields, text areas) count as coverage, only when they hold enough
+//  text to fill their frame, minus any part a window in front hides, and only from apps whose AX
 //  was checked against OCR before (`AXAlignmentLedger`), so a misaligned
 //  app is still OCRed and still caught. Canvas text has no AX at all, so
 //  it is always OCRed.
@@ -51,18 +52,79 @@ public enum OCRCoveragePlanner {
     /// CG frames of AX elements that may stand in for OCR on one display.
     public static func coveringFramesCG(axElements: [GroundingElement], displayID: CGDirectDisplayID, windowStack: WindowStack,
                                         trustedProcessIdentifiers: Set<pid_t>) -> [CGRect] {
-        axElements.compactMap { element in
+        axElements.flatMap { element -> [CGRect] in
             guard element.source == .accessibility, element.displayID == displayID, coveringRoles.contains(element.role),
                   trustedProcessIdentifiers.contains(element.processIdentifier),
-                  element.role == .textArea || hasText(element),
+                  coversItsFrame(element),
                   !windowStack.isBehind(point: element.visibleFrameCG.center, processIdentifier: element.processIdentifier),
-                  element.visibleFrameCG.area > 0 else { return nil }
-            return element.visibleFrameCG
+                  element.visibleFrameCG.area > 0 else { return [] }
+            // Only the part no window in front of it hides: text another
+            // window draws over it still needs OCR.
+            return subtract(occludingFrames(of: element, windowStack: windowStack), from: element.visibleFrameCG)
+                .filter { $0.width >= 1 && $0.height >= 1 }
         }
+    }
+
+    /// Frames of the app windows (and open menus) in front of the element's
+    /// window that overlap it. Without a known window: other apps' windows
+    /// over it, front to back, until the element's own app's window.
+    static func occludingFrames(of element: GroundingElement, windowStack: WindowStack) -> [CGRect] {
+        let frame = element.visibleFrameCG
+        func isOccluder(_ window: WindowInfo) -> Bool {
+            (window.isApplicationWindowLayer || window.layer == 101) && window.boundsCG.intersects(frame)
+        }
+        if let windowID = element.windowID, let windowIndex = windowStack.zIndex(of: windowID) {
+            return windowStack.windows[..<windowIndex].filter(isOccluder).map(\.boundsCG)
+        }
+        var frames: [CGRect] = []
+        for window in windowStack.windows where isOccluder(window) {
+            if window.processIdentifier == element.processIdentifier && window.boundsCG.contains(frame.center) { break }
+            if window.processIdentifier != element.processIdentifier { frames.append(window.boundsCG) }
+        }
+        return frames
+    }
+
+    /// `rect` minus every rect in `holes`, as non-overlapping rects.
+    static func subtract(_ holes: [CGRect], from rect: CGRect) -> [CGRect] {
+        var pieces = [rect]
+        for hole in holes {
+            pieces = pieces.flatMap { piece -> [CGRect] in
+                let overlap = piece.intersection(hole)
+                guard !overlap.isNull, overlap.width > 0, overlap.height > 0 else { return [piece] }
+                var remaining: [CGRect] = []
+                if overlap.minY > piece.minY { remaining.append(CGRect(x: piece.minX, y: piece.minY, width: piece.width, height: overlap.minY - piece.minY)) }
+                if overlap.maxY < piece.maxY { remaining.append(CGRect(x: piece.minX, y: overlap.maxY, width: piece.width, height: piece.maxY - overlap.maxY)) }
+                if overlap.minX > piece.minX { remaining.append(CGRect(x: piece.minX, y: overlap.minY, width: overlap.minX - piece.minX, height: overlap.height)) }
+                if overlap.maxX < piece.maxX { remaining.append(CGRect(x: overlap.maxX, y: overlap.minY, width: piece.maxX - overlap.maxX, height: overlap.height)) }
+                return remaining
+            }
+        }
+        return pieces
     }
 
     private static func hasText(_ element: GroundingElement) -> Bool {
         !(element.label ?? "").isEmpty || !(element.value ?? "").isEmpty
+    }
+
+    /// Roughly the area one character of UI text takes (pt²): a 13 pt
+    /// font's glyph cell with line spacing is ~8x17 pt, generously doubled.
+    static let pointsSquaredPerCharacter: CGFloat = 300
+    /// A text element smaller than this always counts (labels, fields).
+    static let alwaysCoveringAreaPt2: CGFloat = 40_000
+
+    /// Whether an AX text element's frame can stand in for OCR of that
+    /// frame: it has text (text areas excepted: the walk never reads their
+    /// value, the resolver reads it live), and a big frame has enough text
+    /// to fill it (a page-sized label holding one word covers that word,
+    /// not whatever else is drawn in its frame).
+    static func coversItsFrame(_ element: GroundingElement) -> Bool {
+        // A text area's value isn't read in the walk; its text is still looked up live.
+        if element.role == .textArea && !hasText(element) { return true }
+        guard hasText(element) else { return false }
+        let area = element.visibleFrameCG.area
+        guard area > alwaysCoveringAreaPt2 else { return true }
+        let characterCount = max((element.value ?? "").count, (element.label ?? "").count)
+        return CGFloat(characterCount) * pointsSquaredPerCharacter >= area * 0.25
     }
 
     /// CG rect → native-px rect of a capture.

@@ -1270,6 +1270,8 @@ final class CompanionManager: ObservableObject {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
             var turnError: Error?
+            /// Kept outside the do block so an interrupted answer can still log what it spoke.
+            var activeAnswerSession: AnswerSession?
 
             do {
                 // Every screen's element list + badged screenshot (warm from the
@@ -1289,7 +1291,8 @@ final class CompanionManager: ObservableObject {
                     droppedAXApplications: groundedTurn.droppedAXApplications,
                     axWalks: groundingCoordinator.lastAXWalkStats,
                     ocrCoverage: groundingCoordinator.lastOCRCoverageStats,
-                    latencyAlarm: groundedTurn.latencyAlarmWarning
+                    latencyAlarm: groundedTurn.latencyAlarmWarning,
+                    blackFrameRetry: groundedTurn.blackFrameRetry
                 )
 
                 guard !Task.isCancelled else { throw CancellationError() }
@@ -1307,6 +1310,7 @@ final class CompanionManager: ObservableObject {
                                                   companionManager: self, speaksResponse: turnOptions.speaksResponse)
                 answerSession.isWhiteboardTurn = modeHint.isWhiteboard
                 currentAnswerSession = answerSession
+                activeAnswerSession = answerSession
                 markController.startAnswer(turnRecord: turnRecord)
 
                 let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
@@ -1333,15 +1337,28 @@ final class CompanionManager: ObservableObject {
                 } onCancel: {
                     Task { @MainActor in answerSession.coordinator.bargeIn(.newQuestion) }
                 }
-                turnRecord?.speech = TurnRecord.SpeechEntry(
-                    engine: answerSession.coordinator.isSilent ? nil : answerSession.coordinator.spokenEngineName,
-                    fallback: answerSession.coordinator.didUseFallback,
-                    voice: answerSession.coordinator.spokenEngineName == "qwen"
-                        ? (ClickySettings.qwenReferenceClipPath as NSString).lastPathComponent : nil
-                )
+                if Task.isCancelled {
+                    // Interrupted while speaking: log what played before the cut.
+                    turnRecord?.speech = Self.interruptedSpeechEntry(for: answerSession.coordinator)
+                } else {
+                    turnRecord?.speech = TurnRecord.SpeechEntry(
+                        engine: answerSession.coordinator.isSilent ? nil : answerSession.coordinator.spokenEngineName,
+                        fallback: answerSession.coordinator.didUseFallback,
+                        voice: answerSession.coordinator.spokenEngineName == "qwen"
+                            ? (ClickySettings.qwenReferenceClipPath as NSString).lastPathComponent : nil
+                    )
+                }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
                 turnError = CancellationError()
+                // Log what actually played before the interrupt (the entry
+                // after waitUntilFinished is never reached on this path).
+                if let activeAnswerSession {
+                    turnRecord?.speech = Self.interruptedSpeechEntry(for: activeAnswerSession.coordinator)
+                } else {
+                    turnRecord?.speech.interrupted = true
+                    turnRecord?.speech.playedSegments = 0
+                }
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
@@ -1375,6 +1392,20 @@ final class CompanionManager: ObservableObject {
                 }
             }
         }
+    }
+
+    /// turn.json speech for an answer cut off mid-way: the engine that spoke
+    /// what played (the primary's name when nothing started yet, with
+    /// playedSegments 0), whether the fallback spoke, and the Qwen clip.
+    static func interruptedSpeechEntry(for coordinator: SpeechCoordinator) -> TurnRecord.SpeechEntry {
+        let engineName = coordinator.isSilent ? nil : (coordinator.playedEngineName ?? coordinator.primaryEngineName)
+        return TurnRecord.SpeechEntry(
+            engine: engineName,
+            fallback: coordinator.playedOnFallback,
+            voice: engineName == "qwen" ? (ClickySettings.qwenReferenceClipPath as NSString).lastPathComponent : nil,
+            interrupted: true,
+            playedSegments: coordinator.playedSegmentCount
+        )
     }
 
     /// Runs one Claude stream into the answer: every event goes to the
