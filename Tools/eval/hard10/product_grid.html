@@ -7,10 +7,10 @@
 <style>
 html, body { margin: 0; background: #f4f5f7; color: #1d1d1f; font: 14px -apple-system, Helvetica, Arial, sans-serif; }
 header { padding: 20px 28px; font-size: 22px; font-weight: 700; }
-.grid { display: grid; grid-template-columns: repeat(3, 300px); gap: 24px; padding: 0 28px 28px; justify-content: start; }
-.card { box-sizing: border-box; width: 300px; height: 330px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+.grid { display: grid; grid-template-columns: repeat(3, 300px); gap: 16px; padding: 0 28px 20px; justify-content: start; }
+.card { box-sizing: border-box; width: 300px; height: 215px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
         background: #ffffff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
-.card img { width: 272px; height: 180px; border-radius: 8px; object-fit: cover; }
+.card img { width: 272px; height: 90px; border-radius: 8px; object-fit: cover; }
 .name { font-size: 15px; font-weight: 600; }
 .price { font-size: 16px; font-weight: 700; }
 .add { margin-top: auto; height: 32px; border: 0; border-radius: 8px; background: #1d1d1f; color: #ffffff; font-size: 13px; }
@@ -37,10 +37,10 @@ header { padding: 20px 28px; font-size: 22px; font-weight: 700; }
   ];
 
   function artwork(color) {
-    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='272' height='180'>" +
-      "<rect width='272' height='180' fill='" + color + "'/>" +
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='272' height='90'>" +
+      "<rect width='272' height='90' fill='" + color + "'/>" +
       "<circle cx='136' cy='90' r='50' fill='rgba(255,255,255,0.35)'/>" +
-      "<rect x='96' y='128' width='80' height='14' rx='7' fill='rgba(0,0,0,0.25)'/></svg>";
+      "<rect x='96' y='64' width='80' height='14' rx='7' fill='rgba(0,0,0,0.25)'/></svg>";
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
 
