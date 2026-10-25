@@ -325,13 +325,20 @@ public enum ArticleWindowChoice {
         public var frameCG: CGRect
         /// The window title (CG window name), when readable.
         public var title: String?
+        /// Its app's AXFocusedWindow / AXMainWindow.
+        public var isFocusedWindow: Bool
+        /// Covers its whole display (full screen): a show or a film, never "the article".
+        public var isFullScreen: Bool
 
-        public init(processIdentifier: Int32, bundleIdentifier: String?, windowNumber: UInt32, frameCG: CGRect, title: String? = nil) {
+        public init(processIdentifier: Int32, bundleIdentifier: String?, windowNumber: UInt32, frameCG: CGRect, title: String? = nil,
+                    isFocusedWindow: Bool = false, isFullScreen: Bool = false) {
             self.processIdentifier = processIdentifier
             self.bundleIdentifier = bundleIdentifier
             self.windowNumber = windowNumber
             self.frameCG = frameCG
             self.title = title
+            self.isFocusedWindow = isFocusedWindow
+            self.isFullScreen = isFullScreen
         }
 
         /// A window playing Netflix is never "the article" (a live read picked the owner's
@@ -349,13 +356,20 @@ public enum ArticleWindowChoice {
     }
 
     /// `windows`: on-screen normal windows, front to back, Clicky's own already removed.
-    public static func choose(frontmostProcessIdentifier: Int32?, windows: [Candidate]) -> Candidate? {
-        let usable = windows.filter { $0.frameCG.width >= 200 && $0.frameCG.height >= 150 && !$0.isNetflix }
+    /// Order: the frontmost browser's focused/main window, else the browser window under the cursor,
+    /// else the largest browser window; never a full-screen (media) or Netflix window.
+    public static func choose(frontmostProcessIdentifier: Int32?, windows: [Candidate], cursorCG: CGPoint? = nil) -> Candidate? {
+        let usable = windows.filter { $0.frameCG.width >= 200 && $0.frameCG.height >= 150 && !$0.isNetflix && !$0.isFullScreen }
+        let browsers = usable.filter { isBrowser($0.bundleIdentifier) }
         if let frontmostProcessIdentifier,
-           let frontmostWindow = usable.first(where: { $0.processIdentifier == frontmostProcessIdentifier }), isBrowser(frontmostWindow.bundleIdentifier) {
-            return frontmostWindow
+           let focused = browsers.first(where: { $0.processIdentifier == frontmostProcessIdentifier && $0.isFocusedWindow }) {
+            return focused
         }
-        if let browserWindow = usable.first(where: { isBrowser($0.bundleIdentifier) }) { return browserWindow }
+        if let cursorCG, let underCursor = browsers.first(where: { $0.frameCG.contains(cursorCG) }) { return underCursor }
+        if let frontmostProcessIdentifier, let frontmostBrowserWindow = browsers.first(where: { $0.processIdentifier == frontmostProcessIdentifier }) {
+            return frontmostBrowserWindow
+        }
+        if let largest = browsers.max(by: { $0.frameCG.width * $0.frameCG.height < $1.frameCG.width * $1.frameCG.height }) { return largest }
         if let frontmostProcessIdentifier, let frontmostWindow = usable.first(where: { $0.processIdentifier == frontmostProcessIdentifier }) {
             return frontmostWindow
         }

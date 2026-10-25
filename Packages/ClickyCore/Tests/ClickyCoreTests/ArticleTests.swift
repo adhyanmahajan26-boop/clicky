@@ -620,3 +620,18 @@ struct ArticleRenderTests {
     #expect(!ArticleReadFurther.isPlainExpander("Subscribe to read more"))
     #expect(!ArticleReadFurther.isPlainExpander("Sign in to continue reading"))
 }
+
+@Test func articleWindowChoicePrefersFocusedThenCursorAndSkipsFullScreen() {
+    let fullScreen = ArticleWindowChoice.Candidate(processIdentifier: 10, bundleIdentifier: "com.apple.Safari", windowNumber: 1,
+                                                   frameCG: CGRect(x: -1920, y: 155, width: 1920, height: 1080), title: "Movie", isFullScreen: true)
+    let focused = ArticleWindowChoice.Candidate(processIdentifier: 10, bundleIdentifier: "com.apple.Safari", windowNumber: 2,
+                                                frameCG: CGRect(x: 100, y: 100, width: 1200, height: 900), isFocusedWindow: true)
+    let other = ArticleWindowChoice.Candidate(processIdentifier: 20, bundleIdentifier: "com.google.Chrome", windowNumber: 3,
+                                              frameCG: CGRect(x: 1400, y: 100, width: 1600, height: 1100))
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 10, windows: [fullScreen, focused, other])?.windowNumber == 2)
+    // Frontmost isn't a browser: the browser window under the cursor.
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 99, windows: [fullScreen, focused, other], cursorCG: CGPoint(x: 1500, y: 500))?.windowNumber == 3)
+    // No cursor hint: the largest non-full-screen browser window.
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 99, windows: [fullScreen, focused, other])?.windowNumber == 3)
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 10, windows: [fullScreen]) == nil)
+}

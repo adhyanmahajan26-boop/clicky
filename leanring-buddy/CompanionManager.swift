@@ -255,6 +255,8 @@ final class CompanionManager: ObservableObject {
 
     /// "send this to my project …": the outbox file, the replies, the dashboard's project tasks.
     private(set) lazy var projectBridge = ProjectBridgeController(companionManager: self)
+    /// P9: background research with Haiku helpers ("research these links").
+    private(set) lazy var researchController = ResearchController(companionManager: self)
 
     /// P6.2 "Type this for me": the <type> card, its confirm gate and the insertion.
     private(set) lazy var typeForMeController = TypeForMeController { [weak self] text in
@@ -1574,6 +1576,12 @@ final class CompanionManager: ObservableObject {
         // P7: "stop listening" / "start listening" switch the wake word (push-to-talk or a wake turn).
         if turnOptions.extraUserText == nil, let wakeListeningCommand = WakeListeningCommand.parse(transcript) {
             performWakeListeningCommand(wakeListeningCommand, speaks: turnOptions.speaksResponse)
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // P9 "research these links" / "research X for me" / "cancel research": runs in the background.
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
+           researchController.handleSpokenTranscript(transcript, speaks: turnOptions.speaksResponse) {
             turnOptions.onTurnFinished?(nil, nil)
             return
         }

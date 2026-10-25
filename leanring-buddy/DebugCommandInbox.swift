@@ -509,6 +509,22 @@ final class DebugCommandInbox {
             result["selected"] = failureReason == nil ? (chosenEntry?.id ?? NSNull()) : NSNull()
             reply(commandIdentifier: commandIdentifier, isSuccess: failureReason == nil, result: result, errorMessage: failureReason)
 
+        case "researchStart":
+            // Tests: {question, urls?, localTest?} — like a spoken research request (localTest allows 127.0.0.1 pages).
+            let question = commandObject["question"] as? String ?? "research these links"
+            let urls = (commandObject["urls"] as? [String] ?? []).compactMap(URL.init(string:))
+            let allowsLocal = commandObject["localTest"] as? Bool ?? false
+            let request = ResearchTrigger.parse(question) ?? ResearchRequest(source: .links(count: max(1, urls.count)), question: question)
+            var withURLs = request
+            withURLs.namedURLs = urls.isEmpty ? request.namedURLs : urls
+            companionManager.researchController.start(withURLs, speaks: commandObject["speak"] as? Bool ?? false, allowsLocalHostForTests: allowsLocal)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.researchController.lastStatus, errorMessage: nil)
+
+        case "researchStatus":
+            var status = companionManager.researchController.lastStatus
+            status["running"] = companionManager.researchController.isRunning
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: status, errorMessage: nil)
+
         case "codeCloseReview":
             // Test only: the review panel's Close (nothing outward; worktree and branch stay).
             reply(commandIdentifier: commandIdentifier, isSuccess: true,

@@ -77,6 +77,9 @@ enum ArticleReader {
         let ownProcessIdentifier = getpid()
         let windowInfoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         var candidates: [ArticleWindowChoice.Candidate] = []
+        let displays = ScreenTopology.current().map(\.boundsCG)
+        let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focusedFrame = frontmostProcessIdentifier.flatMap { ActionExecutor.focusedWindow(processIdentifier: $0) }.flatMap { TypeForMeAccessibility.frameCG(of: $0) }
         for windowInfo in windowInfoList {
             guard let layer = (windowInfo[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
                   let ownerProcessIdentifier = (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, ownerProcessIdentifier != ownProcessIdentifier,
@@ -84,12 +87,19 @@ enum ArticleReader {
                   let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else { continue }
             let bundleIdentifier = NSRunningApplication(processIdentifier: ownerProcessIdentifier)?.bundleIdentifier
+            let isFocused = ownerProcessIdentifier == frontmostProcessIdentifier && focusedFrame.map { abs($0.minX - bounds.minX) < 3 && abs($0.minY - bounds.minY) < 3 && abs($0.width - bounds.width) < 3 } == true
+            let isFullScreen = displays.contains { abs($0.minX - bounds.minX) < 2 && abs($0.width - bounds.width) < 2 && bounds.height >= $0.height - 2 && abs($0.minY - bounds.minY) < 40 }
             candidates.append(ArticleWindowChoice.Candidate(processIdentifier: ownerProcessIdentifier, bundleIdentifier: bundleIdentifier,
                                                            windowNumber: windowNumber, frameCG: bounds,
-                                                           title: windowInfo[kCGWindowName as String] as? String))
+                                                           title: windowInfo[kCGWindowName as String] as? String,
+                                                           isFocusedWindow: isFocused, isFullScreen: isFullScreen))
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        guard let chosen = ArticleWindowChoice.choose(frontmostProcessIdentifier: frontmost == ownProcessIdentifier ? nil : frontmost, windows: candidates) else { return nil }
+        let mouse = NSEvent.mouseLocation
+        let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 0
+        let cursorCG = CGPoint(x: mouse.x, y: mainScreenHeight - mouse.y)
+        guard let chosen = ArticleWindowChoice.choose(frontmostProcessIdentifier: frontmost == ownProcessIdentifier ? nil : frontmost, windows: candidates,
+                                                      cursorCG: cursorCG) else { return nil }
         let runningApplication = NSRunningApplication(processIdentifier: chosen.processIdentifier)
         return ArticleWindowTarget(processIdentifier: chosen.processIdentifier, bundleIdentifier: chosen.bundleIdentifier,
                                    applicationName: runningApplication?.localizedName,
