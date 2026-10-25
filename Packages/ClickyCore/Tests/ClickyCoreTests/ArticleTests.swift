@@ -455,7 +455,7 @@ struct ArticleActionsTests {
         #expect(loop.needsObserveTurn(planWasDone: true, wasCancelled: false))
         let message = loop.continuationMessage()
         #expect(message.contains("ARTICLE (read from the front browser window):\ntitle: Sleep\n\nBody.\nEND ARTICLE"))
-        #expect(message.contains("5 to 8 most important sentences"))
+        #expect(message.contains("7 to 8 most important sentences"))
         #expect(message.contains("WORD FOR WORD"))
         #expect(message.contains("\"do\":\"notes\""))
     }
