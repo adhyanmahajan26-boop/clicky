@@ -247,6 +247,9 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// "send this to my project …": the outbox file, the replies, the dashboard's project tasks.
+    private(set) lazy var projectBridge = ProjectBridgeController(companionManager: self)
+
     /// P6.2 "Type this for me": the <type> card, its confirm gate and the insertion.
     private(set) lazy var typeForMeController = TypeForMeController { [weak self] text in
         self?.speakCodeModeLine(text)
@@ -433,6 +436,7 @@ final class CompanionManager: ObservableObject {
         addCompanionActivitySource(simulatedCompanionActivitySource)
         // Agents dashboard: the brain record follows voiceState; code tasks report in; the spark opens it.
         codeModeController.agentsCenter = agentsCenter
+        projectBridge.start()
         sparkClickTarget.onClick = { [weak self] in self?.showAgentsDashboard(activatesClicky: true) }
         agentsVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] newVoiceState in
             self?.updateBrainAgent(for: newVoiceState)
@@ -520,6 +524,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         agentsVoiceStateCancellable?.cancel()
+        projectBridge.stop()
         sparkClickTarget.reset()
         agentsCenter.saveNow(waitsForWrite: true)
         shortcutTransitionCancellable?.cancel()
@@ -1309,6 +1314,8 @@ final class CompanionManager: ObservableObject {
         // Always: the spoken Code-mode switch ([CODEMODE:on] while off, [CODEMODE:off] while on).
         promptFeatures.insert(.codeToggle)
         if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }
+        // "send this to my project …" works only from the user's words; Claude tells them the phrase.
+        if ClickySettings.isProjectBridgeEnabled { promptFeatures.insert(.projectBridge) }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
     }
 
@@ -1374,6 +1381,14 @@ final class CompanionManager: ObservableObject {
         // "copy that" works with push-to-talk too, without asking Claude.
         if HandsFreeVoiceCommand.parse(transcript) == .copyLastAnswer {
             copyLastAnswerToPasteboard()
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // "send this to my project …" (the owner's own words only): written to the
+        // project outbox and answered here, no brain turn. Follow-ups that carry
+        // extra text (code-mode continuations, "whiteboard that") never send.
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
+           projectBridge.handleSpokenTranscript(transcript, speaks: turnOptions.speaksResponse).isHandledLocally {
             turnOptions.onTurnFinished?(nil, nil)
             return
         }

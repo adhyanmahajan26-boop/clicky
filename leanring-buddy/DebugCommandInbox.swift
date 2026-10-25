@@ -20,6 +20,9 @@
 //    codeStatus               → the current code task, its live progress (step, files
 //                               changed, elapsed), the queue and the panel mode
 //    codeToggle {on, transcript} → as if Claude said [CODEMODE:on|off] for that transcript
+//    projectSend {transcript, speak=true} → the "send this to my project …" trigger + outbox
+//                               write, as for a spoken transcript: {sent, id, path} or {sent:false, reason}
+//    projectStatus            → the Agents dashboard's project tasks (phase, note, link) and the bridge's settings
 //    (codeTask also takes {frontWindow: {bundle, title, document, terminalCwd}} to stand
 //     in for the front window when task.repo is "this")
 //    board {path}             → a .jsonl board or a raw answer file, drawn and narrated as if Claude said it
@@ -358,6 +361,26 @@ final class DebugCommandInbox {
             let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["decision": String(describing: decision),
                                                                                   "enabled": companionManager.codeModeController.isEnabled], errorMessage: nil)
+        case "projectSend":
+            guard let transcript = commandObject["transcript"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "projectSend needs \"transcript\"")
+                return
+            }
+            let speaksResponse = commandObject["speak"] as? Bool ?? true
+            let outcome = companionManager.projectBridge.handleSpokenTranscript(transcript, speaks: speaksResponse)
+            let result: [String: Any]
+            switch outcome {
+            case .sent(let taskID, let path): result = ["sent": true, "id": taskID, "path": path]
+            case .notTriggered: result = ["sent": false, "reason": "no trigger phrase in the transcript"]
+            case .disabled: result = ["sent": false, "reason": "v2.project.enabled is off"]
+            case .askedForTask: result = ["sent": false, "reason": "no task after the trigger phrase (asked what to send)"]
+            case .failed(let reason): result = ["sent": false, "reason": reason]
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
+
+        case "projectStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.projectBridge.statusSnapshot(), errorMessage: nil)
+
         case "markRegion":
             // Test-only: drop marks outside this CG rect ({"rectCG": [x, y, w, h]}) or allow all again ({"clear": true}).
             if commandObject["clear"] as? Bool == true {

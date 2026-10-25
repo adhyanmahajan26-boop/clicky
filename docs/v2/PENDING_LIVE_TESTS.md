@@ -372,3 +372,22 @@ Notes:
 - Cleanup after the run: Terminal windows stay open with "[Process completed]"; Finder / Xcode / VS Code /
   Preview windows show temporary copies under `build/eval/final/<run>/fixtures`; Safari keeps the
   127.0.0.1 tabs. Close them by hand.
+
+## Project bridge ("send this to my project …")
+
+Unit-tested in ClickyCore (`ProjectBridgeTests`); these need the running app:
+1. Push-to-talk "send this to my project fix the login page": Clicky says "Sent to your project." with no brain
+   turn (no spinner), the notch shows "sent to project" for ~4 s, a Project task row ("Sent") appears in the
+   Agents dashboard, and `~/.clicky/project-outbox/<yyyyMMdd-HHmmss>-<uuid>.json` holds exactly
+   id/createdAt/transcript/frontApp/frontWindowTitle/repoRoot/cursorDisplay. With Xcode / VS Code / Terminal
+   on a git repo in front, repoRoot is its root; with a Clicky checkout in front it is null.
+2. "send this to my project" alone → "What should I send to your project?", nothing written.
+3. Hands-free utterance with the phrase → same as 1. A Clicky answer that says the phrase (echo) is not sent.
+4. Write `~/.clicky/project-inbox/<id>.json` `{"id":…,"status":"thread_started","note":"…"}` → within ~2 s the
+   dashboard shows "Thread started" + the note, the notch flashes, and "Your project started a thread for that."
+   is said once (after any answer in progress finishes). Rewriting the same status says nothing. `done` /
+   `failed` finish the row; `failed` says the note. Oversized (>16 KB) or malformed files change nothing.
+5. `defaults write com.personal.clicky v2.project.speakUpdates -bool false` → replies update silently;
+   `v2.project.enabled -bool false` → the phrase goes to the brain as an ordinary question.
+6. Debug inbox: `{"cmd":"projectSend","transcript":"send this to my project x","speak":false}` →
+   `{sent, id, path}`; `{"cmd":"projectStatus"}` lists the task.

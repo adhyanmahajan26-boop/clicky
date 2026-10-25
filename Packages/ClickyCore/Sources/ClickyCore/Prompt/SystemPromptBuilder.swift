@@ -35,6 +35,9 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
     /// says coding is available via [CODEMODE:on]; while it's on, how to
     /// turn it off (CodeModeToggle). The app always sends it.
     public static let codeToggle = SystemPromptFeatures(rawValue: 1 << 8)
+    /// "send this to my project …": Claude can't send, so it tells the user
+    /// the phrase (ProjectSendTrigger.promptLine). Sent while v2.project.enabled is on.
+    public static let projectBridge = SystemPromptFeatures(rawValue: 1 << 9)
 
     /// Everything the app consumes as of P1b.
     public static let current: SystemPromptFeatures = [.grounding, .badges, .helperWorkers]
@@ -87,6 +90,7 @@ public enum SystemPromptBuilder {
         if features.contains(.codeToggle) {
             sections.append(isAvailable(.code, features: features, sectionTexts: sectionTexts) ? CodeModeToggle.onPromptLine : CodeModeToggle.offPromptLine)
         }
+        if features.contains(.projectBridge) { sections.append(ProjectSendTrigger.promptLine) }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
             // P6.7: on a board, helpers draw sections instead (the whiteboard section says how).

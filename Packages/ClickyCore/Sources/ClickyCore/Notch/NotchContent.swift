@@ -102,14 +102,18 @@ public enum NotchStatus {
     /// The collapsed status line. The companion's own phase wins (you're
     /// talking to it); otherwise the helper agents: one code task is
     /// "coding: <repo>", several agents "N agents", one helper "1 agent".
-    /// Idle with nothing running is "" (just the logo).
-    public static func statusText(phase: NotchCompanionPhase, activeHelperAgents: [AgentRecord]) -> String {
+    /// Idle with nothing running is "" (just the logo). A project task's
+    /// short-lived note ("sent to project") wins over the helper count while
+    /// idle; waiting project tasks themselves run outside Clicky and don't count.
+    public static func statusText(phase: NotchCompanionPhase, activeHelperAgents: [AgentRecord], projectStatusText: String? = nil) -> String {
         switch phase {
         case .listening: return "listening…"
         case .thinking: return "thinking…"
         case .speaking: return "speaking"
         case .idle: break
         }
+        if let projectStatusText, !projectStatusText.isEmpty { return projectStatusText }
+        let activeHelperAgents = activeHelperAgents.filter { $0.kind != .projectTask }
         switch activeHelperAgents.count {
         case 0:
             return ""
@@ -158,11 +162,13 @@ public enum NotchStatus {
 
     /// Builds everything the pill shows from the existing state.
     /// `canCancel` / `canOpenReview` are the dashboard's own checks.
+    /// `projectStatusText`: the few-seconds "sent to project" / "project: done" note.
     public static func content(phase: NotchCompanionPhase, store: AgentStore, captionText: String?, isCodeModeOn: Bool, selectedAgentID: String?,
-                               now: Date, canCancel: (AgentRecord) -> Bool, canOpenReview: (AgentRecord) -> Bool) -> NotchContent {
+                               now: Date, projectStatusText: String? = nil, canCancel: (AgentRecord) -> Bool, canOpenReview: (AgentRecord) -> Bool) -> NotchContent {
         let runningRecords = store.runningRecords
         let activeHelperAgents = runningRecords.filter { $0.kind != .brain }
-        let orbitingAgentIDs = Array(activeHelperAgents.filter { $0.status == .running }.prefix(NotchGeometry.maximumAgentRows).map(\.id))
+        // Project tasks run in another session: listed, but not drawn as Clicky's own orbiting helpers.
+        let orbitingAgentIDs = Array(activeHelperAgents.filter { $0.status == .running && $0.kind != .projectTask }.prefix(NotchGeometry.maximumAgentRows).map(\.id))
 
         let agentRowsAreRecent = runningRecords.isEmpty
         let listedRecords = agentRowsAreRecent ? Array(store.recentRecords.prefix(3)) : runningRecords
@@ -177,7 +183,7 @@ public enum NotchStatus {
         let cancelTargetID = (selectedRow?.isCancellable == true ? selectedRow?.id : nil) ?? rows.first(where: \.isCancellable)?.id
         let reviewTargetID = (selectedRow?.canOpenReview == true ? selectedRow?.id : nil) ?? rows.first(where: \.canOpenReview)?.id
 
-        return NotchContent(phase: phase, statusText: statusText(phase: phase, activeHelperAgents: activeHelperAgents), orbitingAgentIDs: orbitingAgentIDs,
+        return NotchContent(phase: phase, statusText: statusText(phase: phase, activeHelperAgents: activeHelperAgents, projectStatusText: projectStatusText), orbitingAgentIDs: orbitingAgentIDs,
                             agentRows: Array(rows), hiddenAgentCount: hiddenAgentCount, agentRowsAreRecent: agentRowsAreRecent, captionText: captionText,
                             isCodeModeOn: isCodeModeOn, selectedAgentID: selectedRow?.id, cancelTargetID: cancelTargetID, reviewTargetID: reviewTargetID)
     }
@@ -189,6 +195,9 @@ public enum NotchStatus {
         }
         if record.kind == .codeTask, record.status == .running, let currentStep = record.currentStep, !currentStep.isEmpty {
             return currentStep
+        }
+        if record.kind == .projectTask, let phaseDisplayText = record.phaseDisplayText {
+            return phaseDisplayText
         }
         return record.status.displayName
     }

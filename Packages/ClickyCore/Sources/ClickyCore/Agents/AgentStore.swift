@@ -4,7 +4,8 @@
 //
 //  Every agent Clicky runs, as plain data for the Agents dashboard: the
 //  main brain's turn, Haiku helper workers, whiteboard section helpers and
-//  the board repair call, and Code-mode Claude Code tasks. The app's
+//  the board repair call, Code-mode Claude Code tasks, and tasks handed to
+//  the owner's project coordinator ("send this to my project"). The app's
 //  adapters feed the store (upsert / log / finish / cancel); the store keeps
 //  the last ~20 log lines per agent, trims history to the newest 50
 //  finished agents (running and queued ones are never trimmed), sums usage,
@@ -26,6 +27,10 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
     case boardRepair
     /// A Code-mode Claude Code agent (<codetask>).
     case codeTask
+    /// A task handed to the owner's project coordinator ("send this to my
+    /// project …"). It runs outside Clicky: phase is a ProjectTaskPhase
+    /// (queued → received → threadStarted → done / failed), from the inbox replies.
+    case projectTask
 
     public var displayName: String {
         switch self {
@@ -34,6 +39,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .boardSection: return "Board section"
         case .boardRepair: return "Board repair"
         case .codeTask: return "Code task"
+        case .projectTask: return "Project task"
         }
     }
 
@@ -45,6 +51,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .boardSection: return "rectangle.on.rectangle"
         case .boardRepair: return "wrench.and.screwdriver"
         case .codeTask: return "chevron.left.forwardslash.chevron.right"
+        case .projectTask: return "paperplane"
         }
     }
 }
@@ -201,10 +208,15 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
     /// Code tasks waiting behind this one when it was last updated.
     public var queuedBehindCount: Int?
 
+    // Project tasks (the coordinator's reply; display only, never followed or opened).
+    public var note: String?
+    public var link: String?
+
     public init(id: String = UUID().uuidString.lowercased(), kind: AgentKind, title: String, model: String? = nil, status: AgentStatus = .running,
                 phase: String? = nil, startedAt: Date = Date(), endedAt: Date? = nil, usage: AgentUsage? = nil, logLines: [AgentLogLine] = [],
                 parentID: String? = nil, errorDescription: String? = nil, repository: String? = nil, clonePath: String? = nil, branch: String? = nil,
-                worktreePath: String? = nil, currentStep: String? = nil, changedFiles: [String] = [], queuedBehindCount: Int? = nil) {
+                worktreePath: String? = nil, currentStep: String? = nil, changedFiles: [String] = [], queuedBehindCount: Int? = nil,
+                note: String? = nil, link: String? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -224,6 +236,15 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
         self.currentStep = currentStep
         self.changedFiles = changedFiles
         self.queuedBehindCount = queuedBehindCount
+        self.note = note
+        self.link = link
+    }
+
+    /// The phase as the status badge shows it ("Thread started", "Speaking").
+    public var phaseDisplayText: String? {
+        guard let phase, !phase.isEmpty else { return nil }
+        if kind == .projectTask, let projectPhase = ProjectTaskPhase(rawValue: phase) { return projectPhase.displayName }
+        return phase.prefix(1).uppercased() + phase.dropFirst()
     }
 
     /// Seconds from start to end (or to `now` while it runs).
@@ -250,6 +271,8 @@ public struct AgentRecord: Codable, Equatable, Identifiable, Sendable {
         if let usage { lines.append("usage: \(usage.tokenSummary)\(usage.costText.map { " · \($0)" } ?? "")") }
         if let worktreePath { lines.append("worktree: \(worktreePath)\(branch.map { " (\($0))" } ?? "")") }
         if let errorDescription { lines.append("error: \(errorDescription)") }
+        if let note { lines.append("note: \(note)") }
+        if let link { lines.append("link: \(link)") }
         lines.append("")
         lines += logLines.map { "\(formatter.string(from: $0.date)) \($0.text)" }
         return lines.joined(separator: "\n")
@@ -370,8 +393,9 @@ public struct AgentStore: Codable, Equatable, Sendable {
     }
 
     /// Agents that were still running when Clicky last quit: cancelled, with a note.
+    /// Project tasks run outside Clicky and keep waiting for their reply.
     public mutating func markInterruptedAgents(at date: Date = Date()) {
-        for record in records where record.status.isActive {
+        for record in records where record.status.isActive && record.kind != .projectTask {
             update(record.id) { interruptedRecord in
                 interruptedRecord.logLines.append(AgentLogLine(date: date, text: "Clicky quit while this was running."))
             }
@@ -389,6 +413,61 @@ public struct AgentStore: Codable, Equatable, Sendable {
             .prefix(excessCount)
             .map(\.id))
         records.removeAll { oldestFinishedIDs.contains($0.id) }
+    }
+
+    // MARK: - Project tasks
+
+    /// How long a project task waits for its last reply before it's marked failed.
+    public static let projectTaskReplyTimeout: TimeInterval = 24 * 60 * 60
+
+    /// Applies one inbox reply to its project task. Returns the new phase
+    /// when the phase moved forward (the only time Clicky announces it); a
+    /// repeat, an older status, an unknown id, another kind of agent or a
+    /// finished task returns nil (a repeat may still refresh the note/link).
+    @discardableResult
+    public mutating func applyProjectReply(_ reply: ProjectInboxReply, at date: Date = Date()) -> ProjectTaskPhase? {
+        guard let record = self[reply.id], record.kind == .projectTask, record.status.isActive else { return nil }
+        let currentPhase = record.phase.flatMap(ProjectTaskPhase.init(rawValue:)) ?? .queued
+        let newPhase = ProjectTaskPhase(reply.status)
+        guard newPhase.rank > currentPhase.rank else {
+            if newPhase == currentPhase, reply.note != nil || reply.link != nil {
+                update(reply.id) { sameRecord in
+                    if let note = reply.note { sameRecord.note = note }
+                    if let link = reply.link { sameRecord.link = link }
+                }
+            }
+            return nil
+        }
+        update(reply.id) { changedRecord in
+            changedRecord.phase = newPhase.rawValue
+            changedRecord.currentStep = newPhase.displayName
+            if let note = reply.note { changedRecord.note = note }
+            if let link = reply.link { changedRecord.link = link }
+            // Done / failed are set by finish() below (which also stamps the end time).
+            if newPhase.agentStatus.isActive { changedRecord.status = newPhase.agentStatus }
+        }
+        appendLog(reply.id, "project: \(newPhase.displayName.lowercased())\(reply.note.map { " — \($0)" } ?? "")", at: date)
+        if !newPhase.agentStatus.isActive {
+            let failureText = newPhase == .failed ? (reply.note ?? "Your project couldn't do that.") : nil
+            finish(reply.id, status: newPhase.agentStatus, errorDescription: failureText, at: date)
+        }
+        return newPhase
+    }
+
+    /// Project tasks still waiting a day after they were sent: failed, "no reply".
+    public mutating func expireStaleProjectTasks(now: Date = Date(), timeout: TimeInterval = AgentStore.projectTaskReplyTimeout) {
+        for record in records where record.kind == .projectTask && record.status.isActive && now.timeIntervalSince(record.startedAt) > timeout {
+            update(record.id) { staleRecord in
+                staleRecord.phase = ProjectTaskPhase.failed.rawValue
+                staleRecord.currentStep = ProjectTaskPhase.failed.displayName
+            }
+            finish(record.id, status: .failed, errorDescription: "No reply from your project.", at: now)
+        }
+    }
+
+    /// Project tasks still waiting for a reply.
+    public var activeProjectTaskRecords: [AgentRecord] {
+        records.filter { $0.kind == .projectTask && $0.status.isActive }
     }
 
     // MARK: - Views of the store
@@ -461,6 +540,7 @@ public struct AgentStore: Codable, Equatable, Sendable {
         let contents = try decoder.decode(FileContents.self, from: data)
         var store = AgentStore(records: contents.records, maximumFinishedRecords: maximumFinishedRecords)
         store.markInterruptedAgents(at: now)
+        store.expireStaleProjectTasks(now: now)
         return store
     }
 
