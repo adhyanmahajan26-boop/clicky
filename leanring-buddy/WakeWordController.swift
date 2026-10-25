@@ -99,7 +99,7 @@ final class WakeWordController: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollIntervalSeconds, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.pollTick() }
         }
-        isDefaultInputBluetooth = MicrophoneInUseProbe.isDefaultInputBluetooth()
+        isDefaultInputBluetooth = Self.isBluetoothWithoutWiredFallback()
         sampleCPU(includingSpeechService: true)
         reevaluate()
     }
@@ -218,13 +218,18 @@ final class WakeWordController: ObservableObject {
         if let isLockedNow = Self.readScreenLockState() { isScreenLocked = isLockedNow }
         if ClickySettings.isWakeWordEnabled, audioEngineHub.exclusiveMicrophoneUsers.isEmpty, !isScreenLocked {
             isMicrophoneInUseElsewhere = MicrophoneInUseProbe.isMicrophoneInUseByAnotherProcess(isOwnEngineRunning: audioEngine?.isRunning == true)
-            isDefaultInputBluetooth = MicrophoneInUseProbe.isDefaultInputBluetooth()
+            isDefaultInputBluetooth = Self.isBluetoothWithoutWiredFallback()
         }
         sampleCPU(includingSpeechService: pollTickCount % 5 == 0)
         reevaluate()
     }
 
     // MARK: - Microphone
+
+    /// Pause for Bluetooth only when there's no wired mic to pin instead.
+    private static func isBluetoothWithoutWiredFallback() -> Bool {
+        MicrophoneInUseProbe.isDefaultInputBluetooth() && MicrophoneInUseProbe.wiredInputDeviceID() == nil
+    }
 
     /// Opens the wake mic if it isn't open. False if it couldn't.
     private func startMicrophoneIfNeeded() -> Bool {
@@ -243,6 +248,15 @@ final class WakeWordController: ObservableObject {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
+        // A Bluetooth headset is the default input: listen on a wired mic instead (the headset stays in
+        // music mode for Netflix). Only this engine; push-to-talk keeps the default input.
+        if MicrophoneInUseProbe.isDefaultInputBluetooth(), var wiredDeviceID = MicrophoneInUseProbe.wiredInputDeviceID(),
+           let audioUnit = inputNode.audioUnit {
+            let status = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                              &wiredDeviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+            print(status == noErr ? "🎙️ Wake word: Bluetooth default input, listening on wired mic \(wiredDeviceID)"
+                                  : "⚠️ Wake word: couldn't pin the wired mic (\(status))")
+        }
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             print("⚠️ Wake word: the mic has no usable format")

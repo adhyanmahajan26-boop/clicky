@@ -57,6 +57,29 @@ enum MicrophoneInUseProbe {
         return transportType == kAudioDeviceTransportTypeBluetooth || transportType == kAudioDeviceTransportTypeBluetoothLE
     }
 
+    /// A wired mic to use instead of a Bluetooth default (built-in first, then USB/other wired), or nil.
+    /// The wake engine pins it so AirPods never switch to call mode. Virtual and aggregate devices are skipped.
+    static func wiredInputDeviceID() -> AudioDeviceID? {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                                         mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var propertySize: UInt32 = 0
+        let systemObjectID = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(systemObjectID, &propertyAddress, 0, nil, &propertySize) == noErr else { return nil }
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: Int(propertySize) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(systemObjectID, &propertyAddress, 0, nil, &propertySize, &deviceIDs) == noErr else { return nil }
+        let excluded: Set<UInt32> = [kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE,
+                                     kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate]
+        let inputDevices = deviceIDs.filter { deviceID in
+            var streamsAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
+                                                            mScope: kAudioDevicePropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
+            var streamsSize: UInt32 = 0
+            return AudioObjectGetPropertyDataSize(deviceID, &streamsAddress, 0, nil, &streamsSize) == noErr && streamsSize > 0
+                && !excluded.contains(uint32Property(of: deviceID, selector: kAudioDevicePropertyTransportType) ?? kAudioDeviceTransportTypeVirtual)
+        }
+        return inputDevices.first { uint32Property(of: $0, selector: kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBuiltIn }
+            ?? inputDevices.first
+    }
+
     private static func processObjectIDs() -> [AudioObjectID]? {
         var propertyAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
                                                          mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
