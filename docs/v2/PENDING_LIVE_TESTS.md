@@ -288,3 +288,47 @@ enhanced-UI matching/transitions, alarm percentiles (`GroundingPerfTests`).
    (drop `electron` to stop matching Electron apps).
 6. Alarm: with a forced slow path (e.g. 10 cold turns under load) the console shows "Grounding latency over limit"
    and turn.json `grounding.latencyAlarm` is set.
+
+## P6.11 (final eval: harness and fixtures only, not run)
+
+Run only when the coordinator says so, with Addy away: it opens Finder, Safari, Xcode, System Settings,
+Preview, Notes, Slack, VS Code, Terminal and a throwaway Chrome, and `--spoken-rows` talks out loud.
+Harness: `Tools/eval/final_eval.py` (data in `Tools/eval/final/`, pages in `Tools/eval/canvas/`); results
+are resumable per row in `build/eval/final/<run>/results.jsonl` (rerun the same command after a stop; usage
+limits back off 30 s → 8 min, then the run stops). Before starting: relaunch Clicky at HEAD via Xcode Run,
+`Tools/clickyctl.sh '{"cmd":"ping"}'` (sha = HEAD), `Tools/GroundingFixture/build.sh`.
+
+1. Validate the data (touches no app):
+   `python3 -I Tools/eval/final_eval.py --dry-run` and `python3 -I Tools/eval/test_final_eval.py`
+2. Check the AX truths first (opens the apps, resolves every row with `axfind`, asks nothing):
+   `python3 -I Tools/eval/final_eval.py --probe-truth --run-name probe`
+   The "Not scored" list in `build/eval/final/probe/EVAL-P6.11.md` (and `results.jsonl`, with the labels
+   `axfind` saw) shows rows whose truth didn't resolve: fix `Tools/eval/final/ax_asks.tsv` (titles of the
+   real controls), `rm build/eval/final/probe/results.jsonl`, probe again. Rows that still don't resolve
+   are reported as truth-missing and left out of n. Slack / VS Code need `"electron"` (set automatically).
+3. Configs on the 40-row fixture (baseline, raw-hires, list, list+badges, verify):
+   `python3 -I Tools/eval/final_eval.py --sets fixture --configs baseline,raw-hires,list,list+badges,verify --displays 0,1,2 --run-name final`
+4. Full sets on the final config (add `,baseline` to `--set-configs` for a baseline arm on the full sets):
+   `python3 -I Tools/eval/final_eval.py --sets ax,canvas --set-configs verify --spoken-rows 10 --run-name final`
+5. Inputs for the board / code-probe lines: `python3 -I Tools/eval/gen_boards.py` (or `--check-only` if the
+   answers exist) and `Tools/codeprobe.sh | tee build/eval/codeprobe.txt`.
+6. Report into EVAL.md (reads results only):
+   `python3 -I Tools/eval/final_eval.py --report-only --run-name final --append-to docs/v2/EVAL.md`
+
+Notes:
+- Config arms are written with `defaults write com.personal.clicky` and restored afterwards. This build reads
+  `v2.grounding.badges` and `v2.grounding.imageTier` (cursor screen only; image tier is read per capture);
+  `v2.grounding.lists` and `v2.grounding.verifyWithHaiku` are written but not read here yet. The report's
+  "setting reached the turn" column checks every turn (`grounding.isBadged`, `elements.txt`,
+  `grounding.verifyWithHaiku`, image px/pt) and says when an arm did not take effect.
+- Truth: AX rows from `axfind` (a plain AX walk in the app, independent of the registry; truths below 50 %
+  visible are dropped as truth-hidden); canvas pages from the DevTools protocol on 127.0.0.1 (Chrome runs in
+  `--app` mode with a temp `--user-data-dir`, deleted afterwards), cross-checked against Chrome's AXWebArea;
+  the video (`canvas/video/dots.mp4`, regenerate with `python3 -I Tools/eval/canvas/make_video.py`); Terminal
+  text from AXBoundsForRange. Figma rows are skipped (not installed).
+- Caption checks need spoken rows (the bubble only shows while Clicky talks): bubble rects are logged as
+  `bubble` events in `<turn>/marks.jsonl`, label pills as `drawn.labelRectCG` in turn.json. RTF and caption
+  lag are reported only if turn.json carries them on the build under test.
+- Cleanup after the run: Terminal windows stay open with "[Process completed]"; Finder / Xcode / VS Code /
+  Preview windows show temporary copies under `build/eval/final/<run>/fixtures`; Safari keeps the
+  127.0.0.1 tabs. Close them by hand.

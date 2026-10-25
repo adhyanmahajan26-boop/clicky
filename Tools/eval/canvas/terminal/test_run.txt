@@ -1,0 +1,11 @@
+$ swift test --parallel
+Test Suite 'All tests' started at 2026-10-25 14:02:11.384
+[1/6] ParserTests ............ passed (0.412 s)
+[2/6] LayoutTests ............ passed (1.207 s)
+[3/6] NetworkTests ........... FAILED (3.950 s)
+      expected 200, got 503 from https://api.example.test/health
+[4/6] CacheTests ............. passed (0.088 s)
+[5/6] SyncTests .............. skipped
+[6/6] ExportTests ............ passed (2.731 s)
+Coverage: 87.4%
+Executed 214 tests, with 1 failure (0 unexpected) in 8.388 seconds

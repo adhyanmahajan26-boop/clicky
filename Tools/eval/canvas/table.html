@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Website launch tasks</title>
+<style>
+  html, body { margin: 0; background: #ffffff; font: 14px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #37352f; overflow: hidden; }
+  main { padding: 48px 96px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 18px; }
+  table { border-collapse: collapse; width: 860px; table-layout: fixed; }
+  th { text-align: left; font-weight: 500; color: #787774; font-size: 13px; height: 32px; border-bottom: 1px solid #e9e9e7; }
+  td { height: 28px; padding: 0 8px; border-bottom: 1px solid #f1f1ef; white-space: nowrap; overflow: hidden; }
+  td.title { width: 420px; }
+  th.title { padding-left: 8px; }
+  .status { display: inline-block; padding: 0 6px; border-radius: 3px; background: #f1f1ef; font-size: 12px; line-height: 18px; }
+</style>
+<script src="common.js"></script>
+</head>
+<body>
+<main>
+  <h1>Website launch tasks</h1>
+  <table aria-label="Website launch tasks">
+    <thead><tr><th class="title">Name</th><th>Status</th><th>Owner</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+// Notion-style dense table (the live-testing case: 5 non-adjacent rows of a
+// 15+ row table marked as steps must come out as underlines with labels in
+// clear space). ?seed= shuffles the row order, ?spread= puts the asked rows on non-adjacent rows. Truth:
+//   items.<task key>       the whole row (<tr>)
+//   items.<task key>_text  the title cell's text span (underline truth)
+//   texts                  every cell text span (labels must not cover any)
+(async function () {
+  try {
+    const spec = await Fixture.manifest("table");
+    // ?spread=k1,k2,...: those tasks go to the non-adjacent rows 2, 5, 8,
+    // 11, 14 (0-based 1, 4, 7, 10, 13, as in DenseTableFixture), in a seeded
+    // order; every other task fills the remaining rows in a seeded order.
+    const shuffle = (list) => {
+      for (let index = list.length - 1; index > 0; index--) {
+        const other = Math.floor(Fixture.rng() * (index + 1));
+        [list[index], list[other]] = [list[other], list[index]];
+      }
+      return list;
+    };
+    const spreadKeys = (Fixture.params.get("spread") || "").split(",").filter(Boolean);
+    const spreadRows = [1, 4, 7, 10, 13, 16];
+    if (spreadKeys.length > spreadRows.length) throw new Error("at most 6 spread rows");
+    const spread = shuffle(spec.tasks.filter((task) => spreadKeys.includes(task.key)));
+    if (spread.length !== spreadKeys.length) throw new Error("unknown spread key");
+    const others = shuffle(spec.tasks.filter((task) => !spreadKeys.includes(task.key)));
+    const tasks = [];
+    for (let row = 0; row < spec.tasks.length; row++) {
+      const slot = spreadRows.indexOf(row);
+      tasks.push(slot >= 0 && slot < spread.length ? spread[slot] : others.shift());
+    }
+    const body = document.getElementById("rows");
+    const spans = [];
+    for (const task of tasks) {
+      const row = document.createElement("tr");
+      row.dataset.key = task.key;
+      for (const [className, text, pill] of [["title", task.title, false], ["", task.status, true], ["", task.owner, false]]) {
+        const cell = document.createElement("td");
+        if (className) cell.className = className;
+        const span = document.createElement("span");
+        span.textContent = text;
+        if (pill) span.className = "status";
+        cell.appendChild(span);
+        row.appendChild(cell);
+        spans.push(span);
+      }
+      body.appendChild(row);
+    }
+    await document.fonts.ready;
+    const items = {};
+    for (const row of body.querySelectorAll("tr")) {
+      items[row.dataset.key] = Fixture.domRect(row);
+      items[row.dataset.key + "_text"] = Fixture.domRect(row.querySelector("td.title span"));
+    }
+    Fixture.publish("table", items, { texts: spans.map(Fixture.domRect), order: tasks.map((task) => task.key) });
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>

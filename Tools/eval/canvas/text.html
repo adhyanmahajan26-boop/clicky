@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Status board</title>
+<style>html, body { margin: 0; overflow: hidden; background: #f7f7f8; }</style>
+<script src="common.js"></script>
+</head>
+<body>
+<script>
+// Canvas text only (no DOM text, no AX children): the 12 manifest strings
+// plus look-alike decoys at seeded positions. Truth: each string's ink box.
+(async function () {
+  try {
+    const spec = await Fixture.manifest("text");
+    const { canvas, context, width, height } = Fixture.fullCanvas("#f7f7f8");
+    const entries = spec.items.map((item) => Object.assign({ decoy: false }, item))
+      .concat(spec.decoys.map((text, index) => ({ key: "decoy_" + index, text, font: "15px Helvetica", color: "#98a2b3", decoy: true })));
+    const sizes = entries.map((entry) => {
+      context.font = entry.font;
+      const metrics = context.measureText(entry.text);
+      entry.ascent = Math.ceil(metrics.actualBoundingBoxAscent);
+      entry.descent = Math.ceil(metrics.actualBoundingBoxDescent);
+      entry.left = Math.ceil(metrics.actualBoundingBoxLeft);
+      entry.width = Math.ceil(metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight);
+      return [entry.width, entry.ascent + entry.descent];
+    });
+    const rects = Fixture.place(Fixture.rng, width, height, sizes, { margin: 60, gap: 36 });
+    const items = {};
+    entries.forEach((entry, index) => {
+      const rect = rects[index];
+      context.font = entry.font;
+      context.fillStyle = entry.color;
+      context.textBaseline = "alphabetic";
+      context.fillText(entry.text, rect[0] + entry.left, rect[1] + entry.ascent);
+      if (!entry.decoy) items[entry.key] = Fixture.toViewport(canvas, rect);
+    });
+    Fixture.publish("text", items);
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>

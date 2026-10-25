@@ -68,6 +68,8 @@ final class TurnRecord {
         var tip: [Double]?
         var tentative: Bool
         var recheck: RecheckEntry?
+        /// The mark's label pill, when it has one (evals check it sits in clear space).
+        var labelRectCG: [Double]? = nil
     }
 
     struct GroundingEntry: Encodable {

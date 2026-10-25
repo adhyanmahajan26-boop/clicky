@@ -25,6 +25,8 @@ struct CaptionBubbleLayer: View {
     var textObstaclesCG: [CGRect] = []
 
     @State private var lastPlacement: BubblePlacement?
+    /// Told each new bubble rect (CG); MarkController logs it to marks.jsonl.
+    static var onPlacementChanged: ((CGRect) -> Void)?
 
     private var maxWidth: CGFloat { CGFloat(ClickySettings.captionMaxWidth) }
     private var maxLines: Int { ClickySettings.captionMaxLines }
@@ -76,8 +78,10 @@ struct CaptionBubbleLayer: View {
         }
         .frame(width: displayBoundsCG.width, height: displayBoundsCG.height, alignment: .topLeading)
         .allowsHitTesting(false)
+        .onAppear { Self.onPlacementChanged?(currentPlacement.rect) }
         .onChange(of: currentPlacement) { _, newPlacement in
             lastPlacement = newPlacement
+            Self.onPlacementChanged?(newPlacement.rect)
         }
     }
 }
