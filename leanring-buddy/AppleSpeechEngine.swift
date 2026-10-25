@@ -9,7 +9,7 @@
 //  Some voices never send ranges: if none arrives within 600 ms the engine
 //  estimates from a running average of seconds per character for that
 //  voice and rate (seeded at 0.065), capped at 90 % until the utterance
-//  actually finishes.
+//  actually finishes. The rate follows v2.voice.rate ("slower"/"faster").
 //
 
 import AVFoundation
@@ -50,7 +50,7 @@ final class AppleSpeechEngine: NSObject, SpeechEngine {
     func enqueue(_ segment: CaptionSegment) {
         let utterance = AVSpeechUtterance(string: segment.speech)
         utterance.voice = voiceProvider()
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * Self.rateMultiplier
+        utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate, Self.utteranceRate)
         pending.append((utterance, segment))
         synthesizer.speak(utterance)
     }
@@ -71,8 +71,12 @@ final class AppleSpeechEngine: NSObject, SpeechEngine {
     func pause() { synthesizer.pauseSpeaking(at: .word) }
     func resume() { synthesizer.continueSpeaking() }
 
+    private static var utteranceRate: Float {
+        AVSpeechUtteranceDefaultSpeechRate * rateMultiplier * Float(ClickySettings.voiceRate)
+    }
+
     private var voiceKey: String {
-        "\(voiceProvider()?.identifier ?? "default")|\(Self.rateMultiplier)"
+        "\(voiceProvider()?.identifier ?? "default")|\(Self.utteranceRate)"
     }
 
     // MARK: - Delegate events (main actor)

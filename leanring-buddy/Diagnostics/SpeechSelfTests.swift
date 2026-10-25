@@ -44,6 +44,9 @@ enum SpeechSelfTests {
             return (false, ["error": "on-device speech recognition isn't available"])
         }
         let client = companionManager.speechOutputClient.qwenLocalVoiceClient
+        guard await companionManager.speechOutputClient.qwenServerSupervisor.waitUntilReady(timeoutSeconds: QwenTuning.serverStartupTimeoutSeconds) else {
+            return (false, ["error": companionManager.speechOutputClient.qwenServerSupervisor.status])
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clicky-qwen-sync", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -51,8 +54,7 @@ enum SpeechSelfTests {
         var perSentence: [[String: Any]] = []
         for (sentenceIndex, sentence) in sentences.enumerated() {
             do {
-                try await client.ensureServerIsRunning()
-                let wavData = try await client.synthesizeSpeech(for: sentence)
+                let wavData = try await client.synthesizeSpeech(for: sentence, watchdogSeconds: 30)
                 let fileURL = directory.appendingPathComponent("s\(sentenceIndex).wav")
                 try wavData.write(to: fileURL)
                 guard let audio = PCMAudio(wavData: wavData) else { continue }

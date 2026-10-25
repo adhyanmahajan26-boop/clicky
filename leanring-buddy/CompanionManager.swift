@@ -562,8 +562,9 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Barge-in: cut off the answer being spoken (its caption freezes),
-            // then cancel any in-progress response from a previous utterance.
+            // Barge-in: silence the voices first, then cut off the answer
+            // (its caption freezes) and cancel any response in flight.
+            speechOutputClient.stopVoicesNow()
             speechOutputClient.activeCoordinator?.bargeIn(.pushToTalk)
             currentResponseTask?.cancel()
             speechOutputClient.stopPlayback()
@@ -591,6 +592,8 @@ final class CompanionManager: ObservableObject {
                         // Partial transcripts are hidden (waveform-only UI)
                     },
                     submitDraftText: { [weak self] finalTranscript in
+                        // A bare "slower" / "faster" changes the voice speed, no Claude.
+                        if self?.applyVoiceSpeedCommandIfExact(finalTranscript) == true { return }
                         self?.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
@@ -648,8 +651,11 @@ final class CompanionManager: ObservableObject {
     /// Short-lived feedback in the indicator, e.g. "Saved capture 3".
     @Published private(set) var handsFreeStatusMessage: String?
     /// Scroll speed for the autopilot scroller (later phase), adjusted by
-    /// "slower" / "faster". 1.0 is the default speed.
+    /// "slower" / "faster" while it runs. 1.0 is the default speed.
     @Published private(set) var autopilotScrollSpeedMultiplier: Double = 1.0
+    /// Set by the autopilot scroller (later phase) while it scrolls. When
+    /// it isn't, "slower" / "faster" change the voice speed instead.
+    @Published private(set) var isAutopilotScrollRunning = false
 
     private var handsFreeListeningSession: HandsFreeListeningSession?
     private var handsFreeSessionCaptureStore: HandsFreeSessionCaptureStore?
@@ -754,7 +760,9 @@ final class CompanionManager: ObservableObject {
         // First words of an utterance: start reading the screens.
         groundingCoordinator.prewarm()
 
-        if speechOutputClient.isPlaying {
+        // Until output latency + 0.25 s after the last audio, what the mic
+        // hears is most likely Clicky itself.
+        if speechOutputClient.isPlayingOrEchoTail {
             currentUtteranceOverlappedBuddySpeech = true
             // Half-duplex: nothing the mic hears while Clicky talks counts.
             if ClickySettings.echoMode == .halfDuplex { return }
@@ -826,12 +834,22 @@ final class CompanionManager: ObservableObject {
             captureScreenForHandsFreeSession(requestedCaptureCount: requestedCaptureCount)
 
         case .slower:
-            autopilotScrollSpeedMultiplier = max(0.25, autopilotScrollSpeedMultiplier * 0.75)
-            showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+            if isAutopilotScrollRunning {
+                autopilotScrollSpeedMultiplier = max(0.25, autopilotScrollSpeedMultiplier * 0.75)
+                showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+            } else {
+                let newRate = speechOutputClient.stepVoiceRate(faster: false)
+                showHandsFreeStatusMessage(String(format: "Voice speed %.2f×", newRate))
+            }
 
         case .faster:
-            autopilotScrollSpeedMultiplier = min(3.0, autopilotScrollSpeedMultiplier * 1.33)
-            showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+            if isAutopilotScrollRunning {
+                autopilotScrollSpeedMultiplier = min(3.0, autopilotScrollSpeedMultiplier * 1.33)
+                showHandsFreeStatusMessage(String(format: "Scroll speed %.2g×", autopilotScrollSpeedMultiplier))
+            } else {
+                let newRate = speechOutputClient.stepVoiceRate(faster: true)
+                showHandsFreeStatusMessage(String(format: "Voice speed %.2f×", newRate))
+            }
 
         case .clearMarks:
             clearLiveScreenMarks()
@@ -878,6 +896,24 @@ final class CompanionManager: ObservableObject {
             guard !Task.isCancelled else { return }
             handsFreeStatusMessage = nil
         }
+    }
+
+    /// A push-to-talk transcript that is exactly "slower" or "faster" steps
+    /// the voice speed (0.85 / 1.0 / 1.15 / 1.3) and says so at the new speed.
+    /// While the autopilot scroller runs it changes the scroll speed instead.
+    func applyVoiceSpeedCommandIfExact(_ transcript: String) -> Bool {
+        let normalizedTranscript = transcript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        guard normalizedTranscript == "slower" || normalizedTranscript == "faster" else { return false }
+        let isFaster = normalizedTranscript == "faster"
+        if isAutopilotScrollRunning {
+            performHandsFreeVoiceCommand(isFaster ? .faster : .slower)
+            return true
+        }
+        speechOutputClient.stepVoiceRate(faster: isFaster)
+        Task {
+            try? await speechOutputClient.speakText(isFaster ? "Okay, a bit faster." : "Okay, a bit slower.")
+        }
+        return true
     }
 
     /// Cuts off the buddy mid-sentence and abandons any answer in flight.

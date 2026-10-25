@@ -8,6 +8,11 @@
 //  never goes silent. Short one-off lines (errors, hands-free status, voice
 //  preview) go through the same path via speakText.
 //
+//  Qwen is the primary only while its supervisor hasn't ruled the server
+//  out. Clicky's mlx-serve keeps running after quit (the next launch
+//  adopts it). The echo tail (isPlayingOrEchoTail) keeps the mic's words
+//  counted as Clicky's own until output latency + 0.25 s after the audio.
+//
 
 import ClickyCore
 import Combine
@@ -17,7 +22,8 @@ import Foundation
 final class CompanionSpeechOutput: ObservableObject {
     let systemVoiceClient = SystemVoiceTTSClient()
     let qwenLocalVoiceClient = QwenLocalTTSClient()
-    private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient)
+    private(set) lazy var qwenServerSupervisor = QwenServerSupervisor(client: qwenLocalVoiceClient)
+    private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient, supervisor: qwenServerSupervisor)
     private(set) lazy var appleEngine = AppleSpeechEngine { [weak self] in self?.systemVoiceClient.voiceInUse }
     /// A second Mac-voice engine: the fallback behind Apple-as-primary.
     private(set) lazy var appleFallbackEngine = AppleSpeechEngine { [weak self] in self?.systemVoiceClient.voiceInUse }
@@ -55,20 +61,42 @@ final class CompanionSpeechOutput: ObservableObject {
     private var lastCoordinatorEngineName: String?
     private var lastCoordinatorUsedFallback = false
 
+    /// Qwen speaks the next answer (selected, and its server not ruled out).
+    var isQwenPrimary: Bool {
+        usesQwenLocalVoice && !qwenServerSupervisor.isUnavailable
+    }
+
+    /// Qwen's first WAV only arrives whole, so its first segment is cut early.
+    var narrationSegmenterOptions: NarrationSegmenter.Options {
+        isQwenPrimary ? .qwen : NarrationSegmenter.Options()
+    }
+
     /// A coordinator for one answer: the selected voice, the Mac voice behind it.
     func makeCoordinator(host: SpeechCoordinatorHost) -> SpeechCoordinator {
         activeCoordinator?.bargeIn(.newQuestion)
-        let primary: SpeechEngine = usesQwenLocalVoice ? qwenEngine : appleEngine
-        let fallback: SpeechEngine = usesQwenLocalVoice ? appleEngine : appleFallbackEngine
+        let usesQwen = isQwenPrimary
+        let primary: SpeechEngine = usesQwen ? qwenEngine : appleEngine
+        let fallback: SpeechEngine = usesQwen ? appleEngine : appleFallbackEngine
         let coordinator = SpeechCoordinator(primaryEngine: primary, fallbackEngine: fallback, host: host)
         activeCoordinator = coordinator
         return coordinator
     }
 
-    /// Notes which voice spoke (for turn.json).
+    /// Notes which voice spoke (for turn.json) and starts the echo tail.
     func recordFinished(_ coordinator: SpeechCoordinator) {
         lastCoordinatorEngineName = coordinator.spokenEngineName
         lastCoordinatorUsedFallback = coordinator.didUseFallback
+        lastSpeechEndDate = Date()
+    }
+
+    private var lastSpeechEndDate: Date?
+
+    /// Speaking, or within the echo tail after it (output latency + 0.25 s):
+    /// what the mic hears now is still likely Clicky's own voice.
+    var isPlayingOrEchoTail: Bool {
+        if isPlaying { return true }
+        guard let lastSpeechEndDate else { return false }
+        return Date().timeIntervalSince(lastSpeechEndDate) < QwenTuning.echoTailSeconds
     }
 
     /// Speaks a one-off line (no tags). Returns once it's queued.
@@ -90,14 +118,23 @@ final class CompanionSpeechOutput: ObservableObject {
 
     /// The engine a new answer would use right now, for the debug ping.
     var currentEngineName: String {
-        usesQwenLocalVoice ? "qwen" : "system"
+        isQwenPrimary ? "qwen" : "system"
     }
 
     var isPlaying: Bool {
         qwenEngine.isPlaying || appleEngine.isPlaying || appleFallbackEngine.isPlaying
     }
 
+    /// Silences every voice at once (push-to-talk key-down, before the barge-in).
+    func stopVoicesNow() {
+        if isPlaying { lastSpeechEndDate = Date() }
+        qwenEngine.stopNow()
+        appleEngine.stopNow()
+        appleFallbackEngine.stopNow()
+    }
+
     func stopPlayback() {
+        if isPlaying { lastSpeechEndDate = Date() }
         activeCoordinator?.bargeIn(.newQuestion)
         qwenEngine.stopNow()
         appleEngine.stopNow()
@@ -114,14 +151,20 @@ final class CompanionSpeechOutput: ObservableObject {
     /// doesn't wait for it.
     func warmUpIfNeeded() {
         guard usesQwenLocalVoice else { return }
-        Task {
-            await qwenLocalVoiceClient.warmUp()
-        }
+        qwenServerSupervisor.start()
     }
 
+    /// Stops the voices. A server Clicky started stays up for the next launch.
     func shutDown() {
         stopPlayback()
-        qwenLocalVoiceClient.stopServerIfStartedByClicky()
+    }
+
+    /// One step slower or faster for both voices (v2.voice.rate); returns the new rate.
+    @discardableResult
+    func stepVoiceRate(faster: Bool) -> Double {
+        let newRate = QwenTuning.steppedRate(from: ClickySettings.voiceRate, faster: faster)
+        ClickySettings.voiceRate = newRate
+        return newRate
     }
 }
 
