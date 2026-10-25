@@ -72,7 +72,7 @@ ARTICLE_MIN_PARAGRAPHS = 20
 DEBUG_COMMANDS = ["ask", "actionsStatus", "actionsRun", "wakeStatus", "wakeFeed", "voiceCommand",
                   "notesStatus", "wakeFeedChain", "markRegion", "boardDisplay"]
 
-ENTER_PROMPT = "on my right monitor in the test browser, google weather in delhi and press enter"
+ENTER_PROMPT = "on my right monitor in the test browser, search weather in delhi"
 TYPE_PROMPT = "type weather in delhi into the search box"
 GARBLED_PROMPT = "press centre"
 SEARCH_PHRASE = "weather in delhi"
