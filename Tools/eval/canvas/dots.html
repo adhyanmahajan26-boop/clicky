@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dots</title>
+<style>html, body { margin: 0; overflow: hidden; background: #ffffff; }</style>
+<script src="common.js"></script>
+</head>
+<body>
+<script>
+// Coloured dots on a canvas (?variant=default|many). Truth: each dot's
+// bounding square. Grey decoys carry no key.
+(async function () {
+  try {
+    const spec = (await Fixture.manifest("dots")).variants[Fixture.variant];
+    const { canvas, context, width, height } = Fixture.fullCanvas("#ffffff");
+    const entries = spec.dots.slice();
+    for (let index = 0; index < spec.decoy_count; index++) entries.push({ key: null, color: spec.decoy_color, r: 14 });
+    const rects = Fixture.place(Fixture.rng, width, height, entries.map((entry) => [entry.r * 2, entry.r * 2]), { margin: 70, gap: 60 });
+    const items = {};
+    entries.forEach((entry, index) => {
+      const rect = rects[index];
+      context.beginPath();
+      context.arc(rect[0] + entry.r, rect[1] + entry.r, entry.r, 0, Math.PI * 2);
+      context.fillStyle = entry.color;
+      context.fill();
+      if (entry.key) items[entry.key] = Fixture.toViewport(canvas, rect);
+    });
+    Fixture.publish("dots", items);
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>

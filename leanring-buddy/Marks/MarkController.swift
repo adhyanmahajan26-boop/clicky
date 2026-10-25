@@ -54,6 +54,11 @@ final class MarkController {
         tracker.onLog = { [weak self] event in
             self?.turnRecord?.appendMarkEvent(event)
         }
+        // Where the caption bubble lands, for the evals' bubble/mark overlap check.
+        CaptionBubbleLayer.onPlacementChanged = { [weak self] rectCG in
+            self?.turnRecord?.appendMarkEvent(["event": "bubble", "t": (Date().timeIntervalSince1970 * 1000).rounded(),
+                                               "rectCG": [rectCG.minX, rectCG.minY, rectCG.width, rectCG.height]])
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -158,7 +163,8 @@ final class MarkController {
         }
         if drawing.style == .spot { kind = "spot" }
         return TurnRecord.DrawnEntry(kind: kind, rectCG: rectArray(drawnRect), radius: Double(drawing.outline?.cornerRadius ?? 0),
-                                     tip: tip, tentative: drawing.isTentative, recheck: nil)
+                                     tip: tip, tentative: drawing.isTentative, recheck: nil,
+                                     labelRectCG: drawing.labelText != nil || drawing.labelStepNumber != nil ? drawing.labelRect.map(rectArray) : nil)
     }
 
     // MARK: Tracking callbacks

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Monthly signups</title>
+<style>html, body { margin: 0; overflow: hidden; background: #ffffff; }</style>
+<script src="common.js"></script>
+</head>
+<body>
+<script>
+// A bar chart on a canvas: six months, seeded values (all distinct), a
+// title, a y axis and a legend. Truth: every bar, bar_max / bar_min (the
+// tallest / shortest), chart_title, legend, axis_y.
+(async function () {
+  try {
+    const spec = await Fixture.manifest("chart");
+    const { canvas, context, width, height } = Fixture.fullCanvas("#ffffff");
+    const rng = Fixture.rng;
+    const values = [];
+    while (values.length < spec.bars.length) {
+      const value = 20 + Math.round(rng() * 80);
+      if (values.every((other) => Math.abs(other - value) >= 6)) values.push(value);
+    }
+    const chartWidth = Math.min(900, width - 200), chartHeight = Math.min(460, height - 220);
+    const originX = 80 + Math.round(rng() * Math.max(1, width - chartWidth - 160));
+    const originY = 110 + Math.round(rng() * Math.max(1, height - chartHeight - 200));
+    const items = {};
+
+    context.font = "bold 22px Helvetica";
+    context.fillStyle = "#101828";
+    const title = "Monthly signups";
+    const titleMetrics = context.measureText(title);
+    context.fillText(title, originX, originY - 40);
+    items.chart_title = Fixture.toViewport(canvas, [originX, originY - 40 - Math.ceil(titleMetrics.actualBoundingBoxAscent),
+      Math.ceil(titleMetrics.width), Math.ceil(titleMetrics.actualBoundingBoxAscent + titleMetrics.actualBoundingBoxDescent)]);
+
+    context.strokeStyle = "#98a2b3"; context.lineWidth = 2;
+    context.beginPath(); context.moveTo(originX, originY); context.lineTo(originX, originY + chartHeight); context.lineTo(originX + chartWidth, originY + chartHeight); context.stroke();
+    items.axis_y = Fixture.toViewport(canvas, [originX - 4, originY, 8, chartHeight]);
+
+    const slot = chartWidth / spec.bars.length, barWidth = Math.round(slot * 0.55);
+    let maxIndex = 0, minIndex = 0;
+    values.forEach((value, index) => {
+      const barHeight = Math.round((value / 100) * chartHeight);
+      const x = Math.round(originX + slot * index + (slot - barWidth) / 2);
+      const y = originY + chartHeight - barHeight;
+      context.fillStyle = "#6e56cf";
+      context.fillRect(x, y, barWidth, barHeight);
+      context.font = "14px Helvetica"; context.fillStyle = "#475467";
+      context.fillText(spec.bars[index], x + barWidth / 2 - context.measureText(spec.bars[index]).width / 2, originY + chartHeight + 22);
+      items["bar_" + spec.bars[index].toLowerCase()] = Fixture.toViewport(canvas, [x, y, barWidth, barHeight]);
+      if (value > values[maxIndex]) maxIndex = index;
+      if (value < values[minIndex]) minIndex = index;
+    });
+    items.bar_max = items["bar_" + spec.bars[maxIndex].toLowerCase()];
+    items.bar_min = items["bar_" + spec.bars[minIndex].toLowerCase()];
+
+    const legendX = originX + chartWidth - 150, legendY = originY - 52;
+    context.fillStyle = "#6e56cf"; context.fillRect(legendX, legendY, 14, 14);
+    context.fillStyle = "#344054"; context.font = "14px Helvetica"; context.fillText("Signups (k)", legendX + 22, legendY + 12);
+    items.legend = Fixture.toViewport(canvas, [legendX, legendY, 22 + Math.ceil(context.measureText("Signups (k)").width), 14]);
+    Fixture.publish("chart", items, { values });
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>
