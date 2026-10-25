@@ -237,3 +237,42 @@ runaway audio is handled client-side (cut at the last pause past 3x chars/15 s).
   Deferred question for the user: load/download `Qwen3-TTS-12Hz-1.7B-CustomVoice` (and/or an 8-bit build)?
 - Lexicon WAVs for the user to compare (raw text vs what Clicky now sends), synthesized silently to files:
   `build/eval/p3-lexicon/{pr12,xcode,json,ctrl,version}-{raw,lexicon}.wav` in the p3 worktree.
+
+## hard10: ten hard live tests (Tools/eval/hard10.py), 2026-10-25
+
+Runs: first 34535d3→0a08835, second cf0ac6c, third 9b57210, fourth 81382e1 (Netflix-safe: far-right display only, silent, Safari untouched, frontmost restored).
+
+| # | test | run 1 | run 2 | run 3/4 | cause → fix |
+|---|---|---|---|---|---|
+| 1 | dense table, 4 rows + notes | ✗ | ✗ | **✓** (r3) | black app windows on first capture after launch → per-display black verdict + launch warm-up (0b189b3, 1e34f6e) |
+| 2 | 3 red product boxes + price notes | ✗ | ✗ 2/3 | evidence ✓ (r3) | black frame; Chrome web AX; card cut off by window; harness read the wrong label field → 1e34f6e, 79debf9, 34e493d |
+| 3 | icon-only Share | ✗ | ✓ | **✓** (r4, element #26, page ready 222 ms) | Chrome web AX needs ~2.1 s → ask-time write + follow-up, first-page wait 2.5 s (1e34f6e, 34e493d) |
+| 4 | System Settings wallpaper, steps | n/s | ✓ | – | harness truth finder (6eb5ccd) |
+| 5 | canvas text "Quarterly" | ✓ | ✓ | – | – |
+| 6 | side-display Submit | ✗ | ✓ | – | resolver matched "submit" inside the URL → TextMatchClassifier (ff4b00c) |
+| 7 | screenshot of window | ✓ | ✓ | – | new [SNAP] (2d326a5) |
+| 8 | whiteboard DNS diagram | ✗ | ✓ (6 nodes) | – | harness node counting (6eb5ccd) |
+| 9 | code mode: multiply + test | ✗ | ✗ | evidence ✓ (r3: commit 7628c5d, unittest 4 OK) | plugin preflight (d9a906f); Edit(~/.clicky/**) denied the worktree (fb166f3); harness polled after the review closed (34e493d) |
+| 10 | barge-in, same voice | ✗ | ✓ (qwen, clicky-voice.wav both) | – | interrupted turn logged no engine (0b189b3) |
+
+Live first audio per test (run 2): 3.3–9.4 s. Addy's real turns today (13:39–16:55, test turns excluded): keyUp→firstAudio p50 5.06 s, p95 7.85 s (n 24).
+
+## PDF export (fix-pdf 6e164a7, 11dd212), offscreen, paper/chalk/dark
+
+| board | pages | size pt | text | vector | fonts | diff vs render | before → after |
+|---|---|---|---|---|---|---|---|
+| DNS (real turn) | 1 | 1469×802 | all | 0 images | embedded | SSIM 1.000 | pass → pass |
+| math (LaTeX) | 1 | 1280×802 | all + LaTeX source | 0 images (was 3 bitmaps) | 4 | 0.999 | fail → pass |
+| code (30 lines) | 1 | 1280×802 | all | yes | 2 incl. mono | 1.000 | pass → pass |
+| long, 8 sections | 1 | 1866×2155 | all | yes | yes | 1.000 | pass → pass |
+| chart | 1 | 1280×802 | all | yes | 2 | 1.000 | pass → pass |
+| tall (pagination) | 2 | 1866×2639 | all, "page n of m" | yes | yes | 1.000 | fail → pass |
+
+Live voice path (e537857, silent, board forced onto the far-right display via debug `boardDisplay`): "save this as a pdf" →
+~/Pictures/Clicky/whiteboard-20261025-182150.{pdf,png,clickyboard}; PDF 1 page 1857×893, vector (0 images, 32 text ops),
+ChalkboardSE embedded, text searchable, title "How DNS resolution works". Frontmost (Safari) and Safari full screen unchanged.
+
+## Agents dashboard (bef1580), live check
+
+Silent ask after relaunch → agentsStatus: 1 brain agent, done, claude-sonnet-5-5, usage 12,562 tokens, $0.0503; turn.json
+`usage` matches. Window open/placement, spark click and cancel paths not exercised live (they would put a window on the owner's screen).
