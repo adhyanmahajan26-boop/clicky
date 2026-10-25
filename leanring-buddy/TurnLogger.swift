@@ -99,6 +99,17 @@ final class TurnRecord {
         var ocrCoverage: [String] = []
         /// P6.8: set when key-up p95 over 20 turns is over 150 ms warm / 300 ms cold.
         var latencyAlarm: String?
+        /// Set when a capture came back with the app windows black and was retaken.
+        var blackFrameRetry: BlackFrameRetryEntry? = nil
+    }
+
+    struct BlackFrameRetryEntry: Encodable, Sendable {
+        /// Recaptures taken (1: after 200 ms; 2: also with a fresh SCShareableContent + filter).
+        var count: Int
+        /// "recovered", "recoveredFreshFilter" or "stillBlack".
+        var result: String
+        /// Share of the app-window area that was black in the first capture.
+        var firstBlackFraction: Double
     }
 
     struct SpeechEntry: Encodable {
@@ -106,6 +117,10 @@ final class TurnRecord {
         var fallback: Bool
         /// The Qwen reference clip the voice is cloned from (nil for Apple).
         var voice: String? = nil
+        /// Set when the answer was cut off (barge-in / new question).
+        var interrupted: Bool? = nil
+        /// Segments that started playing before the interrupt.
+        var playedSegments: Int? = nil
     }
 
     let turnDirectoryURL: URL

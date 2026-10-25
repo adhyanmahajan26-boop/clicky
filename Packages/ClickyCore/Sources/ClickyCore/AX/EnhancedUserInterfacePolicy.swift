@@ -70,4 +70,79 @@ public enum EnhancedUserInterfacePolicy {
                           enableProcessIdentifier: shouldEnable ? activated.processIdentifier : nil,
                           enhancedProcessIdentifierAfter: shouldEnable ? activated.processIdentifier : nil)
     }
+
+    // MARK: - Ask time
+
+    /// Setting the flag only when an app is activated misses cases seen live
+    /// (turn 20261025-161216-42555df1: a second Chrome instance launched
+    /// frontmost had no web content in its tree on the first ask): the
+    /// write can land before the app is ready for it and its result isn't
+    /// checked, the window can come forward without an activation change,
+    /// and Chromium builds the web tree a moment after the flag is set. So
+    /// on each ask the frontmost listed app is checked until its web
+    /// content shows up once (up to `maximumAskAttempts` asks per pid).
+    public static let maximumAskAttempts = 3
+    public static let askTimeWaitSeconds = 0.25
+    public static let askTimePollSeconds = 0.025
+
+    public enum AskTimeAction: Sendable, Equatable {
+        case none
+        /// Set the flag (again) and wait up to `askTimeWaitSeconds` for web content.
+        case enableAndWait
+    }
+
+    public static func askTimeAction(isListed: Bool, isVerified: Bool, attemptCount: Int) -> AskTimeAction {
+        guard isListed, !isVerified, attemptCount < maximumAskAttempts else { return .none }
+        return .enableAndWait
+    }
+
+    public enum WebContentState: Sendable, Equatable {
+        /// An AXWebArea with children: the page is in the tree.
+        case ready
+        /// AXWebArea(s) without children yet.
+        case emptyWebArea
+        /// No AXWebArea in the front window (yet).
+        case noWebArea
+    }
+
+    /// Searches the app's front window (breadth first, ≤ 12 levels, ≤ 600
+    /// nodes) for an AXWebArea and whether it has children.
+    public static func webContentState(ax: AXQuerying, applicationNode: AXNodeReference, deadline: Date? = nil,
+                                       now: () -> Date = Date.init) -> WebContentState {
+        guard let frontWindow = ax.windows(of: applicationNode).first else { return .noWebArea }
+        var queue: [(node: AXNodeReference, depth: Int)] = [(frontWindow, 0)]
+        var visitedCount = 0
+        var sawEmptyWebArea = false
+        while !queue.isEmpty, visitedCount < 600 {
+            if let deadline, visitedCount % 16 == 0, now() >= deadline { break }
+            let (node, depth) = queue.removeFirst()
+            visitedCount += 1
+            let children = ax.children(of: node, role: nil, limit: 64)
+            if ax.attributes(of: node)?.role == "AXWebArea" {
+                if !children.isEmpty { return .ready }
+                sawEmptyWebArea = true
+                continue
+            }
+            guard depth < 12 else { continue }
+            queue += children.map { ($0, depth + 1) }
+        }
+        return sawEmptyWebArea ? .emptyWebArea : .noWebArea
+    }
+
+    /// Polls `webContentState` until ready or `timeout` (wall clock, so a
+    /// slow AX tree can't stretch it much); `sleep` and `now` are injected
+    /// (Thread.sleep / Date in the app). Returns the last state and the
+    /// seconds waited.
+    public static func waitForWebContent(ax: AXQuerying, applicationNode: AXNodeReference, timeout: TimeInterval = askTimeWaitSeconds,
+                                         pollInterval: TimeInterval = askTimePollSeconds, now: () -> Date = Date.init,
+                                         sleep: (TimeInterval) -> Void) -> (state: WebContentState, waitedSeconds: TimeInterval) {
+        let start = now()
+        let deadline = start.addingTimeInterval(timeout)
+        var state = webContentState(ax: ax, applicationNode: applicationNode, deadline: deadline, now: now)
+        while state != .ready, now().addingTimeInterval(pollInterval) <= deadline.addingTimeInterval(1e-9) {
+            sleep(pollInterval)
+            state = webContentState(ax: ax, applicationNode: applicationNode, deadline: deadline, now: now)
+        }
+        return (state, now().timeIntervalSince(start))
+    }
 }

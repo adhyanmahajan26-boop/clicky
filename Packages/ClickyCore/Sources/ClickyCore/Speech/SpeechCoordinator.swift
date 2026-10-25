@@ -77,6 +77,16 @@ public final class SpeechCoordinator {
     public private(set) var didUseFallback = false
     public var primaryEngineName: String { primaryEngine.name }
     public var spokenEngineName: String { didUseFallback ? fallbackEngine.name : primaryEngine.name }
+    /// Segments of this answer that started playing (survives a barge-in).
+    public var playedSegmentCount: Int { startedSegmentIDs.count }
+    /// Whether any segment that actually played was spoken by the fallback.
+    public var playedOnFallback: Bool { !startedSegmentIDs.isDisjoint(with: fallbackSegmentIDs) }
+    /// The engine that spoke what played (the fallback if any played
+    /// segment was its), or nil when nothing started before the answer ended.
+    public var playedEngineName: String? {
+        guard !startedSegmentIDs.isEmpty else { return nil }
+        return playedOnFallback ? fallbackEngine.name : primaryEngine.name
+    }
     public var echoGuard = EchoGuard()
     public var now: () -> Date = Date.init
 

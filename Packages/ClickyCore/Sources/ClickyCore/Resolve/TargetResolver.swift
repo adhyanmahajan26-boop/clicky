@@ -10,10 +10,14 @@
 //             close by can be re-snapped to. An unlabelled id is never
 //             overridden. (0.98)
 //   #a-#b     union of the refreshed frames, one display only. (0.95)
-//   "text"    AX text ranges (AXBoundsForRange) and OCR words, exact before
-//             fuzzy; ~k picks the k-th in front-window/reading order, else
-//             the one nearest the cursor; "in #n" limits the search. (0.95 /
-//             0.8 fuzzy)
+//   "text"    AX text ranges (AXBoundsForRange), AX buttons/links titled
+//             the query, and OCR words, exact before fuzzy, ranked by
+//             TextMatchQuality (titled control > whole line > word-boundary
+//             hit > hit inside a longer token such as a URL), page before
+//             browser chrome, case-exact first; ~k picks the k-th in
+//             front-window/reading order, else the best nearest the cursor;
+//             "in #n" limits the search. (0.95 / 0.8 fuzzy / 0.7 in-token,
+//             never textExact)
 //   box on text  an explicit box on OCR text ("text", or an ocr element)
 //             snaps to the smallest AX element holding it (a card, image,
 //             button or cell ≤ 20 % of the display): the model named the
@@ -51,6 +55,16 @@ public protocol GroundingLiveLookup {
     func refreshedFrame(of element: GroundingElement) -> CGRect?
     /// Frames of `query` inside an AX text element (AXBoundsForRange).
     func textRanges(of query: String, in element: GroundingElement) -> [(frameCG: CGRect, isFuzzy: Bool)]
+    /// The same hits with their match quality (whole / token / inside a
+    /// longer token). The default classifies them against the element's
+    /// value/label.
+    func textMatches(of query: String, in element: GroundingElement) -> [TextRangeMatch]
+}
+
+public extension GroundingLiveLookup {
+    func textMatches(of query: String, in element: GroundingElement) -> [TextRangeMatch] {
+        TextMatchClassifier.classify(rangeHits: textRanges(of: query, in: element), query: query, text: element.value ?? element.label)
+    }
 }
 
 public struct TargetResolver {
@@ -73,7 +87,7 @@ public struct TargetResolver {
         guard tag.kind == .mark, tag.style == .box, tag.hasExplicitStyle else { return resolved }
         let isOCRText: Bool
         switch resolved.method {
-        case .textExact, .textFuzzy: isOCRText = resolved.axNode == nil
+        case .textExact, .textFuzzy: isOCRText = resolved.axNode == nil && resolved.elementID == nil
         case .element, .elementResnapped, .elementAlternative: isOCRText = resolved.elementID.flatMap { registry[$0] }?.source == .ocr
         default: isOCRText = false
         }
@@ -199,27 +213,55 @@ public struct TargetResolver {
     struct TextCandidate {
         let frameCG: CGRect
         let isFuzzy: Bool
+        let quality: TextMatchQuality
+        let isCaseExact: Bool
+        /// An AX button/link whose title is the query.
+        let isAXControl: Bool
+        /// In a browser's tab strip / address bar.
+        var isBrowserChrome = false
         let zIndex: Int
         let displayID: CGDirectDisplayID
         let processIdentifier: pid_t?
         let axNode: AXNodeReference?
         let elementID: Int?
+
+        /// Lower is better: exact before fuzzy; a titled AX control, then a
+        /// whole line, then a word-boundary hit, then a hit inside a longer
+        /// token; page before browser chrome; case-exact first.
+        var rankKey: (Int, Int, Int, Int) {
+            (isFuzzy ? 1 : 0, isAXControl ? -1 : quality.rawValue, isBrowserChrome ? 1 : 0, isCaseExact ? 0 : 1)
+        }
+
+        func ranks(before other: TextCandidate) -> Bool { rankKey < other.rankKey }
     }
+
+    /// Roles whose title alone can be a text target's match ("Submit" button).
+    static let titledControlRoles: Set<GroundingRole> = [.button, .link, .menuItem]
 
     func resolveText(query: String, occurrence: Int?, scopeID: Int?) -> ResolvedTarget? {
         var candidates: [TextCandidate] = []
 
         for elementID in registry.orderedIDs {
             guard let element = registry[elementID], element.source == .accessibility else { continue }
-            for textRange in lookup.textRanges(of: query, in: element) {
-                candidates.append(TextCandidate(frameCG: textRange.frameCG, isFuzzy: textRange.isFuzzy, zIndex: element.windowZIndex,
+            for textMatch in lookup.textMatches(of: query, in: element) {
+                candidates.append(TextCandidate(frameCG: textMatch.frameCG, isFuzzy: textMatch.isFuzzy, quality: textMatch.quality,
+                                                isCaseExact: textMatch.isCaseExact, isAXControl: false, zIndex: element.windowZIndex,
                                                 displayID: element.displayID, processIdentifier: element.processIdentifier,
                                                 axNode: element.axNode, elementID: elementID))
+            }
+            // A visible button/link titled exactly the query.
+            if Self.titledControlRoles.contains(element.role), !element.isBehind,
+               TextMatchClassifier.isWholeMatch(query: query, text: element.label),
+               let frame = lookup.refreshedFrame(of: element) {
+                let isCaseExact = TextMatchClassifier.isCaseExactWholeMatch(query: query, text: element.label)
+                candidates.append(TextCandidate(frameCG: frame, isFuzzy: false, quality: .whole, isCaseExact: isCaseExact, isAXControl: true,
+                                                zIndex: element.windowZIndex, displayID: element.displayID,
+                                                processIdentifier: element.processIdentifier, axNode: element.axNode, elementID: elementID))
             }
         }
         for ocrLine in registry.allOCRLines {
             let lineLength = LabelSimilarity.normalize(ocrLine.text).count
-            for occurrenceMatch in LabelSimilarity.findOccurrences(of: query, in: ocrLine.text) {
+            for occurrenceMatch in TextMatchClassifier.occurrences(of: query, in: ocrLine.text) {
                 // A match covering all but ≤ 2 characters of the line is the
                 // line (OCR often adds or drops a stray character at the end;
                 // a proportional slice would just shift the box).
@@ -227,9 +269,13 @@ public struct TargetResolver {
                     ? ocrLine.frameCG
                     : OCREngine.substringFrame(of: occurrenceMatch.range, inLineOfLength: lineLength, lineFrameCG: ocrLine.frameCG)
                 // AX already covers this spot: keep the AX candidate.
-                if candidates.contains(where: { $0.axNode != nil && $0.frameCG.intersectionOverUnion(with: matchFrame) > 0.5 }) { continue }
+                if candidates.contains(where: { candidate in
+                    candidate.elementID != nil && (candidate.frameCG.intersectionOverUnion(with: matchFrame) > 0.5
+                        || (candidate.isAXControl && candidate.frameCG.insetBy(dx: -4, dy: -4).contains(matchFrame.center)))
+                }) { continue }
                 let ownerWindow = windowStack?.windows.first { $0.isApplicationWindowLayer && $0.boundsCG.contains(matchFrame.center) }
-                candidates.append(TextCandidate(frameCG: matchFrame, isFuzzy: occurrenceMatch.isFuzzy,
+                candidates.append(TextCandidate(frameCG: matchFrame, isFuzzy: occurrenceMatch.isFuzzy, quality: occurrenceMatch.quality,
+                                                isCaseExact: occurrenceMatch.isCaseExact, isAXControl: false,
                                                 zIndex: ownerWindow.flatMap { windowStack?.zIndex(of: $0.windowID) } ?? Int.max / 2,
                                                 displayID: ocrLine.displayID, processIdentifier: ownerWindow?.processIdentifier,
                                                 axNode: nil, elementID: nil))
@@ -240,12 +286,22 @@ public struct TargetResolver {
             let scopeFrame = (lookup.refreshedFrame(of: scopeElement) ?? scopeElement.visibleFrameCG).insetBy(dx: -4, dy: -4)
             candidates = candidates.filter { scopeFrame.contains($0.frameCG.center) }
         }
+        let chromeBands = TextMatchClassifier.browserChromeBands(registry: registry, windowStack: windowStack)
+        if !chromeBands.isEmpty {
+            for index in candidates.indices where chromeBands.contains(where: { $0.contains(candidates[index].frameCG.center) }) {
+                candidates[index].isBrowserChrome = true
+            }
+        }
         let exactCandidates = candidates.filter { !$0.isFuzzy }
-        let pool = exactCandidates.isEmpty ? candidates : exactCandidates
+        var pool = exactCandidates.isEmpty ? candidates : exactCandidates
         guard !pool.isEmpty else { return nil }
 
         let chosen: TextCandidate
         if let occurrence, occurrence >= 1 {
+            // The k-th of the real hits: hits inside longer tokens only count when there's nothing else.
+            if pool.contains(where: { $0.isAXControl || $0.quality != .inToken }) {
+                pool = pool.filter { $0.isAXControl || $0.quality != .inToken }
+            }
             let ordered = pool.sorted { first, second in
                 if first.zIndex != second.zIndex { return first.zIndex < second.zIndex }
                 let firstLine = Int((first.frameCG.minY / 12).rounded(.down))
@@ -255,10 +311,17 @@ public struct TargetResolver {
             }
             chosen = ordered[min(occurrence, ordered.count) - 1]
         } else {
-            chosen = pool.min { $0.frameCG.edgeDistance(to: cursorCG) < $1.frameCG.edgeDistance(to: cursorCG) }!
+            // Best-ranked first; among equals, the one nearest the cursor.
+            chosen = pool.min { first, second in
+                if first.rankKey != second.rankKey { return first.ranks(before: second) }
+                return first.frameCG.edgeDistance(to: cursorCG) < second.frameCG.edgeDistance(to: cursorCG)
+            }!
         }
-        return ResolvedTarget(frameCG: chosen.frameCG, pointCG: chosen.frameCG.center, confidence: chosen.isFuzzy ? 0.8 : 0.95,
-                              method: chosen.isFuzzy ? .textFuzzy : .textExact, elementID: chosen.elementID, displayID: chosen.displayID,
+        // A hit inside a longer token (a URL, a path) is never an exact text match.
+        let isLooseMatch = chosen.isFuzzy || (!chosen.isAXControl && chosen.quality == .inToken)
+        return ResolvedTarget(frameCG: chosen.frameCG, pointCG: chosen.frameCG.center,
+                              confidence: chosen.isFuzzy ? 0.8 : (isLooseMatch ? 0.7 : 0.95),
+                              method: isLooseMatch ? .textFuzzy : .textExact, elementID: chosen.elementID, displayID: chosen.displayID,
                               label: query, processIdentifier: chosen.processIdentifier, axNode: chosen.axNode)
     }
 

@@ -51,6 +51,10 @@ enum ScreenCaptureService {
         var effectiveMaxEdge: Int?
         /// Self-tests only: include Clicky's own windows in the capture.
         var includesOwnWindows = false
+        /// Black-frame retry: never reuse the cached shareable content, and
+        /// exclude Clicky by its windows instead of by application (a
+        /// different SCContentFilter than the one that produced the frame).
+        var forcesFreshContentAndWindowFilter = false
     }
 
     /// Captures every display concurrently. SCREEN 1 is the cursor screen,
@@ -96,7 +100,8 @@ enum ScreenCaptureService {
     }
 
     /// Native-resolution capture of a display (or a CG region of it).
-    static func captureNativeImage(of display: DisplayInfo, regionCG requestedRegionCG: CGRect? = nil, includesOwnWindows: Bool, shareableContent: SCShareableContent? = nil) async throws -> (image: CGImage, regionCG: CGRect) {
+    static func captureNativeImage(of display: DisplayInfo, regionCG requestedRegionCG: CGRect? = nil, includesOwnWindows: Bool, shareableContent: SCShareableContent? = nil,
+                                   excludesOwnWindowsByWindow: Bool = false) async throws -> (image: CGImage, regionCG: CGRect) {
         let content: SCShareableContent
         if let shareableContent {
             content = shareableContent
@@ -109,7 +114,8 @@ enum ScreenCaptureService {
             throw ScreenCaptureError(message: "Display \(display.displayID) isn't available to ScreenCaptureKit")
         }
 
-        let contentFilter = makeContentFilter(display: screenCaptureKitDisplay, shareableContent: content, includesOwnWindows: includesOwnWindows)
+        let contentFilter = makeContentFilter(display: screenCaptureKitDisplay, shareableContent: content, includesOwnWindows: includesOwnWindows,
+                                              excludesOwnWindowsByWindow: excludesOwnWindowsByWindow)
         let regionCG = requestedRegionCG ?? display.boundsCG
         let pointPixelScale = CGFloat(SCShareableContent.info(for: contentFilter).pointPixelScale)
         let outputSize = RecheckMath.pixelSize(region: regionCG, pointPixelScale: pointPixelScale)
@@ -135,15 +141,17 @@ enum ScreenCaptureService {
     /// anyway (badges).
     static func captureScreen(display: DisplayInfo, screenNumber: Int, isCursorScreen: Bool, positionDescription: String,
                               options requestedOptions: Options? = nil, encodesJPEG: Bool = true) async throws -> ScreenCapture {
+        let options = requestedOptions ?? Options()
         let shareableContent: SCShareableContent
-        if let cachedContent = await ShareableContentCache.shared.recentContent(maximumAge: 3) {
+        if !options.forcesFreshContentAndWindowFilter, let cachedContent = await ShareableContentCache.shared.recentContent(maximumAge: 3) {
             shareableContent = cachedContent
         } else {
             shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            await ShareableContentCache.shared.store(shareableContent)
         }
         return try await captureScreen(display: display, screenNumber: screenNumber, isCursorScreen: isCursorScreen,
                                        positionDescription: positionDescription, shareableContent: shareableContent,
-                                       options: requestedOptions ?? Options(), encodesJPEG: encodesJPEG)
+                                       options: options, encodesJPEG: encodesJPEG)
     }
 
     // MARK: - Private
@@ -152,7 +160,8 @@ enum ScreenCaptureService {
         let (nativeImage, regionCG) = try await captureNativeImage(
             of: display,
             includesOwnWindows: options.includesOwnWindows,
-            shareableContent: shareableContent
+            shareableContent: shareableContent,
+            excludesOwnWindowsByWindow: options.forcesFreshContentAndWindowFilter
         )
         let nativeSize = PixelSize(width: nativeImage.width, height: nativeImage.height)
         let modelSize = ClaudeImageSizing.modelImageSize(
@@ -181,11 +190,16 @@ enum ScreenCaptureService {
     /// Excludes Clicky by application (all its windows, present and future).
     /// If Clicky somehow isn't in the app list, falls back to excluding the
     /// windows owned by this process.
-    private static func makeContentFilter(display: SCDisplay, shareableContent: SCShareableContent, includesOwnWindows: Bool) -> SCContentFilter {
+    private static func makeContentFilter(display: SCDisplay, shareableContent: SCShareableContent, includesOwnWindows: Bool,
+                                          excludesOwnWindowsByWindow: Bool = false) -> SCContentFilter {
         if includesOwnWindows {
             return SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         }
         let ownProcessIdentifier = getpid()
+        if excludesOwnWindowsByWindow {
+            let ownWindows = shareableContent.windows.filter { $0.owningApplication?.processID == ownProcessIdentifier }
+            return SCContentFilter(display: display, excludingWindows: ownWindows)
+        }
         if let ownApplication = shareableContent.applications.first(where: { $0.processID == ownProcessIdentifier }) {
             return SCContentFilter(display: display, excludingApplications: [ownApplication], exceptingWindows: [])
         }
@@ -265,5 +279,12 @@ actor ShareableContentCache {
     func recentContent(maximumAge: TimeInterval) -> SCShareableContent? {
         guard let fetchDate, Date().timeIntervalSince(fetchDate) < maximumAge else { return nil }
         return content
+    }
+
+    /// Forget the cached list (a black frame, an app launched or quit, the
+    /// display layout changed): the next capture fetches a fresh one.
+    func invalidate() {
+        content = nil
+        fetchDate = nil
     }
 }

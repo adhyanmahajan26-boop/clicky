@@ -56,10 +56,13 @@ public protocol AXQuerying: Sendable {
     func enableManualAccessibility(for applicationNode: AXNodeReference)
     /// AXEnhancedUserInterface on an app (Chromium's full AX tree; P6.8).
     func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference)
+    /// The app's AXEnhancedUserInterface as it reads back (nil: unreadable).
+    func enhancedUserInterface(of applicationNode: AXNodeReference) -> Bool?
 }
 
 public extension AXQuerying {
     func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference) {}
+    func enhancedUserInterface(of applicationNode: AXNodeReference) -> Bool? { nil }
 }
 
 /// The live Accessibility API.
@@ -272,5 +275,11 @@ public final class SystemAXQuerying: AXQuerying, @unchecked Sendable {
 
     public func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference) {
         AXUIElementSetAttributeValue(element(applicationNode), "AXEnhancedUserInterface" as CFString, isEnabled ? kCFBooleanTrue : kCFBooleanFalse)
+    }
+
+    public func enhancedUserInterface(of applicationNode: AXNodeReference) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element(applicationNode), "AXEnhancedUserInterface" as CFString, &value) == .success else { return nil }
+        return value as? Bool
     }
 }
