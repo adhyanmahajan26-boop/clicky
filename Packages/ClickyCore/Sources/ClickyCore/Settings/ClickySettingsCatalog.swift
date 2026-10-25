@@ -53,6 +53,10 @@ public enum ClickySettingsCatalog {
                             explanation: "Draw id badges on the screenshots (A/B switch)."),
         ClickySettingsEntry(key: ClickySettings.Keys.groundingValueBlockedBundleIDs, kind: .textList(defaultValue: ClickySettings.defaultValueBlockedBundleIDs),
                             explanation: "Bundle ids whose field values are never read. Comma separated."),
+        ClickySettingsEntry(key: ClickySettings.Keys.groundingEnhancedUIBundleIDs, kind: .textList(defaultValue: EnhancedUserInterfacePolicy.defaultBundleIdentifiers),
+                            explanation: "Apps that get AXEnhancedUserInterface while in front (\"electron\" = any Electron app). Comma separated."),
+        ClickySettingsEntry(key: ClickySettings.Keys.groundingVerifyWithHaiku, kind: .toggle(defaultValue: false),
+                            explanation: "Ask Haiku to check tentative marks on a zoomed crop."),
 
         // Marks.
         ClickySettingsEntry(key: ClickySettings.Keys.marksMax, kind: .integer(defaultValue: 9, range: 1...30, step: 1),
