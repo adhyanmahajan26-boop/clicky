@@ -1,0 +1,21 @@
+Here's a quick board on how the electoral college picks a president.
+
+<whiteboard>
+{"wb":1,"title":"How the Electoral College works","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"The electoral college","q":"how does the electoral college work"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Where electors come from","Why 270 wins","From your vote to the president","The catch"],"ordered":true}
+{"el":"math","id":"m1","sec":"q1","tex":"E_{state} = H + 2"}
+{"el":"table","id":"t1","sec":"q1","cols":["State","Electors"],"rows":[["California","54"],["Texas","40"],["Florida","30"],["New York","28"],["Wyoming","3"]]}
+{"el":"math","id":"m2","sec":"q1","tex":"435 + 100 + 3 = 538"}
+{"el":"flow","id":"f1","sec":"q1","src":"flowchart LR\nA[Voters vote in their state] --> B[Winner gets the state's electors]\nB --> C[Electors vote in December]\nC --> D[Congress counts in January]\nD --> E[270 wins]"}
+{"el":"callout","id":"c1","sec":"q1","target":"f1","style":"info","text":"48 states and DC are winner-take-all. Maine and Nebraska split by district."}
+{"el":"callout","id":"c2","sec":"q1","target":"m2","style":"warning","text":"Winning the national popular vote isn't enough. It's possible to lose it and still win 270."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Electors = House seats + 2 senators","538 total, 270 needed","Most states give all electors to the statewide winner","The popular vote winner can still lose","No majority means the House decides"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at where electors come from, why 270 matters, how your vote turns into a president, and the catch.","focus":"agenda"}
+{"step":2,"show":["m1"],"hl":["m1"],"say":"Each state gets electors equal to its House seats plus its two senators.","focus":"q1"}
+{"step":3,"show":["t1"],"hl":["t1"],"say":"So big states like California get 54, while tiny Wyoming gets just 3.","cue":{"t1":"California"},"point":"t1"}
+{"step":4,"show":["m2"],"hl":["m2"],"say":"Add 435 House seats, 100 senators, and 3 for DC, and you get 538 electors, so a candidate needs 270 to win.","point":"m2"}
+{"step":5,"show":["f1"],"hl":["f1"],"say":"On election day, voters pick in their own state, the winner earns that state's electors, who vote in December, and Congress counts them in January.","point":"f1"}
+{"step":6,"show":["c1"],"hl":["c1"],"say":"Almost every state gives all its electors to the statewide winner, except Maine and Nebraska, which split theirs.","point":"c1"}
+{"step":7,"show":["c2"],"hl":["c2"],"say":"That's the catch: winning big in a few states piles up extra votes, so a candidate can win the national popular vote and still fall short of 270.","point":"c2"}
+{"step":8,"show":["rc"],"hl":["rc"],"say":"So remember: electors come from House seats plus two, 270 of 538 wins, and if nobody gets there, the House decides.","focus":"recap"}
+</whiteboard>

@@ -122,6 +122,15 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+
+    /// The whiteboard panel and its narration (P4).
+    private(set) lazy var boardController = BoardController(companionManager: self)
+    /// The board panel is open: the caption bubble stays hidden (the board has its subtitle bar).
+    @Published private(set) var isWhiteboardPanelOpen = false
+
+    func setWhiteboardPanelOpen(_ isOpen: Bool) {
+        isWhiteboardPanelOpen = isOpen
+        if isOpen { captionState.isVisible = false }
     }
 
     /// Whether the Claude Code CLI is signed in. Checked on launch so the
@@ -269,6 +278,11 @@ final class CompanionManager: ObservableObject {
         // The CODE prompt section exists from launch; it's only sent while Code mode is on.
         CodeModePrompt.register()
         escapeKeyConsumers.append { [weak self] in self?.codeModeController.handleEscapeKey() ?? false }
+
+        // P4: the whiteboard prompt section exists now that boards are drawn.
+        SystemPromptBuilder.gatedSectionTexts[.whiteboard] = WhiteboardPromptSection.text
+        WBMathRenderer.install()
+        _ = boardController
         markController.onDrawingsChanged = { [weak self] drawings in self?.markDrawings = drawings }
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
@@ -824,6 +838,18 @@ final class CompanionManager: ObservableObject {
         let utteranceOverlappedBuddySpeech = currentUtteranceOverlappedBuddySpeech
         currentUtteranceOverlappedBuddySpeech = false
 
+        // Board commands first (with a board open "next" / "pause" mean the board).
+        if let boardCommand = BoardVoiceCommand.parse(finishedUtterance), !boardCommand.needsOpenBoard || boardController.isOpen {
+            // While Clicky talks, only if it didn't just say those words itself.
+            if utteranceOverlappedBuddySpeech, let activeCoordinator = speechOutputClient.activeCoordinator,
+               !activeCoordinator.echoGuard.accepts(finishedUtterance, commandWords: BoardVoiceCommand.echoWords(in: finishedUtterance), at: Date()) {
+                print("🔇 Hands-free: board command heard in Clicky's own words, ignored: \(finishedUtterance)")
+                return
+            }
+            performBoardVoiceCommand(boardCommand)
+            return
+        }
+
         if let voiceCommand = HandsFreeVoiceCommand.parse(finishedUtterance) {
             performHandsFreeVoiceCommand(voiceCommand)
             return
@@ -1004,11 +1030,88 @@ final class CompanionManager: ObservableObject {
         endHandsFreeSession()
     }
 
+    // MARK: - Whiteboard commands
+
+    func performBoardVoiceCommand(_ boardCommand: BoardVoiceCommand) {
+        print("🧑‍🏫 Board command: \(boardCommand)")
+        switch boardCommand {
+        case .next: boardController.next()
+        case .back: boardController.back()
+        case .repeatStep: boardController.repeatStep()
+        case .pause: boardController.pause()
+        case .resume: boardController.resume()
+        case .close: boardController.close()
+        case .save:
+            let savedURL = boardController.exportBoard()
+            showHandsFreeStatusMessage(savedURL == nil ? "Couldn't save the board" : "Saved the board")
+        case .whiteboardThat:
+            whiteboardLastAnswer()
+        case .goDeeper(let sectionNumber):
+            goDeeper(onSection: sectionNumber)
+        }
+    }
+
+    /// "whiteboard that": the last answer again, drawn as a board.
+    func whiteboardLastAnswer() {
+        guard let lastAnswerText, !lastAnswerText.isEmpty else {
+            showHandsFreeStatusMessage("Nothing to put on a board yet")
+            return
+        }
+        var turnOptions = TurnOptions()
+        turnOptions.forcedModeHint = .whiteboard
+        turnOptions.extraUserText = "redraw your last answer as a whiteboard (same content, as a board with steps). your last answer was:\n\(lastAnswerText)"
+        sendTranscriptToClaudeWithScreenshot(transcript: "whiteboard that", turnOptions: turnOptions)
+    }
+
+    /// "go deeper on <n>": a new page about the board's n-th question section.
+    func goDeeper(onSection sectionNumber: Int) {
+        guard let board = boardController.board else {
+            showHandsFreeStatusMessage("There's no board to go deeper on")
+            return
+        }
+        let questionSections = BoardHistory.questionSections(of: board)
+        guard questionSections.indices.contains(sectionNumber - 1),
+              let sectionJSONL = BoardHistory.sectionJSONL(board: board, sectionIdentifier: questionSections[sectionNumber - 1].id) else {
+            showHandsFreeStatusMessage("The board has no part \(sectionNumber)")
+            return
+        }
+        var turnOptions = TurnOptions()
+        turnOptions.forcedModeHint = .whiteboard
+        turnOptions.extraUserText = "go deeper on this part of the board you drew: a new whiteboard page with more detail about it. the part, as JSON lines:\n\(sectionJSONL)"
+        sendTranscriptToClaudeWithScreenshot(transcript: "go deeper on part \(sectionNumber)", turnOptions: turnOptions)
+    }
+
+    #if DEBUG
+    /// The debug inbox's `board`: an answer text (or a bare board's JSONL)
+    /// played as if Claude had just said it, through the real answer path.
+    func playDebugAnswer(_ answerText: String) async -> URL? {
+        let fullAnswerText = WBBlockExtractor.containsWhiteboardBlock(answerText) ? answerText : "Here's the board.\n<whiteboard>\n\(answerText)\n</whiteboard>"
+        let turnRecord = TurnLogger.beginTurn(transcript: "debug board", keyUpDate: Date())
+        guard let groundedTurn = try? await groundingCoordinator.prepareTurn(keyUpDate: Date()) else { return nil }
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        markController.startAnswer(turnRecord: turnRecord)
+        let answerSession = AnswerSession(transcript: "debug board", groundedTurn: groundedTurn, turnRecord: turnRecord,
+                                          companionManager: self, speaksResponse: true)
+        currentAnswerSession = answerSession
+        turnRecord?.rawResponse = fullAnswerText
+        answerSession.handle(.textDelta(fullAnswerText))
+        answerSession.handle(.result(text: fullAnswerText, isError: false, subtype: "success"))
+        await answerSession.waitUntilFinished()
+        if let turnRecord { TurnLogger.finishTurn(turnRecord) }
+        return turnRecord?.turnDirectoryURL
+    }
+    #endif
+
     // MARK: - Companion Prompt
 
     /// The main brain's system prompt. Pointing and live marks are only
     /// requested while grounding is trusted this session.
-    private var companionSystemPrompt: String {
+    /// The whiteboard section is in when a board can be drawn this turn:
+    /// v2.whiteboard.auto is on (and the user didn't say "no board"), or the
+    /// turn carries MODE: whiteboard ("draw a diagram", "whiteboard that").
+    /// Otherwise the missing-ability sentence keeps saying it can't draw boards.
+    private func companionSystemPrompt(modeHint: ModeHint) -> String {
         var promptFeatures = SystemPromptFeatures.current
         if !ClickySettings.areBadgesEnabled {
             promptFeatures.remove(.badges)
@@ -1016,8 +1119,8 @@ final class CompanionManager: ObservableObject {
         if !isGroundingActiveThisSession {
             promptFeatures.remove([.grounding, .badges])
         }
-        // Gated sections (P5's code text is registered at start; P4/P6 arrive later).
-        if ClickySettings.isWhiteboardAutoEnabled { promptFeatures.insert(.whiteboard) }
+        // Gated sections: P4's whiteboard (auto, or a MODE: whiteboard turn), P5's code (registered at start).
+        if (ClickySettings.isWhiteboardAutoEnabled && !modeHint.isAnswerOnly) || modeHint.isWhiteboard { promptFeatures.insert(.whiteboard) }
         if ClickySettings.isCodeEnabled { promptFeatures.insert(.code) }
         if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
@@ -1054,6 +1157,10 @@ final class CompanionManager: ObservableObject {
         /// Called once the turn has fully finished (or failed/cancelled) with
         /// the turn's log directory.
         var onTurnFinished: ((URL?, Error?) -> Void)?
+        /// P4 follow-ups ("whiteboard that", "go deeper on 2"): the MODE to
+        /// use instead of detecting one, and text added after the user's words.
+        var forcedModeHint: ModeHint?
+        var extraUserText: String?
     }
 
     /// Reads the screens, streams Claude's answer and speaks it as it
@@ -1066,6 +1173,13 @@ final class CompanionManager: ObservableObject {
         // "copy that" works with push-to-talk too, without asking Claude.
         if HandsFreeVoiceCommand.parse(transcript) == .copyLastAnswer {
             copyLastAnswerToPasteboard()
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // Board commands work with push-to-talk too ("next", "whiteboard that").
+        if turnOptions.extraUserText == nil, let boardCommand = BoardVoiceCommand.parse(transcript),
+           !boardCommand.needsOpenBoard || boardController.isOpen {
+            performBoardVoiceCommand(boardCommand)
             turnOptions.onTurnFinished?(nil, nil)
             return
         }
@@ -1105,17 +1219,20 @@ final class CompanionManager: ObservableObject {
                 let screenBlocks = groundedTurn.contentBlocks
                 let conversationText = makeConversationText(transcript: transcript)
                 // "draw a diagram" / "no whiteboard": a MODE hint (the user's words still win).
-                let modeHint = ModeHint.detect(transcript)
-                let userText = modeHint.line.map { conversationText + "\n" + $0 } ?? conversationText
+                let modeHint = turnOptions.forcedModeHint ?? ModeHint.detect(transcript)
+                var userText = modeHint.line.map { conversationText + "\n" + $0 } ?? conversationText
+                if let extraUserText = turnOptions.extraUserText { userText += "\n" + extraUserText }
+                let systemPrompt = companionSystemPrompt(modeHint: modeHint)
 
                 // Streamed: the router, segmenter and voice start on the first words.
                 let answerSession = AnswerSession(transcript: transcript, groundedTurn: groundedTurn, turnRecord: turnRecord,
                                                   companionManager: self, speaksResponse: turnOptions.speaksResponse)
+                answerSession.isWhiteboardTurn = modeHint.isWhiteboard
                 currentAnswerSession = answerSession
                 markController.startAnswer(turnRecord: turnRecord)
 
                 let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
-                try await runAnswerStream(answerSession, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel, turnRecord: turnRecord)
+                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel, turnRecord: turnRecord)
 
                 // Helpers spawned while streaming: wait for them, then ask
                 // again with their results (same answer, same screens).
@@ -1124,8 +1241,8 @@ final class CompanionManager: ObservableObject {
                     try Task.checkCancellation()
                     print("🧠 Workers finished: \(workerResults.map(\.workerTitle))")
                     answerSession.beginFollowUpStream()
-                    try await runAnswerStream(answerSession, contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
-                        transcript: conversationText, companionWorkerResults: workerResults))] + screenBlocks, effortLevel: effortLevel, turnRecord: nil)
+                    try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
+                        transcript: userText, companionWorkerResults: workerResults))] + screenBlocks, effortLevel: effortLevel, turnRecord: nil)
                 }
                 turnRecord?.rawResponse = answerSession.rawResponse
                 ClickyAnalytics.trackAIResponseReceived(response: answerSession.rawResponse)
@@ -1166,11 +1283,11 @@ final class CompanionManager: ObservableObject {
 
     /// Runs one Claude stream into the answer: every event goes to the
     /// session; stream failures become something said out loud.
-    private func runAnswerStream(_ answerSession: AnswerSession, contentBlocks: [ClaudeContentBlock], effortLevel: String?, turnRecord: TurnRecord?) async throws {
+    private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?, turnRecord: TurnRecord?) async throws {
         do {
             let mainBrainTurn = try await claudeCodeBridge.runTurn(
                 systemPromptFileName: "system-prompt.md",
-                systemPrompt: companionSystemPrompt,
+                systemPrompt: systemPrompt,
                 contentBlocks: contentBlocks,
                 effortLevel: effortLevel,
                 onStreamEvent: { streamEvent in
@@ -1205,6 +1322,8 @@ final class CompanionManager: ObservableObject {
     func showCaption(_ caption: CaptionState) {
         captionHideTask?.cancel()
         captionState = caption
+        // The board shows the words in its own subtitle bar.
+        if isWhiteboardPanelOpen { captionState.isVisible = false }
         if caption.current != nil && voiceState == .processing {
             voiceState = .responding
         }
@@ -1254,7 +1373,27 @@ final class CompanionManager: ObservableObject {
         detectedElementScreenLocation = ScreenTopology.appKit(fromCG: landing.center, flipH: ScreenTopology.mainDisplayHeight)
         detectedElementDisplayFrame = frame.display.frameAppKit
         pointTargetCG = target.frameCG
+        lastFlightSource = .screen
         ClickyAnalytics.trackElementPointed(elementLabel: target.label)
+    }
+
+    /// Where the companion last flew for a POINT: the real screen or the board.
+    enum CompanionFlightSource: String {
+        case screen, board
+    }
+
+    private(set) var lastFlightSource: CompanionFlightSource = .screen
+
+    /// Flies the companion beside a board element (its rect on screen, CG).
+    func flyCompanion(toBoardRectCG rectCG: CGRect) {
+        let displays = ScreenTopology.current()
+        guard let display = displays.first(where: { $0.boundsCG.contains(rectCG.center) }) ?? displays.first else { return }
+        let landing = CompanionLanding.landing(target: rectCG, visible: display.visibleCG, obstacles: [])
+        markController.companionRect = landing
+        detectedElementScreenLocation = ScreenTopology.appKit(fromCG: landing.center, flipH: ScreenTopology.mainDisplayHeight)
+        detectedElementDisplayFrame = display.frameAppKit
+        pointTargetCG = rectCG
+        lastFlightSource = .board
     }
 
     /// The current POINT target (the caption bubble avoids it).

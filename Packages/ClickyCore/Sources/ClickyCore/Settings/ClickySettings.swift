@@ -41,6 +41,10 @@ public enum ClickySettings {
         public static let captionAVOffsetMs = "v2.caption.avOffsetMs"
         /// Bool gates for the P4/P5/P6 prompt sections (default off).
         public static let whiteboardAuto = "v2.whiteboard.auto"
+        /// String "paper" (default), "chalk" or "dark": the board's look.
+        public static let whiteboardTheme = "v2.whiteboard.theme"
+        /// Bool, default false: the board panel fills the screen's visible frame.
+        public static let whiteboardFullScreen = "v2.whiteboard.fullScreen"
         public static let codeEnabled = "v2.code.enabled"
         public static let typeForMeEnabled = "v2.typeForMe.enabled"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
@@ -107,6 +111,15 @@ public enum ClickySettings {
     }
 
     public static var isWhiteboardAutoEnabled: Bool { defaults.object(forKey: Keys.whiteboardAuto) as? Bool ?? false }
+    /// "paper" | "chalk" | "dark"; anything else reads as "paper".
+    public static var whiteboardTheme: String {
+        let theme = defaults.string(forKey: Keys.whiteboardTheme)?.lowercased() ?? "paper"
+        return ["paper", "chalk", "dark"].contains(theme) ? theme : "paper"
+    }
+    public static var isWhiteboardFullScreen: Bool {
+        get { defaults.object(forKey: Keys.whiteboardFullScreen) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.whiteboardFullScreen) }
+    }
     public static var isCodeEnabled: Bool { defaults.object(forKey: Keys.codeEnabled) as? Bool ?? false }
     public static var isTypeForMeEnabled: Bool { defaults.object(forKey: Keys.typeForMeEnabled) as? Bool ?? false }
 

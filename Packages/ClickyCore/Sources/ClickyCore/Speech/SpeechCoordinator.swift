@@ -44,6 +44,18 @@ public protocol SpeechCoordinatorHost: AnyObject {
     func answerDidFinish(historyText: String, wasInterrupted: Bool)
     func speakApology(_ text: String)
     func log(_ event: String)
+    /// A segment started playing (P4: a board step reveals here, never before).
+    func segmentDidStart(_ segment: CaptionSegment)
+    /// Characters of a segment spoken so far (P4: board cues).
+    func segmentDidProgress(_ segment: CaptionSegment, spokenCharacters: Int)
+    /// A segment finished playing (P4: a board step ends after its last one).
+    func segmentDidEnd(_ segment: CaptionSegment)
+}
+
+public extension SpeechCoordinatorHost {
+    func segmentDidStart(_ segment: CaptionSegment) {}
+    func segmentDidProgress(_ segment: CaptionSegment, spokenCharacters: Int) {}
+    func segmentDidEnd(_ segment: CaptionSegment) {}
 }
 
 @MainActor
@@ -96,6 +108,8 @@ public final class SpeechCoordinator {
 
     /// An answer is in progress (streaming or still being spoken).
     public var isSpeaking: Bool { isAnswerOpen }
+    /// Paused by the user (board Space / "pause"); the voice holds its place.
+    public private(set) var isPaused = false
     public var hasSpokenAnything: Bool { spokenCharactersBySegment.values.contains { $0 > 0 } || !finishedSegmentIDs.isEmpty }
 
     /// The host can be set after creation (it may need the coordinator first).
@@ -118,6 +132,7 @@ public final class SpeechCoordinator {
         knownTagIndexes = []
         firedTagIndexes = []
         isAnswerOpen = true
+        isPaused = false
         hasEndedAnswer = false
         awaitingWorkers = false
         isPrimaryDisabledForAnswer = false
@@ -181,6 +196,25 @@ public final class SpeechCoordinator {
         primaryEngine.endOfAnswer()
         fallbackEngine.endOfAnswer()
         finishAnswerIfPlayedOut()
+    }
+
+    // MARK: - Pause
+
+    /// Holds the voice where it is (both engines; the fallback may be speaking).
+    public func pause() {
+        guard isAnswerOpen, !isPaused else { return }
+        isPaused = true
+        primaryEngine.pause()
+        fallbackEngine.pause()
+        host?.log("paused")
+    }
+
+    public func resume() {
+        guard isPaused else { return }
+        isPaused = false
+        primaryEngine.resume()
+        fallbackEngine.resume()
+        host?.log("resumed")
     }
 
     // MARK: - Barge-in
@@ -282,6 +316,7 @@ public final class SpeechCoordinator {
         caption.isVisible = true
         echoGuard.recordSpoken(segment.speech, at: now())
         publishCaption()
+        host?.segmentDidStart(segment)
         progress(segmentID: segmentID, spoken: 0, leadSpoken: 0, isExact: true)
     }
 
@@ -294,6 +329,7 @@ public final class SpeechCoordinator {
             caption.revealedDisplayCharacters = segment.displayRevealCount(spokenCharacters: currentTimeline.revealed)
             publishCaption()
         }
+        host?.segmentDidProgress(segment, spokenCharacters: spoken)
         for anchor in segment.anchors {
             let isPoint = pointTagIndexes.contains(anchor.tagIndex)
             let isReached = isPoint ? leadSpoken > anchor.prevWordStart || leadSpoken >= segment.speechLength || anchor.speechOffset == 0
@@ -316,6 +352,7 @@ public final class SpeechCoordinator {
             publishCaption()
         }
         echoGuard.recordSpoken(segment.speech, at: now())
+        host?.segmentDidEnd(segment)
         if fallbackSegmentIDs.contains(segmentID), fallbackSegmentIDs.isSubset(of: finishedSegmentIDs), !isPrimaryDisabledForAnswer {
             // Apple finished Qwen's leftovers: later segments go back to Qwen.
             let held = heldForPrimary

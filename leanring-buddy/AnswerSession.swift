@@ -18,6 +18,14 @@
 //  With the Qwen voice the segmenter cuts the first segment early
 //  (NarrationSegmenter.Options.qwen): its first WAV only arrives whole.
 //
+//  P4: a <whiteboard> block is streamed into WBStreamParser as it arrives
+//  (the panel opens with "Drawing…"); when it closes the board goes to the
+//  BoardController, whose narrator feeds the steps' `say` segments into
+//  this answer's coordinator (so captions, EchoGuard and barge-in work).
+//  The stream's end waits until the narrator has handed over its last
+//  step. A board too broken to use gets one repair call; if that fails the
+//  steps' words are spoken without a board.
+//
 
 import ClickyCore
 import CoreGraphics
@@ -47,6 +55,8 @@ final class AnswerSession: SpeechCoordinatorHost {
     private enum PreparedTag {
         case mark(LiveScreenMark)
         case point(ResolvedTarget, CaptureFrame)
+        /// A POINT at an element of the board on screen.
+        case boardPoint(String)
         case clear
         case unusable
     }
@@ -57,6 +67,23 @@ final class AnswerSession: SpeechCoordinatorHost {
     private var pendingFires: Set<Int> = []
     private var droppedTags: Set<Int> = []
     private var preparationChain: Task<Void, Never>?
+
+    /// A MODE: whiteboard turn (workers show the board's shell).
+    var isWhiteboardTurn = false
+    /// This answer drew a board (its history gets the BOARD STATE).
+    private(set) var presentedBoard = false
+    private var whiteboardStreamParser: WBStreamParser?
+    private var whiteboardSearchStartUTF16 = 0
+    private var whiteboardFedUTF16 = 0
+    private var isWhiteboardStreamClosed = false
+    /// A board is being narrated (or repaired): the stream's end waits.
+    private var isBoardSpeechOpen = false
+    private var deferredStreamFinish: Bool?
+    /// Claude's stream (and any follow-up) has ended.
+    private var hasStreamEnded = false
+    /// The board took the voice over (next / back / close): stop speaking,
+    /// but a finished turn isn't cancelled.
+    private var isYieldingToBoard = false
 
     private(set) var workerRequests: [CompanionWorkerRequest] = []
     private var workerTasks: [Task<CompanionWorkerResult, Never>] = []
@@ -91,6 +118,7 @@ final class AnswerSession: SpeechCoordinatorHost {
     }
 
     private var captionTickTimer: Timer?
+    /// Blocks this answer consumes (P4: the whiteboard).
 
     /// Waits until the answer has been fully spoken or interrupted.
     func waitUntilFinished() async {
@@ -119,17 +147,19 @@ final class AnswerSession: SpeechCoordinatorHost {
         case .feed(let text):
             rawResponse += text
             turnRecord?.markTiming("firstDelta")
+            streamWhiteboardBody()
             route(router.feed(text))
         case .finish:
             route(router.finish())
             enqueue(segmenter.finish())
             let spawnedWorkers = isFirstStream && !workerTasks.isEmpty
-            coordinator.streamDidFinish(spawnedWorkers: spawnedWorkers)
+            finishStream(spawnedWorkers: spawnedWorkers)
         case .reset:
             // A new message before anything was spoken: start the answer over.
             turnRecord?.rawResponse += "\n--- message restarted ---\n"
             router = ResponseRouter(blockConsumers: Self.blockConsumers())
             segmenter = NarrationSegmenter(options: segmenterOptions)
+            resetWhiteboardStream(searchFromUTF16: 0)
             tagIndexOffset = 0
             placeholdersSeen = 0
             preparedTags = [:]
@@ -143,11 +173,19 @@ final class AnswerSession: SpeechCoordinatorHost {
             route(router.finish())
             enqueue(segmenter.finish())
             speakNow(failure.spokenMessage)
-            coordinator.streamDidFinish(spawnedWorkers: false)
+            finishStream(spawnedWorkers: false)
         }
     }
 
     /// The follow-up stream after workers: same answer, fresh router.
+    /// The board takes the voice (BoardController): this answer stops speaking.
+    func yieldVoiceToBoard() {
+        guard coordinator.isSpeaking else { return }
+        isYieldingToBoard = true
+        coordinator.bargeIn(.voiceCommand)
+        isYieldingToBoard = false
+    }
+
     func beginFollowUpStream() {
         tagIndexOffset += router.tags.count
         placeholdersSeen = 0
@@ -156,6 +194,128 @@ final class AnswerSession: SpeechCoordinatorHost {
         supervisor = CLIStreamSupervisor()
         isFirstStream = false
         rawResponse += "\n\n--- final answer after workers ---\n"
+        resetWhiteboardStream(searchFromUTF16: rawResponse.utf16.count)
+    }
+
+    /// The stream ended; with a board still handing over steps, later.
+    private func finishStream(spawnedWorkers: Bool) {
+        hasStreamEnded = !spawnedWorkers
+        if isBoardSpeechOpen {
+            deferredStreamFinish = spawnedWorkers
+        } else {
+            coordinator.streamDidFinish(spawnedWorkers: spawnedWorkers)
+        }
+    }
+
+    /// The board's narrator handed over its last step (BoardController).
+    func boardSpeechDidEnd() {
+        isBoardSpeechOpen = false
+        if let deferredStreamFinish {
+            self.deferredStreamFinish = nil
+            coordinator.streamDidFinish(spawnedWorkers: deferredStreamFinish)
+        }
+    }
+
+    // MARK: - Whiteboard
+
+    private func resetWhiteboardStream(searchFromUTF16 searchStart: Int) {
+        whiteboardStreamParser = nil
+        whiteboardSearchStartUTF16 = searchStart
+        whiteboardFedUTF16 = searchStart
+        isWhiteboardStreamClosed = false
+    }
+
+    /// Feeds the <whiteboard> body to the parser as it streams (a possible
+    /// half-arrived close tag is held back); opens the panel with "Drawing…".
+    private func streamWhiteboardBody() {
+        guard !isWhiteboardStreamClosed else { return }
+        let openTag = "<whiteboard>", closeTag = "</whiteboard>"
+        if whiteboardStreamParser == nil {
+            let searchStart = String.Index(utf16Offset: min(whiteboardSearchStartUTF16, rawResponse.utf16.count), in: rawResponse)
+            guard let openRange = rawResponse.range(of: openTag, options: .caseInsensitive, range: searchStart..<rawResponse.endIndex) else { return }
+            whiteboardStreamParser = WBStreamParser()
+            whiteboardFedUTF16 = openRange.upperBound.utf16Offset(in: rawResponse)
+            turnRecord?.markTiming("boardOpen")
+            companionManager.boardController.showDrawingPlaceholder(title: nil, session: self)
+        }
+        let fedIndex = String.Index(utf16Offset: whiteboardFedUTF16, in: rawResponse)
+        var feedEnd: String.Index
+        if let closeRange = rawResponse.range(of: closeTag, options: .caseInsensitive, range: fedIndex..<rawResponse.endIndex) {
+            feedEnd = closeRange.lowerBound
+            isWhiteboardStreamClosed = true
+        } else {
+            feedEnd = rawResponse.index(rawResponse.endIndex, offsetBy: -(closeTag.count - 1), limitedBy: fedIndex) ?? fedIndex
+        }
+        if feedEnd < fedIndex { feedEnd = fedIndex }
+        whiteboardStreamParser?.feed(String(rawResponse[fedIndex..<feedEnd]))
+        whiteboardFedUTF16 = feedEnd.utf16Offset(in: rawResponse)
+        if let title = whiteboardStreamParser?.provisionalBoard.title, !title.isEmpty, !presentedBoard {
+            companionManager.boardController.showDrawingPlaceholder(title: title, session: self)
+        }
+    }
+
+    /// The block closed: parse (streamed, else the whole body), repair once
+    /// if too broken, then narrate it.
+    private func handleWhiteboardBlock(body: String) {
+        // The words before the board are spoken first.
+        enqueue(segmenter.finish())
+        segmenter = NarrationSegmenter(options: segmenterOptions)
+        isBoardSpeechOpen = true
+        var outcome = whiteboardStreamParser?.finish()
+        whiteboardStreamParser = nil
+        isWhiteboardStreamClosed = true
+        if outcome?.isUsable != true {
+            let wholeBodyOutcome = WBStreamParser.parse(body)
+            if wholeBodyOutcome.isUsable || outcome == nil { outcome = wholeBodyOutcome }
+        }
+        guard let outcome else {
+            companionManager.boardController.abandonIncomingBoard(session: self)
+            return boardSpeechDidEnd()
+        }
+        turnRecord?.boardStats = TurnRecord.BoardStatsEntry(elements: outcome.stats.elementCount, steps: outcome.stats.stepCount,
+                                                            dropped: outcome.stats.droppedCount, usable: outcome.isUsable, repaired: false)
+        if outcome.isUsable {
+            presentBoard(outcome.board)
+            return
+        }
+        print("🧑‍🏫 Board too broken (\(outcome.stats.droppedCount) dropped); one repair call")
+        let brokenBoard = outcome.board
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let repaired = await WhiteboardRepairRunner.repair(brokenBoardText: body, model: self.companionManager.selectedModel)
+            guard !self.isFinished else { return }
+            if let repaired {
+                self.turnRecord?.boardStats?.repaired = true
+                self.turnRecord?.boardStats?.usable = true
+                self.presentBoard(repaired.board)
+            } else {
+                // No board after all: the steps' words, spoken like any answer.
+                self.companionManager.boardController.abandonIncomingBoard(session: self)
+                for step in brokenBoard.steps where !step.say.isEmpty { self.enqueue(self.segmenter.feed(Self.spokenWords(of: step.say) + " ")) }
+                self.enqueue(self.segmenter.finish())
+                self.boardSpeechDidEnd()
+            }
+        }
+    }
+
+    private func presentBoard(_ board: WBBoard) {
+        presentedBoard = true
+        nextSegmentID = companionManager.boardController.presentLive(board: board, session: self, coordinator: coordinator, turnRecord: turnRecord,
+                                                                     firstSegmentID: nextSegmentID, segmenterOptions: segmenterOptions)
+    }
+
+    /// A step's `say` without its tags (spoken when the board couldn't be drawn).
+    static func spokenWords(of say: String) -> String {
+        var stepRouter = ResponseRouter()
+        return (stepRouter.feed(say) + stepRouter.finish()).compactMap { output -> String? in
+            if case .narration(let text) = output { return text.replacingOccurrences(of: String(ResponseRouter.placeholder), with: "") }
+            return nil
+        }.joined()
+    }
+
+    /// A tag inside a board step's `say` (BoardController registers it).
+    func prepareBoardTag(_ tag: ParsedTag, index: Int) {
+        prepare(tag, index: index)
     }
 
     /// Something to say that didn't come from Claude (errors, apologies).
@@ -167,8 +327,9 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     /// Blocks with a consumer this turn: <codetask> only while Code mode is
     /// on (otherwise the router says "I can't do that yet").
+    /// Blocks with a consumer: boards always (P4), code tasks while Code mode is on (P5).
     static func blockConsumers() -> Set<String> {
-        ClickySettings.isCodeEnabled ? ["codetask"] : []
+        ClickySettings.isCodeEnabled ? ["whiteboard", "codetask"] : ["whiteboard"]
     }
 
     // MARK: - Routing
@@ -188,6 +349,8 @@ final class AnswerSession: SpeechCoordinatorHost {
                 if !companionManager.codeModeController.handleCodeTaskBlock(body, context: CodeTurnContext(transcript: transcript)) {
                     speakNow("I couldn't read that code task.")
                 }
+            case .block(let name, let body) where name == "whiteboard":
+                handleWhiteboardBlock(body: body)
             case .block(let name, _):
                 print("🧱 Block <\(name)> has no consumer yet")
             case .unsupportedBlock(let name):
@@ -243,6 +406,9 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private func resolve(_ tag: ParsedTag) async -> PreparedTag {
         if tag.kind == .clear { return .clear }
+        if presentedBoard, let boardElementIdentifier = companionManager.boardController.boardElementIdentifier(for: tag) {
+            return .boardPoint(boardElementIdentifier)
+        }
         if case .text = tag.target {
             var workingTurn = groundedTurn
             await workingTurn.ensureOCRLines()
@@ -346,10 +512,19 @@ final class AnswerSession: SpeechCoordinatorHost {
             companionManager.markController.add(mark)
         case .point(let target, let frame)?:
             companionManager.flyCompanion(to: target, frame: frame)
+        case .boardPoint(let elementIdentifier)?:
+            companionManager.boardController.point(atElement: elementIdentifier)
         case .clear?:
             companionManager.markController.clear()
         case .unusable?, nil:
             break
+        }
+        // A board step pointing at the real screen: the board steps aside.
+        if index >= BoardNarrationScript.firstBoardTagIndex, let prepared = preparedTags[index] {
+            switch prepared {
+            case .mark, .point: companionManager.boardController.realScreenTagFired()
+            default: break
+            }
         }
     }
 
@@ -360,6 +535,8 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     func cancelClaudeAndWorkers() {
         for workerTask in workerTasks { workerTask.cancel() }
+        // Handing the voice to the board after Claude finished isn't a cancel.
+        if isYieldingToBoard && hasStreamEnded { return }
         companionManager.cancelResponseRequest()
     }
 
@@ -386,7 +563,12 @@ final class AnswerSession: SpeechCoordinatorHost {
         companionManager.upcomingTargetRectsCG = []
         self.wasInterrupted = wasInterrupted
         companionManager.speechOutputClient.recordFinished(coordinator)
-        let history = wasInterrupted ? historyText : HistoryTagRewriter.wordsForHistory(rawResponse)
+        var history = wasInterrupted ? historyText : HistoryTagRewriter.wordsForHistory(Self.removingWhiteboardBlocks(rawResponse))
+        if presentedBoard, let boardHistory = companionManager.boardController.historyEntry(spokenHistory: history, session: self) {
+            history = boardHistory
+        }
+        companionManager.boardController.liveSessionDidFinish(self, wasInterrupted: wasInterrupted)
+        companionManager.boardController.closeShellIfNoBoard(session: self)
         companionManager.recordAnswer(transcript: transcript, history: history, spokenText: coordinator.spokenText, wasInterrupted: wasInterrupted)
         // Report the end only once every tag has been resolved (and logged).
         let pendingPreparation = preparationChain
@@ -401,6 +583,25 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private var hasSettled = false
 
+    /// The answer's words without its <whiteboard> blocks (the history keeps a BOARD STATE instead).
+    static func removingWhiteboardBlocks(_ text: String) -> String {
+        text.replacingOccurrences(of: #"(?is)<whiteboard>.*?(</whiteboard>|$)"#, with: " ", options: .regularExpression)
+    }
+
+    // MARK: - Board segments (SpeechCoordinatorHost)
+
+    func segmentDidStart(_ segment: CaptionSegment) {
+        if segment.boardStep != nil { companionManager.boardController.liveSegmentStarted(segment, session: self) }
+    }
+
+    func segmentDidProgress(_ segment: CaptionSegment, spokenCharacters: Int) {
+        if segment.boardStep != nil { companionManager.boardController.liveSegmentProgressed(segment, spokenCharacters: spokenCharacters, session: self) }
+    }
+
+    func segmentDidEnd(_ segment: CaptionSegment) {
+        if segment.boardStep != nil { companionManager.boardController.liveSegmentEnded(segment, session: self) }
+    }
+
     func speakApology(_ text: String) {
         speakNow(text)
     }
@@ -413,6 +614,7 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     private func spawnWorker(_ request: CompanionWorkerRequest) {
         workerRequests.append(request)
+        if isWhiteboardTurn { companionManager.boardController.showShell(workerTitle: request.workerTitle, session: self) }
         let screenBlocks = groundedTurn.contentBlocks
         let workerTask = companionManager.companionWorkerRunner.spawnWorker(request) { workerRequest in
             let workerTurn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(

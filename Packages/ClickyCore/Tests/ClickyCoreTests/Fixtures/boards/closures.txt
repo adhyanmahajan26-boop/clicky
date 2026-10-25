@@ -1,0 +1,24 @@
+Here's a board on closures, and how they compare with classes.
+
+<whiteboard>
+{"wb":1,"title":"Closures vs classes","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"What is a closure","q":"what is a closure in javascript"},{"id":"q2","title":"Closure vs class","q":"how is it different from a class"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["What a closure is","How a closure differs from a class"],"ordered":true}
+{"el":"code","id":"c1","sec":"q1","lang":"javascript","text":"function makeCounter() {\n  let count = 0;\n  return function () {\n    count++;\n    return count;\n  };\n}\nconst next = makeCounter();\nnext(); // 1\nnext(); // 2","hl":[2,4]}
+{"el":"box","id":"outer","sec":"q1","text":"makeCounter scope: count = 0","shape":"rect","color":"blue"}
+{"el":"box","id":"inner","sec":"q1","text":"returned inner function","shape":"round","color":"green"}
+{"el":"arrow","id":"a1","sec":"q1","from":"inner","to":"outer","text":"still remembers","style":"dashed","head":"end"}
+{"el":"callout","id":"co1","sec":"q1","target":"inner","style":"info","text":"A closure is a function plus the variables it was created next to."}
+{"el":"code","id":"c2","sec":"q2","lang":"javascript","text":"class Counter {\n  #count = 0;\n  next() {\n    return ++this.#count;\n  }\n}\nconst c = new Counter();\nc.next(); // 1","hl":[2,4]}
+{"el":"table","id":"t1","sec":"q2","cols":["","Closure","Class"],"rows":[["State","captured variables","fields on this"],["Created by","calling a function","new"],["Privacy","automatic, by scope","# private fields"],["Methods","new copies per call","shared on prototype"]]}
+{"el":"callout","id":"co2","sec":"q2","target":"t1","style":"tip","text":"Same idea, two packages: data bundled with the behavior that uses it."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["A closure keeps access to variables from where it was created","The state lives on after the outer function returns","A class bundles state and methods using this and new","Closures are lighter, classes share methods and are easier to inspect"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"two things today: what a closure is, and how it compares to a class.","focus":"agenda"}
+{"step":2,"show":["c1"],"hl":["c1"],"say":"here makeCounter creates a variable called count, then returns a small function that uses it.","point":"c1","focus":"q1"}
+{"step":3,"show":["outer","inner"],"hl":["outer"],"say":"normally count would vanish once makeCounter finishes, but the inner function keeps it alive.","cue":{"outer":"count","inner":"inner function"}}
+{"step":4,"show":["a1"],"hl":["a1"],"say":"that link back to its birthplace is the closure, so every call to next keeps adding to the same count.","point":"a1"}
+{"step":5,"show":["co1"],"hl":["co1"],"say":"so a closure is simply a function plus the variables around it when it was made.","point":"co1"}
+{"step":6,"show":["c2"],"hl":["c2"],"say":"now the same counter as a class, where the state lives in a private field on the object.","point":"c2","focus":"q2"}
+{"step":7,"show":["t1"],"hl":["t1"],"say":"the closure holds state in captured variables, while the class holds it on this, and you create it with new.","cue":{"t1":"captured"}}
+{"step":8,"show":["co2"],"hl":["co2"],"say":"both bundle data with the behavior that uses it, so the choice is mostly about style and how many methods you need.","point":"co2"}
+{"step":9,"show":["rc"],"hl":["rc"],"say":"to recap, closures remember their surroundings, and classes are another way to package state with behavior.","focus":"recap"}
+</whiteboard>
