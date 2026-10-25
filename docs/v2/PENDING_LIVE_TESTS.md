@@ -240,3 +240,28 @@ Compare the look with `~/Library/Logs/Clicky/renders/p6/type-card.png` (and `typ
 1. The generator and decisions are covered by `swift test` (plist parses, plutil lint on a temp file, exact argv and env). No file is written to ~/Library/LaunchAgents and no launchctl is run by the app.
 2. Installing is not wired. It needs your yes: set `v2.voice.keepWarmAgent` and `v2.voice.keepWarmAgentApproved` (both in the Diagnostics settings list), then wire the install step before trying it.
 3. Not done yet: the app never calls `KeepWarmLaunchAgent.installPlanRequiringUserApproval`, and it doesn't adopt a running server through `adoptDecision` yet.
+
+## P6.7
+
+Progressive board (helper sections, bridge lines, plan-order narration). Hosted tests compiled with build-for-testing,
+not run; the narrator / filter / merge logic is covered by `swift test` (ProgressiveBoardTests).
+
+1. Ask a multi-part board question, e.g. "draw how https works, what a certificate is, and why https is slower"
+   (MODE: whiteboard). turn.json `rawResponse`: one `[WORKER:s<k> title:task]` line per helper section BEFORE the
+   `<whiteboard>` block, and inside it one `{"el":"text","id":"s<k>_wait",…,"text":"working on it…"}` placeholder
+   plus a silent step per helper section. The log shows `🛠️ Worker started (haiku): s1 …` and no
+   "final answer after workers" follow-up stream for these helpers.
+2. Helpers that finish while the agenda is spoken: their sections are drawn in place (the board re-lays out,
+   "working on it…" replaced), narrated in plan order (agenda, s1, s2, …, recap), with no bridge line.
+3. A slow helper (or a long agenda cut short): when the voice reaches its section the placeholder shows, Clicky says
+   ONE bridge line ("that part's still coming, i'll come back to it.") — back-to-back pending sections share it —
+   and goes on. When the helper lands, its steps are narrated right before the recap.
+4. A helper that hasn't landed when the voice reaches the recap (or the end, with no recap): one short line
+   ("that part didn't make it in time…"), its placeholder and empty section leave the board, then the recap.
+   A late reply is ignored (log: `came too late; ignored`).
+5. A helper that fails or replies with nothing of its section: log `drew nothing usable`; the section is dropped
+   with the short line when the voice gets there. Lines outside the section (no `s<k>_` id, header lines, other
+   `sec`, arrows leaving the section) are logged as rejected and never reach the board.
+6. Ordinary helpers (titles without `s<k>`) still get the follow-up stream; a section helper of an answer that
+   drew no board also falls back to the follow-up stream.
+7. After the narration: replay (r), next / back, export and the history's BOARD STATE all use the merged board.
