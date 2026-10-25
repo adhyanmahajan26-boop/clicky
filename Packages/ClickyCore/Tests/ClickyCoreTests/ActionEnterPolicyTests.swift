@@ -241,3 +241,12 @@ struct ActionEnterTierTests {
         #expect(followUp.grants.count == 1)
     }
 }
+
+/// Live P8 run: "click #68 (the search box), type … + return" skipped the type step as stale.
+@Test func clickingIntoATextFieldKeepsLaterIDsValid() {
+    let click = ActionStep.click(elementID: 68)
+    #expect(!click.changesScreen(targetRole: "AXTextField"))
+    #expect(!click.changesScreen(targetRole: "AXSearchField"))
+    #expect(click.changesScreen(targetRole: "AXLink"))
+    #expect(click.changesScreen(targetRole: nil))
+}

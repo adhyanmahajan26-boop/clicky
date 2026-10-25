@@ -395,7 +395,8 @@ public enum VoiceFastPathParser {
 
     static let keyRule: Rule = { text in
         let tab = "(?:tab|tap|tabs)"
-        if matches(text, ["new \(tab)", "(?:open|create|make|add) (?:a )?new \(tab)", "open (?:a|another) \(tab)", "another \(tab)"]) { return .key(.newTab) }
+        // The whole utterance "new time/tub/tob" is en-IN ASR for "new tab" (heard in a live follow-up feed).
+        if matches(text, ["new \(tab)", "new (?:time|tub|tob|tab please)", "(?:open|create|make|add) (?:a )?new \(tab)", "open (?:a|another) \(tab)", "another \(tab)"]) { return .key(.newTab) }
         if matches(text, ["close \(the)(?:current )?\(tab)", "close (?:this|the|current) \(tab)", "close \(tab)"]) { return .key(.closeTab) }
         if matches(text, ["close \(the)(?:current )?window", "close (?:this|the) window"]) { return .key(.closeWindow) }
         if matches(text, ["go back", "back", "navigate back", "previous page", "go to (?:the )?previous page", "back (?:one )?page", "go back a page",

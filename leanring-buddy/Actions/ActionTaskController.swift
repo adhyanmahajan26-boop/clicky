@@ -252,7 +252,7 @@ final class ActionTaskController {
             task.currentStepText = nil
             companionManager.agentsCenter.log(task.agentID, task.loop.records.last?.resultLine ?? "")
             publish()
-            if case .done = result.outcome, step.changesScreen { screenChanged = true }
+            if case .done = result.outcome, step.changesScreen(targetRole: target.facts?.role) { screenChanged = true }
             try? await Task.sleep(nanoseconds: step.changesScreen ? Self.settleAfterScreenChange : Self.settleAfterStep)
         }
 

@@ -249,6 +249,16 @@ public enum ActionStep: Equatable, Sendable {
         }
     }
 
+    /// Text-entry roles: clicking one only focuses it, so the ids that follow stay valid (a live
+    /// "click the search box, type …, press enter" skipped the typing as stale).
+    public static let focusOnlyClickRoles: Set<String> = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSecureTextField"]
+
+    /// `changesScreen`, except a click that only focuses a text field.
+    public func changesScreen(targetRole: String?) -> Bool {
+        if case .click = self, let targetRole, Self.focusOnlyClickRoles.contains(targetRole) { return false }
+        return changesScreen
+    }
+
     /// A type step with "enter":true, or a key step that is Return / Enter.
     public var pressesReturn: Bool {
         switch self {
