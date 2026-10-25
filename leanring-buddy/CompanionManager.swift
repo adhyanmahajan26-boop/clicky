@@ -122,6 +122,12 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+    }
+
+    /// P6.2 "Type this for me": the <type> card, its confirm gate and the insertion.
+    private(set) lazy var typeForMeController = TypeForMeController { [weak self] text in
+        self?.speakCodeModeLine(text)
+    }
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -278,6 +284,9 @@ final class CompanionManager: ObservableObject {
         // The CODE prompt section exists from launch; it's only sent while Code mode is on.
         CodeModePrompt.register()
         escapeKeyConsumers.append { [weak self] in self?.codeModeController.handleEscapeKey() ?? false }
+        // P6.2: the TYPING prompt section (sent only while v2.typeForMe.enabled is on); the card takes Esc first.
+        TypeForMePrompt.register()
+        escapeKeyConsumers.insert({ [weak self] in self?.typeForMeController.handleEscapeKey() ?? false }, at: 0)
 
         // P4: the whiteboard prompt section exists now that boards are drawn.
         SystemPromptBuilder.gatedSectionTexts[.whiteboard] = WhiteboardPromptSection.text

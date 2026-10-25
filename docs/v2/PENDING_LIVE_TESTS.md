@@ -165,3 +165,29 @@ PNGs in `~/Library/Logs/Clicky/renders/p4/`).
 11. Hosted tests compiled with build-for-testing, not run.
 
 SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for math images.
+
+## P6.2 (Type this for me)
+
+Off by default (`v2.typeForMe.enabled`); with it off a `<type>` block still opens the card, Copy
+only. Silent mode covered: `swift test` (chunker, refusal rules, clean-up + 5000 cap, terminals,
+plain-⌘V menu finder, clipboard restore, verification, the confirm gate's 0.5 s window, auto-repeat,
+tagged events, 30 s / focus expiry), the app build and build-for-testing. Nothing was ever typed:
+every confirm below needs the user's own physical Return (or click on Type) — never automate it.
+Compare the look with `~/Library/Logs/Clicky/renders/p6/type-card.png` (and `type-card-refused.png`).
+
+1. Turn on `v2.typeForMe.enabled`. Slack self-DM: "type 'testing clicky, ignore' into this
+   message" → card under the caret with Slack's icon, "text area · Message …", the preview and
+   "AX insert, else paste, else type". Return within 0.5 s of the card appearing does nothing;
+   holding Return (auto-repeat) does nothing; a real Return types it once. Don't send it — clear it.
+   The log line `⌨️ Type for me: Slack AXTextArea len=… method=… result=inserted` names the method.
+2. Safari: a draft in a web form (e.g. a GitHub comment box) → Type; check it landed once, then
+   clear the draft. Also click Type with the mouse (press + release on the button) instead of Return.
+3. TextEdit: a multi-line text → typed with its line breaks (method ax or paste); the clipboard
+   holds what it held before (~350 ms later), unless you copied something in between.
+4. A terminal (Terminal / iTerm2 / Warp / Ghostty): the card asks for a second Return, line breaks
+   are gone, and no Return is ever sent (the command is NOT run).
+5. A secure field (a password field in Safari, or System Settings' password prompt) → card says
+   it won't type, Copy only. Same with 1Password / Keychain Access focused.
+6. Expiry: wait 30 s → Type greys out; switch apps or click into another field → greys out; Esc
+   closes the card without stopping Clicky's speech; changing focus after confirming (during the
+   0.15 s settle) → "focus moved, nothing typed"; holding ⌘ after confirming for > 2 s → aborted.
