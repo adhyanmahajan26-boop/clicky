@@ -174,7 +174,8 @@ struct BlueCursorView: View {
                     companionLocalCenter: cursorPosition,
                     isCompanionFlying: buddyNavigationMode == .navigatingToTarget,
                     obstaclesCG: companionManager.markDrawings.filter { $0.style != .spot && !$0.isHidden }.map(\.drawnBounds)
-                        + [companionManager.pointTargetCG].compactMap { $0 } + companionManager.upcomingTargetRectsCG
+                        + [companionManager.pointTargetCG].compactMap { $0 } + companionManager.upcomingTargetRectsCG,
+                    textObstaclesCG: companionManager.screenTextObstaclesCG
                 )
             }
 

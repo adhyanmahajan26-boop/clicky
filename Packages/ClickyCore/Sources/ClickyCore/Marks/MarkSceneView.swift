@@ -4,9 +4,12 @@
 //
 //  Draws a display's share of the mark scene in its full-screen overlay.
 //  SwiftUI Shapes only (no Canvas) so that a tracked mark's rect animates
-//  (0.1 s) and each outline draws itself on with .trim (0.35 s). Every
-//  stroke is a white 6 pt halo at 90 % under the 3 pt orange line, with a
-//  soft shadow; tentative marks are dashed at 70 %.
+//  (0.1 s) and each outline draws itself on with .trim (0.35 s). Arrows are
+//  a white 6 pt halo at 90 % under a 3 pt orange line; outlines and
+//  underlines are the fine weight (4 pt halo, 2 pt line) so they never spill
+//  onto neighbouring rows; leaders are 1.5 pt on a 3 pt halo. All have a
+//  soft shadow; tentative marks are dashed at 70 %. A step's number is a
+//  white disc inside its label pill.
 //
 
 import SwiftUI
@@ -15,6 +18,10 @@ public enum MarkPalette {
     public static let orange = Color(red: 0.85, green: 0.47, blue: 0.34)
     public static let haloWidth: CGFloat = 6
     public static let lineWidth: CGFloat = 3
+    /// Outlines and underlines.
+    public static let fineHaloWidth: CGFloat = 4
+    public static let fineLineWidth: CGFloat = 2
+    public static let leaderHaloWidth: CGFloat = 3
     public static let tentativeDash: [CGFloat] = [6, 4]
     public static let tentativeOpacity = 0.7
 }
@@ -71,12 +78,8 @@ private struct MarkDrawingView: View {
     private func local(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x - origin.x, y: point.y - origin.y) }
     private func local(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: -origin.x, dy: -origin.y) }
 
-    private var strokeStyle: StrokeStyle {
-        StrokeStyle(lineWidth: MarkPalette.lineWidth, lineCap: .round, lineJoin: .round,
-                    dash: drawing.isTentative ? MarkPalette.tentativeDash : [])
-    }
-    private var haloStyle: StrokeStyle {
-        StrokeStyle(lineWidth: MarkPalette.haloWidth, lineCap: .round, lineJoin: .round,
+    private func strokeStyle(_ lineWidth: CGFloat) -> StrokeStyle {
+        StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round,
                     dash: drawing.isTentative ? MarkPalette.tentativeDash : [])
     }
 
@@ -91,13 +94,19 @@ private struct MarkDrawingView: View {
                     .fill(MarkPalette.orange.opacity(0.12))
             }
             if let outline = drawing.outline, drawing.style != .spot {
-                haloed(OutlineShape(kind: outline.kind, rect: local(outline.rect), cornerRadius: outline.cornerRadius))
+                haloed(OutlineShape(kind: outline.kind, rect: local(outline.rect), cornerRadius: outline.cornerRadius),
+                       halo: MarkPalette.fineHaloWidth, line: MarkPalette.fineLineWidth)
             }
             if let arrow = drawing.arrow {
-                haloed(ArrowShape(arrow: arrow, origin: origin))
+                haloed(ArrowShape(arrow: arrow, origin: origin), halo: MarkPalette.haloWidth, line: MarkPalette.lineWidth)
             }
             if let underline = drawing.underline {
-                haloed(SegmentShape(start: local(underline.start), end: local(underline.end)))
+                haloed(SegmentShape(start: local(underline.start), end: local(underline.end)),
+                       halo: MarkPalette.fineHaloWidth, line: MarkPalette.fineLineWidth)
+            }
+            if let leader = drawing.leader {
+                haloed(LeaderShape(start: local(leader.start), tip: local(leader.tip), headLeft: local(leader.headLeft), headRight: local(leader.headRight)),
+                       halo: MarkPalette.leaderHaloWidth, line: LabelColumnPlacer.leaderLineWidth)
             }
             if let connectorFrom = drawing.connectorFrom, let stepDiscCenter = drawing.stepDiscCenter {
                 SegmentShape(start: local(connectorFrom), end: local(stepDiscCenter))
@@ -107,8 +116,9 @@ private struct MarkDrawingView: View {
             if let stepDiscCenter = drawing.stepDiscCenter, case .step(let stepNumber) = drawing.style {
                 stepDisc(stepNumber).position(local(stepDiscCenter))
             }
-            if let labelRect = drawing.labelRect, let labelText = drawing.labelText {
-                labelPill(labelText, size: labelRect.size)
+            if let labelRect = drawing.labelRect, drawing.labelText != nil || drawing.labelStepNumber != nil {
+                let labelText = drawing.labelText
+                labelPill(labelText, stepNumber: drawing.labelStepNumber, size: labelRect.size)
                     .position(x: local(labelRect).midX, y: local(labelRect).midY)
                     .opacity(Double(drawProgress))
             }
@@ -120,10 +130,10 @@ private struct MarkDrawingView: View {
         }
     }
 
-    private func haloed<S: Shape>(_ shape: S) -> some View {
+    private func haloed<S: Shape>(_ shape: S, halo: CGFloat, line: CGFloat) -> some View {
         ZStack {
-            shape.trim(from: 0, to: drawProgress).stroke(Color.white.opacity(0.9), style: haloStyle)
-            shape.trim(from: 0, to: drawProgress).stroke(MarkPalette.orange, style: strokeStyle)
+            shape.trim(from: 0, to: drawProgress).stroke(Color.white.opacity(0.9), style: strokeStyle(halo))
+            shape.trim(from: 0, to: drawProgress).stroke(MarkPalette.orange, style: strokeStyle(line))
         }
         .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
     }
@@ -139,16 +149,28 @@ private struct MarkDrawingView: View {
             .scaleEffect(drawProgress)
     }
 
-    private func labelPill(_ text: String, size: CGSize) -> some View {
-        Text(text)
-            .font(.system(size: LabelPlacer.fontSize, weight: .semibold))
-            .foregroundColor(.white)
-            .multilineTextAlignment(.leading)
-            .frame(width: size.width - 2 * LabelPlacer.horizontalPadding, height: size.height - 2 * LabelPlacer.verticalPadding, alignment: .leading)
-            .padding(.horizontal, LabelPlacer.horizontalPadding)
-            .padding(.vertical, LabelPlacer.verticalPadding)
-            .background(RoundedRectangle(cornerRadius: LabelPlacer.cornerRadius, style: .continuous).fill(MarkPalette.orange))
-            .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
+    private func labelPill(_ text: String?, stepNumber: Int?, size: CGSize) -> some View {
+        HStack(spacing: LabelPlacer.stepBadgeSpacing) {
+            if let stepNumber {
+                Text("\(stepNumber)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundColor(MarkPalette.orange)
+                    .frame(width: LabelPlacer.stepBadgeDiameter, height: LabelPlacer.stepBadgeDiameter)
+                    .background(Circle().fill(Color.white))
+            }
+            if let text {
+                Text(text)
+                    .font(.system(size: LabelPlacer.fontSize, weight: .semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, text == nil ? LabelPlacer.verticalPadding : LabelPlacer.horizontalPadding)
+        .padding(.vertical, LabelPlacer.verticalPadding)
+        .frame(width: size.width, height: size.height, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: LabelPlacer.cornerRadius, style: .continuous).fill(MarkPalette.orange))
+        .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
     }
 }
 
@@ -244,5 +266,23 @@ struct ArrowShape: Shape {
         arrowPath.addLine(to: tip)
         arrowPath.addLine(to: offset(headRightOffset))
         return arrowPath
+    }
+}
+
+/// A label's leader: a straight shaft and a small open head at the tip.
+struct LeaderShape: Shape {
+    let start: CGPoint
+    let tip: CGPoint
+    let headLeft: CGPoint
+    let headRight: CGPoint
+
+    func path(in _: CGRect) -> Path {
+        var leaderPath = Path()
+        leaderPath.move(to: start)
+        leaderPath.addLine(to: tip)
+        leaderPath.move(to: headLeft)
+        leaderPath.addLine(to: tip)
+        leaderPath.addLine(to: headRight)
+        return leaderPath
     }
 }

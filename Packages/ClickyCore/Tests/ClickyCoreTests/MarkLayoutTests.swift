@@ -299,21 +299,33 @@ private func containsWithTolerance(_ outer: CGRect, _ inner: CGRect, tolerance: 
 // MARK: - Scene
 
 @Test func sceneStepsConnectAndLabelsAvoidEachOther() {
+    // v2: a labelled step carries its number inside the label pill (no
+    // disc, no connector); only label-less outlined steps keep the numbered
+    // discs and the dashed connectors between them.
     let display = MarkSceneDisplay(displayID: 1, bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), visible: CGRect(x: 0, y: 25, width: 1920, height: 985))
-    let inputs = (1...3).map { stepNumber in
+    let labelledInputs = (1...3).map { stepNumber in
         MarkSceneInput(id: UUID(), style: .step(stepNumber), rectCG: CGRect(x: 300 + CGFloat(stepNumber) * 200, y: 400, width: 80, height: 24),
                        displayText: "Step \(stepNumber)", isTentative: false, order: stepNumber)
     }
-    let drawings = MarkSceneBuilder.build(inputs: inputs, displays: [display])
+    let drawings = MarkSceneBuilder.build(inputs: labelledInputs, displays: [display])
     #expect(drawings.count == 3)
-    #expect(drawings[0].connectorFrom == nil)
-    #expect(drawings[1].connectorFrom == drawings[0].stepDiscCenter)
-    #expect(drawings[2].connectorFrom == drawings[1].stepDiscCenter)
+    #expect(drawings.allSatisfy { $0.stepDiscCenter == nil && $0.connectorFrom == nil })
+    #expect(drawings.map(\.labelStepNumber) == [1, 2, 3])
     let labelRects = drawings.compactMap(\.labelRect)
+    #expect(labelRects.count == 3)
     for (firstIndex, first) in labelRects.enumerated() {
         for second in labelRects[(firstIndex + 1)...] { #expect(!first.intersects(second)) }
-        for drawing in drawings { #expect(!first.intersects(MarkLayout.padded(drawing.targetCG))) }
+        for drawing in drawings { #expect(!first.intersects(drawing.outline!.rect)) }
     }
+
+    let discInputs = (1...3).map { stepNumber in
+        MarkSceneInput(id: UUID(), style: .step(stepNumber), rectCG: CGRect(x: 300 + CGFloat(stepNumber) * 200, y: 400, width: 80, height: 24),
+                       displayText: nil, isTentative: false, order: stepNumber)
+    }
+    let discDrawings = MarkSceneBuilder.build(inputs: discInputs, displays: [display])
+    #expect(discDrawings[0].stepDiscCenter != nil && discDrawings[0].connectorFrom == nil)
+    #expect(discDrawings[1].connectorFrom == discDrawings[0].stepDiscCenter)
+    #expect(discDrawings[2].connectorFrom == discDrawings[1].stepDiscCenter)
 }
 
 // MARK: - Re-check maths

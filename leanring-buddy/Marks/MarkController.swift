@@ -9,6 +9,11 @@
 //  and removals. Records what was drawn in turn.json and tracking events in
 //  <turn>/marks.jsonl.
 //
+//  Each answer hands it the screen's text bounds (AX text / cell / row
+//  frames and OCR lines from the grounded turn's registry) so the builder
+//  can underline dense rows and keep labels off text. When tracked marks
+//  scroll, the bounds inside their window are shifted by the same amount.
+//
 
 import AppKit
 import ClickyCore
@@ -23,6 +28,15 @@ final class MarkController {
     var companionRect: CGRect? {
         didSet { if companionRect != oldValue { rebuild() } }
     }
+
+    /// This answer's text bounds (CG), as captured; see currentTextObstacles().
+    var textObstaclesCG: [CGRect] = [] {
+        didSet {
+            leafTextObstaclesCG = MarkDensity.leafTextBounds(textObstaclesCG)
+            if !marks.isEmpty { rebuild() }
+        }
+    }
+    private var leafTextObstaclesCG: [CGRect] = []
 
     private let tracker = MarkTracker()
     /// Kept strongly: tracking keeps logging to marks.jsonl after the turn's
@@ -59,6 +73,7 @@ final class MarkController {
         tracker.stopAll()
         self.turnRecord = turnRecord
         marks = Array(newMarks.suffix(ClickySettings.maximumMarks))
+        for markIndex in marks.indices where marks[markIndex].originalRectCG == nil { marks[markIndex].originalRectCG = marks[markIndex].rectCG }
         rebuild()
         tracker.track(marks)
     }
@@ -70,6 +85,8 @@ final class MarkController {
 
     /// One mark, drawn as its words are spoken (the oldest goes past the max).
     func add(_ mark: LiveScreenMark) {
+        var mark = mark
+        if mark.originalRectCG == nil { mark.originalRectCG = mark.rectCG }
         marks.append(mark)
         let maximumMarks = ClickySettings.maximumMarks
         if marks.count > maximumMarks {
@@ -89,9 +106,31 @@ final class MarkController {
 
     func rebuild() {
         let displays = ScreenTopology.current().map(MarkSceneDisplay.init)
-        drawings = MarkSceneBuilder.build(inputs: marks.map(\.sceneInput), displays: displays, companionRect: companionRect)
+        drawings = MarkSceneBuilder.build(inputs: marks.map(\.sceneInput), displays: displays, companionRect: companionRect,
+                                          textObstacles: currentTextObstacles())
         onDrawingsChanged?(drawings)
         recordDrawn()
+    }
+
+    /// The text bounds where they are now: those inside a tracked mark's
+    /// window move by however far that window's first moved mark has moved
+    /// (a scroll or window drag carries its text along).
+    private func currentTextObstacles() -> [CGRect] {
+        var shiftsByWindow: [(frame: CGRect, dx: CGFloat, dy: CGFloat)] = []
+        var seenWindowIDs: Set<CGWindowID> = []
+        for mark in marks {
+            guard let windowID = mark.windowID, let windowFrame = mark.windowFrameCG, let originalRect = mark.originalRectCG,
+                  !seenWindowIDs.contains(windowID) else { continue }
+            seenWindowIDs.insert(windowID)
+            let dx = mark.rectCG.minX - originalRect.minX
+            let dy = mark.rectCG.minY - originalRect.minY
+            if dx != 0 || dy != 0 { shiftsByWindow.append((windowFrame, dx, dy)) }
+        }
+        guard !shiftsByWindow.isEmpty else { return leafTextObstaclesCG }
+        return leafTextObstaclesCG.map { bound in
+            guard let shift = shiftsByWindow.first(where: { $0.frame.contains(bound.center) }) else { return bound }
+            return bound.offsetBy(dx: shift.dx, dy: shift.dy)
+        }
     }
 
     private func recordDrawn() {

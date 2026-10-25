@@ -11,6 +11,9 @@
 //  Everything stays inside the visible frame inset by 8. Avoided: the
 //  companion (+4), 24×24 around the mouse, the POINT target, marks, and
 //  this segment's upcoming targets. While the companion flies it stays put.
+//  A slot that covers on-screen text (AX / OCR text bounds) is skipped too,
+//  so the bubble never sits on a table's rows; the dock ignores text (it's
+//  the last resort) but still keeps clear of the other obstacles.
 //
 
 import CoreGraphics
@@ -46,11 +49,14 @@ public enum BubblePlacer {
         public var mouseLocation: CGPoint?
         /// POINT target, marks, upcoming targets of this segment.
         public var obstacles: [CGRect]
+        /// On-screen text near the companion: slots that cover it are skipped.
+        public var textObstacles: [CGRect]
         public var isCompanionFlying: Bool
         public var previous: BubblePlacement?
 
         public init(companionRect: CGRect, bubbleSize: CGSize, visibleFrames: [CGRect], mouseLocation: CGPoint? = nil,
-                    obstacles: [CGRect] = [], isCompanionFlying: Bool = false, previous: BubblePlacement? = nil) {
+                    obstacles: [CGRect] = [], textObstacles: [CGRect] = [], isCompanionFlying: Bool = false, previous: BubblePlacement? = nil) {
+            self.textObstacles = textObstacles
             self.companionRect = companionRect
             self.bubbleSize = bubbleSize
             self.visibleFrames = visibleFrames
@@ -74,8 +80,9 @@ public enum BubblePlacer {
             avoided.append(CGRect(x: mouseLocation.x - mouseBoxSize / 2, y: mouseLocation.y - mouseBoxSize / 2, width: mouseBoxSize, height: mouseBoxSize))
         }
 
+        let nearbyText = input.textObstacles.filter { $0.area > 0 }
         func isFree(_ rect: CGRect) -> Bool {
-            visible.contains(rect) && !avoided.contains { $0.intersects(rect) }
+            visible.contains(rect) && !avoided.contains { $0.intersects(rect) } && !nearbyText.contains { $0.intersects(rect) }
         }
 
         // Keep the current slot while it still works.

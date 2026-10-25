@@ -35,6 +35,20 @@ public enum LabelPlacer {
         return CGSize(width: ceil(textBounds.width) + 2 * horizontalPadding, height: ceil(textBounds.height) + 2 * verticalPadding)
     }
 
+    /// The step number's white disc at the pill's left, and the space after it.
+    public static let stepBadgeDiameter: CGFloat = 20
+    public static let stepBadgeSpacing: CGFloat = 6
+
+    /// Pill size for a step's label: the number's disc, then `text` (or the
+    /// disc alone when there's no text), never shorter than a text pill.
+    public static func size(for text: String?, stepNumber: Int?) -> CGSize {
+        guard stepNumber != nil else { return size(for: text ?? "") }
+        let textSize = text.map { size(for: $0) } ?? CGSize(width: 2 * horizontalPadding, height: size(for: "0").height)
+        let badgeWidth = stepBadgeDiameter + (text == nil ? 0 : stepBadgeSpacing)
+        return CGSize(width: textSize.width + badgeWidth - (text == nil ? 2 * horizontalPadding - 2 * verticalPadding : 0),
+                      height: max(textSize.height, stepBadgeDiameter + 2 * verticalPadding))
+    }
+
     public static func rect(for anchor: Anchor, size: CGSize, around anchorRect: CGRect) -> CGRect {
         let origin: CGPoint
         switch anchor {

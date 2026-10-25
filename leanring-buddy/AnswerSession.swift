@@ -77,6 +77,7 @@ final class AnswerSession: SpeechCoordinatorHost {
         coordinator.replaceHost(self)
         coordinator.isSilent = !speaksResponse
         coordinator.beginAnswer()
+        publishTextObstacles()
         // Estimated progress (Qwen, Apple without callbacks) is walked in at 60 Hz.
         let timer = Timer(timeInterval: 1.0 / CaptionTimeline.ticksPerSecond, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -237,6 +238,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             groundedTurn = workingTurn
         }
         turnRecord?.grounding?.ocrLineCount = groundedTurn.registry.allOCRLines.count
+        publishTextObstacles()
         let framesByScreenNumber = groundedTurn.framesByScreenNumber
         let ax = companionManager.groundingCoordinator.ax
         var maybeResolvedTarget = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
@@ -246,6 +248,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             var workingTurn = groundedTurn
             await workingTurn.retryOCRWithShiftedBands()
             groundedTurn = workingTurn
+            publishTextObstacles()
             maybeResolvedTarget = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
                                                  cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
                                                  lookup: AXGroundingLiveLookup(ax: ax)).resolve(tag)
@@ -284,8 +287,20 @@ final class AnswerSession: SpeechCoordinatorHost {
             originalLabel: context.originalLabel,
             recheckName: recheckName,
             order: preparedTags.count,
-            tagIndex: tagIndexInRecord
+            tagIndex: tagIndexInRecord,
+            targetRole: MarkTextObstacles.targetRole(for: resolvedTarget.elementID.flatMap { groundedTurn.registry[$0] },
+                                                     isTextMatch: resolvedTarget.method == .textExact || resolvedTarget.method == .textFuzzy)
         ))
+    }
+
+    /// The registry's text bounds (AX text-ish elements and OCR lines) for
+    /// this answer: marks underline dense rows and keep labels off them, and
+    /// the caption bubble skips slots that cover them. Re-sent when OCR
+    /// lines arrive; only sent when they changed.
+    private func publishTextObstacles() {
+        let registry = groundedTurn.registry
+        let textBounds = MarkTextObstacles.collect(elements: registry.orderedIDs.compactMap { registry[$0] }, ocrLines: registry.allOCRLines)
+        if companionManager.screenTextObstaclesCG != textBounds { companionManager.screenTextObstaclesCG = textBounds }
     }
 
     private func recheckFinished(_ outcome: MarkRecheck.Outcome, tagIndex: Int) {
