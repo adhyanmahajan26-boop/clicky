@@ -15,6 +15,8 @@
 //    wakeStatus               → wake word: armed, paused reason, restarts, wakes, false wakes,
 //                               last wake latency, CPU % over the last minute (Clicky and the
 //                               on-device speech service)
+//    perfStatus               → idle-CPU guard: overlay/notch body evaluations, cursor-loop
+//                               ticks and state writes per second (last 5 s), loop mode
 //    wakeFeed {path}          → a WAV/CAF through the wake recognizer + matcher at real-time pace
 //                               (no mic, no speaker): detections with times and latency
 //    snap {target, marks}     → the [SNAP:…] path: target screen|window|marks, marks=true keeps
@@ -324,6 +326,17 @@ final class DebugCommandInbox {
                 companionManager.endHandsFreeSession()
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["handsFree": companionManager.isHandsFreeSessionActive], errorMessage: nil)
+
+        case "perfStatus":
+            // Idle-CPU guard: per-second rates over the last 5 s of overlay /
+            // notch body evaluations, cursor-loop ticks and state writes, plus
+            // the cursor loop's mode. Pointer still + nothing animating should
+            // read ~10 ticks/s (idle poll) and ~0 for everything else.
+            var perfResult = OverlayPerfMonitor.shared.snapshot()
+            let cursorLoopStatus = CursorFollowDriver.shared.statusSnapshot()
+            perfResult["cursorLoop"] = cursorLoopStatus
+            perfResult["frameLoopRunning"] = CursorFollowDriver.shared.isRunning && CursorFollowDriver.shared.mode == .fast
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: perfResult, errorMessage: nil)
 
         case "wakeStatus":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.wakeWordController.statusSnapshot(), errorMessage: nil)

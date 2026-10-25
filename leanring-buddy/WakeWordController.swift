@@ -158,7 +158,9 @@ final class WakeWordController: ObservableObject {
     /// Recomputes the state and opens or closes the mic to match.
     private func reevaluate() {
         guard isStarted else { return }
-        isEnabled = ClickySettings.isWakeWordEnabled
+        // Runs every 2 s: publish only on a change.
+        let isEnabledNow = ClickySettings.isWakeWordEnabled
+        if isEnabled != isEnabledNow { isEnabled = isEnabledNow }
         let configuredPhrases = ClickySettings.wakePhrases
         if configuredPhrases != phrasesInUse {
             phrasesInUse = configuredPhrases

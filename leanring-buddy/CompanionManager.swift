@@ -556,8 +556,11 @@ final class CompanionManager: ObservableObject {
         let previouslyHadMicrophone = hasMicrophonePermission
         let previouslyHadAll = allPermissionsGranted
 
+        // Every assignment below only happens on a change: this runs every
+        // 1.5 s and each @Published write (even an equal one) re-renders every
+        // overlay and panel view observing CompanionManager.
         let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
-        hasAccessibilityPermission = currentlyHasAccessibility
+        if hasAccessibilityPermission != currentlyHasAccessibility { hasAccessibilityPermission = currentlyHasAccessibility }
 
         if currentlyHasAccessibility {
             globalPushToTalkShortcutMonitor.start()
@@ -565,10 +568,12 @@ final class CompanionManager: ObservableObject {
             globalPushToTalkShortcutMonitor.stop()
         }
 
-        hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
+        let currentlyHasScreenRecording = WindowPositionManager.hasScreenRecordingPermission()
+        if hasScreenRecordingPermission != currentlyHasScreenRecording { hasScreenRecordingPermission = currentlyHasScreenRecording }
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        hasMicrophonePermission = micAuthStatus == .authorized
+        let currentlyHasMicrophone = micAuthStatus == .authorized
+        if hasMicrophonePermission != currentlyHasMicrophone { hasMicrophonePermission = currentlyHasMicrophone }
 
         // Log permission state on changes (and on the first check of a launch)
         if !hasLoggedPermissionStateThisLaunch
@@ -594,8 +599,8 @@ final class CompanionManager: ObservableObject {
         }
         // Screen content permission is persisted — once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
-        if !hasScreenContentPermission {
-            hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
+        if !hasScreenContentPermission, UserDefaults.standard.bool(forKey: "hasScreenContentPermission") {
+            hasScreenContentPermission = true
         }
 
         if !previouslyHadAll && allPermissionsGranted {
