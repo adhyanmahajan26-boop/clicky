@@ -276,3 +276,19 @@ ChalkboardSE embedded, text searchable, title "How DNS resolution works". Frontm
 
 Silent ask after relaunch → agentsStatus: 1 brain agent, done, claude-sonnet-5-5, usage 12,562 tokens, $0.0503; turn.json
 `usage` matches. Window open/placement, spark click and cancel paths not exercised live (they would put a window on the owner's screen).
+
+### hard10 clean reruns (Netflix-safe, far-right display), 2026-10-25 evening
+
+- T9 code mode (run "sixth", 7f90f85): **PASS** — multiply + test in the diff, unittest OK.
+- T2 product boxes: fifth FAIL (photo-only boxes; a `:screen3` mid-tag field ignored → a mark on the cursor's display),
+  sixth FAIL (product boxes resolved but the tracker shrank them to the photo), seventh 2/3 (a raw box over a photo Chrome
+  hadn't named yet), eighth (b3b6d06) **PASS** — 3 imageCard boxes 278×193 over photo + name + price + button, notes attached.
+  Fixes: 7f90f85's parent (imageCard, screenN parsing, markRegion guard), 2c05c1f (untracked product boxes, OCR, raw boxes),
+  b3b6d06 (raw box grows over the card's button).
+- With T1, T3–T8, T10 from earlier runs: **10/10 passed live**.
+
+### Project bridge e2e (b3b6d06)
+
+projectSend (silent) → ~/.clicky/project-outbox/…dfe8060b….json (7 keys only) → RC watcher → coordinator → inbox
+received / thread_started / done → projectStatus + Agents dashboard showed each status; notch "project: thread started" →
+"project: done". No spoken updates (silent send).
