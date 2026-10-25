@@ -227,6 +227,12 @@ public struct TargetResolver {
 
     // MARK: - Point / box
 
+    /// P6.1: a point Haiku named on a zoom-check crop, snapped like an x,y
+    /// tag (`frame` is the crop's frame; it supplies the display).
+    public func snapPoint(_ pointCG: CGPoint, name: String?, frame: CaptureFrame) -> ResolvedTarget {
+        resolvePoint(pointCG, rawRect: nil, name: name, frame: frame)
+    }
+
     func resolvePoint(_ pointCG: CGPoint, rawRect: CGRect?, name: String?, frame: CaptureFrame) -> ResolvedTarget {
         let screenRect = frame.display.boundsCG
         let searchRadius = max(24, 0.012 * screenRect.width)
