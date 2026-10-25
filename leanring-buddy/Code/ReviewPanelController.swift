@@ -63,6 +63,27 @@ final class ReviewPanelController {
         panel?.orderOut(nil)
     }
 
+    /// Live progress: shown in the top-right corner without activating
+    /// Clicky or taking key focus (the user keeps typing where they were).
+    /// Later calls only update the card.
+    func showProgress(_ snapshot: CodeTaskProgressSnapshot) {
+        let mode = ReviewPanelState.Mode.working(snapshot)
+        if isVisible, case .working = state.mode {
+            state.mode = mode
+            return
+        }
+        state.mode = mode
+        let panel = panel ?? makePanel()
+        self.panel = panel
+        let targetSize = NSSize(width: 440, height: 250)
+        let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        let origin = NSPoint(x: screenFrame.maxX - targetSize.width - 16, y: screenFrame.maxY - targetSize.height - 16)
+        panel.setFrame(NSRect(origin: origin, size: targetSize), display: true)
+        panel.title = "Clicky — Working"
+        panel.orderFrontRegardless()
+        state.panelShownAt = ProcessInfo.processInfo.systemUptime
+    }
+
     private func makePanel() -> ReviewPanel {
         let panel = ReviewPanel(contentRect: NSRect(x: 0, y: 0, width: 780, height: 760),
                                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)

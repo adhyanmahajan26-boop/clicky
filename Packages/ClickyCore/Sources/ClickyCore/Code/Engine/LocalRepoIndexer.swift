@@ -5,7 +5,8 @@
 //  Finds local clones for RepoMatcher: walks each repo root (~/Projects,
 //  ~/Developer by default) up to depth 3, stops descending at a folder with
 //  a `.git`, skips hidden folders, node_modules and Clicky's own worktrees,
-//  and reads origin/upstream with read-only `git config --get`.
+//  and reads origin/upstream with read-only `git config --get`. A repo with
+//  neither remote is kept too (RepoMatcher makes it local-only).
 //
 
 import Foundation
@@ -55,7 +56,6 @@ public struct LocalRepoIndexer: Sendable {
         for folder in cloneFolders() {
             let originURL = await git.remoteURL(named: "origin", in: folder)
             let upstreamURL = await git.remoteURL(named: "upstream", in: folder)
-            guard originURL != nil || upstreamURL != nil else { continue }
             entries.append(LocalRepoEntry(folderPath: folder, originURL: originURL, upstreamURL: upstreamURL))
         }
         return entries

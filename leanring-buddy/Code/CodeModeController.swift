@@ -13,6 +13,16 @@
 //  dry-run OK, no un-acked red finding), and the ApprovalKey of what the
 //  panel showed must still match the disk before each command.
 //
+//  Live use: Code mode can be switched by voice ([CODEMODE:on]/[CODEMODE:off]
+//  from the main brain, honoured only when the user's words ask for coding);
+//  "this repo" comes from the front Xcode / VS Code / Terminal window
+//  (FrontWindowProbe → FrontWindowRepoResolver); Clicky's own checkouts are
+//  never used (CodeRepoDenylist); while the agent runs the panel shows its
+//  current step, files changed so far and elapsed time, with a short spoken
+//  update at most every 20 s; several tasks asked at once are queued and run
+//  one after another, each with its own review. None of this changes the
+//  click gate: outward steps still need a real click in the review panel.
+//
 
 import AppKit
 import ClickyCore
@@ -22,6 +32,14 @@ import Foundation
 /// The turn a code task came from (for logs).
 struct CodeTurnContext {
     var transcript: String
+    /// The front window when the task arrived (read only for "this repo").
+    var frontWindow: FrontWindowContext? = nil
+}
+
+/// A task waiting for the one before it to finish (or the running one).
+struct QueuedCodeTask {
+    var task: CodeTask
+    var context: CodeTurnContext
 }
 
 @MainActor
@@ -53,6 +71,20 @@ final class CodeModeController: ObservableObject {
     private var isOpeningCancelled = false
     private var recentEvents: [String] = []
 
+    /// Asked while another task runs: run in order, each with its own review.
+    private(set) var queuedTasks: [QueuedCodeTask] = []
+    static let maximumQueuedTasks = 4
+    private var activeQueuedTask: QueuedCodeTask?
+    private var activeRepository: ResolvedRepository?
+    private var progressTracker: CodeTaskProgressTracker?
+    private var progressTickerTask: Task<Void, Never>?
+    /// The user hid the progress card (Hide / Esc / close): don't bring it back for this task.
+    private var isProgressPanelHidden = false
+    private var lastNarration: String?
+    private var lastToggleDescription: String?
+    /// Which run owns the controller's state (a cancelled run's late clean-up must not end the next one).
+    private var activeRunIdentifier: UUID?
+
     private let speak: (String) -> Void
     private let panelController: ReviewPanelController
 
@@ -71,9 +103,25 @@ final class CodeModeController: ObservableObject {
             preflightStatusLine = "Checking…"
             Task { _ = await ensurePreflight(force: true) }
         } else {
+            queuedTasks = []
             cancelActiveTask()
             preflightStatusLine = "Off"
         }
+    }
+
+    /// [CODEMODE:on] / [CODEMODE:off] from the main brain. "on" is honoured
+    /// only when the user's own words ask for coding (CodeModeToggle).
+    @discardableResult
+    func handleSpokenToggle(isOn requestedOn: Bool, transcript: String) -> CodeModeToggle.Decision {
+        let decision = CodeModeToggle.decide(isOn: requestedOn, isCurrentlyOn: isEnabled, transcript: transcript)
+        lastToggleDescription = "\(requestedOn ? "on" : "off") → \(decision) from \"\(transcript.prefix(80))\""
+        record("spoken toggle: \(lastToggleDescription ?? "")")
+        switch decision {
+        case .turnOn: setEnabled(true)
+        case .turnOff: setEnabled(false)
+        case .unchanged, .refused: break
+        }
+        return decision
     }
 
     /// Runs the preflight once per launch (again when `force`).
@@ -116,18 +164,58 @@ final class CodeModeController: ObservableObject {
 
     func start(_ task: CodeTask, context: CodeTurnContext) {
         guard isEnabled else {
-            speak("Code mode is off. Turn it on in Clicky's menu first.")
+            speak("Code mode is off. Say \"turn on code mode\" first.")
             return
         }
+        var context = context
+        // "this repo": remember the front window now, before any panel takes focus.
+        if context.frontWindow == nil, FrontWindowRepoResolver.isDeicticRepoName(task.repo) {
+            context.frontWindow = FrontWindowProbe.capture()
+        }
+        let queuedTask = QueuedCodeTask(task: task, context: context)
         guard !isBusy else {
-            speak("I'm still on the last code task. Close its panel first.")
+            guard queuedTasks.count < Self.maximumQueuedTasks else {
+                speak("I already have \(Self.maximumQueuedTasks) code tasks waiting. Let me finish those first.")
+                return
+            }
+            queuedTasks.append(queuedTask)
+            record("queued #\(queuedTasks.count) \(task.action.rawValue) repo=\(task.repo)")
+            // Several tasks from one answer: Claude already said they'll run in order.
+            if activeQueuedTask?.context.transcript != context.transcript {
+                speak("Got it, I'll do that one after the current task.")
+            }
             return
         }
-        record("start \(task.action.rawValue) repo=\(task.repo) pr=\(task.pr.map(String.init) ?? "-") from \"\(context.transcript.prefix(80))\"")
+        begin(queuedTask)
+    }
+
+    private func begin(_ queuedTask: QueuedCodeTask) {
+        let task = queuedTask.task
+        record("start \(task.action.rawValue) repo=\(task.repo) pr=\(task.pr.map(String.init) ?? "-") from \"\(queuedTask.context.transcript.prefix(80))\"")
         isBusy = true
+        activeQueuedTask = queuedTask
+        isProgressPanelHidden = false
+        let runIdentifier = UUID()
+        activeRunIdentifier = runIdentifier
         activeTask = Task { [weak self] in
-            await self?.run(task)
+            await self?.run(task, frontWindow: queuedTask.context.frontWindow, runIdentifier: runIdentifier)
         }
+    }
+
+    /// The next queued task, once the current one is fully done.
+    private func startNextQueuedTaskIfAny() {
+        guard isEnabled, !isBusy, !queuedTasks.isEmpty else { return }
+        let next = queuedTasks.removeFirst()
+        record("dequeued \(next.task.action.rawValue) repo=\(next.task.repo) (\(queuedTasks.count) left)")
+        begin(next)
+    }
+
+    /// "Stop" on the progress card: the running task and the queue end; nothing was sent.
+    func stopAllTasks() {
+        let hadWork = isBusy || !queuedTasks.isEmpty
+        queuedTasks = []
+        cancelActiveTask()
+        if hadWork { speak("Stopped. Nothing was sent.") }
     }
 
     func cancelActiveTask() {
@@ -155,8 +243,8 @@ final class CodeModeController: ObservableObject {
 
     // MARK: - Running a task
 
-    private func run(_ task: CodeTask) async {
-        defer { if activeReview == nil && !isExecuting { finishTask(hidePanel: true) } }
+    private func run(_ task: CodeTask, frontWindow: FrontWindowContext?, runIdentifier: UUID) async {
+        defer { if activeRunIdentifier == runIdentifier && activeReview == nil && !isExecuting { finishTask(hidePanel: true) } }
         setPhase("Checking code mode")
         let report = await ensurePreflight()
         guard report.isReady, let toolPaths else {
@@ -164,7 +252,8 @@ final class CodeModeController: ObservableObject {
             return
         }
         setPhase("Finding \(task.repo)")
-        guard var repository = await resolveRepository(for: task, tools: toolPaths), !Task.isCancelled else { return }
+        guard var repository = await resolveRepository(for: task, frontWindow: frontWindow, tools: toolPaths), !Task.isCancelled else { return }
+        activeRepository = repository
         if repository.clonePath == nil, Self.needsLocalClone(task) {
             guard let clonePath = await offerClone(repository.remote, tools: toolPaths) else { return }
             repository.clonePath = clonePath
@@ -176,11 +265,22 @@ final class CodeModeController: ObservableObject {
                                         isBashAllowed: ClickySettings.isCodeBashAllowed)
             engine.onProgress = { [weak self] progress in
                 let controller = self
-                Task { @MainActor in controller?.setPhase(progress) }
+                Task { @MainActor in
+                    controller?.setPhase(progress)
+                    controller?.progressTracker?.setPhase(progress.prefix(1).lowercased() + String(progress.dropFirst()))
+                }
+            }
+            engine.onAgentProgress = { [weak self] progressEvent in
+                let controller = self
+                Task { @MainActor in controller?.applyAgentProgress(progressEvent) }
             }
             activeEngine = engine
+            startProgress(title: Self.progressTitle(for: task, repository: repository))
+            defer { stopProgress() }
             record("task dir \(workspace.taskDirectoryURL.path)")
-            switch try await engine.prepare(task, repository: repository, workspace: workspace) {
+            let preparation = try await engine.prepare(task, repository: repository, workspace: workspace)
+            stopProgress()
+            switch preparation {
             case .spoken(let answer, let agentReport):
                 record("answer (\(agentReport.map { String(describing: $0.outcome).prefix(60) } ?? "no agent")): \(answer.prefix(200))")
                 speak(answer)
@@ -216,6 +316,10 @@ final class CodeModeController: ObservableObject {
     }
 
     private func finishTask(hidePanel: Bool) {
+        stopProgress()
+        activeRunIdentifier = nil
+        activeQueuedTask = nil
+        activeRepository = nil
         activeTask = nil
         activeEngine = nil
         activeReview = nil
@@ -228,6 +332,72 @@ final class CodeModeController: ObservableObject {
         isBusy = false
         setPhase("Idle")
         if hidePanel { panelController.hide() }
+        if !queuedTasks.isEmpty {
+            Task { @MainActor [weak self] in self?.startNextQueuedTaskIfAny() }
+        }
+    }
+
+    // MARK: - Live progress
+
+    static func progressTitle(for task: CodeTask, repository: ResolvedRepository) -> String {
+        let name = repository.isLocalOnly ? repository.remote.name : repository.remote.fullName
+        switch task.flow {
+        case .readOnlyAgent: return "Reading \(name)\(task.pr.map { " #\($0)" } ?? "")"
+        case .editingAgent: return "Working on \(name)\(task.pr.map { " #\($0)" } ?? "")"
+        case .panelOnly: return "Preparing \(task.action.rawValue.replacingOccurrences(of: "_", with: " ")) on \(name)"
+        }
+    }
+
+    private var progressTitle = ""
+
+    private func startProgress(title: String) {
+        progressTitle = title
+        progressTracker = CodeTaskProgressTracker(startedAt: Date(), initialStep: "starting")
+        lastNarration = nil
+        progressTickerTask?.cancel()
+        progressTickerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.progressTick()
+            }
+        }
+        refreshProgressPanel()
+    }
+
+    private func stopProgress() {
+        progressTickerTask?.cancel()
+        progressTickerTask = nil
+        if case .working = panelController.state.mode, panelController.isVisible { panelController.hide() }
+    }
+
+    private func applyAgentProgress(_ progressEvent: AgentProgressEvent) {
+        guard progressTracker != nil, progressTickerTask != nil else { return }
+        progressTracker?.apply(progressEvent)
+        setPhase(progressEvent.stepDescription.prefix(1).uppercased() + String(progressEvent.stepDescription.dropFirst()))
+        refreshProgressPanel()
+    }
+
+    private func progressTick() {
+        guard progressTickerTask != nil else { return }
+        refreshProgressPanel()
+        if ClickySettings.isCodeProgressNarrationEnabled, let narration = progressTracker?.narrationIfDue(now: Date()) {
+            lastNarration = narration
+            record("narrate: \(narration)")
+            speak(narration)
+        }
+    }
+
+    private func refreshProgressPanel() {
+        guard let progressTracker, progressTickerTask != nil, !isProgressPanelHidden else { return }
+        // Only over its own card or a hidden panel (never over the chooser or a question).
+        if panelController.isVisible, !Self.isWorkingMode(panelController.state.mode) { return }
+        panelController.showProgress(progressTracker.snapshot(title: progressTitle, now: Date(), queuedCount: queuedTasks.count))
+    }
+
+    private static func isWorkingMode(_ mode: ReviewPanelState.Mode) -> Bool {
+        if case .working = mode { return true }
+        return false
     }
 
     private func setPhase(_ phase: String) {
@@ -237,34 +407,45 @@ final class CodeModeController: ObservableObject {
 
     // MARK: - Resolving the repo
 
-    private func resolveRepository(for task: CodeTask, tools: CodeToolPaths) async -> ResolvedRepository? {
+    private func resolveRepository(for task: CodeTask, frontWindow: FrontWindowContext?, tools: CodeToolPaths) async -> ResolvedRepository? {
         let git = HardenedGit(gitPath: tools.git, ghPath: tools.gh, runner: ChildProcessCommandRunner())
         if cachedLocalRepos == nil {
             cachedLocalRepos = await LocalRepoIndexer(git: git, roots: ClickySettings.codeRepoRoots).index()
         }
-        var matchResult = RepoMatcher(localRepos: cachedLocalRepos ?? [], accountRepoFullNames: cachedAccountRepos ?? []).match(spokenName: task.repo)
+        let allLocalRepos = cachedLocalRepos ?? []
+        // Clicky's own checkouts never match, and neither does their GitHub repo.
+        let deniedLocalRepos = allLocalRepos.filter { CodeRepoDenylist.isDeniedLocalRoot($0.folderPath) }
+        let allowedLocalRepos = allLocalRepos.filter { !CodeRepoDenylist.isDeniedLocalRoot($0.folderPath) }
+        let deniedFullNames = Set(deniedLocalRepos.flatMap { [$0.originURL, $0.upstreamURL] }.compactMap { $0.flatMap(GitHubRemote.parse)?.fullName.lowercased() })
+
+        if FrontWindowRepoResolver.isDeicticRepoName(task.repo) {
+            return await resolveFrontWindowRepository(task: task, frontWindow: frontWindow, localRepos: allLocalRepos, deniedFullNames: deniedFullNames, git: git)
+        }
+
+        func match() -> RepoMatchResult {
+            var result = RepoMatcher(localRepos: allowedLocalRepos, accountRepoFullNames: (cachedAccountRepos ?? []).filter { !deniedFullNames.contains($0.lowercased()) })
+                .match(spokenName: task.repo)
+            result.rankedCandidates.removeAll { deniedFullNames.contains($0.fullName.lowercased()) }
+            return result
+        }
+        var matchResult = match()
         if !matchResult.isConfident {
             if cachedAccountRepos == nil, let engine = makeReadOnlyEngine(tools: tools) {
                 cachedAccountRepos = await engine.accountRepositoryNames()
             }
-            matchResult = RepoMatcher(localRepos: cachedLocalRepos ?? [], accountRepoFullNames: cachedAccountRepos ?? []).match(spokenName: task.repo)
+            matchResult = match()
         }
         guard !matchResult.rankedCandidates.isEmpty else {
-            speak("I couldn't find a repo called \(task.repo).")
+            if deniedLocalRepos.contains(where: { RepoMatcher.normalize(($0.folderPath as NSString).lastPathComponent) == RepoMatcher.normalize(task.repo) }) {
+                speak("That's Clicky's own code, and I don't work on that one.")
+            } else {
+                speak("I couldn't find a repo called \(task.repo).")
+            }
             return nil
         }
         let chosenCandidate: RepoCandidate
         if matchResult.isConfident, let top = matchResult.top {
-            let openingText = "Opening \(top.fullName)\(task.pr.map { " #\($0)" } ?? "")"
-            isOpeningCancelled = false
-            panelController.show(mode: .opening(openingText))
-            let deadline = Date().addingTimeInterval(2)
-            while Date() < deadline, !isOpeningCancelled, !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            panelController.hide()
-            guard !isOpeningCancelled, !Task.isCancelled else {
-                record("opening cancelled")
+            guard await showOpeningCountdown("Opening \(top.source == .localOnly ? (top.folderPath.map { ($0 as NSString).lastPathComponent } ?? top.fullName) : top.fullName)\(task.pr.map { " #\($0)" } ?? "")") else {
                 return nil
             }
             chosenCandidate = top
@@ -275,10 +456,66 @@ final class CodeModeController: ObservableObject {
             guard let choice else { return nil }
             chosenCandidate = choice
         }
-        guard !RepoMatcher.isDenied(chosenCandidate.fullName) else { return nil }
+        guard !RepoMatcher.isDenied(chosenCandidate.fullName), !deniedFullNames.contains(chosenCandidate.fullName.lowercased()) else { return nil }
+        if let folderPath = chosenCandidate.folderPath, CodeRepoDenylist.isDeniedLocalRoot(folderPath) { return nil }
         let nameParts = chosenCandidate.fullName.split(separator: "/").map(String.init)
         guard nameParts.count == 2 else { return nil }
-        return ResolvedRepository(remote: GitHubRemote(owner: nameParts[0], name: nameParts[1]), clonePath: chosenCandidate.folderPath)
+        return ResolvedRepository(remote: GitHubRemote(owner: nameParts[0], name: nameParts[1]), clonePath: chosenCandidate.folderPath,
+                                  isLocalOnly: chosenCandidate.source == .localOnly)
+    }
+
+    /// "Opening …" for 2 s; Esc or Cancel stops it. False when cancelled.
+    private func showOpeningCountdown(_ openingText: String) async -> Bool {
+        isOpeningCancelled = false
+        panelController.show(mode: .opening(openingText))
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, !isOpeningCancelled, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        panelController.hide()
+        guard !isOpeningCancelled, !Task.isCancelled else {
+            record("opening cancelled")
+            return false
+        }
+        return true
+    }
+
+    /// "this repo": the front Xcode / VS Code / Terminal window's git root.
+    private func resolveFrontWindowRepository(task: CodeTask, frontWindow: FrontWindowContext?, localRepos: [LocalRepoEntry], deniedFullNames: Set<String>,
+                                              git: HardenedGit) async -> ResolvedRepository? {
+        guard let frontWindow else {
+            speak("I couldn't tell which repo is in front. Say its name, or bring it up in Xcode, VS Code or Terminal.")
+            return nil
+        }
+        let resolution = FrontWindowRepoResolver.resolve(frontWindow, localRepos: localRepos)
+        record("front window \(frontWindow.bundleIdentifier ?? "-") \"\(frontWindow.windowTitle?.prefix(80) ?? "")\" → \(resolution)")
+        let rootPath: String
+        switch resolution {
+        case .found(let foundRootPath, _):
+            rootPath = foundRootPath
+        case .denied:
+            speak("That's Clicky's own code, and I don't work on that one.")
+            return nil
+        case .notFound:
+            speak("I couldn't tell which repo is in front. Say its name, or bring it up in Xcode, VS Code or Terminal.")
+            return nil
+        }
+        let originURL = await git.remoteURL(named: "origin", in: rootPath)
+        let upstreamURL = await git.remoteURL(named: "upstream", in: rootPath)
+        let folderName = (rootPath as NSString).lastPathComponent
+        var repository: ResolvedRepository
+        if let identity = originURL.flatMap(GitHubRemote.parse) ?? upstreamURL.flatMap(GitHubRemote.parse) {
+            guard !RepoMatcher.isDenied(identity.fullName), !deniedFullNames.contains(identity.fullName.lowercased()) else {
+                speak("That's Clicky's own code, and I don't work on that one.")
+                return nil
+            }
+            repository = ResolvedRepository(remote: identity, clonePath: rootPath)
+        } else {
+            repository = ResolvedRepository(remote: GitHubRemote(owner: RepoMatcher.localOnlyOwner, name: folderName), clonePath: rootPath, isLocalOnly: true)
+        }
+        guard await showOpeningCountdown("Opening \(repository.isLocalOnly ? folderName : repository.remote.fullName)\(task.pr.map { " #\($0)" } ?? "")") else { return nil }
+        repository.clonePath = rootPath
+        return repository
     }
 
     private func makeReadOnlyEngine(tools: CodeToolPaths) -> CodeTaskEngine? {
@@ -420,9 +657,16 @@ final class CodeModeController: ObservableObject {
             self?.pendingQuestionAnswer?.resume(returning: true)
             self?.pendingQuestionAnswer = nil
         }
+        state.onStopTask = { [weak self] in self?.stopAllTasks() }
         state.onCancel = { [weak self] in
             guard let self else { return }
             if case .opening = state.mode { self.isOpeningCancelled = true; return }
+            // Hide / Esc / close on the progress card: the task keeps running.
+            if case .working = state.mode {
+                self.isProgressPanelHidden = true
+                self.panelController.hide()
+                return
+            }
             if self.pendingRepositoryChoice != nil || self.pendingQuestionAnswer != nil {
                 self.pendingRepositoryChoice?.resume(returning: nil)
                 self.pendingRepositoryChoice = nil
@@ -641,5 +885,59 @@ final class CodeModeController: ObservableObject {
             ] as [String: Any]
         }
         return snapshot
+    }
+
+    /// `codeStatus` (debug inbox): the current task, its live progress, the queue and the panel.
+    func statusSnapshot() -> [String: Any] {
+        func describe(_ task: CodeTask) -> [String: Any] {
+            ["action": task.action.rawValue, "repo": task.repo, "instructions": task.instructions, "pr": task.pr.map { $0 as Any } ?? NSNull(), "flow": task.flow.rawValue]
+        }
+        var status: [String: Any] = [
+            "enabled": isEnabled,
+            "busy": isBusy,
+            "phase": phaseDescription,
+            "preflight": preflightStatusLine,
+            "queue": queuedTasks.map { describe($0.task) },
+            "panelVisible": panelController.isVisible,
+            "panelMode": Self.modeName(panelController.state.mode),
+            "lastNarration": lastNarration.map { $0 as Any } ?? NSNull(),
+            "lastToggle": lastToggleDescription.map { $0 as Any } ?? NSNull(),
+            "narrateProgress": ClickySettings.isCodeProgressNarrationEnabled
+        ]
+        if let activeQueuedTask {
+            var taskStatus = describe(activeQueuedTask.task)
+            if let frontWindow = activeQueuedTask.context.frontWindow {
+                func valueOrNull(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
+                taskStatus["frontWindow"] = ["bundle": valueOrNull(frontWindow.bundleIdentifier), "title": valueOrNull(frontWindow.windowTitle),
+                                             "document": valueOrNull(frontWindow.documentURL), "terminalCwd": valueOrNull(frontWindow.terminalWorkingDirectory)] as [String: Any]
+            }
+            status["task"] = taskStatus
+        } else {
+            status["task"] = NSNull()
+        }
+        if let activeRepository {
+            status["repository"] = ["fullName": activeRepository.remote.fullName, "clonePath": activeRepository.clonePath.map { $0 as Any } ?? NSNull(),
+                                    "localOnly": activeRepository.isLocalOnly] as [String: Any]
+        }
+        if let progressTracker {
+            let snapshot = progressTracker.snapshot(title: progressTitle, now: Date(), queuedCount: queuedTasks.count)
+            status["progress"] = ["title": snapshot.title, "step": snapshot.currentStep, "changedFiles": snapshot.changedFiles,
+                                  "elapsedSeconds": snapshot.elapsedSeconds, "toolCalls": snapshot.toolCallCount, "running": progressTickerTask != nil] as [String: Any]
+        }
+        if let review = activeReview {
+            status["review"] = ["header": review.content.headerText, "worktree": review.worktree.map { $0.path as Any } ?? NSNull(), "buttons": review.content.buttons.map(\.id),
+                                "changedFiles": review.content.diffFiles.map(\.displayPath), "blockers": panelController.state.content.approveBlockers] as [String: Any]
+        }
+        return status
+    }
+
+    private static func modeName(_ mode: ReviewPanelState.Mode) -> String {
+        switch mode {
+        case .opening: return "opening"
+        case .chooser: return "chooser"
+        case .question: return "question"
+        case .working: return "working"
+        case .review: return "review"
+        }
     }
 }

@@ -96,6 +96,9 @@ public struct RepoCandidate: Equatable, Sendable {
         case localUpstream
         /// From the `gh api user/repos` list; no local clone.
         case githubAccount
+        /// A local git repo with no GitHub remote: named "local/<folder>",
+        /// it can be read and changed locally, never pushed.
+        case localOnly
     }
 
     /// owner/name.
@@ -162,6 +165,9 @@ public struct RepoMatcher: Sendable {
         hardDenylist.contains(fullName.lowercased())
     }
 
+    /// The owner used for local-only repos ("local/<folder>").
+    public static let localOnlyOwner = "local"
+
     public func match(spokenName: String) -> RepoMatchResult {
         let spokenKey = Self.normalize(spokenName)
         guard !spokenKey.isEmpty else { return RepoMatchResult(rankedCandidates: []) }
@@ -169,7 +175,7 @@ public struct RepoMatcher: Sendable {
 
         func offer(_ candidate: RepoCandidate) {
             guard !Self.isDenied(candidate.fullName), candidate.score >= Self.minimumCandidateScore else { return }
-            let dedupeKey = candidate.fullName.lowercased()
+            let dedupeKey = candidate.source == .localOnly ? "local-only:" + (candidate.folderPath ?? candidate.fullName) : candidate.fullName.lowercased()
             if let existing = bestByFullName[dedupeKey] {
                 let candidateIsBetter = candidate.score > existing.score
                     || (candidate.score == existing.score && existing.folderPath == nil && candidate.folderPath != nil)
@@ -182,9 +188,15 @@ public struct RepoMatcher: Sendable {
         for localRepo in localRepos {
             let originRemote = localRepo.originURL.flatMap(GitHubRemote.parse)
             let upstreamRemote = localRepo.upstreamURL.flatMap(GitHubRemote.parse)
-            // Identity prefers origin; a clone with neither remote can't be acted on outward.
-            guard let identityRemote = originRemote ?? upstreamRemote else { continue }
             let folderName = (localRepo.folderPath as NSString).lastPathComponent
+            // Identity prefers origin; a clone with neither remote is local-only (never acted on outward).
+            guard let identityRemote = originRemote ?? upstreamRemote else {
+                if localRepo.originURL == nil, localRepo.upstreamURL == nil {
+                    offer(RepoCandidate(fullName: "\(Self.localOnlyOwner)/\(folderName)", folderPath: localRepo.folderPath,
+                                        score: Self.score(spokenKey: spokenKey, against: folderName), source: .localOnly))
+                }
+                continue
+            }
 
             var originSideNames = [folderName]
             if let originRemote { originSideNames += [originRemote.name, originRemote.owner + originRemote.name] }

@@ -79,6 +79,8 @@ public enum ClickySettings {
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+        /// Bool, default true: short spoken updates (at most every 20 s) while the code agent works.
+        public static let codeNarrateProgress = "v2.code.narrateProgress"
         /// Bool, default false: keep the Qwen server running from a LaunchAgent (also needs keepWarmAgentApproved).
         public static let keepWarmAgent = "v2.voice.keepWarmAgent"
         /// Bool, default false: the user said yes to installing the keep-warm LaunchAgent.
@@ -253,6 +255,7 @@ public enum ClickySettings {
     public static var isKeepWarmAgentApproved: Bool { defaults.object(forKey: Keys.keepWarmAgentApproved) as? Bool ?? false }
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
     public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+    public static var isCodeProgressNarrationEnabled: Bool { defaults.object(forKey: Keys.codeNarrateProgress) as? Bool ?? true }
 
     // MARK: - P6.2 Type this for me
 

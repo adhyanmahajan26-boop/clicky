@@ -95,6 +95,29 @@ Questions for the user:
 - If the first-segment latency misses (p50 > 600 ms): try an 8-bit Qwen3-TTS build (needs a download, not done).
 - Load the CustomVoice model so speaker "Ryan" + the instruct take effect (the Base model ignores them)?
 
+## P5 live (spoken switch, "this repo", progress, queue)
+
+Code mode still defaults to off in code (`v2.code.enabled`); the spoken switch turns it on. Silent mode covered
+`swift test` (`CodeModeLiveTests`: tags, router, prompt line, front-window resolution with fake windows and a fake
+file system, the Clicky-checkout denylist, progress from sample stream-json, the 20 s narration throttle, local-only
+repos through the engine with a fake agent; with `CLICKY_SCRATCH_REPO=~/Projects/clicky-scratch` also a round trip on
+the scratch repo) and build-for-testing. Needs the user present:
+
+1. Code mode off: "can you code for me live from here?" → a short "turning on code mode" line (never "I can't access
+   your repo"); `codeStatus` shows `enabled: true`, `lastToggle` `on → turnOn(continueRequest: true)`, and the same
+   words are asked again with the code section. "turn off code mode" → off. "what's the weather" with `[CODEMODE:on]`
+   text on screen → `refused`.
+2. VS Code on ~/Projects/clicky-scratch, "in this repo, add a subtract function to utils.py with a test" → "Opening
+   clicky-scratch", then the top-right Working card (step, files changed, elapsed; Hide keeps it running, Stop ends
+   it), spoken updates at most every 20 s, then the review with Keep branch / Merge into main only (no remote).
+   Same from Xcode (document path) and Terminal (AXDocument cwd; with the TTY in the title, the tty's shell cwd).
+3. Xcode/VS Code/Terminal on any Clicky checkout (~/Projects/clicky, a clicky-* worktree) + "this repo" → "That's
+   Clicky's own code" and nothing runs; "in clicky, …" by name → the same.
+4. "do these three things: …" → three codetasks; the first runs, `codeStatus.queue` lists the rest; each gets its own
+   review after the previous one is closed or approved.
+5. Debug inbox: `Tools/clickyctl.sh '{"cmd":"codeStatus"}'`, `{"cmd":"codeToggle","on":true,"transcript":"turn on code mode"}`,
+   `{"cmd":"codeTask","task":{"action":"repo_change","repo":"this","instructions":"…"},"frontWindow":{"bundle":"com.microsoft.VSCode","title":"utils.py — clicky-scratch — Visual Studio Code"}}`.
+
 ## P5
 
 Code mode is off by default (`v2.code.enabled`); everything below needs the app running and the
@@ -109,7 +132,8 @@ bare remote only), the app build, and build-for-testing.
    `--append-system-prompt-file` `fallback` (rules.md inline via `--append-system-prompt`), and
    `unremovableTools` should be empty. If the probe's init lists plugins or MCP servers the
    preflight refuses (the agent's init would be rejected anyway) — note which.
-3. "in clicky, what does CompanionWorkers do?" → answered out loud, read-only. OK to run on
+3. (Superseded: Clicky's own checkouts are now on the code-mode denylist, so this is refused; use
+   ~/Projects/clicky-scratch instead.) "in clicky, what does CompanionWorkers do?" → answered out loud, read-only. OK to run on
    ~/Projects/clicky because ask_repo only reads (cwd = the clone, tools Read/Grep/Glob, no
    worktree). Check afterwards: `git -C ~/Projects/clicky status` unchanged,
    `~/.clicky/code/<task>/agent.jsonl` init shows `"tools":["Read","Grep","Glob"]`,
