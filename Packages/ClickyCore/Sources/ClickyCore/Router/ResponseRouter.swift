@@ -10,6 +10,8 @@
 //     their words are spoken);
 //   - [CODEMODE:on] / [CODEMODE:off]: the spoken Code-mode switch
 //     (CodeModeToggle), emitted at once and never spoken;
+//   - [AGENTS:open]: open the Agents dashboard (AgentsDashboardTag),
+//     emitted at once and never spoken;
 //   - [WORKER:title:task]: on its own line, ending at the line's last "]";
 //     emitted at once (spawned unanchored);
 //   - <whiteboard>, <code>, <type>, <codetask> blocks: handed to their
@@ -33,6 +35,8 @@ public enum ResponseRouterOutput: Equatable, Sendable {
     case worker(title: String, task: String)
     /// [CODEMODE:on] (true) or [CODEMODE:off] (false).
     case codeModeToggle(isOn: Bool)
+    /// [AGENTS:open]: open the Agents dashboard.
+    case agentsDashboard(AgentsDashboardTag.Command)
     case block(name: String, body: String)
     /// A block nobody consumes yet ("I can't do that yet" is in the narration).
     case unsupportedBlock(name: String)
@@ -47,7 +51,7 @@ public struct ResponseRouter: Sendable {
     public static let blockNames = ["whiteboard", "code", "type", "codetask"]
     public static let unsupportedBlockSentence = "I can't do that yet."
 
-    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:"]
+    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:", "AGENTS:"]
 
     /// Block names that have a consumer (P4+ register theirs).
     public var blockConsumers: Set<String>
@@ -207,6 +211,15 @@ public struct ResponseRouter: Sendable {
                     }
                     continue
                 }
+                if rawTag.dropFirst().trimmingCharacters(in: .whitespaces).uppercased().hasPrefix("AGENTS:") {
+                    if let command = AgentsDashboardTag.parse(rawTag) {
+                        flushNarration()
+                        outputs.append(.agentsDashboard(command))
+                    } else {
+                        record(&outputs, reason: "malformed agents tag", raw: rawTag)
+                    }
+                    continue
+                }
                 if let parsedTag = MarkTagParser.parse(rawTag) {
                     narration.append(Self.placeholder)
                     flushNarration()
@@ -305,7 +318,7 @@ public struct ResponseRouter: Sendable {
     // MARK: - Narration clean-up
 
     private static let strayCoordinatePattern = try! NSRegularExpression(pattern: #"@\d+(\.\d+)?,\d+(\.\d+)?"#)
-    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER|SNAP|CODEMODE):[^\s\]]*\]"#, options: [.caseInsensitive])
+    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER|SNAP|CODEMODE|AGENTS):[^\s\]]*\]"#, options: [.caseInsensitive])
 
     /// Removes "@x,y" and tag heads that lost their "[" ("POINT:#5]").
     static func cleanNarration(_ text: String) -> String {

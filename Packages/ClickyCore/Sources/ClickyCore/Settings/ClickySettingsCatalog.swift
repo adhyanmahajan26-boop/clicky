@@ -111,6 +111,12 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.codeNarrateProgress, kind: .toggle(defaultValue: true),
                             explanation: "Say short progress updates (at most every 20 seconds) while the code agent works."),
 
+        // Agents dashboard.
+        ClickySettingsEntry(key: ClickySettings.Keys.agentsSparkClickOpensDashboard, kind: .toggle(defaultValue: true),
+                            explanation: "Clicking the companion spark opens the Agents dashboard. The spark holds still while the pointer rests near it so it can be clicked."),
+        ClickySettingsEntry(key: ClickySettings.Keys.agentsHistoryLimit, kind: .integer(defaultValue: 50, range: 10...500, step: 10),
+                            explanation: "Finished agents kept in the dashboard's history (agents-history.json)."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

@@ -133,6 +133,8 @@ public final class CodeTaskEngine: @unchecked Sendable {
     public var onProgress: @Sendable (String) -> Void = { _ in }
     /// Each agent tool call, from its stream-json ("editing utils.py").
     public var onAgentProgress: @Sendable (AgentProgressEvent) -> Void = { _ in }
+    /// Each agent run's tokens and cost, once it ends (from its `result` event).
+    public var onAgentUsage: @Sendable (AgentUsage) -> Void = { _ in }
 
     private let lock = NSLock()
     private var currentAgentRunner: CodeAgentRunner?
@@ -598,7 +600,9 @@ public final class CodeTaskEngine: @unchecked Sendable {
         lock.withLock { currentAgentRunner = agentRunner }
         defer { lock.withLock { currentAgentRunner = nil } }
         onProgress(isReadOnly ? "The agent is reading…" : "The agent is working…")
-        return await agentRunner.run()
+        let report = await agentRunner.run()
+        if let usage = report.usage { onAgentUsage(usage) }
+        return report
     }
 
     private func requireResult(_ report: AgentRunReport) throws -> AgentResult {

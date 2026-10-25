@@ -301,6 +301,7 @@ struct BlueCursorView: View {
         .onDisappear {
             timer?.invalidate()
             navigationAnimationTimer?.invalidate()
+            companionManager.sparkClickTarget.reset()
         }
         .onChange(of: companionManager.detectedElementScreenLocation) { newLocation in
             // When a UI element location is detected, navigate the buddy to
@@ -365,6 +366,7 @@ struct BlueCursorView: View {
 
             // During forward navigation or pointing, just skip cursor tracking
             if self.buddyNavigationMode != .followingCursor {
+                if self.isCursorOnThisScreen { self.companionManager.sparkClickTarget.reset() }
                 return
             }
 
@@ -372,7 +374,29 @@ struct BlueCursorView: View {
             let swiftUIPosition = self.convertScreenPointToSwiftUICoordinates(mouseLocation)
             let buddyX = swiftUIPosition.x + 35
             let buddyY = swiftUIPosition.y + 25
-            self.cursorPosition = CGPoint(x: buddyX, y: buddyY)
+            let followingPosition = CGPoint(x: buddyX, y: buddyY)
+
+            // Agents dashboard: once the pointer rests, the spark holds still
+            // so it can be clicked (CompanionSparkClickTarget). Only the
+            // screen the pointer is on drives it, and only while the spark shows.
+            guard self.isCursorOnThisScreen else {
+                self.cursorPosition = followingPosition
+                return
+            }
+            let isSparkShowing = self.buddyIsVisibleOnThisScreen && self.companionManager.voiceState != .listening && self.cursorOpacity > 0
+            guard isSparkShowing else {
+                self.companionManager.sparkClickTarget.reset()
+                self.cursorPosition = followingPosition
+                return
+            }
+            let followingSparkCenterAppKit = CGPoint(x: self.screenFrame.origin.x + followingPosition.x,
+                                                     y: self.screenFrame.origin.y + self.screenFrame.height - followingPosition.y)
+            if let heldSparkCenterAppKit = self.companionManager.sparkClickTarget.sparkCenterWhileHolding(
+                mouseLocation: mouseLocation, followingSparkCenter: followingSparkCenterAppKit) {
+                self.cursorPosition = self.convertScreenPointToSwiftUICoordinates(heldSparkCenterAppKit)
+            } else {
+                self.cursorPosition = followingPosition
+            }
         }
     }
 
@@ -668,6 +692,7 @@ class OverlayWindowManager {
     }
 
     func hideOverlay() {
+        lastCompanionManager?.sparkClickTarget.reset()
         for window in overlayWindows {
             window.orderOut(nil)
             window.contentView = nil
@@ -679,6 +704,7 @@ class OverlayWindowManager {
     func fadeOutAndHideOverlay(duration: TimeInterval = 0.4) {
         let windowsToFade = overlayWindows
         overlayWindows.removeAll()
+        lastCompanionManager?.sparkClickTarget.reset()
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration

@@ -84,6 +84,9 @@ final class AnswerSession: SpeechCoordinatorHost {
 
     /// A MODE: whiteboard turn (workers show the board's shell).
     var isWhiteboardTurn = false
+    /// This turn's main-brain record in the Agents dashboard (helpers hang off it).
+    var brainAgentID: String?
+    private var agentsCenter: AgentsCenter { companionManager.agentsCenter }
     /// This answer drew a board (its history gets the BOARD STATE).
     private(set) var presentedBoard = false
     private var whiteboardStreamParser: WBStreamParser?
@@ -256,6 +259,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             whiteboardStreamParser = WBStreamParser()
             whiteboardFedUTF16 = openRange.upperBound.utf16Offset(in: rawResponse)
             turnRecord?.markTiming("boardOpen")
+            agentsCenter.log(brainAgentID, "drawing a whiteboard")
             companionManager.boardController.showDrawingPlaceholder(title: nil, session: self)
         }
         let fedIndex = String.Index(utf16Offset: whiteboardFedUTF16, in: rawResponse)
@@ -300,9 +304,20 @@ final class AnswerSession: SpeechCoordinatorHost {
         }
         print("🧑‍🏫 Board too broken (\(outcome.stats.droppedCount) dropped); one repair call")
         let brokenBoard = outcome.board
+        let repairModel = companionManager.selectedModel
+        let repairAgentID = agentsCenter.begin(kind: .boardRepair, title: "Repair the board", model: repairModel, parentID: brainAgentID)
+        agentsCenter.log(repairAgentID, "\(outcome.stats.droppedCount) board lines dropped; asking for a repaired board")
+        let repairTurnRecord = turnRecord
+        let agentsCenterForRepair = agentsCenter
         Task { @MainActor [weak self] in
+            let repairResult = await WhiteboardRepairRunner.repair(brokenBoardText: body, model: repairModel)
+            let repaired = repairResult.outcome
+            let repairStatus: AgentStatus = repaired != nil ? .done : .failed
+            agentsCenterForRepair.log(repairAgentID, repaired != nil ? "repaired: \(repaired?.stats.elementCount ?? 0) elements" : "no usable board came back")
+            agentsCenterForRepair.finish(repairAgentID, status: repairStatus, usage: repairResult.usage,
+                                         errorDescription: repaired == nil ? "The repair call returned no usable board." : nil)
+            repairTurnRecord?.recordWorker(title: "Repair the board", kind: .boardRepair, status: repairStatus, usage: repairResult.usage)
             guard let self else { return }
-            let repaired = await WhiteboardRepairRunner.repair(brokenBoardText: body, model: self.companionManager.selectedModel)
             guard !self.isFinished else { return }
             if let repaired {
                 self.turnRecord?.boardStats?.repaired = true
@@ -385,6 +400,10 @@ final class AnswerSession: SpeechCoordinatorHost {
                     router.blockConsumers.insert("codetask")
                     if continueRequest { companionManager.scheduleCodeModeContinuation(transcript: transcript) }
                 }
+            case .agentsDashboard(let command):
+                // "show agents": open the window without taking focus from what the user is doing.
+                agentsCenter.log(brainAgentID, "[AGENTS:\(command.rawValue)]")
+                companionManager.showAgentsDashboard(activatesClicky: false)
             case .block(let name, let body) where name == "codetask":
                 if !companionManager.codeModeController.handleCodeTaskBlock(body, context: CodeTurnContext(transcript: transcript)) {
                     speakNow("I couldn't read that code task.")
@@ -417,6 +436,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             nextSegmentID += 1
             turnRecord?.markTiming("firstSegment")
             turnRecord?.segmentTexts.append(segment.speech)
+            agentsCenter.log(brainAgentID, "said: \(segment.speech)")
             coordinator.enqueue(segment)
         }
         turnRecord?.grounding?.speechLeakCount = speechLeakCount
@@ -792,14 +812,35 @@ final class AnswerSession: SpeechCoordinatorHost {
         let systemPrompt = boardSection.map {
             WhiteboardPromptSection.workerSectionSystemPrompt(sectionIdentifier: $0.sectionIdentifier, sectionTitle: $0.title)
         } ?? CompanionManager.companionWorkerSystemPrompt
+        // Agents dashboard: one record per helper, under this turn's brain record.
+        let agentsCenter = self.agentsCenter
+        let workerKind: AgentKind = boardSection != nil ? .boardSection : .worker
+        let workerAgentID = agentsCenter.begin(kind: workerKind, title: request.workerTitle, model: CompanionWorkerRunner.workerClaudeModel, parentID: brainAgentID)
+        agentsCenter.log(workerAgentID, "task: \(request.workerTaskPrompt)")
+        agentsCenter.log(brainAgentID, "spawned helper: \(request.workerTitle)")
+        let workerTurnRecord = turnRecord
         let workerTask = companionManager.companionWorkerRunner.spawnWorker(request) { workerRequest in
-            let workerTurn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
-                systemPromptFileName: systemPromptFileName,
-                systemPrompt: systemPrompt,
-                contentBlocks: [.text(workerRequest.workerTaskPrompt)] + screenBlocks
-            )
-            return workerTurn.text
+            do {
+                let workerTurn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+                    systemPromptFileName: systemPromptFileName,
+                    systemPrompt: systemPrompt,
+                    contentBlocks: [.text(workerRequest.workerTaskPrompt)] + screenBlocks
+                )
+                agentsCenter.log(workerAgentID, workerTurn.text)
+                agentsCenter.finish(workerAgentID, status: .done, usage: workerTurn.usageSummary)
+                workerTurnRecord?.recordWorker(title: workerRequest.workerTitle, kind: workerKind, status: .done, usage: workerTurn.usageSummary)
+                return workerTurn.text
+            } catch {
+                let wasCancelled = error is CancellationError || Task.isCancelled
+                let workerStatus: AgentStatus = wasCancelled ? .cancelled : .failed
+                agentsCenter.log(workerAgentID, wasCancelled ? "cancelled" : "failed: \(error.localizedDescription)")
+                agentsCenter.finish(workerAgentID, status: workerStatus, errorDescription: wasCancelled ? nil : error.localizedDescription)
+                workerTurnRecord?.recordWorker(title: workerRequest.workerTitle, kind: workerKind, status: workerStatus, usage: nil)
+                throw error
+            }
         }
+        // Cancel in the dashboard: the worker's own task (its bridge kills the CLI process).
+        agentsCenter.setCancelHandler(workerAgentID) { workerTask.cancel() }
         if let boardSection {
             boardSectionByWorkerIndex[workerTasks.count] = boardSection
             Task { @MainActor [weak self] in

@@ -195,6 +195,32 @@ final class TurnRecord {
         var repaired: Bool
     }
 
+    /// The main brain's tokens and cost for this turn (both streams when
+    /// helpers ran), from the CLI's `result` event: model, inputTokens,
+    /// outputTokens, cacheReadTokens, cacheCreationTokens, costUSD (when reported).
+    var usage: AgentUsage?
+
+    /// One helper (worker / board section / board repair) of this turn and its usage.
+    struct WorkerUsageEntry: Encodable {
+        let title: String
+        /// worker / boardSection / boardRepair.
+        let kind: String
+        /// done / failed / cancelled.
+        let status: String
+        let usage: AgentUsage?
+    }
+    var workers: [WorkerUsageEntry] = []
+
+    func addUsage(_ streamUsage: AgentUsage) {
+        usage = usage.map { $0 + streamUsage } ?? streamUsage
+    }
+
+    /// A helper finished. One that ends after turn.json was written writes it again.
+    func recordWorker(title: String, kind: AgentKind, status: AgentStatus, usage workerUsage: AgentUsage?) {
+        workers.append(WorkerUsageEntry(title: title, kind: kind.rawValue, status: status.rawValue, usage: workerUsage))
+        if timings["end"] != nil { TurnLogger.finishTurn(self) }
+    }
+
     var boardTitle: String?
     var boardStats: BoardStatsEntry?
     var boardEvents: [BoardEventEntry] = []
@@ -370,6 +396,8 @@ enum TurnLogger {
             let boardEvents: [TurnRecord.BoardEventEntry]
             let cli: TurnRecord.CLIProcessEntry?
             let snapshots: [TurnRecord.SnapshotEntry]
+            let usage: AgentUsage?
+            let workers: [TurnRecord.WorkerUsageEntry]
         }
 
         let turnFile = TurnFile(
@@ -389,7 +417,9 @@ enum TurnLogger {
             boardStats: turnRecord.boardStats,
             boardEvents: turnRecord.boardEvents,
             cli: turnRecord.cli,
-            snapshots: turnRecord.snapshots
+            snapshots: turnRecord.snapshots,
+            usage: turnRecord.usage,
+            workers: turnRecord.workers
         )
 
         let jsonEncoder = JSONEncoder()

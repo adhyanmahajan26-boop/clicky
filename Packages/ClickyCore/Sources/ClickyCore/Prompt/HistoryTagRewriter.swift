@@ -31,7 +31,7 @@ public enum HistoryTagRewriter {
                         rewrittenText.append(character)
                     }
                 }
-            case .worker, .block, .unsupportedBlock, .dropped, .codeModeToggle:
+            case .worker, .block, .unsupportedBlock, .dropped, .codeModeToggle, .agentsDashboard:
                 break
             }
         }
