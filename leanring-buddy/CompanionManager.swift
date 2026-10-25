@@ -859,6 +859,7 @@ final class CompanionManager: ObservableObject {
 
     private func startWakeWord() {
         wakeWordController.onWake = { [weak self] initialTurnText in self?.wakeWordDidFire(initialTurnText: initialTurnText) }
+        wakeWordController.onStopCommand = { [weak self] in self?.wakeStopCommandHeard() }
         wakeWordController.onTurnFinished = { [weak self] turnText in self?.wakeWordTurnDidFinish(turnText: turnText) }
         wakeWordController.onTurnAbandoned = { [weak self] in self?.wakeWordTurnWasAbandoned() }
         // P8 follow-up window: the answer is done once nothing is thinking, speaking or acting
@@ -880,6 +881,18 @@ final class CompanionManager: ObservableObject {
     /// The wake phrase fired: the same set-up as a push-to-talk key-down
     /// (listening state, screens and CLI warming up), then the turn is heard
     /// by the wake listener until the hands-free end-of-speech rule ends it.
+    /// P9: "stop" / "wait" heard by the wake listener: silence Clicky and end any action right away.
+    private func wakeStopCommandHeard() {
+        let isActing = actionTaskController.isActive
+        guard speechOutputClient.isPlaying || isActing || currentResponseTask != nil else { return }
+        print("✋ Barge-in: stop heard")
+        speechOutputClient.activeCoordinator?.bargeIn(.escape)
+        speechOutputClient.stopPlayback()
+        currentResponseTask?.cancel()
+        if isActing { actionTaskController.cancel(reason: "you said stop", stopsSpeech: true, speaksLine: false) }
+        voiceState = .idle
+    }
+
     private func wakeWordDidFire(initialTurnText: String) {
         guard !isHandsFreeSessionActive, !buddyDictationManager.isDictationInProgress else {
             wakeWordController.cancelCurrentTurn()
@@ -894,9 +907,11 @@ final class CompanionManager: ObservableObject {
             isOverlayVisible = true
         }
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-        // A new question replaces an answer still being worked on.
+        // A new question replaces an answer still being worked on (P9: also an action in progress).
+        speechOutputClient.activeCoordinator?.bargeIn(.newQuestion)
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
+        if actionTaskController.isActive { actionTaskController.cancel(reason: "you asked something new", stopsSpeech: true, speaksLine: false) }
         clearDetectedElementLocation()
         prespawnMainBrainStandby()
         zoomChecker.prespawnStandbyIfEnabled()

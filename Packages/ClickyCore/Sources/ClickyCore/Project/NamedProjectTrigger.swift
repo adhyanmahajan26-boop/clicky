@@ -284,3 +284,33 @@ public enum NamedProjectSpeech {
         return taskText + "\nScreenshot: " + screenshotPath
     }
 }
+
+extension NamedProjectTrigger {
+    /// The bridge trigger matched, but what's left starts with "<name> project" ("send this to my
+    /// project, Mahajan motor Works project that what's the update…" left "motor Works project that…"):
+    /// it's for that project, not this one. Returns (name, rest).
+    public static func leadingProjectName(in taskText: String) -> (name: String, rest: String)? {
+        let words = taskText.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard let projectIndex = words.prefix(6).firstIndex(where: { $0.lowercased().trimmingCharacters(in: .punctuationCharacters).hasPrefix("project") }),
+              projectIndex >= 1 else { return nil }
+        let nameWords = words[..<projectIndex].map { $0.trimmingCharacters(in: .punctuationCharacters) }.filter { !$0.isEmpty }
+        let lowered = Set(nameWords.map { $0.lowercased() })
+        guard !nameWords.isEmpty, lowered.isDisjoint(with: ["my", "the", "this", "clicky", "our"]) || nameWords.count > 1 else { return nil }
+        let filtered = nameWords.filter { !["my", "the", "this", "our"].contains($0.lowercased()) }
+        guard !filtered.isEmpty, !(filtered.count == 1 && filtered[0].lowercased() == "clicky") else { return nil }
+        let rest = words[(projectIndex + 1)...].joined(separator: " ")
+        return (filtered.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " "), rest)
+    }
+
+    /// A question for the project ("what's the update on…") rather than a change to make: answered by
+    /// that project's own Claude, so Clicky offers to put it into Claude instead of running a code task.
+    public static func isQuestion(_ taskText: String) -> Bool {
+        var text = taskText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        for filler in ["that ", "and ", "so ", "please ", "can you tell me ", "tell me ", "ask "] where text.hasPrefix(filler) {
+            text = String(text.dropFirst(filler.count))
+        }
+        let starts = ["what", "whats", "what's", "how", "is ", "are ", "did ", "does ", "do ", "when", "why", "who", "where", "which",
+                      "any update", "status", "update on", "has ", "have ", "can ", "could ", "should "]
+        return starts.contains { text.hasPrefix($0) } || taskText.contains("?")
+    }
+}

@@ -296,11 +296,15 @@ public struct WakeWordGate: Sendable {
     public init() {}
 
     /// `recentClickySpokenWords`: every word Clicky said in the EchoGuard window.
+    /// `allowsBargeIn` (v2.wake.bargeIn): "Hey Claudia" while Clicky talks interrupts it — then only
+    /// the echo check guards against Clicky's own voice (it rarely says the name).
     public mutating func decide(at date: Date, isClickySpeaking: Bool, lastClickySpeechEndDate: Date?,
-                                recentClickySpokenWords: Set<String>, matcher: WakeWordMatcher) -> Decision {
-        if isClickySpeaking { return .ignoredWhileSpeaking }
-        if let lastClickySpeechEndDate, date.timeIntervalSince(lastClickySpeechEndDate) < Self.afterSpeechSeconds {
-            return .ignoredJustAfterSpeaking
+                                recentClickySpokenWords: Set<String>, matcher: WakeWordMatcher, allowsBargeIn: Bool = false) -> Decision {
+        if !allowsBargeIn {
+            if isClickySpeaking { return .ignoredWhileSpeaking }
+            if let lastClickySpeechEndDate, date.timeIntervalSince(lastClickySpeechEndDate) < Self.afterSpeechSeconds {
+                return .ignoredJustAfterSpeaking
+            }
         }
         if matcher.containsNameWord(recentClickySpokenWords) { return .ignoredEcho }
         if let lastFireDate, date.timeIntervalSince(lastFireDate) < Self.debounceSeconds { return .ignoredDebounce }
@@ -355,4 +359,24 @@ public enum WakeTurnLimits {
     /// "hey claudia" and then nothing: give up (counted as a likely false wake).
     public static let noSpeechAfterWakeSeconds: TimeInterval = 5
     public static let maximumTurnSeconds: TimeInterval = 30
+}
+
+// MARK: - Barge-in "stop"
+
+/// A short standalone "stop" while Clicky talks or acts ("stop", "wait", "claudia stop", "ruko", "bas").
+/// The whole utterance segment must be stop words (at most 4 words, a leading "hey claudia"/"clicky"
+/// ignored), so a "stop" inside a longer sentence never counts; and the stop word must not be one
+/// Clicky itself just said (its voice reaches the mic).
+public enum WakeStopCommand {
+    static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "enough", "quiet", "shush", "hold", "pause", "cancel"]
+    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "claudia", "clicky", "it", "now", "please", "on", "talking",
+                                          "be", "jao", "jaao", "karo", "that", "the"]
+
+    public static func isStopUtterance(_ words: [String], recentClickySpokenWords: Set<String> = []) -> Bool {
+        let normalized = words.map { WakeWordMatcher.normalizedWord($0) }.filter { !$0.isEmpty }
+        guard !normalized.isEmpty, normalized.count <= 4 else { return false }
+        let stopsSaid = normalized.filter { stopWords.contains($0) }
+        guard !stopsSaid.isEmpty, normalized.allSatisfy({ stopWords.contains($0) || fillerWords.contains($0) }) else { return false }
+        return stopsSaid.allSatisfy { !recentClickySpokenWords.contains($0) }
+    }
 }

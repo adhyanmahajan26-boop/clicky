@@ -115,6 +115,11 @@ final class ProjectBridgeController: ObservableObject {
             print("📮 Project: trigger heard but v2.project.enabled is off")
             return .disabled
         }
+        // What's left names another project ("… Mahajan motor Works project that what's …"): not this one.
+        if let named = NamedProjectTrigger.leadingProjectName(in: triggerMatch.taskText),
+           namedProjectRouter?.handleNamedProject(named.name, taskText: named.rest, transcript: transcript, speaks: speaks) == true {
+            return .namedProject
+        }
         guard !triggerMatch.taskText.isEmpty else {
             print("📮 Project: \"\(triggerMatch.triggerPhrase)\" without a task, asking for one")
             if speaks { companionManager?.speakCodeModeLine(ProjectUpdateSpeech.askForTaskLine) }

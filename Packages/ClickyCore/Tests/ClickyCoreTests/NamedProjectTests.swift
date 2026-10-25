@@ -317,3 +317,20 @@ struct NamedProjectTests {
         #expect(LocalRepoIndexer.maximumDepth(forRoot: "/Users/owner/Code", homeDirectory: "/Users/owner") == 3)
     }
 }
+
+/// Live: "send this to my project, Mahajan motor Works project that what's the update on…" went to
+/// the bridge with "motor Works project that…" left over.
+@Test func bridgeLeftoverNamingAnotherProjectIsRerouted() throws {
+    let named = try #require(NamedProjectTrigger.leadingProjectName(in: "motor Works project that what's the update on the Mahajan motor website AI visibility"))
+    #expect(named.name == "Motor Works")
+    #expect(named.rest.hasPrefix("that what's the update"))
+    #expect(NamedProjectTrigger.leadingProjectName(in: "add a multiply function to utils") == nil)
+    #expect(NamedProjectTrigger.leadingProjectName(in: "my project needs a new readme") == nil)
+}
+
+@Test func questionsForAProjectAreQuestions() {
+    #expect(NamedProjectTrigger.isQuestion("that what's the update on the Mahajan motor website AI visibility"))
+    #expect(NamedProjectTrigger.isQuestion("is the deploy done?"))
+    #expect(!NamedProjectTrigger.isQuestion("make 3G9024 use the photo of 4G9089"))
+    #expect(!NamedProjectTrigger.isQuestion("add a subtract function with a test"))
+}

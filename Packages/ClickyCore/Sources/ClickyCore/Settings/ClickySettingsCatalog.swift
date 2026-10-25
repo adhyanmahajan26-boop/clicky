@@ -108,6 +108,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Turn on Code mode. You can also say \"turn on code mode\" or \"turn off code mode\"."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeBashAllowed, kind: .toggle(defaultValue: false),
                             explanation: "Let the code agent use Bash (allowlisted test/build/git commands only). Only a passing sandbox probe (Tools/codeprobe.sh --write-setting) should turn this on."),
+        ClickySettingsEntry(key: ClickySettings.Keys.wakeBargeIn, kind: .toggle(defaultValue: true),
+                            explanation: "Say \"stop\" or \"Hey Claudia\" while Clicky talks or works to interrupt it."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeSearchProtectedFolders, kind: .toggle(defaultValue: false),
                             explanation: "Also look for your projects in Desktop, Documents and Downloads (macOS asks once). Off: only your home folder's top level and ~/Projects."),
         ClickySettingsEntry(key: ClickySettings.Keys.codeRepoRoots, kind: .textList(defaultValue: ClickySettings.defaultCodeRepoRoots),

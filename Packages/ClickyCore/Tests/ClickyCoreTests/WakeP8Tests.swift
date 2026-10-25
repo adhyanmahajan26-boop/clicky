@@ -345,3 +345,29 @@ struct WakeFollowUpWindowTests {
         #expect(!didStart)
     }
 }
+
+// MARK: - P9 barge-in
+
+@Test func standaloneStopWordsInterrupt() {
+    for phrase in ["stop", "Stop!", "wait", "claudia stop", "hey clicky stop", "stop it", "ruko", "bas", "stop talking", "hold on"] {
+        #expect(WakeStopCommand.isStopUtterance(phrase.split(separator: " ").map(String.init)), "\(phrase)")
+    }
+    for phrase in ["stop the music on spotify please", "don't stop believing", "wait until tomorrow then", "the bus stop is near", "next"] {
+        #expect(!WakeStopCommand.isStopUtterance(phrase.split(separator: " ").map(String.init)), "\(phrase)")
+    }
+}
+
+@Test func stopIsIgnoredWhenClickyJustSaidIt() {
+    #expect(!WakeStopCommand.isStopUtterance(["stop"], recentClickySpokenWords: ["press", "stop", "to", "end"]))
+    #expect(WakeStopCommand.isStopUtterance(["wait"], recentClickySpokenWords: ["press", "stop", "to", "end"]))
+}
+
+@Test func wakeWordInterruptsSpeechWhenBargeInIsOn() {
+    var gate = WakeWordGate()
+    let matcher = WakeWordMatcher()
+    let now = Date()
+    #expect(gate.decide(at: now, isClickySpeaking: true, lastClickySpeechEndDate: nil, recentClickySpokenWords: [], matcher: matcher) == .ignoredWhileSpeaking)
+    #expect(gate.decide(at: now, isClickySpeaking: true, lastClickySpeechEndDate: nil, recentClickySpokenWords: [], matcher: matcher, allowsBargeIn: true) == .fire)
+    var echoGate = WakeWordGate()
+    #expect(echoGate.decide(at: now, isClickySpeaking: true, lastClickySpeechEndDate: nil, recentClickySpokenWords: ["claudia"], matcher: matcher, allowsBargeIn: true) == .ignoredEcho)
+}

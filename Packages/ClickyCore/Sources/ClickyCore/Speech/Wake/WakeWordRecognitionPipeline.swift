@@ -60,6 +60,8 @@ public enum WakeWordPipelineEvent: Sendable {
     /// P8: a request ended. `failed`: an error that wasn't a cancel, or no words at all
     /// (what WakeLocaleSelector compares locales by).
     case requestFinished(localeIdentifier: String, failed: Bool)
+    /// P9: the latest utterance segment is only stop words (the controller checks Clicky is talking or acting).
+    case stopCommand(words: [String])
 }
 
 public struct WakeWordPipelineStatistics: Equatable, Sendable {
@@ -146,6 +148,7 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
         var wordFirstHeardSeconds: [TimeInterval] = []
         /// Segment starts already reported, so one "hey claudia" is one candidate.
         var reportedSegmentStarts: Set<Int> = []
+        var reportedStopSegments: Set<Int> = []
         var latestWords: [WakeTranscriptWord] = []
 
         init(serial: Int, request: SFSpeechAudioBufferRecognitionRequest, startAudioSeconds: TimeInterval) {
@@ -430,6 +433,7 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
                 // The wake request's late final, after the turn moved to a new request.
                 updateCarriedTextFromWakeRequest(words: words, capture: capture)
             } else if capture == nil {
+                reportStopIfAny(words: words, requestState: requestState)
                 reportCandidateIfAny(words: words, requestState: requestState)
             }
         }
@@ -527,6 +531,16 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
                 return WakeTranscriptWord(text: part, startSeconds: cursor, endSeconds: cursor + share)
             }
         }
+    }
+
+    /// The newest segment (after the last pause) when it is a standalone stop utterance; once per segment.
+    private func reportStopIfAny(words: [WakeTranscriptWord], requestState: RequestState) {
+        guard let segmentStart = WakeWordMatcher.segmentStartIndexes(in: words).last,
+              !requestState.reportedStopSegments.contains(segmentStart) else { return }
+        let segmentWords = words[segmentStart...].map(\.text)
+        guard WakeStopCommand.isStopUtterance(Array(segmentWords)) else { return }
+        requestState.reportedStopSegments.insert(segmentStart)
+        onEvent(.stopCommand(words: Array(segmentWords)))
     }
 
     private func reportCandidateIfAny(words: [WakeTranscriptWord], requestState: RequestState) {
@@ -770,7 +784,7 @@ public enum WakeWordFileFeeder {
                 }
             case .captureAbandoned(let candidate):
                 if candidate.isFollowUp { collector.followUpWindow.commandAbandoned(at: Date()) }
-            case .captureUpdated, .requestFinished:
+            case .captureUpdated, .requestFinished, .stopCommand:
                 break
             }
         }) else {

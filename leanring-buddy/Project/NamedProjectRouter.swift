@@ -123,9 +123,29 @@ final class NamedProjectRouter {
             return true
         }
         let request = NamedRequest(projectName: match.projectName, taskText: match.taskText, spokenWords: spokenWords, speaks: speaks)
+        start(request)
+        return true
+    }
+
+    /// The bridge trigger caught "send this to my project" but the rest names another project.
+    func handleNamedProject(_ projectName: String, taskText: String, transcript: String, speaks: Bool) -> Bool {
+        guard !taskText.isEmpty else { return false }
+        note("named project \"\(projectName)\" from the bridge's leftover text")
+        let spokenWords = ProjectSendTrigger.cleanedTaskText(ProjectSendTrigger.withoutBracketedText(transcript))
+        start(NamedRequest(projectName: projectName, taskText: taskText, spokenWords: spokenWords, speaks: speaks))
+        return true
+    }
+
+    /// A question ("what's the update on…") goes to that project's own Claude (the paste offer);
+    /// a change to make runs as a code task in the matching repo.
+    private func start(_ request: NamedRequest) {
+        if NamedProjectTrigger.isQuestion(request.taskText) {
+            note("a question for \"\(request.projectName)\": offering the Claude app")
+            offerClaudeApp(for: request, prefix: nil)
+            return
+        }
         resolutionTask?.cancel()
         resolutionTask = Task { [weak self] in await self?.resolve(request) }
-        return true
     }
 
     /// P7 actions: a code_task step naming a project ("choose this project

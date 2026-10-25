@@ -45,6 +45,9 @@ final class WakeWordController: ObservableObject {
 
     /// The phrase fired; `initialTurnText` is what followed it in the same breath.
     var onWake: ((_ initialTurnText: String) -> Void)?
+    /// P9: a standalone "stop" heard while Clicky may be talking or acting (CompanionManager decides).
+    var onStopCommand: (() -> Void)?
+    private(set) var stopCommandCount = 0
     /// The turn after the wake word ended (end-of-speech rule or the 30 s cap).
     var onTurnFinished: ((_ turnText: String) -> Void)?
     /// Nothing followed the wake word, or push-to-talk / hands-free took the mic.
@@ -368,7 +371,8 @@ final class WakeWordController: ObservableObject {
 
     /// While Clicky talks (and 1.5 s after) no audio reaches the recognizer.
     func refreshSpeechSuppression() {
-        let isSuppressed = isClickySpeakingOrJustSpoke
+        // P9 barge-in: keep listening while Clicky talks so "stop" / "Hey Claudia" can interrupt it.
+        let isSuppressed = isClickySpeakingOrJustSpoke && !ClickySettings.isWakeBargeInEnabled
         pipeline?.setSuppressed(isSuppressed && !isCapturingTurn)
         speechSuppressionRecheckTask?.cancel()
         guard isSuppressed, audioEngine != nil else { return }
@@ -410,7 +414,8 @@ final class WakeWordController: ObservableObject {
                 return
             }
             let decision = gate.decide(at: now, isClickySpeaking: speechOutput.isPlaying, lastClickySpeechEndDate: speechOutput.lastSpeechEndDate,
-                                       recentClickySpokenWords: speechOutput.recentSpokenWords(at: now), matcher: matcher)
+                                       recentClickySpokenWords: speechOutput.recentSpokenWords(at: now), matcher: matcher,
+                                       allowsBargeIn: ClickySettings.isWakeBargeInEnabled)
             guard decision == .fire else {
                 ignoredMatchCounts[decision.rawValue, default: 0] += 1
                 print("👂 Wake word: match ignored (\(decision.rawValue))")
@@ -427,6 +432,15 @@ final class WakeWordController: ObservableObject {
 
         case .captureUpdated:
             break
+
+        case .stopCommand(let words):
+            guard state == .armed, ClickySettings.isWakeBargeInEnabled,
+                  WakeStopCommand.isStopUtterance(words, recentClickySpokenWords: speechOutput.recentSpokenWords(at: Date())) else {
+                ignoredMatchCounts["stopEcho", default: 0] += 1
+                return
+            }
+            stopCommandCount += 1
+            onStopCommand?()
 
         case .captureFinished(let turnText, let candidate):
             guard isCapturingTurn else { return }
