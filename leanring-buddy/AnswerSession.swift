@@ -4,7 +4,8 @@
 //
 //  One spoken answer, from Claude's first streamed word to the end of the
 //  voice. Text deltas go through the ResponseRouter (tags out, workers and
-//  blocks aside) and the NarrationSegmenter; each segment is parsed for the
+//  blocks aside; a <codetask> goes to the CodeModeController when Code mode
+//  is on) and the NarrationSegmenter; each segment is parsed for the
 //  caption, cleaned of leaked ids (SpeechSafetyNet) and handed to the
 //  SpeechCoordinator, which speaks it and fires its tags on their words.
 //
@@ -68,7 +69,7 @@ final class AnswerSession: SpeechCoordinatorHost {
         self.groundedTurn = groundedTurn
         self.turnRecord = turnRecord
         self.companionManager = companionManager
-        self.router = ResponseRouter(blockConsumers: [])
+        self.router = ResponseRouter(blockConsumers: AnswerSession.blockConsumers())
         self.segmenterOptions = companionManager.speechOutputClient.narrationSegmenterOptions
         self.segmenter = NarrationSegmenter(options: segmenterOptions)
         // A placeholder host is replaced by `self` right below (Swift needs
@@ -126,7 +127,7 @@ final class AnswerSession: SpeechCoordinatorHost {
         case .reset:
             // A new message before anything was spoken: start the answer over.
             turnRecord?.rawResponse += "\n--- message restarted ---\n"
-            router = ResponseRouter(blockConsumers: [])
+            router = ResponseRouter(blockConsumers: Self.blockConsumers())
             segmenter = NarrationSegmenter(options: segmenterOptions)
             tagIndexOffset = 0
             placeholdersSeen = 0
@@ -149,7 +150,7 @@ final class AnswerSession: SpeechCoordinatorHost {
     func beginFollowUpStream() {
         tagIndexOffset += router.tags.count
         placeholdersSeen = 0
-        router = ResponseRouter(blockConsumers: [])
+        router = ResponseRouter(blockConsumers: Self.blockConsumers())
         segmenter = NarrationSegmenter(options: segmenterOptions)
         supervisor = CLIStreamSupervisor()
         isFirstStream = false
@@ -161,6 +162,12 @@ final class AnswerSession: SpeechCoordinatorHost {
         let segment = CaptionParser.parse(text, id: nextSegmentID, firstTagIndex: 0)
         nextSegmentID += 1
         coordinator.enqueue(segment)
+    }
+
+    /// Blocks with a consumer this turn: <codetask> only while Code mode is
+    /// on (otherwise the router says "I can't do that yet").
+    static func blockConsumers() -> Set<String> {
+        ClickySettings.isCodeEnabled ? ["codetask"] : []
     }
 
     // MARK: - Routing
@@ -176,6 +183,10 @@ final class AnswerSession: SpeechCoordinatorHost {
                 prepare(tag, index: globalIndex)
             case .worker(let title, let task):
                 spawnWorker(CompanionWorkerRequest(workerTitle: title, workerTaskPrompt: task))
+            case .block(let name, let body) where name == "codetask":
+                if !companionManager.codeModeController.handleCodeTaskBlock(body, context: CodeTurnContext(transcript: transcript)) {
+                    speakNow("I couldn't read that code task.")
+                }
             case .block(let name, _):
                 print("🧱 Block <\(name)> has no consumer yet")
             case .unsupportedBlock(let name):

@@ -87,6 +87,12 @@ struct CompanionPanelView: View {
 
                 claudeCodeConnectionButton
                     .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
+                CodeModeSettingsRow(codeModeController: companionManager.codeModeController)
+                    .padding(.horizontal, 16)
             }
 
             #if DEBUG

@@ -10,8 +10,9 @@
 //     their words are spoken);
 //   - [WORKER:title:task]: on its own line, ending at the line's last "]";
 //     emitted at once (spawned unanchored);
-//   - <whiteboard>, <code>, <type> blocks: handed to their consumer, or
-//     "I can't do that yet" when nothing consumes them.
+//   - <whiteboard>, <code>, <type>, <codetask> blocks: handed to their
+//     consumer, or "I can't do that yet" when nothing consumes them
+//     (<codetask> is P5 Code mode's JSON task; "<code" alone stays <code>).
 //  A "]" inside "…" doesn't close a tag (\" escapes). A tag held longer than
 //  800 characters, or still open at the end, is dropped and logged.
 //  Narration loses stray tag fragments and "@x,y" coordinates; "#57" is kept
@@ -39,7 +40,7 @@ public struct ResponseRouter: Sendable {
     public static let maximumHeldTagLength = 800
     public static let maximumHeldBlockLength = 40_000
     public static let maximumWorkers = 4
-    public static let blockNames = ["whiteboard", "code", "type"]
+    public static let blockNames = ["whiteboard", "code", "type", "codetask"]
     public static let unsupportedBlockSentence = "I can't do that yet."
 
     private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]"]

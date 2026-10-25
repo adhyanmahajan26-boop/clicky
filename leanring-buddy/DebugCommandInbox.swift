@@ -12,6 +12,9 @@
 //    ask {text, speak=true}   → runs the full answer pipeline; replies at turn end
 //    marks {tags}             → fresh capture, parse/map/draw the tags (legacy parser)
 //    say {text}, stop, clear, reset, handsfree {on}, selftest {name}
+//    codeTask {task | json}   → runs a CodeTask through the CodeModeController
+//                               (the review panel still needs a real click)
+//    codeState                → Code mode's preflight, phase, review and recent events
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -239,6 +242,25 @@ final class DebugCommandInbox {
                 let (isPassing, selfTestResult) = await self.runSelfTest(named: selfTestName, mode: selfTestMode)
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: isPassing, result: selfTestResult, errorMessage: isPassing ? nil : "selftest \(selfTestName) failed")
             }
+
+        case "codeTask":
+            let blockBody: String?
+            if let taskObject = commandObject["task"], JSONSerialization.isValidJSONObject(taskObject),
+               let taskData = try? JSONSerialization.data(withJSONObject: taskObject) {
+                blockBody = String(decoding: taskData, as: UTF8.self)
+            } else {
+                blockBody = commandObject["json"] as? String
+            }
+            guard let blockBody, let codeTask = try? CodeTask.decode(blockBody: blockBody) else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "codeTask needs a valid \"task\" object or \"json\" string")
+                return
+            }
+            companionManager.codeModeController.start(codeTask, context: CodeTurnContext(transcript: "debug codeTask"))
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["started": companionManager.codeModeController.isBusy,
+                                                                                  "action": codeTask.action.rawValue], errorMessage: nil)
+
+        case "codeState":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.codeModeController.stateSnapshot(), errorMessage: nil)
 
         default:
             reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "unknown cmd \(commandName)")

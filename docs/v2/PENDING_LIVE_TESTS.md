@@ -73,7 +73,7 @@ Probe results and the voice decision are in docs/v2/EVAL.md "P3 probe". Live che
    relaunch → status "Qwen unavailable: nothing on port 11299", the Mac voice speaks, nothing spawned on 11299
    (then `defaults delete com.personal.clicky v2.debug.ttsPortOverride`); (b) kill mlx-serve mid-answer → the Mac
    voice speaks the rest of that answer, the supervisor respawns it (at most once per 60 s) and the next answer is
-   Qwen again; (c) a slow segment (watchdog 1.0 + 0.6 x chars/15 s) → only that segment in the Mac voice.
+   Qwen again; (c) a slow segment waits (watchdog max(20 s, 10 + 3 x estimate)), never switching voices mid-answer.
 5. Adopt on relaunch: quit Clicky → mlx-serve keeps running (`lsof -nP -iTCP:11234 -sTCP:LISTEN`, pid in
    `~/.clicky/mlx-serve.pid` when Clicky started it) → relaunch → "Qwen ready (…)" with no second server.
    Also: a server bound to `*:11234` → "Qwen unavailable: not loopback-only", Mac voice, the server is untouched.
@@ -94,3 +94,38 @@ Questions for the user:
   still comfortable to follow?
 - If the first-segment latency misses (p50 > 600 ms): try an 8-bit Qwen3-TTS build (needs a download, not done).
 - Load the CustomVoice model so speaker "Ryan" + the instruct take effect (the Base model ignores them)?
+
+## P5
+
+Code mode is off by default (`v2.code.enabled`); everything below needs the app running and the
+user present. Silent mode covered: `swift test` (fake `claude`/`gh` scripts, temp repos and a temp
+bare remote only), the app build, and build-for-testing.
+
+1. Sandbox probe: run `Tools/codeprobe.sh`. Any FAIL or INCONCLUSIVE → keep
+   `v2.code.bashAllowed` false (the default). Only an all-PASS run may set it true.
+2. Preflight probe: turn on "Code mode" in the menu-bar panel; the status line must say
+   "Ready as @<login>". `codeState` (debug inbox) shows the flag table: `--max-turns` must read
+   `probeVerified` (it's hidden from `claude --help` 2.1.301; the probe passes `--max-turns 1`),
+   `--append-system-prompt-file` `fallback` (rules.md inline via `--append-system-prompt`), and
+   `unremovableTools` should be empty. If the probe's init lists plugins or MCP servers the
+   preflight refuses (the agent's init would be rejected anyway) — note which.
+3. "in clicky, what does CompanionWorkers do?" → answered out loud, read-only. OK to run on
+   ~/Projects/clicky because ask_repo only reads (cwd = the clone, tools Read/Grep/Glob, no
+   worktree). Check afterwards: `git -C ~/Projects/clicky status` unchanged,
+   `~/.clicky/code/<task>/agent.jsonl` init shows `"tools":["Read","Grep","Glob"]`,
+   `permissionMode` acceptEdits, no MCP servers.
+4. Sandbox PR flow — needs the user's OK to create a throwaway repo first (never a real one):
+   a PR with one review comment → "fix the review comments on <sandbox> PR 1" → the panel shows
+   `o/n #1 @old→new`, the diff, the reply text, the quoted argv; Approve stays disabled until the
+   push dry-run finishes; Push & reply → `ls-remote` check, push, reply, resolve, then
+   `gh pr checks` polling (15 s, ≤ 20 min) spoken. Also: a `.github/workflows/` change is red
+   and blocks; editing a reply changes what's sent (and an edit after the click aborts);
+   `repo_change` with deliver local/branch/pr (PR only if `gh pr list --head` is empty);
+   "Clean up worktrees" asks when a worktree has unpushed commits.
+5. Review panel by hand: the look (compare with
+   `~/Library/Logs/Clicky/renders/p5/review-panel.png` from `swift test`), a click within 0.5 s
+   of the panel appearing is ignored, plain click for push/PR/comment/reply, a 1.5 s hold (with
+   the fill animation) for approve / request changes / merge / update branch, a short press on
+   those does nothing, Return only highlights the primary button for 5 s, Esc during
+   "Opening o/n #N" cancels, and the chooser appears for an ambiguous name.
+6. Hosted tests (`leanring-buddyTests/CodeModeControllerTests.swift`): compiled, not run.

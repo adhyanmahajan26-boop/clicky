@@ -54,6 +54,10 @@ public enum ClickySettings {
         /// Int, debug only: send Qwen requests to this port instead of 11234
         /// (a closed port tests the Apple fallback). Clicky never spawns on it.
         public static let ttsPortOverride = "v2.debug.ttsPortOverride"
+        /// Bool, default false: the code agent may get Bash (set true only by a passing sandbox probe).
+        public static let codeBashAllowed = "v2.code.bashAllowed"
+        /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
+        public static let codeRepoRoots = "v2.code.repoRoots"
     }
 
     public static var qwenSpeaker: String {
@@ -187,4 +191,10 @@ public enum ClickySettings {
         guard let modelIdentifier else { return nil }
         return probeRecords[modelIdentifier]?.effectiveMaxEdge
     }
+
+    // MARK: - P5 Code mode
+
+    public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer"]
+    public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
+    public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
 }
