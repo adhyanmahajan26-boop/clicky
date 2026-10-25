@@ -7,6 +7,10 @@
 //  is drawn at 25 % opacity in place, so revealing words never re-wraps the
 //  bubble. Fence contents are monospaced.
 //
+//  Below the caption, the marks' legend (nearCursor label style): one line
+//  per numbered mark, its chip then its words (13 pt, one line each, cut
+//  with "…"), each row a fixed height so the size is known up front.
+//
 
 import SwiftUI
 
@@ -17,6 +21,21 @@ public enum CaptionBubbleMetrics {
     public static let cornerRadius: CGFloat = 12
     public static let unrevealedOpacity = 0.25
     public static let previousOpacity = 0.55
+    public static let legendFontSize: CGFloat = 13
+    public static let legendRowHeight: CGFloat = 18
+    public static let legendRowSpacing: CGFloat = 3
+    /// Between the caption text and the first legend row.
+    public static let legendTopGap: CGFloat = 8
+    public static let legendChipSpacing: CGFloat = 7
+    /// More rows than this are cut (the bubble stays near the cursor).
+    public static let maximumLegendRows = 9
+
+    /// The legend block's height for `rowCount` rows (0 when empty).
+    public static func legendHeight(rowCount: Int) -> CGFloat {
+        let rows = min(rowCount, maximumLegendRows)
+        guard rows > 0 else { return 0 }
+        return legendTopGap + CGFloat(rows) * legendRowHeight + CGFloat(rows - 1) * legendRowSpacing
+    }
 }
 
 public struct CaptionBubbleView: View {
@@ -30,19 +49,28 @@ public struct CaptionBubbleView: View {
         self.maxLines = maxLines
     }
 
+    private var legendRows: [MarkLegendEntry] {
+        caption.statusText == nil ? Array(caption.markLegend.prefix(CaptionBubbleMetrics.maximumLegendRows)) : []
+    }
+
     public var body: some View {
-        Group {
-            if let statusText = caption.statusText {
-                Text(statusText).foregroundColor(.white.opacity(0.85))
-            } else {
-                captionText
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if let statusText = caption.statusText {
+                    Text(statusText).foregroundColor(.white.opacity(0.85))
+                } else {
+                    captionText
+                }
+            }
+            .font(.system(size: CaptionBubbleMetrics.fontSize, weight: .medium))
+            .lineLimit(maxLines)
+            .truncationMode(.head)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            if !legendRows.isEmpty {
+                legend.padding(.top, CaptionBubbleMetrics.legendTopGap)
             }
         }
-        .font(.system(size: CaptionBubbleMetrics.fontSize, weight: .medium))
-        .lineLimit(maxLines)
-        .truncationMode(.head)
-        .multilineTextAlignment(.leading)
-        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: maxWidth - 2 * CaptionBubbleMetrics.horizontalPadding, alignment: .leading)
         .padding(.horizontal, CaptionBubbleMetrics.horizontalPadding)
         .padding(.vertical, CaptionBubbleMetrics.verticalPadding)
@@ -55,6 +83,22 @@ public struct CaptionBubbleView: View {
                 .stroke(MarkPalette.orange.opacity(0.7), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
+    }
+
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: CaptionBubbleMetrics.legendRowSpacing) {
+            ForEach(legendRows) { entry in
+                HStack(spacing: CaptionBubbleMetrics.legendChipSpacing) {
+                    MarkChipView(number: entry.number)
+                    Text(entry.text)
+                        .font(.system(size: CaptionBubbleMetrics.legendFontSize, weight: .medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(height: CaptionBubbleMetrics.legendRowHeight, alignment: .leading)
+            }
+        }
     }
 
     private var captionText: Text {

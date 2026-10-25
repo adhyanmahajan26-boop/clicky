@@ -9,7 +9,8 @@
 //  underlines are the fine weight (4 pt halo, 2 pt line) so they never spill
 //  onto neighbouring rows; leaders are 1.5 pt on a 3 pt halo. All have a
 //  soft shadow; tentative marks are dashed at 70 %. A step's number is a
-//  white disc inside its label pill.
+//  white disc inside its label pill. nearCursor marks carry only a 14 pt
+//  numbered chip (MarkChipView, also used by the caption bubble's legend).
 //
 
 import SwiftUI
@@ -116,6 +117,11 @@ private struct MarkDrawingView: View {
             if let stepDiscCenter = drawing.stepDiscCenter, case .step(let stepNumber) = drawing.style {
                 stepDisc(stepNumber).position(local(stepDiscCenter))
             }
+            if let chipCenter = drawing.chipCenter, let chipNumber = drawing.chipNumber {
+                MarkChipView(number: chipNumber)
+                    .scaleEffect(drawProgress)
+                    .position(local(chipCenter))
+            }
             if let labelRect = drawing.labelRect, drawing.labelText != nil || drawing.labelStepNumber != nil {
                 let labelText = drawing.labelText
                 labelPill(labelText, stepNumber: drawing.labelStepNumber, size: labelRect.size)
@@ -171,6 +177,29 @@ private struct MarkDrawingView: View {
         .frame(width: size.width, height: size.height, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: LabelPlacer.cornerRadius, style: .continuous).fill(MarkPalette.orange))
         .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
+    }
+}
+
+/// The small numbered chip: an orange circle with a white number and a thin
+/// white rim, MarkChips.diameter wide.
+public struct MarkChipView: View {
+    let number: Int
+    let diameter: CGFloat
+
+    public init(number: Int, diameter: CGFloat = MarkChips.diameter) {
+        self.number = number
+        self.diameter = diameter
+    }
+
+    public var body: some View {
+        Text("\(number)")
+            .font(.system(size: diameter * (number >= 10 ? 0.55 : 0.68), weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundColor(.white)
+            .frame(width: diameter, height: diameter)
+            .background(Circle().fill(MarkPalette.orange))
+            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.25))
+            .shadow(color: Color.black.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 }
 

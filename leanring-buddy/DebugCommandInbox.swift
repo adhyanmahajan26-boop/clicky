@@ -195,6 +195,7 @@ final class DebugCommandInbox {
                 "captionFrozen": caption.isFrozen,
                 "captionCurrent": caption.current?.display ?? NSNull(),
                 "captionRevealed": caption.revealedDisplayCharacters,
+                "captionLegend": caption.markLegend.map { "\($0.number) \($0.text)" },
                 "lastHistory": companionManager.lastHistoryEntryForDebug ?? NSNull()
             ], errorMessage: nil)
 
