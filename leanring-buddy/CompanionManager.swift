@@ -122,6 +122,7 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+    }
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -606,6 +607,9 @@ final class CompanionManager: ObservableObject {
             speechOutputClient.stopPlayback()
             clearDetectedElementLocation()
 
+            // Start the CLI now so key-up only has to write the message.
+            prespawnMainBrainStandby()
+
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
                 withAnimation(.easeOut(duration: 0.3)) {
@@ -765,6 +769,7 @@ final class CompanionManager: ObservableObject {
 
     func endHandsFreeSession() {
         guard isHandsFreeSessionActive else { return }
+        claudeCodeBridge.reapStandbyProcess()
 
         handsFreeListeningSession?.stopListening()
         handsFreeListeningSession = nil
@@ -793,8 +798,11 @@ final class CompanionManager: ObservableObject {
 
     private func handleHandsFreePartialTranscript(_ partialTranscript: String) {
         handsFreeLastHeardText = partialTranscript
-        // First words of an utterance: start reading the screens.
+        // First words of an utterance: start reading the screens and the CLI.
         groundingCoordinator.prewarm()
+        if claudeCodeBridge.standbySlot.currentProcess?.isHealthy != true {
+            prespawnMainBrainStandby()
+        }
 
         // Until output latency + 0.25 s after the last audio, what the mic
         // hears is most likely Clicky itself.
@@ -1148,6 +1156,21 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - AI Response Pipeline
 
+    /// P6.3: launches the main CLI for the next answer and leaves it waiting
+    /// on stdin, with the settings a plain question uses (no MODE hint). A
+    /// question that needs another effort or prompt reaps it and spawns
+    /// fresh at key-up; one unused for 60 s is reaped.
+    private func prespawnMainBrainStandby() {
+        let defaultModeHint = ModeHint.detect("")
+        claudeCodeBridge.prespawnStandbyProcess(
+            systemPromptFileName: Self.mainSystemPromptFileName,
+            systemPrompt: companionSystemPrompt(modeHint: defaultModeHint),
+            effortLevel: ClickySettings.claudeEffortOverride ?? defaultModeHint.effort
+        )
+    }
+
+    private static let mainSystemPromptFileName = "system-prompt.md"
+
     /// Optional extras for one turn, used by the debug inbox's `ask`.
     struct TurnOptions {
         /// false = no TTS; tags still fire right away.
@@ -1232,7 +1255,8 @@ final class CompanionManager: ObservableObject {
                 markController.startAnswer(turnRecord: turnRecord)
 
                 let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
-                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel, turnRecord: turnRecord)
+                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel,
+                                          allowsStandbyProcess: true, turnRecord: turnRecord)
 
                 // Helpers spawned while streaming: wait for them, then ask
                 // again with their results (same answer, same screens).
@@ -1283,18 +1307,32 @@ final class CompanionManager: ObservableObject {
 
     /// Runs one Claude stream into the answer: every event goes to the
     /// session; stream failures become something said out loud.
-    private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?, turnRecord: TurnRecord?) async throws {
+    /// `allowsStandbyProcess`: the first stream may take the CLI pre-spawned
+    /// at key-down (P6.3); worker follow-ups always spawn their own.
+    private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?,
+                                 allowsStandbyProcess: Bool = false, turnRecord: TurnRecord?) async throws {
         do {
             let mainBrainTurn = try await claudeCodeBridge.runTurn(
-                systemPromptFileName: "system-prompt.md",
+                systemPromptFileName: Self.mainSystemPromptFileName,
                 systemPrompt: systemPrompt,
                 contentBlocks: contentBlocks,
                 effortLevel: effortLevel,
+                allowsStandbyProcess: allowsStandbyProcess,
                 onStreamEvent: { streamEvent in
                     answerSession.handle(streamEvent)
                 },
                 onPipelineStage: { pipelineStageName in
                     turnRecord?.markTiming(pipelineStageName)
+                },
+                onProcessReady: { processOrigin in
+                    guard let turnRecord else { return }
+                    turnRecord.markTiming("cliSpawned", at: processOrigin.spawnDate)
+                    turnRecord.cli = TurnRecord.CLIProcessEntry(
+                        prespawned: processOrigin.usedStandbyProcess,
+                        standby: processOrigin.standbyOutcome?.rawValue,
+                        retriedAfterBrokenPipe: processOrigin.retriedAfterBrokenPipe
+                    )
+                    print("⏱️ CLI \(processOrigin.usedStandbyProcess ? "pre-spawned" : "spawned at key-up") (standby \(processOrigin.standbyOutcome?.rawValue ?? "off"))")
                 }
             )
             turnRecord?.markTiming("result")

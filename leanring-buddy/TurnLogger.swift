@@ -85,9 +85,20 @@ final class TurnRecord {
     var screens: [ScreenEntry] = []
     var rawResponse = ""
     var tags: [TagEntry] = []
-    /// Unix timestamps (seconds) for keyUp, captureDone, handedToWriter,
-    /// requestWritten, firstDelta, firstAudio, result, end.
+    /// Unix timestamps (seconds) for keyUp, captureDone, cliSpawned,
+    /// handedToWriter, requestWritten, firstDelta, firstAudio, result, end.
+    /// cliSpawned is before keyUp when the turn used the pre-spawned CLI.
     var timings: [String: Double] = [:]
+
+    /// v2 P6.3: where the main answer's CLI process came from.
+    struct CLIProcessEntry: Encodable {
+        /// The process pre-spawned at key-down was used.
+        var prespawned: Bool
+        /// The standby slot's verdict: matched / mismatched / unhealthy / empty.
+        var standby: String?
+        var retriedAfterBrokenPipe: Bool
+    }
+    var cli: CLIProcessEntry?
     var speech = SpeechEntry(engine: nil, fallback: false)
     var errorDescription: String?
     var grounding: GroundingEntry?
@@ -281,6 +292,7 @@ enum TurnLogger {
             let boardTitle: String?
             let boardStats: TurnRecord.BoardStatsEntry?
             let boardEvents: [TurnRecord.BoardEventEntry]
+            let cli: TurnRecord.CLIProcessEntry?
         }
 
         let turnFile = TurnFile(
@@ -298,7 +310,8 @@ enum TurnLogger {
             firedTags: turnRecord.firedTagIndexes,
             boardTitle: turnRecord.boardTitle,
             boardStats: turnRecord.boardStats,
-            boardEvents: turnRecord.boardEvents
+            boardEvents: turnRecord.boardEvents,
+            cli: turnRecord.cli
         )
 
         let jsonEncoder = JSONEncoder()

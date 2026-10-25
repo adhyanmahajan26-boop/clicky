@@ -25,6 +25,9 @@ public enum ClickySettings {
         public static let groundingProbe = "v2.grounding.probe"
         /// Bool, default true: draw id badges on the images (A/B switch).
         public static let groundingBadges = "v2.grounding.badges"
+        /// Bool, default false: P6.1 asks Haiku to check tentative marks on a zoomed crop
+        /// (and P6.3 keeps a Haiku process waiting for it from key-down).
+        public static let groundingVerifyWithHaiku = "v2.grounding.verifyWithHaiku"
         /// [String] bundle ids whose field values are never read.
         public static let groundingValueBlockedBundleIDs = "v2.grounding.valueBlockedBundleIDs"
         /// Int, most marks on screen at once (the oldest goes first). Default 9.
@@ -136,6 +139,10 @@ public enum ClickySettings {
 
     public static var areBadgesEnabled: Bool {
         defaults.object(forKey: Keys.groundingBadges) as? Bool ?? true
+    }
+
+    public static var isVerifyWithHaikuEnabled: Bool {
+        defaults.object(forKey: Keys.groundingVerifyWithHaiku) as? Bool ?? false
     }
 
     public static var maximumMarks: Int {

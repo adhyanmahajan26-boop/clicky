@@ -19,13 +19,17 @@ public struct ClaudeArgs: Sendable {
     public var persistentSessionIdentifier: String?
     /// When the CLI rejects --system-prompt-file, pass the text inline instead.
     public var inlineSystemPrompt: String?
+    /// One-shot checks (P6.1 zoom check): --max-turns (hidden from --help, accepted).
+    public var maximumTurns: Int?
 
-    public init(model: String, systemPromptFileURL: URL, effortLevel: String? = nil, persistentSessionIdentifier: String? = nil, inlineSystemPrompt: String? = nil) {
+    public init(model: String, systemPromptFileURL: URL, effortLevel: String? = nil, persistentSessionIdentifier: String? = nil,
+                inlineSystemPrompt: String? = nil, maximumTurns: Int? = nil) {
         self.model = model
         self.systemPromptFileURL = systemPromptFileURL
         self.effortLevel = effortLevel
         self.persistentSessionIdentifier = persistentSessionIdentifier
         self.inlineSystemPrompt = inlineSystemPrompt
+        self.maximumTurns = maximumTurns
     }
 
     public var arguments: [String] {
@@ -58,6 +62,9 @@ public struct ClaudeArgs: Sendable {
         ]
         if let effortLevel {
             commandArguments += ["--effort", effortLevel]
+        }
+        if let maximumTurns {
+            commandArguments += ["--max-turns", String(maximumTurns)]
         }
         return commandArguments
     }
