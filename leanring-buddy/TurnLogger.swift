@@ -72,6 +72,10 @@ final class TurnRecord {
         var badgeMentionsInNarration: Int = 0
         var ocrLineCount: Int = 0
         var axWalks: [String] = []
+        /// P6.8: per display, how much OCR the AX coverage saved.
+        var ocrCoverage: [String] = []
+        /// P6.8: set when key-up p95 over 20 turns is over 150 ms warm / 300 ms cold.
+        var latencyAlarm: String?
     }
 
     struct SpeechEntry: Encodable {

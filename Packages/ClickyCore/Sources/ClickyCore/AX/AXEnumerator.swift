@@ -85,8 +85,11 @@ public enum AXEnumerator {
     /// Walks one app. `shouldStop` is checked before every node; `publish`
     /// receives elements as they're found. Throws when the app itself (or
     /// its window list) can't be read: then that app has no AX at all.
+    /// `publishWindow` gets each on-screen window's AX node (the AX cache's
+    /// observer maps notifications back to windows with them).
     public static func walk(request: AXEnumerationRequest, ax: AXQuerying, windowStack: WindowStack,
-                            shouldStop: @escaping () -> Bool, publish: @escaping (GroundingElement) -> Void) throws {
+                            shouldStop: @escaping () -> Bool, publish: @escaping (GroundingElement) -> Void,
+                            publishWindow: ((CGWindowID, AXNodeReference) -> Void)? = nil) throws {
         let applicationNode = ax.applicationNode(processIdentifier: request.processIdentifier)
         if request.isElectron {
             ax.enableManualAccessibility(for: applicationNode)
@@ -109,6 +112,7 @@ public enum AXEnumerator {
                       let matchedWindow = windowStack.matchWindow(processIdentifier: request.processIdentifier, axBoundsCG: windowFrame, axTitle: windowAttributes.title) else {
                     continue // not an on-screen window
                 }
+                publishWindow?(matchedWindow.windowID, windowNode)
                 let windowContext = WindowContext(
                     windowID: matchedWindow.windowID,
                     title: windowAttributes.title ?? matchedWindow.title,
@@ -317,6 +321,7 @@ public final class AXAppWalk: @unchecked Sendable {
     public let request: AXEnumerationRequest
     private let lock = NSLock()
     private var publishedElements: [GroundingElement] = []
+    private var publishedWindowNodes: [CGWindowID: AXNodeReference] = [:]
     private var isStopRequested = false
     private var isWalkFinished = false
     private var walkError: Error?
@@ -334,6 +339,9 @@ public final class AXAppWalk: @unchecked Sendable {
                 }, publish: { [weak self] element in
                     guard let self else { return }
                     self.lock.lock(); self.publishedElements.append(element); self.lock.unlock()
+                }, publishWindow: { [weak self] windowID, windowNode in
+                    guard let self else { return }
+                    self.lock.lock(); self.publishedWindowNodes[windowID] = windowNode; self.lock.unlock()
                 })
             } catch {
                 self.lock.lock(); self.walkError = error; self.lock.unlock()
@@ -354,6 +362,12 @@ public final class AXAppWalk: @unchecked Sendable {
         isStopRequested = true
         if walkError != nil { return ([], isWalkFinished, walkError) }
         return (publishedElements, isWalkFinished, nil)
+    }
+
+    /// The AX nodes of the windows walked so far, by CG window id.
+    public var windowNodesByWindowID: [CGWindowID: AXNodeReference] {
+        lock.lock(); defer { lock.unlock() }
+        return publishedWindowNodes
     }
 
     public func cancel() {

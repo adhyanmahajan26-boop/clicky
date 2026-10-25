@@ -122,6 +122,7 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+    }
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -287,6 +288,8 @@ final class CompanionManager: ObservableObject {
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
         }
+        // P6.8: AX observers (walk cache) and enhanced UI for Chromium/Electron.
+        groundingCoordinator.startBackgroundServices()
         // A model we haven't measured yet: check in the background what image
         // size it really sees (stored per resolved model id).
         onNewResolvedModelIdentifier = { [weak self] resolvedModelIdentifier in
@@ -1211,7 +1214,9 @@ final class CompanionManager: ObservableObject {
                     badgedCount: groundedTurn.registry.orderedIDs.filter { groundedTurn.registry.entries[$0]?.isBadged == true }.count,
                     isBadged: groundedTurn.isBadged,
                     droppedAXApplications: groundedTurn.droppedAXApplications,
-                    axWalks: groundingCoordinator.lastAXWalkStats
+                    axWalks: groundingCoordinator.lastAXWalkStats,
+                    ocrCoverage: groundingCoordinator.lastOCRCoverageStats,
+                    latencyAlarm: groundedTurn.latencyAlarmWarning
                 )
 
                 guard !Task.isCancelled else { throw CancellationError() }

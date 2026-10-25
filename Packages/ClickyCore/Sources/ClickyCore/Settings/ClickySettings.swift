@@ -27,6 +27,9 @@ public enum ClickySettings {
         public static let groundingBadges = "v2.grounding.badges"
         /// [String] bundle ids whose field values are never read.
         public static let groundingValueBlockedBundleIDs = "v2.grounding.valueBlockedBundleIDs"
+        /// [String] bundle ids that get AXEnhancedUserInterface while frontmost
+        /// ("electron" = any detected Electron app). See EnhancedUserInterfacePolicy.
+        public static let groundingEnhancedUIBundleIDs = "v2.grounding.enhancedUIBundleIDs"
         /// Int, most marks on screen at once (the oldest goes first). Default 9.
         public static let marksMax = "v2.marks.max"
         /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
@@ -132,6 +135,11 @@ public enum ClickySettings {
 
     public static var valueBlockedBundleIDs: Set<String> {
         Set(defaults.stringArray(forKey: Keys.groundingValueBlockedBundleIDs) ?? defaultValueBlockedBundleIDs)
+    }
+
+    /// Chromium/Electron apps whose full AX tree is switched on while frontmost.
+    public static var enhancedUIBundleIDs: Set<String> {
+        Set(defaults.stringArray(forKey: Keys.groundingEnhancedUIBundleIDs) ?? EnhancedUserInterfacePolicy.defaultBundleIdentifiers)
     }
 
     public static var areBadgesEnabled: Bool {

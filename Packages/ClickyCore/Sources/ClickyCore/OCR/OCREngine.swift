@@ -8,6 +8,8 @@
 //  concurrently; on low-density displays (< 1.5 px/pt, e.g. the 1x
 //  ultrawide) bands are upscaled 2x for recognition but mapped back through
 //  the native crop. Lines found twice in overlapping bands are de-duplicated.
+//  P6.8: `recognizeLines(regionsPx:)` reads only planned regions (see
+//  OCRCoveragePlanner); their bands keep the region's own x range.
 //
 
 import CoreGraphics
@@ -34,6 +36,13 @@ public enum OCRBandPlanner {
             let bottom = min(Double(regionPx.maxY), Double(regionPx.minY) + relativeEnd + Double(overlapPx) / 2)
             guard bottom > top else { return nil }
             return CGRect(x: 0, y: top.rounded(.down), width: Double(imageWidthPx), height: (bottom - top).rounded(.up))
+        }
+    }
+
+    /// Bands over `regionPx` that keep its x range (not full width).
+    public static func regionBands(regionPx: CGRect, phase: Double = 0) -> [CGRect] {
+        bands(imageWidthPx: Int(regionPx.width.rounded(.up)), regionPx: regionPx, phase: phase).map { band in
+            CGRect(x: regionPx.minX.rounded(.down), y: band.minY, width: band.width, height: band.height)
         }
     }
 
@@ -82,6 +91,26 @@ public enum OCREngine {
     public static func recognizeLines(in nativeImage: CGImage, frame: CaptureFrame, regionPx: CGRect? = nil, level: Level = .accurate, bandPhase: Double = 0) async -> [OCRLine] {
         let fullRegion = CGRect(x: 0, y: 0, width: nativeImage.width, height: nativeImage.height)
         let bands = OCRBandPlanner.bands(imageWidthPx: nativeImage.width, regionPx: (regionPx ?? fullRegion).intersection(fullRegion), phase: bandPhase)
+        return await recognizeBands(bands, in: nativeImage, frame: frame, level: level)
+    }
+
+    /// OCR over several native-px regions (an OCRCoveragePlanner plan);
+    /// each region's bands keep its x range. No regions → no lines.
+    public static func recognizeLines(in nativeImage: CGImage, frame: CaptureFrame, regionsPx: [CGRect], level: Level = .accurate) async -> [OCRLine] {
+        let fullRegion = CGRect(x: 0, y: 0, width: nativeImage.width, height: nativeImage.height)
+        let bands = regionsPx.flatMap { regionPx -> [CGRect] in
+            let clippedRegion = regionPx.intersection(fullRegion)
+            guard !clippedRegion.isNull, clippedRegion.width >= 1, clippedRegion.height >= 1 else { return [] }
+            if clippedRegion.width >= fullRegion.width - 1 {
+                return OCRBandPlanner.bands(imageWidthPx: nativeImage.width, regionPx: clippedRegion)
+            }
+            return OCRBandPlanner.regionBands(regionPx: clippedRegion).map { $0.intersection(fullRegion) }
+        }
+        return await recognizeBands(bands, in: nativeImage, frame: frame, level: level)
+    }
+
+    private static func recognizeBands(_ bands: [CGRect], in nativeImage: CGImage, frame: CaptureFrame, level: Level) async -> [OCRLine] {
+        guard !bands.isEmpty else { return [] }
         let pixelsPerPoint = frame.nativePixelsPerPoint
         let languages = recognitionLanguages()
 

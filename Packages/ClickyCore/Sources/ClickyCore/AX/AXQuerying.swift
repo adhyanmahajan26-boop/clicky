@@ -54,6 +54,12 @@ public protocol AXQuerying: Sendable {
     /// CG frame of a UTF-16 character range of a text element.
     func boundsForRange(_ range: NSRange, of node: AXNodeReference) -> CGRect?
     func enableManualAccessibility(for applicationNode: AXNodeReference)
+    /// AXEnhancedUserInterface on an app (Chromium's full AX tree; P6.8).
+    func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference)
+}
+
+public extension AXQuerying {
+    func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference) {}
 }
 
 /// The live Accessibility API.
@@ -262,5 +268,9 @@ public final class SystemAXQuerying: AXQuerying, @unchecked Sendable {
 
     public func enableManualAccessibility(for applicationNode: AXNodeReference) {
         AXUIElementSetAttributeValue(element(applicationNode), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
+
+    public func setEnhancedUserInterface(_ isEnabled: Bool, for applicationNode: AXNodeReference) {
+        AXUIElementSetAttributeValue(element(applicationNode), "AXEnhancedUserInterface" as CFString, isEnabled ? kCFBooleanTrue : kCFBooleanFalse)
     }
 }
