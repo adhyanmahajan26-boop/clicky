@@ -31,6 +31,10 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
     public static let whiteboard = SystemPromptFeatures(rawValue: 1 << 5)
     public static let code = SystemPromptFeatures(rawValue: 1 << 6)
     public static let typing = SystemPromptFeatures(rawValue: 1 << 7)
+    /// The spoken Code-mode switch: while Code mode is off, a compact line
+    /// says coding is available via [CODEMODE:on]; while it's on, how to
+    /// turn it off (CodeModeToggle). The app always sends it.
+    public static let codeToggle = SystemPromptFeatures(rawValue: 1 << 8)
 
     /// Everything the app consumes as of P1b.
     public static let current: SystemPromptFeatures = [.grounding, .badges, .helperWorkers]
@@ -80,11 +84,16 @@ public enum SystemPromptBuilder {
         for gatedSection in GatedSection.allCases where features.contains(gatedSection.feature) {
             if let sectionText = sectionTexts[gatedSection] { sections.append(sectionText) }
         }
+        if features.contains(.codeToggle) {
+            sections.append(isAvailable(.code, features: features, sectionTexts: sectionTexts) ? CodeModeToggle.onPromptLine : CodeModeToggle.offPromptLine)
+        }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
             // P6.7: on a board, helpers draw sections instead (the whiteboard section says how).
             if isAvailable(.whiteboard, features: features, sectionTexts: sectionTexts) { sections.append(boardHelperWorkersSentence) }
-            if features.contains(.grounding) { sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features, sectionTexts: sectionTexts))) }
+            if features.contains(.grounding) {
+                sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features, sectionTexts: sectionTexts) || features.contains(.codeToggle)))
+            }
         }
         return sections.joined(separator: "\n\n") + "\n"
     }
@@ -94,7 +103,9 @@ public enum SystemPromptBuilder {
     }
 
     static func missingAbilities(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]? = nil) -> [String] {
-        GatedSection.allCases.filter { !isAvailable($0, features: features, sectionTexts: sectionTexts) }.map(\.missingAbilityName)
+        // With the spoken switch, coding is never "missing": Claude offers [CODEMODE:on] instead.
+        GatedSection.allCases.filter { !isAvailable($0, features: features, sectionTexts: sectionTexts) && !($0 == .code && features.contains(.codeToggle)) }
+            .map(\.missingAbilityName)
     }
 
     /// Set-of-marks grounding: describes exactly the lines Clicky sends.

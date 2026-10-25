@@ -22,10 +22,14 @@ import Foundation
 public struct ResolvedRepository: Equatable, Sendable {
     public var remote: GitHubRemote
     public var clonePath: String?
+    /// No GitHub remote ("local/<folder>"): ask_repo and local changes only,
+    /// no gh calls, no push or PR buttons.
+    public var isLocalOnly: Bool
 
-    public init(remote: GitHubRemote, clonePath: String?) {
+    public init(remote: GitHubRemote, clonePath: String?, isLocalOnly: Bool = false) {
         self.remote = remote
         self.clonePath = clonePath
+        self.isLocalOnly = isLocalOnly
     }
 }
 
@@ -79,6 +83,10 @@ public enum CodeTaskEngineError: Error, Equatable, Sendable, CustomStringConvert
     case agentNeedsInput(String)
     case unsafeBranchName(String)
     case nothingChanged
+    /// Clicky's own checkout (CodeRepoDenylist).
+    case deniedRepository(String)
+    /// A PR action (or anything outward) on a repo with no GitHub remote.
+    case localOnlyRepository(CodeTask.Action)
 
     public var description: String {
         switch self {
@@ -89,6 +97,8 @@ public enum CodeTaskEngineError: Error, Equatable, Sendable, CustomStringConvert
         case .agentNeedsInput(let question): return question
         case .unsafeBranchName(let branch): return "unsafe branch name \(branch)"
         case .nothingChanged: return "the agent didn't change anything"
+        case .deniedRepository(let path): return "\(path) is on the code-mode denylist"
+        case .localOnlyRepository(let action): return "\(action.rawValue) needs a GitHub remote"
         }
     }
 
@@ -102,6 +112,8 @@ public enum CodeTaskEngineError: Error, Equatable, Sendable, CustomStringConvert
         case .agentNeedsInput(let question): return question
         case .unsafeBranchName: return "That PR's branch name looks unsafe, so I stopped."
         case .nothingChanged: return "The agent didn't change anything, so there's nothing to review."
+        case .deniedRepository: return "That's Clicky's own code, and I don't work on that one."
+        case .localOnlyRepository: return "That repo has no GitHub remote, so I can only read it or change it locally."
         }
     }
 }
@@ -119,6 +131,8 @@ public final class CodeTaskEngine: @unchecked Sendable {
     public var agentInitTimeoutSeconds: TimeInterval
     /// Called with each phase ("Fetching the PR", "The agent is working…").
     public var onProgress: @Sendable (String) -> Void = { _ in }
+    /// Each agent tool call, from its stream-json ("editing utils.py").
+    public var onAgentProgress: @Sendable (AgentProgressEvent) -> Void = { _ in }
 
     private let lock = NSLock()
     private var currentAgentRunner: CodeAgentRunner?
@@ -207,6 +221,11 @@ public final class CodeTaskEngine: @unchecked Sendable {
 
     /// `workspace`: pass one made earlier (so its commands.log already logs), or a new one is made.
     public func prepare(_ task: CodeTask, repository: ResolvedRepository, workspace existingWorkspace: CodeTaskWorkspace? = nil) async throws -> CodeTaskPreparation {
+        if let clonePath = repository.clonePath, CodeRepoDenylist.isDeniedLocalRoot(clonePath) { throw CodeTaskEngineError.deniedRepository(clonePath) }
+        if repository.isLocalOnly {
+            let isLocalAction = task.action == .askRepo || task.action == .repoChange || (task.action == .edit && task.pr == nil)
+            guard isLocalAction, repository.clonePath != nil else { throw CodeTaskEngineError.localOnlyRepository(task.action) }
+        }
         let workspace = try existingWorkspace ?? CodeTaskWorkspace.create(rootURL: workspaceRootURL)
         try workspace.writeContextFile("task.md", "# Task (\(task.action.rawValue))\n\nrepo: \(repository.remote.fullName)\(task.pr.map { " #\($0)" } ?? "")\n\n\(task.instructions)\n")
         switch task.action {
@@ -396,7 +415,8 @@ public final class CodeTaskEngine: @unchecked Sendable {
         let title = commitLines.first.map { String($0.prefix(120)) }.flatMap { $0.isEmpty ? nil : $0 } ?? "Change from Clicky"
         let pullRequestBody = commitLines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         let pullRequestBodyURL = try workspace.writeOutboxFile("pr-body.md", pullRequestBody.isEmpty ? result.result.spokenSummary : pullRequestBody)
-        let canPushToBase = PushPermission.canPush(viewerPermission: await viewerPermission(repository.remote), viewerLogin: viewerLogin, pullRequest: nil, base: repository.remote)
+        let canPushToBase = repository.isLocalOnly ? false
+            : PushPermission.canPush(viewerPermission: await viewerPermission(repository.remote), viewerLogin: viewerLogin, pullRequest: nil, base: repository.remote)
         let pushRemote = canPushToBase ? repository.remote : GitHubRemote(owner: viewerLogin, name: repository.remote.name)
         let pushTarget = OutwardDelivery.PushTarget(repositoryPath: worktree.path, remoteURL: GitHubCommands.httpsURL(pushRemote), branch: worktree.branch,
                                                     expectedRemoteOID: nil, reviewOID: commitOID, forkFrom: canPushToBase ? nil : repository.remote)
@@ -414,12 +434,17 @@ public final class CodeTaskEngine: @unchecked Sendable {
             notes.append("To merge locally, check out \(baseBranch) in \(clonePath) with no uncommitted changes.")
         }
 
-        let pushDelivery = OutwardDelivery(repository: repository.remote, pullRequestNumber: nil, reviewOID: commitOID, push: pushTarget)
-        buttons.append(.init(id: "push", title: canPushToBase ? "Push branch" : "Fork & push", gatedAction: canPushToBase ? .push : .fork,
-                             commands: CodeOutwardStepRunner.commands(for: pushDelivery, git: git, ghPath: tools.gh), isPrimary: delivery == .branch))
-        actions["push"] = .delivery(pushDelivery)
+        if repository.isLocalOnly {
+            notes.append("This repo has no GitHub remote, so nothing can be pushed from here.")
+            buttons[0].isPrimary = true
+        } else {
+            let pushDelivery = OutwardDelivery(repository: repository.remote, pullRequestNumber: nil, reviewOID: commitOID, push: pushTarget)
+            buttons.append(.init(id: "push", title: canPushToBase ? "Push branch" : "Fork & push", gatedAction: canPushToBase ? .push : .fork,
+                                 commands: CodeOutwardStepRunner.commands(for: pushDelivery, git: git, ghPath: tools.gh), isPrimary: delivery == .branch))
+            actions["push"] = .delivery(pushDelivery)
+        }
 
-        if baseBranch != "HEAD" {
+        if baseBranch != "HEAD", !repository.isLocalOnly {
             let head = canPushToBase ? worktree.branch : "\(viewerLogin):\(worktree.branch)"
             let creation = OutwardDelivery.PullRequestCreation(base: baseBranch, head: head, headBranch: worktree.branch, title: title, bodyFilePath: pullRequestBodyURL.path)
             let pullRequestDelivery = OutwardDelivery(repository: repository.remote, pullRequestNumber: nil, reviewOID: commitOID, push: pushTarget, pullRequestCreation: creation)
@@ -439,7 +464,8 @@ public final class CodeTaskEngine: @unchecked Sendable {
                                         summary: result.result.spokenSummary, notes: notes, diffFiles: DiffParser.parse(diffText), editableTexts: editableTexts,
                                         buttons: buttons, findings: findings)
         return PreparedReview(task: task, repository: repository, workspace: workspace, content: content, actionsByButtonID: actions, worktree: worktree,
-                              reviewOID: commitOID, diffText: diffText, agentReport: result.report, agentResult: result.result, pullRequestContext: nil, dryRunPush: pushTarget)
+                              reviewOID: commitOID, diffText: diffText, agentReport: result.report, agentResult: result.result, pullRequestContext: nil,
+                              dryRunPush: repository.isLocalOnly ? nil : pushTarget)
     }
 
     private func viewerPermission(_ repository: GitHubRemote) async -> String? {
@@ -562,7 +588,8 @@ public final class CodeTaskEngine: @unchecked Sendable {
                                                apiKeySource: preflight.apiKeySource ?? "none", worktreePath: workingDirectory)
         let configuration = AgentRunConfiguration(claudePath: tools.claude, invocation: invocation, supportedFlags: Set(preflight.effectiveSupportedFlags),
                                                   expectation: expectation, workingDirectory: workingDirectory, baseEnvironment: agentBaseEnvironment,
-                                                  timeouts: agentTimeouts, initTimeoutSeconds: agentInitTimeoutSeconds, transcriptURL: workspace.agentTranscriptURL)
+                                                  timeouts: agentTimeouts, initTimeoutSeconds: agentInitTimeoutSeconds, transcriptURL: workspace.agentTranscriptURL,
+                                                  onProgressEvent: onAgentProgress)
         let agentRunner = CodeAgentRunner(configuration: configuration)
         lock.withLock { currentAgentRunner = agentRunner }
         defer { lock.withLock { currentAgentRunner = nil } }

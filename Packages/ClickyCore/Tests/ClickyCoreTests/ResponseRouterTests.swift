@@ -17,6 +17,7 @@ private func summarize(_ outputs: [ResponseRouterOutput], into summary: inout Ro
         case .block(let name, let body): summary.events.append("block:\(name):\(body)")
         case .unsupportedBlock(let name): summary.events.append("unsupported:\(name)")
         case .dropped(let reason, _): summary.events.append("dropped:\(reason)")
+        case .codeModeToggle(let isOn): summary.events.append("codemode:\(isOn ? "on" : "off")")
         }
     }
 }

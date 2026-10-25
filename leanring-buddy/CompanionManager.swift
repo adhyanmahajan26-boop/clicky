@@ -110,6 +110,15 @@ final class CompanionManager: ObservableObject {
         self?.speakCodeModeLine(text)
     }
 
+    /// Set when an answer turned Code mode on by voice for a coding request:
+    /// once that answer ends, the same words are asked again with the code
+    /// section in the prompt (so the request itself gets its <codetask>).
+    private var pendingCodeModeContinuationTranscript: String?
+
+    func scheduleCodeModeContinuation(transcript: String) {
+        pendingCodeModeContinuationTranscript = transcript
+    }
+
     /// Code-mode results arrive long after the answer; wait for any speech to end first.
     private func speakCodeModeLine(_ text: String) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1161,6 +1170,8 @@ final class CompanionManager: ObservableObject {
         // Gated sections: P4's whiteboard (auto, or a MODE: whiteboard turn), P5's code (registered at start).
         if (ClickySettings.isWhiteboardAutoEnabled && !modeHint.isAnswerOnly) || modeHint.isWhiteboard { promptFeatures.insert(.whiteboard) }
         if ClickySettings.isCodeEnabled { promptFeatures.insert(.code) }
+        // Always: the spoken Code-mode switch ([CODEMODE:on] while off, [CODEMODE:off] while on).
+        promptFeatures.insert(.codeToggle)
         if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
     }
@@ -1340,6 +1351,17 @@ final class CompanionManager: ObservableObject {
                 voiceState = .idle
                 scheduleLiveScreenMarksAutoClear()
                 scheduleTransientHideIfNeeded()
+            }
+
+            // Code mode was just switched on for this request: ask it again, now with the code section.
+            if let continuationTranscript = pendingCodeModeContinuationTranscript, continuationTranscript == transcript {
+                pendingCodeModeContinuationTranscript = nil
+                if !Task.isCancelled && turnError == nil && ClickySettings.isCodeEnabled {
+                    var continuationOptions = TurnOptions()
+                    continuationOptions.speaksResponse = turnOptions.speaksResponse
+                    continuationOptions.extraUserText = "(code mode is on now. handle the request above with a codetask; don't say you're turning code mode on again.)"
+                    sendTranscriptToClaudeWithScreenshot(transcript: continuationTranscript, turnOptions: continuationOptions)
+                }
             }
         }
     }

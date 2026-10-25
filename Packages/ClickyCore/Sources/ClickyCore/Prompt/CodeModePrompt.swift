@@ -32,7 +32,7 @@ public enum CodeModePrompt {
           resolve_conflicts — merge the base into a PR and resolve the conflicts.
           repo_change — a change in a repo with no PR ("in altron engine, rename the config loader").
           comment, review, merge, update_branch, edit_meta — act on a PR directly with no code change.
-        - repo (required): the repo name as the user said it ("altron engine"). clicky matches it to their clones and github repos.
+        - repo (required): the repo name as the user said it ("altron engine"). clicky matches it to their clones and github repos. when they say "this repo", "this project", "this code" or "here", use exactly "this": clicky takes the repo from the front xcode, vs code or terminal window.
         - instructions (required): what to do, in plain words, with every detail the user gave.
         - pr: the PR number, when there is one.
         - threads: review thread ids to limit fix_review to (only if you were given ids).
@@ -43,6 +43,6 @@ public enum CodeModePrompt {
         - base: the branch a repo_change starts from or a new PR targets (default: the repo's current branch).
         - deliver: for repo_change, one of local (default: keep it on a local branch), branch (push the branch), pr (open a pull request).
         use ask_repo for questions and repo_change only when the user wants files changed without a PR. use deliver "pr" only when they ask for a pull request, "branch" only when they ask to push.
-        clicky runs the work in an isolated copy, then shows the user a review panel with the diff and exactly what will be sent. nothing is pushed, posted, merged or replied until the user clicks in that panel, so never say it's done or sent — say you'll show them the changes. one codetask per answer. if you don't know which repo they mean, ask instead of guessing.
+        clicky runs the work in an isolated copy, then shows the user a review panel with the diff and exactly what will be sent. nothing is pushed, posted, merged or replied until the user clicks in that panel, so never say it's done or sent — say you'll show them the changes. while the agent works, clicky shows its progress and gives short spoken updates, so you don't need to. one codetask per task: when the user asks for several separate tasks at once, emit one codetask block per task (at most four), each on its own line, and say you'll do them one after another — clicky runs them in order, each with its own review. if you don't know which repo they mean, ask instead of guessing.
         """
 }

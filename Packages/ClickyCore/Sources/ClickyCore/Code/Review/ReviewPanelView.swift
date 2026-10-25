@@ -3,7 +3,9 @@
 //  ClickyCore
 //
 //  The SwiftUI content of Code mode's review panel. Modes: "Opening o/n #N"
-//  (2 s, Esc cancels), the top-4 repo chooser, a yes/no question (e.g.
+//  (2 s, Esc cancels), live progress while the agent works (current step,
+//  files changed so far, elapsed time, tasks queued; Hide / Stop — neither
+//  sends anything), the top-4 repo chooser, a yes/no question (e.g.
 //  unpushed work before cleanup) and the review itself: header, CI status,
 //  the agent's summary, guard findings with ack toggles, the diff hunks,
 //  every body and the commit message verbatim and editable, each button's
@@ -22,6 +24,8 @@ public final class ReviewPanelState: ObservableObject {
         case chooser(title: String, candidates: [RepoCandidate])
         /// A yes/no prompt whose confirm is itself a gated button (clone, remove unpushed work).
         case question(title: String, detail: String, confirmTitle: String, gatedAction: GatedAction)
+        /// The agent is working: progress only, nothing to approve.
+        case working(CodeTaskProgressSnapshot)
         case review
     }
 
@@ -36,6 +40,8 @@ public final class ReviewPanelState: ObservableObject {
     public var onChooseRepository: (RepoCandidate) -> Void = { _ in }
     public var onConfirmQuestion: () -> Void = {}
     public var onCancel: () -> Void = {}
+    /// "Stop" on the progress card: cancels the running task (nothing is sent).
+    public var onStopTask: () -> Void = {}
     /// The live NSViews of the gated buttons (for Return / voice arming).
     public private(set) var buttonViews: [String: GatedActionButtonView] = [:]
 
@@ -95,6 +101,28 @@ public struct ReviewPanelView: View {
                         Spacer()
                         actionButton(CodeReviewContent.ActionButton(id: "question-confirm", title: confirmTitle, gatedAction: gatedAction, commands: [], isPrimary: true, isOutward: false),
                                      isEnabled: true) { state.onConfirmQuestion() }
+                    }
+                }
+            case .working(let snapshot):
+                compactCard(title: snapshot.title, detail: snapshot.stepLine) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if snapshot.changedFiles.isEmpty {
+                            Text("No files changed yet.").font(.system(size: 11)).foregroundColor(.secondary)
+                        } else {
+                            Text("Changed so far (\(snapshot.changedFiles.count))").font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
+                            ForEach(Array(snapshot.changedFiles.suffix(6).enumerated()), id: \.offset) { _, filePath in
+                                Text(filePath).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                        if snapshot.queuedCount > 0 {
+                            Text("\(snapshot.queuedCount) more task\(snapshot.queuedCount == 1 ? "" : "s") queued after this one.").font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                        Text("Edits stay in a separate worktree. Nothing is sent until you review it.").font(.system(size: 10.5)).foregroundColor(.secondary)
+                        HStack {
+                            Button("Hide") { state.onCancel() }.keyboardShortcut(.cancelAction)
+                            Spacer()
+                            Button("Stop") { state.onStopTask() }
+                        }
                     }
                 }
             case .review:

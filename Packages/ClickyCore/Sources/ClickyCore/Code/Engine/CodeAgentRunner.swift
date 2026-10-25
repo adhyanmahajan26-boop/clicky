@@ -27,10 +27,13 @@ public struct AgentRunConfiguration: Sendable {
     public var initTimeoutSeconds: TimeInterval
     /// Every stdout line is appended here (0600), when set.
     public var transcriptURL: URL?
+    /// Each tool call after a valid init, as a progress step (AgentProgressExtractor).
+    public var onProgressEvent: (@Sendable (AgentProgressEvent) -> Void)?
 
     public init(claudePath: String, invocation: AgentInvocation, supportedFlags: Set<String>, expectation: AgentInitExpectation, workingDirectory: String,
                 baseEnvironment: [String: String] = ProcessInfo.processInfo.environment, timeouts: ChildProcessTimeouts = .agent,
-                initTimeoutSeconds: TimeInterval = AgentInitValidator.initTimeout, transcriptURL: URL? = nil) {
+                initTimeoutSeconds: TimeInterval = AgentInitValidator.initTimeout, transcriptURL: URL? = nil,
+                onProgressEvent: (@Sendable (AgentProgressEvent) -> Void)? = nil) {
         self.claudePath = claudePath
         self.invocation = invocation
         self.supportedFlags = supportedFlags
@@ -40,6 +43,7 @@ public struct AgentRunConfiguration: Sendable {
         self.timeouts = timeouts
         self.initTimeoutSeconds = initTimeoutSeconds
         self.transcriptURL = transcriptURL
+        self.onProgressEvent = onProgressEvent
     }
 
     /// argv after `claude`, filtered by the supported flags.
@@ -214,6 +218,9 @@ public final class CodeAgentRunner: @unchecked Sendable {
         switch eventType {
         case "assistant":
             if Self.contentBlockTypes(in: event).contains("tool_use") { runningProcess?.markToolInFlight(true) }
+            if let onProgressEvent = configuration.onProgressEvent {
+                for progressEvent in AgentProgressExtractor.events(fromStreamEvent: event, workingDirectory: configuration.workingDirectory) { onProgressEvent(progressEvent) }
+            }
         case "user":
             if Self.contentBlockTypes(in: event).contains("tool_result") { runningProcess?.markToolInFlight(false) }
         case "result":

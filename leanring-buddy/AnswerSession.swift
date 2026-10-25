@@ -376,6 +376,13 @@ final class AnswerSession: SpeechCoordinatorHost {
                 prepare(tag, index: globalIndex)
             case .worker(let title, let task):
                 spawnWorker(CompanionWorkerRequest(workerTitle: title, workerTaskPrompt: task))
+            case .codeModeToggle(let isOn):
+                // The spoken switch: on only when the user's words ask for coding (CodeModeToggle).
+                let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
+                if case .turnOn(let continueRequest) = decision {
+                    router.blockConsumers.insert("codetask")
+                    if continueRequest { companionManager.scheduleCodeModeContinuation(transcript: transcript) }
+                }
             case .block(let name, let body) where name == "codetask":
                 if !companionManager.codeModeController.handleCodeTaskBlock(body, context: CodeTurnContext(transcript: transcript)) {
                     speakNow("I couldn't read that code task.")

@@ -15,6 +15,11 @@
 //    codeTask {task | json}   → runs a CodeTask through the CodeModeController
 //                               (the review panel still needs a real click)
 //    codeState                → Code mode's preflight, phase, review and recent events
+//    codeStatus               → the current code task, its live progress (step, files
+//                               changed, elapsed), the queue and the panel mode
+//    codeToggle {on, transcript} → as if Claude said [CODEMODE:on|off] for that transcript
+//    (codeTask also takes {frontWindow: {bundle, title, document, terminalCwd}} to stand
+//     in for the front window when task.repo is "this")
 //    board {path}             → a .jsonl board or a raw answer file, drawn and narrated as if Claude said it
 //    boardCtl {action}        → next | back | replay | pause | export | close | state
 //    axfind {bundle, role, title, nth, …} → frameCG [x,y,w,h] of another app's
@@ -286,12 +291,31 @@ final class DebugCommandInbox {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "codeTask needs a valid \"task\" object or \"json\" string")
                 return
             }
-            companionManager.codeModeController.start(codeTask, context: CodeTurnContext(transcript: "debug codeTask"))
+            var codeContext = CodeTurnContext(transcript: commandObject["transcript"] as? String ?? "debug codeTask")
+            if let frontWindowObject = commandObject["frontWindow"] as? [String: Any] {
+                codeContext.frontWindow = FrontWindowContext(bundleIdentifier: frontWindowObject["bundle"] as? String, windowTitle: frontWindowObject["title"] as? String,
+                                                             documentURL: frontWindowObject["document"] as? String,
+                                                             terminalWorkingDirectory: frontWindowObject["terminalCwd"] as? String)
+            }
+            companionManager.codeModeController.start(codeTask, context: codeContext)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["started": companionManager.codeModeController.isBusy,
                                                                                   "action": codeTask.action.rawValue], errorMessage: nil)
 
         case "codeState":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.codeModeController.stateSnapshot(), errorMessage: nil)
+
+        case "codeStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.codeModeController.statusSnapshot(), errorMessage: nil)
+
+        case "codeToggle":
+            guard let isOn = commandObject["on"] as? Bool else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "codeToggle needs \"on\" (true/false)")
+                return
+            }
+            let transcript = commandObject["transcript"] as? String ?? (isOn ? "turn on code mode" : "turn off code mode")
+            let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["decision": String(describing: decision),
+                                                                                  "enabled": companionManager.codeModeController.isEnabled], errorMessage: nil)
         case "board":
             guard let path = commandObject["path"] as? String, !path.isEmpty else {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "board needs \"path\"")
