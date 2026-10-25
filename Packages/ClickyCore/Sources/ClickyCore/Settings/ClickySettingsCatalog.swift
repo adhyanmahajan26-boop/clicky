@@ -72,6 +72,11 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.ttsPortOverride, kind: .integer(defaultValue: 0, range: 0...65535, step: 1),
                             explanation: "Debug: Qwen port instead of 11234. 0 means off; a closed port tests the Apple fallback."),
 
+        ClickySettingsEntry(key: ClickySettings.Keys.keepWarmAgent, kind: .toggle(defaultValue: false),
+                            explanation: "Keep the Qwen server running from a LaunchAgent. Install also needs the approval below."),
+        ClickySettingsEntry(key: ClickySettings.Keys.keepWarmAgentApproved, kind: .toggle(defaultValue: false),
+                            explanation: "Set after you approve installing the keep-warm LaunchAgent."),
+
         // Captions.
         ClickySettingsEntry(key: ClickySettings.Keys.captionMaxLines, kind: .integer(defaultValue: 4, range: 1...10, step: 1),
                             explanation: "Caption bubble lines."),

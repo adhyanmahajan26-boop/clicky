@@ -180,3 +180,9 @@ SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for ma
 
 1. Open a board and press `e` (or `boardCtl export`). Expect `~/Pictures/Clicky/whiteboard-<ts>.pdf` next to the PNG and the `.clickyboard`.
 2. Open the PDF in Preview: one page, the board's title and steps as selectable text, charts drawn (not blank).
+
+### P6.6 keep-warm LaunchAgent (generator only; nothing is installed or bootstrapped)
+
+1. The generator and decisions are covered by `swift test` (plist parses, plutil lint on a temp file, exact argv and env). No file is written to ~/Library/LaunchAgents and no launchctl is run by the app.
+2. Installing is not wired. It needs your yes: set `v2.voice.keepWarmAgent` and `v2.voice.keepWarmAgentApproved` (both in the Diagnostics settings list), then wire the install step before trying it.
+3. Not done yet: the app never calls `KeepWarmLaunchAgent.installPlanRequiringUserApproval`, and it doesn't adopt a running server through `adoptDecision` yet.
