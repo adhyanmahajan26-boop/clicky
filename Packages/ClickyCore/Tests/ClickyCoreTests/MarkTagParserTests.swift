@@ -399,3 +399,14 @@ private struct LinearCongruentialGenerator {
     // An on-screen list is not a leak.
     #expect(SpeechSafetyNet.countBadgeMentions(in: "row 9 is in the list on the left", liveElementIDs: [9]) == 0)
 }
+
+@Test func fuzzySearchInHugeTextIsFast() {
+    // A console-sized value: the fuzzy pass must not freeze the main thread.
+    let longText = String(repeating: "build log line with nothing useful in it\n", count: 400) + "Deploy faled at step 3"
+    let start = Date()
+    let matches = LabelSimilarity.findOccurrences(of: "Deploy failed", in: longText)
+    #expect(matches.first?.isFuzzy == true)
+    let hugeText = String(repeating: "x", count: 500_000)
+    #expect(LabelSimilarity.findOccurrences(of: "Deploy failed", in: hugeText).isEmpty)
+    #expect(Date().timeIntervalSince(start) < 2)
+}

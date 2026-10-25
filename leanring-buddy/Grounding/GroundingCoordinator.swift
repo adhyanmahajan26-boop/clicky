@@ -525,7 +525,7 @@ struct AXGroundingLiveLookup: GroundingLiveLookup {
         var results: [(CGRect, Bool)] = []
         // Exact (case-insensitive) on the real string, so UTF-16 ranges are right.
         var searchRange = fullText.startIndex..<fullText.endIndex
-        while let foundRange = fullText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
+        while results.count < 20, let foundRange = fullText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
             let utf16Range = NSRange(foundRange, in: fullText)
             if let bounds = ax.boundsForRange(utf16Range, of: axNode) {
                 results.append((bounds, false))
