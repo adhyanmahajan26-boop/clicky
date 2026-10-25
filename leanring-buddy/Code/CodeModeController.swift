@@ -41,6 +41,8 @@ struct CodeTurnContext {
 struct QueuedCodeTask {
     var task: CodeTask
     var context: CodeTurnContext
+    /// Its record in the Agents dashboard.
+    var agentID: String? = nil
 }
 
 @MainActor
@@ -90,6 +92,12 @@ final class CodeModeController: ObservableObject {
 
     private let speak: (String) -> Void
     private let panelController: ReviewPanelController
+    /// The Agents dashboard (set by CompanionManager). Each task is one
+    /// record: queued, running (steps, files, worktree), then done / failed / cancelled.
+    weak var agentsCenter: AgentsCenter?
+    /// Set when the active run fails or is cancelled; read when it finishes.
+    private var activeRunFailureDescription: String?
+    private var wasActiveRunCancelled = false
     /// "Turn on code mode": shown when [CODEMODE:on] came without the user saying "code mode".
     private let chipController = CodeModeChipController()
     private var pendingChipTranscript: String?
@@ -113,6 +121,7 @@ final class CodeModeController: ObservableObject {
             preflightStatusLine = "Checking…"
             Task { _ = await ensurePreflight(force: true) }
         } else {
+            cancelQueuedAgents()
             queuedTasks = []
             cancelActiveTask()
             preflightStatusLine = "Off"
@@ -204,13 +213,15 @@ final class CodeModeController: ObservableObject {
         if context.frontWindow == nil, FrontWindowRepoResolver.isDeicticRepoName(task.repo) {
             context.frontWindow = FrontWindowProbe.capture()
         }
-        let queuedTask = QueuedCodeTask(task: task, context: context)
+        var queuedTask = QueuedCodeTask(task: task, context: context)
         guard !isBusy else {
             guard queuedTasks.count < Self.maximumQueuedTasks else {
                 speak("I already have \(Self.maximumQueuedTasks) code tasks waiting. Let me finish those first.")
                 return
             }
+            queuedTask.agentID = beginAgentRecord(for: task, status: .queued)
             queuedTasks.append(queuedTask)
+            refreshQueueCounts()
             record("queued #\(queuedTasks.count) \(task.action.rawValue) repo=\(task.repo)")
             // Several tasks from one answer: Claude already said they'll run in order.
             if activeQueuedTask?.context.transcript != context.transcript {
@@ -222,10 +233,22 @@ final class CodeModeController: ObservableObject {
     }
 
     private func begin(_ queuedTask: QueuedCodeTask) {
+        var queuedTask = queuedTask
         let task = queuedTask.task
         record("start \(task.action.rawValue) repo=\(task.repo) pr=\(task.pr.map(String.init) ?? "-") from \"\(queuedTask.context.transcript.prefix(80))\"")
         isBusy = true
+        if queuedTask.agentID == nil { queuedTask.agentID = beginAgentRecord(for: task, status: .running) }
+        let agentID = queuedTask.agentID
+        agentsCenter?.update(agentID) { agentRecord in
+            agentRecord.status = .running
+            agentRecord.startedAt = Date()
+        }
+        agentsCenter?.log(agentID, "started")
+        agentsCenter?.setCancelHandler(agentID) { [weak self] in self?.stopTask(agentID: agentID) }
+        activeRunFailureDescription = nil
+        wasActiveRunCancelled = false
         activeQueuedTask = queuedTask
+        refreshQueueCounts()
         isProgressPanelHidden = false
         let runIdentifier = UUID()
         activeRunIdentifier = runIdentifier
@@ -245,12 +268,14 @@ final class CodeModeController: ObservableObject {
     /// "Stop" on the progress card: the running task and the queue end; nothing was sent.
     func stopAllTasks() {
         let hadWork = isBusy || !queuedTasks.isEmpty
+        cancelQueuedAgents()
         queuedTasks = []
         cancelActiveTask()
         if hadWork { speak("Stopped. Nothing was sent.") }
     }
 
     func cancelActiveTask() {
+        if isBusy { wasActiveRunCancelled = true }
         activeEngine?.cancelAgent()
         activeTask?.cancel()
         checksPollTask?.cancel()
@@ -290,6 +315,12 @@ final class CodeModeController: ObservableObject {
             guard let clonePath = await offerClone(repository.remote, tools: toolPaths) else { return }
             repository.clonePath = clonePath
         }
+        let resolvedRepository = repository
+        agentsCenter?.update(activeQueuedTask?.agentID) { agentRecord in
+            agentRecord.repository = resolvedRepository.isLocalOnly ? resolvedRepository.remote.name : resolvedRepository.remote.fullName
+            agentRecord.clonePath = resolvedRepository.clonePath
+            agentRecord.title = AgentsCenter.cleanTitle(Self.progressTitle(for: task, repository: resolvedRepository))
+        }
 
         do {
             let workspace = try CodeTaskWorkspace.create()
@@ -306,6 +337,14 @@ final class CodeModeController: ObservableObject {
                 let controller = self
                 Task { @MainActor in controller?.applyAgentProgress(progressEvent) }
             }
+            let usageAgentID = activeQueuedTask?.agentID
+            engine.onAgentUsage = { [weak self] agentUsage in
+                let controller = self
+                Task { @MainActor in
+                    controller?.agentsCenter?.addUsage(usageAgentID, agentUsage)
+                    controller?.agentsCenter?.log(usageAgentID, "agent usage: \(agentUsage.tokenSummary)\(agentUsage.costText.map { " · \($0)" } ?? "")")
+                }
+            }
             activeEngine = engine
             startProgress(title: Self.progressTitle(for: task, repository: repository))
             defer { stopProgress() }
@@ -315,17 +354,21 @@ final class CodeModeController: ObservableObject {
             switch preparation {
             case .spoken(let answer, let agentReport):
                 record("answer (\(agentReport.map { String(describing: $0.outcome).prefix(60) } ?? "no agent")): \(answer.prefix(200))")
+                agentsCenter?.log(activeQueuedTask?.agentID, "answer: \(answer)")
                 speak(answer)
             case .review(let review):
                 await presentReview(review)
             }
         } catch is CancellationError {
             record("cancelled")
+            wasActiveRunCancelled = true
         } catch let engineError as CodeTaskEngineError {
             record("engine: \(engineError)")
+            activeRunFailureDescription = engineError.spokenMessage
             speak(engineError.spokenMessage)
         } catch let worktreeError as WorktreeError {
             record("worktree: \(worktreeError)")
+            activeRunFailureDescription = "Worktree: \(worktreeError.description)"
             switch worktreeError {
             case .integrityChanged:
                 speak("Something changed git's settings or hooks during the run, so I stopped and won't use that change.")
@@ -336,6 +379,7 @@ final class CodeModeController: ObservableObject {
             }
         } catch {
             record("failed: \(error)")
+            activeRunFailureDescription = String(describing: error).prefix(300).description
             speak("The code task failed: \(String(describing: error).prefix(140)).")
         }
     }
@@ -348,6 +392,7 @@ final class CodeModeController: ObservableObject {
     }
 
     private func finishTask(hidePanel: Bool) {
+        finishActiveAgentRecord()
         stopProgress()
         activeRunIdentifier = nil
         activeQueuedTask = nil
@@ -367,6 +412,91 @@ final class CodeModeController: ObservableObject {
         if !queuedTasks.isEmpty {
             Task { @MainActor [weak self] in self?.startNextQueuedTaskIfAny() }
         }
+    }
+
+    // MARK: - Agents dashboard
+
+    /// The record for a task asked by voice (queued or about to run).
+    private func beginAgentRecord(for task: CodeTask, status: AgentStatus) -> String? {
+        guard let agentsCenter else { return nil }
+        let action = task.action.rawValue.replacingOccurrences(of: "_", with: " ")
+        let title = "\(action.prefix(1).uppercased() + action.dropFirst()) \(task.repo)\(task.pr.map { " #\($0)" } ?? "")"
+        let agentID = agentsCenter.begin(kind: .codeTask, title: title, model: AgentInvocation.model, status: status)
+        agentsCenter.update(agentID) { agentRecord in agentRecord.repository = task.repo }
+        agentsCenter.log(agentID, "asked: \(task.instructions)")
+        if status == .queued {
+            agentsCenter.log(agentID, "queued behind the current code task")
+            agentsCenter.setCancelHandler(agentID) { [weak self] in self?.stopTask(agentID: agentID) }
+        }
+        return agentID
+    }
+
+    /// Each record's "waiting after this" count.
+    private func refreshQueueCounts() {
+        let waitingCount = queuedTasks.count
+        agentsCenter?.update(activeQueuedTask?.agentID) { agentRecord in agentRecord.queuedBehindCount = waitingCount }
+        for (queuePosition, queuedTask) in queuedTasks.enumerated() {
+            agentsCenter?.update(queuedTask.agentID) { agentRecord in agentRecord.queuedBehindCount = waitingCount - queuePosition - 1 }
+        }
+    }
+
+    private func cancelQueuedAgents() {
+        for queuedTask in queuedTasks {
+            agentsCenter?.log(queuedTask.agentID, "removed from the queue")
+            agentsCenter?.finish(queuedTask.agentID, status: .cancelled)
+        }
+    }
+
+    /// The active task's record ends with how the run went.
+    private func finishActiveAgentRecord() {
+        guard let agentID = activeQueuedTask?.agentID else { return }
+        let status: AgentStatus
+        if wasActiveRunCancelled {
+            status = .cancelled
+        } else if activeRunFailureDescription != nil {
+            status = .failed
+        } else {
+            status = .done
+        }
+        agentsCenter?.update(agentID) { agentRecord in
+            if agentRecord.phase == "waiting for review" { agentRecord.phase = nil }
+        }
+        agentsCenter?.log(agentID, status.rawValue)
+        agentsCenter?.finish(agentID, status: status, errorDescription: activeRunFailureDescription)
+        activeRunFailureDescription = nil
+        wasActiveRunCancelled = false
+    }
+
+    /// Cancel from the Agents dashboard: the running task stops like the
+    /// progress card's Stop (nothing was sent); a queued one leaves the queue.
+    func stopTask(agentID: String?) {
+        guard let agentID else { return }
+        if activeQueuedTask?.agentID == agentID {
+            record("stop from the Agents window")
+            cancelActiveTask()
+            speak("Stopped. Nothing was sent.")
+        } else if let queuePosition = queuedTasks.firstIndex(where: { $0.agentID == agentID }) {
+            let removedTask = queuedTasks.remove(at: queuePosition)
+            record("removed queued \(removedTask.task.action.rawValue) repo=\(removedTask.task.repo) from the Agents window")
+            agentsCenter?.log(agentID, "removed from the queue")
+            agentsCenter?.finish(agentID, status: .cancelled)
+            refreshQueueCounts()
+        }
+    }
+
+    /// The dashboard record whose review is open right now (Open review).
+    var activeReviewAgentID: String? {
+        activeReview != nil ? activeQueuedTask?.agentID : nil
+    }
+
+    /// Open review: shows the existing review panel again. Every button in it
+    /// still needs a real click through the gate; nothing else changes.
+    @discardableResult
+    func showActiveReview(agentID: String) -> Bool {
+        guard activeReview != nil, activeQueuedTask?.agentID == agentID else { return false }
+        record("review reopened from the Agents window")
+        panelController.show(mode: .review)
+        return true
     }
 
     // MARK: - Live progress
@@ -406,6 +536,12 @@ final class CodeModeController: ObservableObject {
     private func applyAgentProgress(_ progressEvent: AgentProgressEvent) {
         guard progressTracker != nil, progressTickerTask != nil else { return }
         progressTracker?.apply(progressEvent)
+        let changedFiles = progressTracker?.changedFiles ?? []
+        agentsCenter?.update(activeQueuedTask?.agentID) { agentRecord in
+            agentRecord.currentStep = progressEvent.stepDescription
+            agentRecord.changedFiles = changedFiles
+        }
+        agentsCenter?.log(activeQueuedTask?.agentID, progressEvent.stepDescription + (progressEvent.toolName.isEmpty ? "" : " (\(progressEvent.toolName))"))
         setPhase(progressEvent.stepDescription.prefix(1).uppercased() + String(progressEvent.stepDescription.dropFirst()))
         refreshProgressPanel()
     }
@@ -435,6 +571,16 @@ final class CodeModeController: ObservableObject {
     private func setPhase(_ phase: String) {
         phaseDescription = phase
         record("phase: \(phase)")
+        logPhaseToAgentRecord(phase)
+    }
+
+    /// Engine phases ("Making a worktree…") go into the task's dashboard log.
+    private func logPhaseToAgentRecord(_ phase: String) {
+        guard phase != "Idle", let agentsCenter, let agentID = activeQueuedTask?.agentID else { return }
+        // applyAgentProgress already logged the agent's own step and then sets the phase to the same words.
+        guard phase.lowercased() != agentsCenter.record(agentID)?.currentStep?.lowercased() else { return }
+        agentsCenter.update(agentID) { agentRecord in agentRecord.currentStep = phase }
+        agentsCenter.log(agentID, phase)
     }
 
     // MARK: - Resolving the repo
@@ -606,6 +752,12 @@ final class CodeModeController: ObservableObject {
                              "branch": review.worktree.map { $0.branch as Any } ?? NSNull(), "reviewOID": review.reviewOID,
                              "changedFiles": review.content.diffFiles.map(\.displayPath), "shownAt": Date().timeIntervalSince1970]
         acks = []
+        agentsCenter?.update(activeQueuedTask?.agentID) { agentRecord in
+            agentRecord.worktreePath = review.worktree?.path
+            agentRecord.branch = review.worktree?.branch
+            agentRecord.phase = "waiting for review"
+            agentRecord.changedFiles = review.content.diffFiles.map(\.displayPath)
+        }
         panelController.state.content = review.content
         panelController.show(mode: .review)
         setPhase("Waiting for your review")
@@ -721,6 +873,7 @@ final class CodeModeController: ObservableObject {
             }
             guard !self.isExecuting else { return }
             self.record("review closed without sending")
+            self.agentsCenter?.log(self.activeQueuedTask?.agentID, "review closed without sending")
             self.finishTask(hidePanel: true)
         }
         panelController.onReturnKey = { [weak self] event in
@@ -794,6 +947,7 @@ final class CodeModeController: ObservableObject {
         let result = await engine.execute(action, approvedKey: shownKey, reviewOID: review.reviewOID, acks: acks.sorted(), workspace: review.workspace)
         isExecuting = false
         record("\(button.id): \(result.succeeded ? "ok" : "failed") \(result.message) pr=\(result.createdPullRequestURL ?? "-")")
+        agentsCenter?.log(activeQueuedTask?.agentID, "\(button.title): \(result.succeeded ? "done" : "failed") \(result.message)")
 
         guard result.succeeded else {
             panelController.state.content.progress = result.message

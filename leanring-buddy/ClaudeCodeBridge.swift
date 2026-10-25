@@ -71,6 +71,9 @@ struct ClaudeTurnResult {
     let resolvedModelIdentifier: String?
     /// The `usage` object from the final result event.
     let usage: [String: Any]
+    /// Tokens and `total_cost_usd` from the final result event, for turn.json
+    /// and the Agents dashboard (nil when the result had neither).
+    let usageSummary: AgentUsage?
     let duration: TimeInterval
 }
 
@@ -267,6 +270,7 @@ final class ClaudeCodeBridge {
             var finalResultText: String?
             var resolvedModelIdentifier: String?
             var finalUsage: [String: Any] = [:]
+            var finalResultEvent: [String: Any]?
             var lineReader = LineReader()
             var pendingBytes = Data()
 
@@ -293,6 +297,7 @@ final class ClaudeCodeBridge {
                 if let outputEvent = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                    (outputEvent["type"] as? String) == "result" {
                     finalUsage = outputEvent["usage"] as? [String: Any] ?? [:]
+                    finalResultEvent = outputEvent
                 }
             }
 
@@ -329,6 +334,7 @@ final class ClaudeCodeBridge {
                 text: responseText,
                 resolvedModelIdentifier: resolvedModelIdentifier,
                 usage: finalUsage,
+                usageSummary: finalResultEvent.flatMap { AgentUsage.fromResultEvent($0, model: resolvedModelIdentifier ?? model) },
                 duration: Date().timeIntervalSince(startTime)
             )
         } onCancel: {

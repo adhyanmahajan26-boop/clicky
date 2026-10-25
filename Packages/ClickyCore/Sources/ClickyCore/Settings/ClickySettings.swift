@@ -85,6 +85,11 @@ public enum ClickySettings {
         public static let keepWarmAgent = "v2.voice.keepWarmAgent"
         /// Bool, default false: the user said yes to installing the keep-warm LaunchAgent.
         public static let keepWarmAgentApproved = "v2.voice.keepWarmAgentApproved"
+        /// Bool, default true: a click on the resting companion spark opens the
+        /// Agents dashboard (the spark holds still while the pointer rests near it).
+        public static let agentsSparkClickOpensDashboard = "v2.agents.sparkClickOpensDashboard"
+        /// Int, finished agents kept in agents-history.json (default 50).
+        public static let agentsHistoryLimit = "v2.agents.historyLimit"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -255,6 +260,8 @@ public enum ClickySettings {
     public static var isKeepWarmAgentApproved: Bool { defaults.object(forKey: Keys.keepWarmAgentApproved) as? Bool ?? false }
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
     public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+    public static var isAgentsSparkClickEnabled: Bool { defaults.object(forKey: Keys.agentsSparkClickOpensDashboard) as? Bool ?? true }
+    public static var agentsHistoryLimit: Int { min(500, max(10, defaults.object(forKey: Keys.agentsHistoryLimit) as? Int ?? AgentStore.defaultMaximumFinishedRecords)) }
     public static var isCodeProgressNarrationEnabled: Bool { defaults.object(forKey: Keys.codeNarrateProgress) as? Bool ?? true }
 
     // MARK: - P6.2 Type this for me

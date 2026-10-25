@@ -62,6 +62,111 @@ final class CompanionManager: ObservableObject {
 
     /// The real source: Haiku helper workers the main brain opens for a question.
     let companionWorkerRunner = CompanionWorkerRunner()
+
+    // MARK: - Agents dashboard
+
+    /// Every agent Clicky runs (brain turns, helpers, board calls, code tasks) and its history.
+    let agentsCenter = AgentsCenter()
+    /// Clicking the resting spark opens the dashboard.
+    let sparkClickTarget = CompanionSparkClickTarget()
+    private(set) lazy var agentsWindowController = AgentsWindowController(agentsCenter: agentsCenter, actions: makeAgentsDashboardActions())
+    /// The brain record started at key-down ("listening"), adopted by the turn that follows.
+    private var listeningBrainAgentID: String?
+    /// The brain record of the answer in flight (its phase follows voiceState).
+    private(set) var currentBrainAgentID: String?
+    private var agentsVoiceStateCancellable: AnyCancellable?
+    private var listeningBrainRemovalTask: Task<Void, Never>?
+
+    /// Opens the Agents window (menu bar, spark click, or [AGENTS:open]).
+    /// Only these user requests order it front; agent updates never do.
+    func showAgentsDashboard(activatesClicky: Bool = true) {
+        agentsWindowController.show(selecting: nil, activatesClicky: activatesClicky)
+    }
+
+    /// The dashboard's Cancel on the brain: the same path as Escape (barge-in,
+    /// then the response task and its helpers are cancelled), without ending a
+    /// hands-free session.
+    func cancelAnswerFromAgentsDashboard() {
+        if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
+            activeCoordinator.bargeIn(.escape)
+        }
+        hideCaption()
+        stopBuddySpeechAndCancelResponse()
+    }
+
+    private func makeAgentsDashboardActions() -> AgentsDashboardActions {
+        AgentsDashboardActions(
+            canCancel: { [weak self] record in self?.agentsCenter.canCancel(record) ?? false },
+            canOpenReview: { [weak self] record in
+                record.kind == .codeTask && self?.codeModeController.activeReviewAgentID == record.id
+            },
+            canRevealWorktree: { record in
+                guard let worktreePath = record.worktreePath else { return false }
+                return FileManager.default.fileExists(atPath: worktreePath)
+            },
+            cancel: { [weak self] record in self?.agentsCenter.cancel(record) },
+            openReview: { [weak self] record in
+                // Shows the existing review panel; its buttons still go through the click gate.
+                _ = self?.codeModeController.showActiveReview(agentID: record.id)
+            },
+            revealWorktree: { record in
+                guard let worktreePath = record.worktreePath, FileManager.default.fileExists(atPath: worktreePath) else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktreePath)])
+            },
+            copyLog: { record in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(record.logText, forType: .string)
+            }
+        )
+    }
+
+    /// The brain record follows voiceState: key-down starts one in
+    /// "listening" (dropped again if nothing was asked), responding is "speaking".
+    private func updateBrainAgent(for newVoiceState: CompanionVoiceState) {
+        switch newVoiceState {
+        case .listening:
+            listeningBrainRemovalTask?.cancel()
+            if agentsCenter.record(listeningBrainAgentID)?.phase != BrainPhase.listening.rawValue {
+                listeningBrainAgentID = agentsCenter.begin(kind: .brain, title: "Listening…", model: selectedModel, phase: BrainPhase.listening.rawValue)
+            }
+        case .responding:
+            agentsCenter.setBrainPhase(currentBrainAgentID, .speaking)
+        case .idle:
+            guard let listeningBrainAgentID else { return }
+            listeningBrainRemovalTask?.cancel()
+            listeningBrainRemovalTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled, let self, self.listeningBrainAgentID == listeningBrainAgentID,
+                      self.agentsCenter.record(listeningBrainAgentID)?.phase == BrainPhase.listening.rawValue else { return }
+                self.agentsCenter.remove(listeningBrainAgentID)
+                self.listeningBrainAgentID = nil
+            }
+        case .processing:
+            break
+        }
+    }
+
+    /// The turn's brain record: the one started at key-down, or a new one.
+    private func beginBrainAgent(transcript: String) -> String {
+        listeningBrainRemovalTask?.cancel()
+        let brainAgentID: String
+        if let listeningBrainAgentID, agentsCenter.record(listeningBrainAgentID)?.phase == BrainPhase.listening.rawValue {
+            brainAgentID = listeningBrainAgentID
+        } else {
+            brainAgentID = agentsCenter.begin(kind: .brain, title: transcript, model: selectedModel)
+        }
+        listeningBrainAgentID = nil
+        agentsCenter.update(brainAgentID) { record in
+            record.title = AgentsCenter.cleanTitle(transcript)
+            record.model = self.selectedModel
+            record.phase = BrainPhase.thinking.rawValue
+        }
+        agentsCenter.log(brainAgentID, "heard: \(transcript)")
+        agentsCenter.log(brainAgentID, "thinking (\(selectedModel))")
+        agentsCenter.setCancelHandler(brainAgentID) { [weak self] in self?.cancelAnswerFromAgentsDashboard() }
+        currentBrainAgentID = brainAgentID
+        return brainAgentID
+    }
     /// Driven by the debug controls in the panel so the visuals can be tried
     /// without asking Claude anything.
     let simulatedCompanionActivitySource = SimulatedCompanionActivitySource()
@@ -326,6 +431,12 @@ final class CompanionManager: ObservableObject {
         speechOutputClient.warmUpIfNeeded()
         addCompanionActivitySource(companionWorkerRunner)
         addCompanionActivitySource(simulatedCompanionActivitySource)
+        // Agents dashboard: the brain record follows voiceState; code tasks report in; the spark opens it.
+        codeModeController.agentsCenter = agentsCenter
+        sparkClickTarget.onClick = { [weak self] in self?.showAgentsDashboard(activatesClicky: true) }
+        agentsVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] newVoiceState in
+            self?.updateBrainAgent(for: newVoiceState)
+        }
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -408,6 +519,9 @@ final class CompanionManager: ObservableObject {
 
         currentResponseTask?.cancel()
         currentResponseTask = nil
+        agentsVoiceStateCancellable?.cancel()
+        sparkClickTarget.reset()
+        agentsCenter.saveNow(waitsForWrite: true)
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
@@ -1278,6 +1392,7 @@ final class CompanionManager: ObservableObject {
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: turnOptions.keyUpDate)
         // Zoom checks still running for the last answer apply nothing now.
         zoomChecker.beginQuestion()
+        let brainAgentID = beginBrainAgent(transcript: transcript)
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -1322,13 +1437,15 @@ final class CompanionManager: ObservableObject {
                 let answerSession = AnswerSession(transcript: transcript, groundedTurn: groundedTurn, turnRecord: turnRecord,
                                                   companionManager: self, speaksResponse: turnOptions.speaksResponse)
                 answerSession.isWhiteboardTurn = modeHint.isWhiteboard
+                answerSession.brainAgentID = brainAgentID
                 currentAnswerSession = answerSession
                 activeAnswerSession = answerSession
                 markController.startAnswer(turnRecord: turnRecord)
 
                 let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
-                try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel,
-                                          allowsStandbyProcess: true, turnRecord: turnRecord)
+                let firstStreamUsage = try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(userText)] + screenBlocks,
+                                                                 effortLevel: effortLevel, allowsStandbyProcess: true, turnRecord: turnRecord)
+                recordBrainUsage(firstStreamUsage, brainAgentID: brainAgentID, turnRecord: turnRecord)
 
                 // Helpers spawned while streaming: wait for them, then ask
                 // again with their results (same answer, same screens).
@@ -1338,8 +1455,10 @@ final class CompanionManager: ObservableObject {
                     try Task.checkCancellation()
                     print("🧠 Workers finished: \(workerResults.map(\.workerTitle))")
                     answerSession.beginFollowUpStream()
-                    try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
+                    agentsCenter.log(brainAgentID, "helpers done (\(workerResults.filter(\.didWorkerSucceed).count)/\(workerResults.count) ok); final answer")
+                    let followUpStreamUsage = try await runAnswerStream(answerSession, systemPrompt: systemPrompt, contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
                         transcript: userText, companionWorkerResults: workerResults))] + screenBlocks, effortLevel: effortLevel, turnRecord: nil)
+                    recordBrainUsage(followUpStreamUsage, brainAgentID: brainAgentID, turnRecord: turnRecord)
                 }
                 turnRecord?.rawResponse = answerSession.rawResponse
                 ClickyAnalytics.trackAIResponseReceived(response: answerSession.rawResponse)
@@ -1383,6 +1502,7 @@ final class CompanionManager: ObservableObject {
                 turnRecord.errorDescription = turnError.map { String(describing: $0) }
                 TurnLogger.finishTurn(turnRecord)
             }
+            finishBrainAgent(brainAgentID, turnError: turnError, wasCancelled: Task.isCancelled)
             turnOptions.onTurnFinished?(turnRecord?.turnDirectoryURL, turnError)
 
             if !Task.isCancelled {
@@ -1425,8 +1545,9 @@ final class CompanionManager: ObservableObject {
     /// session; stream failures become something said out loud.
     /// `allowsStandbyProcess`: the first stream may take the CLI pre-spawned
     /// at key-down (P6.3); worker follow-ups always spawn their own.
+    @discardableResult
     private func runAnswerStream(_ answerSession: AnswerSession, systemPrompt: String, contentBlocks: [ClaudeContentBlock], effortLevel: String?,
-                                 allowsStandbyProcess: Bool = false, turnRecord: TurnRecord?) async throws {
+                                 allowsStandbyProcess: Bool = false, turnRecord: TurnRecord?) async throws -> AgentUsage? {
         do {
             let mainBrainTurn = try await claudeCodeBridge.runTurn(
                 systemPromptFileName: Self.mainSystemPromptFileName,
@@ -1453,15 +1574,43 @@ final class CompanionManager: ObservableObject {
             )
             turnRecord?.markTiming("result")
             noteResolvedModelIdentifier(mainBrainTurn.resolvedModelIdentifier)
+            return mainBrainTurn.usageSummary
         } catch ClaudeCodeBridgeError.claudeCodeStalled {
             answerSession.streamFailed(.stalled)
+            agentsCenter.log(answerSession.brainAgentID, "stream stalled")
         } catch ClaudeCodeBridgeError.claudeCodeExitedWithoutResult {
             if Task.isCancelled { throw CancellationError() }
             answerSession.streamEndedWithoutResult()
-        } catch ClaudeCodeBridgeError.claudeCodeReportedError {
+            agentsCenter.log(answerSession.brainAgentID, "Claude Code exited without a result")
+        } catch ClaudeCodeBridgeError.claudeCodeReportedError(let message) {
             // Already spoken: the result event went through the session.
+            agentsCenter.log(answerSession.brainAgentID, "Claude Code error: \(message)")
             refreshClaudeCodeSignInStatus()
         }
+        return nil
+    }
+
+    /// A stream's tokens and cost, into turn.json and the brain's record.
+    private func recordBrainUsage(_ usage: AgentUsage?, brainAgentID: String, turnRecord: TurnRecord?) {
+        guard let usage else { return }
+        turnRecord?.addUsage(usage)
+        agentsCenter.addUsage(brainAgentID, usage)
+        agentsCenter.log(brainAgentID, "usage: \(usage.tokenSummary)\(usage.costText.map { " · \($0)" } ?? "")")
+    }
+
+    /// The turn ended: done, cancelled (a new question, Escape, Cancel) or failed.
+    private func finishBrainAgent(_ brainAgentID: String, turnError: Error?, wasCancelled: Bool) {
+        let status: AgentStatus
+        if wasCancelled || turnError is CancellationError {
+            status = .cancelled
+        } else if turnError != nil {
+            status = .failed
+        } else {
+            status = .done
+        }
+        agentsCenter.log(brainAgentID, status == .done ? "answered" : status.rawValue)
+        agentsCenter.finish(brainAgentID, status: status, errorDescription: status == .failed ? turnError?.localizedDescription : nil)
+        if currentBrainAgentID == brainAgentID { currentBrainAgentID = nil }
     }
 
     /// P6.1: Haiku's second look at tentative marks (v2.grounding.verifyWithHaiku).

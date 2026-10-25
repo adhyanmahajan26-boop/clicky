@@ -88,6 +88,10 @@ public struct AgentRunReport: Sendable {
     public var processIdentifier: pid_t?
     /// The leader exited and its group was reaped (ChildProcess guarantees it on exit).
     public var isProcessGroupReaped: Bool
+    /// Tokens and cost from the agent's `result` event (nil without one).
+    public var usage: AgentUsage? = nil
+    /// The model the agent's init event named.
+    public var resolvedModel: String? = nil
 }
 
 public final class CodeAgentRunner: @unchecked Sendable {
@@ -102,6 +106,7 @@ public final class CodeAgentRunner: @unchecked Sendable {
     private var wasCancelledByUser = false
     private var resultEvent: [String: Any]?
     private var sessionIdentifier: String?
+    private var resolvedModel: String?
     private var transcriptHandle: FileHandle?
 
     public init(configuration: AgentRunConfiguration) {
@@ -180,8 +185,11 @@ public final class CodeAgentRunner: @unchecked Sendable {
             case .exited: return .endedWithoutResult
             }
         }
+        let (finalResultEvent, initModel): ([String: Any]?, String?) = lock.withLock { (resultEvent, resolvedModel) }
+        let model = initModel ?? AgentInvocation.model
         return AgentRunReport(outcome: outcome, droppedFlags: droppedFlags, sessionIdentifier: lock.withLock { sessionIdentifier },
-                              processIdentifier: launchedProcess.processIdentifier, isProcessGroupReaped: launchedProcess.isFinished)
+                              processIdentifier: launchedProcess.processIdentifier, isProcessGroupReaped: launchedProcess.isFinished,
+                              usage: finalResultEvent.flatMap { AgentUsage.fromResultEvent($0, model: model) }, resolvedModel: initModel)
     }
 
     // MARK: - Stream
@@ -201,6 +209,7 @@ public final class CodeAgentRunner: @unchecked Sendable {
             if failures.isEmpty {
                 hasSeenInit = true
                 sessionIdentifier = event["session_id"] as? String
+                resolvedModel = event["model"] as? String
                 lock.unlock()
             } else {
                 initFailures = failures

@@ -337,6 +337,18 @@ final class DebugCommandInbox {
         case "codeStatus":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.codeModeController.statusSnapshot(), errorMessage: nil)
 
+        case "agentsStatus":
+            // The Agents dashboard's store as saved (running + history), plus usage totals. Opens nothing.
+            let agentsStore = companionManager.agentsCenter.store
+            let storeObject = (try? agentsStore.encoded()).flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? NSNull()
+            let usageTotals = agentsStore.usageTotals()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: [
+                "store": storeObject,
+                "running": agentsStore.runningRecords.map(\.id),
+                "windowVisible": companionManager.agentsWindowController.isVisible,
+                "totals": ["agents": usageTotals.agentCount, "tokens": usageTotals.usage.totalTokens, "costUSD": usageTotals.usage.costUSD ?? NSNull()] as [String: Any]
+            ], errorMessage: nil)
+
         case "codeToggle":
             guard let isOn = commandObject["on"] as? Bool else {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "codeToggle needs \"on\" (true/false)")

@@ -923,6 +923,23 @@ struct CompanionPanelView: View {
             .buttonStyle(.plain)
             .pointerCursor()
 
+            // Opens the Agents window: every agent Clicky runs, with usage and history.
+            Button(action: {
+                NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+                companionManager.showAgentsDashboard(activatesClicky: true)
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Agents…")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .padding(.leading, 10)
+
             Spacer()
 
             Button(action: {

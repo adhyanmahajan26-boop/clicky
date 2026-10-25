@@ -16,17 +16,25 @@ import Foundation
 enum WhiteboardRepairRunner {
     nonisolated static let timeoutSeconds: TimeInterval = 60
 
-    static func repair(brokenBoardText: String, model: String) async -> WBParseOutcome? {
+    /// The repaired board (nil: none usable) and the call's tokens and cost
+    /// (from the `--output-format json` result) for the Agents dashboard.
+    struct RepairResult {
+        let outcome: WBParseOutcome?
+        let usage: AgentUsage?
+    }
+
+    static func repair(brokenBoardText: String, model: String) async -> RepairResult {
         guard let systemPromptFileURL = try? ClaudeArgs.writePromptFile(named: WBRepairRequest.systemPromptFileName,
-                                                                        contents: WBRepairRequest.systemPromptText) else { return nil }
+                                                                        contents: WBRepairRequest.systemPromptText) else { return RepairResult(outcome: nil, usage: nil) }
         let request = WBRepairRequest(brokenBoardText: brokenBoardText, model: model, systemPromptFileURL: systemPromptFileURL)
-        guard let executableURL = ClaudeCodeBridge.locateClaudeCodeExecutable() else { return nil }
+        guard let executableURL = ClaudeCodeBridge.locateClaudeCodeExecutable() else { return RepairResult(outcome: nil, usage: nil) }
         let resultText: String? = await Task.detached(priority: .userInitiated) {
             runCLI(request, executableURL: executableURL)
         }.value
-        guard let resultText else { return nil }
+        guard let resultText else { return RepairResult(outcome: nil, usage: nil) }
+        let usage = AgentUsage.fromResultLine(Data(resultText.utf8), model: model)
         let outcome = WBRepairRequest.board(fromCLIResult: resultText)
-        return outcome?.isUsable == true ? outcome : nil
+        return RepairResult(outcome: outcome?.isUsable == true ? outcome : nil, usage: usage)
     }
 
     nonisolated private static func runCLI(_ request: WBRepairRequest, executableURL: URL) -> String? {
