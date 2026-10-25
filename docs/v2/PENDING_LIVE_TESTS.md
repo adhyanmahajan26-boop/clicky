@@ -411,3 +411,32 @@ reference-clip reload, renders in `~/Library/Logs/Clicky/renders/voice/`); these
    Mac voice (fallback) while Qwen warms up; the next answer should be in the cloned voice.
 5. Debug inbox: `{"cmd":"voiceGallery"}` lists entries + active; `{"cmd":"voiceSelect","index":3}` switches
    silently; `{"cmd":"ask","text":"next voice","speak":false}` switches without speaking.
+
+## Wake word (P7)
+
+Unit-tested in ClickyCore (`WakeWordTests`: matcher variants and negatives on transcript fixtures, segment
+starts, the gate, "stop/start listening", listener state, energy gate, CPU window). `WakeWordFeedTests` runs
+`say -o` WAVs through the real recognizer only when the test runner has Speech Recognition permission (a
+terminal `swift test` normally doesn't, so it's skipped). These need the running app:
+1. `{"cmd":"wakeStatus"}` right after launch: `armed: true`, `locale` en-IN (or en-US), `micOpen: true`;
+   the notch pill shows a small white dot on the logo; the panel's Wake word row says it's listening.
+2. Make the clips (never played): `say -o /tmp/wake/a.wav --data-format=LEI16@22050 "Hey Claudia, what's on my
+   screen?"`, likewise "Hey Clicky, open notes.", "Hey Claude, open the file.", "Claudia is my friend.", plain
+   chatter. `{"cmd":"wakeFeed","path":"/tmp/wake/a.wav"}` → one `fire` detection with `turnText` "what's on my
+   screen" and a `latencyMs`; the negatives → no `fire`.
+3. Say "hey Claudia, what's on my screen" → Pop, listening, a normal answer. "hey Clicky" … pause … "open
+   notes" → same. "hey Claudia, next voice" → the voice gallery switch (no brain turn).
+4. While Clicky answers, play a clip saying "hey Claudia" from another device → ignored (`ignoredMatches`
+   counts `ignoredWhileSpeaking` / `ignoredJustAfterSpeaking`).
+5. Join a FaceTime / Zoom call → within 2 s red dot, `pausedReason: microphoneInUseByAnotherApp`; hang up →
+   armed again. Lock the screen → `screenLocked`; unlock → armed. Connect AirPods as input → `bluetoothMicrophone`
+   (holding their mic open would drop them into call-quality audio).
+6. Hold push-to-talk mid-way through a wake turn → the wake turn is dropped, PTT works as before; after key-up
+   `wakeStatus` is armed again within ~0.5 s. Same for a hands-free session (paused for its whole length).
+7. "hey Claudia, stop listening" → spoken confirmation, setting off, dot hidden; push-to-talk "start listening"
+   → back on.
+8. CPU over 30 min idle in a quiet room: `wakeStatus.cpuPercentLastMinute` (Clicky) and
+   `speechServiceCpuPercentLastMinute` (localspeechrecognition + com.apple.siri.embeddedspeech) every few
+   minutes; also with Netflix playing on speakers (the gate stays open more, so the recognizer runs more).
+9. False wakes with Netflix audio for an evening: `wakes`, `falseWakes`, `ignoredMatches`.
+

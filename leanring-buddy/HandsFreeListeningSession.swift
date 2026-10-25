@@ -52,7 +52,8 @@ struct HandsFreeListeningSessionError: LocalizedError {
 final class HandsFreeListeningSession {
     /// How long the user must be quiet before an utterance counts as finished.
     /// Long enough to not cut people off mid-thought, short enough to feel snappy.
-    private let utteranceEndSilenceSeconds: TimeInterval = 1.1
+    /// (Shared with the P7 wake turn through UtteranceEndRule.)
+    private let utteranceEndSilenceSeconds: TimeInterval = UtteranceEndRule.silenceSeconds
 
     private let onPartialTranscript: (String) -> Void
     private let onUtteranceFinished: (String) -> Void

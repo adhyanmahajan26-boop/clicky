@@ -92,9 +92,20 @@ final class CompanionSpeechOutput: ObservableObject {
         lastCoordinatorEngineName = coordinator.spokenEngineName
         lastCoordinatorUsedFallback = coordinator.didUseFallback
         lastSpeechEndDate = Date()
+        lastFinishedEchoGuard = coordinator.echoGuard
     }
 
-    private var lastSpeechEndDate: Date?
+    /// When Clicky last stopped talking (the wake word waits 1.5 s after it).
+    private(set) var lastSpeechEndDate: Date?
+    /// The last finished answer's spoken words (its coordinator may be gone already).
+    private var lastFinishedEchoGuard = EchoGuard()
+
+    /// Every word Clicky said in the EchoGuard window (4 s) before `date`:
+    /// the wake word ignores a name the mic may have heard from the speaker.
+    func recentSpokenWords(at date: Date) -> Set<String> {
+        let activeWords = activeCoordinator?.echoGuard.recentSpokenWords(at: date) ?? []
+        return activeWords.union(lastFinishedEchoGuard.recentSpokenWords(at: date))
+    }
 
     /// Speaking, or within the echo tail after it (output latency + 0.25 s):
     /// what the mic hears now is still likely Clicky's own voice.

@@ -56,6 +56,12 @@ struct CompanionPanelView: View {
                 Spacer()
                     .frame(height: 8)
 
+                WakeWordSettingsRow(wakeWordController: companionManager.wakeWordController)
+                    .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
                 copyLastAnswerButton
                     .padding(.horizontal, 16)
             }

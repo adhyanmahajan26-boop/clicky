@@ -212,6 +212,9 @@ final class CompanionManager: ObservableObject {
 
     /// Built-in Mac voice for spoken replies (free, offline).
     let speechOutputClient = CompanionSpeechOutput()
+    /// P7: "hey claudia" / "hey clicky", heard on-device (see WakeWordController).
+    private(set) lazy var wakeWordController = WakeWordController(speechOutput: speechOutputClient, audioEngineHub: speechOutputClient.audioEngineHub)
+    private var wakeWordVoiceStateCancellable: AnyCancellable?
 
     /// P5 Code mode: `<codetask>` blocks, the review panel and click-gated sends.
     private(set) lazy var codeModeController: CodeModeController = {
@@ -444,6 +447,7 @@ final class CompanionManager: ObservableObject {
         agentsVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] newVoiceState in
             self?.updateBrainAgent(for: newVoiceState)
         }
+        startWakeWord()
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
@@ -518,6 +522,8 @@ final class CompanionManager: ObservableObject {
     func stop() {
         speechOutputClient.shutDown()
         endHandsFreeSession()
+        wakeWordController.stop()
+        wakeWordVoiceStateCancellable?.cancel()
         escapeKeyCancellable?.cancel()
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
@@ -733,6 +739,10 @@ final class CompanionManager: ObservableObject {
             guard !isHandsFreeSessionActive else { return }
             guard !buddyDictationManager.isDictationInProgress else { return }
 
+            // P7: the wake listener closes its mic first (a turn it was
+            // hearing is dropped) and opens it again after key-up.
+            speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)
+
             // Start reading the screens while the user is still talking.
             groundingCoordinator.prewarm()
 
@@ -817,6 +827,8 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            // The dictation engine stopped above; the wake word may listen again.
+            speechOutputClient.audioEngineHub.releaseMicrophone(for: .pushToTalk)
 
             if wasShortcutDoubleTapped {
                 // The two quick taps each started a (silent) push-to-talk
@@ -827,6 +839,76 @@ final class CompanionManager: ObservableObject {
         case .none:
             break
         }
+    }
+
+    // MARK: - Wake Word (P7)
+
+    private func startWakeWord() {
+        wakeWordController.onWake = { [weak self] initialTurnText in self?.wakeWordDidFire(initialTurnText: initialTurnText) }
+        wakeWordController.onTurnFinished = { [weak self] turnText in self?.wakeWordTurnDidFinish(turnText: turnText) }
+        wakeWordController.onTurnAbandoned = { [weak self] in self?.wakeWordTurnWasAbandoned() }
+        // Clicky starting or stopping an answer: the wake recognizer goes deaf / listens again.
+        wakeWordVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.wakeWordController.refreshSpeechSuppression() }
+        }
+        wakeWordController.start()
+    }
+
+    /// The wake phrase fired: the same set-up as a push-to-talk key-down
+    /// (listening state, screens and CLI warming up), then the turn is heard
+    /// by the wake listener until the hands-free end-of-speech rule ends it.
+    private func wakeWordDidFire(initialTurnText: String) {
+        guard !isHandsFreeSessionActive, !buddyDictationManager.isDictationInProgress else {
+            wakeWordController.cancelCurrentTurn()
+            return
+        }
+        groundingCoordinator.prewarm()
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        if !isClickyCursorEnabled && !isOverlayVisible {
+            overlayWindowManager.hasShownOverlayBefore = true
+            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            isOverlayVisible = true
+        }
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        // A new question replaces an answer still being worked on.
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        clearDetectedElementLocation()
+        prespawnMainBrainStandby()
+        zoomChecker.prespawnStandbyIfEnabled()
+        // The hands-free session's start sound, reused.
+        NSSound(named: "Pop")?.play()
+        voiceState = .listening
+    }
+
+    private func wakeWordTurnDidFinish(turnText: String) {
+        guard voiceState == .listening, !buddyDictationManager.isDictationInProgress, !isHandsFreeSessionActive else { return }
+        voiceState = .idle
+        lastTranscript = turnText
+        ClickyAnalytics.trackUserMessageSent(transcript: turnText)
+        // Latency is measured from the end of speech, as push-to-talk does from key-up.
+        sendTranscriptToClaudeWithScreenshot(transcript: turnText, turnOptions: TurnOptions(keyUpDate: Date()))
+        if currentResponseTask == nil { scheduleTransientHideIfNeeded() }
+    }
+
+    private func wakeWordTurnWasAbandoned() {
+        guard voiceState == .listening, !buddyDictationManager.isDictationInProgress else { return }
+        voiceState = .idle
+        claudeCodeBridge.reapStandbyProcess()
+        zoomChecker.reapStandby()
+        scheduleTransientHideIfNeeded()
+    }
+
+    /// "stop listening" turns the wake word off until "start listening" or the menu toggle.
+    private func performWakeListeningCommand(_ wakeListeningCommand: WakeListeningCommand, speaks: Bool) {
+        let enables = wakeListeningCommand == .startListening
+        wakeWordController.setEnabled(enables)
+        guard speaks else { return }
+        let confirmation = enables
+            ? "Okay, I'm listening for hey Claudia again."
+            : "Okay, I've stopped listening for my name. Say start listening with the shortcut to turn it back on."
+        Task { try? await speechOutputClient.speakText(confirmation) }
     }
 
     // MARK: - Hands-Free Session
@@ -889,6 +971,8 @@ final class CompanionManager: ObservableObject {
             isOverlayVisible = true
         }
 
+        // P7: the wake listener gives the mic to the session until it ends.
+        speechOutputClient.audioEngineHub.claimMicrophone(for: .handsFree)
         let handsFreeListeningSession = HandsFreeListeningSession(
             requestedEchoMode: ClickySettings.echoMode,
             audioEngineHub: speechOutputClient.audioEngineHub,
@@ -928,6 +1012,7 @@ final class CompanionManager: ObservableObject {
 
         handsFreeListeningSession?.stopListening()
         handsFreeListeningSession = nil
+        speechOutputClient.audioEngineHub.releaseMicrophone(for: .handsFree)
         isHandsFreeSessionActive = false
         isHandsFreeSessionPaused = false
         handsFreeLastHeardText = ""
@@ -1201,6 +1286,10 @@ final class CompanionManager: ObservableObject {
         } else {
             hideCaption()
         }
+        if wakeWordController.isHearingTurn {
+            wakeWordController.cancelCurrentTurn()
+            wakeWordTurnWasAbandoned()
+        }
         let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
         let hasLiveScreenMarksShowing = hasLiveScreenMarks
         guard isHandsFreeSessionActive || isBuddyBusy || hasLiveScreenMarksShowing else { return }
@@ -1384,6 +1473,12 @@ final class CompanionManager: ObservableObject {
         // "copy that" works with push-to-talk too, without asking Claude.
         if HandsFreeVoiceCommand.parse(transcript) == .copyLastAnswer {
             copyLastAnswerToPasteboard()
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // P7: "stop listening" / "start listening" switch the wake word (push-to-talk or a wake turn).
+        if turnOptions.extraUserText == nil, let wakeListeningCommand = WakeListeningCommand.parse(transcript) {
+            performWakeListeningCommand(wakeListeningCommand, speaks: turnOptions.speaksResponse)
             turnOptions.onTurnFinished?(nil, nil)
             return
         }
