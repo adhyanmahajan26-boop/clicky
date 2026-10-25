@@ -115,6 +115,13 @@ public enum ClickySettings {
         public static let wakeEnabled = "v2.wake.enabled"
         /// [String], default ["hey claudia", "hey clicky"]: greeting + name pairs (fuzzy ASR spellings accepted).
         public static let wakePhrases = "v2.wake.phrases"
+        /// "auto" (default) | "en-IN" | "en-US" (P8): the on-device wake recognizer's language. auto starts with the
+        /// system locale and moves to the other English one if its requests keep failing (at most once per 10 min).
+        public static let wakeLocale = "v2.wake.locale"
+        /// Double, default 10 (P8): seconds after a wake turn's answer during which a command needs no wake word (0 = off).
+        public static let wakeFollowUpSeconds = "v2.wake.followUpSeconds"
+        /// Bool, default true (P8): simple commands (volume, media, windows, apps, tabs, scrolling…) run locally without Claude.
+        public static let voiceFastPathEnabled = "v2.voice.fastPath"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -339,6 +346,13 @@ public enum ClickySettings {
             .filter { !$0.isEmpty }
         return phrases
     }
+
+    public static var wakeLocaleSetting: WakeLocaleSetting { WakeLocaleSetting.parse(defaults.string(forKey: Keys.wakeLocale)) }
+    /// Clamped to 0…30 s; 0 turns the follow-up window off.
+    public static var wakeFollowUpSeconds: Double {
+        min(30, max(0, defaults.object(forKey: Keys.wakeFollowUpSeconds) as? Double ?? WakeFollowUpWindow.defaultListenSeconds))
+    }
+    public static var isVoiceFastPathEnabled: Bool { defaults.object(forKey: Keys.voiceFastPathEnabled) as? Bool ?? true }
 
     // MARK: - P6.2 Type this for me
 

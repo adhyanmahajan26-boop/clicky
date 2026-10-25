@@ -557,6 +557,8 @@ final class BuddyDictationManager: NSObject, ObservableObject {
 
         audioEngine.prepare()
         try audioEngine.start()
+        // P8: remember the mic push-to-talk really hears through; the wake word listens on the same one.
+        PushToTalkInputDeviceRecord.record(AudioInputDeviceInfo.current(of: inputNode.audioUnit) ?? AudioInputDeviceInfo.defaultInput())
     }
 
     private func handleRecognitionError(_ error: Error) {

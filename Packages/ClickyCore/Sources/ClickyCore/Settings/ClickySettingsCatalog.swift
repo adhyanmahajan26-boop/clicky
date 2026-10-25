@@ -142,6 +142,12 @@ public enum ClickySettingsCatalog {
                             explanation: "Listen on-device for the wake phrase. Say \"stop listening\" to turn it off, \"start listening\" (push-to-talk) or the menu to turn it back on."),
         ClickySettingsEntry(key: ClickySettings.Keys.wakePhrases, kind: .textList(defaultValue: WakeWordMatcher.defaultPhrases),
                             explanation: "Wake phrases: a greeting and a name (\"hey claudia\"). Close spellings and hi/okay count too. Comma separated."),
+        ClickySettingsEntry(key: ClickySettings.Keys.wakeLocale, kind: .choice(options: ["auto", "en-IN", "en-US"], defaultValue: "auto"),
+                            explanation: "The wake recognizer's language (on-device only). auto tries the other English one if this one keeps failing."),
+        ClickySettingsEntry(key: ClickySettings.Keys.wakeFollowUpSeconds, kind: .number(defaultValue: 10, range: 0...30, step: 1),
+                            explanation: "After a wake turn is answered, how long Clicky keeps listening for another command without the wake word (0 = off). \"that's all\" ends it."),
+        ClickySettingsEntry(key: ClickySettings.Keys.voiceFastPathEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Do simple spoken commands right away on the Mac (volume, play/pause, snap windows, switch apps, new tab, scroll, lock…) without asking Claude."),
         // Actions (P7).
         ClickySettingsEntry(key: ClickySettings.Keys.actionsEnabled, kind: .toggle(defaultValue: true),
                             explanation: "Let Clicky do things on screen when asked: open apps and links, search, click, type, highlight, summarize (with safety tiers)."),
