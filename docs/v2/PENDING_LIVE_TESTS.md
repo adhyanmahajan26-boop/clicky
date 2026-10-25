@@ -59,3 +59,38 @@ starts the app binary, so it was skipped in silent mode).
 8. Whether the TTS passes the Mac's echo cancellation with the mic open (open vs halfDuplex,
    `defaults write com.personal.clicky v2.voice.echoMode halfDuplex`).
 9. Hosted tests (`xcodebuild test -only-testing:leanring-buddyTests`); compiled, not run.
+
+## P3 (Qwen via mlx-serve)
+
+Probe results and the voice decision are in docs/v2/EVAL.md "P3 probe". Live checks (all talk out loud):
+
+1. `ttsLatency`: 10 spoken asks with Qwen; warm first segment (segment queued → first audio) p50 ≤ 600 ms.
+2. `ttsIntelligibility`: Qwen WAVs of 20 answer-like sentences (lexicon applied) transcribed on-device;
+   WER ≤ 15 % against the caption text.
+3. 20 ask / stop cycles (push-to-talk barge-in and spoken "stop"): silent within 300 ms each time, no audio
+   from an older answer afterwards (engine epoch), history ends in "[interrupted]".
+4. Fallback: (a) closed port: `defaults write com.personal.clicky v2.debug.ttsPortOverride -int 11299`,
+   relaunch → status "Qwen unavailable: nothing on port 11299", the Mac voice speaks, nothing spawned on 11299
+   (then `defaults delete com.personal.clicky v2.debug.ttsPortOverride`); (b) kill mlx-serve mid-answer → the Mac
+   voice speaks the rest of that answer, the supervisor respawns it (at most once per 60 s) and the next answer is
+   Qwen again; (c) a slow segment (watchdog 1.0 + 0.6 x chars/15 s) → only that segment in the Mac voice.
+5. Adopt on relaunch: quit Clicky → mlx-serve keeps running (`lsof -nP -iTCP:11234 -sTCP:LISTEN`, pid in
+   `~/.clicky/mlx-serve.pid` when Clicky started it) → relaunch → "Qwen ready (…)" with no second server.
+   Also: a server bound to `*:11234` → "Qwen unavailable: not loopback-only", Mac voice, the server is untouched.
+6. Gaps between Qwen segments p95 ≤ 50 ms (segment end → next segment start, turn.json).
+7. Caption lag p95 ≤ 120 ms with Qwen (WordTiming on the original caption words; also at v2.voice.rate 1.3).
+8. keyUp → firstAudio p50 (`grounding_eval.py --latency-asks 10`), compared with P2.
+9. Echo: while Clicky speaks only stop / wait / "clicky stop" act (EchoGuard); other speech heard until
+   output latency + 0.25 s after the last audio is dropped as echo; music is not ducked during hands-free.
+10. Hands-free "slower" / "faster" and push-to-talk "slower" / "faster" step 0.85 → 1.0 → 1.15 → 1.3 for
+    both voices; captions stay on the words at every rate.
+11. Panel: speaker / instruct / presets / "Test voice" / status line (the button speaks only when clicked).
+12. Hosted tests (`xcodebuild test -only-testing:leanring-buddyTests`, includes QwenP3HostedTests with the
+    URLProtocol stub); compiled with build-for-testing, not run.
+
+Questions for the user:
+- Listen to `build/eval/p3-lexicon/*-{raw,lexicon}.wav` (p3 worktree): are "P R", "number 12", "Git Hub",
+  "X code", "Swift U I", "Jason", "Control Option", "version 2.1" better than the raw readings? And is rate 1.3
+  still comfortable to follow?
+- If the first-segment latency misses (p50 > 600 ms): try an 8-bit Qwen3-TTS build (needs a download, not done).
+- Load the CustomVoice model so speaker "Ryan" + the instruct take effect (the Base model ignores them)?

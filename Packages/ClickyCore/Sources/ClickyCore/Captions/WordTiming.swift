@@ -11,6 +11,8 @@
 //      after punctuation (. ! ? … newline = 2, , ; : — – = 1);
 //   3. each pause (a silence ≥ 120 ms) pulls the nearest word start within
 //      ±250 ms onto its midpoint, and the words between are re-spread.
+//  Runaway audio (over 3x the chars/15 s estimate) is cut at its last
+//  pause before that limit (overrunCutTime).
 //
 
 import Foundation
@@ -25,6 +27,11 @@ public struct PCMAudio: Equatable, Sendable {
     }
 
     public var duration: TimeInterval { Double(samples.count) / sampleRate }
+
+    /// The first `seconds` of the audio.
+    public func prefix(seconds: TimeInterval) -> PCMAudio {
+        PCMAudio(samples: Array(samples.prefix(max(0, Int(seconds * sampleRate)))), sampleRate: sampleRate)
+    }
 
     /// Mono PCM from a RIFF/WAVE file: 16-bit integer or 32-bit float,
     /// any channel count (channels are averaged).
@@ -138,6 +145,16 @@ public enum WordTiming {
             }
         }
         return pauses
+    }
+
+    /// Runaway audio (longer than 3x chars/15 s): where to cut it, at the
+    /// start of the last pause before that limit (else at the limit).
+    /// nil when the audio is a normal length.
+    public static func overrunCutTime(_ audio: PCMAudio, characters: Int) -> TimeInterval? {
+        let limit = QwenTuning.overrunFactor * QwenTuning.estimatedAudioSeconds(characters: characters)
+        guard limit > 0, audio.duration > limit else { return nil }
+        let lastPauseBeforeLimit = pauses(audio).last { $0.start < limit }
+        return lastPauseBeforeLimit?.start ?? limit
     }
 
     private static func windowLoudness(_ audio: PCMAudio) -> [Bool] {

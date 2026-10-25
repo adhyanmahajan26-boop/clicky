@@ -161,3 +161,74 @@ Note: the 19 "badge mentions" above were all the plain phrase "the list" describ
 - A complete A/B run on the final build, including 0 badge mentions with the corrected counter.
 - Real-app asks (Finder, Safari, System Settings, Xcode, Slack, VS Code; Tools/eval/real_app_asks.py).
 - d0 canvas misses: "x = 42" also appears in the fixture's results list, so the text target is ambiguous; "Total: 1,284" misses on d0 need a look.
+
+## P3 probe
+
+- Date: 2026-10-25 13:00, on top of P2 (`9afb85d`). Silent: every response went to a file, nothing played.
+- `lsof -nP -iTCP:11234 -sTCP:LISTEN`: `mlx-serve 44155 … TCP 127.0.0.1:11234 (LISTEN)`, so loopback only
+  (adopted; it runs as `mlx-serve serve --host 127.0.0.1 --port 11234`). mlx-serve's own `--host` default is
+  0.0.0.0, so Clicky always passes `--host 127.0.0.1` when it spawns one.
+- `GET /v1/models`: the only loaded model is `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` (audio). No
+  CustomVoice or VoiceDesign model is loaded or on the list (the others are image/video/music/chat models).
+- Output: `audio/wav`, 16-bit PCM mono 24 kHz, deterministic (same text → byte-identical WAV).
+
+### Warm timings (`curl -w '%{time_starttransfer} %{time_total}'`, seconds)
+
+| text | stream | run 1 ttfb / total | run 2 ttfb / total | run 3 ttfb / total | audio |
+|---|---|---|---|---|---|
+| "Okay, found it." (15 chars) | false | 0.466 / 0.467 | 0.382 / 0.382 | 0.363 / 0.364 | 1.52 s |
+| "Okay, found it." | true | 0.0006 / 0.380 | 0.0006 / 0.365 | 0.0006 / 0.376 | 1.52 s |
+| "Open the pull request, go to Files changed, and check the build." (64 chars) | false | 1.148 / 1.149 | 1.149 / 1.150 | 1.131 / 1.132 | 5.12 s |
+| same | true | 0.0006 / 1.167 | 0.0006 / 1.146 | 0.0006 / 1.140 | 5.12 s |
+
+- **Streaming verdict: not real streaming.** With `"stream": true` the first bytes are SSE *progress* events
+  (`{"type":"progress","stage":"Generating audio","step":8}` …, then "Decoding audio"), and the audio arrives
+  as one final `{"type":"complete","format":"wav","data":<base64 WAV>}` event at the same time as the
+  non-streamed WAV (total ≈ the non-stream total). With `false`, ttfb ≈ total. So the engine stays on
+  `stream: false` and the first segment is cut early instead (`NarrationSegmenter.Options.qwen`: first
+  ", " ≥ 16 chars in, any sentence length → "Open the pull request, " is the first WAV).
+- Speed: ~4.5x real time warm (5.12 s of audio in 1.14 s); a 201-char request took 2.91 s for 12.2 s of audio.
+
+### Cancellation → lookahead
+
+Started a 201-char request, killed curl after 0.3 s, then timed "Okay, found it." (warm baseline 0.36–0.47 s):
+
+| run | ttfb / total after the cancel |
+|---|---|
+| 1 | 3.364 / 3.365 |
+| 2 | 2.823 / 2.823 |
+| 3 | 2.921 / 2.921 |
+
+The server keeps synthesizing a request whose client went away (the short one waited for the whole long one,
+2.91 s), so **L = 1** (`QwenTuning.lookahead`): only the next segment is requested while one plays, because a
+segment requested and then abandoned (barge-in) delays the next answer. Consequence worth knowing: right after a
+barge-in during synthesis, the next answer's first request can exceed its watchdog (15 chars → 1.6 s); that
+segment is then spoken by the Mac voice and Qwen takes over from the next one.
+
+### Request keys
+
+All sent with the 15-char text, each returned 200 and a **byte-identical** WAV (md5 `7541001339eb…`):
+`response_format: "wav"`, `language: "English"`, `voice`, `speaker: "Ryan"` + `instruct`, `max_tokens: 80`,
+`max_tokens: 5` (no truncation), `max_new_tokens: 5`, an unknown `bogus_param_xyz`, and even a wrong `model` id.
+`response_format: "mp3"` still returned WAV. So unknown keys are accepted, not rejected: Clicky sends exactly
+`model, input, speaker, instruct, language, response_format: "wav", max_tokens: 50 + 2 x chars` (the cap is
+harmless today and takes effect if a later server honours it). The Base model ignores speaker and instruct;
+runaway audio is handled client-side (cut at the last pause past 3x chars/15 s).
+
+### Voice decision
+
+- ~/ai/content-studio (read-only grep, `server.py`): `TTS_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"`;
+  `generate_speech(engine="qwen3")` posts `{"model", "input"}` plus `ref_audio` (base64 WAV, no `ref_text`, no
+  speaker/instruct) when voice is "mine" (clones the user's own voice from `local-avatar/inputs/my_voice_ref.wav`,
+  a Hindi/Hinglish clip), and nothing extra for voice "default" (the Base model's stock voice).
+- Clone test (one silent curl to a file, the loaded Base model supports `ref_audio`): 200, a different voice,
+  ttfb **2.98 s and 2.53 s** for "Okay, found it." vs 0.37 s plain, i.e. **+2.2–2.6 s prefill per request**
+  (the reference is re-encoded on every request).
+- **Decision: the Base model's stock voice, no cloning.** Cloning would add ~2.4 s to every segment (it breaks
+  the first-segment target) and would make Clicky speak in the user's own voice from a Hindi reference. The
+  CustomVoice model (speaker "Ryan" + the warm instruct) isn't loaded and no downloads are allowed, so Clicky keeps
+  requesting the loaded Base model; it still sends `speaker`/`instruct` from the picker (ignored by Base) so a
+  CustomVoice model works as soon as it's the loaded one. The status line says "Qwen ready (Base voice)" until then.
+  Deferred question for the user: load/download `Qwen3-TTS-12Hz-1.7B-CustomVoice` (and/or an 8-bit build)?
+- Lexicon WAVs for the user to compare (raw text vs what Clicky now sends), synthesized silently to files:
+  `build/eval/p3-lexicon/{pr12,xcode,json,ctrl,version}-{raw,lexicon}.wav` in the p3 worktree.

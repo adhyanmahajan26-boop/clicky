@@ -45,6 +45,35 @@ public enum ClickySettings {
         public static let typeForMeEnabled = "v2.typeForMe.enabled"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
         public static let claudeEffortOverride = "v2.claude.effortOverride"
+        /// String, Qwen CustomVoice speaker (default "Ryan"; the Base model ignores it).
+        public static let qwenSpeaker = "v2.voice.qwen.speaker"
+        /// String, Qwen style instruction (default: warm conversational).
+        public static let qwenInstruct = "v2.voice.qwen.instruct"
+        /// Double, playback rate for both voices: 0.85, 1.0 (default), 1.15, 1.3.
+        public static let voiceRate = "v2.voice.rate"
+        /// Int, debug only: send Qwen requests to this port instead of 11234
+        /// (a closed port tests the Apple fallback). Clicky never spawns on it.
+        public static let ttsPortOverride = "v2.debug.ttsPortOverride"
+    }
+
+    public static var qwenSpeaker: String {
+        let speaker = defaults.string(forKey: Keys.qwenSpeaker) ?? ""
+        return QwenTuning.speakers.contains(speaker) ? speaker : QwenTuning.defaultSpeaker
+    }
+
+    public static var qwenInstruct: String {
+        let instruct = (defaults.string(forKey: Keys.qwenInstruct) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return instruct.isEmpty ? QwenTuning.instructPresets[0].instruct : instruct
+    }
+
+    public static var voiceRate: Double {
+        get { QwenTuning.nearestRate(to: defaults.object(forKey: Keys.voiceRate) as? Double ?? 1.0) }
+        set { defaults.set(QwenTuning.nearestRate(to: newValue), forKey: Keys.voiceRate) }
+    }
+
+    public static var ttsPortOverride: Int? {
+        guard let port = defaults.object(forKey: Keys.ttsPortOverride) as? Int, (1...65535).contains(port) else { return nil }
+        return port
     }
 
     public static var claudeEffortOverride: String? {

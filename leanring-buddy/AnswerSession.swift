@@ -14,6 +14,9 @@
 //  follow-up stream with their results continues it (same snapshot, same
 //  registry, same epoch).
 //
+//  With the Qwen voice the segmenter cuts the first segment early
+//  (NarrationSegmenter.Options.qwen): its first WAV only arrives whole.
+//
 
 import ClickyCore
 import CoreGraphics
@@ -28,7 +31,8 @@ final class AnswerSession: SpeechCoordinatorHost {
     private(set) var groundedTurn: GroundedTurn
 
     private var router: ResponseRouter
-    private var segmenter = NarrationSegmenter()
+    private let segmenterOptions: NarrationSegmenter.Options
+    private var segmenter: NarrationSegmenter
     private var supervisor = CLIStreamSupervisor()
     /// Global index of this stream's tag 0 (follow-up streams continue the numbering).
     private var tagIndexOffset = 0
@@ -65,6 +69,8 @@ final class AnswerSession: SpeechCoordinatorHost {
         self.turnRecord = turnRecord
         self.companionManager = companionManager
         self.router = ResponseRouter(blockConsumers: [])
+        self.segmenterOptions = companionManager.speechOutputClient.narrationSegmenterOptions
+        self.segmenter = NarrationSegmenter(options: segmenterOptions)
         // A placeholder host is replaced by `self` right below (Swift needs
         // every property set before `self` can be passed).
         self.coordinator = companionManager.speechOutputClient.makeCoordinator(host: PlaceholderHost.shared)
@@ -121,7 +127,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             // A new message before anything was spoken: start the answer over.
             turnRecord?.rawResponse += "\n--- message restarted ---\n"
             router = ResponseRouter(blockConsumers: [])
-            segmenter = NarrationSegmenter()
+            segmenter = NarrationSegmenter(options: segmenterOptions)
             tagIndexOffset = 0
             placeholdersSeen = 0
             preparedTags = [:]
@@ -144,7 +150,7 @@ final class AnswerSession: SpeechCoordinatorHost {
         tagIndexOffset += router.tags.count
         placeholdersSeen = 0
         router = ResponseRouter(blockConsumers: [])
-        segmenter = NarrationSegmenter()
+        segmenter = NarrationSegmenter(options: segmenterOptions)
         supervisor = CLIStreamSupervisor()
         isFirstStream = false
         rawResponse += "\n\n--- final answer after workers ---\n"

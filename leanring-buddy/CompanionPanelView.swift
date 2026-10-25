@@ -8,6 +8,7 @@
 //
 
 import AVFoundation
+import ClickyCore
 import SwiftUI
 
 struct CompanionPanelView: View {
@@ -37,7 +38,8 @@ struct CompanionPanelView: View {
 
                 CompanionVoicePickerRow(
                     speechOutput: companionManager.speechOutputClient,
-                    systemVoiceClient: companionManager.speechOutputClient.systemVoiceClient
+                    systemVoiceClient: companionManager.speechOutputClient.systemVoiceClient,
+                    qwenServerSupervisor: companionManager.speechOutputClient.qwenServerSupervisor
                 )
                     .padding(.horizontal, 16)
 
@@ -968,6 +970,9 @@ struct CompanionPanelView: View {
 private struct CompanionVoicePickerRow: View {
     @ObservedObject var speechOutput: CompanionSpeechOutput
     @ObservedObject var systemVoiceClient: SystemVoiceTTSClient
+    @ObservedObject var qwenServerSupervisor: QwenServerSupervisor
+    @AppStorage(ClickySettings.Keys.qwenSpeaker) private var qwenSpeaker = QwenTuning.defaultSpeaker
+    @AppStorage(ClickySettings.Keys.qwenInstruct) private var qwenInstruct = QwenTuning.instructPresets[0].instruct
 
     /// Opens System Settings > Accessibility > Spoken Content, where the
     /// System Voice menu has "Manage Voices…" to download Premium voices.
@@ -1001,6 +1006,10 @@ private struct CompanionVoicePickerRow: View {
                 .help("Preview")
             }
 
+            if speechOutput.usesQwenLocalVoice {
+                qwenVoiceSettings
+            }
+
             if !speechOutput.usesQwenLocalVoice && !SystemVoiceTTSClient.hasHighQualityVoiceInstalled {
                 Button(action: {
                     if let spokenContentSettingsURL = URL(string: Self.spokenContentSettingsURLString) {
@@ -1018,6 +1027,97 @@ private struct CompanionVoicePickerRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Qwen speaker, style instruction, a test button (speaks only when
+    /// clicked) and the server supervisor's status line.
+    private var qwenVoiceSettings: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Speaker")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                Spacer()
+                Menu {
+                    ForEach(QwenTuning.speakers, id: \.self) { speaker in
+                        Button(Self.speakerMenuTitle(speaker)) {
+                            qwenSpeaker = speaker
+                            qwenServerSupervisor.refreshReadyStatus()
+                        }
+                    }
+                } label: {
+                    Text(Self.speakerMenuTitle(qwenSpeaker))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textPrimary)
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .pointerCursor()
+            }
+
+            HStack(spacing: 6) {
+                TextField("Style instruction", text: $qwenInstruct)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(DS.Colors.textPrimary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                Menu {
+                    ForEach(QwenTuning.instructPresets, id: \.name) { preset in
+                        Button(preset.name) { qwenInstruct = preset.instruct }
+                    }
+                } label: {
+                    Text("Presets")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .pointerCursor()
+            }
+
+            HStack(spacing: 8) {
+                Text(qwenServerSupervisor.status)
+                    .font(.system(size: 10))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button(action: {
+                    speechOutput.previewVoice()
+                }) {
+                    Text("Test voice")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+
+            if !QwenSupervisor.supportsSpeakers(modelIdentifier: qwenServerSupervisor.client.modelIdentifier) {
+                Text("The loaded Base model has one voice; speakers and style need the CustomVoice model.")
+                    .font(.system(size: 10))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 8)
+    }
+
+    private static func speakerMenuTitle(_ speaker: String) -> String {
+        let displayName = speaker.replacingOccurrences(of: "_", with: " ")
+        return QwenTuning.englishNativeSpeakers.contains(speaker) ? "\(displayName) · English native" : displayName
     }
 
     private var voiceMenu: some View {

@@ -14,6 +14,10 @@
 //  workers → stop the voice → freeze the caption at what was spoken → drop
 //  unfired tags → history gets the spoken text + " [interrupted]".
 //
+//  A primary failure that loses one segment (Qwen merely slow): Apple
+//  speaks it, and the segments Qwen still had queued wait (with any new
+//  ones) until Apple is done, so the two voices never overlap.
+//
 
 import Foundation
 
@@ -78,6 +82,8 @@ public final class SpeechCoordinator {
     private var isPrimaryDisabledForAnswer = false
     private var fallbackSegmentIDs: Set<Int> = []
     private var heldForPrimary: [CaptionSegment] = []
+    private var primarySegmentIDs: Set<Int> = []
+    private var startedSegmentIDs: Set<Int> = []
     private var apologyTask: Task<Void, Never>?
 
     public init(primaryEngine: SpeechEngine, fallbackEngine: SpeechEngine, host: SpeechCoordinatorHost) {
@@ -118,6 +124,8 @@ public final class SpeechCoordinator {
         didUseFallback = false
         fallbackSegmentIDs = []
         heldForPrimary = []
+        primarySegmentIDs = []
+        startedSegmentIDs = []
         apologyTask?.cancel()
         caption = CaptionState()
         primaryEngine.begin(epoch: epoch)
@@ -151,6 +159,7 @@ public final class SpeechCoordinator {
             }
             return
         }
+        primarySegmentIDs.insert(segment.id)
         primaryEngine.enqueue(segment)
     }
 
@@ -263,6 +272,7 @@ public final class SpeechCoordinator {
 
     private func startSegment(_ segmentID: Int) {
         guard let segment = segmentsByID[segmentID], !caption.isFrozen else { return }
+        startedSegmentIDs.insert(segmentID)
         if caption.current?.id != segmentID {
             caption.previous = caption.current
             caption.current = segment
@@ -310,7 +320,10 @@ public final class SpeechCoordinator {
             // Apple finished Qwen's leftovers: later segments go back to Qwen.
             let held = heldForPrimary
             heldForPrimary = []
-            for heldSegment in held { primaryEngine.enqueue(heldSegment) }
+            for heldSegment in held {
+                primarySegmentIDs.insert(heldSegment.id)
+                primaryEngine.enqueue(heldSegment)
+            }
             if hasEndedAnswer { primaryEngine.endOfAnswer() }
         }
         finishAnswerIfPlayedOut()
@@ -330,6 +343,16 @@ public final class SpeechCoordinator {
         host?.log("primary voice failed (\(unspoken.count) unspoken, rest=\(restOfAnswer))")
         didUseFallback = true
         if restOfAnswer { isPrimaryDisabledForAnswer = true }
+        let unspokenIDs = Set(unspoken.map(\.id))
+        let waitingOnPrimary = segmentOrder.filter { segmentID in
+            primarySegmentIDs.contains(segmentID) && !startedSegmentIDs.contains(segmentID)
+                && !finishedSegmentIDs.contains(segmentID) && !unspokenIDs.contains(segmentID)
+        }
+        if !restOfAnswer, !unspoken.isEmpty, !waitingOnPrimary.isEmpty {
+            // Take them back from the primary; they return once the fallback is done.
+            primaryEngine.stopNow()
+            heldForPrimary = waitingOnPrimary.compactMap { segmentsByID[$0] } + heldForPrimary
+        }
         for segment in unspoken where segmentsByID[segment.id] != nil && !finishedSegmentIDs.contains(segment.id) {
             fallbackSegmentIDs.insert(segment.id)
             fallbackEngine.enqueue(segment)

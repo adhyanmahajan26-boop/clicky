@@ -9,7 +9,9 @@
 //   - Sentences under 24 characters merge into the next one, except the very
 //     first (it starts the voice early).
 //   - A first sentence over 80 characters is cut at its first ", " or "; "
-//     at least 24 characters in, however it arrived.
+//     at least 24 characters in, however it arrived. Options change both
+//     numbers: the Qwen voice (no streaming audio) cuts any first sentence
+//     at its first ", " 16 characters in, so the first WAV is short.
 //   - Never cut inside a ``` fence. Tags arrive whole (the router holds
 //     them) as U+E000 placeholders.
 //   - A sentence that is only placeholders / spaces / punctuation joins the
@@ -25,10 +27,31 @@ public struct NarrationSegmenter: Sendable {
     public static let minimumSentenceLength = 24
     public static let longFirstSentenceLength = 80
 
+    /// When the first sentence is cut at a clause. The defaults are the
+    /// behaviour every engine had before P3.
+    public struct Options: Equatable, Sendable {
+        /// The ", " / "; " must be at least this many characters in.
+        public var firstCutMinChars: Int
+        /// Only first sentences longer than this are cut.
+        public var firstCutMinSentenceLen: Int
+
+        public init(firstCutMinChars: Int = NarrationSegmenter.minimumSentenceLength,
+                    firstCutMinSentenceLen: Int = NarrationSegmenter.longFirstSentenceLength) {
+            self.firstCutMinChars = firstCutMinChars
+            self.firstCutMinSentenceLen = firstCutMinSentenceLen
+        }
+
+        /// For the Qwen voice: its first WAV arrives only when it's complete.
+        public static let qwen = Options(firstCutMinChars: 16, firstCutMinSentenceLen: 0)
+    }
+
+    public let options: Options
     private var pending = ""
     public private(set) var releasedCount = 0
 
-    public init() {}
+    public init(options: Options = Options()) {
+        self.options = options
+    }
 
     public mutating func feed(_ narration: String) -> [String] {
         pending += narration
@@ -55,8 +78,8 @@ public struct NarrationSegmenter: Sendable {
 
             // A long first sentence: cut early at a comma, even mid-stream.
             if releasedCount == 0, let firstUnit = units.first, firstUnit.hasSpeech,
-               firstUnit.text.count > Self.longFirstSentenceLength,
-               let cutOffset = Self.firstClauseCut(in: firstUnit.text) {
+               firstUnit.text.count > options.firstCutMinSentenceLen,
+               let cutOffset = Self.firstClauseCut(in: firstUnit.text, minimumOffset: options.firstCutMinChars) {
                 let head = String(firstUnit.text.prefix(cutOffset))
                 released.append(head)
                 releasedCount += 1
@@ -196,9 +219,9 @@ public struct NarrationSegmenter: Sendable {
         return length
     }
 
-    /// Offset just after the first ", " or "; " at least 24 characters in,
-    /// outside fences and before any placeholder-only tail.
-    static func firstClauseCut(in sentence: String) -> Int? {
+    /// Offset just after the first ", " or "; " at least `minimumOffset`
+    /// characters in, outside fences and before any placeholder-only tail.
+    static func firstClauseCut(in sentence: String, minimumOffset: Int = minimumSentenceLength) -> Int? {
         let characters = Array(sentence)
         var isInsideFence = false
         var index = 0
@@ -208,7 +231,7 @@ public struct NarrationSegmenter: Sendable {
                 index += 3
                 continue
             }
-            if !isInsideFence, index >= minimumSentenceLength, (characters[index] == "," || characters[index] == ";"), characters[index + 1] == " " {
+            if !isInsideFence, index >= minimumOffset, (characters[index] == "," || characters[index] == ";"), characters[index + 1] == " " {
                 return index + 2
             }
             index += 1
