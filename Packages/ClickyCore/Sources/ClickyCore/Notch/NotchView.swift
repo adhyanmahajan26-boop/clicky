@@ -182,6 +182,21 @@ public struct NotchView: View {
     private var logo: some View {
         NotchLogoView(phase: content.phase, orbitingAgentCount: content.orbitingAgentIDs.count, isAnimating: content.isLogoAnimating,
                       fixedAnimationDate: fixedAnimationDate)
+            .overlay(alignment: .bottomTrailing) { wakeIndicatorDot }
+    }
+
+    /// P7: a small dot on the logo while the wake word is armed (red while paused).
+    @ViewBuilder private var wakeIndicatorDot: some View {
+        switch content.wakeIndicator {
+        case .hidden:
+            EmptyView()
+        case .armed, .paused:
+            Circle()
+                .fill(content.wakeIndicator == .paused ? Color(red: 1, green: 0.27, blue: 0.23) : Color.white.opacity(0.72))
+                .frame(width: 4.5, height: 4.5)
+                .padding(1.5)
+                .accessibilityLabel(content.wakeIndicator == .paused ? "Wake word paused" : "Wake word listening")
+        }
     }
 
     // MARK: - Expanded

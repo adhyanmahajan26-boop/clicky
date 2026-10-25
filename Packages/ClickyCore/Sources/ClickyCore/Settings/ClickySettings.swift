@@ -104,6 +104,11 @@ public enum ClickySettings {
         public static let projectEnabled = "v2.project.enabled"
         /// Bool, default true: say short updates when the project replies (thread started, done, failed).
         public static let projectSpeakUpdates = "v2.project.speakUpdates"
+        /// Bool, default true (P7): listen on-device for the wake phrase ("hey claudia").
+        /// "stop listening" turns it off, "start listening" (push-to-talk) or the menu toggle back on.
+        public static let wakeEnabled = "v2.wake.enabled"
+        /// [String], default ["hey claudia", "hey clicky"]: greeting + name pairs (fuzzy ASR spellings accepted).
+        public static let wakePhrases = "v2.wake.phrases"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -309,6 +314,19 @@ public enum ClickySettings {
 
     public static var isProjectBridgeEnabled: Bool { defaults.object(forKey: Keys.projectEnabled) as? Bool ?? true }
     public static var isProjectSpeakUpdatesEnabled: Bool { defaults.object(forKey: Keys.projectSpeakUpdates) as? Bool ?? true }
+
+    // MARK: - P7 Wake word
+
+    public static var isWakeWordEnabled: Bool {
+        get { defaults.object(forKey: Keys.wakeEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.wakeEnabled) }
+    }
+    public static var wakePhrases: [String] {
+        let phrases = (defaults.stringArray(forKey: Keys.wakePhrases) ?? WakeWordMatcher.defaultPhrases)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return phrases
+    }
 
     // MARK: - P6.2 Type this for me
 

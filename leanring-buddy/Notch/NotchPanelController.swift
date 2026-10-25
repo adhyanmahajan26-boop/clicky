@@ -127,7 +127,8 @@ final class NotchPanelController: NSObject {
             companionManager.$captionState.map { _ in () }.eraseToAnyPublisher(),
             companionManager.agentsCenter.$store.map { _ in () }.eraseToAnyPublisher(),
             codeModeController.$isEnabled.map { _ in () }.eraseToAnyPublisher(),
-            companionManager.projectBridge.$notchStatusText.map { _ in () }.eraseToAnyPublisher()
+            companionManager.projectBridge.$notchStatusText.map { _ in () }.eraseToAnyPublisher(),
+            companionManager.wakeWordController.$state.map { _ in () }.eraseToAnyPublisher()
         ]
         Publishers.MergeMany(triggers)
             .receive(on: DispatchQueue.main)
@@ -154,6 +155,7 @@ final class NotchPanelController: NSObject {
             selectedAgentID: selectedAgentID,
             now: Date(),
             projectStatusText: companionManager.projectBridge.notchStatusText,
+            wakeIndicator: NotchWakeIndicator.indicator(for: companionManager.wakeWordController.state),
             canCancel: { agentsCenter.canCancel($0) },
             canOpenReview: { record in record.kind == .codeTask && codeModeController.activeReviewAgentID == record.id }
         )

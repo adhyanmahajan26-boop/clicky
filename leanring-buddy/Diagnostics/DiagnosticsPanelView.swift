@@ -41,6 +41,7 @@ struct DiagnosticsPanelView: View {
             statusSection(title: "Code mode", lines: snapshot.codeLines)
             statusSection(title: "GitHub", lines: snapshot.githubLines, buttonTitle: "Check GitHub", buttonAction: actions.checkGitHub)
             statusSection(title: "Voice (TTS)", lines: snapshot.voiceLines)
+            statusSection(title: "Wake word", lines: snapshot.wakeLines)
             statusSection(title: "LaunchAgent", lines: snapshot.launchAgentLines)
             selfTestSection
             settingsSection

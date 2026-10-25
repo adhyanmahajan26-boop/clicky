@@ -73,10 +73,13 @@ public struct NotchContent: Equatable, Sendable {
     public var cancelTargetID: String?
     /// The code task whose review panel "Open review" shows.
     public var reviewTargetID: String?
+    /// P7: the wake word's small mic dot on the collapsed logo.
+    public var wakeIndicator: NotchWakeIndicator
 
     public init(phase: NotchCompanionPhase = .idle, statusText: String = "", orbitingAgentIDs: [String] = [], agentRows: [NotchAgentRow] = [],
                 hiddenAgentCount: Int = 0, agentRowsAreRecent: Bool = false, captionText: String? = nil, isCodeModeOn: Bool = false,
-                selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil) {
+                selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil,
+                wakeIndicator: NotchWakeIndicator = .hidden) {
         self.phase = phase
         self.statusText = statusText
         self.orbitingAgentIDs = orbitingAgentIDs
@@ -88,6 +91,7 @@ public struct NotchContent: Equatable, Sendable {
         self.selectedAgentID = selectedAgentID
         self.cancelTargetID = cancelTargetID
         self.reviewTargetID = reviewTargetID
+        self.wakeIndicator = wakeIndicator
     }
 
     /// True while the logo should move (spin, pulse or carry orbiting minis);
@@ -164,7 +168,8 @@ public enum NotchStatus {
     /// `canCancel` / `canOpenReview` are the dashboard's own checks.
     /// `projectStatusText`: the few-seconds "sent to project" / "project: done" note.
     public static func content(phase: NotchCompanionPhase, store: AgentStore, captionText: String?, isCodeModeOn: Bool, selectedAgentID: String?,
-                               now: Date, projectStatusText: String? = nil, canCancel: (AgentRecord) -> Bool, canOpenReview: (AgentRecord) -> Bool) -> NotchContent {
+                               now: Date, projectStatusText: String? = nil, wakeIndicator: NotchWakeIndicator = .hidden,
+                               canCancel: (AgentRecord) -> Bool, canOpenReview: (AgentRecord) -> Bool) -> NotchContent {
         let runningRecords = store.runningRecords
         let activeHelperAgents = runningRecords.filter { $0.kind != .brain }
         // Project tasks run in another session: listed, but not drawn as Clicky's own orbiting helpers.
@@ -185,7 +190,8 @@ public enum NotchStatus {
 
         return NotchContent(phase: phase, statusText: statusText(phase: phase, activeHelperAgents: activeHelperAgents, projectStatusText: projectStatusText), orbitingAgentIDs: orbitingAgentIDs,
                             agentRows: Array(rows), hiddenAgentCount: hiddenAgentCount, agentRowsAreRecent: agentRowsAreRecent, captionText: captionText,
-                            isCodeModeOn: isCodeModeOn, selectedAgentID: selectedRow?.id, cancelTargetID: cancelTargetID, reviewTargetID: reviewTargetID)
+                            isCodeModeOn: isCodeModeOn, selectedAgentID: selectedRow?.id, cancelTargetID: cancelTargetID, reviewTargetID: reviewTargetID,
+                            wakeIndicator: wakeIndicator)
     }
 
     /// The brain shows its phase ("Speaking"); code tasks their step; others their status.

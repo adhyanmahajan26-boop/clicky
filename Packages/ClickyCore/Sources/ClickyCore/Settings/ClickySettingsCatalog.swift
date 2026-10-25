@@ -135,6 +135,12 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.projectSpeakUpdates, kind: .toggle(defaultValue: true),
                             explanation: "Say a short update when your project replies (thread started, done, couldn't do it)."),
 
+        // Wake word (P7).
+        ClickySettingsEntry(key: ClickySettings.Keys.wakeEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Listen on-device for the wake phrase. Say \"stop listening\" to turn it off, \"start listening\" (push-to-talk) or the menu to turn it back on."),
+        ClickySettingsEntry(key: ClickySettings.Keys.wakePhrases, kind: .textList(defaultValue: WakeWordMatcher.defaultPhrases),
+                            explanation: "Wake phrases: a greeting and a name (\"hey claudia\"). Close spellings and hi/okay count too. Comma separated."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

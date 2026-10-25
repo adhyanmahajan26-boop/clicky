@@ -44,6 +44,8 @@ struct DiagnosticsSnapshot: Equatable {
     var githubLines: [DiagnosticsStatusLine] = [DiagnosticsStatusLine(label: "GitHub", value: "Not checked. Press Check GitHub.", level: .unknown)]
     /// Qwen supervisor status, model id and the newest turn's time to first audio.
     var voiceLines: [DiagnosticsStatusLine] = []
+    /// P7: the wake word's state, phrases, recognizer locale and counts.
+    var wakeLines: [DiagnosticsStatusLine] = []
     /// Whether ~/Library/LaunchAgents/local.clicky.tts.plist exists.
     var launchAgentLines: [DiagnosticsStatusLine] = []
     /// Last result per self-test name; a name without a result has not been run in this window.

@@ -12,6 +12,11 @@
 //    ask {text, speak=true}   → runs the full answer pipeline; replies at turn end
 //    marks {tags}             → fresh capture, parse/map/draw the tags (legacy parser)
 //    say {text}, stop, clear, reset, handsfree {on}, selftest {name}
+//    wakeStatus               → wake word: armed, paused reason, restarts, wakes, false wakes,
+//                               last wake latency, CPU % over the last minute (Clicky and the
+//                               on-device speech service)
+//    wakeFeed {path}          → a WAV/CAF through the wake recognizer + matcher at real-time pace
+//                               (no mic, no speaker): detections with times and latency
 //    snap {target, marks}     → the [SNAP:…] path: target screen|window|marks, marks=true keeps
 //                               Clicky's overlay in the shot; replies with the saved path
 //    codeTask {task | json}   → runs a CodeTask through the CodeModeController
@@ -306,6 +311,21 @@ final class DebugCommandInbox {
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["handsFree": companionManager.isHandsFreeSessionActive], errorMessage: nil)
 
+        case "wakeStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.wakeWordController.statusSnapshot(), errorMessage: nil)
+
+        case "wakeFeed":
+            // A WAV/CAF through the wake recognizer + matcher at real-time pace (no mic, no speaker).
+            guard let filePath = commandObject["path"] as? String, !filePath.isEmpty else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "wakeFeed needs \"path\"")
+                return
+            }
+            let fileURL = URL(fileURLWithPath: (filePath as NSString).expandingTildeInPath)
+            Task {
+                let (isSuccess, result, errorMessage) = await companionManager.wakeWordController.feedFile(at: fileURL)
+                reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
+            }
+
         case "selftest":
             let selfTestName = commandObject["name"] as? String ?? ""
             let selfTestMode = commandObject["mode"] as? String
@@ -506,7 +526,8 @@ final class DebugCommandInbox {
             "ax": AXIsProcessTrusted(),
             "screen": CGPreflightScreenCaptureAccess(),
             "voiceEngine": companionManager.speechOutputClient.currentEngineName,
-            "handsFree": companionManager.isHandsFreeSessionActive
+            "handsFree": companionManager.isHandsFreeSessionActive,
+            "wake": companionManager.wakeWordController.state.displayText
         ]
     }
 

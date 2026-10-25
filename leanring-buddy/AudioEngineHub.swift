@@ -17,6 +17,10 @@
 //    the voices use their usual paths (AVAudioPlayer / AVSpeechSynthesizer).
 //  - AudioOutputRouteInspector: is the default output headphones? (then no
 //    AEC is needed; the mode stays open).
+//  - P7: the microphone claims. Push-to-talk and hands-free claim the mic
+//    while they capture; the wake-word listener watches the claims, stops
+//    its own engine while any is held (so it never fights voice processing
+//    or the dictation engine) and resumes after the last one is released.
 //
 
 import AVFoundation
@@ -24,9 +28,32 @@ import ClickyCore
 import CoreAudio
 import Foundation
 
+/// Who is capturing from the mic for a turn (the wake listener yields to them).
+enum ExclusiveMicrophoneUser: String {
+    case pushToTalk
+    case handsFree
+}
+
 @MainActor
 final class AudioEngineHub {
     let audioEngine = AVAudioEngine()
+
+    /// P7: mic claims by push-to-talk / hands-free (see the header).
+    private(set) var exclusiveMicrophoneUsers: Set<ExclusiveMicrophoneUser> = []
+    /// Called on every change of `exclusiveMicrophoneUsers`.
+    var onExclusiveMicrophoneUsersChanged: ((Set<ExclusiveMicrophoneUser>) -> Void)?
+
+    func claimMicrophone(for microphoneUser: ExclusiveMicrophoneUser) {
+        guard !exclusiveMicrophoneUsers.contains(microphoneUser) else { return }
+        exclusiveMicrophoneUsers.insert(microphoneUser)
+        onExclusiveMicrophoneUsersChanged?(exclusiveMicrophoneUsers)
+    }
+
+    func releaseMicrophone(for microphoneUser: ExclusiveMicrophoneUser) {
+        guard exclusiveMicrophoneUsers.contains(microphoneUser) else { return }
+        exclusiveMicrophoneUsers.remove(microphoneUser)
+        onExclusiveMicrophoneUsersChanged?(exclusiveMicrophoneUsers)
+    }
     /// Voice processing is on and the shared engine is running (mic + voices).
     private(set) var isVoiceProcessingActive = false
     private var playerChannels: [SharedEnginePlayerChannel] = []

@@ -33,6 +33,7 @@ final class DiagnosticsModel: ObservableObject {
                                                            modelIdentifier: companionManager.speechOutputClient.qwenLocalVoiceClient.modelIdentifier,
                                                            newestTimeToFirstAudioMilliseconds: DiagnosticsProbes.newestTimeToFirstAudioMilliseconds())
         snapshot.launchAgentLines = DiagnosticsProbes.launchAgentLines()
+        snapshot.wakeLines = companionManager.wakeWordController.diagnosticsLines()
     }
 
     /// Runs `claude auth status`. Only from the Check Claude button.
