@@ -276,3 +276,15 @@ struct ProcessCPUUsageWindowTests {
         #expect(window.spanSeconds >= 60 && window.spanSeconds <= 62)
     }
 }
+
+/// Live finding: the en-IN on-device recognizer returned "Hey Claudia what's on my screen" as ONE
+/// segment, and the word-by-word matcher never fired.
+@Test func multiWordSegmentsAreSplitBeforeMatching() {
+    let segment = WakeTranscriptWord(text: "Hey Claudia what's on my screen", startSeconds: 0.4, endSeconds: 2.0)
+    let words = WakeWordRecognitionPipeline.splitIntoWords([segment])
+    #expect(words.map(\.text) == ["Hey", "Claudia", "what's", "on", "my", "screen"])
+    #expect(abs(words.first!.startSeconds - 0.4) < 0.0001 && abs(words.last!.endSeconds - 2.0) < 0.0001)
+    let match = WakeWordMatcher().firstMatch(in: words)
+    #expect(match?.phrase == "hey claudia")
+    #expect(match?.remainderText.lowercased() == "what's on my screen")
+}

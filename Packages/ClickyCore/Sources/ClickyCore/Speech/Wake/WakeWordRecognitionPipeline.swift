@@ -415,12 +415,31 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
         }
         let hasRecognizerTimes = segments.contains { $0.timestamp > 0 || $0.duration > 0 }
         if hasRecognizerTimes { statistics.usedRecognizerWordTimes = true }
-        return segments.enumerated().map { segmentIndex, segment in
+        let segmentWords = segments.enumerated().map { segmentIndex, segment -> WakeTranscriptWord in
             if hasRecognizerTimes {
                 return WakeTranscriptWord(text: segment.substring, startSeconds: segment.timestamp, endSeconds: segment.timestamp + segment.duration)
             }
             let firstHeardSeconds = requestState.wordFirstHeardSeconds[segmentIndex]
             return WakeTranscriptWord(text: segment.substring, startSeconds: firstHeardSeconds, endSeconds: firstHeardSeconds)
+        }
+        return Self.splitIntoWords(segmentWords)
+    }
+
+    /// The on-device recognizer can return several words as one segment ("Hey Claudia what's on my
+    /// screen" — seen with en-IN), and the matcher works word by word: split each segment on
+    /// whitespace and share its time span between its words in proportion to their length.
+    static func splitIntoWords(_ segmentWords: [WakeTranscriptWord]) -> [WakeTranscriptWord] {
+        segmentWords.flatMap { segmentWord -> [WakeTranscriptWord] in
+            let parts = segmentWord.text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard parts.count > 1 else { return [segmentWord] }
+            let totalLength = Double(parts.reduce(0) { $0 + $1.count })
+            let span = segmentWord.endSeconds - segmentWord.startSeconds
+            var cursor = segmentWord.startSeconds
+            return parts.map { part in
+                let share = totalLength > 0 ? span * Double(part.count) / totalLength : 0
+                defer { cursor += share }
+                return WakeTranscriptWord(text: part, startSeconds: cursor, endSeconds: cursor + share)
+            }
         }
     }
 

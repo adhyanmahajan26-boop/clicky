@@ -261,16 +261,23 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(sum(1 for c in cases if c["expected"] == "positive"), 2)
         self.assertTrue(any(c["text"] == "hey claude open" and c["expected"] == "negative" for c in cases))
         self.assertTrue(any(c["text"] == "claudia is my friend" and c["expected"] == "negative" for c in cases))
-        self.assertTrue(all(c["file"].endswith(".aiff") for c in cases))
+        self.assertTrue(all(c["file"].endswith(".wav") for c in cases))
 
     def test_slug_is_a_safe_file_name(self):
         self.assertEqual(WAKE.slug("hey claudia what's on my screen"), "hey_claudia_what_s_on_my_screen")
         self.assertRegex(WAKE.slug("a/b\\c d!"), r"^[a-z0-9_]+$")
 
     def test_say_writes_a_file_and_never_plays(self):
-        command = WAKE.say_command("/tmp/x/a.aiff", "hey clicky open notes")
-        self.assertEqual(command[:3], ["say", "-o", "/tmp/x/a.aiff"])
+        command = WAKE.say_command("/tmp/x/a.wav", "hey clicky open notes")
+        self.assertEqual(command[0], "say")
+        self.assertIn("-o", command)
+        self.assertEqual(command[command.index("-o") + 1], "/tmp/x/a.wav")
         self.assertNotIn("-a", command)
+
+    def test_reply_detection_reads_clickys_detections_list(self):
+        reply = {"ok": True, "result": {"detections": [{"phrase": "hey claudia", "decision": "fire", "latencyMs": 380}]}}
+        self.assertEqual(WAKE.reply_detection(reply), (True, "hey claudia", 380.0))
+        self.assertEqual(WAKE.reply_detection({"ok": True, "result": {"detections": []}}), (False, None, None))
 
     def test_reply_detection_accepts_nested_result(self):
         self.assertEqual(WAKE.reply_detection({"ok": True, "result": {"detected": True, "phrase": "hey clicky", "latencyMs": 420}}),

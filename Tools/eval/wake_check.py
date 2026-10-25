@@ -73,9 +73,9 @@ def build_cases():
     """Every clip to feed: (file name, text, expected). Positives first, then negatives."""
     cases = []
     for text in POSITIVE:
-        cases.append({"file": slug(text) + ".aiff", "text": text, "expected": "positive"})
+        cases.append({"file": slug(text) + ".wav", "text": text, "expected": "positive"})
     for text in NEGATIVE:
-        cases.append({"file": slug(text) + ".aiff", "text": text, "expected": "negative"})
+        cases.append({"file": slug(text) + ".wav", "text": text, "expected": "negative"})
     return cases
 
 
@@ -84,6 +84,14 @@ def reply_detection(reply):
     payload = reply.get("result") if isinstance(reply.get("result"), dict) else reply
     if not isinstance(payload, dict):
         return False, None, None
+    detections = payload.get("detections")
+    if isinstance(detections, list):
+        # Clicky's wakeFeed: a list of {phrase, decision, latencyMs, ...}; a "fire" decision is a wake.
+        fired = [item for item in detections if isinstance(item, dict) and str(item.get("decision", "fire")).lower().endswith("fire")]
+        if not fired:
+            return False, None, None
+        latency = fired[0].get("latencyMs")
+        return True, fired[0].get("phrase"), float(latency) if isinstance(latency, (int, float)) else None
     detected = bool(payload.get("detected"))
     phrase = payload.get("phrase")
     latency = payload.get("latencyMs")
@@ -137,7 +145,7 @@ def passive_plan(minutes):
 
 def say_command(path, text):
     """`say -o` writes an AIFF file. There is no output device: nothing is played."""
-    return ["say", "-o", path, text]
+    return ["say", "--file-format=WAVE", "--data-format=LEF32@48000", "-o", path, text]  # 48 kHz float, like the live mic
 
 
 def results_markdown(report):
