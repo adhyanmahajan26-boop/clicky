@@ -31,7 +31,9 @@ public enum ClickySettings {
         public static let marksMax = "v2.marks.max"
         /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
         public static let marksTrackAX = "v2.marks.trackAX"
-        /// "open" (default: mic stays open while Clicky talks) or "halfDuplex".
+        /// "open" (default: mic stays open while Clicky talks), "halfDuplex",
+        /// or "aec" (P6.4: both voices play through the mic's engine with
+        /// voice processing on; headphones stay open, a failure → halfDuplex).
         public static let voiceEchoMode = "v2.voice.echoMode"
         /// Int, caption bubble lines (default 4).
         public static let captionMaxLines = "v2.caption.maxLines"
@@ -92,6 +94,8 @@ public enum ClickySettings {
     public enum EchoMode: String, Sendable {
         case open
         case halfDuplex
+        /// Echo cancellation on the shared mic + voice engine (P6.4).
+        case aec
     }
 
     public static var echoMode: EchoMode {

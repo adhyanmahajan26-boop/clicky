@@ -97,6 +97,7 @@ public final class SpeechCoordinator {
     private var primarySegmentIDs: Set<Int> = []
     private var startedSegmentIDs: Set<Int> = []
     private var apologyTask: Task<Void, Never>?
+    private var lastEchoGuardRefreshDate: Date?
 
     public init(primaryEngine: SpeechEngine, fallbackEngine: SpeechEngine, host: SpeechCoordinatorHost) {
         self.primaryEngine = primaryEngine
@@ -260,6 +261,21 @@ public final class SpeechCoordinator {
         return true
     }
 
+    /// "aec" mode (P6.4): while playing only "stop" / "wait" / "clicky stop"
+    /// (the whole partial) barge in, and only if Clicky didn't just say it.
+    @discardableResult
+    public func heardWhileSpeakingWithEchoCancellation(_ heardText: String) -> Bool {
+        guard isAnswerOpen, echoGuard.acceptsWhilePlaying(heardText, at: now()) else { return false }
+        bargeIn(.voiceCommand)
+        return true
+    }
+
+    /// The mic most likely heard Clicky: the partial's last 4 words are
+    /// ≥ 60 % words it said in the last 4 seconds.
+    public func isLikelyEcho(_ heardText: String) -> Bool {
+        echoGuard.isLikelyEcho(heardText, at: now())
+    }
+
     /// Everything spoken so far, in order (whole segments + the current one's spoken part).
     public var spokenText: String {
         var text = ""
@@ -323,6 +339,7 @@ public final class SpeechCoordinator {
     private func progress(segmentID: Int, spoken: Int, leadSpoken: Int, isExact: Bool) {
         guard let segment = segmentsByID[segmentID], !caption.isFrozen else { return }
         spokenCharactersBySegment[segmentID] = max(spokenCharactersBySegment[segmentID] ?? 0, spoken)
+        refreshEchoGuardWhilePlaying(segment)
         if caption.current?.id == segmentID, var currentTimeline = timeline {
             if isExact { currentTimeline.applyExact(spoken) } else { currentTimeline.applyEstimate(spoken) }
             timeline = currentTimeline
@@ -364,6 +381,15 @@ public final class SpeechCoordinator {
             if hasEndedAnswer { primaryEngine.endOfAnswer() }
         }
         finishAnswerIfPlayedOut()
+    }
+
+    /// A long segment keeps counting as "just said" while it plays
+    /// (at most twice a second).
+    private func refreshEchoGuardWhilePlaying(_ segment: CaptionSegment) {
+        let currentDate = now()
+        if let lastEchoGuardRefreshDate, currentDate.timeIntervalSince(lastEchoGuardRefreshDate) < 0.5 { return }
+        lastEchoGuardRefreshDate = currentDate
+        echoGuard.recordSpoken(segment.speech, at: currentDate)
     }
 
     private func fire(_ tagIndex: Int) {

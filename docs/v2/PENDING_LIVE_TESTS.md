@@ -165,3 +165,31 @@ PNGs in `~/Library/Logs/Clicky/renders/p4/`).
 11. Hosted tests compiled with build-for-testing, not run.
 
 SwiftMath is pinned at 1.7.3 (`Packages/ClickyCore/Package.swift`, exact) for math images.
+
+## P6.4 (AEC echo mode)
+
+Opt-in: `defaults write com.personal.clicky v2.voice.echoMode aec` (default stays `open`; nothing changes
+unless it's set). Silent mode covered only the pure parts in `swift test` (`EchoCancellationTests`: 60 %
+partial-overlap echo filter, command phrases while playing, byteSampleOffset → frames → characters,
+headphone classification, throw → halfDuplex); no mic or speaker was opened. Everything below needs the user
+present, talking, with hands-free on. Watch the console for `🎙️ AEC:` / `🎧 AEC:` / `🔇 Hands-free:` lines.
+
+1. Speakers vs headphones: start hands-free on the built-in speakers → `listening (echo mode aec)` and
+   `shared engine on`; with AirPods / wired headphones → `🎧 … headphones` and `echo mode open` (no voice
+   processing). Hot-plugging mid-session isn't re-classified (restart hands-free).
+2. Both voices play through the shared engine (Qwen and, with Qwen off, the Mac voice): audible, no
+   clicks between segments, rate 0.85 / 1.15 / 1.3 sounds right (Qwen via the time pitch, Mac voice via its
+   utterance rate), music in another app is NOT ducked.
+3. Barge-in with TTS loud (volume ≥ 75 %): "stop", "wait", "clicky stop" each cut Clicky off ≤ 1 s;
+   "please wait for me" / "stop the build" don't (only the bare phrases count while playing); a "wait" that
+   Clicky itself just said doesn't stop it.
+4. False triggers over 10 spoken answers on speakers (no user speech): count barge-ins and utterances sent to
+   Claude — target 0; count `🔇 … echo … dropped` lines (leaks the canceller missed and the filter caught).
+5. Caption sync with Apple word markers (Mac voice): the caption reveals each word as it's heard (≤ 120 ms
+   lag, as P2); confirm `byteSampleOffset` really is bytes (if captions run ~2× ahead, it's frames: drop the
+   bytesPerFrame division in `SpeechWordMarkerTimeline.sampleOffset`). Qwen caption sync on the player-node
+   clock matches the AVAudioPlayer path (`v2.caption.avOffsetMs` still applies).
+6. Fallback: if voice processing throws (e.g. an aggregate device), the log says `falling back to halfDuplex`
+   and hands-free still hears the user when Clicky is quiet.
+7. Ending hands-free mid-answer: the segment playing ends, the rest of the answer continues on the normal
+   output path (no stuck caption, no overlap).

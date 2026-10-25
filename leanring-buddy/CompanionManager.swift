@@ -122,6 +122,7 @@ final class CompanionManager: ObservableObject {
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
+    }
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -734,6 +735,8 @@ final class CompanionManager: ObservableObject {
         }
 
         let handsFreeListeningSession = HandsFreeListeningSession(
+            requestedEchoMode: ClickySettings.echoMode,
+            audioEngineHub: speechOutputClient.audioEngineHub,
             onPartialTranscript: { [weak self] partialTranscript in
                 self?.handleHandsFreePartialTranscript(partialTranscript)
             },
@@ -799,13 +802,28 @@ final class CompanionManager: ObservableObject {
         // Until output latency + 0.25 s after the last audio, what the mic
         // hears is most likely Clicky itself.
         if speechOutputClient.isPlayingOrEchoTail {
+            // The mode that actually runs ("aec" may have resolved to open / halfDuplex).
+            let activeEchoMode = handsFreeListeningSession?.effectiveEchoMode ?? ClickySettings.echoMode
+            // AEC: Clicky's words that leaked past the canceller (last 4 words
+            // ≥ 60 % its own) are dropped, so they don't start an utterance.
+            if activeEchoMode == .aec, let activeCoordinator = speechOutputClient.activeCoordinator,
+               activeCoordinator.isLikelyEcho(partialTranscript) {
+                print("🔇 Hands-free: echo of Clicky's own words dropped: \(partialTranscript)")
+                handsFreeListeningSession?.discardCurrentUtterance()
+                currentUtteranceOverlappedBuddySpeech = false
+                return
+            }
             currentUtteranceOverlappedBuddySpeech = true
             // Half-duplex: nothing the mic hears while Clicky talks counts.
-            if ClickySettings.echoMode == .halfDuplex { return }
+            if activeEchoMode == .halfDuplex { return }
             // "stop" / "wait" / "clicky stop" barge in, unless Clicky itself
-            // just said that word (the mic heard the speaker).
+            // just said that word (the mic heard the speaker). AEC: only those
+            // exact phrases count while it plays.
             if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
-                if activeCoordinator.heardWhileSpeaking(partialTranscript) {
+                let isAcceptedBargeIn = activeEchoMode == .aec
+                    ? activeCoordinator.heardWhileSpeakingWithEchoCancellation(partialTranscript)
+                    : activeCoordinator.heardWhileSpeaking(partialTranscript)
+                if isAcceptedBargeIn {
                     handsFreeListeningSession?.discardCurrentUtterance()
                     currentUtteranceOverlappedBuddySpeech = false
                     isHandsFreeSessionPaused = true
