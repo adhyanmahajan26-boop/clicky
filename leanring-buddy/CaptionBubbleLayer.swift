@@ -21,6 +21,8 @@ struct CaptionBubbleLayer: View {
     let isCompanionFlying: Bool
     /// Marks, the POINT target and upcoming targets (CG).
     let obstaclesCG: [CGRect]
+    /// On-screen text (AX / OCR bounds, CG): slots covering it are skipped.
+    var textObstaclesCG: [CGRect] = []
 
     @State private var lastPlacement: BubblePlacement?
 
@@ -43,9 +45,17 @@ struct CaptionBubbleLayer: View {
             visibleFrames: [visibleFrameCG],
             mouseLocation: mouseCG,
             obstacles: obstaclesCG,
+            textObstacles: nearbyTextObstacles(around: companionRectCG),
             isCompanionFlying: isCompanionFlying,
             previous: lastPlacement
         ))
+    }
+
+    /// Only text a bubble slot could reach (the bubble is at most
+    /// maxWidth wide, a few lines tall) is checked.
+    private func nearbyTextObstacles(around companionRectCG: CGRect) -> [CGRect] {
+        let reach = companionRectCG.insetBy(dx: -(maxWidth + 2 * BubblePlacer.gap), dy: -(maxWidth / 2 + 2 * BubblePlacer.gap))
+        return textObstaclesCG.filter { $0.intersects(reach) }
     }
 
     var body: some View {

@@ -55,12 +55,17 @@ struct LiveScreenMark: Identifiable {
     let tagIndex: Int?
     var isHidden = false
     var opacity = 1.0
+    /// Text / control / unknown, from the element's role (decides underline vs ring on dense UI).
+    var targetRole: MarkTargetRole = .unknown
+    /// Where the target was when first drawn: MarkController shifts the
+    /// answer's text obstacles by how far a tracked mark has since moved.
+    var originalRectCG: CGRect?
 
     static let tentativeConfidence = 0.7
 
     var sceneInput: MarkSceneInput {
         MarkSceneInput(id: id, style: style, rectCG: rectCG, displayText: displayText, isTentative: isTentative,
-                       isHidden: isHidden, opacity: opacity, order: order)
+                       isHidden: isHidden, opacity: opacity, order: order, windowFrameCG: windowFrameCG, targetRole: targetRole)
     }
 
     static func source(for target: ResolvedTarget) -> LiveScreenMarkSource {

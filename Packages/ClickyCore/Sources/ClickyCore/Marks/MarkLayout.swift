@@ -193,6 +193,24 @@ public enum MarkLayout {
         return MarkShapeSpec(kind: .roundedBox, rect: clippedRect, cornerRadius: clippedCornerRadius(clippedRect, keeping: target.center))
     }
 
+    /// Isolated controls on a density-aware scene: a rounded box only
+    /// `MarkDensity.tightPad` (3 pt) outside the target, radius
+    /// min(8, short side / 2) (a pill for short targets), with the edge rule.
+    /// Radius ≤ 8 with a 3 pt pad keeps the target's corners inside.
+    public static func tightOutline(target: CGRect, display: CGRect) -> MarkShapeSpec {
+        let paddedRect = target.insetBy(dx: -MarkDensity.tightPad, dy: -MarkDensity.tightPad)
+        let allowedRect = display.insetBy(dx: edgeInset, dy: edgeInset)
+        var shapeRect = paddedRect
+        if !allowedRect.contains(paddedRect) {
+            let clippedRect = paddedRect.intersection(allowedRect)
+            guard !clippedRect.isNull, clippedRect.width > 0, clippedRect.height > 0 else { return ring(target: target, display: display) }
+            shapeRect = clippedRect
+        }
+        let radius = min(8, min(shapeRect.width, shapeRect.height) / 2)
+        let kind: MarkShapeKind = radius >= min(shapeRect.width, shapeRect.height) / 2 - 1e-6 ? .pill : .roundedBox
+        return MarkShapeSpec(kind: kind, rect: shapeRect, cornerRadius: radius)
+    }
+
     // MARK: Arrow
 
     /// The 8 tail directions, most preferred first: from the upper left like

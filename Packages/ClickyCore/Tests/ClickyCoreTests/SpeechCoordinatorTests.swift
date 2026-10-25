@@ -368,3 +368,30 @@ private struct SeededPlacerRandom: RandomNumberGenerator {
     apple.playNext()
     #expect(host.history == "first part here.second part arrives later.")
 }
+
+// MARK: - Bubble vs on-screen text
+
+@Test func bubbleSkipsSlotsThatCoverTextAndTakesTheClearOne() {
+    // Companion parked on a dense table: rows of text everywhere around it
+    // except up and to the left, which is empty.
+    let companion = CGRect(x: 600, y: 400, width: 28, height: 28)
+    let bubbleSize = CGSize(width: 260, height: 60)
+    let visible = CGRect(x: 0, y: 25, width: 1440, height: 800)
+    var rows: [CGRect] = []
+    for row in 0..<20 {
+        let rowY = 300 + CGFloat(row) * 22
+        rows.append(CGRect(x: 640, y: rowY, width: 400, height: 13))                      // right of the companion
+        if rowY > companion.minY - 4 { rows.append(CGRect(x: 200, y: rowY, width: 380, height: 13)) } // left, below only
+    }
+    let input = BubblePlacer.Input(companionRect: companion, bubbleSize: bubbleSize, visibleFrames: [visible], textObstacles: rows)
+    let placement = BubblePlacer.place(input)
+    #expect(placement.slot == .leftAbove)
+    #expect(!rows.contains { $0.intersects(placement.rect) })
+    // Without the text it would have sat right-below, on the rows.
+    let blind = BubblePlacer.place(BubblePlacer.Input(companionRect: companion, bubbleSize: bubbleSize, visibleFrames: [visible]))
+    #expect(blind.slot == .rightBelow && rows.contains { $0.intersects(blind.rect) })
+    // Text on every side: it docks.
+    let everywhere = rows + [CGRect(x: 200, y: 300, width: 380, height: 90)]
+    let docked = BubblePlacer.place(BubblePlacer.Input(companionRect: companion, bubbleSize: bubbleSize, visibleFrames: [visible], textObstacles: everywhere))
+    #expect(docked.slot == .dockedTop)
+}

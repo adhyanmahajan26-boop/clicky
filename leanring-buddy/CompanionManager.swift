@@ -1261,6 +1261,12 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var pointTargetCG: CGRect?
     /// Targets of the segment being spoken that haven't fired yet (the bubble avoids them).
     @Published var upcomingTargetRectsCG: [CGRect] = []
+    /// This answer's on-screen text bounds (AX text / cell / row frames and
+    /// OCR lines, CG), set by AnswerSession: marks and the caption bubble
+    /// keep clear of them.
+    @Published var screenTextObstaclesCG: [CGRect] = [] {
+        didSet { markController.textObstaclesCG = screenTextObstaclesCG }
+    }
 
     /// Draws a full answer's tags at once, without speaking (the debug
     /// inbox's `marks`). Returns the text that would have been spoken.
