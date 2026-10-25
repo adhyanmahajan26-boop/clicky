@@ -125,6 +125,12 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.notchHideOverFullscreen, kind: .toggle(defaultValue: true),
                             explanation: "Hide the pill while a full-screen app (a video, a game) covers its display."),
 
+        // Project bridge.
+        ClickySettingsEntry(key: ClickySettings.Keys.projectEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Say \"send this to my project …\" to hand a task to your project coordinator (writes ~/.clicky/project-outbox)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.projectSpeakUpdates, kind: .toggle(defaultValue: true),
+                            explanation: "Say a short update when your project replies (thread started, done, couldn't do it)."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

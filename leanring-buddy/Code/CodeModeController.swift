@@ -56,6 +56,9 @@ final class CodeModeController: ObservableObject {
     private var preflightTask: Task<CodePreflightReport, Never>?
     private var toolPaths: CodeToolPaths?
     private var cachedLocalRepos: [LocalRepoEntry]?
+    /// The clones indexed so far (empty until a code task has run): the project
+    /// bridge's front-window repo lookup uses them for title-only matches.
+    var indexedLocalReposForFrontWindow: [LocalRepoEntry] { cachedLocalRepos ?? [] }
     private var cachedAccountRepos: [String]?
     private var activeTask: Task<Void, Never>?
     private var activeEngine: CodeTaskEngine?

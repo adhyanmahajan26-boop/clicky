@@ -96,6 +96,10 @@ public enum ClickySettings {
         public static let notchDisplay = "v2.notch.display"
         /// Bool, default true: hide the pill while a full-screen app covers its display.
         public static let notchHideOverFullscreen = "v2.notch.hideOverFullscreen"
+        /// Bool, default true: "send this to my project …" writes the task to ~/.clicky/project-outbox.
+        public static let projectEnabled = "v2.project.enabled"
+        /// Bool, default true: say short updates when the project replies (thread started, done, failed).
+        public static let projectSpeakUpdates = "v2.project.speakUpdates"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -285,6 +289,11 @@ public enum ClickySettings {
         defaults.string(forKey: Keys.notchDisplay).flatMap(NotchDisplayChoice.init(rawValue:)) ?? .main
     }
     public static var isNotchHiddenOverFullScreen: Bool { defaults.object(forKey: Keys.notchHideOverFullscreen) as? Bool ?? true }
+
+    // MARK: - Project bridge
+
+    public static var isProjectBridgeEnabled: Bool { defaults.object(forKey: Keys.projectEnabled) as? Bool ?? true }
+    public static var isProjectSpeakUpdatesEnabled: Bool { defaults.object(forKey: Keys.projectSpeakUpdates) as? Bool ?? true }
 
     // MARK: - P6.2 Type this for me
 

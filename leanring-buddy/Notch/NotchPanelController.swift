@@ -7,7 +7,8 @@
 //  non-activating, never key or main) hosting ClickyCore's NotchView, and
 //  feeds it from the state the app already has: CompanionManager's voice
 //  state and caption, the AgentsCenter store the Agents window uses, and
-//  CodeModeController's switch. Nothing is duplicated; a NotchContent is
+//  CodeModeController's switch, plus the project bridge's few-seconds
+//  "sent to project" status. Nothing is duplicated; a NotchContent is
 //  rebuilt whenever one of those changes.
 //
 //  Hover: an .activeAlways tracking area on the hosting view (no key status
@@ -125,7 +126,8 @@ final class NotchPanelController: NSObject {
             companionManager.$isCompanionCoordinatorThinking.map { _ in () }.eraseToAnyPublisher(),
             companionManager.$captionState.map { _ in () }.eraseToAnyPublisher(),
             companionManager.agentsCenter.$store.map { _ in () }.eraseToAnyPublisher(),
-            codeModeController.$isEnabled.map { _ in () }.eraseToAnyPublisher()
+            codeModeController.$isEnabled.map { _ in () }.eraseToAnyPublisher(),
+            companionManager.projectBridge.$notchStatusText.map { _ in () }.eraseToAnyPublisher()
         ]
         Publishers.MergeMany(triggers)
             .receive(on: DispatchQueue.main)
@@ -151,6 +153,7 @@ final class NotchPanelController: NSObject {
             isCodeModeOn: codeModeController.isEnabled,
             selectedAgentID: selectedAgentID,
             now: Date(),
+            projectStatusText: companionManager.projectBridge.notchStatusText,
             canCancel: { agentsCenter.canCancel($0) },
             canOpenReview: { record in record.kind == .codeTask && codeModeController.activeReviewAgentID == record.id }
         )

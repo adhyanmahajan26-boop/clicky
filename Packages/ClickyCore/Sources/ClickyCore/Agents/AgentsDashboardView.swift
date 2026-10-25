@@ -299,6 +299,7 @@ private struct AgentDetailView: View {
             factsCard
             if let usage = record.usage { usageCard(usage) }
             if record.kind == .codeTask { codeCard }
+            if record.kind == .projectTask { projectCard }
             if !helpers.isEmpty { helpersCard }
             if let errorDescription = record.errorDescription { errorCard(errorDescription) }
             logCard
@@ -319,7 +320,7 @@ private struct AgentDetailView: View {
                     .lineLimit(3)
                     .textSelection(.enabled)
                 HStack(spacing: 6) {
-                    AgentStatusBadge(status: record.status, phase: record.phase)
+                    AgentStatusBadge(status: record.status, phase: record.phaseDisplayText)
                     Text(record.kind.displayName)
                         .font(.system(size: 12))
                         .foregroundColor(AgentsDashboardColors.secondaryText)
@@ -400,6 +401,18 @@ private struct AgentDetailView: View {
                 }
                 .padding(.leading, 110)
             }
+        }
+    }
+
+    /// The coordinator's reply. The note and link are text only: selectable, never opened or followed.
+    private var projectCard: some View {
+        AgentsDashboardCard(title: "Project task") {
+            AgentFactRow(label: "Status", value: record.phaseDisplayText ?? record.status.displayName)
+            if let repository = record.repository {
+                AgentFactRow(label: "Repository", value: (repository as NSString).abbreviatingWithTildeInPath, isMonospaced: true)
+            }
+            if let note = record.note { AgentFactRow(label: "Note", value: note) }
+            if let link = record.link { AgentFactRow(label: "Link", value: link, isMonospaced: true) }
         }
     }
 

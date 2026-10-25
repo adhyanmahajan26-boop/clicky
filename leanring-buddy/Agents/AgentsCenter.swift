@@ -5,7 +5,8 @@
 //  The app side of the Agents dashboard: owns ClickyCore's AgentStore,
 //  takes updates from the adapters (the main brain turn in
 //  CompanionManager, helper / board-section workers and the board repair in
-//  AnswerSession, Code-mode tasks in CodeModeController), keeps each
+//  AnswerSession, Code-mode tasks in CodeModeController, project tasks in
+//  ProjectBridgeController), keeps each
 //  running agent's cancel path (the existing ones: barge-in, the worker's
 //  task, CodeModeController's stop), and saves the history to
 //  ~/Library/Application Support/Clicky/agents-history.json, debounced and
@@ -51,10 +52,12 @@ final class AgentsCenter: ObservableObject {
 
     // MARK: - Adapter API
 
-    /// Adds a running (or queued) agent and returns its id.
+    /// Adds a running (or queued) agent and returns its id. `id`: a record
+    /// whose id is fixed elsewhere (a project task's outbox id).
     @discardableResult
-    func begin(kind: AgentKind, title: String, model: String?, parentID: String? = nil, status: AgentStatus = .running, phase: String? = nil) -> String {
-        let record = AgentRecord(kind: kind, title: Self.cleanTitle(title), model: model, status: status, phase: phase, startedAt: Date(), parentID: parentID)
+    func begin(id: String? = nil, kind: AgentKind, title: String, model: String?, parentID: String? = nil, status: AgentStatus = .running, phase: String? = nil) -> String {
+        let record = AgentRecord(id: id ?? UUID().uuidString.lowercased(), kind: kind, title: Self.cleanTitle(title), model: model, status: status, phase: phase,
+                                 startedAt: Date(), parentID: parentID)
         store.upsert(record)
         scheduleSave()
         return record.id
@@ -92,6 +95,21 @@ final class AgentsCenter: ObservableObject {
         guard let agentID else { return }
         cancelHandlers[agentID] = nil
         if store.remove(agentID) { scheduleSave() }
+    }
+
+    /// A project coordinator's reply; the new phase when it moved forward.
+    func applyProjectReply(_ reply: ProjectInboxReply) -> ProjectTaskPhase? {
+        let storeBefore = store
+        let newPhase = store.applyProjectReply(reply)
+        if store != storeBefore { scheduleSave() }
+        return newPhase
+    }
+
+    /// Project tasks with no final reply a day after they were sent: failed.
+    func expireStaleProjectTasks() {
+        guard store.activeProjectTaskRecords.contains(where: { Date().timeIntervalSince($0.startedAt) > AgentStore.projectTaskReplyTimeout }) else { return }
+        store.expireStaleProjectTasks()
+        scheduleSave()
     }
 
     func setCancelHandler(_ agentID: String?, _ cancelHandler: @escaping () -> Void) {
