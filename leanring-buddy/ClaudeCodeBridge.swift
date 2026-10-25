@@ -5,13 +5,15 @@
 //  Talks to Claude through the locally installed Claude Code CLI instead of
 //  the Anthropic API, so requests run on the user's Claude subscription and
 //  no API key is needed. Each request launches `claude -p` in headless
-//  stream-json mode, writes one user message (screenshots + prompt) to its
-//  stdin, and reads streamed text deltas back from its stdout.
+//  stream-json mode (arguments from ClickyCore's ClaudeArgs, shared with
+//  workers and probes), writes ONE user message to its stdin and closes it,
+//  and reads streamed text deltas plus the final `result` from stdout.
 //
-//  Exposes the same `analyzeImageStreaming` surface the old ClaudeAPI had so
-//  CompanionManager's pipeline didn't need to change shape.
+//  The message is: a text block (history + what the user said), then for
+//  each screen its SCREEN header text followed by its JPEG.
 //
 
+import ClickyCore
 import Foundation
 
 enum ClaudeCodeBridgeError: LocalizedError {
@@ -31,18 +33,35 @@ enum ClaudeCodeBridgeError: LocalizedError {
     }
 }
 
+/// One piece of the user message.
+enum ClaudeContentBlock {
+    case text(String)
+    case jpegImage(Data)
+}
+
+struct ClaudeTurnResult {
+    let text: String
+    /// The model id the CLI resolved the alias to (from its system/init event).
+    let resolvedModelIdentifier: String?
+    /// The `usage` object from the final result event.
+    let usage: [String: Any]
+    let duration: TimeInterval
+}
+
 final class ClaudeCodeBridge {
-    /// Claude Code model alias ("sonnet", "opus") or a full model ID.
+    /// Claude Code model alias ("sonnet", "opus", "haiku") or a full model ID.
     /// Aliases always resolve to the newest model of that family.
     var model: String
 
-    /// An empty folder the CLI runs in, so it never picks up a project's
-    /// CLAUDE.md or settings from wherever the app happened to launch.
-    private let isolatedWorkingDirectoryURL: URL = {
-        let workingDirectoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clicky-claude-code-workdir", isDirectory: true)
-        try? FileManager.default.createDirectory(at: workingDirectoryURL, withIntermediateDirectories: true)
-        return workingDirectoryURL
+    /// Whether image blocks carry `"transformations":{"oversized_image":"error"}`
+    /// (fail loudly instead of being silently downscaled). Set from the
+    /// transportProbe result (c); see docs/v2/PROBES.md.
+    static var sendsOversizedImageErrorTransformation = false
+
+    /// $TMPDIR/clicky-session is recreated empty once per launch; calls run
+    /// concurrently (workers), so it is never deleted while one is running.
+    private static let sessionWorkingDirectoryURL: URL = {
+        (try? ClaudeArgs.prepareSessionWorkingDirectory()) ?? ClaudeArgs.sessionWorkingDirectoryURL
     }()
 
     init(model: String = "sonnet") {
@@ -93,46 +112,37 @@ final class ClaudeCodeBridge {
 
     // MARK: - Requests
 
-    /// Sends screenshots + a prompt to Claude via Claude Code and streams the reply.
-    /// Calls `onTextChunk` with the full text accumulated so far each time new text arrives.
-    func analyzeImageStreaming(
-        images: [(data: Data, label: String)],
+    /// Runs one request: writes the system prompt file, launches the CLI,
+    /// builds and writes the single stdin line off the main actor, and
+    /// collects streamed deltas and the final result.
+    func runTurn(
+        systemPromptFileName: String,
         systemPrompt: String,
-        conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
-        userPrompt: String,
-        onTextChunk: @MainActor @Sendable (String) -> Void,
+        contentBlocks: [ClaudeContentBlock],
+        persistentSessionIdentifier: String? = nil,
+        oversizedImageErrorTransformationOverride: Bool? = nil,
+        onTextChunk: @MainActor @Sendable (String) -> Void = { _ in },
         onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil
-    ) async throws -> (text: String, duration: TimeInterval) {
+    ) async throws -> ClaudeTurnResult {
         let startTime = Date()
 
         guard let claudeCodeExecutableURL = Self.locateClaudeCodeExecutable() else {
             throw ClaudeCodeBridgeError.claudeCodeNotInstalled
         }
-
-        let userMessageLine = try makeStreamJSONUserMessageLine(
-            images: images,
-            conversationHistory: conversationHistory,
-            userPrompt: userPrompt
+        let systemPromptFileURL = try ClaudeArgs.writePromptFile(named: systemPromptFileName, contents: systemPrompt)
+        let claudeArgs = ClaudeArgs(
+            model: model,
+            systemPromptFileURL: systemPromptFileURL,
+            persistentSessionIdentifier: persistentSessionIdentifier
         )
+
+        let workingDirectoryURL = Self.sessionWorkingDirectoryURL
+        try? FileManager.default.createDirectory(at: workingDirectoryURL, withIntermediateDirectories: true)
 
         let claudeCodeProcess = Process()
         claudeCodeProcess.executableURL = claudeCodeExecutableURL
-        claudeCodeProcess.currentDirectoryURL = isolatedWorkingDirectoryURL
-        claudeCodeProcess.arguments = [
-            "-p",
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--model", model,
-            "--system-prompt", systemPrompt,
-            // Clicky only needs Claude to look and answer — no file, shell, or
-            // web tools, no MCP servers, no skills. This also keeps startup fast.
-            "--tools", "",
-            "--strict-mcp-config",
-            "--disable-slash-commands",
-            "--no-session-persistence"
-        ]
+        claudeCodeProcess.currentDirectoryURL = workingDirectoryURL
+        claudeCodeProcess.arguments = claudeArgs.arguments
 
         let standardInputPipe = Pipe()
         let standardOutputPipe = Pipe()
@@ -141,13 +151,19 @@ final class ClaudeCodeBridge {
         claudeCodeProcess.standardOutput = standardOutputPipe
         claudeCodeProcess.standardError = standardErrorPipe
 
+        // Launch first, then build the (large) message while the CLI starts up.
         try claudeCodeProcess.run()
-        let payloadMB = Double(userMessageLine.count) / 1_048_576.0
-        print("🌐 Claude Code request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s), model \(model)")
 
-        // Write the message off the main actor: the payload is larger than the
-        // pipe buffer, so a blocking write here would stall the UI until the
-        // CLI drains it. Closing stdin tells the CLI there are no more turns.
+        let sendsTransformation = oversizedImageErrorTransformationOverride ?? Self.sendsOversizedImageErrorTransformation
+        let userMessageLine = try await Task.detached(priority: .userInitiated) {
+            try Self.makeStreamJSONUserMessageLine(contentBlocks: contentBlocks, sendsOversizedImageErrorTransformation: sendsTransformation)
+        }.value
+        let imageCount = contentBlocks.filter { if case .jpegImage = $0 { return true } else { return false } }.count
+        print("🌐 Claude Code request: \(String(format: "%.1f", Double(userMessageLine.count) / 1_048_576.0))MB, \(imageCount) image(s), model \(model)")
+
+        // Write off the main actor: the payload is larger than the pipe
+        // buffer, so a blocking write would stall the UI until the CLI drains
+        // it. Closing stdin tells the CLI there are no more turns.
         let standardInputFileHandle = standardInputPipe.fileHandleForWriting
         onPipelineStage?("handedToWriter")
         Task.detached {
@@ -161,12 +177,18 @@ final class ClaudeCodeBridge {
         return try await withTaskCancellationHandler {
             var accumulatedResponseText = ""
             var finalResultText: String?
+            var resolvedModelIdentifier: String?
+            var finalUsage: [String: Any] = [:]
 
             for try await outputLine in standardOutputPipe.fileHandleForReading.bytes.lines {
                 guard let outputLineData = outputLine.data(using: .utf8),
                       let outputEvent = try? JSONSerialization.jsonObject(with: outputLineData) as? [String: Any],
                       let outputEventType = outputEvent["type"] as? String else {
                     continue
+                }
+
+                if outputEventType == "system", (outputEvent["subtype"] as? String) == "init" {
+                    resolvedModelIdentifier = outputEvent["model"] as? String
                 }
 
                 if outputEventType == "stream_event",
@@ -183,6 +205,7 @@ final class ClaudeCodeBridge {
                 if outputEventType == "result" {
                     let resultText = outputEvent["result"] as? String ?? ""
                     let isErrorResult = outputEvent["is_error"] as? Bool ?? false
+                    finalUsage = outputEvent["usage"] as? [String: Any] ?? [:]
                     if isErrorResult {
                         throw ClaudeCodeBridgeError.claudeCodeReportedError(resultText)
                     }
@@ -208,74 +231,52 @@ final class ClaudeCodeBridge {
             // Prefer the CLI's final result; fall back to the streamed text if
             // the result came back empty for any reason.
             let responseText = finalResultText.isEmpty ? accumulatedResponseText : finalResultText
-            return (text: responseText, duration: Date().timeIntervalSince(startTime))
+            return ClaudeTurnResult(
+                text: responseText,
+                resolvedModelIdentifier: resolvedModelIdentifier,
+                usage: finalUsage,
+                duration: Date().timeIntervalSince(startTime)
+            )
         } onCancel: {
             // The user spoke again — kill the in-flight request immediately.
             claudeCodeProcess.terminate()
         }
     }
 
-    /// Builds one newline-terminated stream-json user message. The CLI can't
-    /// accept prior assistant turns as input, so earlier exchanges are folded
-    /// into the text as a transcript ahead of the new question.
-    private func makeStreamJSONUserMessageLine(
-        images: [(data: Data, label: String)],
-        conversationHistory: [(userPlaceholder: String, assistantResponse: String)],
-        userPrompt: String
-    ) throws -> Data {
-        var contentBlocks: [[String: Any]] = []
-
-        if !conversationHistory.isEmpty {
-            let earlierConversationTranscript = conversationHistory.map { exchange in
-                "user: \(exchange.userPlaceholder)\nyou: \(exchange.assistantResponse)"
-            }.joined(separator: "\n\n")
-            contentBlocks.append([
-                "type": "text",
-                "text": "earlier in this conversation:\n\n\(earlierConversationTranscript)"
-            ])
-        }
-
-        for image in images {
-            contentBlocks.append([
-                "type": "image",
-                "source": [
-                    "type": "base64",
-                    "media_type": detectImageMediaType(for: image.data),
-                    "data": image.data.base64EncodedString()
+    /// Builds one newline-terminated stream-json user message.
+    nonisolated static func makeStreamJSONUserMessageLine(contentBlocks: [ClaudeContentBlock], sendsOversizedImageErrorTransformation: Bool) throws -> Data {
+        let messageContent: [[String: Any]] = contentBlocks.map { contentBlock in
+            switch contentBlock {
+            case .text(let blockText):
+                return ["type": "text", "text": blockText]
+            case .jpegImage(let jpegData):
+                var imageBlock: [String: Any] = [
+                    "type": "image",
+                    "source": [
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": jpegData.base64EncodedString()
+                    ]
                 ]
-            ])
-            contentBlocks.append([
-                "type": "text",
-                "text": image.label
-            ])
+                if sendsOversizedImageErrorTransformation {
+                    imageBlock["transformations"] = ["oversized_image": "error"]
+                }
+                return imageBlock
+            }
         }
-
-        contentBlocks.append([
-            "type": "text",
-            "text": userPrompt
-        ])
 
         let streamJSONUserMessage: [String: Any] = [
             "type": "user",
             "message": [
                 "role": "user",
-                "content": contentBlocks
-            ]
+                "content": messageContent
+            ],
+            "parent_tool_use_id": NSNull()
         ]
 
         var userMessageLine = try JSONSerialization.data(withJSONObject: streamJSONUserMessage)
         userMessageLine.append(contentsOf: [UInt8(ascii: "\n")])
         return userMessageLine
-    }
-
-    /// Screen captures are JPEG but pasted images can be PNG, and Claude
-    /// rejects images whose declared media type doesn't match the bytes.
-    private func detectImageMediaType(for imageData: Data) -> String {
-        let pngSignature: [UInt8] = [0x89, 0x50, 0x4E, 0x47]
-        if imageData.count >= 4 && [UInt8](imageData.prefix(4)) == pngSignature {
-            return "image/png"
-        }
-        return "image/jpeg"
     }
 
     // MARK: - Sign-in Status

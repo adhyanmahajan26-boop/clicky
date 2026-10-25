@@ -7,6 +7,7 @@
 //  exposes observable voice state for the panel UI.
 //
 
+import ClickyCore
 import AVFoundation
 import Combine
 import Foundation
@@ -120,6 +121,47 @@ final class CompanionManager: ObservableObject {
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
 
+    /// False when the startup geometry check found AppKit and CG display
+    /// frames disagreeing; then nothing is drawn from tags for this session.
+    /// Never written to settings.
+    private(set) var isGroundingActiveThisSession = ClickySettings.isGroundingEnabled
+    /// The model id the CLI last resolved the selected alias to.
+    private(set) var lastResolvedModelIdentifier: String?
+    /// Called with each newly resolved model id (the tier probe uses it).
+    var onNewResolvedModelIdentifier: ((String) -> Void)?
+
+    /// Runs once at launch: if any display's flipped AppKit frame is more
+    /// than 0.5 pt off its CGDisplayBounds, coordinates can't be trusted.
+    func runStartupGeometryCheck() {
+        let displayDisagreements = ScreenTopology.flipDisagreements(
+            displays: ScreenTopology.current(),
+            flipH: ScreenTopology.mainDisplayHeight
+        )
+        if !displayDisagreements.isEmpty {
+            isGroundingActiveThisSession = false
+            print("⚠️ Geometry self-check failed for displays \(displayDisagreements); pointing is off for this session")
+        }
+    }
+
+    private func noteResolvedModelIdentifier(_ resolvedModelIdentifier: String?) {
+        guard let resolvedModelIdentifier, resolvedModelIdentifier != lastResolvedModelIdentifier else { return }
+        lastResolvedModelIdentifier = resolvedModelIdentifier
+        onNewResolvedModelIdentifier?(resolvedModelIdentifier)
+    }
+
+    /// Forgets the conversation and anything on screen from the last answer
+    /// (the debug inbox's `reset`, so eval rows don't influence each other).
+    func resetConversation() {
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        conversationHistory.removeAll()
+        clearLiveScreenMarks()
+        clearDetectedElementLocation()
+        if voiceState == .processing || voiceState == .responding {
+            voiceState = .idle
+        }
+    }
+
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
@@ -202,6 +244,13 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        runStartupGeometryCheck()
+        // A model we haven't measured yet: check in the background what image
+        // size it really sees (stored per resolved model id).
+        onNewResolvedModelIdentifier = { [weak self] resolvedModelIdentifier in
+            guard let self else { return }
+            DiagnosticSelfTests.probeInBackgroundIfNeeded(resolvedModelIdentifier: resolvedModelIdentifier, model: self.selectedModel)
+        }
         speechOutputClient.warmUpIfNeeded()
         addCompanionActivitySource(companionWorkerRunner)
         addCompanionActivitySource(simulatedCompanionActivitySource)
@@ -855,57 +904,43 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Companion Prompt
 
-    private static let companionVoiceResponseSystemPrompt = """
-    you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
+    /// The main brain's system prompt. Pointing and live marks are only
+    /// requested while grounding is trusted this session.
+    private var companionSystemPrompt: String {
+        var promptFeatures = SystemPromptFeatures.current
+        if !isGroundingActiveThisSession {
+            promptFeatures.remove([.pointing, .liveMarks])
+        }
+        return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+    }
 
-    rules:
-    - default to one or two sentences. be direct and dense. BUT if the user asks you to explain more, go deeper, or elaborate, then go all out — give a thorough, detailed explanation with no length limit.
-    - all lowercase, casual, warm. no emojis.
-    - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
-    - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
-    - if the user's question relates to what's on their screen, reference specific things you see.
-    - if the screenshot doesn't seem relevant to their question, just answer the question directly.
-    - you can help with anything — coding, writing, general knowledge, brainstorming.
-    - never say "simply" or "just".
-    - don't read out code verbatim. describe what the code does or what needs to change conversationally.
-    - focus on giving a thorough, useful explanation. don't end with simple yes/no questions like "want me to explain more?" or "should i show you?" — those are dead ends that force the user to just say yes.
-    - instead, when it fits naturally, end by planting a seed — mention something bigger or more ambitious they could try, a related concept that goes deeper, or a next-level technique that builds on what you just explained. make it something worth coming back for, not a question they'd just nod to. it's okay to not end with anything extra if the answer is complete on its own.
-    - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
+    /// How many earlier exchanges are sent with each question (text only).
+    private static let conversationHistoryExchangeLimit = 6
 
-    element pointing:
-    you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
+    /// The first text block: earlier exchanges in words, then what the user
+    /// just said. No coordinates, ids or images from earlier turns.
+    private func makeConversationText(transcript: String) -> String {
+        var conversationLines: [String] = []
+        let recentHistory = conversationHistory.suffix(Self.conversationHistoryExchangeLimit)
+        if !recentHistory.isEmpty {
+            conversationLines.append("earlier in this conversation (text only):")
+            for exchange in recentHistory {
+                conversationLines.append("USER SAID: \"\(exchange.userTranscript)\"")
+                conversationLines.append("YOU SAID: \(exchange.assistantResponse)")
+            }
+            conversationLines.append("")
+        }
+        conversationLines.append("USER SAID: \"\(transcript)\"")
+        return conversationLines.joined(separator: "\n")
+    }
 
-    don't point at things when it would be pointless — like if the user asks a general knowledge question, or the conversation has nothing to do with what's on screen, or you'd just be pointing at something obvious they're already looking at. but if there's a specific UI element, menu, button, or area on screen that's relevant to what you're helping with, point at it.
+    /// Each screen as its SCREEN header followed by its image.
+    private static func screenContentBlocks(for screenCaptures: [ScreenCapture]) -> [ClaudeContentBlock] {
+        screenCaptures.flatMap { screenCapture in
+            [ClaudeContentBlock.text(screenCapture.header), .jpegImage(screenCapture.modelJPEGData)]
+        }
+    }
 
-    when you point, append a coordinate tag at the very end of your response, AFTER your spoken text. the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. the origin (0,0) is the top-left corner of the image. x increases rightward, y increases downward.
-
-    format: [POINT:x,y:label] where x,y are integer pixel coordinates in the screenshot's coordinate space, and label is a short 1-3 word description of the element (like "search bar" or "save button"). if the element is on the cursor's screen you can omit the screen number. if the element is on a DIFFERENT screen, append :screenN where N is the screen number from the image label (e.g. :screen2). this is important — without the screen number, the cursor will point at the wrong place.
-
-    if pointing wouldn't help, append [POINT:none].
-
-    examples:
-    - user asks how to color grade in final cut: "you'll want to open the color inspector — it's right up in the top right area of the toolbar. click that and you'll get all the color wheels and curves. [POINT:1100,42:color inspector]"
-    - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
-    - user asks how to commit in xcode: "see that source control menu up top? click that and hit commit, or you can use command option c as a shortcut. [POINT:285,11:source control]"
-    - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
-
-    live marks:
-    you can also draw marks on top of the user's screen. they appear while you talk and stay up for a little while after. use them when one pointing cursor isn't enough:
-    - numbered steps when your answer walks through two or more places in order ("first click this, then this"). number them in the order you say them.
-    - a circle to highlight a specific thing you're talking about, like a setting, a value, or an error message.
-    - an arrow when the target is small or easy to miss.
-    don't mark anything for answers that have nothing to do with the screen, and use at most five marks.
-
-    format: [MARK:kind:x,y:label] where kind is circle, arrow, or the step number (1, 2, 3...). x,y use the same pixel coordinate space as POINT. label is optional, one to three words. add :screenN at the end for a mark on a different screen, same as POINT. put all MARK tags at the end of your response, right BEFORE the POINT tag. the POINT tag must still be the very last thing.
-
-    helper workers:
-    for a question that splits into two to four independent, smaller sub-tasks that each deserve their own look (for example comparing three options, or checking several separate parts of the screen), you can hand those sub-tasks to fast helper workers that run in parallel. most questions need no workers. never use them for simple, quick, or conversational questions, or when the parts depend on each other.
-
-    to use workers, reply with ONLY a very short spoken heads-up (under ten words, like "on it, checking those three for you") followed by one tag per sub-task: [WORKER:short title:task prompt]. the title is two to four words. the task prompt must stand on its own: workers see the same screenshots but not this conversation. no MARK or POINT tags in that reply. at most four workers run at once and extras wait in line. you'll then get their results and give the final answer.
-
-    live marks example:
-    - user asks how to turn on dark mode in system settings: "click appearance in the sidebar, then pick dark at the top of the window. [MARK:1:160,320:appearance] [MARK:2:540,140:dark] [POINT:160,320:appearance]"
-    """
 
     // MARK: - AI Response Pipeline
 
@@ -942,31 +977,23 @@ final class CompanionManager: ObservableObject {
             var turnError: Error?
 
             do {
-                // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                // Capture every display at native resolution, sized to exactly
+                // what the model will see (SCREEN 1 = cursor screen).
+                let screenCaptures = try await ScreenCaptureService.captureAllScreens(options: ScreenCaptureService.Options(
+                    effectiveMaxEdge: ClickySettings.effectiveMaxEdge(forModelIdentifier: lastResolvedModelIdentifier)
+                ))
                 turnRecord?.markTiming("captureDone")
                 turnRecord?.recordScreens(screenCaptures)
 
                 guard !Task.isCancelled else { throw CancellationError() }
 
-                // Build image labels with the actual screenshot pixel dimensions
-                // so Claude's coordinate space matches the image it sees. We
-                // scale from screenshot pixels to display points ourselves.
-                let labeledImages = screenCaptures.map { capture in
-                    let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
-                    return (data: capture.imageData, label: capture.label + dimensionInfo)
-                }
+                let screenBlocks = Self.screenContentBlocks(for: screenCaptures)
+                let conversationText = makeConversationText(transcript: transcript)
 
-                // Pass conversation history so Claude remembers prior exchanges
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
-
-                let (fullResponseText, _) = try await claudeCodeBridge.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
-                    conversationHistory: historyForAPI,
-                    userPrompt: transcript,
+                let mainBrainTurn = try await claudeCodeBridge.runTurn(
+                    systemPromptFileName: "system-prompt.md",
+                    systemPrompt: companionSystemPrompt,
+                    contentBlocks: [.text(conversationText)] + screenBlocks,
                     onTextChunk: { _ in
                         // No streaming text display — spinner stays until TTS plays
                         turnRecord?.markTiming("firstDelta")
@@ -976,6 +1003,8 @@ final class CompanionManager: ObservableObject {
                     }
                 )
                 turnRecord?.markTiming("result")
+                let fullResponseText = mainBrainTurn.text
+                noteResolvedModelIdentifier(mainBrainTurn.resolvedModelIdentifier)
 
                 guard !Task.isCancelled else { throw CancellationError() }
 
@@ -988,9 +1017,8 @@ final class CompanionManager: ObservableObject {
                     mainBrainResponseText = try await runCompanionWorkersAndAskMainBrainForFinalAnswer(
                         companionWorkerRequests: companionWorkerRequests,
                         workerHeadsUpText: responseTextWithoutWorkerTags,
-                        transcript: transcript,
-                        labeledImages: labeledImages,
-                        historyForAPI: historyForAPI
+                        conversationText: conversationText,
+                        screenBlocks: screenBlocks
                     )
                 }
                 turnRecord?.rawResponse = companionWorkerRequests.isEmpty
@@ -1005,16 +1033,16 @@ final class CompanionManager: ObservableObject {
                     turnRecord: turnRecord
                 )
 
-                // Save this exchange to conversation history (with the point tag
-                // stripped so it doesn't confuse future context)
+                // Save this exchange in words only: what it pointed at survives
+                // as "(pointed at Share)", never coordinates.
                 conversationHistory.append((
                     userTranscript: transcript,
-                    assistantResponse: spokenText
+                    assistantResponse: HistoryTagRewriter.wordsForHistory(mainBrainResponseText)
                 ))
 
-                // Keep only the last 10 exchanges to avoid unbounded context growth
-                if conversationHistory.count > 10 {
-                    conversationHistory.removeFirst(conversationHistory.count - 10)
+                // Keep only what's sent, so memory doesn't grow without bound.
+                if conversationHistory.count > Self.conversationHistoryExchangeLimit {
+                    conversationHistory.removeFirst(conversationHistory.count - Self.conversationHistoryExchangeLimit)
                 }
 
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
@@ -1070,7 +1098,7 @@ final class CompanionManager: ObservableObject {
     @discardableResult
     func presentLegacyTags(
         responseText: String,
-        screenCaptures: [CompanionScreenCapture],
+        screenCaptures: [ScreenCapture],
         turnRecord: TurnRecord?
     ) -> String {
         // Pull out the [MARK:...] tags first. They sit before the
@@ -1079,6 +1107,12 @@ final class CompanionManager: ObservableObject {
 
         // Parse the [POINT:...] tag from Claude's response
         let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
+
+        // With grounding off this session (geometry self-check failed), tags
+        // are stripped from speech but never drawn.
+        guard isGroundingActiveThisSession else {
+            return parseResult.spokenText
+        }
 
         // Handle element pointing if Claude returned coordinates.
         // Switch to idle BEFORE setting the location so the triangle
@@ -1100,21 +1134,19 @@ final class CompanionManager: ObservableObject {
 
         // The POINT is logged after the MARKs so the turn log lists tags in
         // the order Claude wrote them (MARKs come before the final POINT).
-        var pointTagForTurnLog: (screenNumber: Int, modelPixel: CGPoint, appKitPoint: CGPoint)?
+        var pointTagForTurnLog: (screenNumber: Int, modelPixel: CGPoint, cgPoint: CGPoint)?
 
         if let pointCoordinate = parseResult.coordinate, let pointScreenIndex {
             let targetScreenCapture = screenCaptures[pointScreenIndex]
-            // Claude's coordinates are in the screenshot's pixel space
-            // (top-left origin, e.g. 1280x535). Scale to the display's
-            // point space, then convert to AppKit global coords.
-            let globalLocation = Self.globalScreenLocation(
-                forScreenshotPixelCoordinate: pointCoordinate,
-                in: targetScreenCapture
-            )
+            // Claude's coordinates are pixels of the image named in that
+            // SCREEN header; one CaptureFrame maps them to CG, and the
+            // AppKit flip happens only for the legacy flight animation.
+            let pointCG = targetScreenCapture.frame.cg(fromModelPx: pointCoordinate)
+            let globalLocation = ScreenTopology.appKit(fromCG: pointCG, flipH: ScreenTopology.mainDisplayHeight)
 
             detectedElementScreenLocation = globalLocation
-            detectedElementDisplayFrame = targetScreenCapture.displayFrame
-            pointTagForTurnLog = (pointScreenIndex + 1, pointCoordinate, globalLocation)
+            detectedElementDisplayFrame = targetScreenCapture.frame.display.frameAppKit
+            pointTagForTurnLog = (pointScreenIndex + 1, pointCoordinate, pointCG)
             ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
             print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
         } else {
@@ -1134,7 +1166,7 @@ final class CompanionManager: ObservableObject {
                 raw: Self.rawPointTag(in: responseTextWithoutMarkTags) ?? "[POINT]",
                 screenNumber: pointTagForTurnLog.screenNumber,
                 modelPixel: pointTagForTurnLog.modelPixel,
-                appKitPoint: pointTagForTurnLog.appKitPoint
+                cgPoint: pointTagForTurnLog.cgPoint
             )
         }
 
@@ -1220,9 +1252,8 @@ final class CompanionManager: ObservableObject {
     private func runCompanionWorkersAndAskMainBrainForFinalAnswer(
         companionWorkerRequests: [CompanionWorkerRequest],
         workerHeadsUpText: String,
-        transcript: String,
-        labeledImages: [(data: Data, label: String)],
-        historyForAPI: [(userPlaceholder: String, assistantResponse: String)]
+        conversationText: String,
+        screenBlocks: [ClaudeContentBlock]
     ) async throws -> String {
         print("🧠 Main brain opened \(companionWorkerRequests.count) worker(s): \(companionWorkerRequests.map(\.workerTitle))")
 
@@ -1236,28 +1267,27 @@ final class CompanionManager: ObservableObject {
         }
 
         let companionWorkerResults = try await companionWorkerRunner.runWorkers(companionWorkerRequests) { companionWorkerRequest in
+            // Workers see the same screens (same frames and JPEGs).
             let workerClaudeCodeBridge = CompanionWorkerRunner.makeWorkerClaudeCodeBridge()
-            let (workerResultText, _) = try await workerClaudeCodeBridge.analyzeImageStreaming(
-                images: labeledImages,
+            let workerTurn = try await workerClaudeCodeBridge.runTurn(
+                systemPromptFileName: "worker-prompt.md",
                 systemPrompt: Self.companionWorkerSystemPrompt,
-                userPrompt: companionWorkerRequest.workerTaskPrompt,
-                onTextChunk: { _ in }
+                contentBlocks: [.text(companionWorkerRequest.workerTaskPrompt)] + screenBlocks
             )
-            return workerResultText
+            return workerTurn.text
         }
 
         try Task.checkCancellation()
 
-        let (finalResponseText, _) = try await claudeCodeBridge.analyzeImageStreaming(
-            images: labeledImages,
-            systemPrompt: Self.companionVoiceResponseSystemPrompt,
-            conversationHistory: historyForAPI,
-            userPrompt: Self.makeMainBrainPromptWithWorkerResults(
-                transcript: transcript,
+        let finalTurn = try await claudeCodeBridge.runTurn(
+            systemPromptFileName: "system-prompt.md",
+            systemPrompt: companionSystemPrompt,
+            contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
+                transcript: conversationText,
                 companionWorkerResults: companionWorkerResults
-            ),
-            onTextChunk: { _ in }
+            ))] + screenBlocks
         )
+        let finalResponseText = finalTurn.text
 
         // One round of workers per question: any new worker tags are dropped.
         return CompanionWorkerTagParser.extractWorkerTags(from: finalResponseText).textWithoutWorkerTags
@@ -1291,66 +1321,39 @@ final class CompanionManager: ObservableObject {
     /// a screen that doesn't exist fall back to the cursor's screen.
     private static func makeLiveScreenMarks(
         from parsedLiveScreenMarkTags: [ParsedLiveScreenMarkTag],
-        screenCaptures: [CompanionScreenCapture],
+        screenCaptures: [ScreenCapture],
         turnRecord: TurnRecord? = nil
     ) -> [LiveScreenMark] {
         var liveScreenMarks: [LiveScreenMark] = []
 
         for parsedLiveScreenMarkTag in parsedLiveScreenMarkTags {
-            let targetScreenCapture: CompanionScreenCapture? = {
+            // SCREEN n from the tag, falling back to the cursor screen.
+            let targetScreenIndex: Int? = {
                 if let screenNumber = parsedLiveScreenMarkTag.screenNumber,
                    screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                    return screenCaptures[screenNumber - 1]
+                    return screenNumber - 1
                 }
-                return screenCaptures.first(where: { $0.isCursorScreen })
+                return screenCaptures.firstIndex(where: \.isCursorScreen)
             }()
-            guard let targetScreenCapture,
-                  let targetScreenIndex = screenCaptures.firstIndex(where: { $0.displayID == targetScreenCapture.displayID }) else { continue }
+            guard let targetScreenIndex else { continue }
 
-            let markGlobalScreenLocation = globalScreenLocation(
-                forScreenshotPixelCoordinate: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
-                in: targetScreenCapture
-            )
+            let markCG = screenCaptures[targetScreenIndex].frame.cg(fromModelPx: parsedLiveScreenMarkTag.screenshotPixelCoordinate)
             turnRecord?.recordTag(
                 raw: "[MARK:\(parsedLiveScreenMarkTag.markKind):\(parsedLiveScreenMarkTag.markLabel ?? "")]",
                 screenNumber: targetScreenIndex + 1,
                 modelPixel: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
-                appKitPoint: markGlobalScreenLocation
+                cgPoint: markCG
             )
 
             liveScreenMarks.append(LiveScreenMark(
                 markKind: parsedLiveScreenMarkTag.markKind,
-                globalScreenLocation: markGlobalScreenLocation,
+                locationCG: markCG,
                 markLabel: parsedLiveScreenMarkTag.markLabel,
                 orderInResponse: liveScreenMarks.count
             ))
         }
 
         return liveScreenMarks
-    }
-
-    /// Same mapping the [POINT:...] flight uses: screenshot pixels (top-left
-    /// origin) → display points → AppKit global coords (bottom-left origin).
-    private static func globalScreenLocation(
-        forScreenshotPixelCoordinate screenshotPixelCoordinate: CGPoint,
-        in screenCapture: CompanionScreenCapture
-    ) -> CGPoint {
-        let screenshotWidth = CGFloat(screenCapture.screenshotWidthInPixels)
-        let screenshotHeight = CGFloat(screenCapture.screenshotHeightInPixels)
-        let displayWidth = CGFloat(screenCapture.displayWidthInPoints)
-        let displayHeight = CGFloat(screenCapture.displayHeightInPoints)
-        let displayFrame = screenCapture.displayFrame
-
-        let clampedX = max(0, min(screenshotPixelCoordinate.x, screenshotWidth))
-        let clampedY = max(0, min(screenshotPixelCoordinate.y, screenshotHeight))
-        let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-        let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-        let appKitY = displayHeight - displayLocalY
-
-        return CGPoint(
-            x: displayLocalX + displayFrame.origin.x,
-            y: appKitY + displayFrame.origin.y
-        )
     }
 
     // MARK: - Point Tag Parsing

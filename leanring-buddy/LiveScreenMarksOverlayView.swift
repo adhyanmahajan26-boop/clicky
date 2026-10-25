@@ -10,6 +10,7 @@
 //  so a 1-2-3 walkthrough reads in sequence.
 //
 
+import ClickyCore
 import SwiftUI
 
 struct LiveScreenMarksOverlayView: View {
@@ -21,7 +22,7 @@ struct LiveScreenMarksOverlayView: View {
             ForEach(liveScreenMarksOnThisScreen) { liveScreenMark in
                 LiveScreenMarkView(
                     liveScreenMark: liveScreenMark,
-                    markLocationInThisScreen: convertGlobalScreenLocationToSwiftUICoordinates(liveScreenMark.globalScreenLocation),
+                    markLocationInThisScreen: ScreenTopology.overlayLocal(fromCG: liveScreenMark.locationCG, displayBoundsCG: displayBoundsCG),
                     screenSize: screenFrame.size
                 )
                 .transition(.opacity)
@@ -33,16 +34,13 @@ struct LiveScreenMarksOverlayView: View {
     }
 
     private var liveScreenMarksOnThisScreen: [LiveScreenMark] {
-        liveScreenMarks.filter { screenFrame.contains($0.globalScreenLocation) }
+        liveScreenMarks.filter { displayBoundsCG.contains($0.locationCG) }
     }
 
-    /// Converts an AppKit global point (bottom-left origin) to this overlay's
-    /// SwiftUI space (top-left origin).
-    private func convertGlobalScreenLocationToSwiftUICoordinates(_ globalScreenLocation: CGPoint) -> CGPoint {
-        CGPoint(
-            x: globalScreenLocation.x - screenFrame.origin.x,
-            y: (screenFrame.origin.y + screenFrame.height) - globalScreenLocation.y
-        )
+    /// This overlay's display in CG global points. Marks are stored in CG
+    /// and drawn at overlay-local = CG − display origin (top-left, y down).
+    private var displayBoundsCG: CGRect {
+        ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight)
     }
 }
 

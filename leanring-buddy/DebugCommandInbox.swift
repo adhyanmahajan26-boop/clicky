@@ -11,7 +11,7 @@
 //    ping                     → exe, sha, pid, ax, screen, voiceEngine, handsFree
 //    ask {text, speak=true}   → runs the full answer pipeline; replies at turn end
 //    marks {tags}             → fresh capture, parse/map/draw the tags (legacy parser)
-//    say {text}, stop, clear, handsfree {on}, selftest {name}
+//    say {text}, stop, clear, reset, handsfree {on}, selftest {name}
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -186,6 +186,10 @@ final class DebugCommandInbox {
             companionManager.endHandsFreeSession()
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
 
+        case "reset":
+            companionManager.resetConversation()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
+
         case "clear":
             companionManager.clearLiveScreenMarks()
             companionManager.clearDetectedElementLocation()
@@ -226,9 +230,9 @@ final class DebugCommandInbox {
 
     /// Captures the screens, runs `tagText` through the same legacy
     /// parse → map → draw path as a real answer, and logs it as a turn.
-    private func presentTagsOnFreshCapture(tagText: String, transcript: String) async throws -> (tags: [[String: Any]], turnDirectoryURL: URL?, screenCaptures: [CompanionScreenCapture]) {
+    private func presentTagsOnFreshCapture(tagText: String, transcript: String) async throws -> (tags: [[String: Any]], turnDirectoryURL: URL?, screenCaptures: [ScreenCapture]) {
         let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: Date())
-        let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+        let screenCaptures = try await ScreenCaptureService.captureAllScreens()
         turnRecord?.markTiming("captureDone")
         turnRecord?.recordScreens(screenCaptures)
         turnRecord?.rawResponse = tagText
@@ -251,45 +255,46 @@ final class DebugCommandInbox {
             return await runLegacyCenterSelfTest()
         case "fixtureAX":
             return runFixtureAccessibilitySelfTest()
+        case "calibration", "overlayExclusion", "transportProbe", "tierProbe":
+            return await DiagnosticSelfTests.run(named: selfTestName, companionManager: companionManager)
         default:
-            return (false, ["error": "unknown selftest \(selfTestName); known: legacyCenter, fixtureAX"])
+            return (false, ["error": "unknown selftest \(selfTestName); known: legacyCenter, fixtureAX, calibration, overlayExclusion, transportProbe, tierProbe"])
         }
     }
 
-    /// On each screen, a POINT at the centre of the screenshot must land
-    /// within 2 pt of the display's centre.
+    /// On each screen, a POINT at the centre pixel of the model image must
+    /// land within 2 pt of the display's centre (measured in CG).
     private func runLegacyCenterSelfTest() async -> (Bool, [String: Any]) {
         let maximumAllowedErrorInPoints = 2.0
         var perScreenResults: [[String: Any]] = []
         var isPassing = true
 
         do {
-            let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-            for (screenIndex, screenCapture) in screenCaptures.enumerated() {
-                let screenNumber = screenIndex + 1
-                let centerPixelX = Int((Double(screenCapture.screenshotWidthInPixels) / 2).rounded())
-                let centerPixelY = Int((Double(screenCapture.screenshotHeightInPixels) / 2).rounded())
-                let tagText = "[POINT:\(centerPixelX),\(centerPixelY):c:screen\(screenNumber)]"
+            let screenCaptures = try await ScreenCaptureService.captureAllScreens()
+            for screenCapture in screenCaptures {
+                let modelSize = screenCapture.frame.modelSize
+                let tagText = "[POINT:\(modelSize.width / 2),\(modelSize.height / 2):c:screen\(screenCapture.screenNumber)]"
 
-                let markResult = try await presentTagsOnFreshCapture(tagText: tagText, transcript: "selftest legacyCenter screen \(screenNumber)")
-                // A fresh capture can reorder screens if the cursor moved; find
-                // this display in the capture the tag was actually mapped with.
+                let markResult = try await presentTagsOnFreshCapture(tagText: tagText, transcript: "selftest legacyCenter screen \(screenCapture.screenNumber)")
+                // A fresh capture can reorder screens if the cursor moved; use
+                // the capture the tag was actually mapped with.
                 guard let pointTag = markResult.tags.first,
-                      let landedAppKitPoint = pointTag["appKitPoint"] as? [Double],
+                      let landedCGPoint = pointTag["cgPoint"] as? [Double],
                       let mappedScreenNumber = pointTag["screen"] as? Int,
-                      mappedScreenNumber >= 1, mappedScreenNumber <= markResult.screenCaptures.count else {
-                    perScreenResults.append(["screen": screenNumber, "error": "no point landed"])
+                      let mappedCapture = markResult.screenCaptures.first(where: { $0.screenNumber == mappedScreenNumber }) else {
+                    perScreenResults.append(["screen": screenCapture.screenNumber, "error": "no point landed"])
                     isPassing = false
                     continue
                 }
-                let mappedDisplayFrame = markResult.screenCaptures[mappedScreenNumber - 1].displayFrame
-                let distanceFromCenter = hypot(landedAppKitPoint[0] - mappedDisplayFrame.midX, landedAppKitPoint[1] - mappedDisplayFrame.midY)
+                let displayBoundsCG = mappedCapture.frame.display.boundsCG
+                let distanceFromCenter = hypot(landedCGPoint[0] - displayBoundsCG.midX, landedCGPoint[1] - displayBoundsCG.midY)
                 if distanceFromCenter > maximumAllowedErrorInPoints { isPassing = false }
                 perScreenResults.append([
-                    "screen": screenNumber,
-                    "displayID": Int(markResult.screenCaptures[mappedScreenNumber - 1].displayID),
-                    "image": "\(screenCapture.screenshotWidthInPixels)x\(screenCapture.screenshotHeightInPixels)",
-                    "errorPt": (distanceFromCenter * 100).rounded() / 100
+                    "screen": mappedScreenNumber,
+                    "displayID": Int(mappedCapture.displayID),
+                    "image": mappedCapture.frame.modelSize.description,
+                    "native": mappedCapture.frame.native.description,
+                    "errorPt": Double((distanceFromCenter * 100).rounded() / 100)
                 ])
             }
         } catch {

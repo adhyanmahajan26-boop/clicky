@@ -7,6 +7,7 @@
 //  seamlessly follows the cursor across multiple monitors.
 //
 
+import ClickyCore
 import AppKit
 import AVFoundation
 import SwiftUI
@@ -26,7 +27,7 @@ class OverlayWindow: NSWindow {
         self.backgroundColor = .clear
         self.level = .screenSaver  // Always on top, above submenus and popups
         self.ignoresMouseEvents = true  // Click-through
-        self.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         self.isReleasedWhenClosed = false
         self.hasShadow = false
 
@@ -40,6 +41,8 @@ class OverlayWindow: NSWindow {
         if let screenForWindow = NSScreen.screens.first(where: { $0.frame == screen.frame }) {
             self.setFrameOrigin(screenForWindow.frame.origin)
         }
+        // Overlay-local coordinates assume the window exactly covers its screen.
+        assert(self.frame == screen.frame, "overlay frame \(self.frame) != screen frame \(screen.frame)")
     }
 
     // Prevent window from becoming key (no focus stealing)
@@ -318,6 +321,7 @@ struct BlueCursorView: View {
         }
         .frame(width: screenFrame.width, height: screenFrame.height)
         .ignoresSafeArea()
+        .allowsHitTesting(false)
         .onAppear {
             // Set initial cursor position immediately before starting animation
             let mouseLocation = NSEvent.mouseLocation
@@ -726,8 +730,27 @@ private struct BlueCursorWaveformView: View {
 class OverlayWindowManager {
     private var overlayWindows: [OverlayWindow] = []
     var hasShownOverlayBefore = false
+    private weak var lastCompanionManager: CompanionManager?
+    private var screenParametersObserver: NSObjectProtocol?
+
+    init() {
+        // Displays added, removed, rearranged or rescaled: rebuild so every
+        // overlay again covers exactly one screen.
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isShowingOverlay(), let companionManager = self.lastCompanionManager else { return }
+                print("🖥️ Screens changed; rebuilding overlays")
+                self.showOverlay(onScreens: NSScreen.screens, companionManager: companionManager)
+            }
+        }
+    }
 
     func showOverlay(onScreens screens: [NSScreen], companionManager: CompanionManager) {
+        lastCompanionManager = companionManager
         // Hide any existing overlays
         hideOverlay()
 

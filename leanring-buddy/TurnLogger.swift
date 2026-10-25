@@ -25,6 +25,7 @@ final class TurnRecord {
         let boundsCG: [Double]
         let imageW: Int
         let imageH: Int
+        let header: String
     }
 
     struct TagEntry: Encodable {
@@ -64,28 +65,28 @@ final class TurnRecord {
         timings[stageName] = stageDate.timeIntervalSince1970
     }
 
-    func recordScreens(_ screenCaptures: [CompanionScreenCapture]) {
-        let mainDisplayHeight = TurnLogger.mainDisplayHeight
-        screens = screenCaptures.enumerated().map { screenIndex, screenCapture in
-            let boundsCG = ScreenTopology.cg(fromAppKit: screenCapture.displayFrame, flipH: mainDisplayHeight)
+    func recordScreens(_ screenCaptures: [ScreenCapture]) {
+        screens = screenCaptures.map { screenCapture in
+            let boundsCG = screenCapture.frame.regionCG
             return ScreenEntry(
-                n: screenIndex + 1,
+                n: screenCapture.screenNumber,
                 displayID: screenCapture.displayID,
                 boundsCG: [boundsCG.minX, boundsCG.minY, boundsCG.width, boundsCG.height],
-                imageW: screenCapture.screenshotWidthInPixels,
-                imageH: screenCapture.screenshotHeightInPixels
+                imageW: screenCapture.frame.modelSize.width,
+                imageH: screenCapture.frame.modelSize.height,
+                header: screenCapture.header
             )
         }
-        for (screenIndex, screenCapture) in screenCaptures.enumerated() {
-            try? screenCapture.imageData.write(to: turnDirectoryURL.appendingPathComponent("screen\(screenIndex + 1).jpg"))
+        for screenCapture in screenCaptures {
+            try? screenCapture.modelJPEGData.write(to: turnDirectoryURL.appendingPathComponent("screen\(screenCapture.screenNumber).jpg"))
         }
     }
 
-    /// The legacy hook: every POINT / MARK records the model's pixel
-    /// coordinate, its screen, and where it landed, converting to CG in this
-    /// one place via ScreenTopology.
-    func recordTag(raw rawTag: String, screenNumber: Int, modelPixel: CGPoint, appKitPoint: CGPoint) {
-        let cgPoint = ScreenTopology.cg(fromAppKit: appKitPoint, flipH: TurnLogger.mainDisplayHeight)
+    /// Every POINT / MARK records the model's pixel coordinate, its SCREEN
+    /// n, where it landed in CG, and the AppKit point the legacy overlay uses
+    /// (derived here, in one place, via ScreenTopology).
+    func recordTag(raw rawTag: String, screenNumber: Int, modelPixel: CGPoint, cgPoint: CGPoint) {
+        let appKitPoint = ScreenTopology.appKit(fromCG: cgPoint, flipH: TurnLogger.mainDisplayHeight)
         tags.append(TagEntry(
             raw: rawTag,
             screen: screenNumber,

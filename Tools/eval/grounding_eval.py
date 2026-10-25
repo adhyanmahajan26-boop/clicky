@@ -37,6 +37,10 @@ GROUND_TRUTH_PATH = os.path.expanduser("~/.clicky/fixture/groundtruth.json")
 PROMPTS_PATH = os.path.join(os.path.dirname(__file__), "grounding_prompts.tsv")
 
 POINT_TOLERANCE_PT = 4.0
+# Must match fixtureCoverPadding in GroundingFixture.swift.
+COVER_PADDING_PT = 20.0
+CANT_SEE_PHRASES = ("can't see", "cannot see", "can not see", "don't see", "do not see", "not visible",
+                    "hidden", "covered", "blocked", "obscured", "behind")
 BOX_CENTER_TOLERANCE_PT = 2.0
 
 LATENCY_PROMPTS = [
@@ -196,12 +200,32 @@ def score_row(keys, tags, frames_by_key):
     return True, ""
 
 
+def score_cover_row(keys, tags, frames_by_key, raw_response):
+    """A covered item can't be seen: a hit means Clicky says so, or points
+    at the window covering it (never a confident guess through it)."""
+    lowered_response = raw_response.lower()
+    if any(phrase in lowered_response for phrase in CANT_SEE_PHRASES):
+        return True, "said it can't see it"
+    frame = target_frame(keys[0], frames_by_key)
+    if frame is None:
+        return False, "unknown key %s" % keys[0]
+    cover_frame = [frame[0] - COVER_PADDING_PT, frame[1] - COVER_PADDING_PT,
+                   frame[2] + 2 * COVER_PADDING_PT, frame[3] + 2 * COVER_PADDING_PT]
+    # A tag on the covering window but not on the hidden item's own spot.
+    for tag in tags:
+        if tag_hits_target(tag, cover_frame) and not tag_hits_target(tag, frame):
+            return True, "pointed at the cover"
+    return False, "guessed through the cover" if tags else "no tag and no can't-see"
+
+
 def run_grounding(display_indexes, row_limit):
     rows = read_prompt_rows()[:row_limit] if row_limit else read_prompt_rows()
     results = []
     for display_index in display_indexes:
         for row_number, row in enumerate(rows, start=1):
             keys = [k.strip() for k in row["keys"].split(",") if k.strip()]
+            # Each row starts fresh: no conversation history from earlier rows.
+            clickyctl({"cmd": "reset"}, 10)
             process, ground_truth = start_fixture(display_index, row.get("flags", ""))
             record = {"display": display_index, "row": row_number, "prompt": row["prompt"], "keys": keys,
                       "kind": row["kind"], "flags": row.get("flags", ""), "hit": False, "reason": ""}
@@ -226,7 +250,10 @@ def run_grounding(display_indexes, row_limit):
                     record["reason"] = "SCREEN 1 is not the fixture display"
                     results.append(record)
                     continue
-                record["hit"], record["reason"] = score_row(keys, turn.get("tags", []), frames_by_key)
+                if row["kind"] == "cover":
+                    record["hit"], record["reason"] = score_cover_row(keys, turn.get("tags", []), frames_by_key, turn.get("rawResponse", ""))
+                else:
+                    record["hit"], record["reason"] = score_row(keys, turn.get("tags", []), frames_by_key)
                 results.append(record)
             finally:
                 stop_fixture(process, ground_truth)
@@ -237,6 +264,7 @@ def run_grounding(display_indexes, row_limit):
 def run_latency(ask_count):
     samples = []
     for prompt in LATENCY_PROMPTS[:ask_count]:
+        clickyctl({"cmd": "reset"}, 10)
         reply = clickyctl({"cmd": "ask", "text": prompt, "speak": True}, 150)
         turn_directory = reply.get("turnDir")
         if not turn_directory:
@@ -273,6 +301,8 @@ def write_report(output_path, ping_result, grounding_results, latency_samples):
     lines.append("")
     lines.append("## Hits per display x kind")
     lines.append("")
+    cover_results = [r for r in grounding_results if r["kind"] == "cover"]
+    grounding_results = [r for r in grounding_results if r["kind"] != "cover"]
     kinds = sorted({r["kind"] for r in grounding_results})
     displays = sorted({r["display"] for r in grounding_results})
     lines.append("| display | " + " | ".join(kinds) + " | all |")
@@ -287,8 +317,14 @@ def write_report(output_path, ping_result, grounding_results, latency_samples):
         lines.append("| %d | " % display_index + " | ".join(cells) + " |")
     total_hits = sum(r["hit"] for r in grounding_results)
     lines.append("")
-    lines.append("Total: **%d/%d** (%.0f%%)" % (total_hits, len(grounding_results), 100.0 * total_hits / max(1, len(grounding_results))))
+    lines.append("Total (excluding cover rows): **%d/%d** (%.0f%%)" % (total_hits, len(grounding_results), 100.0 * total_hits / max(1, len(grounding_results))))
     lines.append("")
+    if cover_results:
+        lines.append("Cover rows (hit = says it can't see it, or points at the covering window): **%d/%d**" % (
+            sum(r["hit"] for r in cover_results), len(cover_results)))
+        for result in cover_results:
+            lines.append("- d%d r%d `%s` -> %s" % (result["display"], result["row"], result["prompt"], result["reason"]))
+        lines.append("")
     if latency_samples:
         seconds = [s["seconds"] for s in latency_samples]
         engines = sorted({str(s["engine"]) + (" (fallback)" if s["fallback"] else "") for s in latency_samples})

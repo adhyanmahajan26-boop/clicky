@@ -38,11 +38,11 @@ struct ParsedLiveScreenMarkTag: Equatable {
     let screenNumber: Int?
 }
 
-/// A mark ready to draw, in AppKit global screen coordinates.
+/// A mark ready to draw, in CG global points (main display top-left, y down).
 struct LiveScreenMark: Identifiable, Equatable {
     let id = UUID()
     let markKind: LiveScreenMarkKind
-    let globalScreenLocation: CGPoint
+    let locationCG: CGPoint
     let markLabel: String?
     /// Position in the response, used to stagger the draw-in animation so
     /// marks appear one after another instead of all at once.

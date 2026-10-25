@@ -12,7 +12,7 @@ where's the bell icon	icon_bell	ax
 highlight the Archive button	archive	ax	
 where is the info icon	icon_info	ax	
 circle the Share button	share	ax	
-where is row 27	row_27	ax	
+where is row 9	row_9	ax	
 circle the subscribe button	web_subscribe	web	
 where's the read more link	web_read_more	web	
 point at the sign in button on the page	web_sign_in	web	
@@ -37,5 +37,5 @@ tell me the total and the rate limit error	canvas_total,canvas_rate_limit	canvas
 point at the red dot then the subscribe button	dot_red,web_subscribe	mixed	multi
 where is row 17 in the table	row_17	ax	scroll
 box rows 10 to 12 in the table	row_10..row_12	ax	scroll
-point at the Run button	run	ax	cover:run
-circle the Export as PDF button	export_pdf	ax	cover:export_pdf
+point at the Run button	run	cover	cover:run
+circle the Export as PDF button	export_pdf	cover	cover:export_pdf
