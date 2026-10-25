@@ -7,15 +7,30 @@ the debug inbox, and checks the turn record (turn.json, marks.jsonl) against
 ground truth. The pass rule for each test is in its docstring and in TESTS.
 
 Usage:
-  python3 -I Tools/eval/hard10.py --dry-run          validate pages and fixtures; no app touched
+  python3 -I Tools/eval/hard10.py --dry-run          read-only: prints the test display, the recorded
+                                                     frontmost app and Safari state, and each test's plan
   python3 -I Tools/eval/hard10.py --only 2,5 --run NAME
-  python3 -I Tools/eval/hard10.py --side-origin X,Y  Chrome origin for test 6 (default: next to the side display)
+  python3 -I Tools/eval/hard10.py --side-origin X,Y  Chrome origin for test 6; must lie on the test display
+
+Owner rules (hard requirements, the owner watches Netflix full screen in Safari):
+  1. Test display = the display with the largest origin.x (read from CoreGraphics by a swift -e
+     helper, never hardcoded). Every test window goes there, at its top-left + (40, 40), at most
+     1280x860. Tests that cannot be placed there are skipped (SKIPS).
+  2. Safari is never opened, activated or used. Its pid and full-screen bounds are recorded at the
+     start; the run stops if they change (Guard.check_safari, before each test and after each ask).
+  3. Every ask uses speak:false (AnswerSession isSilent). Test 10 needs live speech, so it is skipped.
+  4. The recorded frontmost app is restored by pid after each ask that needed the throwaway Chrome
+     frontmost (Guard.focus). Nothing else is activated: no clicks, keys, cursor moves, Spaces or
+     full-screen changes. If the recorded app is Safari, Chrome tests are skipped, because restoring
+     it would activate Safari.
+  5. Prompts name the place ("on my right monitor, in the Launch tracker window, ...").
+  6. The owner-idle pause guard waits while HID idle is under 5 s and resumes at 120 s.
 
 Pause guard: before each setup and each ask, if the owner's HID idle time is
 under 5 s the run waits until it reaches 120 s. Every pause is logged to
 build/eval/hard10/<run>/pauses.jsonl.
 
-Output: build/eval/hard10/<run>/results.jsonl and results.md.
+Output: build/eval/hard10/<run>/results.jsonl, results.md, preflight.json and guard.jsonl.
 
 Reused from final_eval.py: clickyctl, owner_idle_seconds, ChromeHarness (temp
 profile, DevTools on 127.0.0.1), css_to_cg, axfind/resolve_truth, open_app,
@@ -41,15 +56,17 @@ EVAL_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(EVAL_DIRECTORY, "..", ".."))
 PAGE_DIRECTORY = os.path.join(EVAL_DIRECTORY, "hard10")
 RUNS_DIRECTORY = os.path.join(REPO_ROOT, "build", "eval", "hard10")
-TURNS_DIRECTORY = os.path.expanduser("~/Library/Logs/Clicky/turns")
 SCRATCH_REPO = os.path.expanduser("~/Projects/clicky-scratch")
 SHOTS_DIRECTORY = os.path.expanduser("~/Desktop/Clicky Screenshots")
 SETTINGS_BUNDLE = "com.apple.systempreferences"
 SERVER_PORT = 8793
 DEBUG_PORT_BASE = 9440
-MAIN_ORIGIN = (200, 200)
-MAIN_SIZE = (1100, 1000)
-SIDE_SIZE = (1100, 800)
+TEST_WINDOW_SIZE = (1280, 860)
+TEST_WINDOW_INSET_PT = 40
+SAFARI_NAME = "Safari"
+SAFARI_BUNDLE = "com.apple.Safari"
+FULLSCREEN_TOLERANCE_PT = 2.0
+ASK_SPEAK = False
 OWNER_ACTIVE_SECONDS = 5.0
 OWNER_RESUME_SECONDS = 120.0
 POINT_TOLERANCE_PT = 4.0
@@ -547,15 +564,331 @@ def probe_flag(value, names):
 
 
 # ---------------------------------------------------------------------------
+# Test display, Safari baseline, focus guard and prompts. The pure functions are unit-tested
+# with fakes (test_hard10.py). The only system reads are the swift -e snapshot and the
+# System Events frontmost-pid read; the only activation is the by-pid frontmost set.
+
+SWIFT_SNAPSHOT_SOURCE = r'''
+import AppKit
+import CoreGraphics
+import Foundation
+
+var displayCount: UInt32 = 0
+CGGetActiveDisplayList(0, nil, &displayCount)
+var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount)
+var displays: [[String: Any]] = []
+for displayID in displayIDs {
+    let rect = CGDisplayBounds(displayID)
+    displays.append(["id": Int(displayID), "main": CGDisplayIsMain(displayID) != 0,
+                     "bounds": [Double(rect.origin.x), Double(rect.origin.y), Double(rect.size.width), Double(rect.size.height)]])
+}
+var frontmost: [String: Any] = [:]
+if let app = NSWorkspace.shared.frontmostApplication {
+    frontmost = ["pid": Int(app.processIdentifier), "bundle": app.bundleIdentifier ?? "", "name": app.localizedName ?? ""]
+}
+var safari: [String: Any] = [:]
+var safariWindows: [[String: Any]] = []
+let windowInfo = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]) ?? []
+for window in windowInfo where (window[kCGWindowOwnerName as String] as? String) == "Safari" {
+    if safari["pid"] == nil, let pid = window[kCGWindowOwnerPID as String] as? Int { safari["pid"] = pid }
+    guard let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
+          let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+    safariWindows.append(["layer": window[kCGWindowLayer as String] as? Int ?? -1,
+                          "onScreen": window[kCGWindowIsOnscreen as String] as? Bool ?? false,
+                          "bounds": [Double(rect.origin.x), Double(rect.origin.y), Double(rect.size.width), Double(rect.size.height)]])
+}
+safari["windows"] = safariWindows
+let payload: [String: Any] = ["displays": displays, "frontmost": frontmost, "safari": safari]
+let data = try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+print(String(data: data, encoding: .utf8)!)
+'''
+
+
+def parse_snapshot(text):
+    """The JSON line of a swift snapshot run (swift may print warnings before it)."""
+    for line in reversed((text or "").strip().splitlines()):
+        if line.strip().startswith("{"):
+            return json.loads(line.strip())
+    raise ValueError("no JSON snapshot in the swift output")
+
+
+def rects_close(first, second, tolerance=FULLSCREEN_TOLERANCE_PT):
+    return len(first) == 4 and len(second) == 4 and all(abs(a - b) <= tolerance for a, b in zip(first, second))
+
+
+def rect_lists_close(first, second, tolerance=FULLSCREEN_TOLERANCE_PT):
+    if len(first) != len(second):
+        return False
+    return all(rects_close(a, b, tolerance) for a, b in zip(sorted(first), sorted(second)))
+
+
+def pick_test_display(displays):
+    """The display with the largest origin.x. Two displays sharing that x make the choice ambiguous."""
+    usable = [display for display in displays or [] if display.get("bounds")]
+    if not usable:
+        raise ValueError("no displays reported")
+    top = max(display["bounds"][0] for display in usable)
+    tied = [display for display in usable if display["bounds"][0] == top]
+    if len(tied) > 1:
+        raise ValueError("%d displays share origin.x %s; the test display is ambiguous" % (len(tied), top))
+    return tied[0]
+
+
+def window_placement(bounds):
+    """(origin, size) for a test window: top-left + inset, at most TEST_WINDOW_SIZE, inside the display."""
+    x, y, width, height = bounds
+    room_x, room_y = width - 2 * TEST_WINDOW_INSET_PT, height - 2 * TEST_WINDOW_INSET_PT
+    if room_x < 400 or room_y < 400:
+        raise ValueError("test display too small for a test window (%sx%s)" % (width, height))
+    size = (int(min(TEST_WINDOW_SIZE[0], room_x)), int(min(TEST_WINDOW_SIZE[1], room_y)))
+    return (int(x + TEST_WINDOW_INSET_PT), int(y + TEST_WINDOW_INSET_PT)), size
+
+
+def place_phrase(displays):
+    """How a prompt names the test display: it is the rightmost one whenever there are several."""
+    return "right monitor" if len(displays or []) > 1 else "main monitor"
+
+
+def safari_state(snapshot):
+    """Safari's pid and the bounds of its on-screen full-screen windows, from a snapshot. A window is
+    full screen when its bounds match a display's bounds. Only on-screen layer-0 windows count: Safari
+    also keeps off-screen windows (other Spaces, hidden), which change without touching the owner's view."""
+    displays = [display["bounds"] for display in snapshot.get("displays") or [] if display.get("bounds")]
+    safari = snapshot.get("safari") or {}
+    windows = []
+    for window in safari.get("windows") or []:
+        bounds = window.get("bounds")
+        if window.get("layer", 0) != 0 or not window.get("onScreen") or not bounds:
+            continue
+        windows.append({"bounds": bounds, "fullScreen": any(rects_close(bounds, display) for display in displays)})
+    return {"pid": safari.get("pid"), "windowCount": len(windows),
+            "fullScreenBounds": sorted(window["bounds"] for window in windows if window["fullScreen"])}
+
+
+def safari_matches(before, now):
+    """(ok, reason): the same Safari process with the same full-screen window bounds."""
+    if before.get("pid") is None:
+        return False, "Safari was not running at the start"
+    if now.get("pid") != before["pid"]:
+        return False, "Safari pid is %s, was %s" % (now.get("pid"), before["pid"])
+    if not rect_lists_close(before["fullScreenBounds"], now["fullScreenBounds"]):
+        return False, "Safari full-screen bounds changed: %s -> %s" % (before["fullScreenBounds"], now["fullScreenBounds"])
+    return True, "Safari pid %s, full-screen bounds %s unchanged" % (before["pid"], before["fullScreenBounds"])
+
+
+def is_safari(frontmost):
+    return (frontmost or {}).get("bundle") == SAFARI_BUNDLE or (frontmost or {}).get("name") == SAFARI_NAME
+
+
+FOCUS_TESTS = {1, 2, 3, 5, 6, 7}
+
+
+def plan_run(snapshot):
+    """The run's layout and baseline from a snapshot: test display, window placement, prompt place,
+    recorded frontmost app and Safari state. Tests that need the Chrome frontmost are skipped
+    (not run) when the recorded app is Safari, since restoring it would re-activate Safari."""
+    displays = snapshot.get("displays") or []
+    test_display = pick_test_display(displays)
+    origin, size = window_placement(test_display["bounds"])
+    frontmost = snapshot.get("frontmost") or {}
+    safari = safari_state(snapshot)
+    problems = []
+    if not frontmost.get("pid"):
+        problems.append("no frontmost app recorded")
+    if safari["pid"] is None:
+        problems.append("Safari is not running, so there is no Safari baseline to protect")
+    focus_allowed = not is_safari(frontmost)
+    return {"testDisplay": test_display, "windowOrigin": origin, "windowSize": size,
+            "place": place_phrase(displays), "frontmost": frontmost, "safari": safari,
+            "focusAllowed": focus_allowed, "problems": problems}
+
+
+def skip_reason(number, layout):
+    """Why a test is not run under this layout, or None."""
+    if number in SKIPS:
+        return SKIPS[number]
+    if number in FOCUS_TESTS and not layout.get("focusAllowed", True):
+        return ("skipped: the owner's frontmost app is Safari; a Chrome test restores the frontmost app "
+                "by pid, which would re-activate Safari (forbidden)")
+    return None
+
+
+WINDOW_TITLES = {1: "Launch tracker", 2: "Kitchen and Home", 3: "Plan draft", 5: "Board", 6: "Contact",
+                 7: "Kitchen and Home"}
+
+
+def prompt_for(number, place):
+    """The test prompt, naming the place (rule 5). Tests without a window keep their text."""
+    template = PROMPT_TEMPLATES[number]
+    if number not in WINDOW_TITLES:
+        return template
+    return template.format(where="on my %s, in the %s window" % (place, WINDOW_TITLES[number]))
+
+
+class RunStop(Exception):
+    """The run must stop: Safari changed, or the owner's focus was taken and cannot be put back."""
+
+
+class FocusLost(RunStop):
+    pass
+
+
+class Guard:
+    """Safari baseline, frontmost restore and the by-pid focus change around each ask.
+
+    activate(pid) sets one process frontmost (System Events, returns bool); read_frontmost() returns
+    the frontmost pid or None; take_snapshot() returns a snapshot dict (the swift helper). All three
+    are injected so the sequencing can be tested with fakes."""
+
+    def __init__(self, baseline, activate, read_frontmost, take_snapshot, log_path=None,
+                 settle_seconds=0.0, sleep=time.sleep):
+        self.recorded_pid = (baseline.get("frontmost") or {}).get("pid")
+        self.safari_baseline = safari_state(baseline)
+        self.activate = activate
+        self.read_frontmost = read_frontmost
+        self.take_snapshot = take_snapshot
+        self.log_path = log_path
+        self.settle_seconds = settle_seconds
+        self.sleep = sleep
+        self.touched = False
+        self.events = []
+
+    def _log(self, event, **fields):
+        record = dict(fields, event=event, time=round(time.time(), 1))
+        self.events.append(record)
+        if self.log_path:
+            append_jsonl(self.log_path, record)
+
+    def note_touch(self):
+        """Called before this harness may have changed focus (a Chrome launch counts: Chrome takes focus)."""
+        self.touched = True
+
+    def check_safari(self, label):
+        now = safari_state(self.take_snapshot())
+        ok, reason = safari_matches(self.safari_baseline, now)
+        self._log("safari-check", label=label, ok=ok, reason=reason)
+        if not ok:
+            raise RunStop("%s: %s" % (label, reason))
+        return reason
+
+    def _restore(self, label):
+        """Activates the recorded app by pid and reads it back; one retry. Raises FocusLost."""
+        for attempt in (1, 2):
+            self.activate(self.recorded_pid)
+            now = self.read_frontmost()
+            if now == self.recorded_pid:
+                self.touched = False
+                self._log("restored", label=label, attempt=attempt, pid=now)
+                return
+            self._log("restore-miss", label=label, attempt=attempt, frontmost=now)
+        raise FocusLost("%s: could not put frontmost pid %s back" % (label, self.recorded_pid))
+
+    def before(self, label):
+        """Before a test or an ask: Safari unchanged, and the recorded app frontmost. A focus change
+        left by this harness is undone; a change this harness did not make stops the run."""
+        self.check_safari(label)
+        now = self.read_frontmost()
+        if now == self.recorded_pid:
+            self._log("frontmost-ok", label=label, pid=now)
+            return
+        if not self.touched:
+            raise RunStop("%s: frontmost is pid %s, not the recorded pid %s, and this harness did not change focus "
+                          "(the owner may have moved it)" % (label, now, self.recorded_pid))
+        self._restore(label)
+
+    def focus(self, target_pid, body, label):
+        """Runs body(target_frontmost) with the target process frontmost, then restores the recorded
+        app by pid, even when body raises. Returns (body result, target_frontmost). target_pid None
+        means no focus change at all."""
+        if target_pid is None:
+            return body(False), False
+        self.touched = True
+        self.activate(target_pid)
+        if self.settle_seconds:
+            self.sleep(self.settle_seconds)
+        front = self.read_frontmost() == target_pid
+        self._log("activate", label=label, target=target_pid, frontmost=front)
+        result, failure = None, None
+        try:
+            result = body(front)
+        except BaseException as error:
+            failure = error
+        self._restore(label)
+        if failure is not None:
+            raise failure
+        return result, front
+
+    def settle(self, label):
+        if self.touched:
+            self._restore(label)
+
+    def final(self, label):
+        self.settle(label)
+        self.check_safari(label)
+        now = self.read_frontmost()
+        self._log("final", label=label, frontmostOk=now == self.recorded_pid, frontmost=now)
+
+
+def frontmost_pid_script():
+    """AppleScript read: the unix id of the frontmost process. Reads only."""
+    return 'tell application "System Events" to return unix id of first process whose frontmost is true'
+
+
+def read_frontmost_pid():
+    try:
+        completed = subprocess.run(["osascript", "-e", frontmost_pid_script()], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        return int(completed.stdout.strip()) if completed.returncode == 0 else None
+    except ValueError:
+        return None
+
+
+def activate_pid(pid):
+    """Sets one process frontmost by pid (the only activation the harness makes). Returns success."""
+    try:
+        return subprocess.run(["osascript", "-e", frontmost_script(pid)], capture_output=True, text=True,
+                              timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def query_snapshot(timeout_seconds=180):
+    """Displays, the frontmost app and Safari's windows, from a swift -e helper. Read-only."""
+    completed = subprocess.run(["swift", "-e", SWIFT_SNAPSHOT_SOURCE], capture_output=True, text=True,
+                               timeout=timeout_seconds)
+    if completed.returncode != 0:
+        raise RuntimeError("swift snapshot failed: %s" % completed.stderr.strip()[-300:])
+    return parse_snapshot(completed.stdout)
+
+
+# ---------------------------------------------------------------------------
 # Owner pause guard, asks, and records.
 
 class Context:
-    def __init__(self, run_directory, server, side_origin=None):
+    def __init__(self, run_directory, server, side_origin=None, layout=None, guard=None):
         self.run_directory = run_directory
         self.pauses_path = os.path.join(run_directory, "pauses.jsonl")
         self.server = server
         self.side_origin = side_origin
+        self.layout = layout or {}
+        self.guard = guard
+        self.last_focus = {}
         self.paused_total = 0.0
+
+    @property
+    def place(self):
+        return self.layout["place"]
+
+    @property
+    def window_origin(self):
+        return self.layout["windowOrigin"]
+
+    @property
+    def window_size(self):
+        return self.layout["windowSize"]
 
 
 def append_jsonl(path, record):
@@ -582,13 +915,24 @@ def wait_owner_idle(ctx):
     return paused
 
 
-def ask(ctx, prompt):
-    """ask{speak:true} through the debug inbox, with the owner guard before each try and
-    final_eval's usage-limit backoff. Returns (reply, turn)."""
+def owner_gate(ctx, label):
+    """Before a setup or an ask: wait for the owner to be idle, then check Safari and the frontmost app."""
+    wait_owner_idle(ctx)
+    ctx.guard.before(label)
+
+
+def ask(ctx, prompt, target_pid=None):
+    """ask{speak:false} through the debug inbox, with the owner gate before each try, the
+    throwaway Chrome (target_pid) frontmost for the ask only, and final_eval's usage-limit
+    backoff. Sets ctx.last_focus. Returns (reply, turn)."""
     waits = FE.backoff_schedule()
     while True:
-        wait_owner_idle(ctx)
-        reply = FE.clickyctl({"cmd": "ask", "text": prompt, "speak": True}, ASK_TIMEOUT_SECONDS)
+        owner_gate(ctx, "ask")
+        reply, front = ctx.guard.focus(
+            target_pid, lambda _: FE.clickyctl({"cmd": "ask", "text": prompt, "speak": ASK_SPEAK}, ASK_TIMEOUT_SECONDS),
+            "ask")
+        ctx.guard.check_safari("after ask")
+        ctx.last_focus = {"targetPid": target_pid, "frontmost": front}
         turn = FE.read_turn(reply.get("turnDir"))
         error_text = str(reply.get("error") or "")
         if turn and turn.get("error"):
@@ -624,7 +968,10 @@ def score(ctx, number, reply, turn, check):
         return record(number, "error", False, "turn error: %s" % str(turn["error"])[:200], turn_dir, turn)
     bubbles = dedupe_bubbles(FE.read_mark_events(turn_dir))
     passed, reason = check(turn, bubbles)
-    return record(number, "scored", passed, reason, turn_dir, turn, {"tags": len(turn.get("tags") or [])})
+    extra = {"tags": len(turn.get("tags") or [])}
+    if ctx.last_focus.get("targetPid") is not None:
+        extra["chromeFrontmost"] = ctx.last_focus.get("frontmost")
+    return record(number, "scored", passed, reason, turn_dir, turn, extra)
 
 
 def cg_frames(window, truth, keys):
@@ -639,23 +986,14 @@ def frontmost_script(pid, activate=True):
     return 'tell application "System Events" to return frontmost of (first process whose unix id is %d)' % pid
 
 
-def bring_chrome_front(harness):
-    """Activates this harness's Chrome window (by pid) and reads back that it is frontmost."""
-    pid = harness.process.pid
-    try:
-        subprocess.run(["osascript", "-e", frontmost_script(pid)], capture_output=True, text=True, timeout=10)
-        read = subprocess.run(["osascript", "-e", frontmost_script(pid, activate=False)], capture_output=True, text=True, timeout=10)
-        return read.returncode == 0 and read.stdout.strip() == "true"
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def open_chrome_page(ctx, number, page, origin, size):
-    """Owner guard, then a Chrome app window on origin, loaded with the page. The window is made
-    frontmost and given CHROME_SETTLE_SECONDS after the page reports its truth, before any ask.
+def open_chrome_page(ctx, number, page, origin=None):
+    """Owner gate, then a throwaway Chrome app window on the test display (ctx.window_origin unless
+    origin is given), loaded with the page. Chrome may take focus when it launches, so the guard is
+    told to settle focus afterwards. The window is made frontmost only during an ask (ask, Guard.focus).
     Returns (harness, state, window, truth)."""
-    wait_owner_idle(ctx)
-    harness = FE.ChromeHarness(DEBUG_PORT_BASE + number, origin, size)
+    owner_gate(ctx, "setup test %d" % number)
+    ctx.guard.note_touch()
+    harness = FE.ChromeHarness(DEBUG_PORT_BASE + number, origin or ctx.window_origin, ctx.window_size)
     try:
         state = harness.load(ctx.server.url("/" + page))
     except Exception:
@@ -665,43 +1003,54 @@ def open_chrome_page(ctx, number, page, origin, size):
     if not truth.get("items"):
         harness.stop()
         raise TruthMissing("%s published no truth items" % page)
-    harness.frontmost = bring_chrome_front(harness)
-    time.sleep(CHROME_SETTLE_SECONDS)
     window = {"bounds": state["bounds"], "innerWidth": state["innerWidth"], "innerHeight": state["innerHeight"]}
     return harness, state, window, truth
+
+
+def ask_in_chrome(ctx, harness, number):
+    """ask for test number, with the throwaway Chrome frontmost for that ask and the prompt naming
+    the place. Returns (reply, turn)."""
+    return ask(ctx, prompt_for(number, ctx.place), harness.process.pid)
 
 
 # ---------------------------------------------------------------------------
 # The ten tests. Each returns one record.
 
-PROMPTS = {
-    1: "mark rows Alpha, Delta, Kilo and Papa and note what's wrong with each",
-    2: "box the three red products and note their prices",
-    3: "point at the share button",
+# Prompts name the place (owner rule 5). {where} is filled by prompt_for from the test display.
+PROMPT_TEMPLATES = {
+    1: "{where}, mark rows Alpha, Delta, Kilo and Papa and note what's wrong with each",
+    2: "{where}, box the three red products and note their prices",
+    3: "{where}, point at the Share button",
     4: "how do I change my wallpaper",
-    5: "point at the word 'Quarterly'",
-    6: "point at the Submit button",
-    7: "take a screenshot of this window",
+    5: "{where}, point at the word 'Quarterly'",
+    6: "{where}, point at the Submit button",
+    7: "{where}, take a screenshot of that window",
     8: "explain how DNS resolution works with a diagram",
     9: CODE_PROMPT,
     10: LONG_QUESTION,
+}
+
+# Tests that are not run, with the reason logged (owner rules 1 and 3). Their functions stay in
+# TESTS so they can be re-enabled once the placement or the silence condition is met.
+SKIPS = {
+    4: "skipped: can't place on the test display (System Settings opens where it likes and can't be positioned without scripting)",
+    8: "skipped: can't place on the test display (the whiteboard panel goes on the screen the mouse is on, and the harness never moves the cursor)",
+    10: "skipped: silent run (barge-in needs live speech, and no debug command routes live TTS to a file)",
 }
 
 
 def test_1_dense_table(ctx):
     """Dense Notion-style table, 18 rows. Pass: underline on each of Alpha, Delta, Kilo, Papa
     (and no other row), each with a note."""
-    harness, _, window, truth = open_chrome_page(ctx, 1, "dense_table.html", MAIN_ORIGIN, MAIN_SIZE)
+    harness, _, window, truth = open_chrome_page(ctx, 1, "dense_table.html")
     try:
         frames = {key.split("_", 1)[1].capitalize(): frame
                   for key, frame in cg_frames(window, truth, truth["items"].keys()).items()}
         wanted = ["Alpha", "Delta", "Kilo", "Papa"]
         targets = {name: frames[name] for name in wanted}
         others = {name: frame for name, frame in frames.items() if name not in wanted}
-        reply, turn = ask(ctx, PROMPTS[1])
-        result = score(ctx, 1, reply, turn, lambda t, b: check_dense(t.get("tags") or [], targets, others, b))
-        result["extra"]["chromeFrontmost"] = harness.frontmost
-        return result
+        reply, turn = ask_in_chrome(ctx, harness, 1)
+        return score(ctx, 1, reply, turn, lambda t, b: check_dense(t.get("tags") or [], targets, others, b))
     finally:
         harness.stop()
 
@@ -709,24 +1058,22 @@ def test_1_dense_table(ctx):
 def test_2_product_boxes(ctx):
     """Product grid, 9 cards, 3 red. Pass: one box/rbox per red card, within 8 pt of the card
     edges (DevTools truth), each labelled within 40 pt, each note with a price."""
-    harness, _, window, truth = open_chrome_page(ctx, 2, "product_grid.html", MAIN_ORIGIN, MAIN_SIZE)
+    harness, _, window, truth = open_chrome_page(ctx, 2, "product_grid.html")
     try:
         red_keys = truth.get("red") or []
         red_frames = [FE.css_to_cg(truth["items"][key], window) for key in red_keys]
-        reply, turn = ask(ctx, PROMPTS[2])
-        result = score(ctx, 2, reply, turn, lambda t, b: check_boxes(t.get("tags") or [], red_frames, b))
-        result["extra"]["chromeFrontmost"] = harness.frontmost
-        return result
+        reply, turn = ask_in_chrome(ctx, harness, 2)
+        return score(ctx, 2, reply, turn, lambda t, b: check_boxes(t.get("tags") or [], red_frames, b))
     finally:
         harness.stop()
 
 
 def test_3_icon_button(ctx):
     """16 px icon toolbar. Pass: a point lands inside the Share button frame plus 4 pt."""
-    harness, _, window, truth = open_chrome_page(ctx, 3, "toolbar.html", MAIN_ORIGIN, MAIN_SIZE)
+    harness, _, window, truth = open_chrome_page(ctx, 3, "toolbar.html")
     try:
         frame = FE.css_to_cg(truth["items"]["share"], window)
-        reply, turn = ask(ctx, PROMPTS[3])
+        reply, turn = ask_in_chrome(ctx, harness, 3)
         return score(ctx, 3, reply, turn, lambda t, b: check_point(t.get("tags") or [], frame))
     finally:
         harness.stop()
@@ -760,7 +1107,7 @@ def test_4_settings_steps(ctx):
     frame, finder, error = resolve_wallpaper_truth()
     if frame is None:
         raise TruthMissing("truth: no Wallpaper sidebar item after %d s (%s)" % (SETTINGS_TRUTH_SECONDS, error))
-    reply, turn = ask(ctx, PROMPTS[4])
+    reply, turn = ask(ctx, PROMPT_TEMPLATES[4])
     result = score(ctx, 4, reply, turn, lambda t, b: check_settings(t.get("tags") or [], frame))
     result["extra"]["truthFinder"] = finder
     result["extra"]["truthFrameCG"] = frame
@@ -769,40 +1116,25 @@ def test_4_settings_steps(ctx):
 
 def test_5_canvas_text(ctx):
     """Canvas-only text. Pass: a point lands inside the ink box of 'Quarterly' plus 4 pt."""
-    harness, _, window, truth = open_chrome_page(ctx, 5, "canvas_quarterly.html", MAIN_ORIGIN, MAIN_SIZE)
+    harness, _, window, truth = open_chrome_page(ctx, 5, "canvas_quarterly.html")
     try:
         frame = FE.css_to_cg(truth["items"]["quarterly"], window)
-        reply, turn = ask(ctx, PROMPTS[5])
+        reply, turn = ask_in_chrome(ctx, harness, 5)
         return score(ctx, 5, reply, turn, lambda t, b: check_point(t.get("tags") or [], frame))
     finally:
         harness.stop()
 
 
-def find_side_display():
-    """bounds [x, y, w, h] of a display that is not the main one (main has origin 0,0), from the
-    screens recorded in recent turns. None when no turn has shown a side display yet."""
-    if not os.path.isdir(TURNS_DIRECTORY):
-        return None
-    for name in sorted(os.listdir(TURNS_DIRECTORY), reverse=True)[:30]:
-        turn = FE.read_turn(os.path.join(TURNS_DIRECTORY, name))
-        for screen in (turn or {}).get("screens") or []:
-            bounds = screen.get("boundsCG")
-            if bounds and list(bounds[:2]) != [0, 0]:
-                return bounds
-    return None
-
-
 def test_6_side_display(ctx):
-    """Chrome window on a non-main display. Pass: a point lands on the Submit button, which
-    is on that display."""
-    side = find_side_display()
-    if side is None:
-        raise Skip("no side display seen in turn records (ask Clicky once with the side display attached)")
-    origin = ctx.side_origin or (side[0] + 100, side[1] + 100)
-    harness, _, window, truth = open_chrome_page(ctx, 6, "submit_form.html", origin, SIDE_SIZE)
+    """Chrome window on the test display (the right monitor: the largest origin.x). Pass: a point
+    lands on the Submit button, and the Submit frame's centre is on a non-main screen of the same
+    turn. Skipped when the test display is the main display (single monitor)."""
+    if is_main_screen({"boundsCG": ctx.layout["testDisplay"]["bounds"]}):
+        raise Skip("skipped: the test display is the main display, so there is no side display to test")
+    harness, _, window, truth = open_chrome_page(ctx, 6, "submit_form.html", ctx.side_origin or ctx.window_origin)
     try:
         frame = FE.css_to_cg(truth["items"]["submit"], window)
-        reply, turn = ask(ctx, PROMPTS[6])
+        reply, turn = ask_in_chrome(ctx, harness, 6)
         # The screens come from the scored turn itself, not from an earlier one.
         return score(ctx, 6, reply, turn, lambda t, b: check_side(t.get("tags") or [], frame, t.get("screens") or []))
     finally:
@@ -812,10 +1144,12 @@ def test_6_side_display(ctx):
 def test_7_screenshot(ctx):
     """Window screenshot. Pass: a snap with a path (or a new PNG in the shots folder), PNG
     size matches the window size within 10 %."""
-    harness, state, _, _ = open_chrome_page(ctx, 7, "product_grid.html", MAIN_ORIGIN, MAIN_SIZE)
+    harness, state, _, _ = open_chrome_page(ctx, 7, "product_grid.html")
     try:
         started = time.time()
-        reply, turn = ask(ctx, PROMPTS[7])
+        # The window to snap is this throwaway Chrome, frontmost for the ask only (owner rule 9).
+        reply, turn = ask_in_chrome(ctx, harness, 7)
+        chrome_front = ctx.last_focus.get("frontmost")
         if turn is None:
             return record(7, "no-turn", False, "no turn record: %s" % (reply.get("error") or "no turnDir"))
         window_points = (state["bounds"]["width"], state["bounds"]["height"])
@@ -823,16 +1157,16 @@ def test_7_screenshot(ctx):
         for path in snapshot_paths(turn, started):
             size = png_size(path) if os.path.exists(path) else None
             if size and screenshot_matches_window(size, window_points, dpr):
-                return record(7, "scored", True, "PNG %dx%d matches the window %sx%s pt" % (size[0], size[1], window_points[0], window_points[1]), reply.get("turnDir"), turn, {"png": path})
-        return record(7, "scored", False, "no matching PNG (candidates %d)" % len(snapshot_paths(turn, started)), reply.get("turnDir"), turn)
+                return record(7, "scored", True, "PNG %dx%d matches the window %sx%s pt" % (size[0], size[1], window_points[0], window_points[1]), reply.get("turnDir"), turn, {"png": path, "chromeFrontmost": chrome_front})
+        return record(7, "scored", False, "no matching PNG (candidates %d)" % len(snapshot_paths(turn, started)), reply.get("turnDir"), turn, {"chromeFrontmost": chrome_front})
     finally:
         harness.stop()
 
 
 def test_8_whiteboard(ctx):
     """Whiteboard. Pass: turn.json boardEvents is non-empty and holds at least four nodes."""
-    wait_owner_idle(ctx)
-    reply, turn = ask(ctx, PROMPTS[8])
+    owner_gate(ctx, "test 8")
+    reply, turn = ask(ctx, prompt_for(8, ctx.place))
     return score(ctx, 8, reply, turn, lambda t, b: check_board(t))
 
 
@@ -893,7 +1227,7 @@ def test_9_code_mode(ctx):
     with a worktree, not busy); the worktree diff has def multiply and a test naming multiply; and
     python3 -m unittest passes in that worktree. Nothing is approved or pushed by the harness."""
     base_sha = ensure_scratch_repo()
-    reply, turn = ask(ctx, PROMPTS[9])
+    reply, turn = ask(ctx, prompt_for(9, ctx.place))
     asked_at = time.time()
     finished, preflight_reason, last_snap, last_reason = False, None, {}, "no poll"
     started = False
@@ -955,6 +1289,7 @@ def test_10_barge_in(ctx):
     """Barge-in during speech. Pass: the follow-up answers (Paris) on qwen with clicky-voice.wav and
     no fallback, and the first (cancelled) turn is qwen or was seen speaking with no fallback (see
     check_barge). Records the follow-up's keyUp to firstAudio."""
+    # Speech must play for a barge-in, so this test uses speak:true. It is in SKIPS (silent run).
     wait_owner_idle(ctx)
     long_ask = subprocess.Popen([FE.CLICKYCTL, json.dumps({"cmd": "ask", "text": LONG_QUESTION, "speak": True}),
                                  str(ASK_TIMEOUT_SECONDS)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -1051,7 +1386,8 @@ def write_report(run_directory, records):
             item["test"], item["name"], item["status"], "yes" if item["pass"] else "no", latency,
             item.get("pausedSeconds", 0.0), str(item["reason"]).replace("|", "/")))
     passed = sum(1 for item in records if item["pass"])
-    lines += ["", "Passed %d of %d." % (passed, len(records))]
+    skipped = sum(1 for item in records if item["status"] == "skipped")
+    lines += ["", "Passed %d of %d (%d skipped)." % (passed, len(records), skipped)]
     with open(os.path.join(run_directory, "results.md"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     return passed
@@ -1064,6 +1400,22 @@ def leftover_harness_state():
     return processes, profiles
 
 
+def print_layout(snapshot, layout):
+    display = layout["testDisplay"]
+    safari = layout["safari"]
+    frontmost = layout["frontmost"]
+    print("displays (CoreGraphics bounds, largest origin.x is the test display):")
+    for item in snapshot.get("displays") or []:
+        marker = " <- test display" if item["id"] == display["id"] else ""
+        print("  id %s %s bounds %s%s" % (item["id"], "main" if item.get("main") else "side", item["bounds"], marker))
+    print("test display: id %s; windows at %s size %sx%s; prompts say 'on my %s'" % (
+        display["id"], layout["windowOrigin"], layout["windowSize"][0], layout["windowSize"][1], layout["place"]))
+    print("recorded frontmost app: pid %s bundle %s (%s)" % (frontmost.get("pid"), frontmost.get("bundle") or "?", frontmost.get("name") or "?"))
+    print("Safari: %s; pid %s; %d layer-0 window(s); full-screen bounds %s" % (
+        "running" if safari["pid"] is not None else "NOT running", safari["pid"], safari["windowCount"], safari["fullScreenBounds"] or "none"))
+    print("Chrome tests: %s" % ("allowed" if layout["focusAllowed"] else "skipped (recorded frontmost app is Safari)"))
+
+
 def run_selected(selected, run_name, side_origin):
     run_directory = os.path.join(RUNS_DIRECTORY, run_name)
     os.makedirs(run_directory, exist_ok=True)
@@ -1071,23 +1423,50 @@ def run_selected(selected, run_name, side_origin):
     if not FE.clickyctl({"cmd": "ping"}, 10).get("ok"):
         print("Clicky does not answer ping on the debug inbox; start the debug build first.", file=sys.stderr)
         return 1
+    snapshot = query_snapshot()
+    layout = plan_run(snapshot)
+    if layout["problems"]:
+        print("refusing to start: %s" % "; ".join(layout["problems"]), file=sys.stderr)
+        return 1
+    if side_origin is not None and not point_in_bounds(side_origin, layout["testDisplay"]["bounds"]):
+        print("refusing to start: --side-origin %s is not on the test display" % (side_origin,), file=sys.stderr)
+        return 1
+    print_layout(snapshot, layout)
+    with open(os.path.join(run_directory, "preflight.json"), "w", encoding="utf-8") as handle:
+        json.dump({"snapshot": snapshot, "layout": layout}, handle, indent=2, sort_keys=True)
     server = PageServer(SERVER_PORT)
-    ctx = Context(run_directory, server, side_origin)
+    guard = Guard(snapshot, activate_pid, read_frontmost_pid, query_snapshot,
+                  log_path=os.path.join(run_directory, "guard.jsonl"), settle_seconds=CHROME_SETTLE_SECONDS)
+    ctx = Context(run_directory, server, side_origin, layout, guard)
     records = []
     try:
         for number in selected:
+            label = "test %d" % number
             print("test %d: %s" % (number, TEST_NAMES[number]), flush=True)
             paused_before = ctx.paused_total
             stop_run = False
-            try:
-                item = TESTS[number](ctx)
-            except FE.UsageLimitStop as error:
-                item = record(number, "error", False, "usage limit, run stopped: %s" % error)
-                stop_run = True
-            except (TruthMissing, Skip) as error:
-                item = record(number, "truth-missing" if isinstance(error, TruthMissing) else "skipped", False, str(error))
-            except Exception as error:
-                item = record(number, "error", False, "%s: %s" % (type(error).__name__, str(error)[:200]))
+            reason = skip_reason(number, layout)
+            if reason:
+                item = record(number, "skipped", False, reason)
+            else:
+                try:
+                    guard.before(label)
+                    item = TESTS[number](ctx)
+                except FE.UsageLimitStop as error:
+                    item = record(number, "error", False, "usage limit, run stopped: %s" % error)
+                    stop_run = True
+                except RunStop as error:
+                    item = record(number, "stopped", False, "run stopped: %s" % error)
+                    stop_run = True
+                except (TruthMissing, Skip) as error:
+                    item = record(number, "truth-missing" if isinstance(error, TruthMissing) else "skipped", False, str(error))
+                except Exception as error:
+                    item = record(number, "error", False, "%s: %s" % (type(error).__name__, str(error)[:200]))
+                try:
+                    guard.settle(label)
+                except RunStop as error:
+                    item = record(number, "stopped", False, "focus not restored: %s" % error)
+                    stop_run = True
             item["pausedSeconds"] = round(ctx.paused_total - paused_before, 1)
             records.append(item)
             with open(results_path, "a", encoding="utf-8") as handle:
@@ -1095,12 +1474,21 @@ def run_selected(selected, run_name, side_origin):
             print("  %s %s: %s" % ("PASS" if item["pass"] else item["status"].upper(), item["name"], item["reason"]), flush=True)
             if stop_run:
                 break
+        try:
+            guard.final("end of run")
+        except RunStop as error:
+            print("end-of-run check failed: %s" % error, flush=True)
     finally:
         server.stop()
+        try:
+            guard.settle("interrupted or stopped")
+        except RunStop as error:
+            print("focus could not be restored: %s" % error, file=sys.stderr)
     passed = write_report(run_directory, records)
     processes, profiles = leftover_harness_state()
     print("results: %s" % results_path)
     print("table:   %s" % os.path.join(run_directory, "results.md"))
+    print("guard:   %s" % os.path.join(run_directory, "guard.jsonl"))
     print("passed %d of %d" % (passed, len(records)))
     print("leftover Chrome processes from this harness: %s" % (processes or "none"))
     print("leftover temp profiles: %s" % (", ".join(profiles) or "none"))
@@ -1108,7 +1496,8 @@ def run_selected(selected, run_name, side_origin):
 
 
 # ---------------------------------------------------------------------------
-# Dry run: validates the pages, the scratch-repo fixture and the PNG reader. No app is touched.
+# Dry run: reads only (swift snapshot, owner idle time). No app is touched, no Chrome, no asks,
+# no window moves, no focus change, no files written.
 
 def check_page_files(problems):
     for name in PAGE_FILES:
@@ -1186,24 +1575,53 @@ def check_png_reader(problems):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def dry_run(selected):
+def check_prompts(problems):
+    for number in TESTS:
+        if number not in PROMPT_TEMPLATES or not PROMPT_TEMPLATES[number].strip():
+            problems.append("test %d: no prompt" % number)
+    for number, title in WINDOW_TITLES.items():
+        prompt = prompt_for(number, "right monitor")
+        if "right monitor" not in prompt or title not in prompt or "{" in prompt:
+            problems.append("test %d: prompt does not name the place: %r" % (number, prompt))
+
+
+def dry_run(selected, side_origin=None):
     problems, notes = [], []
     check_page_files(problems)
     check_javascript(problems, notes)
     check_scratch_fixture(problems)
     check_png_reader(problems)
     check_wallpaper_finders(problems)
+    check_prompts(problems)
     for number in selected:
         page = PAGE_OF[number]
         if page and not os.path.isfile(os.path.join(PAGE_DIRECTORY, page)):
             problems.append("test %d: page %s missing" % (number, page))
-        if number not in PROMPTS or not PROMPTS[number].strip():
-            problems.append("test %d: no prompt" % number)
         if not callable(TESTS.get(number)):
             problems.append("test %d: no runner" % number)
-    print("dry run (no app touched, no Chrome, no asks)")
+    snapshot, layout = None, None
+    print("dry run (reads only: swift snapshot and owner idle time; no app, Chrome, ask, window, focus change or file written)")
+    try:
+        snapshot = query_snapshot()
+        layout = plan_run(snapshot)
+        print_layout(snapshot, layout)
+        if side_origin is not None and not point_in_bounds(side_origin, layout["testDisplay"]["bounds"]):
+            problems.append("--side-origin %s is not on the test display" % (side_origin,))
+        for problem in layout["problems"]:
+            notes.append("a live run would refuse to start: " + problem)
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
+        problems.append("display, Safari or frontmost snapshot: %s" % error)
+    idle = FE.owner_idle_seconds()
+    print("owner HID idle: %s" % ("unknown" if idle is None else "%.1f s" % idle))
+    place = layout["place"] if layout else "right monitor"
+    print("tests:")
     for number in selected:
-        print("  %2d  %-48s page=%-22s prompt=%r" % (number, TEST_NAMES[number], PAGE_OF[number] or "-", PROMPTS[number][:60]))
+        reason = skip_reason(number, layout or {})
+        if reason:
+            print("  %2d  %-48s %s" % (number, TEST_NAMES[number], reason))
+            continue
+        print("  %2d  %-48s page=%-22s prompt=%r" % (number, TEST_NAMES[number], PAGE_OF[number] or "-",
+                                                    prompt_for(number, place)[:90]))
     for note in notes:
         print("  note: " + note)
     if problems:
@@ -1211,7 +1629,7 @@ def dry_run(selected):
         for problem in problems:
             print("  - " + problem)
         return 1
-    print("OK: %d tests, pages, scratch fixture and PNG reader valid" % len(selected))
+    print("OK: %d tests, pages, scratch fixture, PNG reader, prompts and the test display valid" % len(selected))
     return 0
 
 
@@ -1242,7 +1660,7 @@ def main(argv):
     args = parser.parse_args(argv)
     selected = args.only or sorted(TESTS)
     if args.dry_run:
-        return dry_run(selected)
+        return dry_run(selected, args.side_origin)
     run_name = args.run or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     return run_selected(selected, run_name, args.side_origin)
 

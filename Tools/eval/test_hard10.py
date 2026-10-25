@@ -476,5 +476,364 @@ class ChromeFrontTests(unittest.TestCase):
 
 
 
+# ---------------------------------------------------------------------------
+# Owner rules: test display, Safari baseline, focus restore, prompts and skips.
+
+CLAUDE_PID = 1111
+SAFARI_PID = 29970
+CHROME_PID = 4242
+OWNER_DISPLAYS = [
+    {"id": 1, "main": True, "bounds": [0, 0, 3440, 1440]},
+    {"id": 4, "main": False, "bounds": [-1920, 155, 1920, 1080]},
+    {"id": 5, "main": False, "bounds": [3440, 198, 1920, 1080]},
+]
+
+
+def fake_snapshot(frontmost_pid=SAFARI_PID, bundle="com.apple.Safari", safari_pid=SAFARI_PID,
+                  safari_bounds=None, layer=0, displays=None):
+    if safari_bounds is None:
+        safari_bounds = [-1920, 155, 1920, 1080]
+    return {"displays": displays if displays is not None else OWNER_DISPLAYS,
+            "frontmost": {"pid": frontmost_pid, "bundle": bundle, "name": "app"},
+            "safari": {"pid": safari_pid, "windows": [{"layer": layer, "onScreen": True, "bounds": safari_bounds}]}}
+
+
+class FakeMac:
+    """Frontmost app plus a log of activations and reads. Activation can be made to fail."""
+
+    def __init__(self, frontmost_pid):
+        self.frontmost = frontmost_pid
+        self.calls = []
+        self.fail_once = {}
+        self.fail_always = set()
+
+    def activate(self, pid):
+        self.calls.append(("activate", pid))
+        if pid in self.fail_always:
+            return False
+        if self.fail_once.get(pid):
+            self.fail_once[pid] -= 1
+            return False
+        self.frontmost = pid
+        return True
+
+    def read(self):
+        self.calls.append(("read", self.frontmost))
+        return self.frontmost
+
+
+def make_guard(mac, current=None, settle_seconds=0.0, baseline=None):
+    baseline = baseline or fake_snapshot(frontmost_pid=CLAUDE_PID, bundle="com.example.Claude")
+    snapshot = {"value": current or baseline}
+    return hard10.Guard(baseline, mac.activate, mac.read, lambda: snapshot["value"],
+                        settle_seconds=settle_seconds, sleep=lambda seconds: mac.calls.append(("sleep", seconds)))
+
+
+class DisplayPickerTests(unittest.TestCase):
+    def test_picks_the_largest_origin_x_whatever_the_order(self):
+        self.assertEqual(hard10.pick_test_display(OWNER_DISPLAYS)["id"], 5)
+        self.assertEqual(hard10.pick_test_display(list(reversed(OWNER_DISPLAYS)))["id"], 5)
+
+    def test_single_display_is_the_test_display(self):
+        self.assertEqual(hard10.pick_test_display([OWNER_DISPLAYS[0]])["id"], 1)
+
+    def test_two_displays_at_the_same_x_are_ambiguous(self):
+        tied = [{"id": 2, "bounds": [3440, 0, 1920, 1080]}, {"id": 3, "bounds": [3440, 1080, 1920, 1080]}]
+        with self.assertRaises(ValueError):
+            hard10.pick_test_display(tied)
+
+    def test_no_displays_raises(self):
+        with self.assertRaises(ValueError):
+            hard10.pick_test_display([])
+
+    def test_window_goes_at_inset_and_at_most_1280_by_860(self):
+        origin, size = hard10.window_placement([3440, 198, 1920, 1080])
+        self.assertEqual(origin, (3480, 238))
+        self.assertEqual(size, (1280, 860))
+        self.assertLessEqual(origin[0] + size[0], 3440 + 1920)
+        self.assertLessEqual(origin[1] + size[1], 198 + 1080)
+
+    def test_small_display_clamps_the_window(self):
+        origin, size = hard10.window_placement([0, 0, 1366, 768])
+        self.assertEqual(origin, (40, 40))
+        self.assertEqual(size, (1280, 688))
+
+    def test_display_too_small_for_a_window_raises(self):
+        with self.assertRaises(ValueError):
+            hard10.window_placement([0, 0, 300, 300])
+
+    def test_prompts_say_right_monitor_only_with_several_displays(self):
+        self.assertEqual(hard10.place_phrase(OWNER_DISPLAYS), "right monitor")
+        self.assertEqual(hard10.place_phrase([OWNER_DISPLAYS[0]]), "main monitor")
+
+    def test_snapshot_parser_skips_swift_warnings(self):
+        text = "warning: something\n{\"displays\": [], \"frontmost\": {}, \"safari\": {}}\n"
+        self.assertEqual(hard10.parse_snapshot(text)["displays"], [])
+        with self.assertRaises(ValueError):
+            hard10.parse_snapshot("no json here")
+
+    def test_rect_lists_compare_sorted_within_tolerance(self):
+        self.assertTrue(hard10.rect_lists_close([[1, 2, 3, 4], [5, 6, 7, 8]], [[5.5, 6, 7, 8], [1, 2, 3, 4.5]]))
+        self.assertFalse(hard10.rect_lists_close([[1, 2, 3, 4]], [[1, 2, 3, 9]]))
+        self.assertFalse(hard10.rect_lists_close([[1, 2, 3, 4]], []))
+
+
+class SafariTests(unittest.TestCase):
+    def test_full_screen_window_on_the_left_display_is_recorded(self):
+        state = hard10.safari_state(fake_snapshot())
+        self.assertEqual(state["pid"], SAFARI_PID)
+        self.assertEqual(state["fullScreenBounds"], [[-1920, 155, 1920, 1080]])
+
+    def test_window_not_matching_a_display_is_not_full_screen(self):
+        state = hard10.safari_state(fake_snapshot(safari_bounds=[100, 100, 800, 600]))
+        self.assertEqual(state["fullScreenBounds"], [])
+        self.assertEqual(state["windowCount"], 1)
+
+    def test_non_normal_layers_are_ignored(self):
+        state = hard10.safari_state(fake_snapshot(layer=25))
+        self.assertEqual(state["fullScreenBounds"], [])
+        self.assertEqual(state["windowCount"], 0)
+
+    def test_off_screen_windows_are_ignored(self):
+        snapshot = fake_snapshot()
+        snapshot["safari"]["windows"].append({"layer": 0, "onScreen": False, "bounds": [3440, 198, 1920, 1080]})
+        self.assertEqual(hard10.safari_state(snapshot)["fullScreenBounds"], [[-1920, 155, 1920, 1080]])
+
+    def test_no_safari_means_no_pid(self):
+        snapshot = fake_snapshot()
+        snapshot["safari"] = {}
+        self.assertIsNone(hard10.safari_state(snapshot)["pid"])
+
+    def test_same_pid_and_bounds_match(self):
+        before = hard10.safari_state(fake_snapshot())
+        ok, reason = hard10.safari_matches(before, hard10.safari_state(fake_snapshot()))
+        self.assertTrue(ok, reason)
+
+    def test_one_point_of_jitter_still_matches(self):
+        before = hard10.safari_state(fake_snapshot())
+        ok, _ = hard10.safari_matches(before, hard10.safari_state(fake_snapshot(safari_bounds=[-1919, 155, 1920, 1080])))
+        self.assertTrue(ok)
+
+    def test_pid_change_fails(self):
+        before = hard10.safari_state(fake_snapshot())
+        ok, reason = hard10.safari_matches(before, hard10.safari_state(fake_snapshot(safari_pid=7)))
+        self.assertFalse(ok)
+        self.assertIn("pid", reason)
+
+    def test_moved_full_screen_window_fails(self):
+        before = hard10.safari_state(fake_snapshot())
+        ok, reason = hard10.safari_matches(before, hard10.safari_state(fake_snapshot(safari_bounds=[0, 0, 1000, 800])))
+        self.assertFalse(ok)
+        self.assertIn("full-screen", reason)
+
+    def test_leaving_full_screen_fails(self):
+        before = hard10.safari_state(fake_snapshot())
+        ok, _ = hard10.safari_matches(before, hard10.safari_state(fake_snapshot(safari_bounds=[100, 100, 800, 600])))
+        self.assertFalse(ok)
+
+    def test_not_running_at_start_fails(self):
+        snapshot = fake_snapshot()
+        snapshot["safari"] = {}
+        ok, reason = hard10.safari_matches(hard10.safari_state(snapshot), hard10.safari_state(fake_snapshot()))
+        self.assertFalse(ok)
+        self.assertIn("not running", reason)
+
+
+class PlanRunTests(unittest.TestCase):
+    def test_plan_with_safari_frontmost_puts_tests_on_right_display_and_skips_chrome_tests(self):
+        plan = hard10.plan_run(fake_snapshot())
+        self.assertEqual(plan["testDisplay"]["id"], 5)
+        self.assertEqual(plan["windowOrigin"], (3480, 238))
+        self.assertEqual(plan["place"], "right monitor")
+        self.assertFalse(plan["focusAllowed"])
+        self.assertEqual(plan["problems"], [])
+
+    def test_plan_with_another_app_frontmost_allows_focus(self):
+        plan = hard10.plan_run(fake_snapshot(frontmost_pid=CLAUDE_PID, bundle="com.example.Claude"))
+        self.assertTrue(plan["focusAllowed"])
+
+    def test_plan_flags_missing_safari_and_missing_frontmost(self):
+        plan = hard10.plan_run(fake_snapshot(safari_pid=None, frontmost_pid=None, bundle=""))
+        self.assertTrue(any("Safari" in problem for problem in plan["problems"]))
+        self.assertTrue(any("frontmost" in problem for problem in plan["problems"]))
+
+
+class FocusGuardTests(unittest.TestCase):
+    def test_no_target_changes_no_focus(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac)
+        result, front = guard.focus(None, lambda front: ("done", front), "ask")
+        self.assertEqual(result, ("done", False))
+        self.assertFalse(front)
+        self.assertEqual(mac.calls, [])
+
+    def test_target_front_during_body_then_recorded_app_restored_in_order(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac)
+        seen = []
+        result, front = guard.focus(CHROME_PID, lambda front: seen.append(mac.frontmost) or "ok", "ask")
+        self.assertEqual(result, "ok")
+        self.assertTrue(front)
+        self.assertEqual(seen, [CHROME_PID])
+        self.assertEqual(mac.calls, [("activate", CHROME_PID), ("read", CHROME_PID),
+                                     ("activate", CLAUDE_PID), ("read", CLAUDE_PID)])
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+        self.assertFalse(guard.touched)
+
+    def test_settle_seconds_are_slept_between_activation_and_read(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac, settle_seconds=1.5)
+        guard.focus(CHROME_PID, lambda front: None, "ask")
+        self.assertEqual(mac.calls[:3], [("activate", CHROME_PID), ("sleep", 1.5), ("read", CHROME_PID)])
+
+    def test_restore_still_happens_when_body_raises(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac)
+
+        def body(front):
+            raise RuntimeError("clickyctl timed out")
+
+        with self.assertRaises(RuntimeError):
+            guard.focus(CHROME_PID, body, "ask")
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+        self.assertFalse(guard.touched)
+
+    def test_restore_retries_once_when_the_first_activation_does_not_stick(self):
+        mac = FakeMac(CLAUDE_PID)
+        mac.fail_once = {CLAUDE_PID: 1}
+        guard = make_guard(mac)
+        guard.focus(CHROME_PID, lambda front: None, "ask")
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+        self.assertEqual(sum(1 for call in mac.calls if call == ("activate", CLAUDE_PID)), 2)
+        self.assertTrue(any(event["event"] == "restore-miss" for event in guard.events))
+
+    def test_restore_that_never_works_stops_the_run(self):
+        mac = FakeMac(CLAUDE_PID)
+        mac.fail_always = {CLAUDE_PID}
+        guard = make_guard(mac)
+        with self.assertRaises(hard10.FocusLost) as caught:
+            guard.focus(CHROME_PID, lambda front: None, "ask")
+        self.assertIsInstance(caught.exception, hard10.RunStop)
+        self.assertTrue(guard.touched)
+
+    def test_target_that_does_not_come_front_is_reported_and_restored(self):
+        mac = FakeMac(CLAUDE_PID)
+        mac.fail_always = {CHROME_PID}
+        guard = make_guard(mac)
+        seen = []
+        _, front = guard.focus(CHROME_PID, lambda front: seen.append(front), "ask")
+        self.assertFalse(front)
+        self.assertEqual(seen, [False])
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+
+    def test_before_undoes_a_focus_change_this_harness_made(self):
+        mac = FakeMac(CHROME_PID)
+        guard = make_guard(mac)
+        guard.note_touch()
+        guard.before("test 2")
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+        self.assertFalse(guard.touched)
+
+    def test_before_stops_when_the_owner_moved_focus(self):
+        mac = FakeMac(555)
+        guard = make_guard(mac)
+        with self.assertRaises(hard10.RunStop) as caught:
+            guard.before("test 3")
+        self.assertIn("owner", str(caught.exception))
+        self.assertEqual(mac.calls, [("read", 555)])
+        self.assertEqual(mac.frontmost, 555)
+
+    def test_before_stops_when_safari_changed(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac, current=fake_snapshot(safari_pid=7))
+        with self.assertRaises(hard10.RunStop) as caught:
+            guard.before("test 1")
+        self.assertIn("pid", str(caught.exception))
+
+    def test_safari_leaving_full_screen_stops_after_an_ask(self):
+        mac = FakeMac(CLAUDE_PID)
+        guard = make_guard(mac, current=fake_snapshot(safari_bounds=[100, 100, 800, 600]))
+        with self.assertRaises(hard10.RunStop):
+            guard.check_safari("after ask")
+
+    def test_settle_only_restores_when_touched(self):
+        mac = FakeMac(CHROME_PID)
+        guard = make_guard(mac)
+        guard.settle("test 9")
+        self.assertEqual(mac.calls, [])
+        guard.note_touch()
+        guard.settle("test 6")
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+
+    def test_final_restores_and_logs_the_end_state(self):
+        mac = FakeMac(CHROME_PID)
+        guard = make_guard(mac)
+        guard.note_touch()
+        guard.final("end of run")
+        final = [event for event in guard.events if event["event"] == "final"][-1]
+        self.assertTrue(final["frontmostOk"])
+        self.assertEqual(mac.frontmost, CLAUDE_PID)
+
+
+class PromptAndSkipTests(unittest.TestCase):
+    def test_window_prompts_name_the_right_monitor_and_the_window(self):
+        for number, title in hard10.WINDOW_TITLES.items():
+            prompt = hard10.prompt_for(number, "right monitor")
+            self.assertIn("on my right monitor, in the %s window," % title, prompt)
+            self.assertNotIn("{", prompt)
+
+    def test_screenshot_prompt_no_longer_says_this_window(self):
+        self.assertNotIn("this window", hard10.prompt_for(7, "right monitor"))
+
+    def test_truth_words_are_kept_in_the_adapted_prompts(self):
+        self.assertIn("Alpha, Delta, Kilo and Papa", hard10.prompt_for(1, "right monitor"))
+        self.assertIn("red products", hard10.prompt_for(2, "right monitor"))
+        self.assertIn("Share button", hard10.prompt_for(3, "right monitor"))
+        self.assertIn("'Quarterly'", hard10.prompt_for(5, "right monitor"))
+        self.assertIn("Submit button", hard10.prompt_for(6, "right monitor"))
+
+    def test_code_and_question_prompts_are_unchanged(self):
+        self.assertEqual(hard10.prompt_for(9, "right monitor"), hard10.CODE_PROMPT)
+        self.assertEqual(hard10.prompt_for(10, "right monitor"), hard10.LONG_QUESTION)
+
+    def test_asks_never_speak(self):
+        self.assertIs(hard10.ASK_SPEAK, False)
+
+    def test_skips_are_system_settings_whiteboard_and_barge_in(self):
+        self.assertEqual(set(hard10.SKIPS), {4, 8, 10})
+        self.assertTrue(hard10.SKIPS[4].startswith("skipped: can't place on the test display"))
+        self.assertTrue(hard10.SKIPS[8].startswith("skipped: can't place on the test display"))
+        self.assertTrue(hard10.SKIPS[10].startswith("skipped: silent run"))
+
+    def test_chrome_tests_are_skipped_while_safari_is_frontmost(self):
+        layout = hard10.plan_run(fake_snapshot())
+        for number in hard10.FOCUS_TESTS:
+            self.assertIn("Safari", hard10.skip_reason(number, layout))
+        self.assertIsNone(hard10.skip_reason(9, layout))
+        self.assertEqual(hard10.skip_reason(4, layout), hard10.SKIPS[4])
+
+    def test_chrome_tests_run_when_another_app_is_frontmost(self):
+        layout = hard10.plan_run(fake_snapshot(frontmost_pid=CLAUDE_PID, bundle="com.example.Claude"))
+        for number in hard10.FOCUS_TESTS:
+            self.assertIsNone(hard10.skip_reason(number, layout))
+
+    def test_focus_tests_are_the_chrome_tests(self):
+        self.assertEqual(hard10.FOCUS_TESTS, {1, 2, 3, 5, 6, 7})
+
+    def test_harness_never_opens_or_activates_safari(self):
+        with open(hard10.__file__, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn('open_app("Safari"', source)
+        self.assertNotIn("open -a Safari", source)
+        self.assertNotIn('tell application "Safari"', source)
+
+    def test_frontmost_read_script_only_reads(self):
+        script = hard10.frontmost_pid_script()
+        self.assertIn("unix id", script)
+        self.assertIn("frontmost is true", script)
+        for forbidden in ("set frontmost", "click", "keystroke", "key code", "position", "bounds", "activate"):
+            self.assertNotIn(forbidden, script)
+
+
 if __name__ == "__main__":
     unittest.main()
