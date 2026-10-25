@@ -676,25 +676,53 @@ struct AXGroundingLiveLookup: GroundingLiveLookup {
     }
 
     func textRanges(of query: String, in element: GroundingElement) -> [(frameCG: CGRect, isFuzzy: Bool)] {
+        guard let axNode = element.axNode, let fullText = searchableText(of: element) else { return [] }
+        return textHits(of: query, in: fullText, axNode: axNode, element: element).map { ($0.frameCG, $0.isFuzzy) }
+    }
+
+    /// The hits classified against the live string they were found in, so
+    /// "submit" inside "127.0.0.1:8793/submit_form.html" ranks as a hit
+    /// inside a longer token, below a real "Submit" label.
+    func textMatches(of query: String, in element: GroundingElement) -> [TextRangeMatch] {
+        guard let axNode = element.axNode, let fullText = searchableText(of: element) else { return [] }
+        let occurrences = TextMatchClassifier.occurrences(of: query, in: fullText)
+        let worstQuality = occurrences.map(\.quality).max() ?? .token
+        return textHits(of: query, in: fullText, axNode: axNode, element: element).map { hit in
+            let occurrence = hit.occurrenceIndex < occurrences.count ? occurrences[hit.occurrenceIndex] : nil
+            return TextRangeMatch(frameCG: hit.frameCG, isFuzzy: hit.isFuzzy, quality: occurrence?.quality ?? worstQuality,
+                                  isCaseExact: occurrence?.isCaseExact ?? false)
+        }
+    }
+
+    private func searchableText(of element: GroundingElement) -> String? {
         guard let axNode = element.axNode, [.text, .textArea, .textField, .cell].contains(element.role),
-              let fullText = ax.stringAttribute(kAXValueAttribute, of: axNode) ?? element.label, !fullText.isEmpty else { return [] }
-        var results: [(CGRect, Bool)] = []
+              let fullText = ax.stringAttribute(kAXValueAttribute, of: axNode) ?? element.label, !fullText.isEmpty else { return nil }
+        return fullText
+    }
+
+    /// Hits in order; `occurrenceIndex` is the hit's position among the
+    /// exact occurrences (left to right), 0 for the fuzzy one.
+    private func textHits(of query: String, in fullText: String, axNode: AXNodeReference,
+                          element: GroundingElement) -> [(frameCG: CGRect, isFuzzy: Bool, occurrenceIndex: Int)] {
+        var results: [(frameCG: CGRect, isFuzzy: Bool, occurrenceIndex: Int)] = []
         // Exact (case-insensitive) on the real string, so UTF-16 ranges are right.
         var searchRange = fullText.startIndex..<fullText.endIndex
+        var occurrenceIndex = 0
         while results.count < 20, let foundRange = fullText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
             let utf16Range = NSRange(foundRange, in: fullText)
             if let bounds = ax.boundsForRange(utf16Range, of: axNode) {
-                results.append((bounds, false))
+                results.append((bounds, false, occurrenceIndex))
             } else if LabelSimilarity.similarity(fullText, query) >= 0.99 {
-                results.append((element.visibleFrameCG, false))
+                results.append((element.visibleFrameCG, false, occurrenceIndex))
             }
+            occurrenceIndex += 1
             searchRange = foundRange.upperBound..<fullText.endIndex
         }
         if results.isEmpty, let fuzzyMatch = LabelSimilarity.findOccurrences(of: query, in: fullText).first(where: \.isFuzzy),
            LabelSimilarity.normalize(fullText).count == fullText.count {
             let utf16Range = NSRange(location: fuzzyMatch.range.lowerBound, length: fuzzyMatch.range.count)
             if let bounds = ax.boundsForRange(utf16Range, of: axNode) {
-                results.append((bounds, true))
+                results.append((bounds, true, 0))
             }
         }
         return results
