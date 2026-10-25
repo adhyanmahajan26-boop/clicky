@@ -139,12 +139,13 @@ final class MarkTracker: @unchecked Sendable {
         return nil
     }
 
-    /// Topmost layer-0 window at a CG point that isn't Clicky's.
+    /// Topmost app window (layers 0–19, like WindowInfo.isApplicationWindowLayer)
+    /// at a CG point that isn't Clicky's.
     static func topmostWindow(at pointCG: CGPoint) -> (id: CGWindowID, frame: CGRect)? {
         guard let windowInfos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
         let ownProcessIdentifier = getpid()
         for windowInfo in windowInfos {
-            guard (windowInfo[kCGWindowLayer as String] as? Int) == 0,
+            guard let layer = windowInfo[kCGWindowLayer as String] as? Int, (0..<20).contains(layer),
                   (windowInfo[kCGWindowOwnerPID as String] as? pid_t) != ownProcessIdentifier,
                   let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary), bounds.contains(pointCG),
@@ -226,12 +227,14 @@ final class MarkTracker: @unchecked Sendable {
             let fraction = TrackerLogic.visibleFraction(currentRect, clip: clipFrame, window: windowFrame)
             let isShown = TrackerLogic.isShown(visibleFraction: fraction)
             if hasMoved || isShown != trackedMark.isShown {
+                // A visibility change is named even when the element also moved.
+                let eventName = isShown != trackedMark.isShown ? (isShown ? "show" : "hide") : "move"
                 trackedMark.lastRect = currentRect
                 trackedMark.isShown = isShown
                 trackedMarks[markID] = trackedMark
                 let callback = onUpdate
                 DispatchQueue.main.async { callback?(markID, currentRect, isShown) }
-                log(["event": hasMoved ? "move" : (isShown ? "show" : "hide"), "id": markID.uuidString,
+                log(["event": eventName, "id": markID.uuidString,
                      "rectCG": [currentRect.minX, currentRect.minY, currentRect.width, currentRect.height],
                      "visible": (Double(fraction) * 100).rounded() / 100, "alpha": isShown ? 1 : 0])
             }

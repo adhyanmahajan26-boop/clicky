@@ -100,27 +100,36 @@ def rect_offset(first, second):
 
 
 def check_scroll_tracking(display_index):
+    """The mark must move with its row: its displacement equals the row's
+    (the mark sits on the row's text, so absolute centres differ)."""
     process, ground_truth = start_fixture(display_index, ["--scroll-after", "3", "--scroll-duration", "1.5"])
     if not process:
         return {"ok": False, "error": "fixture not ready"}
     try:
+        row_12_before = frame_of(ground_truth, "row_12")
         row_1_before = frame_of(ground_truth, "row_1")
         reply = clickyctl({"cmd": "marks", "tags": '[MARK:circle:"Row 12":Row 12] [MARK:circle:"Row 1":Row 1]'}, 30)
         turn_directory = reply.get("turnDir")
+        boxes = [tag.get("box") for tag in (reply.get("result") or [])]
         after = wait_for_key("scrollEndedAt", 10)
         time.sleep(0.5)
-        if not after or not turn_directory:
-            return {"ok": False, "error": "no scrollEndedAt or turn", "reply": reply}
+        if not after or not turn_directory or len(boxes) < 2 or not boxes[0]:
+            return {"ok": False, "error": "no scrollEndedAt, turn or boxes", "reply": str(reply)[:200]}
         scroll_ended_ms = after["scrollEndedAt"]
-        row_12_truth = frame_of(after, "row_12")
+        row_12_after = frame_of(after, "row_12")
+        truth_shift = row_12_after[1] - row_12_before[1]
         events = read_mark_events(turn_directory)
         moves = [e for e in events if e.get("event") == "move" and e["t"] <= scroll_ended_ms + 200]
-        # The Row 12 mark: the latest move whose rect is nearest the new truth.
-        best_offset = min((rect_offset(e["rectCG"], row_12_truth) for e in moves), default=float("inf"))
-        hides = [e for e in events if e.get("event") in ("hide", "remove") and e["t"] <= scroll_ended_ms + 200
-                 and row_1_before and rect_offset(e.get("rectCG", row_1_before), row_1_before) < 200]
-        return {"ok": best_offset <= 2 and bool(hides), "row12OffsetPt": round(best_offset, 2), "row1Hidden": bool(hides),
-                "events": len(events)}
+        # Row 12's mark: the moves that started near its box.
+        row_12_moves = [e for e in moves if abs(e["rectCG"][0] - boxes[0][0]) < 2 and abs(e["rectCG"][1] - boxes[0][1]) < abs(truth_shift) + 40]
+        if not row_12_moves:
+            return {"ok": False, "error": "no move events for Row 12", "events": len(events)}
+        mark_shift = row_12_moves[-1]["rectCG"][1] - boxes[0][1]
+        shift_error = abs(mark_shift - truth_shift)
+        last_move_lag = row_12_moves[-1]["t"] - scroll_ended_ms
+        hides = [e for e in events if e.get("event") in ("hide", "remove") and e["t"] <= scroll_ended_ms + 200]
+        return {"ok": shift_error <= 2 and bool(hides), "row12ShiftErrorPt": round(shift_error, 2), "truthShiftPt": truth_shift,
+                "lastMoveVsScrollEndMs": last_move_lag, "row1Hidden": bool(hides), "events": len(events)}
     finally:
         stop_fixture(process)
 
