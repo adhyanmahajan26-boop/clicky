@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Board</title>
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: #fbfbfd; }
+canvas { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body data-page="canvas_quarterly">
+<canvas id="board" aria-label="Board"></canvas>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  // Text is drawn into the canvas only: no DOM text, no accessibility children.
+  // Truth is the ink box of the bold word "Quarterly"; the other words are decoys.
+  try {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = document.getElementById("board");
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const context = canvas.getContext("2d");
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = "#fbfbfd";
+    context.fillRect(0, 0, width, height);
+
+    const WORDS = ["Revenue", "Quarterly", "Yearly", "Forecast", "Monthly", "Quarter",
+                   "Margin", "Quarterlies", "Churn", "Headcount", "Runway", "Burn"];
+    const columns = 4;
+    const cellWidth = Math.floor(width / columns);
+    const rows = Math.ceil(WORDS.length / columns);
+    const cellHeight = Math.floor((height - 120) / rows);
+    let seed = 7;
+    function random() {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    }
+    const items = {};
+    WORDS.forEach(function (word, index) {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const bold = word === "Quarterly";
+      context.font = (bold ? "700 " : "400 ") + "28px Helvetica, Arial, sans-serif";
+      context.fillStyle = bold ? "#1d1d1f" : "#8a8f98";
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+      const metrics = context.measureText(word);
+      const slackX = Math.max(0, cellWidth - 60 - metrics.actualBoundingBoxRight - metrics.actualBoundingBoxLeft);
+      const slackY = Math.max(0, cellHeight - 60 - metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent);
+      const x = 30 + column * cellWidth + metrics.actualBoundingBoxLeft + random() * slackX;
+      const baseline = 110 + row * cellHeight + metrics.actualBoundingBoxAscent + random() * slackY;
+      context.fillText(word, x, baseline);
+      if (bold) {
+        const left = x - metrics.actualBoundingBoxLeft;
+        const top = baseline - metrics.actualBoundingBoxAscent;
+        items.quarterly = [
+          Math.round(left * 100) / 100,
+          Math.round(top * 100) / 100,
+          Math.round((metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight) * 100) / 100,
+          Math.round((metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) * 100) / 100
+        ];
+      }
+    });
+    if (!items.quarterly) throw new Error("Quarterly was not drawn");
+    Hard10.publish("canvas_quarterly", items);
+  } catch (error) {
+    Hard10.fail(error);
+  }
+})();
+</script>
+</body>
+</html>

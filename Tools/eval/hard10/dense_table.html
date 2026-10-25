@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch tracker</title>
+<style>
+html, body { margin: 0; background: #ffffff; color: #37352f; font: 14px -apple-system, "Helvetica Neue", Arial, sans-serif; }
+main { box-sizing: border-box; padding: 28px 40px; }
+h1 { margin: 0 0 16px; font-size: 28px; font-weight: 700; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th { padding: 6px 10px; border-bottom: 1px solid #e9e9e7; color: #787774; font-size: 12px; font-weight: 500; text-align: left; }
+td { height: 30px; padding: 0 10px; border-bottom: 1px solid #f1f1ef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body data-page="dense_table">
+<main>
+  <h1>Launch tracker</h1>
+  <table>
+    <colgroup>
+      <col style="width: 20%"><col style="width: 14%"><col style="width: 12%"><col style="width: 12%"><col>
+    </colgroup>
+    <thead><tr><th>Name</th><th>Status</th><th>Owner</th><th>Due</th><th>Notes</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  try {
+    const NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+                   "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo"];
+    const STATUSES = ["Open", "In review", "Blocked", "Done", "Open", "In review"];
+    const OWNERS = ["Priya", "Sam", "Lee", "Marta", "Joon"];
+    const NOTES = [
+      "Due date already passed", "Owner missing", "Duplicate of Kilo", "Needs legal sign-off",
+      "Links to a deleted page", "Estimate is blank", "Status contradicts notes", "Wrong project tag",
+      "Missing design review", "Dependency not listed", "Duplicate of Foxtrot", "Priority not set",
+      "Owner left the company", "Missing launch date", "Blocked with no blocker named", "Spec link is 404",
+      "Due before start date", "Owner and reviewer are the same"
+    ];
+    const body = document.getElementById("rows");
+    const items = {};
+    NAMES.forEach(function (name, index) {
+      const row = document.createElement("tr");
+      const cells = [
+        name,
+        STATUSES[index % STATUSES.length],
+        OWNERS[index % OWNERS.length],
+        "2026-10-" + String(3 + index).padStart(2, "0"),
+        NOTES[index]
+      ];
+      cells.forEach(function (text) {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+      items["row_" + name.toLowerCase()] = Hard10.rectOf(row);
+    });
+    Hard10.publish("dense_table", items);
+  } catch (error) {
+    Hard10.fail(error);
+  }
+})();
+</script>
+</body>
+</html>
