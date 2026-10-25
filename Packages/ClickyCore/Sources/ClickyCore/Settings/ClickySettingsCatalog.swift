@@ -147,6 +147,13 @@ public enum ClickySettingsCatalog {
                             explanation: "Let Clicky do things on screen when asked: open apps and links, search, click, type, highlight, summarize (with safety tiers)."),
         ClickySettingsEntry(key: ClickySettings.Keys.actionsCountdownSeconds, kind: .number(defaultValue: 1.5, range: 0.5...5, step: 0.5),
                             explanation: "Seconds Clicky shows a typing or click step before doing it (any key, mouse move or \"stop\" cancels)."),
+        // Article highlights and notes (P8).
+        ClickySettingsEntry(key: ClickySettings.Keys.articleScrollOCRFallback, kind: .toggle(defaultValue: true),
+                            explanation: "When a page has no readable text, let Clicky scroll the article and read it from screenshots (it scrolls back; never clicks or types)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.articleSavesPDF, kind: .toggle(defaultValue: true),
+                            explanation: "\"Save my notes\" also writes a PDF next to the Markdown file in ~/Clicky Notes."),
+        ClickySettingsEntry(key: ClickySettings.Keys.articleMaximumCharacters, kind: .integer(defaultValue: 30_000, range: 5_000...60_000, step: 5_000),
+                            explanation: "The most characters of an article Clicky reads and sends to Claude for highlights and notes."),
 
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),

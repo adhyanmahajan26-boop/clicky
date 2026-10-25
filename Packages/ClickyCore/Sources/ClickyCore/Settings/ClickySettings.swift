@@ -64,6 +64,12 @@ public enum ClickySettings {
         public static let actionsEnabled = "v2.actions.enabled"
         /// Double, default 1.5 (0.5–5): the on-screen countdown before typing or an ordinary click.
         public static let actionsCountdownSeconds = "v2.actions.countdownSeconds"
+        /// Bool, default true: P8 read_article may scroll the article and OCR it when the web area has no text.
+        public static let articleScrollOCRFallback = "v2.article.scrollOCRFallback"
+        /// Bool, default true: "save my notes" also writes a PDF next to the Markdown file.
+        public static let articleSavesPDF = "v2.article.savesPDF"
+        /// Int, default 30000 (5000–60000): the most article characters read_article sends to Claude.
+        public static let articleMaximumCharacters = "v2.article.maximumCharacters"
         /// [String] bundle ids Clicky never types into (default: password managers, Keychain Access).
         public static let typeForMeBlockedBundleIDs = "v2.typeForMe.blockedBundleIDs"
         /// String "low"/"medium"/"high": forces --effort for every answer (evals).
@@ -184,6 +190,12 @@ public enum ClickySettings {
     public static var isCodeEnabled: Bool { defaults.object(forKey: Keys.codeEnabled) as? Bool ?? false }
     public static var isTypeForMeEnabled: Bool { defaults.object(forKey: Keys.typeForMeEnabled) as? Bool ?? false }
     public static var isActionsEnabled: Bool { defaults.object(forKey: Keys.actionsEnabled) as? Bool ?? true }
+    public static var articleScrollOCRFallback: Bool { defaults.object(forKey: Keys.articleScrollOCRFallback) as? Bool ?? true }
+    public static var articleSavesPDF: Bool { defaults.object(forKey: Keys.articleSavesPDF) as? Bool ?? true }
+    /// Clamped to 5000…60000.
+    public static var articleMaximumCharacters: Int {
+        min(60_000, max(5_000, defaults.object(forKey: Keys.articleMaximumCharacters) as? Int ?? ArticleTextAssembler.maximumCharacters))
+    }
     /// Clamped to 0.5…5 s.
     public static var actionsCountdownSeconds: Double {
         min(5, max(0.5, defaults.object(forKey: Keys.actionsCountdownSeconds) as? Double ?? 1.5))

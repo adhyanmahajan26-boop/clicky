@@ -266,6 +266,8 @@ final class CompanionManager: ObservableObject {
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
+    /// P8: the last article read, its highlights, the notes panel and "save my notes".
+    private(set) lazy var articleController = ArticleHighlightController(companionManager: self)
     /// The board panel is open: the caption bubble stays hidden (the board has its subtitle bar).
     @Published private(set) var isWhiteboardPanelOpen = false
 
@@ -1118,6 +1120,12 @@ final class CompanionManager: ObservableObject {
             if actionTaskController.handleOwnerTranscript(finishedUtterance) { return }
         }
 
+        // P8: "save my notes" (not Clicky's own echo).
+        if !utteranceOverlappedBuddySpeech, NotesVoiceCommand.parse(finishedUtterance) == .save {
+            speakCodeModeLine(articleController.saveNotesAndDescribe())
+            return
+        }
+
         // Board commands first (with a board open "next" / "pause" mean the board).
         if let boardCommand = BoardVoiceCommand.parse(finishedUtterance), !boardCommand.needsOpenBoard || boardController.isOpen {
             // While Clicky talks, only if it didn't just say those words itself.
@@ -1216,7 +1224,7 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private func showHandsFreeStatusMessage(_ statusMessage: String) {
+    func showHandsFreeStatusMessage(_ statusMessage: String) {
         handsFreeStatusMessage = statusMessage
         handsFreeStatusMessageClearTask?.cancel()
         handsFreeStatusMessageClearTask = Task {
@@ -1524,6 +1532,13 @@ final class CompanionManager: ObservableObject {
         if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
            let voiceGalleryCommand = VoiceGalleryCommand.parse(transcript) {
             voiceGalleryController.perform(voiceGalleryCommand, speaks: turnOptions.speaksResponse)
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // P8: "save my notes" saves the notes panel's notes here, no brain turn.
+        if turnOptions.extraUserText == nil, NotesVoiceCommand.parse(transcript) == .save {
+            let line = articleController.saveNotesAndDescribe()
+            if turnOptions.speaksResponse { speakCodeModeLine(line) }
             turnOptions.onTurnFinished?(nil, nil)
             return
         }

@@ -217,6 +217,10 @@ public enum ActionTierClassifier {
             return ActionTierDecision(.free, "overlay marks only")
         case .summarize:
             return ActionTierDecision(.free, "reading the page")
+        case .readArticle:
+            return ActionTierDecision(.free, "reading the article (scrolling at most)")
+        case .notes:
+            return ActionTierDecision(.free, "clicky's notes panel only")
         case .selectCopy:
             return ActionTierDecision(.free, "select and copy")
         case .scroll:

@@ -230,6 +230,7 @@ final class ActionTaskController {
             if task.isCancelled { return }
             task.loop.record(step, tier: decision.tier, tierReason: decision.reason, outcome: result.outcome)
             if let pageText = result.pageText { task.loop.pendingPageText = pageText }
+            if let articleText = result.articleText { task.loop.pendingArticleText = articleText }
             task.currentStepText = nil
             companionManager.agentsCenter.log(task.agentID, task.loop.records.last?.resultLine ?? "")
             publish()
@@ -383,6 +384,7 @@ final class ActionTaskController {
         task.loop.beginObserveTurn()
         let continuationText = task.loop.continuationMessage()
         task.loop.pendingPageText = nil
+        task.loop.pendingArticleText = nil
         task.didReceiveBlockThisTurn = false
         task.isAnswerTurnOpen = true
         task.currentStepText = "looking at the screen again"

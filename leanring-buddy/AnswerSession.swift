@@ -420,6 +420,16 @@ final class AnswerSession: SpeechCoordinatorHost {
                 // "show agents": open the window without taking focus from what the user is doing.
                 agentsCenter.log(brainAgentID, "[AGENTS:\(command.rawValue)]")
                 companionManager.showAgentsDashboard(activatesClicky: false)
+            case .notesCommand(let command):
+                // [NOTES:save] / [NOTES:close]: the article notes panel (P8).
+                agentsCenter.log(brainAgentID, "[NOTES:\(command.rawValue)]")
+                switch command {
+                case .save:
+                    let line = companionManager.articleController.saveNotesAndDescribe()
+                    companionManager.speakCodeModeLine(line)
+                case .close:
+                    companionManager.articleController.close()
+                }
             case .block(let name, let body) where name == "codetask":
                 if !companionManager.codeModeController.handleCodeTaskBlock(body, context: CodeTurnContext(transcript: transcript)) {
                     speakNow("I couldn't read that code task.")
