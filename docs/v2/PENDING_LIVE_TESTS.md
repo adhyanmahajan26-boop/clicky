@@ -262,7 +262,18 @@ Compare the look with `~/Library/Logs/Clicky/renders/p6/type-card.png` (and `typ
 ### P6.10 whiteboard PDF export
 
 1. Open a board and press `e` (or `boardCtl export`). Expect `~/Pictures/Clicky/whiteboard-<ts>.pdf` next to the PNG and the `.clickyboard`.
-2. Open the PDF in Preview: one page, the board's title and steps as selectable text, charts drawn (not blank).
+2. Open the PDF in Preview: the board's title and labels as selectable text, charts drawn (not blank), formulas sharp at any
+   zoom (vectors) and found by Find with their TeX (e.g. search `frac`). A board that fits A4 proportions (height ≤ √2 × width)
+   is one page the board's size with no step counter; a taller one is several same-size pages cut between section rows, each
+   headed "<title> … page n of m". Preview's Title (⌘I / Inspector) is the board's title.
+3. Voice: with a board open say "save this as a pdf" (or "export it to pdf", "save board") → Clicky says "saved the board as a
+   PDF and a picture in the Clicky folder in your Pictures." and the files appear. Ask in a longer sentence ("could you save
+   this whiteboard as a pdf so i can send it") → the model answers with a few words + `[SNAP:board]` (turn.json rawResponse),
+   same line spoken after its words; with no board open → "there's no board open to save."
+4. Offscreen evidence (no app needed): `swift test --package-path Packages/ClickyCore --filter PDFExportTests` writes
+   `~/Library/Logs/Clicky/renders/pdf/<board>-<theme>.pdf` + a PNG per page + `report-<board>.txt`;
+   `Tools/eval/pdf_check.sh [files…]` inspects any exported PDF (pages, text, vector vs images, fonts embedded).
+   Printed on A4 a wide board shrinks to fit the width (a 1866-pt board prints at ~32 %): fine on screen, small on paper.
 
 ### P6.6 keep-warm LaunchAgent (generator only; nothing is installed or bootstrapped)
 

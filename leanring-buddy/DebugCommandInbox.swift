@@ -184,8 +184,9 @@ final class DebugCommandInbox {
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: markObjects, errorMessage: nil)
 
         case "snap":
-            guard let targetName = commandObject["target"] as? String, let snapshotTarget = SnapshotTarget(rawValue: targetName) else {
-                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "snap needs \"target\": screen, window or marks")
+            guard let targetName = commandObject["target"] as? String, let snapshotTarget = SnapshotTarget(rawValue: targetName),
+                  snapshotTarget != .board else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "snap needs \"target\": screen, window or marks (a board is saved with boardCtl export)")
                 return
             }
             let includesClickyOverlay = commandObject["marks"] as? Bool ?? false

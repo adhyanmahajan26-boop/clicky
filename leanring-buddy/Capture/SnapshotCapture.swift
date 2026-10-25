@@ -58,6 +58,9 @@ enum SnapshotCapture {
             captured = try await captureDisplay(display, regionCG: clampedRegionCG, includesClickyOverlay: request.includesClickyOverlay)
         case .window:
             captured = try await captureFrontmostWindow(includesClickyOverlay: request.includesClickyOverlay)
+        case .board:
+            // [SNAP:board] saves the whiteboard (AnswerSession → BoardController.exportBoard), never a screen capture.
+            throw ScreenCaptureError(message: "A board is saved with the board export, not captured.")
         }
         let capturedImage = captured.image
 

@@ -166,5 +166,5 @@ import Testing
 }
 
 @Test func snapshotTargetRawValuesMatchTheTagWords() {
-    #expect(SnapshotTarget.allCases.map(\.rawValue) == ["screen", "window", "marks"])
+    #expect(SnapshotTarget.allCases.map(\.rawValue) == ["screen", "window", "marks", "board"])
 }

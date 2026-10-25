@@ -10,6 +10,8 @@
 //    [SNAP:window]        the topmost window of the frontmost app
 //    [SNAP:marks]         the area around the marks on screen right now
 //    [SNAP:window+marks]  any target, keeping Clicky's own windows (its marks) in the shot
+//    [SNAP:board]         save the open whiteboard (PDF + PNG + .clickyboard in
+//                         ~/Pictures/Clicky, BoardExportLocation), not a screenshot
 //
 //  Without "+marks" Clicky's own windows are left out, so the shot is the
 //  user's content only.
@@ -25,6 +27,22 @@ public enum SnapshotTarget: String, Equatable, Sendable, CaseIterable {
     case window
     /// The marked region: the marks' rectangles plus a margin.
     case marks
+    /// The open whiteboard, exported (BoardController.exportBoard): "save this as a PDF".
+    case board
+}
+
+/// Where a saved board goes and what Clicky says after saving it. The folder
+/// is the one P6.10 established (the PNG, the PDF and the .clickyboard side by
+/// side, the same folder hands-free session captures use).
+public enum BoardExportLocation {
+    public static func directory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Pictures/Clicky", isDirectory: true)
+    }
+
+    /// Spoken after a save (the folder, in words; never the file name).
+    public static let savedLine = "saved the board as a PDF and a picture in the Clicky folder in your Pictures."
+    public static let failedLine = "I couldn't save the board."
+    public static let noBoardLine = "there's no board open to save."
 }
 
 public struct SnapshotRequest: Equatable, Sendable {

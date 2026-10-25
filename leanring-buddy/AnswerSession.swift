@@ -670,6 +670,16 @@ final class AnswerSession: SpeechCoordinatorHost {
     /// then says where it went. Runs in its own task: the capture can take a moment and
     /// the speech queue must not wait on it.
     private func fireSnapshot(_ snapshotRequest: SnapshotRequest) {
+        // [SNAP:board]: "save this as a PDF" — the open board's PDF + PNG, then where they went.
+        if snapshotRequest.target == .board {
+            let spokenLine = companionManager.saveBoardAndDescribe()
+            if isFinished {
+                companionManager.speakCodeModeLine(spokenLine)
+            } else {
+                speakNow(spokenLine)
+            }
+            return
+        }
         let markRectsCG = companionManager.markController.marks.map(\.rectCG)
         let turnRecordForSnapshot = turnRecord
         Task { @MainActor [weak self] in

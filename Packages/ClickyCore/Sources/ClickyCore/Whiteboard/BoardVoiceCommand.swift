@@ -4,7 +4,9 @@
 //
 //  Hands-free board commands, matched on the whole utterance like the other
 //  instant commands (filler words like "okay" / "clicky" ignored). With a
-//  board open: next, back, repeat, pause, continue, close board, save board.
+//  board open: next, back, repeat, pause, continue, close board, save board
+//  (also "save this as a pdf" / "export it to pdf": the board's PNG, PDF and
+//  .clickyboard go to ~/Pictures/Clicky and Clicky says so).
 //  Always: "whiteboard that" (draw the last answer as a board) and "go
 //  deeper on <n>" (a new page about section n). While Clicky is speaking
 //  the app only acts on one if EchoGuard says Clicky didn't just say its
@@ -35,7 +37,8 @@ public enum BoardVoiceCommand: Equatable, Sendable {
     static let closePhrases: Set<String> = ["close board", "close the board", "close whiteboard", "close the whiteboard", "close it", "close that",
                                             "close", "hide board", "hide the board", "hide the whiteboard"]
     static let savePhrases: Set<String> = ["save board", "save the board", "save whiteboard", "save the whiteboard", "export board",
-                                           "export the board", "save it", "save that"]
+                                           "export the board", "save it", "save that",
+                                           "export whiteboard", "export the whiteboard", "save this board", "save this whiteboard", "save this"]
     static let whiteboardThatPhrases: Set<String> = ["whiteboard that", "whiteboard this", "whiteboard it", "board that", "draw that",
                                                      "draw that on a whiteboard", "put that on a whiteboard", "put that on the whiteboard",
                                                      "make that a whiteboard", "show that on a whiteboard"]
@@ -56,10 +59,22 @@ public enum BoardVoiceCommand: Equatable, Sendable {
         if pausePhrases.contains(normalizedUtterance) { return .pause }
         if resumePhrases.contains(normalizedUtterance) { return .resume }
         if closePhrases.contains(normalizedUtterance) { return .close }
-        if savePhrases.contains(normalizedUtterance) { return .save }
+        if savePhrases.contains(normalizedUtterance) || isSaveAsPDF(normalizedUtterance) { return .save }
         if whiteboardThatPhrases.contains(normalizedUtterance) { return .whiteboardThat }
         if let sectionNumber = goDeeperSectionNumber(normalizedUtterance) { return .goDeeper(sectionNumber: sectionNumber) }
         return nil
+    }
+
+    /// "save this as a pdf", "export it to pdf", "make a pdf of the board", "pdf it":
+    /// a short utterance (at most 8 words) with "pdf" and nothing but save words around it.
+    static func isSaveAsPDF(_ normalizedUtterance: String) -> Bool {
+        // Dictation sometimes spells it out: "p d f".
+        let words = (" " + normalizedUtterance + " ").replacingOccurrences(of: " p d f ", with: " pdf ").split(separator: " ").map(String.init)
+        guard words.contains("pdf"), words.count <= 8 else { return false }
+        let allowedWords: Set<String> = ["pdf", "save", "export", "make", "download", "turn", "as", "a", "an", "to", "into", "of", "it",
+                                         "this", "that", "the", "board", "whiteboard", "me", "for", "file"]
+        let verbs: Set<String> = ["save", "export", "make", "download", "turn"]
+        return words.allSatisfy(allowedWords.contains) && (words.contains(where: verbs.contains) || words == ["pdf", "it"] || words == ["pdf"])
     }
 
     /// "go deeper on two", "go deeper on section 3", "deeper on the second one", "go deeper into 2".
