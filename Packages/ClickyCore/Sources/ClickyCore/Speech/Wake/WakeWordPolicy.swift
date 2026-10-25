@@ -167,52 +167,66 @@ public struct WakeWordConditions: Equatable, Sendable {
 
 // MARK: - Energy gate
 
-/// A level gate in dBFS with a slowly rising noise floor. Opens once the
-/// level stays `openMarginDecibels` above the floor for `openHoldSeconds`;
-/// closes after `closeHangoverSeconds` back near the floor. The recognizer
-/// is fed only while it's open (plus a short pre-roll the caller keeps).
+/// A level gate in dBFS that adapts to the mic's own noise floor.
+///
+/// P8: the floor is a low percentile (20th) of the buffer levels over the
+/// last 8 s, digital silence left out, so a quiet webcam mic (floor near
+/// -75 dBFS, speech across the desk near -55) opens on speech without a
+/// fixed -58 dB bar it rarely reached. Opens once the level stays
+/// `openMarginDecibels` above the floor for `openHoldSeconds`; closes after
+/// `closeHangoverSeconds` back near the floor. Steady noise (a fan, a TV)
+/// becomes the floor within the window and stops holding the gate open.
+/// The recognizer is fed only while it's open (plus the caller's pre-roll).
 public struct EnergyVoiceActivityGate: Sendable {
     public enum Transition: Equatable, Sendable {
         case opened
         case closed
     }
 
-    public var openMarginDecibels: Double = 9
-    public var closeMarginDecibels: Double = 5
-    /// Never opens below this level, however quiet the room.
-    public var absoluteOpenFloorDecibels: Double = -58
+    public var openMarginDecibels: Double = 8
+    public var closeMarginDecibels: Double = 4
+    /// Never opens below this level, however quiet the room (digital silence, a muted mic).
+    public var absoluteOpenFloorDecibels: Double = -72
     public var openHoldSeconds: TimeInterval = 0.06
     public var closeHangoverSeconds: TimeInterval = 1.2
-    /// How fast the noise floor creeps up while it's loud (dB per second).
-    public var noiseFloorRiseDecibelsPerSecond: Double = 0.6
+    /// How much recent audio the floor is measured over.
+    public var noiseFloorWindowSeconds: TimeInterval = 8
+    /// The floor is this percentile of the window's levels.
+    public var noiseFloorPercentile: Double = 0.2
+    /// Levels below this are digital silence (a muted or starting device), not room noise.
+    public static let digitalSilenceDecibels: Double = -100
+    static let floorRecomputeSeconds: TimeInterval = 0.25
 
-    public private(set) var noiseFloorDecibels: Double = -65
+    public private(set) var noiseFloorDecibels: Double = -100
     public private(set) var isOpen = false
+    /// The loudest buffer in the last open stretch (for wakeStatus).
+    public private(set) var lastOpenPeakDecibels: Double?
     private var secondsAboveOpenThreshold: TimeInterval = 0
     private var secondsBelowCloseThreshold: TimeInterval = 0
+    private var recentLevels: [(levelDecibels: Double, durationSeconds: TimeInterval)] = []
+    private var recentLevelsSeconds: TimeInterval = 0
+    private var secondsSinceFloorRecompute: TimeInterval = .infinity
+    private var currentOpenPeakDecibels: Double = -120
 
     public init() {}
 
     public var openThresholdDecibels: Double { max(noiseFloorDecibels + openMarginDecibels, absoluteOpenFloorDecibels) }
-    private var closeThresholdDecibels: Double { max(noiseFloorDecibels + closeMarginDecibels, absoluteOpenFloorDecibels - 4) }
+    public var closeThresholdDecibels: Double { max(noiseFloorDecibels + closeMarginDecibels, absoluteOpenFloorDecibels - 4) }
 
     /// One buffer's level. Returns a transition when the gate flips.
     public mutating func process(levelDecibels: Double, durationSeconds: TimeInterval) -> Transition? {
         let levelDecibels = levelDecibels.isFinite ? max(levelDecibels, -120) : -120
-        // Floor: falls at once to a quieter level, rises slowly through loud stretches.
-        if levelDecibels < noiseFloorDecibels {
-            noiseFloorDecibels = levelDecibels
-        } else {
-            noiseFloorDecibels = min(levelDecibels, noiseFloorDecibels + noiseFloorRiseDecibelsPerSecond * durationSeconds)
-        }
+        updateNoiseFloor(levelDecibels: levelDecibels, durationSeconds: durationSeconds)
 
         if isOpen {
+            currentOpenPeakDecibels = max(currentOpenPeakDecibels, levelDecibels)
             if levelDecibels < closeThresholdDecibels {
                 secondsBelowCloseThreshold += durationSeconds
                 if secondsBelowCloseThreshold >= closeHangoverSeconds {
                     isOpen = false
                     secondsAboveOpenThreshold = 0
                     secondsBelowCloseThreshold = 0
+                    lastOpenPeakDecibels = currentOpenPeakDecibels
                     return .closed
                 }
             } else {
@@ -226,12 +240,35 @@ public struct EnergyVoiceActivityGate: Sendable {
             if secondsAboveOpenThreshold >= openHoldSeconds {
                 isOpen = true
                 secondsBelowCloseThreshold = 0
+                currentOpenPeakDecibels = levelDecibels
                 return .opened
             }
         } else {
             secondsAboveOpenThreshold = 0
         }
         return nil
+    }
+
+    private mutating func updateNoiseFloor(levelDecibels: Double, durationSeconds: TimeInterval) {
+        if levelDecibels > Self.digitalSilenceDecibels {
+            recentLevels.append((levelDecibels, durationSeconds))
+            recentLevelsSeconds += durationSeconds
+            while recentLevelsSeconds > noiseFloorWindowSeconds, recentLevels.count > 1 {
+                recentLevelsSeconds -= recentLevels.removeFirst().durationSeconds
+            }
+        }
+        secondsSinceFloorRecompute += durationSeconds
+        guard secondsSinceFloorRecompute >= Self.floorRecomputeSeconds else { return }
+        secondsSinceFloorRecompute = 0
+        noiseFloorDecibels = Self.percentileLevel(recentLevels.map(\.levelDecibels), percentile: noiseFloorPercentile) ?? -100
+    }
+
+    /// The level at `percentile` (0…1) of `levels`; nil when empty.
+    public static func percentileLevel(_ levels: [Double], percentile: Double) -> Double? {
+        guard !levels.isEmpty else { return nil }
+        let sortedLevels = levels.sorted()
+        let index = Int((Double(sortedLevels.count - 1) * min(1, max(0, percentile))).rounded(.down))
+        return sortedLevels[index]
     }
 
     /// RMS level of float samples in dBFS (-120 for silence).

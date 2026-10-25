@@ -263,6 +263,8 @@ final class CompanionManager: ObservableObject {
 
     /// P7 computer-use actions: <actions> blocks, the observe → act loop, tiers and cancels.
     private(set) lazy var actionTaskController = ActionTaskController(companionManager: self)
+    /// P8: simple spoken commands done locally (volume, media, windows, apps, tabs…), dictation, their confirms.
+    private(set) lazy var voiceCommandController = VoiceCommandController(companionManager: self)
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -859,6 +861,15 @@ final class CompanionManager: ObservableObject {
         wakeWordController.onWake = { [weak self] initialTurnText in self?.wakeWordDidFire(initialTurnText: initialTurnText) }
         wakeWordController.onTurnFinished = { [weak self] turnText in self?.wakeWordTurnDidFinish(turnText: turnText) }
         wakeWordController.onTurnAbandoned = { [weak self] in self?.wakeWordTurnWasAbandoned() }
+        // P8 follow-up window: the answer is done once nothing is thinking, speaking or acting
+        // (an action task waiting for a spoken yes counts as done, so the yes needs no wake word).
+        wakeWordController.isAnswerBusy = { [weak self] in
+            guard let self else { return false }
+            let isActionTaskBusy = self.actionTaskController.isActive && !self.actionTaskController.isAwaitingConfirmation
+            return self.voiceState != .idle || self.speechOutputClient.isPlaying || isActionTaskBusy
+        }
+        wakeWordController.onFollowUpCommandStarted = { [weak self] in self?.wakeWordFollowUpCommandDidStart() }
+        wakeWordController.onFollowUpEnded = { [weak self] reason in self?.wakeWordFollowUpDidEnd(reason) }
         // Clicky starting or stopping an answer: the wake recognizer goes deaf / listens again.
         wakeWordVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.wakeWordController.refreshSpeechSuppression() }
@@ -902,6 +913,27 @@ final class CompanionManager: ObservableObject {
         // Latency is measured from the end of speech, as push-to-talk does from key-up.
         sendTranscriptToClaudeWithScreenshot(transcript: turnText, turnOptions: TurnOptions(keyUpDate: Date()))
         if currentResponseTask == nil { scheduleTransientHideIfNeeded() }
+        // P8: once this is answered, listen a little longer for another command (wake turns only).
+        wakeWordController.wakeTurnWasSent()
+    }
+
+    /// P8: words inside the follow-up window (no wake word): the listening state without the Pop.
+    private func wakeWordFollowUpCommandDidStart() {
+        guard !isHandsFreeSessionActive, !buddyDictationManager.isDictationInProgress, voiceState == .idle else {
+            wakeWordController.cancelCurrentTurn()
+            return
+        }
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        voiceState = .listening
+    }
+
+    /// P8: "that's all", 10 s of nothing, or cancelled. Dictation ends with the window unless cancelled.
+    private func wakeWordFollowUpDidEnd(_ reason: WakeFollowUpEndReason) {
+        if reason != .cancelled, voiceCommandController.isDictating {
+            voiceCommandController.stopDictation(speaks: false, reason: reason.rawValue)
+        }
+        if voiceState == .idle { scheduleTransientHideIfNeeded() }
     }
 
     private func wakeWordTurnWasAbandoned() {
@@ -1316,6 +1348,9 @@ final class CompanionManager: ObservableObject {
             wakeWordController.cancelCurrentTurn()
             wakeWordTurnWasAbandoned()
         }
+        // P8: Escape also closes the follow-up window and ends dictation.
+        wakeWordController.cancelFollowUp()
+        voiceCommandController.stopDictation(speaks: false, reason: "escape")
         let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
         let hasLiveScreenMarksShowing = hasLiveScreenMarks
         guard isHandsFreeSessionActive || isBuddyBusy || hasLiveScreenMarksShowing else { return }
@@ -1491,6 +1526,8 @@ final class CompanionManager: ObservableObject {
         var extraUserText: String?
         /// P7 observe turns: the marks a highlight step drew stay up.
         var keepsLiveScreenMarks = false
+        /// P8: the fast path already looked at this transcript (it had nothing by that name): straight to Claude.
+        var skipsFastPath = false
     }
 
     /// Reads the screens, streams Claude's answer and speaks it as it
@@ -1504,6 +1541,12 @@ final class CompanionManager: ObservableObject {
         // confirm card, "stop", or a new request (which ends the task first).
         if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
            actionTaskController.handleOwnerTranscript(transcript) {
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // P8: a yes / no to a fast-path confirm ("Lock the screen?"), or a dictated line ("type what I say").
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
+           voiceCommandController.handleEarlyTranscript(transcript, speaks: turnOptions.speaksResponse) {
             turnOptions.onTurnFinished?(nil, nil)
             return
         }
@@ -1548,6 +1591,17 @@ final class CompanionManager: ObservableObject {
             performBoardVoiceCommand(boardCommand)
             turnOptions.onTurnFinished?(nil, nil)
             return
+        }
+        // P8 local fast path: "volume 40", "next song", "snap left", "switch to chrome", "new tab"… done on the
+        // Mac in well under a second, no Claude call. Not found here ("open dark mode") → this same turn, to Claude.
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, !turnOptions.skipsFastPath {
+            var claudeTurnOptions = turnOptions
+            claudeTurnOptions.skipsFastPath = true
+            let isHandledByFastPath = voiceCommandController.handleFastPathTranscript(
+                transcript, speaks: turnOptions.speaksResponse,
+                fallBackToClaude: { [weak self] in self?.sendTranscriptToClaudeWithScreenshot(transcript: transcript, turnOptions: claudeTurnOptions) },
+                onFinished: { turnOptions.onTurnFinished?(nil, nil) })
+            if isHandledByFastPath { return }
         }
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()

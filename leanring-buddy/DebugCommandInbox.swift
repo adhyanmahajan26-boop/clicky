@@ -19,6 +19,15 @@
 //                               ticks and state writes per second (last 5 s), loop mode
 //    wakeFeed {path}          → a WAV/CAF through the wake recognizer + matcher at real-time pace
 //                               (no mic, no speaker): detections with times and latency
+//    wakeFeedBatch {paths, locale?} → P8: each file through its own pipeline (locale "en-IN" / "en-US"
+//                               or the live one): per-file detections, woke, and the wake rate
+//    wakeFeedChain {path, locale?, dryRun=true} → P8: "hey claudia, <cmd1>" … "<cmd2>" … "that's all"
+//                               through recognizer + matcher + follow-up window; every command through
+//                               the fast-path parser only (nothing executed): {wakes, wakeTurn,
+//                               followUpCommands: [{text, recognized, parsed}], commands, endedBy}
+//    voiceCommand {text, dryRun=true} → P8 fast path on text: {parsed: {action, …} | null, decision,
+//                               reason, executed, outcome}; dryRun only parses and decides
+//    voiceStatus              → P8 fast path: enabled, dictating, pending confirm, recent events
 //    snap {target, marks}     → the [SNAP:…] path: target screen|window|marks, marks=true keeps
 //                               Clicky's overlay in the shot; replies with the saved path
 //    codeTask {task | json}   → runs a CodeTask through the CodeModeController
@@ -358,6 +367,53 @@ final class DebugCommandInbox {
                 let (isSuccess, result, errorMessage) = await companionManager.wakeWordController.feedFile(at: fileURL)
                 reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
             }
+
+        case "wakeFeedBatch":
+            guard let paths = commandObject["paths"] as? [String], !paths.isEmpty else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "wakeFeedBatch needs \"paths\"")
+                return
+            }
+            let fileURLs = paths.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            let localeIdentifier = (commandObject["locale"] as? String).flatMap { $0.isEmpty || $0 == "auto" ? nil : $0 }
+            Task {
+                let (isSuccess, result, errorMessage) = await companionManager.wakeWordController.feedFiles(at: fileURLs, localeIdentifier: localeIdentifier)
+                reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
+            }
+
+        case "wakeFeedChain":
+            guard let filePath = commandObject["path"] as? String, !filePath.isEmpty else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "wakeFeedChain needs \"path\"")
+                return
+            }
+            // Commands are only parsed (dry run) whatever dryRun says: a feed never acts on the Mac.
+            let fileURL = URL(fileURLWithPath: (filePath as NSString).expandingTildeInPath)
+            let localeIdentifier = (commandObject["locale"] as? String).flatMap { $0.isEmpty || $0 == "auto" ? nil : $0 }
+            Task {
+                let (isSuccess, chainResult, errorMessage) = await self.companionManager.wakeWordController.feedChain(
+                    at: fileURL, localeIdentifier: localeIdentifier,
+                    describeCommand: { commandText in
+                        guard let command = VoiceFastPathParser.parse(commandText) else { return ["recognized": false, "parsed": NSNull(), "action": NSNull()] }
+                        let parsed = VoiceCommandController.parsedDictionary(command)
+                        return ["recognized": true, "parsed": parsed, "action": parsed]
+                    })
+                var result = chainResult
+                result["dryRun"] = true
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
+            }
+
+        case "voiceCommand":
+            guard let text = commandObject["text"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "voiceCommand needs \"text\"")
+                return
+            }
+            let isDryRun = commandObject["dryRun"] as? Bool ?? true
+            Task {
+                let result = await companionManager.voiceCommandController.debugRun(text: text, isDryRun: isDryRun)
+                reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
+            }
+
+        case "voiceStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.voiceCommandController.statusSnapshot(), errorMessage: nil)
 
         case "selftest":
             let selfTestName = commandObject["name"] as? String ?? ""

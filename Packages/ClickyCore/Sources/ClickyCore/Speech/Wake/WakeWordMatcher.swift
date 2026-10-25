@@ -57,7 +57,17 @@ public struct WakeWordMatcher: Sendable {
     public static let segmentPauseSeconds: TimeInterval = 0.6
 
     /// Greetings that stand in for each other ("hey claudia" = "hi claudia" = "okay claudia").
-    static let interchangeableGreetings: Set<String> = ["hey", "hi", "hay", "hei", "heya", "okay", "ok"]
+    /// P8: en-IN partials also hear "hai", "he", "hii", "heyy". ("hello" stays its own greeting:
+    /// a custom "hello computer" shouldn't answer to "hey computer".)
+    static let interchangeableGreetings: Set<String> = ["hey", "hi", "hay", "hei", "heya", "okay", "ok", "hai", "he", "hii", "heyy", "hy"]
+
+    /// Whether a normalized word is one of the greetings (for near-miss counts).
+    public static func isGreetingWord(_ word: String) -> Bool { interchangeableGreetings.contains(word) }
+
+    /// P8: the second half of a name the recognizer split ("cloud yeah", "cloud ya"): all read as "ya".
+    static let splitNameTailSpellings: [String: String] = ["yeah": "ya", "yah": "ya", "yea": "ya", "iya": "ya", "ia": "ia", "ya": "ya"]
+    /// A split never starts with a real name of its own ("hey claude, yeah…" is talking to Claude).
+    static let rejectedSplitNameHeads: Set<String> = ["claude", "claudes", "clyde"]
 
     /// Spellings the recognizer is known to produce for the built-in names
     /// (checked before the fuzzy rule, which also catches most of them).
@@ -139,10 +149,22 @@ public struct WakeWordMatcher: Sendable {
             var nameEndIndex: Int?
             if isNameVariant(normalizedTexts[firstNameIndex], ofName: parsedPhrase.name) {
                 nameEndIndex = firstNameIndex
-            } else if spokenIndexes.count > greetingCount + 1 {
+            } else if spokenIndexes.count > greetingCount + 1, !Self.rejectedSplitNameHeads.contains(normalizedTexts[firstNameIndex]) {
                 let secondNameIndex = spokenIndexes[greetingCount + 1]
-                let joinedName = normalizedTexts[firstNameIndex] + normalizedTexts[secondNameIndex]
-                if isNameVariant(joinedName, ofName: parsedPhrase.name) { nameEndIndex = secondNameIndex }
+                let secondPart = normalizedTexts[secondNameIndex]
+                let joinedName = normalizedTexts[firstNameIndex] + (Self.splitNameTailSpellings[secondPart] ?? secondPart)
+                if isSplitNameVariant(joinedName, ofName: parsedPhrase.name) {
+                    nameEndIndex = secondNameIndex
+                } else if spokenIndexes.count > greetingCount + 2 {
+                    // Three short pieces ("clau di a"): joined, still one name-length word.
+                    let thirdNameIndex = spokenIndexes[greetingCount + 2]
+                    let pieces = [normalizedTexts[firstNameIndex], secondPart, normalizedTexts[thirdNameIndex]]
+                    let threeWayName = pieces.joined()
+                    if pieces.allSatisfy({ $0.count <= 5 }), threeWayName.count <= parsedPhrase.name.count + 2,
+                       isSplitNameVariant(threeWayName, ofName: parsedPhrase.name) {
+                        nameEndIndex = thirdNameIndex
+                    }
+                }
             }
             guard let nameEndIndex else { continue }
 
@@ -176,6 +198,14 @@ public struct WakeWordMatcher: Sendable {
         // Short names get no fuzz: too many real words sit one edit away.
         guard name.count >= 5, heardWord.count >= 4 else { return false }
         return Self.editDistance(Self.soundKey(heardWord), Self.soundKey(name)) <= 1
+    }
+
+    /// A name heard in pieces must also end like the name ("cloud ya" yes, "cloud is" no):
+    /// two real words joined are one edit from far too much.
+    func isSplitNameVariant(_ joinedWord: String, ofName name: String) -> Bool {
+        guard isNameVariant(joinedWord, ofName: name) else { return false }
+        if joinedWord == name || Self.knownNameSpellings[name]?.contains(joinedWord) == true { return true }
+        return Self.soundKey(joinedWord).last == Self.soundKey(name).last
     }
 
     /// Whether any of these words is one of the configured names (or a

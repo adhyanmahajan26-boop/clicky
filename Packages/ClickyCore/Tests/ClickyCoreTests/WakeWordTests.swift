@@ -235,7 +235,8 @@ struct EnergyVoiceActivityGateTests {
         var gate = EnergyVoiceActivityGate()
         #expect(run(&gate, level: -120, seconds: 1).isEmpty)
         #expect(gate.openThresholdDecibels == gate.absoluteOpenFloorDecibels)
-        #expect(run(&gate, level: -64, seconds: 0.5).isEmpty)
+        // Below the absolute floor nothing opens, however quiet it was before.
+        #expect(run(&gate, level: -78, seconds: 0.5).isEmpty)
         #expect(run(&gate, level: -25, seconds: 0.1) == [.opened])
     }
 

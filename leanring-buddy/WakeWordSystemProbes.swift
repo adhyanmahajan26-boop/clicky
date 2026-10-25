@@ -18,6 +18,7 @@
 //  Read-only; nothing is requested or changed.
 //
 
+import AudioToolbox
 import CoreAudio
 import Darwin
 import Foundation
@@ -116,13 +117,107 @@ enum MicrophoneInUseProbe {
         return bundleIdentifier.takeRetainedValue() as String
     }
 
-    private static func defaultInputDeviceID() -> AudioDeviceID? {
+    static func defaultInputDeviceID() -> AudioDeviceID? {
         var inputDeviceID = AudioDeviceID(0)
         var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
         var propertyAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
                                                          mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &inputDeviceID)
         return status == noErr && inputDeviceID != 0 ? inputDeviceID : nil
+    }
+}
+
+/// P8: which input device a mic engine really runs on (name, UID, sample rate,
+/// transport), so the wake word can listen on the same mic push-to-talk uses
+/// and wakeStatus can say what it hears through. Read-only.
+struct AudioInputDeviceInfo: Equatable {
+    let deviceID: AudioDeviceID
+    let name: String
+    let uid: String
+    let nominalSampleRate: Double
+    let isBluetooth: Bool
+
+    var statusDictionary: [String: Any] {
+        ["name": name, "uid": uid, "sampleRate": nominalSampleRate, "bluetooth": isBluetooth, "id": Int(deviceID)]
+    }
+
+    static func read(deviceID: AudioDeviceID) -> AudioInputDeviceInfo? {
+        guard deviceID != 0 else { return nil }
+        let transportType = uint32Property(of: deviceID, selector: kAudioDevicePropertyTransportType)
+        return AudioInputDeviceInfo(deviceID: deviceID,
+                                    name: stringProperty(of: deviceID, selector: kAudioObjectPropertyName) ?? "device \(deviceID)",
+                                    uid: stringProperty(of: deviceID, selector: kAudioDevicePropertyDeviceUID) ?? "",
+                                    nominalSampleRate: float64Property(of: deviceID, selector: kAudioDevicePropertyNominalSampleRate) ?? 0,
+                                    isBluetooth: transportType == kAudioDeviceTransportTypeBluetooth || transportType == kAudioDeviceTransportTypeBluetoothLE)
+    }
+
+    static func defaultInput() -> AudioInputDeviceInfo? {
+        MicrophoneInUseProbe.defaultInputDeviceID().flatMap { read(deviceID: $0) }
+    }
+
+    /// The device an engine's input unit is set to (its CurrentDevice), else nil.
+    static func current(of audioUnit: AudioUnit?) -> AudioInputDeviceInfo? {
+        guard let audioUnit else { return nil }
+        var deviceID = AudioDeviceID(0)
+        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID, &propertySize)
+        return status == noErr ? read(deviceID: deviceID) : nil
+    }
+
+    /// The live device with this UID that still has input streams, else nil.
+    static func inputDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var translatedDeviceID = AudioDeviceID(0)
+        var cfUID = uid as CFString
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                                         mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafeMutablePointer(to: &cfUID) { uidPointer in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, UInt32(MemoryLayout<CFString>.size),
+                                       uidPointer, &propertySize, &translatedDeviceID)
+        }
+        guard status == noErr, translatedDeviceID != 0 else { return nil }
+        var streamsAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeInput,
+                                                        mElement: kAudioObjectPropertyElementMain)
+        var streamsSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(translatedDeviceID, &streamsAddress, 0, nil, &streamsSize) == noErr, streamsSize > 0 else { return nil }
+        return translatedDeviceID
+    }
+
+    private static func uint32Property(of objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var propertyValue: UInt32 = 0
+        var propertySize = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(objectID, &propertyAddress, 0, nil, &propertySize, &propertyValue) == noErr ? propertyValue : nil
+    }
+
+    private static func float64Property(of objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> Double? {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var propertyValue: Float64 = 0
+        var propertySize = UInt32(MemoryLayout<Float64>.size)
+        return AudioObjectGetPropertyData(objectID, &propertyAddress, 0, nil, &propertySize, &propertyValue) == noErr ? propertyValue : nil
+    }
+
+    private static func stringProperty(of objectID: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var propertyAddress = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value: Unmanaged<CFString>?
+        var propertySize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(objectID, &propertyAddress, 0, nil, &propertySize, &value) == noErr, let value else { return nil }
+        return value.takeRetainedValue() as String
+    }
+}
+
+/// P8: the input device push-to-talk last captured from (set by BuddyDictationManager
+/// when its engine starts). The wake word listens on the same mic when it can.
+@MainActor
+enum PushToTalkInputDeviceRecord {
+    private(set) static var lastDevice: AudioInputDeviceInfo?
+    private(set) static var lastRecordedDate: Date?
+
+    static func record(_ device: AudioInputDeviceInfo?) {
+        guard let device else { return }
+        if lastDevice != device { print("🎙️ Push-to-talk input: \(device.name) (\(device.uid), \(Int(device.nominalSampleRate)) Hz)") }
+        lastDevice = device
+        lastRecordedDate = Date()
     }
 }
 

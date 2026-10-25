@@ -21,6 +21,13 @@
 //    screen locked, display or system asleep.
 //  - Privacy: nothing leaves the Mac until the wake word fires; no audio or
 //    transcript is written anywhere. Logs carry counts and latencies only.
+//  - P8: the wake engine listens on the mic push-to-talk last used (unless
+//    that's a Bluetooth headset); the recognizer error codes, near misses
+//    ("hey <second word>" counts, in memory), gate levels, device and
+//    format are in wakeStatus; v2.wake.locale auto moves between en-IN and
+//    en-US on-device when one keeps failing; and after a wake turn is
+//    answered the follow-up window takes a command without the wake word
+//    for v2.wake.followUpSeconds (10 s).
 //
 
 import AppKit
@@ -42,6 +49,15 @@ final class WakeWordController: ObservableObject {
     var onTurnFinished: ((_ turnText: String) -> Void)?
     /// Nothing followed the wake word, or push-to-talk / hands-free took the mic.
     var onTurnAbandoned: (() -> Void)?
+    /// P8: words started inside the follow-up window (no wake word): the listening state, no sound.
+    var onFollowUpCommandStarted: (() -> Void)?
+    /// P8: the follow-up window closed ("that's all", silence, cancelled).
+    var onFollowUpEnded: ((WakeFollowUpEndReason) -> Void)?
+    /// P8: true while Clicky is still answering (thinking, speaking, running an action): the window waits.
+    var isAnswerBusy: () -> Bool = { false }
+
+    /// P8: the follow-up window is open (the notch shows "listening…").
+    @Published private(set) var isFollowUpListening = false
 
     static let pollIntervalSeconds: TimeInterval = 2
 
@@ -53,8 +69,22 @@ final class WakeWordController: ObservableObject {
     private var pipeline: WakeWordRecognitionPipeline?
     private var matcher = WakeWordMatcher(phrases: ClickySettings.wakePhrases)
     private var phrasesInUse = ClickySettings.wakePhrases
-    /// Resolved once: the system locale if English and on-device, else en-US, else nil.
-    private lazy var recognitionLocale: Locale? = WakeWordRecognitionPipeline.preferredLocale()
+    /// P8: the on-device locale in use, chosen by v2.wake.locale (auto: the system locale first,
+    /// the other English one if requests keep failing). Nil: no on-device English recognizer.
+    private lazy var localeSelector: WakeLocaleSelector = Self.makeLocaleSelector(setting: ClickySettings.wakeLocaleSetting)
+    private var localeSettingInUse = ClickySettings.wakeLocaleSetting
+    private var recognitionLocale: Locale? {
+        get { localeSelector.currentLocale.map { Locale(identifier: $0) } }
+        set { if newValue == nil { localeSelector = WakeLocaleSelector(setting: localeSettingInUse, candidates: []) } }
+    }
+    private var followUpWindow = WakeFollowUpWindow()
+    private var followUpTimer: Timer?
+    private var answerQuietSinceDate: Date?
+    private var answerWaitStartedDate: Date?
+    /// The device the wake engine is capturing from (and why that one).
+    private(set) var listeningDevice: AudioInputDeviceInfo?
+    private var listeningDeviceReason = "default input"
+    private var lastPipelineStatistics = WakeWordPipelineStatistics()
     private var gate = WakeWordGate()
 
     private var isScreenLocked = false
@@ -113,6 +143,7 @@ final class WakeWordController: ObservableObject {
         distributedObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
         distributedObservers.removeAll()
         stopMicrophone(reportAbandonedTurn: false)
+        cancelFollowUp()
         isStarted = false
     }
 
@@ -123,8 +154,9 @@ final class WakeWordController: ObservableObject {
         reevaluate()
     }
 
-    /// Escape or a new push-to-talk turn: drop the turn being heard.
+    /// Escape or a new push-to-talk turn: drop the turn being heard (and the follow-up window).
     func cancelCurrentTurn() {
+        cancelFollowUp()
         guard isCapturingTurn else { return }
         isCapturingTurn = false
         pipeline?.cancelCapture()
@@ -162,6 +194,14 @@ final class WakeWordController: ObservableObject {
         let isEnabledNow = ClickySettings.isWakeWordEnabled
         if isEnabled != isEnabledNow { isEnabled = isEnabledNow }
         let configuredPhrases = ClickySettings.wakePhrases
+        let configuredLocaleSetting = ClickySettings.wakeLocaleSetting
+        if configuredLocaleSetting != localeSettingInUse {
+            localeSettingInUse = configuredLocaleSetting
+            localeSelector = Self.makeLocaleSelector(setting: configuredLocaleSetting)
+            print("👂 Wake word: locale setting → \(localeSelector.currentLocale ?? "none")")
+            stopMicrophone(reportAbandonedTurn: true)
+            pipeline = nil
+        }
         if configuredPhrases != phrasesInUse {
             phrasesInUse = configuredPhrases
             matcher = WakeWordMatcher(phrases: configuredPhrases)
@@ -180,6 +220,8 @@ final class WakeWordController: ObservableObject {
             }
         } else {
             stopMicrophone(reportAbandonedTurn: true)
+            // Push-to-talk, hands-free, lock, off: the follow-up window ends with the mic.
+            cancelFollowUp()
         }
         if newState != state {
             print("👂 Wake word: \(newState.displayText)")
@@ -250,14 +292,25 @@ final class WakeWordController: ObservableObject {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        // A Bluetooth headset is the default input: listen on a wired mic instead (the headset stays in
-        // music mode for Netflix). Only this engine; push-to-talk keeps the default input.
-        if MicrophoneInUseProbe.isDefaultInputBluetooth(), var wiredDeviceID = MicrophoneInUseProbe.wiredInputDeviceID(),
-           let audioUnit = inputNode.audioUnit {
+        // P8: listen on the mic push-to-talk really uses (its turns are the ones that work), unless that's a
+        // Bluetooth headset. Else, a Bluetooth headset as the default input: listen on a wired mic instead (the
+        // headset stays in music mode for Netflix). Only this engine; push-to-talk keeps the default input.
+        let defaultInputDevice = AudioInputDeviceInfo.defaultInput()
+        var pinnedDeviceID: AudioDeviceID?
+        listeningDeviceReason = "default input"
+        if let pushToTalkDevice = PushToTalkInputDeviceRecord.lastDevice, !pushToTalkDevice.isBluetooth,
+           let liveDeviceID = AudioInputDeviceInfo.inputDeviceID(forUID: pushToTalkDevice.uid) {
+            listeningDeviceReason = "same mic as push-to-talk"
+            if liveDeviceID != defaultInputDevice?.deviceID { pinnedDeviceID = liveDeviceID }
+        } else if MicrophoneInUseProbe.isDefaultInputBluetooth(), let wiredDeviceID = MicrophoneInUseProbe.wiredInputDeviceID() {
+            listeningDeviceReason = "wired mic (the default input is Bluetooth)"
+            pinnedDeviceID = wiredDeviceID
+        }
+        if var pinnedDeviceID, let audioUnit = inputNode.audioUnit {
             let status = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                              &wiredDeviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
-            print(status == noErr ? "🎙️ Wake word: Bluetooth default input, listening on wired mic \(wiredDeviceID)"
-                                  : "⚠️ Wake word: couldn't pin the wired mic (\(status))")
+                                              &pinnedDeviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+            print(status == noErr ? "🎙️ Wake word: listening on device \(pinnedDeviceID) (\(listeningDeviceReason))"
+                                  : "⚠️ Wake word: couldn't pin device \(pinnedDeviceID) (\(status))")
         }
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
@@ -275,6 +328,12 @@ final class WakeWordController: ObservableObject {
         }
         audioEngine = engine
         engineStartCount += 1
+        listeningDevice = AudioInputDeviceInfo.current(of: inputNode.audioUnit) ?? defaultInputDevice
+        if let listeningDevice {
+            print("🎙️ Wake word input: \(listeningDevice.name) (\(listeningDevice.uid), \(Int(listeningDevice.nominalSampleRate)) Hz, \(listeningDeviceReason))")
+        }
+        // A rebuilt pipeline (new locale, new device) keeps an open follow-up window.
+        pipeline.setFollowUpListening(followUpWindow.isOpen)
         audioEngineConfigurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
@@ -297,6 +356,7 @@ final class WakeWordController: ObservableObject {
             self.audioEngine = nil
             print("👂 Wake word: mic closed")
         }
+        if let pipeline { lastPipelineStatistics = pipeline.currentStatistics() }
         pipeline?.reset()
         if isCapturingTurn {
             isCapturingTurn = false
@@ -335,6 +395,20 @@ final class WakeWordController: ObservableObject {
                 return
             }
             let now = Date()
+            if candidate.isFollowUp {
+                // Inside the follow-up window: no wake word needed, but never while Clicky talks.
+                guard !speechOutput.isPlaying, followUpWindow.commandSpeechStarted(at: now) else {
+                    ignoredMatchCounts["followUpClosedOrSpeaking", default: 0] += 1
+                    return
+                }
+                isCapturingTurn = true
+                followUpCommandCount += 1
+                pipeline.beginCapture(for: candidate)
+                publishFollowUpState()
+                reevaluate()
+                onFollowUpCommandStarted?()
+                return
+            }
             let decision = gate.decide(at: now, isClickySpeaking: speechOutput.isPlaying, lastClickySpeechEndDate: speechOutput.lastSpeechEndDate,
                                        recentClickySpokenWords: speechOutput.recentSpokenWords(at: now), matcher: matcher)
             guard decision == .fire else {
@@ -354,20 +428,171 @@ final class WakeWordController: ObservableObject {
         case .captureUpdated:
             break
 
-        case .captureFinished(let turnText, _):
+        case .captureFinished(let turnText, let candidate):
             guard isCapturingTurn else { return }
             isCapturingTurn = false
+            defer { rebuildPipelineForLocaleIfIdle() }
             reevaluate()
+            if candidate.isFollowUp {
+                let decision = followUpWindow.commandHeard(turnText, at: Date(), recentClickySpokenWords: speechOutput.recentSpokenWords(at: Date()))
+                switch decision {
+                case .command(let commandText):
+                    print("👂 Follow-up: command heard (\(commandText.split(separator: " ").count) words)")
+                    publishFollowUpState()
+                    onTurnFinished?(commandText)
+                case .ended(let reason):
+                    finishFollowUp(reason)
+                    onTurnAbandoned?()
+                case .ignored(let reason):
+                    ignoredMatchCounts["followUp.\(reason)", default: 0] += 1
+                    publishFollowUpState()
+                    onTurnAbandoned?()
+                }
+                return
+            }
             onTurnFinished?(turnText)
 
-        case .captureAbandoned:
+        case .captureAbandoned(let candidate):
             guard isCapturingTurn else { return }
             isCapturingTurn = false
+            if candidate.isFollowUp {
+                followUpWindow.commandAbandoned(at: Date())
+                publishFollowUpState()
+                reevaluate()
+                onTurnAbandoned?()
+                return
+            }
             falseWakeCount += 1
             print("👂 Wake word: nothing said after it (likely false wakes: \(falseWakeCount))")
             reevaluate()
             onTurnAbandoned?()
+
+        case .requestFinished(let localeIdentifier, let failed):
+            guard let switchedLocale = localeSelector.record(locale: localeIdentifier, failed: failed, at: Date()) else { return }
+            print("👂 Wake word: switching the recognizer to \(switchedLocale) — \(localeSelector.switchLog.last ?? "")")
+            // Rebuilt between turns only (never mid-turn or inside the follow-up window).
+            needsPipelineRebuildForLocale = true
+            rebuildPipelineForLocaleIfIdle()
         }
+    }
+
+    // MARK: - Follow-up window (P8)
+
+    private(set) var followUpCommandCount = 0
+    private(set) var followUpEndCounts: [String: Int] = [:]
+
+    /// A wake turn (or a follow-up command) went to Clicky: once its answer is done, listen for more.
+    func wakeTurnWasSent() {
+        let listenSeconds = ClickySettings.wakeFollowUpSeconds
+        guard listenSeconds > 0, ClickySettings.isWakeWordEnabled else { return }
+        followUpWindow.listenSeconds = listenSeconds
+        followUpWindow.turnSent()
+        answerQuietSinceDate = nil
+        answerWaitStartedDate = Date()
+        startFollowUpTimer()
+        publishFollowUpState()
+    }
+
+    /// Dictation ("type what I say"): keep the window open for `seconds` from now (opening it if needed).
+    func keepFollowUpOpen(forSeconds seconds: TimeInterval) {
+        guard ClickySettings.isWakeWordEnabled, state == .armed || state == .capturing else { return }
+        let now = Date()
+        if followUpWindow.phase == .idle {
+            followUpWindow.listenSeconds = seconds
+            followUpWindow.turnSent()
+            followUpWindow.answerFinished(at: now)
+            pipeline?.setFollowUpListening(true)
+            startFollowUpTimer()
+        } else {
+            // Waiting for the answer: the window that follows lasts at least this long.
+            followUpWindow.listenSeconds = max(followUpWindow.listenSeconds, seconds)
+            followUpWindow.extend(until: now.addingTimeInterval(seconds))
+        }
+        publishFollowUpState()
+    }
+
+    var isFollowUpOpen: Bool { followUpWindow.isOpen }
+
+    func cancelFollowUp() {
+        guard followUpWindow.phase != .idle else { return }
+        followUpWindow.cancel()
+        finishFollowUp(.cancelled)
+    }
+
+    private func startFollowUpTimer() {
+        guard followUpTimer == nil else { return }
+        followUpTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followUpTimerTick() }
+        }
+    }
+
+    private func followUpTimerTick() {
+        let now = Date()
+        switch followUpWindow.phase {
+        case .idle:
+            followUpTimer?.invalidate()
+            followUpTimer = nil
+        case .awaitingAnswer:
+            // The answer is done once Clicky has been quiet (not thinking, speaking or acting) for half a second.
+            if isAnswerBusy() || speechOutput.isPlaying {
+                answerQuietSinceDate = nil
+                // A turn that never finishes (stuck) doesn't keep the window pending forever.
+                if let answerWaitStartedDate, now.timeIntervalSince(answerWaitStartedDate) > 180 { cancelFollowUp() }
+                return
+            }
+            if answerQuietSinceDate == nil { answerQuietSinceDate = now }
+            guard let answerQuietSinceDate, now.timeIntervalSince(answerQuietSinceDate) >= 0.5 else { return }
+            followUpWindow.answerFinished(at: now)
+            pipeline?.setFollowUpListening(true)
+            print("👂 Follow-up: listening \(Int(followUpWindow.listenSeconds)) s for another command")
+            publishFollowUpState()
+        case .listening:
+            if let endReason = followUpWindow.tick(now: now) { finishFollowUp(endReason) }
+        case .hearingCommand:
+            break
+        }
+    }
+
+    private func finishFollowUp(_ reason: WakeFollowUpEndReason) {
+        pipeline?.setFollowUpListening(false)
+        followUpTimer?.invalidate()
+        followUpTimer = nil
+        followUpEndCounts[reason.rawValue, default: 0] += 1
+        print("👂 Follow-up: ended (\(reason.rawValue))")
+        publishFollowUpState()
+        onFollowUpEnded?(reason)
+        rebuildPipelineForLocaleIfIdle()
+    }
+
+    private func publishFollowUpState() {
+        let isListeningNow = followUpWindow.showsListening
+        if isFollowUpListening != isListeningNow { isFollowUpListening = isListeningNow }
+    }
+
+    // MARK: - Locale
+
+    private var needsPipelineRebuildForLocale = false
+
+    private func rebuildPipelineForLocaleIfIdle() {
+        guard needsPipelineRebuildForLocale, !isCapturingTurn, followUpWindow.phase == .idle else { return }
+        needsPipelineRebuildForLocale = false
+        stopMicrophone(reportAbandonedTurn: true)
+        pipeline = nil
+        reevaluate()
+    }
+
+    /// The on-device English locales, the system one first.
+    private static func makeLocaleSelector(setting: WakeLocaleSetting) -> WakeLocaleSelector {
+        var candidates: [String] = []
+        if let preferredLocale = WakeWordRecognitionPipeline.preferredLocale() { candidates.append(preferredLocale.identifier) }
+        for identifier in ["en-IN", "en-US"] where !candidates.contains(where: { WakeLocaleSelector.sameLocale($0, identifier) })
+            && WakeWordRecognitionPipeline.supportsOnDeviceRecognition(Locale(identifier: identifier)) {
+            candidates.append(identifier)
+        }
+        var selector = WakeLocaleSelector(setting: setting, candidates: candidates)
+        // A fixed locale that can't run on-device falls back to the automatic choice.
+        if selector.currentLocale == nil, case .fixed = setting { selector = WakeLocaleSelector(setting: .automatic, candidates: candidates) }
+        return selector
     }
 
     // MARK: - Lock and sleep
@@ -421,7 +646,7 @@ final class WakeWordController: ObservableObject {
 
     /// The debug inbox's `wakeStatus`.
     func statusSnapshot() -> [String: Any] {
-        let statistics = pipeline?.currentStatistics() ?? WakeWordPipelineStatistics()
+        let statistics = pipeline?.currentStatistics() ?? lastPipelineStatistics
         func rounded(_ value: Double?) -> Any { value.map { ($0 * 100).rounded() / 100 } ?? NSNull() }
         return [
             "enabled": ClickySettings.isWakeWordEnabled,
@@ -447,7 +672,33 @@ final class WakeWordController: ObservableObject {
             "engineStarts": engineStartCount,
             "cpuPercentLastMinute": rounded(processCPUWindow.percent),
             "cpuWindowSeconds": Int(processCPUWindow.spanSeconds),
-            "speechServiceCpuPercentLastMinute": rounded(speechServiceCPUWindow.percent)
+            "speechServiceCpuPercentLastMinute": rounded(speechServiceCPUWindow.percent),
+            // P8 diagnosis.
+            "errorsByCode": statistics.errorsByCode,
+            "benignErrors": statistics.benignErrors,
+            "nearMisses": statistics.nearMisses.displayCounts,
+            "nearMissTotal": statistics.nearMisses.totalCount,
+            "followUpActive": followUpWindow.isOpen,
+            "followUpPhase": String(describing: followUpWindow.phase).components(separatedBy: "(").first ?? "",
+            "followUpCommands": followUpCommandCount,
+            "followUpEnds": followUpEndCounts,
+            "deviceSampleRate": statistics.inputSampleRate ?? listeningDevice?.nominalSampleRate ?? NSNull(),
+            "device": listeningDevice?.statusDictionary ?? NSNull(),
+            "deviceReason": listeningDeviceReason,
+            "pushToTalkDevice": PushToTalkInputDeviceRecord.lastDevice?.statusDictionary ?? NSNull(),
+            "defaultInputDevice": AudioInputDeviceInfo.defaultInput()?.statusDictionary ?? NSNull(),
+            "inputFormat": statistics.inputFormatText ?? NSNull(),
+            "conversion": statistics.conversionText,
+            "noiseFloorDb": rounded(statistics.noiseFloorDecibels),
+            "openThresholdDb": rounded(statistics.openThresholdDecibels),
+            "lastOpenPeakDb": rounded(statistics.lastOpenPeakDecibels),
+            "makeUpGainDb": rounded(statistics.makeUpGainDecibels),
+            "suppressed": statistics.isSuppressed,
+            "preRollSeconds": WakeWordRecognitionPipeline.preRollSeconds,
+            "localeSetting": UserDefaults.standard.string(forKey: ClickySettings.Keys.wakeLocale) ?? "auto",
+            "localeCandidates": localeSelector.candidates,
+            "localeFailureRates": Dictionary(uniqueKeysWithValues: localeSelector.candidates.map { ($0, rounded(localeSelector.failureRate(of: $0))) }),
+            "localeSwitches": localeSelector.switchLog
         ]
     }
 
@@ -474,13 +725,14 @@ final class WakeWordController: ObservableObject {
     /// The debug inbox's `wakeFeed`: a WAV/CAF through the same recognizer
     /// and matcher (a separate pipeline; the live one keeps listening). No
     /// mic, no speaker.
-    func feedFile(at fileURL: URL) async -> (isSuccess: Bool, result: [String: Any], errorMessage: String?) {
+    /// `localeIdentifier` (P8 wakeFeedBatch): feed through that on-device locale instead of the live one.
+    func feedFile(at fileURL: URL, localeIdentifier: String? = nil) async -> (isSuccess: Bool, result: [String: Any], errorMessage: String?) {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             return (false, [:], "speech recognition isn't authorized")
         }
-        guard let recognitionLocale else { return (false, [:], "no on-device recognizer for this language") }
+        guard let feedLocale = localeIdentifier.map({ Locale(identifier: $0) }) ?? recognitionLocale else { return (false, [:], "no on-device recognizer for this language") }
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else { return (false, [:], "can't read \(fileURL.path)") }
-        let report = await WakeWordFileFeeder.feed(fileURL: fileURL, locale: recognitionLocale, matcher: matcher)
+        let report = await WakeWordFileFeeder.feed(fileURL: fileURL, locale: feedLocale, matcher: matcher)
         func milliseconds(_ seconds: TimeInterval?) -> Any { seconds.map { Int(($0 * 1000).rounded()) } ?? NSNull() }
         let detections: [[String: Any]] = report.detections.map { detection in
             [
@@ -503,7 +755,76 @@ final class WakeWordController: ObservableObject {
             "recognizedAudioSeconds": (report.statistics.recognizedAudioSeconds * 100).rounded() / 100,
             "recognizerWordTimes": report.statistics.usedRecognizerWordTimes,
             // What the recognizer heard in this test file (feed only; never the mic).
-            "heard": report.statistics.heardTexts.filter { !$0.isEmpty }
+            "heard": report.statistics.heardTexts.filter { !$0.isEmpty },
+            "errorsByCode": report.statistics.errorsByCode,
+            "inputFormat": report.statistics.inputFormatText ?? NSNull(),
+            "conversion": report.statistics.conversionText,
+            "noiseFloorDb": (report.statistics.noiseFloorDecibels * 10).rounded() / 10,
+            "makeUpGainDb": (report.statistics.makeUpGainDecibels * 10).rounded() / 10
+        ]
+        return (report.errorMessage == nil, result, report.errorMessage)
+    }
+
+    /// P8 `wakeFeedBatch {paths, locale?}`: each file through a fresh pipeline (one after another), with a summary
+    /// of how many woke. `localeIdentifier` nil: the live locale. Test files only, never the mic.
+    func feedFiles(at fileURLs: [URL], localeIdentifier: String?) async -> (isSuccess: Bool, result: [String: Any], errorMessage: String?) {
+        if let localeIdentifier, !WakeWordRecognitionPipeline.supportsOnDeviceRecognition(Locale(identifier: localeIdentifier)) {
+            return (false, [:], "\(localeIdentifier) has no on-device recognizer")
+        }
+        var fileResults: [[String: Any]] = []
+        var wokeCount = 0
+        for fileURL in fileURLs {
+            let (isSuccess, result, errorMessage) = await feedFile(at: fileURL, localeIdentifier: localeIdentifier)
+            var fileResult = result
+            fileResult["ok"] = isSuccess
+            if let errorMessage { fileResult["error"] = errorMessage }
+            let detections = result["detections"] as? [[String: Any]] ?? []
+            let woke = detections.contains { $0["decision"] as? String == WakeWordGate.Decision.fire.rawValue }
+            fileResult["woke"] = woke
+            if woke { wokeCount += 1 }
+            fileResults.append(fileResult)
+        }
+        let usedLocale = localeIdentifier ?? recognitionLocale?.identifier ?? ""
+        return (true, ["locale": usedLocale, "files": fileResults, "woke": wokeCount, "total": fileURLs.count,
+                       "wakeRate": fileURLs.isEmpty ? 0 : Double(wokeCount) / Double(fileURLs.count)], nil)
+    }
+
+    /// P8 `wakeFeedChain {path}`: "hey claudia, <cmd1>" … "<cmd2>" … "that's all" through the recognizer, the
+    /// matcher and the follow-up window. `describeCommand` turns each command into the fast path's dry-run
+    /// description (nothing is executed). The trailing 11 s of silence lets the window end on silence too.
+    func feedChain(at fileURL: URL, localeIdentifier: String?,
+                   describeCommand: (String) -> [String: Any]) async -> (isSuccess: Bool, result: [String: Any], errorMessage: String?) {
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized else { return (false, [:], "speech recognition isn't authorized") }
+        guard let feedLocale = localeIdentifier.map({ Locale(identifier: $0) }) ?? recognitionLocale else { return (false, [:], "no on-device recognizer for this language") }
+        guard FileManager.default.isReadableFile(atPath: fileURL.path) else { return (false, [:], "can't read \(fileURL.path)") }
+        let report = await WakeWordFileFeeder.feed(fileURL: fileURL, locale: feedLocale, matcher: matcher,
+                                                   trailingSilenceSeconds: WakeFollowUpWindow.defaultListenSeconds + 1.5, followsUp: true)
+        let wakes = report.detections.filter { $0.decision == .fire }.count
+        var commands: [[String: Any]] = []
+        if let wakeTurnText = report.wakeTurnText {
+            var entry = describeCommand(wakeTurnText)
+            entry["text"] = wakeTurnText
+            entry["viaFollowUp"] = false
+            commands.append(entry)
+        }
+        let followUpCommands: [[String: Any]] = report.followUpCommands.map { command in
+            var entry = describeCommand(command.text)
+            entry["text"] = command.text
+            entry["heardAtMs"] = Int((command.heardAtSeconds * 1000).rounded())
+            entry["viaFollowUp"] = true
+            return entry
+        }
+        commands += followUpCommands
+        let result: [String: Any] = [
+            "file": fileURL.lastPathComponent,
+            "locale": report.localeIdentifier,
+            "wakes": wakes,
+            "wakeTurn": commands.first.map { $0 as Any } ?? NSNull(),
+            "followUpCommands": followUpCommands,
+            "commands": commands,
+            "endedBy": report.followUpEndedBy ?? NSNull(),
+            "heard": report.statistics.heardTexts.filter { !$0.isEmpty },
+            "errorsByCode": report.statistics.errorsByCode
         ]
         return (report.errorMessage == nil, result, report.errorMessage)
     }
