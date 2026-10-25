@@ -107,7 +107,7 @@ let segmenterVectors: [String] = [
     for character in text { streamedSegments += streamed.feed(String(character)) }
     streamedSegments += streamed.finish()
     #expect(wholeSegments == streamedSegments)
-    #expect(wholeSegments.first!.count <= 48)
+    #expect(wholeSegments.first!.count <= 32)
     #expect(wholeSegments.first!.hasSuffix(" "))
     #expect(wholeSegments.joined() == text)
 }
