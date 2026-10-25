@@ -51,3 +51,14 @@ only adds payload (~0.1-0.2 s more stdin write). Candidate follow-up: cap the cu
   0.000% magenta in every square.
 - legacyCenter: 0.71 / 0.66 / 1.55 pt (the ultrawide on the standard tier at 2.19 pt per model px;
   the residual is the half-pixel centre convention).
+
+## P1b follow-ups
+
+- **CLAUDE.md injection fixed.** `--setting-sources user` alone still loads `~/.claude/CLAUDE.md`
+  (it is a user-scope memory file, not a setting). Clicky now also sets
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the CLI's environment (`ClaudeArgs.environment`) and runs it
+  from `$TMPDIR/clicky-session`. transportProbe (d) re-run: the model no longer sees `graphify`;
+  text-only usage dropped from 836 to 616 tokens. The file itself is untouched.
+- **2000 px cap recorded.** `ClaudeImageSizing.claudeCodeCLIMaxLongEdge = 2000` is applied in
+  `modelImageSize`; tierProbe now stores `effectiveMaxEdge = min(measured, 2000)` with reason
+  `"CLI downscale"`. The ultrawide is sent at 2000x837, the 1080p screens at 1920x1080.

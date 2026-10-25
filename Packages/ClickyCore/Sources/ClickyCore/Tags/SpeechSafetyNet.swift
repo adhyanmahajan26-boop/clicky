@@ -44,11 +44,12 @@ public enum SpeechSafetyNet {
     }
 
     /// The acceptance check on raw narration (before cleaning): live-id
-    /// mentions that would be stripped, plus the words "badge(s)" and
-    /// "the list".
+    /// mentions that would be stripped, plus words that only make sense for
+    /// Clicky's own overlay ("badge(s)", "element list", "list of elements").
+    /// A plain "the list" is NOT counted: it is usually an on-screen list.
     public static func countBadgeMentions(in narration: String, liveElementIDs: Set<Int>) -> Int {
         let idMentions = clean(narration, liveElementIDs: liveElementIDs).leakCount
-        let wordMentions = ["badge", "the list"].reduce(0) { mentionCount, phrase in
+        let wordMentions = ["badge", "element list", "elements list", "list of elements"].reduce(0) { mentionCount, phrase in
             mentionCount + narration.lowercased().components(separatedBy: phrase).count - 1
         }
         return idMentions + wordMentions

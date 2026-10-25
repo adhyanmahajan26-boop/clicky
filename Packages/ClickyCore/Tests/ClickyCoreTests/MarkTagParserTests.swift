@@ -394,6 +394,8 @@ private struct LinearCongruentialGenerator {
 }
 
 @Test func badgeMentionsAreCounted() {
-    let count = SpeechSafetyNet.countBadgeMentions(in: "see badge #5 in the list", liveElementIDs: [5])
+    let count = SpeechSafetyNet.countBadgeMentions(in: "see badge #5 in the element list", liveElementIDs: [5])
     #expect(count == 3)
+    // An on-screen list is not a leak.
+    #expect(SpeechSafetyNet.countBadgeMentions(in: "row 9 is in the list on the left", liveElementIDs: [9]) == 0)
 }
