@@ -710,7 +710,9 @@ private final class MockStepRunner: OutwardStepRunner {
         }
         #expect(deny.contains("WebFetch"))
         #expect(deny.contains("Edit(//Users/me/.clicky/code/task1/ctx/**)") && deny.contains("Write(//Users/me/.clicky/code/task1/outbox/**)"))
-        #expect(deny.contains("Edit(.git/**)") && deny.contains("Write(~/.clicky/**)"))
+        #expect(deny.contains("Edit(.git/**)") && deny.contains("Write(~/.clicky/debug-inbox/**)") && deny.contains("Edit(~/.clicky/canary/**)"))
+        // The task worktree lives under ~/.clicky/worktrees: no edit rule may cover it (a live run was denied every Edit).
+        #expect(!deny.contains { $0.hasPrefix("Edit(~/.clicky/**") || $0.hasPrefix("Write(~/.clicky/**") || $0.contains(".clicky/worktrees") })
         for readRule in ["Read(//Users/me/.clicky/code/task1/outbox/**)", "Read(~/.ssh/**)", "Read(~/.config/gh/**)", "Read(~/.netrc)", "Read(~/.aws/**)",
                          "Read(~/Library/Keychains/**)", "Read(~/.clicky/canary/**)"] {
             #expect(deny.contains(readRule))

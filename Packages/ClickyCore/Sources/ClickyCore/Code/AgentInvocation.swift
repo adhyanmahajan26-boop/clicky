@@ -73,6 +73,11 @@ public struct AgentInvocation: Sendable {
 
     /// A random string in a 0600 file that nothing may ever read; the sandbox probe checks it never leaks.
     public static let canaryDirectory = "~/.clicky/canary"
+    /// ~/.clicky entries the agent may never edit: all but worktrees/ (the task worktree is under it).
+    public static let protectedClickyPaths = [
+        "~/.clicky/canary/**", "~/.clicky/code/**", "~/.clicky/debug-inbox/**", "~/.clicky/debug-outbox/**",
+        "~/.clicky/fixture/**", "~/.clicky/session/**", "~/.clicky/voice/**", "~/.clicky/*.pid", "~/.clicky/*.json"
+    ]
     public static let canaryFilePath = canaryDirectory + "/secret.txt"
 
     /// Credential locations no tool may read (Read deny rules, which the sandbox also applies to Bash).
@@ -285,7 +290,9 @@ public struct AgentInvocation: Sendable {
         let contextRule = Self.absolutePermissionPath(contextDirectoryPath) + "/**"
         let outboxRule = Self.absolutePermissionPath(outboxDirectoryPath) + "/**"
         for editingTool in ["Edit", "Write"] {
-            rules += ["\(editingTool)(\(contextRule))", "\(editingTool)(\(outboxRule))", "\(editingTool)(.git/**)", "\(editingTool)(**/.git/**)", "\(editingTool)(~/.clicky/**)"]
+            rules += ["\(editingTool)(\(contextRule))", "\(editingTool)(\(outboxRule))", "\(editingTool)(.git/**)", "\(editingTool)(**/.git/**)"]
+            // Everything Clicky keeps in ~/.clicky except worktrees/, where the agent's own task worktree lives.
+            rules += Self.protectedClickyPaths.map { "\(editingTool)(\($0))" }
         }
         rules.append("Read(\(outboxRule))")
         rules += Self.deniedReadPaths.map { "Read(\($0))" }
