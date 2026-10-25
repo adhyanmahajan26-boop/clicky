@@ -388,6 +388,14 @@ def set_badges(enabled):
     subprocess.run(["defaults", "write", "com.personal.clicky", "v2.grounding.badges", "-bool", "YES" if enabled else "NO"], check=False)
 
 
+def set_effort_override(effort):
+    """Forces --effort for every answer (None removes the override)."""
+    if effort:
+        subprocess.run(["defaults", "write", "com.personal.clicky", "v2.claude.effortOverride", effort], check=False)
+    else:
+        subprocess.run(["defaults", "delete", "com.personal.clicky", "v2.claude.effortOverride"], check=False, stderr=subprocess.DEVNULL)
+
+
 def bucket_of(kind):
     if kind in ("ax", "web"):
         return "ax+web"
@@ -495,6 +503,8 @@ def main():
     parser.add_argument("--rows", type=int, default=0, help="only the first N prompt rows (0 = all)")
     parser.add_argument("--latency-asks", type=int, default=10)
     parser.add_argument("--badges", default="on", choices=["on", "off", "ab"])
+    parser.add_argument("--effort", default=None, choices=["low", "medium", "high"],
+                        help="force --effort for every answer (v2.claude.effortOverride); run twice to compare")
     parser.add_argument("--out", default=os.path.join(REPO_ROOT, "docs", "v2", "EVAL.md"))
     arguments = parser.parse_args()
 
@@ -503,6 +513,7 @@ def main():
     ping_result = require_single_clean_clicky()
     was_hands_free = bool(ping_result.get("handsFree"))
     clickyctl({"cmd": "handsfree", "on": False}, 10)
+    set_effort_override(arguments.effort)
     try:
         display_indexes = [int(d) for d in arguments.displays.split(",") if d != ""]
         badge_arms = ["on", "off"] if arguments.badges == "ab" else [arguments.badges]
@@ -510,6 +521,7 @@ def main():
         latency_samples = run_latency(arguments.latency_asks) if arguments.latency_asks else []
     finally:
         set_badges(True)
+        set_effort_override(None)
         clickyctl({"cmd": "handsfree", "on": was_hands_free}, 10)
         clickyctl({"cmd": "clear"}, 10)
 

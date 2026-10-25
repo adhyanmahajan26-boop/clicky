@@ -108,7 +108,7 @@ private func containsInOrder(_ needles: [String], in haystack: [String]) -> Bool
     #expect(prompt.contains("the centre you see"))
     #expect(prompt.contains("magenta number tags"))
     // Worker scope wording.
-    #expect(prompt.contains("helpers see only your task text plus the element lists; they have no internet, files or GitHub."))
+    #expect(prompt.contains("Helpers see only the text you give them plus the element lists; they have no internet, files or GitHub."))
     #expect(prompt.contains("say you can't look that up yet"))
     #expect(prompt.contains("never say ids"))
 }

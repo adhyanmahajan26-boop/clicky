@@ -31,7 +31,51 @@ public enum ClickySettings {
         public static let marksMax = "v2.marks.max"
         /// Bool, follow AX-backed marks as their elements scroll/move. Default true.
         public static let marksTrackAX = "v2.marks.trackAX"
+        /// "open" (default: mic stays open while Clicky talks) or "halfDuplex".
+        public static let voiceEchoMode = "v2.voice.echoMode"
+        /// Int, caption bubble lines (default 4).
+        public static let captionMaxLines = "v2.caption.maxLines"
+        /// Double, caption bubble width in pt (default 360, 280–480).
+        public static let captionMaxWidth = "v2.caption.maxWidth"
+        /// Double, ms added to the Qwen audio clock for captions (default 0).
+        public static let captionAVOffsetMs = "v2.caption.avOffsetMs"
+        /// Bool gates for the P4/P5/P6 prompt sections (default off).
+        public static let whiteboardAuto = "v2.whiteboard.auto"
+        public static let codeEnabled = "v2.code.enabled"
+        public static let typeForMeEnabled = "v2.typeForMe.enabled"
+        /// String "low"/"medium"/"high": forces --effort for every answer (evals).
+        public static let claudeEffortOverride = "v2.claude.effortOverride"
     }
+
+    public static var claudeEffortOverride: String? {
+        guard let effort = defaults.string(forKey: Keys.claudeEffortOverride), ["low", "medium", "high"].contains(effort) else { return nil }
+        return effort
+    }
+
+    public enum EchoMode: String, Sendable {
+        case open
+        case halfDuplex
+    }
+
+    public static var echoMode: EchoMode {
+        (defaults.string(forKey: Keys.voiceEchoMode)).flatMap(EchoMode.init(rawValue:)) ?? .open
+    }
+
+    public static var captionMaxLines: Int {
+        max(1, defaults.object(forKey: Keys.captionMaxLines) as? Int ?? 4)
+    }
+
+    public static var captionMaxWidth: Double {
+        min(480, max(280, defaults.object(forKey: Keys.captionMaxWidth) as? Double ?? 360))
+    }
+
+    public static var captionAVOffsetMilliseconds: Double {
+        defaults.object(forKey: Keys.captionAVOffsetMs) as? Double ?? 0
+    }
+
+    public static var isWhiteboardAutoEnabled: Bool { defaults.object(forKey: Keys.whiteboardAuto) as? Bool ?? false }
+    public static var isCodeEnabled: Bool { defaults.object(forKey: Keys.codeEnabled) as? Bool ?? false }
+    public static var isTypeForMeEnabled: Bool { defaults.object(forKey: Keys.typeForMeEnabled) as? Bool ?? false }
 
     /// Password managers and Keychain: never read their field values.
     public static let defaultValueBlockedBundleIDs = [

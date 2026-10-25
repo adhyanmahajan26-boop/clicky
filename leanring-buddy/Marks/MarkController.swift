@@ -61,6 +61,23 @@ final class MarkController {
         tracker.track(marks)
     }
 
+    /// A new answer: marks from now on are recorded in this turn.
+    func startAnswer(turnRecord: TurnRecord?) {
+        self.turnRecord = turnRecord
+    }
+
+    /// One mark, drawn as its words are spoken (the oldest goes past the max).
+    func add(_ mark: LiveScreenMark) {
+        marks.append(mark)
+        let maximumMarks = ClickySettings.maximumMarks
+        if marks.count > maximumMarks {
+            for droppedMark in marks.prefix(marks.count - maximumMarks) { tracker.stop(droppedMark.id) }
+            marks.removeFirst(marks.count - maximumMarks)
+        }
+        rebuild()
+        tracker.track([mark])
+    }
+
     func clear() {
         tracker.stopAll()
         marks = []
@@ -157,20 +174,21 @@ final class MarkController {
         }
     }
 
-    private static func apply(_ outcome: MarkRecheck.Outcome, to mark: inout LiveScreenMark) {
+    static func apply(_ outcome: MarkRecheck.Outcome, to mark: inout LiveScreenMark) {
         guard !outcome.isPassing else { return }
         mark.confidence = max(0, mark.confidence - 0.3)
         mark.isTentative = true
     }
 
-    private func applyLateRecheck(_ outcome: MarkRecheck.Outcome, markID: UUID, turnRecord: TurnRecord?) {
+    /// A re-check that finished after its mark was drawn.
+    func applyLateRecheck(_ outcome: MarkRecheck.Outcome, markID: UUID, turnRecord: TurnRecord?) {
         guard let markIndex = marks.firstIndex(where: { $0.id == markID }) else { return }
         Self.apply(outcome, to: &marks[markIndex])
         recordRecheck(outcome, mark: marks[markIndex], turnRecord: turnRecord)
         if !outcome.isPassing { rebuild() }
     }
 
-    private func recordRecheck(_ outcome: MarkRecheck.Outcome, mark: LiveScreenMark, turnRecord: TurnRecord?) {
+    func recordRecheck(_ outcome: MarkRecheck.Outcome, mark: LiveScreenMark, turnRecord: TurnRecord?) {
         if !outcome.isPassing {
             print("🔎 Mark re-check failed for \"\(mark.recheckName ?? "")\" (\(Int(outcome.milliseconds)) ms) → tentative")
         }

@@ -7,7 +7,9 @@
 //  no API key is needed. Each request launches `claude -p` in headless
 //  stream-json mode (arguments from ClickyCore's ClaudeArgs, shared with
 //  workers and probes), writes ONE user message to its stdin and closes it,
-//  and reads streamed text deltas plus the final `result` from stdout.
+//  and reads streamed events from stdout, split on 0x0A only (LineReader:
+//  a U+2028 inside a delta must not break the JSON line). Every event is
+//  passed to `onStreamEvent`; 25 s without a text delta ends the request.
 //
 //  The message is: a text block (history + what the user said), then for
 //  each screen its SCREEN header text followed by its JPEG.
@@ -20,6 +22,7 @@ enum ClaudeCodeBridgeError: LocalizedError {
     case claudeCodeNotInstalled
     case claudeCodeReportedError(String)
     case claudeCodeExitedWithoutResult(exitCode: Int32, standardErrorOutput: String)
+    case claudeCodeStalled
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +32,8 @@ enum ClaudeCodeBridgeError: LocalizedError {
             return "Claude Code error: \(message)"
         case .claudeCodeExitedWithoutResult(let exitCode, let standardErrorOutput):
             return "Claude Code exited (\(exitCode)) without an answer. \(standardErrorOutput)"
+        case .claudeCodeStalled:
+            return "Claude Code sent nothing for \(Int(CLIStreamFailure.stallSeconds)) seconds."
         }
     }
 }
@@ -119,9 +124,11 @@ final class ClaudeCodeBridge {
         systemPromptFileName: String,
         systemPrompt: String,
         contentBlocks: [ClaudeContentBlock],
+        effortLevel: String? = nil,
         persistentSessionIdentifier: String? = nil,
         oversizedImageErrorTransformationOverride: Bool? = nil,
         onTextChunk: @MainActor @Sendable (String) -> Void = { _ in },
+        onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)? = nil,
         onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil
     ) async throws -> ClaudeTurnResult {
         let startTime = Date()
@@ -133,6 +140,7 @@ final class ClaudeCodeBridge {
         let claudeArgs = ClaudeArgs(
             model: model,
             systemPromptFileURL: systemPromptFileURL,
+            effortLevel: effortLevel,
             persistentSessionIdentifier: persistentSessionIdentifier
         )
 
@@ -175,50 +183,70 @@ final class ClaudeCodeBridge {
             }
         }
 
+        // 25 s without a text delta: stop the CLI and report it as stalled.
+        let stallWatch = StallWatch()
+        let stallWatchTask = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if stallWatch.secondsSinceLastActivity() > CLIStreamFailure.stallSeconds {
+                    stallWatch.markStalled()
+                    claudeCodeProcess.terminate()
+                    return
+                }
+            }
+        }
+        defer { stallWatchTask.cancel() }
+
         return try await withTaskCancellationHandler {
             var accumulatedResponseText = ""
             var finalResultText: String?
             var resolvedModelIdentifier: String?
             var finalUsage: [String: Any] = [:]
+            var lineReader = LineReader()
+            var pendingBytes = Data()
 
-            for try await outputLine in standardOutputPipe.fileHandleForReading.bytes.lines {
-                guard let outputLineData = outputLine.data(using: .utf8),
-                      let outputEvent = try? JSONSerialization.jsonObject(with: outputLineData) as? [String: Any],
-                      let outputEventType = outputEvent["type"] as? String else {
-                    continue
-                }
-
-                if outputEventType == "system", (outputEvent["subtype"] as? String) == "init" {
-                    resolvedModelIdentifier = outputEvent["model"] as? String
-                }
-
-                if outputEventType == "stream_event",
-                   let streamEvent = outputEvent["event"] as? [String: Any],
-                   (streamEvent["type"] as? String) == "content_block_delta",
-                   let delta = streamEvent["delta"] as? [String: Any],
-                   (delta["type"] as? String) == "text_delta",
-                   let textChunk = delta["text"] as? String {
-                    accumulatedResponseText += textChunk
-                    let currentAccumulatedText = accumulatedResponseText
-                    onTextChunk(currentAccumulatedText)
-                }
-
-                if outputEventType == "result" {
-                    let resultText = outputEvent["result"] as? String ?? ""
-                    let isErrorResult = outputEvent["is_error"] as? Bool ?? false
-                    finalUsage = outputEvent["usage"] as? [String: Any] ?? [:]
-                    if isErrorResult {
-                        throw ClaudeCodeBridgeError.claudeCodeReportedError(resultText)
+            func handle(_ lineData: Data) async throws {
+                if let event = CLIStreamEvent.parse(lineData) {
+                    await onStreamEvent?(event)
+                    switch event {
+                    case .systemInit(let model):
+                        resolvedModelIdentifier = model
+                    case .textDelta(let textChunk):
+                        stallWatch.noteActivity()
+                        accumulatedResponseText += textChunk
+                        let currentAccumulatedText = accumulatedResponseText
+                        await onTextChunk(currentAccumulatedText)
+                    case .result(let resultText, let isErrorResult, _):
+                        if isErrorResult {
+                            throw ClaudeCodeBridgeError.claudeCodeReportedError(resultText)
+                        }
+                        finalResultText = resultText
+                    case .messageStart, .other:
+                        break
                     }
-                    finalResultText = resultText
+                }
+                if let outputEvent = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                   (outputEvent["type"] as? String) == "result" {
+                    finalUsage = outputEvent["usage"] as? [String: Any] ?? [:]
                 }
             }
+
+            for try await outputByte in standardOutputPipe.fileHandleForReading.bytes {
+                pendingBytes.append(outputByte)
+                guard outputByte == 0x0A || pendingBytes.count >= 65_536 else { continue }
+                let completedLines = lineReader.append(pendingBytes)
+                pendingBytes.removeAll(keepingCapacity: true)
+                for lineData in completedLines { try await handle(lineData) }
+            }
+            for lineData in lineReader.append(pendingBytes) { try await handle(lineData) }
+            if let lastLine = lineReader.finish() { try await handle(lastLine) }
 
             claudeCodeProcess.waitUntilExit()
 
             // A cancelled request was killed mid-stream; report it as a
             // cancellation so the caller doesn't treat it as a failure.
             try Task.checkCancellation()
+            if stallWatch.isStalled { throw ClaudeCodeBridgeError.claudeCodeStalled }
 
             guard let finalResultText else {
                 let standardErrorData = standardErrorPipe.fileHandleForReading.readDataToEndOfFile()
@@ -309,5 +337,30 @@ final class ClaudeCodeBridge {
             }
             return authStatus["loggedIn"] as? Bool ?? false
         }.value
+    }
+}
+
+/// Last text-delta time for the stall watchdog (read from a detached task).
+private nonisolated final class StallWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastActivity = Date()
+    private var stalled = false
+
+    func noteActivity() {
+        lock.lock(); lastActivity = Date(); lock.unlock()
+    }
+
+    func secondsSinceLastActivity() -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return Date().timeIntervalSince(lastActivity)
+    }
+
+    func markStalled() {
+        lock.lock(); stalled = true; lock.unlock()
+    }
+
+    var isStalled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stalled
     }
 }

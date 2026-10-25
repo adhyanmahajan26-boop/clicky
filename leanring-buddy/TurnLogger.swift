@@ -91,6 +91,9 @@ final class TurnRecord {
     var speech = SpeechEntry(engine: nil, fallback: false)
     var errorDescription: String?
     var grounding: GroundingEntry?
+    /// v2 P2: caption segments as spoken, and tags in the order they fired (each once).
+    var segmentTexts: [String] = []
+    var firedTagIndexes: [Int] = []
 
     /// The element lists exactly as sent, saved next to the screenshots.
     func recordElementLists(_ elementListTexts: [String]) {
@@ -251,6 +254,8 @@ enum TurnLogger {
             let speech: TurnRecord.SpeechEntry
             let error: String?
             let grounding: TurnRecord.GroundingEntry?
+            let segments: [String]
+            let firedTags: [Int]
         }
 
         let turnFile = TurnFile(
@@ -263,7 +268,9 @@ enum TurnLogger {
             timings: turnRecord.timings,
             speech: turnRecord.speech,
             error: turnRecord.errorDescription,
-            grounding: turnRecord.grounding
+            grounding: turnRecord.grounding,
+            segments: turnRecord.segmentTexts,
+            firedTags: turnRecord.firedTagIndexes
         )
 
         let jsonEncoder = JSONEncoder()

@@ -29,6 +29,8 @@ enum HandsFreeVoiceCommand: Equatable {
     case clearMarks
     /// "done", "end session", "stop listening" — end the hands-free session.
     case endSession
+    /// "copy that", "copy the answer" — put the last answer on the clipboard.
+    case copyLastAnswer
 
     /// Pause must feel instant, so it's also checked against partial
     /// transcripts while the user is still mid-utterance.
@@ -61,6 +63,10 @@ enum HandsFreeVoiceCommand: Equatable {
         "clear", "clear it", "clear that", "clear marks", "clear the marks",
         "clear the screen", "clear screen", "erase", "erase that", "erase marks",
         "remove marks", "remove the marks", "hide marks", "hide the marks"
+    ]
+
+    private static let copyLastAnswerPhrases: Set<String> = [
+        "copy that", "copy it", "copy the answer", "copy last answer", "copy the last answer", "copy your answer"
     ]
 
     private static let endSessionPhrases: Set<String> = [
@@ -100,6 +106,7 @@ enum HandsFreeVoiceCommand: Equatable {
         if fasterPhrases.contains(normalizedUtterance) { return .faster }
         if clearMarksPhrases.contains(normalizedUtterance) { return .clearMarks }
         if endSessionPhrases.contains(normalizedUtterance) { return .endSession }
+        if copyLastAnswerPhrases.contains(normalizedUtterance) { return .copyLastAnswer }
 
         if let requestedCaptureCount = parseCaptureCount(from: normalizedUtterance) {
             return .capture(requestedCaptureCount: requestedCaptureCount)

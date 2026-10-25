@@ -26,6 +26,11 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
     public static let grounding = SystemPromptFeatures(rawValue: 1 << 3)
     /// The images carry magenta id badges (A/B switch).
     public static let badges = SystemPromptFeatures(rawValue: 1 << 4)
+    /// Gated sections; each needs its consumer (P4 whiteboard, P5 code,
+    /// P6 typing) and its setting, and its text is owned by that phase.
+    public static let whiteboard = SystemPromptFeatures(rawValue: 1 << 5)
+    public static let code = SystemPromptFeatures(rawValue: 1 << 6)
+    public static let typing = SystemPromptFeatures(rawValue: 1 << 7)
 
     /// Everything the app consumes as of P1b.
     public static let current: SystemPromptFeatures = [.grounding, .badges, .helperWorkers]
@@ -34,23 +39,59 @@ public struct SystemPromptFeatures: OptionSet, Sendable {
 }
 
 public enum SystemPromptBuilder {
+    /// Section texts registered by later phases (P4 whiteboard, P5 code, P6
+    /// typing). A gated section is included only when its feature is on AND
+    /// its text exists; until then the prompt says that ability isn't there yet.
+    public nonisolated(unsafe) static var gatedSectionTexts: [GatedSection: String] = [:]
+
+    public enum GatedSection: Hashable, Sendable, CaseIterable {
+        case whiteboard, code, typing
+
+        var feature: SystemPromptFeatures {
+            switch self {
+            case .whiteboard: return .whiteboard
+            case .code: return .code
+            case .typing: return .typing
+            }
+        }
+
+        var missingAbilityName: String {
+            switch self {
+            case .whiteboard: return "draw on a whiteboard"
+            case .code: return "run coding tasks"
+            case .typing: return "type for the user"
+            }
+        }
+    }
+
     public static func mainSystemPrompt(features: SystemPromptFeatures = .current) -> String {
         var sections = [coreSection]
         if features.contains(.grounding) {
-            sections.append(groundingSection(withBadges: features.contains(.badges)))
+            sections.append(groundingSection(withBadges: features.contains(.badges), missingAbilities: missingAbilities(features: features)))
         } else {
             if features.contains(.pointing) { sections.append(pointingSection) }
             if features.contains(.liveMarks) { sections.append(liveMarksSection) }
         }
+        for gatedSection in GatedSection.allCases where features.contains(gatedSection.feature) {
+            if let sectionText = gatedSectionTexts[gatedSection] { sections.append(sectionText) }
+        }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
-            if features.contains(.grounding) { sections.append(workerScopeSection) }
+            if features.contains(.grounding) { sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features))) }
         }
         return sections.joined(separator: "\n\n") + "\n"
     }
 
+    static func isAvailable(_ gatedSection: GatedSection, features: SystemPromptFeatures) -> Bool {
+        features.contains(gatedSection.feature) && gatedSectionTexts[gatedSection] != nil
+    }
+
+    static func missingAbilities(features: SystemPromptFeatures) -> [String] {
+        GatedSection.allCases.filter { !isAvailable($0, features: features) }.map(\.missingAbilityName)
+    }
+
     /// Set-of-marks grounding: describes exactly the lines Clicky sends.
-    static func groundingSection(withBadges: Bool) -> String {
+    static func groundingSection(withBadges: Bool, missingAbilities: [String] = GatedSection.allCases.map(\.missingAbilityName)) -> String {
         let badgeSentence = withBadges
             ? "\nthe images show small magenta number tags next to elements; they are the same ids as the lists. they're drawn for you only — the user can't see them."
             : ""
@@ -81,15 +122,25 @@ public enum SystemPromptBuilder {
         the label is the thing's on-screen name, at most five words. you can add a short note shown next to the mark after a |, at most six words: [MARK:arrow:#57:Share|click this first].
         put each tag right after the words it belongs to. use at most nine marks per answer, on the smallest element that fits. if the target is behind another window, say so instead of pointing through it.
         never say ids, badge numbers, coordinates, or "the list" out loud — the user only sees their screen. name things the way they appear on screen.
-        you can't draw on a whiteboard, run coding tasks, or type for the user yet.
+        \(missingAbilitiesSentence(missingAbilities))
 
         example — user asks how to turn on dark mode with system settings open: "click appearance in the sidebar [MARK:1:#12:Appearance], then pick dark at the top [MARK:2:#40:Dark]. [POINT:#12:Appearance]"
         """
     }
 
-    static let workerScopeSection = """
-        helpers see only your task text plus the element lists; they have no internet, files or GitHub. for a repo, PR or file not on screen, say you can't look that up yet.
-        """
+    static func missingAbilitiesSentence(_ missingAbilities: [String]) -> String {
+        switch missingAbilities.count {
+        case 0: return ""
+        case 1: return "you can't \(missingAbilities[0]) yet."
+        default: return "you can't \(missingAbilities.dropLast().joined(separator: ", ")), or \(missingAbilities.last!) yet."
+        }
+    }
+
+    static func workerScopeSection(hasCode: Bool) -> String {
+        var section = "Helpers see only the text you give them plus the element lists; they have no internet, files or GitHub."
+        if !hasCode { section += " For a repo, PR or file not on screen, say you can't look that up yet." }
+        return section
+    }
 
     static let coreSection = """
         you're clicky, a friendly always-on companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen(s). your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
@@ -99,6 +150,7 @@ public enum SystemPromptBuilder {
         - all lowercase, casual, warm. no emojis.
         - write for the ear, not the eye. short sentences. no lists, bullet points, markdown, or formatting — just natural speech.
         - don't use abbreviations or symbols that sound weird read aloud. write "for example" not "e.g.", spell out small numbers.
+        - say keyboard shortcuts as words, like Command-Shift-P.
         - if the user's question relates to what's on their screen, reference specific things you see.
         - if the screenshot doesn't seem relevant to their question, just answer the question directly.
         - you can help with anything — coding, writing, general knowledge, brainstorming.
@@ -107,6 +159,10 @@ public enum SystemPromptBuilder {
         - focus on giving a thorough, useful explanation. don't end with simple yes/no questions like "want me to explain more?" or "should i show you?" — those are dead ends that force the user to just say yes.
         - instead, when it fits naturally, end by planting a seed — mention something bigger or more ambitious they could try, a related concept that goes deeper, or a next-level technique that builds on what you just explained. make it something worth coming back for, not a question they'd just nod to. it's okay to not end with anything extra if the answer is complete on its own.
         - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
+        - tags: one tag per clause, right after the words it belongs to. never put ] or | inside a tag's name. each WORKER tag goes on its own line.
+        - err toward pointing: when something on screen is relevant, point at it or mark it.
+        - If the answer is about doing something in the on-screen UI (how do I…, show me how…, where is…, draw around/circle…), answer in speech with numbered marks on the real screen, never a board.
+        - MODE lines are hints; the user's words win.
         """
 
     static let pointingSection = """
@@ -146,6 +202,25 @@ public enum SystemPromptBuilder {
         helper workers:
         for a question that splits into two to four independent, smaller sub-tasks that each deserve their own look (for example comparing three options, or checking several separate parts of the screen), you can hand those sub-tasks to fast helper workers that run in parallel. most questions need no workers. never use them for simple, quick, or conversational questions, or when the parts depend on each other.
 
-        to use workers, reply with ONLY a very short spoken heads-up (under ten words, like "on it, checking those three for you") followed by one tag per sub-task: [WORKER:short title:task prompt]. the title is two to four words. the task prompt must stand on its own: workers see the same screenshots but not this conversation. no MARK or POINT tags in that reply. at most four workers run at once and extras wait in line. you'll then get their results and give the final answer.
+        to use workers, reply with ONLY a very short spoken heads-up (under ten words, like "on it, checking those three for you") followed by one tag per sub-task, each on its own line: [WORKER:short title:task prompt]. the title is two to four words. the task prompt must stand on its own: workers see the same screenshots but not this conversation. no MARK or POINT tags in that reply. at most four workers run at once and extras wait in line. you'll then get their results and give the final answer.
         """
+}
+
+/// A hint added to the user's message when their words ask for (or rule
+/// out) a whiteboard. The prompt says the user's words win over it.
+public struct ModeHint: Equatable, Sendable {
+    /// "MODE: whiteboard" / "MODE: answer", or nil for no MODE line.
+    public let line: String?
+    /// The CLI --effort for this turn, nil = the default.
+    public let effort: String?
+
+    private static let noBoardPattern = try! NSRegularExpression(pattern: #"\bno (white ?)?board\b"#, options: [.caseInsensitive])
+    private static let boardPattern = try! NSRegularExpression(pattern: #"\b(white ?board|diagram|visuali[sz]e)\b"#, options: [.caseInsensitive])
+
+    public static func detect(_ transcript: String) -> ModeHint {
+        let range = NSRange(transcript.startIndex..., in: transcript)
+        if noBoardPattern.firstMatch(in: transcript, range: range) != nil { return ModeHint(line: "MODE: answer", effort: nil) }
+        if boardPattern.firstMatch(in: transcript, range: range) != nil { return ModeHint(line: "MODE: whiteboard", effort: "medium") }
+        return ModeHint(line: nil, effort: nil)
+    }
 }

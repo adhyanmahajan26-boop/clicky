@@ -5,7 +5,9 @@
 //  Created by thorfinn on 3/2/26.
 //
 
+import ClickyCore
 import CoreGraphics
+import Foundation
 import Testing
 @testable import Clicky
 
@@ -109,25 +111,22 @@ struct leanring_buddyTests {
     }
 
 
-    @Test func workerTagsAreParsedInOrderAndRemovedFromSpeech() async throws {
-        let (textWithoutWorkerTags, workerRequests) = CompanionWorkerTagParser.extractWorkerTags(
-            from: "on it, checking both. [WORKER:Swift pricing:What does Swift cost? Answer briefly.] [worker: Rust pricing : What does Rust cost: free or paid?] [WORKER:broken]"
-        )
-
-        #expect(textWithoutWorkerTags == "on it, checking both.")
-        #expect(workerRequests == [
+    @Test func workerTagsAreRoutedOutOfSpeech() async throws {
+        var router = ResponseRouter()
+        let outputs = router.feed("on it, checking both.\n[WORKER:Swift pricing:What does Swift cost? Answer briefly.]\n[worker: Rust pricing : What does Rust cost: free or paid?]\n") + router.finish()
+        let workers = outputs.compactMap { output -> CompanionWorkerRequest? in
+            if case .worker(let title, let task) = output { return CompanionWorkerRequest(workerTitle: title, workerTaskPrompt: task) }
+            return nil
+        }
+        let narration = outputs.compactMap { output -> String? in
+            if case .narration(let text) = output { return text }
+            return nil
+        }.joined()
+        #expect(narration.trimmingCharacters(in: .whitespacesAndNewlines) == "on it, checking both.")
+        #expect(workers == [
             CompanionWorkerRequest(workerTitle: "Swift pricing", workerTaskPrompt: "What does Swift cost? Answer briefly."),
             CompanionWorkerRequest(workerTitle: "Rust pricing", workerTaskPrompt: "What does Rust cost: free or paid?")
         ])
-    }
-
-    @Test func responsesWithoutWorkerTagsAreLeftAlone() async throws {
-        let (textWithoutWorkerTags, workerRequests) = CompanionWorkerTagParser.extractWorkerTags(
-            from: "click the save button. [POINT:10,20:save]"
-        )
-
-        #expect(textWithoutWorkerTags == "click the save button. [POINT:10,20:save]")
-        #expect(workerRequests.isEmpty)
     }
 
     @Test func workersRunOnHaiku() async throws {
@@ -180,26 +179,10 @@ struct leanring_buddyTests {
     }
 
 
-    @Test func qwenVoiceSplitsAnswersIntoSentenceChunksAndMergesTinyOnes() async throws {
-        let spokenChunks = QwenLocalTTSClient.splitIntoSpokenChunks(
-            "Sure. Click the appearance tab on the left side of the window.\nThen pick dark at the top. Done!"
-        )
-
-        #expect(spokenChunks == [
-            "Sure. Click the appearance tab on the left side of the window.",
-            "Then pick dark at the top. Done!"
-        ])
-        #expect(QwenLocalTTSClient.splitIntoSpokenChunks("   ").isEmpty)
-    }
-
-    @Test func qwenVoiceBreaksVeryLongSentencesIntoShortChunks() async throws {
-        let longSentence = Array(repeating: "this part keeps going,", count: 30).joined(separator: " ")
-
-        let spokenChunks = QwenLocalTTSClient.splitIntoSpokenChunks(longSentence)
-
-        #expect(spokenChunks.count > 1)
-        #expect(spokenChunks.allSatisfy { $0.count <= 220 })
-        #expect(spokenChunks.joined(separator: " ") == longSentence)
+    @Test func copyThatIsALocalVoiceCommand() async throws {
+        #expect(HandsFreeVoiceCommand.parse("copy that") == .copyLastAnswer)
+        #expect(HandsFreeVoiceCommand.parse("okay clicky, copy the answer") == .copyLastAnswer)
+        #expect(HandsFreeVoiceCommand.parse("copy that file to the desktop") == nil)
     }
 
 }

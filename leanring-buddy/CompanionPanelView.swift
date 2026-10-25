@@ -46,6 +46,12 @@ struct CompanionPanelView: View {
 
                 handsFreeSessionButton
                     .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
+                copyLastAnswerButton
+                    .padding(.horizontal, 16)
             }
 
             if !companionManager.allPermissionsGranted {
@@ -813,6 +819,40 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    /// Copies the last spoken answer (also: say "copy that").
+    private var copyLastAnswerButton: some View {
+        Button(action: {
+            companionManager.copyLastAnswerToPasteboard()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.accentText)
+                Text("Copy last answer")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("or say “copy that”")
+                    .font(.system(size: 10))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
+            .foregroundColor(companionManager.lastAnswerText == nil ? DS.Colors.textTertiary : DS.Colors.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .disabled(companionManager.lastAnswerText == nil)
     }
 
     // MARK: - Claude Code Connection

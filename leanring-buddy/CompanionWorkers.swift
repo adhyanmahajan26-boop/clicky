@@ -4,7 +4,8 @@
 //
 //  Helper workers for the main brain. For questions that split into
 //  independent smaller sub-tasks, the main Claude request replies with a
-//  short heads-up plus [WORKER:short title:task prompt] tags. Each tag runs
+//  short heads-up plus [WORKER:short title:task prompt] tags (parsed by
+//  ClickyCore's ResponseRouter as they stream in). Each tag runs
 //  as its own parallel Claude request on Haiku (fast and cheap), at most four
 //  at a time with the rest queued, and their results go back to the main
 //  brain for the final spoken answer.
@@ -27,52 +28,6 @@ struct CompanionWorkerResult: Equatable {
     let workerTitle: String
     let workerResultText: String
     let didWorkerSucceed: Bool
-}
-
-enum CompanionWorkerTagParser {
-    /// Four run at once and the rest queue; past this many the main brain is
-    /// over-splitting, so extras are dropped.
-    static let maximumWorkerRequestsPerResponse = 8
-
-    private static let workerTagPattern = #"\[WORKER:\s*([^:\]]+?)\s*:\s*([^\]]+?)\s*\]"#
-
-    /// Removes every [WORKER:...] tag (even malformed ones, so they're never
-    /// spoken) and returns the remaining text plus the requests in order.
-    static func extractWorkerTags(from responseText: String) -> (textWithoutWorkerTags: String, workerRequests: [CompanionWorkerRequest]) {
-        guard let workerTagRegex = try? NSRegularExpression(pattern: workerTagPattern, options: [.caseInsensitive]) else {
-            return (responseText, [])
-        }
-
-        let fullResponseRange = NSRange(responseText.startIndex..., in: responseText)
-        var workerRequests: [CompanionWorkerRequest] = []
-
-        for workerTagMatch in workerTagRegex.matches(in: responseText, range: fullResponseRange) {
-            guard workerRequests.count < maximumWorkerRequestsPerResponse,
-                  let titleRange = Range(workerTagMatch.range(at: 1), in: responseText),
-                  let taskPromptRange = Range(workerTagMatch.range(at: 2), in: responseText) else { continue }
-
-            let workerTitle = responseText[titleRange].trimmingCharacters(in: .whitespacesAndNewlines)
-            let workerTaskPrompt = responseText[taskPromptRange].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !workerTitle.isEmpty, !workerTaskPrompt.isEmpty else { continue }
-
-            workerRequests.append(CompanionWorkerRequest(workerTitle: workerTitle, workerTaskPrompt: workerTaskPrompt))
-        }
-
-        var textWithoutWorkerTags = workerTagRegex.stringByReplacingMatches(in: responseText, range: fullResponseRange, withTemplate: "")
-        if let looseWorkerTagRegex = try? NSRegularExpression(pattern: #"\[WORKER:[^\]]*\]"#, options: [.caseInsensitive]) {
-            textWithoutWorkerTags = looseWorkerTagRegex.stringByReplacingMatches(
-                in: textWithoutWorkerTags,
-                range: NSRange(textWithoutWorkerTags.startIndex..., in: textWithoutWorkerTags),
-                withTemplate: ""
-            )
-        }
-
-        let collapsedText = textWithoutWorkerTags
-            .replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return (collapsedText, workerRequests)
-    }
 }
 
 @MainActor
@@ -150,6 +105,43 @@ final class CompanionWorkerRunner: CompanionActivitySource {
         }
 
         return workerRequests.indices.compactMap { workerResultsByIndex[$0] }
+    }
+
+    private var spawnedWorkerCount = 0
+    private var runningSpawnedWorkers = 0
+
+    /// Starts one worker right away (the router spawns them as they're
+    /// parsed, up to four per answer). Never throws: a failure or
+    /// cancellation comes back as a failed result.
+    func spawnWorker(
+        _ workerRequest: CompanionWorkerRequest,
+        performWorkerRequest: @escaping @MainActor (CompanionWorkerRequest) async throws -> String
+    ) -> Task<CompanionWorkerResult, Never> {
+        if runningSpawnedWorkers == 0 { workerRunNumber += 1 }
+        spawnedWorkerCount += 1
+        runningSpawnedWorkers += 1
+        let workerID = Self.workerID(workerRunNumber: workerRunNumber, workerIndex: spawnedWorkerCount)
+        workers.append(CompanionWorkerActivity(id: workerID, workerTitle: workerRequest.workerTitle, isWorking: true))
+        onActivityChanged?()
+        print("🛠️ Worker started (\(Self.workerClaudeModel)): \(workerRequest.workerTitle)")
+        return Task { @MainActor in
+            defer {
+                self.markWorkerFinished(workerID: workerID)
+                self.runningSpawnedWorkers -= 1
+                if self.runningSpawnedWorkers == 0 {
+                    self.workers = []
+                    self.onActivityChanged?()
+                }
+            }
+            do {
+                let workerResultText = try await performWorkerRequest(workerRequest)
+                return CompanionWorkerResult(workerTitle: workerRequest.workerTitle, workerResultText: workerResultText, didWorkerSucceed: true)
+            } catch {
+                print("⚠️ Worker failed: \(workerRequest.workerTitle): \(error)")
+                return CompanionWorkerResult(workerTitle: workerRequest.workerTitle,
+                                             workerResultText: "This helper failed: \(error.localizedDescription)", didWorkerSucceed: false)
+            }
+        }
     }
 
     private func startWorker(

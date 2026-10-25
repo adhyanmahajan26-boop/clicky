@@ -81,13 +81,6 @@ struct SizePreferenceKey: PreferenceKey {
     }
 }
 
-struct NavigationBubbleSizePreferenceKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        value = nextValue()
-    }
-}
-
 /// The buddy's behavioral mode. Controls whether it follows the cursor,
 /// is flying toward a detected UI element, or is pointing at an element.
 enum BuddyNavigationMode {
@@ -142,11 +135,6 @@ struct BlueCursorView: View {
     /// Changes to face the direction of travel when navigating to a target.
     @State private var triangleRotationDegrees: Double = -35.0
 
-    /// Speech bubble text shown when pointing at a detected element.
-    @State private var navigationBubbleText: String = ""
-    @State private var navigationBubbleOpacity: Double = 0.0
-    @State private var navigationBubbleSize: CGSize = .zero
-
     /// The cursor position at the moment navigation started, used to detect
     /// if the user moves the cursor enough to cancel the navigation.
     @State private var cursorPositionWhenNavigationStarted: CGPoint = .zero
@@ -160,24 +148,11 @@ struct BlueCursorView: View {
     /// an energetic "swooping" feel.
     @State private var buddyFlightScale: CGFloat = 1.0
 
-    /// Scale factor for the navigation speech bubble's pop-in entrance.
-    /// Starts at 0.5 and springs to 1.0 when the first character appears.
-    @State private var navigationBubbleScale: CGFloat = 1.0
-
     /// True when the buddy is flying BACK to the cursor after pointing.
     /// Only during the return flight can cursor movement cancel the animation.
     @State private var isReturningToCursor: Bool = false
 
     private let fullWelcomeMessage = "hey! i'm clicky"
-
-    private let navigationPointerPhrases = [
-        "right here!",
-        "this one!",
-        "over here!",
-        "click this!",
-        "here it is!",
-        "found it!"
-    ]
 
     var body: some View {
         ZStack {
@@ -190,6 +165,18 @@ struct BlueCursorView: View {
                 drawings: companionManager.markDrawings,
                 displayBoundsCG: ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight)
             )
+
+            // The answer's caption, word-synced to the voice, next to the companion.
+            if buddyIsVisibleOnThisScreen && companionManager.captionState.isVisible {
+                CaptionBubbleLayer(
+                    caption: companionManager.captionState,
+                    displayBoundsCG: ScreenTopology.cg(fromAppKit: screenFrame, flipH: ScreenTopology.mainDisplayHeight),
+                    companionLocalCenter: cursorPosition,
+                    isCompanionFlying: buddyNavigationMode == .navigatingToTarget,
+                    obstaclesCG: companionManager.markDrawings.filter { $0.style != .spot && !$0.isHidden }.map(\.drawnBounds)
+                        + [companionManager.pointTargetCG].compactMap { $0 } + companionManager.upcomingTargetRectsCG
+                )
+            }
 
             // Welcome speech bubble (first launch only)
             if isCursorOnThisScreen && showWelcome && !welcomeText.isEmpty {
@@ -244,42 +231,6 @@ struct BlueCursorView: View {
                     .animation(.easeOut(duration: 0.4), value: companionManager.onboardingPromptOpacity)
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
-                    }
-            }
-
-            // Navigation pointer bubble — shown when buddy arrives at a detected element.
-            // Pops in with a scale-bounce (0.5x → 1.0x spring) and a bright initial
-            // glow that settles, creating a "materializing" effect.
-            if buddyNavigationMode == .pointingAtTarget && !navigationBubbleText.isEmpty {
-                Text(navigationBubbleText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(DS.Colors.overlayCompanionOrange)
-                            .shadow(
-                                color: DS.Colors.overlayCompanionOrange.opacity(0.5 + (1.0 - navigationBubbleScale) * 1.0),
-                                radius: 6 + (1.0 - navigationBubbleScale) * 16,
-                                x: 0, y: 0
-                            )
-                    )
-                    .fixedSize()
-                    .overlay(
-                        GeometryReader { geo in
-                            Color.clear
-                                .preference(key: NavigationBubbleSizePreferenceKey.self, value: geo.size)
-                        }
-                    )
-                    .scaleEffect(navigationBubbleScale)
-                    .opacity(navigationBubbleOpacity)
-                    .position(x: cursorPosition.x + 10 + (navigationBubbleSize.width / 2), y: cursorPosition.y + 18)
-                    .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
-                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: navigationBubbleScale)
-                    .animation(.easeOut(duration: 0.5), value: navigationBubbleOpacity)
-                    .onPreferenceChange(NavigationBubbleSizePreferenceKey.self) { newSize in
-                        navigationBubbleSize = newSize
                     }
             }
 
@@ -541,69 +492,21 @@ struct BlueCursorView: View {
         }
     }
 
-    /// Transitions to pointing mode — shows a speech bubble with a bouncy
-    /// scale-in entrance and variable-speed character streaming.
+    /// Pointing mode: the buddy waits beside the target (the caption bubble
+    /// carries the words), then flies back to the cursor.
     private func startPointingAtElement() {
         buddyNavigationMode = .pointingAtTarget
 
         // Rotate back to default pointer angle now that we've arrived
         triangleRotationDegrees = -35.0
 
-        // Reset navigation bubble state — start small for the scale-bounce entrance
-        navigationBubbleText = ""
-        navigationBubbleOpacity = 1.0
-        navigationBubbleSize = .zero
-        navigationBubbleScale = 0.5
-
-        // Use custom bubble text from the companion manager (e.g. onboarding demo)
-        // if available, otherwise fall back to a random pointer phrase
-        let pointerPhrase = companionManager.detectedElementBubbleText
-            ?? navigationPointerPhrases.randomElement()
-            ?? "right here!"
-
-        streamNavigationBubbleCharacter(phrase: pointerPhrase, characterIndex: 0) {
-            // All characters streamed — hold for 3 seconds, then fly back
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                guard self.buddyNavigationMode == .pointingAtTarget else { return }
-                self.navigationBubbleOpacity = 0.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard self.buddyNavigationMode == .pointingAtTarget else { return }
-                    self.startFlyingBackToCursor()
-                }
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointingHoldSeconds) {
+            guard self.buddyNavigationMode == .pointingAtTarget else { return }
+            self.startFlyingBackToCursor()
         }
     }
 
-    /// Streams the navigation bubble text one character at a time with variable
-    /// delays (30–60ms) for a natural "speaking" rhythm.
-    private func streamNavigationBubbleCharacter(
-        phrase: String,
-        characterIndex: Int,
-        onComplete: @escaping () -> Void
-    ) {
-        guard buddyNavigationMode == .pointingAtTarget else { return }
-        guard characterIndex < phrase.count else {
-            onComplete()
-            return
-        }
-
-        let charIndex = phrase.index(phrase.startIndex, offsetBy: characterIndex)
-        navigationBubbleText.append(phrase[charIndex])
-
-        // On the first character, trigger the scale-bounce entrance
-        if characterIndex == 0 {
-            navigationBubbleScale = 1.0
-        }
-
-        let characterDelay = Double.random(in: 0.03...0.06)
-        DispatchQueue.main.asyncAfter(deadline: .now() + characterDelay) {
-            self.streamNavigationBubbleCharacter(
-                phrase: phrase,
-                characterIndex: characterIndex + 1,
-                onComplete: onComplete
-            )
-        }
-    }
+    private static let pointingHoldSeconds: Double = 3.5
 
     /// Flies the buddy back to the current cursor position after pointing is done.
     private func startFlyingBackToCursor() {
@@ -625,9 +528,6 @@ struct BlueCursorView: View {
     private func cancelNavigationAndResumeFollowing() {
         navigationAnimationTimer?.invalidate()
         navigationAnimationTimer = nil
-        navigationBubbleText = ""
-        navigationBubbleOpacity = 0.0
-        navigationBubbleScale = 1.0
         buddyFlightScale = 1.0
         finishNavigationAndResumeFollowing()
     }
@@ -640,9 +540,6 @@ struct BlueCursorView: View {
         isReturningToCursor = false
         triangleRotationDegrees = -35.0
         buddyFlightScale = 1.0
-        navigationBubbleText = ""
-        navigationBubbleOpacity = 0.0
-        navigationBubbleScale = 1.0
         companionManager.clearDetectedElementLocation()
     }
 

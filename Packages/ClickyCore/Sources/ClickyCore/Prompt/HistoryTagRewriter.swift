@@ -11,16 +11,33 @@ import Foundation
 
 public enum HistoryTagRewriter {
     public static func wordsForHistory(_ responseText: String) -> String {
-        var rewrittenText = responseText
-        // Each tag (any v2 or legacy form) becomes words; unknown ones vanish.
-        for parsedTag in MarkTagParser.extractAll(responseText).tags {
-            guard let tagRange = rewrittenText.range(of: parsedTag.raw) else { continue }
-            rewrittenText.replaceSubrange(tagRange, with: words(for: parsedTag))
+        // The same router that streams answers: tags become words, WORKER
+        // lines and blocks disappear, malformed tags are dropped.
+        var router = ResponseRouter()
+        var rewrittenText = ""
+        var tagsByIndex: [Int: ParsedTag] = [:]
+        var placeholderIndex = 0
+        for output in router.feed(responseText) + router.finish() {
+            switch output {
+            case .tag(let index, let tag):
+                tagsByIndex[index] = tag
+            case .narration(let text):
+                for character in text {
+                    if character == ResponseRouter.placeholder {
+                        // A marker per tag, replaced by its words below.
+                        rewrittenText += "\u{1}\(placeholderIndex)\u{1}"
+                        placeholderIndex += 1
+                    } else {
+                        rewrittenText.append(character)
+                    }
+                }
+            case .worker, .block, .unsupportedBlock, .dropped:
+                break
+            }
         }
-        // Malformed POINT/MARK tags are dropped like in speech.
-        rewrittenText = MarkTagParser.extractAll(rewrittenText).speechText
-        rewrittenText = replace(#"\[WORKER:[^\]]*\]"#, in: rewrittenText) { _ in "" }
-
+        for (index, tag) in tagsByIndex {
+            rewrittenText = rewrittenText.replacingOccurrences(of: "\u{1}\(index)\u{1}", with: words(for: tag))
+        }
         return rewrittenText
             .replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,15 +57,5 @@ public enum HistoryTagRewriter {
             return "(\(verb) \(thingName))"
         }
         return parsedTag.kind == .point ? "(pointed)" : "(marked something)"
-    }
-
-    private static func replace(_ pattern: String, in text: String, with makeReplacement: (String) -> String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
-        var resultText = text
-        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
-            guard let matchRange = Range(match.range, in: resultText) else { continue }
-            resultText.replaceSubrange(matchRange, with: makeReplacement(String(resultText[matchRange])))
-        }
-        return resultText
     }
 }

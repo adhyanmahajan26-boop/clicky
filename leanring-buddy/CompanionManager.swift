@@ -40,9 +40,6 @@ final class CompanionManager: ObservableObject {
     /// The display frame (global AppKit coords) of the screen the detected
     /// element is on, so BlueCursorView knows which screen overlay should animate.
     @Published var detectedElementDisplayFrame: CGRect?
-    /// Custom speech bubble text for the pointing animation. When set,
-    /// BlueCursorView uses this instead of a random pointer phrase.
-    @Published var detectedElementBubbleText: String?
 
     /// Rings, arrows, steps etc. Claude drew for the current answer, laid out
     /// in CG points (MarkController). Cleared when the user asks something
@@ -308,7 +305,7 @@ final class CompanionManager: ObservableObject {
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
         detectedElementDisplayFrame = nil
-        detectedElementBubbleText = nil
+        pointTargetCG = nil
     }
 
     func clearLiveScreenMarks() {
@@ -565,7 +562,9 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Cancel any in-progress response and TTS from a previous utterance
+            // Barge-in: cut off the answer being spoken (its caption freezes),
+            // then cancel any in-progress response from a previous utterance.
+            speechOutputClient.activeCoordinator?.bargeIn(.pushToTalk)
             currentResponseTask?.cancel()
             speechOutputClient.stopPlayback()
             clearDetectedElementLocation()
@@ -757,6 +756,20 @@ final class CompanionManager: ObservableObject {
 
         if speechOutputClient.isPlaying {
             currentUtteranceOverlappedBuddySpeech = true
+            // Half-duplex: nothing the mic hears while Clicky talks counts.
+            if ClickySettings.echoMode == .halfDuplex { return }
+            // "stop" / "wait" / "clicky stop" barge in, unless Clicky itself
+            // just said that word (the mic heard the speaker).
+            if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
+                if activeCoordinator.heardWhileSpeaking(partialTranscript) {
+                    handsFreeListeningSession?.discardCurrentUtterance()
+                    currentUtteranceOverlappedBuddySpeech = false
+                    isHandsFreeSessionPaused = true
+                    showHandsFreeStatusMessage("Stopped")
+                }
+                // A "wait" the mic heard from Clicky's own voice is ignored.
+                return
+            }
         }
 
         // "wait" / "stop" should cut the buddy off mid-sentence, so check
@@ -823,6 +836,10 @@ final class CompanionManager: ObservableObject {
         case .clearMarks:
             clearLiveScreenMarks()
             showHandsFreeStatusMessage("Cleared marks")
+
+        case .copyLastAnswer:
+            copyLastAnswerToPasteboard()
+            showHandsFreeStatusMessage(lastAnswerText == nil ? "Nothing to copy yet" : "Copied the last answer")
 
         case .endSession:
             endHandsFreeSession()
@@ -905,9 +922,22 @@ final class CompanionManager: ObservableObject {
             }
     }
 
+    /// Panels that use Esc themselves (Type card, review panel, board) get
+    /// it first: each returns true when it consumed the key.
+    var escapeKeyConsumers: [() -> Bool] = []
+
     /// Escape is the universal "stop everything": it silences the buddy,
-    /// cancels any answer in flight, and ends a hands-free session.
+    /// cancels any answer in flight, and ends a hands-free session. A key
+    /// panel that's open consumes it first.
     private func handleEscapeKeyPressed() {
+        if escapeKeyConsumers.contains(where: { $0() }) { return }
+        if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
+            // Barge-in: the caption is hidden.
+            activeCoordinator.bargeIn(.escape)
+            hideCaption()
+        } else {
+            hideCaption()
+        }
         let isBuddyBusy = speechOutputClient.isPlaying || voiceState == .processing
         let hasLiveScreenMarksShowing = hasLiveScreenMarks
         guard isHandsFreeSessionActive || isBuddyBusy || hasLiveScreenMarksShowing else { return }
@@ -928,6 +958,10 @@ final class CompanionManager: ObservableObject {
         if !isGroundingActiveThisSession {
             promptFeatures.remove([.grounding, .badges])
         }
+        // Gated sections (their text arrives with P4/P5/P6; until then a gate changes nothing).
+        if ClickySettings.isWhiteboardAutoEnabled { promptFeatures.insert(.whiteboard) }
+        if ClickySettings.isCodeEnabled { promptFeatures.insert(.code) }
+        if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }
         return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
     }
 
@@ -953,11 +987,6 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - AI Response Pipeline
 
-    /// Captures a screenshot, sends it along with the transcript to Claude,
-    /// and plays the response aloud with the built-in Mac voice. The cursor stays in
-    /// the spinner/processing state until TTS audio begins playing.
-    /// Claude's response may include a [POINT:x,y:label] tag which triggers
-    /// the buddy to fly to that element on screen.
     /// Optional extras for one turn, used by the debug inbox's `ask`.
     struct TurnOptions {
         /// false = no TTS; tags still fire right away.
@@ -969,10 +998,19 @@ final class CompanionManager: ObservableObject {
         var onTurnFinished: ((URL?, Error?) -> Void)?
     }
 
+    /// Reads the screens, streams Claude's answer and speaks it as it
+    /// arrives: the caption follows the voice and tags fire on their words.
+    /// The spinner stays until the first words play.
     func sendTranscriptToClaudeWithScreenshot(transcript: String, turnOptions requestedTurnOptions: TurnOptions? = nil) {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         let turnOptions = requestedTurnOptions ?? TurnOptions()
+        // "copy that" works with push-to-talk too, without asking Claude.
+        if HandsFreeVoiceCommand.parse(transcript) == .copyLastAnswer {
+            copyLastAnswerToPasteboard()
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         // Marks from the previous answer would be confusing next to a new one.
@@ -989,7 +1027,7 @@ final class CompanionManager: ObservableObject {
                 // Every screen's element list + badged screenshot (warm from the
                 // key-down prewarm when possible). SCREEN 1 = cursor screen.
                 let prewarmReadyDate = groundingCoordinator.lastPrewarmReadyDate
-                var groundedTurn = try await groundingCoordinator.prepareTurn(keyUpDate: turnOptions.keyUpDate)
+                let groundedTurn = try await groundingCoordinator.prepareTurn(keyUpDate: turnOptions.keyUpDate)
                 turnRecord?.markTiming("captureDone")
                 turnRecord?.recordScreens(groundedTurn.screenCaptures)
                 turnRecord?.recordElementLists(groundedTurn.elementListTexts)
@@ -1008,84 +1046,42 @@ final class CompanionManager: ObservableObject {
 
                 let screenBlocks = groundedTurn.contentBlocks
                 let conversationText = makeConversationText(transcript: transcript)
+                // "draw a diagram" / "no whiteboard": a MODE hint (the user's words still win).
+                let modeHint = ModeHint.detect(transcript)
+                let userText = modeHint.line.map { conversationText + "\n" + $0 } ?? conversationText
 
-                let mainBrainTurn = try await claudeCodeBridge.runTurn(
-                    systemPromptFileName: "system-prompt.md",
-                    systemPrompt: companionSystemPrompt,
-                    contentBlocks: [.text(conversationText)] + screenBlocks,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
-                        turnRecord?.markTiming("firstDelta")
-                    },
-                    onPipelineStage: { pipelineStageName in
-                        turnRecord?.markTiming(pipelineStageName)
-                    }
+                // Streamed: the router, segmenter and voice start on the first words.
+                let answerSession = AnswerSession(transcript: transcript, groundedTurn: groundedTurn, turnRecord: turnRecord,
+                                                  companionManager: self, speaksResponse: turnOptions.speaksResponse)
+                currentAnswerSession = answerSession
+                markController.startAnswer(turnRecord: turnRecord)
+
+                let effortLevel = ClickySettings.claudeEffortOverride ?? modeHint.effort
+                try await runAnswerStream(answerSession, contentBlocks: [.text(userText)] + screenBlocks, effortLevel: effortLevel, turnRecord: turnRecord)
+
+                // Helpers spawned while streaming: wait for them, then ask
+                // again with their results (same answer, same screens).
+                if answerSession.hasWorkers && !Task.isCancelled && !answerSession.isFinished {
+                    let workerResults = await answerSession.workerResults()
+                    try Task.checkCancellation()
+                    print("🧠 Workers finished: \(workerResults.map(\.workerTitle))")
+                    answerSession.beginFollowUpStream()
+                    try await runAnswerStream(answerSession, contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
+                        transcript: conversationText, companionWorkerResults: workerResults))] + screenBlocks, effortLevel: effortLevel, turnRecord: nil)
+                }
+                turnRecord?.rawResponse = answerSession.rawResponse
+                ClickyAnalytics.trackAIResponseReceived(response: answerSession.rawResponse)
+
+                // Until the last word is spoken (or the answer is interrupted).
+                await withTaskCancellationHandler {
+                    await answerSession.waitUntilFinished()
+                } onCancel: {
+                    Task { @MainActor in answerSession.coordinator.bargeIn(.newQuestion) }
+                }
+                turnRecord?.speech = TurnRecord.SpeechEntry(
+                    engine: answerSession.coordinator.isSilent ? nil : answerSession.coordinator.spokenEngineName,
+                    fallback: answerSession.coordinator.didUseFallback
                 )
-                turnRecord?.markTiming("result")
-                let fullResponseText = mainBrainTurn.text
-                noteResolvedModelIdentifier(mainBrainTurn.resolvedModelIdentifier)
-
-                guard !Task.isCancelled else { throw CancellationError() }
-
-                // If the main brain split the question into helper workers, run
-                // them (on Haiku, at most four at once) and ask the main brain
-                // again with their results for the final answer.
-                let (responseTextWithoutWorkerTags, companionWorkerRequests) = CompanionWorkerTagParser.extractWorkerTags(from: fullResponseText)
-                var mainBrainResponseText = responseTextWithoutWorkerTags
-                if !companionWorkerRequests.isEmpty {
-                    mainBrainResponseText = try await runCompanionWorkersAndAskMainBrainForFinalAnswer(
-                        companionWorkerRequests: companionWorkerRequests,
-                        workerHeadsUpText: responseTextWithoutWorkerTags,
-                        conversationText: conversationText,
-                        screenBlocks: screenBlocks
-                    )
-                }
-                turnRecord?.rawResponse = companionWorkerRequests.isEmpty
-                    ? fullResponseText
-                    : fullResponseText + "\n\n--- final answer after workers ---\n" + mainBrainResponseText
-
-                guard !Task.isCancelled else { throw CancellationError() }
-
-                let spokenText = await presentGroundedTags(
-                    responseText: mainBrainResponseText,
-                    groundedTurn: &groundedTurn,
-                    turnRecord: turnRecord
-                )
-
-                // Save this exchange in words only: what it pointed at survives
-                // as "(pointed at Share)", never coordinates.
-                conversationHistory.append((
-                    userTranscript: transcript,
-                    assistantResponse: HistoryTagRewriter.wordsForHistory(mainBrainResponseText)
-                ))
-
-                // Keep only what's sent, so memory doesn't grow without bound.
-                if conversationHistory.count > Self.conversationHistoryExchangeLimit {
-                    conversationHistory.removeFirst(conversationHistory.count - Self.conversationHistoryExchangeLimit)
-                }
-
-                print("🧠 Conversation history: \(conversationHistory.count) exchanges")
-
-                ClickyAnalytics.trackAIResponseReceived(response: spokenText)
-
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
-                if turnOptions.speaksResponse && !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await speechOutputClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
-                        turnRecord?.markTiming("firstAudio")
-                        turnRecord?.speech = TurnRecord.SpeechEntry(
-                            engine: speechOutputClient.lastSpeechEngineName,
-                            fallback: speechOutputClient.didLastSpeechFallBack
-                        )
-                        voiceState = .responding
-                    } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ System voice TTS error: \(error)")
-                        speakErrorFallback(for: error)
-                    }
-                }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
                 turnError = CancellationError()
@@ -1110,112 +1106,120 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Handles the tags in an answer (v2 grammar): resolves each target to a
-    /// real frame, verifies it with a hit test, draws the marks in order and
-    /// flies the buddy to the POINT. Returns the text to speak (tags removed,
-    /// leaked ids stripped). Shared by answers and the debug inbox's `marks`.
+    /// Runs one Claude stream into the answer: every event goes to the
+    /// session; stream failures become something said out loud.
+    private func runAnswerStream(_ answerSession: AnswerSession, contentBlocks: [ClaudeContentBlock], effortLevel: String?, turnRecord: TurnRecord?) async throws {
+        do {
+            let mainBrainTurn = try await claudeCodeBridge.runTurn(
+                systemPromptFileName: "system-prompt.md",
+                systemPrompt: companionSystemPrompt,
+                contentBlocks: contentBlocks,
+                effortLevel: effortLevel,
+                onStreamEvent: { streamEvent in
+                    answerSession.handle(streamEvent)
+                },
+                onPipelineStage: { pipelineStageName in
+                    turnRecord?.markTiming(pipelineStageName)
+                }
+            )
+            turnRecord?.markTiming("result")
+            noteResolvedModelIdentifier(mainBrainTurn.resolvedModelIdentifier)
+        } catch ClaudeCodeBridgeError.claudeCodeStalled {
+            answerSession.streamFailed(.stalled)
+        } catch ClaudeCodeBridgeError.claudeCodeExitedWithoutResult {
+            if Task.isCancelled { throw CancellationError() }
+            answerSession.streamEndedWithoutResult()
+        } catch ClaudeCodeBridgeError.claudeCodeReportedError {
+            // Already spoken: the result event went through the session.
+            refreshClaudeCodeSignInStatus()
+        }
+    }
+
+    /// The answer being spoken now.
+    private(set) var currentAnswerSession: AnswerSession?
+    /// The last answer's spoken text ("Copy last answer", "copy that").
+    @Published private(set) var lastAnswerText: String?
+    /// The caption bubble's content (all overlays read it).
+    @Published private(set) var captionState = CaptionState()
+    private var captionHideTask: Task<Void, Never>?
+    private static let captionHideDelaySeconds: UInt64 = 4
+
+    func showCaption(_ caption: CaptionState) {
+        captionHideTask?.cancel()
+        captionState = caption
+        if caption.current != nil && voiceState == .processing {
+            voiceState = .responding
+        }
+    }
+
+    func hideCaption() {
+        captionHideTask?.cancel()
+        captionState.isVisible = false
+    }
+
+    /// Kills the in-flight Claude request (the coordinator's barge-in step).
+    func cancelResponseRequest() {
+        currentResponseTask?.cancel()
+    }
+
+    /// History and the copyable last answer, once an answer ends.
+    func recordAnswer(transcript: String, history: String, spokenText: String, wasInterrupted: Bool) {
+        conversationHistory.append((userTranscript: transcript, assistantResponse: history))
+        if conversationHistory.count > Self.conversationHistoryExchangeLimit {
+            conversationHistory.removeFirst(conversationHistory.count - Self.conversationHistoryExchangeLimit)
+        }
+        if !spokenText.isEmpty { lastAnswerText = spokenText }
+        print("🧠 Conversation history: \(conversationHistory.count) exchanges\(wasInterrupted ? " (interrupted)" : "")")
+        captionHideTask?.cancel()
+        captionHideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.captionHideDelaySeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.captionState.isVisible = false
+        }
+    }
+
+    func copyLastAnswerToPasteboard() {
+        guard let lastAnswerText, !lastAnswerText.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lastAnswerText, forType: .string)
+    }
+
+    /// Flies the companion beside a POINT target, clear of it and of the marks.
+    func flyCompanion(to target: ResolvedTarget, frame: CaptureFrame) {
+        let markObstacles = markController.marks.map { MarkLayout.padded($0.rectCG) }
+        let landing = CompanionLanding.landing(target: target.frameCG, visible: frame.display.visibleCG, obstacles: markObstacles)
+        markController.companionRect = landing
+        detectedElementScreenLocation = ScreenTopology.appKit(fromCG: landing.center, flipH: ScreenTopology.mainDisplayHeight)
+        detectedElementDisplayFrame = frame.display.frameAppKit
+        pointTargetCG = target.frameCG
+        ClickyAnalytics.trackElementPointed(elementLabel: target.label)
+    }
+
+    /// The current POINT target (the caption bubble avoids it).
+    @Published private(set) var pointTargetCG: CGRect?
+    /// Targets of the segment being spoken that haven't fired yet (the bubble avoids them).
+    @Published var upcomingTargetRectsCG: [CGRect] = []
+
+    /// Draws a full answer's tags at once, without speaking (the debug
+    /// inbox's `marks`). Returns the text that would have been spoken.
     @discardableResult
     func presentGroundedTags(responseText: String, groundedTurn: inout GroundedTurn, turnRecord: TurnRecord?) async -> String {
-        let extraction = MarkTagParser.extractAll(responseText)
-        let liveElementIDs = groundedTurn.registry.liveElementIDs
-        let cleanedSpeech = SpeechSafetyNet.clean(extraction.speechText, liveElementIDs: liveElementIDs)
-        turnRecord?.grounding?.malformedTagCount = extraction.malformedTagCount
-        turnRecord?.grounding?.speechLeakCount = cleanedSpeech.leakCount
-        turnRecord?.grounding?.badgeMentionsInNarration = SpeechSafetyNet.countBadgeMentions(in: extraction.speechText, liveElementIDs: liveElementIDs)
-
-        // With grounding off this session (geometry self-check failed), tags
-        // are stripped from speech but never drawn.
-        guard isGroundingActiveThisSession, !extraction.tags.isEmpty else {
-            return cleanedSpeech.speechText
+        guard isGroundingActiveThisSession else {
+            // Grounding is off this session: nothing is drawn, only the words remain.
+            var router = ResponseRouter()
+            return (router.feed(responseText) + router.finish()).compactMap { output -> String? in
+                if case .narration(let text) = output { return text.replacingOccurrences(of: String(ResponseRouter.placeholder), with: "") }
+                return nil
+            }.joined()
         }
-
-        if extraction.tags.contains(where: { if case .text = $0.target { return true } else { return false } }) {
-            await groundedTurn.ensureOCRLines()
-        }
-        turnRecord?.grounding?.ocrLineCount = groundedTurn.registry.allOCRLines.count
-
-        let framesByScreenNumber = groundedTurn.framesByScreenNumber
-        let resolver = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
-                                      cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
-                                      lookup: AXGroundingLiveLookup(ax: groundingCoordinator.ax))
-
-        var newLiveScreenMarks: [LiveScreenMark] = []
-        var pointTarget: ResolvedTarget?
-        for parsedTag in extraction.tags {
-            if parsedTag.kind == .clear {
-                newLiveScreenMarks.removeAll()
-                continue
-            }
-            var maybeResolvedTarget = resolver.resolve(parsedTag)
-            if maybeResolvedTarget == nil, case .text = parsedTag.target, !groundedTurn.hasRetriedOCR {
-                // Text not found: one retry pass of OCR with shifted bands.
-                await groundedTurn.retryOCRWithShiftedBands()
-                maybeResolvedTarget = TargetResolver(registry: groundedTurn.registry, framesByScreenNumber: framesByScreenNumber,
-                                                     cursorCG: groundedTurn.cursorCG, windowStack: groundedTurn.windowStack,
-                                                     lookup: AXGroundingLiveLookup(ax: groundingCoordinator.ax)).resolve(parsedTag)
-            }
-            guard var resolvedTarget = maybeResolvedTarget else { continue }
-            HitTestVerifier.verify(&resolvedTarget, ax: groundingCoordinator.ax, ownProcessIdentifier: getpid(), windowStack: groundedTurn.windowStack)
-
-            let screenNumber = framesByScreenNumber.first { $0.value.display.displayID == resolvedTarget.displayID }?.key ?? parsedTag.effectiveScreenNumber
-            let modelPixel = framesByScreenNumber[screenNumber]?.modelPx(fromCG: resolvedTarget.pointCG)
-            let tagIndex = turnRecord?.recordResolvedTag(raw: parsedTag.raw, kind: parsedTag.kind == .point ? "point" : "mark",
-                                                         screenNumber: screenNumber, modelPixel: modelPixel, target: resolvedTarget)
-
-            // Never point through another app's window.
-            if resolvedTarget.verified == false && resolvedTarget.occludedByPID != nil { continue }
-
-            if parsedTag.kind == .point {
-                pointTarget = resolvedTarget
-            } else {
-                let source = LiveScreenMark.source(for: resolvedTarget)
-                let context = MarkTracker.trackingContext(for: source == .accessibility ? resolvedTarget.axNode : nil,
-                                                          rectCG: resolvedTarget.frameCG, ax: groundingCoordinator.ax)
-                var recheckName: String?
-                if case .text(let query, _, _) = parsedTag.target { recheckName = query } else { recheckName = resolvedTarget.label }
-                newLiveScreenMarks.append(LiveScreenMark(
-                    style: LiveScreenMark.style(for: parsedTag.style),
-                    rectCG: resolvedTarget.frameCG,
-                    displayText: parsedTag.displayText,
-                    source: source,
-                    ax: source == .accessibility ? resolvedTarget.axNode : nil,
-                    confidence: resolvedTarget.confidence,
-                    isTentative: resolvedTarget.confidence < LiveScreenMark.tentativeConfidence || resolvedTarget.occludedByPID != nil,
-                    createdAt: Date(),
-                    windowID: context.windowID,
-                    windowFrameCG: context.windowFrame,
-                    clipAX: context.clip,
-                    labelAX: context.label,
-                    originalLabel: context.originalLabel,
-                    recheckName: recheckName,
-                    order: newLiveScreenMarks.count,
-                    tagIndex: tagIndex
-                ))
-            }
-        }
-
-        // OCR re-check (≤ 150 ms; late results apply when they arrive).
-        await markController.recheck(&newLiveScreenMarks, displays: ScreenTopology.current(), turnRecord: turnRecord)
-
-        // The companion parks beside the POINT target, clear of it and of the marks.
-        var companionLanding: CGRect?
-        if let pointTarget, let pointFrame = framesByScreenNumber.values.first(where: { $0.display.displayID == pointTarget.displayID }) {
-            let markObstacles = newLiveScreenMarks.map { MarkLayout.padded($0.rectCG) }
-            companionLanding = CompanionLanding.landing(target: pointTarget.frameCG, visible: pointFrame.display.visibleCG, obstacles: markObstacles)
-        }
-        markController.companionRect = companionLanding
-        markController.show(newLiveScreenMarks, turnRecord: turnRecord)
-        if let pointTarget, let companionLanding,
-           let pointFrame = framesByScreenNumber.values.first(where: { $0.display.displayID == pointTarget.displayID }) {
-            // Switch to idle BEFORE setting the location so the buddy is
-            // visible and can fly to the target.
-            voiceState = .idle
-            detectedElementScreenLocation = ScreenTopology.appKit(fromCG: companionLanding.center, flipH: ScreenTopology.mainDisplayHeight)
-            detectedElementDisplayFrame = pointFrame.display.frameAppKit
-            ClickyAnalytics.trackElementPointed(elementLabel: pointTarget.label)
-        }
-        print("🎯 Grounded tags: \(extraction.tags.count) (\(newLiveScreenMarks.count) marks, point: \(pointTarget?.label ?? "none"))")
-        return cleanedSpeech.speechText
+        markController.startAnswer(turnRecord: turnRecord)
+        let answerSession = AnswerSession(transcript: "debug marks", groundedTurn: groundedTurn, turnRecord: turnRecord,
+                                          companionManager: self, speaksResponse: false)
+        answerSession.handle(.textDelta(responseText))
+        answerSession.handle(.result(text: responseText, isError: false, subtype: "success"))
+        await answerSession.waitUntilFinished()
+        groundedTurn = answerSession.groundedTurn
+        return answerSession.coordinator.spokenText
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -1283,53 +1287,6 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Helper Workers
 
-    /// Speaks the main brain's short heads-up, runs every worker in parallel
-    /// (the runner caps it at four and queues the rest), then asks the main
-    /// brain for the final answer with the workers' results folded in.
-    /// Cancelling the response task (Escape, "stop", a new question) cancels
-    /// the workers too, because they run as child tasks of it.
-    private func runCompanionWorkersAndAskMainBrainForFinalAnswer(
-        companionWorkerRequests: [CompanionWorkerRequest],
-        workerHeadsUpText: String,
-        conversationText: String,
-        screenBlocks: [ClaudeContentBlock]
-    ) async throws -> String {
-        print("🧠 Main brain opened \(companionWorkerRequests.count) worker(s): \(companionWorkerRequests.map(\.workerTitle))")
-
-        // The heads-up shouldn't carry marks or a point, but strip them in
-        // case it does so they're never read aloud.
-        let spokenWorkerHeadsUpText = MarkTagParser.extractAll(workerHeadsUpText).speechText
-        if !spokenWorkerHeadsUpText.isEmpty {
-            try? await speechOutputClient.speakText(spokenWorkerHeadsUpText)
-        }
-
-        let companionWorkerResults = try await companionWorkerRunner.runWorkers(companionWorkerRequests) { companionWorkerRequest in
-            // Workers see the same screens (same frames and JPEGs).
-            let workerClaudeCodeBridge = CompanionWorkerRunner.makeWorkerClaudeCodeBridge()
-            let workerTurn = try await workerClaudeCodeBridge.runTurn(
-                systemPromptFileName: "worker-prompt.md",
-                systemPrompt: Self.companionWorkerSystemPrompt,
-                contentBlocks: [.text(companionWorkerRequest.workerTaskPrompt)] + screenBlocks
-            )
-            return workerTurn.text
-        }
-
-        try Task.checkCancellation()
-
-        let finalTurn = try await claudeCodeBridge.runTurn(
-            systemPromptFileName: "system-prompt.md",
-            systemPrompt: companionSystemPrompt,
-            contentBlocks: [.text(Self.makeMainBrainPromptWithWorkerResults(
-                transcript: conversationText,
-                companionWorkerResults: companionWorkerResults
-            ))] + screenBlocks
-        )
-        let finalResponseText = finalTurn.text
-
-        // One round of workers per question: any new worker tags are dropped.
-        return CompanionWorkerTagParser.extractWorkerTags(from: finalResponseText).textWithoutWorkerTags
-    }
-
     static func makeMainBrainPromptWithWorkerResults(
         transcript: String,
         companionWorkerResults: [CompanionWorkerResult]
@@ -1347,7 +1304,7 @@ final class CompanionManager: ObservableObject {
         """
     }
 
-    private static let companionWorkerSystemPrompt = """
+    static let companionWorkerSystemPrompt = """
     you're a fast helper working for clicky, a voice assistant. clicky's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
 

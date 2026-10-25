@@ -41,3 +41,21 @@ Acceptance once live: ax+web ≥ 98 %, canvas+dot ≥ 90 %, both ≥ P1b; re-che
 
 Also still to do once live: hosted tests (`xcodebuild test -only-testing:leanring-buddyTests`
 starts the app binary, so it was skipped in silent mode).
+
+## P2
+
+1. `selftest qwenCaptionSync`: 20 Qwen WAVs (synthesized to files, no playback) vs on-device
+   `SFSpeechURLRecognitionRequest` word timestamps; p95 ≤ 250 ms.
+2. 10 spoken asks per engine (Qwen, then the Mac voice): caption lag p95 ≤ 120 ms (Apple) /
+   ≤ 250 ms (Qwen); tags fire ≤ 100 ms after their anchor (`firedTags` in turn.json, each once);
+   0 badge leaks; 0 bubble/mark overlap.
+3. `selftest overlayExclusion` with the caption bubble showing (it must not reach screenshots).
+4. Eval row "show me how to search then open build settings" → numbered MARKs, no `<whiteboard>`.
+5. ask + say "stop" → silent within 3 s, history ends in "[interrupted]"; and "wait for the build"
+   spoken by Clicky must not stop itself (EchoGuard).
+6. keyUp → firstAudio p50 ≤ 3.5 s (was 5.7 s): `grounding_eval.py --latency-asks 10`.
+7. Effort low vs medium: `grounding_eval.py --effort low` then `--effort medium` (same rows),
+   compare hits and latency.
+8. Whether the TTS passes the Mac's echo cancellation with the mic open (open vs halfDuplex,
+   `defaults write com.personal.clicky v2.voice.echoMode halfDuplex`).
+9. Hosted tests (`xcodebuild test -only-testing:leanring-buddyTests`); compiled, not run.
