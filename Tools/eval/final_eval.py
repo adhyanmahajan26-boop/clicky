@@ -747,9 +747,46 @@ class UsageLimitStop(Exception):
     pass
 
 
+OWNER_ACTIVE_SECONDS = 5
+OWNER_IDLE_RESUME_SECONDS = 180
+PAUSE_LOG_PATH = None
+
+
+def owner_idle_seconds():
+    """Seconds since the last real keyboard/mouse input (HIDIdleTime); the harness posts no HID events."""
+    try:
+        output = subprocess.run(["/usr/sbin/ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in output.splitlines():
+        if "HIDIdleTime" in line:
+            return int(line.split()[-1]) / 1e9
+    return None
+
+
+def wait_for_owner_idle():
+    """At an ask boundary: if the owner is using the Mac, pause until they've been idle 3 min."""
+    idle = owner_idle_seconds()
+    if idle is None or idle >= OWNER_ACTIVE_SECONDS:
+        return
+    started = time.time()
+    print("  owner is active; pausing until idle %d s" % OWNER_IDLE_RESUME_SECONDS, flush=True)
+    while True:
+        time.sleep(5)
+        idle = owner_idle_seconds()
+        if idle is None or idle >= OWNER_IDLE_RESUME_SECONDS:
+            break
+    paused = time.time() - started
+    print("  resumed after %.0f s" % paused, flush=True)
+    if PAUSE_LOG_PATH:
+        with open(PAUSE_LOG_PATH, "a", encoding="utf-8") as pause_log:
+            pause_log.write(json.dumps({"start": started, "seconds": round(paused)}) + "\n")
+
+
 def ask_with_backoff(prompt, speak):
     """ask{speak}; usage-limit errors wait 30 s, 1, 2, 4, 8 min, then stop the run."""
     waits = backoff_schedule()
+    wait_for_owner_idle()
     while True:
         reply = clickyctl({"cmd": "ask", "text": prompt, "speak": speak}, 240)
         error_text = str(reply.get("error") or "")
@@ -1174,6 +1211,7 @@ def prepare_run_fixtures(run_directory):
 
 
 def run_setup(row, fixtures_directory, server, previous_setup):
+    wait_for_owner_idle()
     app_name = row["app"]
     setup = row["setup"]
     if setup == "app":
@@ -1570,6 +1608,8 @@ def main():
 
     run_directory = os.path.join(RUNS_DIRECTORY, arguments.run_name)
     results = Results(run_directory)
+    global PAUSE_LOG_PATH
+    PAUSE_LOG_PATH = os.path.join(run_directory, "pauses.jsonl")
     output_path = arguments.out or os.path.join(run_directory, "EVAL-P6.11.md")
     ping_result = None
     figma_note = figma_status() if not arguments.report_only else "see the live run"
