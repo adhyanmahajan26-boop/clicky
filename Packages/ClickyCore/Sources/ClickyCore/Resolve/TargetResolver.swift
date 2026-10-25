@@ -91,12 +91,17 @@ public struct TargetResolver {
         case .element, .elementResnapped, .elementAlternative: isOCRText = resolved.elementID.flatMap { registry[$0] }?.source == .ocr
         default: isOCRText = false
         }
-        if !isOCRText, let elementID = resolved.elementID, let image = registry[elementID], image.role == .image,
-           let productFrame = productStack(around: image) {
+        let photo: GroundingElement? = {
+            if let elementID = resolved.elementID, let image = registry[elementID], image.role == .image { return image }
+            // A raw box drawn over a photo ([MARK:box:x,y,w,h:Name]): treat it as that photo.
+            guard resolved.method == .raw || resolved.method == .snapped else { return nil }
+            return photoMatching(resolved.frameCG, displayID: resolved.displayID)
+        }()
+        if !isOCRText, let image = photo, let productFrame = productStack(around: image) {
             // A box on a product photo covers the product: the photo plus the name / price / button
             // stacked with it (a live run boxed only the photos of three product cards).
             return ResolvedTarget(frameCG: productFrame, pointCG: productFrame.center, confidence: resolved.confidence, method: .imageCard,
-                                  elementID: elementID, displayID: resolved.displayID, label: resolved.label,
+                                  elementID: resolved.elementID, displayID: resolved.displayID, label: resolved.label,
                                   processIdentifier: resolved.processIdentifier, axNode: resolved.axNode)
         }
         guard isOCRText, let (cardID, card) = containingCard(of: resolved.frameCG, displayID: resolved.displayID) else { return resolved }
@@ -111,17 +116,33 @@ public struct TargetResolver {
     /// whose container isn't an element. nil when nothing is stacked with it.
     func productStack(around image: GroundingElement) -> CGRect? {
         let imageFrame = image.visibleFrameCG
-        let candidates = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+        func inColumn(_ frame: CGRect) -> Bool {
+            abs(frame.minX - imageFrame.minX) <= 8 && frame.width <= imageFrame.width + 16
+        }
+        let accessibilityFrames = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
             element.source == .accessibility && !element.isBehind && element.displayID == image.displayID
                 && element.processIdentifier == image.processIdentifier && [.text, .button, .link].contains(element.role)
-                && abs(element.visibleFrameCG.minX - imageFrame.minX) <= 8 && element.visibleFrameCG.width <= imageFrame.width + 16
-        }.map(\.visibleFrameCG).sorted { $0.minY < $1.minY }
+                && inColumn(element.visibleFrameCG)
+        }.map(\.visibleFrameCG)
+        // OCR lines fill in text the element list left out (a price, a name).
+        let ocrFrames = registry.allOCRLines.filter { $0.displayID == image.displayID && inColumn($0.frameCG) }.map(\.frameCG)
+        let candidates = (accessibilityFrames + ocrFrames).sorted { $0.minY < $1.minY }
         var union = imageFrame
         for frame in candidates where frame.minY >= union.maxY - 2 {
             guard frame.minY - union.maxY <= 24 else { break }
             union = union.union(frame)
         }
         return union == imageFrame ? nil : union
+    }
+
+    /// The AX photo a raw box was drawn over (≥ 60 % overlap both ways), if any.
+    func photoMatching(_ rect: CGRect, displayID: CGDirectDisplayID) -> GroundingElement? {
+        registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+            element.role == .image && element.source == .accessibility && !element.isBehind && element.displayID == displayID
+        }.first { element in
+            let overlap = element.visibleFrameCG.intersection(rect).area
+            return overlap >= 0.6 * element.visibleFrameCG.area && overlap >= 0.6 * rect.area
+        }
     }
 
     /// Roles that make a card-like box around text.

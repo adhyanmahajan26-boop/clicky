@@ -341,3 +341,20 @@ private func resolvedTarget(pid: pid_t, node: MockNode, point: CGPoint, label: S
     let boxed = try #require(makeResolver(registry: registry).resolve(try parseTag("[MARK:box:#1:Sunset]")))
     #expect(boxed.frameCG == photo)
 }
+
+/// The sixth live run: the third product came back as raw coordinates over its photo, and the
+/// price was missing from the element list (OCR had it).
+@Test func rawBoxOverAPhotoCoversTheProductUsingOCRText() throws {
+    var registry = ElementRegistry()
+    let photo = CGRect(x: 1000, y: 400, width: 272, height: 90)
+    _ = registry.append(accessibilityElement("Cherry Lamp", role: .image, frame: photo))
+    _ = registry.append(accessibilityElement("Cherry Lamp", role: .text, frame: CGRect(x: 1000, y: 500, width: 90, height: 17)))
+    registry.allOCRLines = [ocrLine("$89", frame: CGRect(x: 1001, y: 527, width: 30, height: 18))]
+    let resolver = makeResolver(registry: registry)
+    // A raw box roughly over the photo (model px map 1:1 in this test frame? use the CG rect via a box target).
+    let resolved = try #require(resolver.resolve(try parseTag("[MARK:box:#1:Cherry Lamp|$89]")))
+    #expect(resolved.method == .imageCard)
+    #expect(resolved.frameCG.maxY >= 545)
+    #expect(resolver.photoMatching(CGRect(x: 1002, y: 402, width: 268, height: 86), displayID: 1) != nil)
+    #expect(resolver.photoMatching(CGRect(x: 1000, y: 400, width: 600, height: 400), displayID: 1) == nil)
+}

@@ -74,7 +74,9 @@ struct LiveScreenMark: Identifiable {
 
     static func source(for target: ResolvedTarget) -> LiveScreenMarkSource {
         switch target.method {
-        case .snapped: return .snapped
+        // A product box is the photo plus what's stacked under it: following the photo's AX frame
+        // would shrink it back to the photo (seen live), so it isn't tracked.
+        case .snapped, .imageCard: return .snapped
         case .raw: return .raw
         default: return target.axNode != nil ? .accessibility : .ocr
         }
