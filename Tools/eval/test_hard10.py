@@ -200,13 +200,6 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(hard10.check_settings([point_tag(60, 310)], [20, 300, 180, 24])[0])
 
 
-class SideDisplayTests(unittest.TestCase):
-    def test_target_must_be_on_side_display(self):
-        side = [-1920, 155, 1920, 1080]
-        self.assertTrue(hard10.check_side([point_tag(-900, 500)], [-1000, 480, 120, 40], side)[0])
-        self.assertFalse(hard10.check_side([point_tag(-900, 500)], [100, 480, 120, 40], side)[0])
-
-
 class ScreenshotTests(unittest.TestCase):
     def test_size_within_ten_percent_of_window_points_or_retina(self):
         self.assertTrue(hard10.screenshot_matches_window((1100, 1000), (1100, 1000), 1.0))
@@ -229,22 +222,6 @@ class ScreenshotTests(unittest.TestCase):
 
     def test_snapshot_paths_prefers_reported_snap(self):
         self.assertEqual(hard10.snapshot_paths({"snaps": [{"path": "/tmp/x.png"}]}, 0), ["/tmp/x.png"])
-
-
-class BoardTests(unittest.TestCase):
-    def test_four_nodes_pass(self):
-        events = [{"type": "addNode", "id": "a"}, {"type": "addNode", "id": "b"}, {"type": "node", "nodeId": "c"},
-                  {"type": "addNode", "id": "d"}, {"type": "addEdge", "from": "a", "to": "b"}]
-        self.assertTrue(hard10.check_board({"boardEvents": events})[0])
-
-    def test_three_nodes_or_empty_fail(self):
-        self.assertFalse(hard10.check_board({"boardEvents": [{"type": "addNode", "id": "a"}, {"type": "addNode", "id": "b"}, {"type": "addNode", "id": "c"}]})[0])
-        self.assertFalse(hard10.check_board({"boardEvents": []})[0])
-        self.assertFalse(hard10.check_board({})[0])
-
-    def test_repeated_node_ids_count_once(self):
-        events = [{"type": "addNode", "id": "a"}, {"type": "updateNode", "id": "a"}]
-        self.assertEqual(hard10.board_node_count(events), 1)
 
 
 class CodeModeTests(unittest.TestCase):
@@ -277,32 +254,226 @@ class CodeModeTests(unittest.TestCase):
             shutil.rmtree(scratch, ignore_errors=True)
 
 
-class BargeInTests(unittest.TestCase):
-    def turn(self, engine="qwen", fallback=False, voice="ref-amber-01"):
-        return {"speech": {"engine": engine, "fallback": fallback, "voice": voice},
-                "timings": {"keyUp": 100.0, "firstAudio": 100.42}}
-
-    def test_same_qwen_voice_passes(self):
-        self.assertTrue(hard10.check_barge(self.turn(), self.turn())[0])
-
-    def test_fallback_or_other_engine_fails(self):
-        self.assertFalse(hard10.check_barge(self.turn(), self.turn(fallback=True))[0])
-        self.assertFalse(hard10.check_barge(self.turn(), self.turn(engine="system"))[0])
-
-    def test_voice_change_fails(self):
-        self.assertFalse(hard10.check_barge(self.turn(), self.turn(voice="ref-other"))[0])
-        self.assertFalse(hard10.check_barge({"speech": {"engine": "qwen"}}, {"speech": {"engine": "qwen"}})[0])
-
-    def test_latency_is_key_up_to_first_audio(self):
-        self.assertEqual(hard10.key_up_to_first_audio_ms(self.turn()), 420.0)
-        self.assertIsNone(hard10.key_up_to_first_audio_ms({}))
-
-
 class NoteTests(unittest.TestCase):
     def test_note_after_bar(self):
         self.assertEqual(hard10.note_of("[MARK:box:#76:M2N3G9024|wrong photo, use 4G9088's]"), "wrong photo, use 4G9088's")
         self.assertEqual(hard10.note_of("[POINT:#3]"), "")
         self.assertEqual(hard10.note_of(None), "")
+
+
+# Real excerpts from the first live run (turn 20261025-161310-2311ea8c and 20261025-161343-7cabd9d6).
+SIDE_SCREENS = [
+    {"boundsCG": [0, 0, 3440, 1440], "displayID": 1, "header": 'SCREEN 1 "DELL S3425DW" (main, cursor here) image 2000x837 px', "n": 1},
+    {"boundsCG": [-1920, 155, 1920, 1080], "displayID": 4, "header": 'SCREEN 2 "DELL S2725QC (2)" (left of main) image 1456x819 px', "n": 2},
+    {"boundsCG": [3440, 198, 1920, 1080], "displayID": 5, "header": 'SCREEN 3 "DELL S2725QC (1)" (right of main) image 1456x819 px', "n": 3},
+]
+SIDE_SUBMIT_FRAME = [4297.31, 733.5, 84.69, 36.0]
+SIDE_REAL_TAG = {"raw": '[POINT:"Submit":Submit:screen3]', "kind": "point", "screen": 3, "verified": True,
+                 "cgPoint": [3885.3192892987627, 364.59999999504333]}
+
+WHITEBOARD_EXCERPT = """<whiteboard>
+{"wb":1,"title":"How DNS resolution works","dir":"LR","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Resolving example.com","q":"how does dns resolution work"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Browser asks a resolver","Resolver asks root, then TLD, then authoritative","Answer comes back and gets cached"],"ordered":true}
+{"el":"box","id":"br","sec":"q1","text":"Browser","shape":"round","color":"blue","icon":"safari"}
+{"el":"box","id":"rec","sec":"q1","text":"Recursive resolver (your ISP or 1.1.1.1)","shape":"round","color":"purple","icon":"server.rack"}
+{"el":"box","id":"root","sec":"q1","text":"Root server","shape":"rect","color":"orange"}
+{"el":"box","id":"tld","sec":"q1","text":".com TLD server","shape":"rect","color":"green"}
+{"el":"box","id":"auth","sec":"q1","text":"Authoritative server for example.com","shape":"rect","color":"red"}
+{"el":"arrow","id":"a1","sec":"q1","from":"br","to":"rec","text":"where is example.com?","style":"solid","head":"end"}
+{"el":"callout","id":"c1","sec":"q1","target":"rec","style":"tip","text":"Each answer is cached for its time to live, so repeat lookups are instant."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["The resolver does the legwork, not your browser"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"here's the plan.","focus":"agenda"}
+</whiteboard>"""
+WHITEBOARD_THREE_NODES = """<whiteboard>
+{"el":"box","id":"br","sec":"q1","text":"Browser"}
+{"el":"box","id":"rec","sec":"q1","text":"Recursive resolver"}
+{"el":"box","id":"root","sec":"q1","text":"Root server"}
+{"el":"arrow","id":"a1","sec":"q1","from":"br","to":"rec"}
+</whiteboard>"""
+BOARD_EVENTS_EXCERPT = [{"kind": "segmentStart", "segment": 3, "step": 1, "t": 1792925044.993565},
+                        {"kind": "reveal", "step": 1, "t": 1792925044.993565},
+                        {"kind": "stepEnd", "segment": 4, "step": 1, "t": 1792925054.0401568}]
+
+# Real first-run codeStatus (ok reply, nothing started: the preflight refused the task).
+CODE_STATUS_IDLE = {"ok": True, "error": None, "result": {
+    "busy": False, "enabled": True, "lastNarration": None, "narrateProgress": True, "panelMode": "review",
+    "panelVisible": False, "phase": "Idle", "queue": [], "task": None,
+    "preflight": "Off: plugins load in headless runs (hyperframes, cowork-plugin-management, searchfit-seo), so the agent's init would be rejected"}}
+CODE_STATUS_RUNNING = {"ok": True, "error": None, "result": {
+    "busy": True, "enabled": True, "panelMode": "working", "phase": "Working", "preflight": "OK",
+    "task": {"action": "edit", "repo": "clicky-scratch", "instructions": "add a function multiply with a test", "flow": "review"},
+    "progress": {"step": "editing utils.py", "changedFiles": 1, "elapsedSeconds": 40, "toolCalls": 6, "running": True}}}
+CODE_STATUS_REVIEW = {"ok": True, "error": None, "result": {
+    "busy": False, "enabled": True, "panelMode": "review", "panelVisible": True, "phase": "Ready for review", "preflight": "OK",
+    "task": {"action": "edit", "repo": "clicky-scratch", "instructions": "add a function multiply with a test", "flow": "review"},
+    "review": {"header": "Review changes", "worktree": "/Users/adhyanmahajan/Projects/clicky-scratch-worktrees/multiply",
+               "buttons": ["approve", "discard"], "changedFiles": ["utils.py", "tests/test_utils.py"], "blockers": []}}}
+
+# Real first-run barge-in turns: the cancelled first turn has no engine; the follow-up is qwen.
+BARGE_FIRST = {"transcript": "explain in detail, step by step and in several paragraphs, how a transistor amplifies a small signal into a larger one",
+               "rawResponse": "", "speech": {"fallback": False}, "error": "CancellationError()",
+               "timings": {"keyUp": 1792926019.932239}}
+BARGE_FOLLOW = {"transcript": "quick one, what is the capital of France?", "rawResponse": "the capital of france is paris.",
+                "speech": {"engine": "qwen", "fallback": False, "voice": "clicky-voice.wav"},
+                "timings": {"keyUp": 1792926021.229897, "firstAudio": 1792926026.006393}}
+BARGE_SPEAKING = {"seen": True, "engine": None, "fallback": False}
+
+
+class SideDisplayTests(unittest.TestCase):
+    def test_real_turn_submit_frame_is_on_right_display(self):
+        # The old check used the wrong display; the frame is on SCREEN 3 (right), so containment passes
+        # and only the point rule can fail.
+        passed, reason = hard10.check_side([SIDE_REAL_TAG], SIDE_SUBMIT_FRAME, SIDE_SCREENS)
+        self.assertFalse(passed)
+        self.assertIn("no point within 4 pt", reason)
+        self.assertNotIn("not on the side display", reason)
+
+    def test_point_on_side_frame_passes(self):
+        tag = {"raw": "[POINT:4300,740]", "kind": "point", "cgPoint": [4300, 740]}
+        self.assertTrue(hard10.check_side([tag], SIDE_SUBMIT_FRAME, SIDE_SCREENS)[0])
+
+    def test_frame_centre_on_main_display_fails(self):
+        self.assertFalse(hard10.check_side([point_tag(120, 120)], [100, 100, 80, 36], SIDE_SCREENS)[0])
+
+    def test_left_display_frame_passes_with_a_point(self):
+        self.assertTrue(hard10.check_side([point_tag(-940, 500)], [-1000, 480, 120, 40], SIDE_SCREENS)[0])
+
+    def test_frame_straddling_displays_uses_centre(self):
+        # Centre at x=3440 is on the right display, not main (main ends at x=3440, exclusive).
+        self.assertEqual(hard10.screen_under_frame([3400, 700, 80, 36], SIDE_SCREENS)["n"], 3)
+
+    def test_no_screens_in_turn_fails(self):
+        self.assertFalse(hard10.check_side([point_tag(4300, 740)], SIDE_SUBMIT_FRAME, [])[0])
+
+
+class BoardTests(unittest.TestCase):
+    def test_real_whiteboard_counts_box_and_callout_nodes(self):
+        turn = {"boardEvents": BOARD_EVENTS_EXCERPT, "rawResponse": "intro.\n\n" + WHITEBOARD_EXCERPT}
+        self.assertEqual(hard10.whiteboard_node_ids(turn["rawResponse"]), {"br", "rec", "root", "tld", "auth", "c1"})
+        passed, reason = hard10.check_board(turn)
+        self.assertTrue(passed, reason)
+
+    def test_three_nodes_fail(self):
+        passed, reason = hard10.check_board({"boardEvents": BOARD_EVENTS_EXCERPT, "rawResponse": WHITEBOARD_THREE_NODES})
+        self.assertFalse(passed)
+        self.assertIn("3 board nodes", reason)
+
+    def test_board_not_played_fails(self):
+        self.assertFalse(hard10.check_board({"boardEvents": [], "rawResponse": WHITEBOARD_EXCERPT})[0])
+        self.assertFalse(hard10.check_board({"rawResponse": WHITEBOARD_EXCERPT})[0])
+
+    def test_no_whiteboard_block_has_no_nodes(self):
+        self.assertEqual(hard10.whiteboard_node_ids("just prose, no board"), set())
+
+    def test_edges_lists_and_sections_are_not_nodes(self):
+        text = '<whiteboard>\n{"el":"arrow","id":"a"}\n{"el":"edge","id":"e"}\n{"el":"list","id":"l"}\n{"el":"text","id":"t"}\n{"el":"section","id":"s"}\n</whiteboard>'
+        self.assertEqual(hard10.whiteboard_node_ids(text), set())
+
+    def test_repeated_ids_count_once(self):
+        text = '<whiteboard>\n{"el":"box","id":"a"}\n{"el":"box","id":"a"}\n</whiteboard>'
+        self.assertEqual(hard10.whiteboard_node_ids(text), {"a"})
+
+
+class BargeInTests(unittest.TestCase):
+    def test_real_turns_pass_when_speech_was_seen_playing(self):
+        passed, reason = hard10.check_barge(BARGE_FIRST, BARGE_FOLLOW, BARGE_SPEAKING)
+        self.assertTrue(passed, reason)
+
+    def test_first_turn_engine_from_turn_json_is_enough(self):
+        first = {"speech": {"engine": "qwen", "fallback": False, "voice": "clicky-voice.wav"}}
+        self.assertTrue(hard10.check_barge(first, BARGE_FOLLOW, {"seen": False})[0])
+
+    def test_first_engine_unknown_and_never_seen_fails(self):
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, BARGE_FOLLOW, {"seen": False})[0])
+
+    def test_speechstate_engine_is_used_when_turn_has_none(self):
+        self.assertTrue(hard10.check_barge(BARGE_FIRST, BARGE_FOLLOW, {"seen": True, "engine": "qwen"})[0])
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, BARGE_FOLLOW, {"seen": True, "engine": "system"})[0])
+
+    def test_fallback_anywhere_fails(self):
+        fallback_first = {"speech": {"fallback": True}}
+        self.assertFalse(hard10.check_barge(fallback_first, BARGE_FOLLOW, BARGE_SPEAKING)[0])
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, BARGE_FOLLOW, {"seen": True, "fallback": True})[0])
+        fallback_follow = {"speech": {"engine": "qwen", "fallback": True, "voice": "clicky-voice.wav"}}
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, fallback_follow, BARGE_SPEAKING)[0])
+
+    def test_follow_up_must_be_qwen_on_clicky_voice(self):
+        other_voice = {"speech": {"engine": "qwen", "fallback": False, "voice": "ref-other"}}
+        system = {"speech": {"engine": "system", "fallback": False}}
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, other_voice, BARGE_SPEAKING)[0])
+        self.assertFalse(hard10.check_barge(BARGE_FIRST, system, BARGE_SPEAKING)[0])
+
+    def test_first_turn_on_another_voice_fails(self):
+        first = {"speech": {"engine": "qwen", "fallback": False, "voice": "ref-other"}}
+        self.assertFalse(hard10.check_barge(first, BARGE_FOLLOW, BARGE_SPEAKING)[0])
+
+    def test_speaking_info_reads_a_speechstate_reply(self):
+        playing = {"ok": True, "result": {"isPlaying": True, "isSpeaking": True, "captionVisible": True}}
+        idle = {"ok": True, "result": {"isPlaying": False, "isSpeaking": False}}
+        self.assertTrue(hard10.speaking_info(playing)["seen"])
+        self.assertFalse(hard10.speaking_info(idle)["seen"])
+        self.assertEqual(hard10.speaking_info({"ok": True, "result": {"isSpeaking": True, "engine": "qwen"}})["engine"], "qwen")
+
+    def test_latency_is_key_up_to_first_audio(self):
+        self.assertEqual(hard10.key_up_to_first_audio_ms(BARGE_FOLLOW), 4776.5)
+        self.assertIsNone(hard10.key_up_to_first_audio_ms({}))
+
+
+class CodeProgressTests(unittest.TestCase):
+    def test_first_run_idle_status_is_waiting_with_preflight_reason(self):
+        verdict, _ = hard10.code_progress(CODE_STATUS_IDLE)
+        self.assertEqual(verdict, "waiting")
+        self.assertTrue(hard10.preflight_failed(CODE_STATUS_IDLE["result"]["preflight"]))
+        self.assertIn("rejected", CODE_STATUS_IDLE["result"]["preflight"])
+
+    def test_busy_is_running(self):
+        self.assertEqual(hard10.code_progress(CODE_STATUS_RUNNING)[0], "running")
+
+    def test_review_with_worktree_is_finished(self):
+        verdict, reason = hard10.code_progress(CODE_STATUS_REVIEW)
+        self.assertEqual(verdict, "finished")
+        self.assertIn("clicky-scratch-worktrees/multiply", reason)
+
+    def test_review_without_worktree_is_not_finished(self):
+        status = {"result": {"busy": False, "panelMode": "review", "task": {"action": "edit"}, "review": {"worktree": None}}}
+        self.assertEqual(hard10.code_progress(status)[0], "waiting")
+
+    def test_preflight_words(self):
+        self.assertTrue(hard10.preflight_failed("Off"))
+        self.assertTrue(hard10.preflight_failed("Preflight failed: git missing"))
+        self.assertFalse(hard10.preflight_failed("Checking…"))
+        self.assertFalse(hard10.preflight_failed("Not checked yet"))
+        self.assertFalse(hard10.preflight_failed("OK"))
+
+
+class WallpaperFinderTests(unittest.TestCase):
+    def test_every_finder_is_valid_axfind(self):
+        for finder in hard10.WALLPAPER_FINDERS:
+            self.assertEqual(hard10.FE.validate_finder(finder, "finder"), [])
+
+    def test_searches_any_role_by_contains_inside_the_sidebar_first(self):
+        first = hard10.WALLPAPER_FINDERS[0]
+        self.assertEqual(first["role"], "*")
+        self.assertEqual(first["match"], "contains")
+        self.assertEqual(first["title"], "Wallpaper")
+        self.assertIn(first["within"]["role"], ("AXOutline", "AXList"))
+
+    def test_sidebar_rows_cells_and_anywhere_are_all_tried(self):
+        ancestors = {finder.get("ancestor") for finder in hard10.WALLPAPER_FINDERS}
+        self.assertTrue({"AXRow", "AXCell", None} <= ancestors)
+        self.assertIsNone(hard10.WALLPAPER_FINDERS[-1].get("within"))
+
+
+class ChromeFrontTests(unittest.TestCase):
+    def test_script_only_sets_or_reads_the_frontmost_flag_of_one_pid(self):
+        script = hard10.frontmost_script(4242)
+        self.assertIn("unix id is 4242", script)
+        self.assertIn("set frontmost", script)
+        read = hard10.frontmost_script(4242, activate=False)
+        self.assertIn("return frontmost", read)
+        for forbidden in ("click", "keystroke", "key code", "position", "bounds"):
+            self.assertNotIn(forbidden, script + read)
+
 
 
 if __name__ == "__main__":

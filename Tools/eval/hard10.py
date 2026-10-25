@@ -65,8 +65,25 @@ LONG_QUESTION = ("explain in detail, step by step and in several paragraphs, how
                  "amplifies a small signal into a larger one")
 FOLLOW_UP = "quick one, what is the capital of France?"
 CODE_PROMPT = "turn on code mode and in the clicky-scratch repo add a function multiply with a test"
-WALLPAPER_FINDER = {"role": "AXStaticText", "title": "Wallpaper",
-                    "within": {"role": "AXOutline", "nth": 1}, "ancestor": "AXRow"}
+SETTINGS_TRUTH_SECONDS = 20
+# Sidebar rows on recent macOS are AXRow > AXCell > AXStaticText, and the sidebar is an
+# AXOutline (or AXList). Search any role whose title/description/value contains "Wallpaper",
+# first inside the sidebar container, then anywhere; report the nearest row/cell frame.
+WALLPAPER_FINDERS = [
+    dict({"role": "*", "title": "Wallpaper", "match": "contains", "within": {"role": container, "nth": 1}},
+         **({"ancestor": ancestor} if ancestor else {}))
+    for container in ("AXOutline", "AXList")
+    for ancestor in ("AXRow", "AXCell", None)
+] + [
+    {"role": "*", "title": "Wallpaper", "match": "contains", "ancestor": "AXRow"},
+    {"role": "*", "title": "Wallpaper", "match": "contains"},
+]
+BARGE_VOICE = "clicky-voice.wav"
+CODE_START_SECONDS = 120
+CODE_RUN_SECONDS = 600
+CHROME_SETTLE_SECONDS = 1.5
+NON_NODE_ELEMENTS = {"edge", "arrow", "list", "text", "section"}
+PREFLIGHT_FAILURE_WORDS = ("off", "fail", "reject", "blocked", "missing", "not found", "unavailable", "error")
 SCRATCH_FILES = {
     "utils.py": "def add(a, b):\n    return a + b\n",
     "tests/__init__.py": "",
@@ -274,17 +291,33 @@ def check_settings(tags, wallpaper_frame):
     return True, "%d steps, first on Wallpaper" % len(tags)
 
 
-def rect_inside(inner, outer, tolerance=0.5):
-    return (inner[0] >= outer[0] - tolerance and inner[1] >= outer[1] - tolerance
-            and inner[0] + inner[2] <= outer[0] + outer[2] + tolerance
-            and inner[1] + inner[3] <= outer[1] + outer[3] + tolerance)
+def point_in_bounds(point, bounds):
+    return bounds[0] <= point[0] < bounds[0] + bounds[2] and bounds[1] <= point[1] < bounds[1] + bounds[3]
 
 
-def check_side(tags, frame, side_bounds):
-    """Test 6. Pass: the target frame sits on the side display and a tag points at it."""
-    if not rect_inside(frame, side_bounds):
-        return False, "Submit frame %s is not on the side display" % (frame,)
-    return check_point(tags, frame)
+def is_main_screen(screen):
+    """The main display is the one at origin 0,0 (or the one the turn's header marks as main)."""
+    bounds = screen.get("boundsCG") or [None, None]
+    return (list(bounds[:2]) == [0, 0]) or "(main" in str(screen.get("header", ""))
+
+
+def screen_under_frame(frame, screens):
+    """The screen from this turn whose boundsCG holds the frame's centre, or None."""
+    centre = [frame[0] + frame[2] / 2.0, frame[1] + frame[3] / 2.0]
+    for screen in screens or []:
+        if screen.get("boundsCG") and point_in_bounds(centre, screen["boundsCG"]):
+            return screen
+    return None
+
+
+def check_side(tags, frame, screens):
+    """Test 6. Pass: the frame's centre lies on a non-main screen of the same turn (screens =
+    that turn's boundsCG list), and a tag points at the frame within 4 pt."""
+    screen = screen_under_frame(frame, screens)
+    if screen is None or is_main_screen(screen):
+        return False, "Submit frame %s is not on the side display (centre off every non-main screen)" % (frame,)
+    passed, reason = check_point(tags, frame)
+    return passed, "%s; frame on %s" % (reason, (screen.get("header") or "side display")[:40])
 
 
 def png_size(path):
@@ -323,33 +356,36 @@ def snapshot_paths(turn, started_at):
     return paths
 
 
-def board_node_count(events):
-    """Distinct node ids in boardEvents (events whose type/event/op/kind names a node)."""
+def whiteboard_node_ids(raw_response):
+    """Distinct ids of the node elements in the <whiteboard> JSONL of an answer. Node elements
+    are every "el" except edge, arrow, list, text and section; a line with no id counts once."""
+    match = re.search(r"<whiteboard>(.*?)</whiteboard>", raw_response or "", re.S)
+    if not match:
+        return set()
     ids = set()
-    unnamed = 0
-    for event in events or []:
-        if not isinstance(event, dict):
+    for line_index, line in enumerate(match.group(1).splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
             continue
-        kind = " ".join(str(event.get(key, "")) for key in ("type", "event", "op", "kind")).lower()
-        if "node" not in kind:
+        try:
+            element = json.loads(line)
+        except ValueError:
             continue
-        identity = event.get("nodeId", event.get("id", event.get("node")))
-        if identity is None:
-            unnamed += 1
-        else:
-            ids.add(str(identity))
-    return len(ids) + unnamed
+        if not isinstance(element, dict) or "el" not in element or element["el"] in NON_NODE_ELEMENTS:
+            continue
+        ids.add(str(element.get("id", "#line%d" % line_index)))
+    return ids
 
 
 def check_board(turn):
-    """Test 8. Pass: boardEvents is non-empty and holds at least four distinct nodes."""
-    events = (turn or {}).get("boardEvents") or []
-    if not events:
-        return False, "boardEvents is empty"
-    nodes = board_node_count(events)
-    if nodes < 4:
-        return False, "%d board nodes, want at least 4" % nodes
-    return True, "%d board nodes" % nodes
+    """Test 8. Pass: the board was played (boardEvents non-empty) and the board itself holds at
+    least four distinct node elements (counted from the <whiteboard> JSONL in rawResponse)."""
+    if not (turn or {}).get("boardEvents"):
+        return False, "boardEvents is empty: the board was not played"
+    nodes = whiteboard_node_ids((turn or {}).get("rawResponse"))
+    if len(nodes) < 4:
+        return False, "%d board nodes, want at least 4" % len(nodes)
+    return True, "%d board nodes (%s)" % (len(nodes), ", ".join(sorted(nodes)))
 
 
 def reports_finished(value):
@@ -381,6 +417,35 @@ def check_code(finished, diff_text, test_diff_text, unittest_returncode):
     return True, "multiply and its test are in the diff; unittest passes"
 
 
+def status_snapshot(reply):
+    """The codeStatus snapshot from a clickyctl reply ({ok, result, ...}) or a bare snapshot."""
+    if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
+        return reply["result"]
+    return reply if isinstance(reply, dict) else {}
+
+
+def preflight_failed(line):
+    """True when the code preflight line reads as a failure (e.g. "Off: plugins load in headless runs")."""
+    text = str(line or "").strip().lower()
+    if text.startswith("off"):
+        return True
+    return any(word in text for word in PREFLIGHT_FAILURE_WORDS if word != "off")
+
+
+def code_progress(reply):
+    """(verdict, reason) for one codeStatus poll. verdict is "finished" (not busy, the review panel
+    shows a task whose worktree is ready), "running" (busy or a task is live), or "waiting".
+    A finished review needs a worktree path, so an idle panel with no task is still "waiting"."""
+    snap = status_snapshot(reply)
+    review = snap.get("review") if isinstance(snap.get("review"), dict) else None
+    busy = bool(snap.get("busy"))
+    if busy or (snap.get("task") and not review):
+        return "running", "busy: phase %s" % snap.get("phase")
+    if reports_finished(snap) or (not busy and snap.get("panelMode") == "review" and review and review.get("worktree")):
+        return "finished", "review ready in %s" % (review or {}).get("worktree")
+    return "waiting", "phase %s, panel %s, task %s" % (snap.get("phase"), snap.get("panelMode"), "set" if snap.get("task") else "none")
+
+
 SPEECH_VOICE_KEYS = ("voice", "referenceVoice", "reference", "voiceId", "referenceId")
 
 
@@ -394,16 +459,58 @@ def speech_identity(turn):
     return {"engine": speech.get("engine"), "fallback": bool(speech.get("fallback")), "voice": voice}
 
 
-def check_barge(first_turn, second_turn):
-    """Test 10. Both turns must use the qwen engine with no fallback and the same reference voice."""
+def find_key(value, name):
+    """First value stored under name anywhere in a reply (any nesting), or None."""
+    if isinstance(value, dict):
+        if name in value and value[name] is not None:
+            return value[name]
+        for item in value.values():
+            found = find_key(item, name)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = find_key(item, name)
+            if found is not None:
+                return found
+    return None
+
+
+def speaking_info(state):
+    """From a speechState reply sampled while speaking: whether speech was seen playing, and the
+    engine and fallback flag when the app reports them (the first turn of a barge-in is cancelled,
+    so its turn.json may carry no engine)."""
+    return {"seen": probe_flag(state, ("speaking", "isSpeaking", "playing", "audioPlaying", "isPlaying")),
+            "engine": find_key(state, "engine"),
+            "fallback": bool(find_key(state, "fallback"))}
+
+
+def check_barge(first_turn, second_turn, speaking):
+    """Test 10. The follow-up must be qwen with no fallback on the clicky-voice.wav reference. The
+    first (cancelled) turn must be qwen when its speech shows it, or else speech must have been seen
+    playing before the barge-in (speaking, from speaking_info) with no fallback flag."""
+    speaking = speaking or {}
     first, second = speech_identity(first_turn), speech_identity(second_turn)
-    if first["engine"] != "qwen" or second["engine"] != "qwen":
-        return False, "engine %s then %s, want qwen both" % (first["engine"], second["engine"])
-    if first["fallback"] or second["fallback"]:
-        return False, "a turn used fallback speech"
-    if first["voice"] is None or first["voice"] != second["voice"]:
-        return False, "reference voice %r then %r" % (first["voice"], second["voice"])
-    return True, "qwen on both turns, same reference voice"
+    if second["engine"] != "qwen":
+        return False, "follow-up engine %s, want qwen" % second["engine"]
+    if second["fallback"]:
+        return False, "follow-up used fallback speech"
+    if second["voice"] != BARGE_VOICE:
+        return False, "follow-up reference voice %r, want %s" % (second["voice"], BARGE_VOICE)
+    if first["fallback"] or speaking.get("fallback"):
+        return False, "first turn used fallback speech"
+    first_engine = first["engine"] or speaking.get("engine")
+    if first_engine is None:
+        if not speaking.get("seen"):
+            return False, "first turn engine not recorded and no speech seen playing before the barge-in"
+        note = "first turn engine not in turn.json; speech was playing before the barge-in, no fallback"
+    elif first_engine != "qwen":
+        return False, "first turn engine %s, want qwen" % first_engine
+    else:
+        note = "first turn qwen"
+    if first["voice"] not in (None, BARGE_VOICE):
+        return False, "first turn reference voice %r, want %s" % (first["voice"], BARGE_VOICE)
+    return True, "follow-up qwen on %s; %s" % (BARGE_VOICE, note)
 
 
 def key_up_to_first_audio_ms(turn):
@@ -511,8 +618,29 @@ def cg_frames(window, truth, keys):
     return {key: FE.css_to_cg(truth["items"][key], window) for key in keys}
 
 
+def frontmost_script(pid, activate=True):
+    """AppleScript for the one Chrome process with this pid. Only sets or reads its frontmost
+    flag; no clicks, keystrokes or window moves."""
+    if activate:
+        return 'tell application "System Events" to set frontmost of (first process whose unix id is %d) to true' % pid
+    return 'tell application "System Events" to return frontmost of (first process whose unix id is %d)' % pid
+
+
+def bring_chrome_front(harness):
+    """Activates this harness's Chrome window (by pid) and reads back that it is frontmost."""
+    pid = harness.process.pid
+    try:
+        subprocess.run(["osascript", "-e", frontmost_script(pid)], capture_output=True, text=True, timeout=10)
+        read = subprocess.run(["osascript", "-e", frontmost_script(pid, activate=False)], capture_output=True, text=True, timeout=10)
+        return read.returncode == 0 and read.stdout.strip() == "true"
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def open_chrome_page(ctx, number, page, origin, size):
-    """Owner guard, then a Chrome app window on origin, loaded with the page. Returns (harness, state, window, truth)."""
+    """Owner guard, then a Chrome app window on origin, loaded with the page. The window is made
+    frontmost and given CHROME_SETTLE_SECONDS after the page reports its truth, before any ask.
+    Returns (harness, state, window, truth)."""
     wait_owner_idle(ctx)
     harness = FE.ChromeHarness(DEBUG_PORT_BASE + number, origin, size)
     try:
@@ -524,6 +652,8 @@ def open_chrome_page(ctx, number, page, origin, size):
     if not truth.get("items"):
         harness.stop()
         raise TruthMissing("%s published no truth items" % page)
+    harness.frontmost = bring_chrome_front(harness)
+    time.sleep(CHROME_SETTLE_SECONDS)
     window = {"bounds": state["bounds"], "innerWidth": state["innerWidth"], "innerHeight": state["innerHeight"]}
     return harness, state, window, truth
 
@@ -556,7 +686,9 @@ def test_1_dense_table(ctx):
         targets = {name: frames[name] for name in wanted}
         others = {name: frame for name, frame in frames.items() if name not in wanted}
         reply, turn = ask(ctx, PROMPTS[1])
-        return score(ctx, 1, reply, turn, lambda t, b: check_dense(t.get("tags") or [], targets, others, b))
+        result = score(ctx, 1, reply, turn, lambda t, b: check_dense(t.get("tags") or [], targets, others, b))
+        result["extra"]["chromeFrontmost"] = harness.frontmost
+        return result
     finally:
         harness.stop()
 
@@ -569,7 +701,9 @@ def test_2_product_boxes(ctx):
         red_keys = truth.get("red") or []
         red_frames = [FE.css_to_cg(truth["items"][key], window) for key in red_keys]
         reply, turn = ask(ctx, PROMPTS[2])
-        return score(ctx, 2, reply, turn, lambda t, b: check_boxes(t.get("tags") or [], red_frames, b))
+        result = score(ctx, 2, reply, turn, lambda t, b: check_boxes(t.get("tags") or [], red_frames, b))
+        result["extra"]["chromeFrontmost"] = harness.frontmost
+        return result
     finally:
         harness.stop()
 
@@ -585,20 +719,39 @@ def test_3_icon_button(ctx):
         harness.stop()
 
 
+def resolve_wallpaper_truth(timeout_seconds=SETTINGS_TRUTH_SECONDS):
+    """First WALLPAPER_FINDERS entry that resolves, polling until the sidebar is up.
+    Returns (frame, finder, error)."""
+    deadline = time.time() + timeout_seconds
+    error = "no finder tried"
+    while True:
+        for finder in WALLPAPER_FINDERS:
+            frames, _, found_error = FE.resolve_truth([finder], SETTINGS_BUNDLE)
+            if frames:
+                return frames[0], finder, None
+            error = found_error
+        if time.time() >= deadline:
+            return None, None, error
+        time.sleep(2)
+
+
 def test_4_settings_steps(ctx):
     """System Settings, read-only (opened, never clicked by the harness). Pass: at least two
-    step marks, the first on the sidebar Wallpaper item (axfind truth)."""
+    step marks, the first on the sidebar Wallpaper item (axfind truth, any of WALLPAPER_FINDERS)."""
     if not FE.app_installed("System Settings"):
         raise Skip("System Settings is not installed")
     wait_owner_idle(ctx)
     if not FE.open_app("System Settings"):
         raise Skip("could not open System Settings")
     time.sleep(3)
-    frames, _, error = FE.resolve_truth([WALLPAPER_FINDER], SETTINGS_BUNDLE)
-    if error or not frames:
-        raise TruthMissing(error or "no Wallpaper frame")
+    frame, finder, error = resolve_wallpaper_truth()
+    if frame is None:
+        raise TruthMissing("truth: no Wallpaper sidebar item after %d s (%s)" % (SETTINGS_TRUTH_SECONDS, error))
     reply, turn = ask(ctx, PROMPTS[4])
-    return score(ctx, 4, reply, turn, lambda t, b: check_settings(t.get("tags") or [], frames[0]))
+    result = score(ctx, 4, reply, turn, lambda t, b: check_settings(t.get("tags") or [], frame))
+    result["extra"]["truthFinder"] = finder
+    result["extra"]["truthFrameCG"] = frame
+    return result
 
 
 def test_5_canvas_text(ctx):
@@ -637,7 +790,8 @@ def test_6_side_display(ctx):
     try:
         frame = FE.css_to_cg(truth["items"]["submit"], window)
         reply, turn = ask(ctx, PROMPTS[6])
-        return score(ctx, 6, reply, turn, lambda t, b: check_side(t.get("tags") or [], frame, side))
+        # The screens come from the scored turn itself, not from an earlier one.
+        return score(ctx, 6, reply, turn, lambda t, b: check_side(t.get("tags") or [], frame, t.get("screens") or []))
     finally:
         harness.stop()
 
@@ -696,10 +850,12 @@ def git_output(path, arguments):
     return completed.stdout
 
 
-def worktree_changes(base_sha):
-    """(path, combined diff text, test-file diff text) for every worktree of the scratch repo."""
-    listing = git_output(SCRATCH_REPO, ["worktree", "list", "--porcelain"])
-    paths = [line[len("worktree "):] for line in listing.splitlines() if line.startswith("worktree ")]
+def worktree_changes(base_sha, paths=None):
+    """(path, combined diff text, test-file diff text) for the given worktree paths, or for every
+    worktree of the scratch repo when none are given."""
+    if paths is None:
+        listing = git_output(SCRATCH_REPO, ["worktree", "list", "--porcelain"])
+        paths = [line[len("worktree "):] for line in listing.splitlines() if line.startswith("worktree ")]
     changes = []
     for path in paths:
         diff = git_output(path, ["diff", base_sha])
@@ -718,56 +874,80 @@ def worktree_changes(base_sha):
 
 
 def test_9_code_mode(ctx):
-    """Code mode in clicky-scratch. Pass: codeStatus reports a finished task; the scratch diff
-    has def multiply and a test; python3 -m unittest passes in that worktree. Nothing is
-    approved or pushed by the harness."""
+    """Code mode in clicky-scratch. The ask may carry [CODEMODE:on]; the app then re-asks the
+    original request itself and a code task starts after a 2 s "Opening" countdown. Poll codeStatus
+    for up to CODE_RUN_SECONDS after the ask. Pass: codeStatus reports a finished task (review panel
+    with a worktree, not busy); the worktree diff has def multiply and a test naming multiply; and
+    python3 -m unittest passes in that worktree. Nothing is approved or pushed by the harness."""
     base_sha = ensure_scratch_repo()
     reply, turn = ask(ctx, PROMPTS[9])
-    finished = False
-    last_status = None
-    deadline = time.time() + 900
-    while time.time() < deadline:
+    asked_at = time.time()
+    finished, preflight_reason, last_snap, last_reason = False, None, {}, "no poll"
+    started = False
+    while time.time() < asked_at + CODE_RUN_SECONDS:
         status = FE.clickyctl({"cmd": "codeStatus"}, 30)
-        last_status = status
         if status.get("ok") is False and "unknown" in str(status.get("error", "")).lower():
             raise TruthMissing("codeStatus is not in this build: %s" % str(status.get("error"))[:120])
-        if reports_finished(status):
+        last_snap = status_snapshot(status)
+        verdict, last_reason = code_progress(status)
+        if verdict == "running":
+            started = True
+        if verdict == "finished":
             finished = True
             break
+        if not started and time.time() - asked_at > CODE_START_SECONDS:
+            if preflight_failed(last_snap.get("preflight")):
+                preflight_reason = "preflight: %s" % last_snap.get("preflight")
+            break
         time.sleep(5)
+    review = last_snap.get("review") if isinstance(last_snap.get("review"), dict) else {}
+    worktree = review.get("worktree") if finished else None
+    branch = None
+    if worktree and os.path.isdir(worktree):
+        branch = git_output(worktree, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
     diff_text, test_text, returncode = "", "", None
-    for path, diff, test_diff in worktree_changes(base_sha):
-        if "def multiply" in diff:
+    for path, diff, test_diff in worktree_changes(base_sha, [worktree] if worktree else None):
+        if "def multiply" in diff or worktree:
             diff_text, test_text = diff, test_diff
             run = subprocess.run([sys.executable, "-m", "unittest"], cwd=path, capture_output=True, text=True, timeout=120)
             returncode = run.returncode
             break
     if returncode is None:
         returncode = 1
-    passed, reason = check_code(finished, diff_text, test_text, returncode)
+    if not finished:
+        reason = preflight_reason or "codeStatus never reported a finished task (last: %s)" % last_reason
+        passed = False
+    else:
+        passed, reason = check_code(finished, diff_text, test_text, returncode)
+    extra = {"codeStatus": last_snap, "worktree": worktree, "branch": branch, "codeToggled": "[CODEMODE:on" in str((turn or {}).get("rawResponse") or "")}
     if turn is None:
-        return record(9, "no-turn", False, "no turn record: %s" % (reply.get("error") or "no turnDir"), extra={"codeStatus": last_status})
-    return record(9, "scored", passed, reason, reply.get("turnDir"), turn, {"codeStatus": last_status})
+        return record(9, "no-turn", False, "no turn record: %s" % (reply.get("error") or "no turnDir"), extra=extra)
+    return record(9, "scored", passed, reason, reply.get("turnDir"), turn, extra)
 
 
 def wait_for_speaking(timeout_seconds):
+    """Polls speechState until speech is seen playing. Returns speaking_info(state) for that poll
+    (seen, engine, fallback) or {"seen": False} on timeout."""
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        status = FE.clickyctl({"cmd": "speechState"}, 15)
-        if probe_flag(status, ("speaking", "isSpeaking", "playing", "audioPlaying")):
-            return True
+        state = FE.clickyctl({"cmd": "speechState"}, 15)
+        info = speaking_info(state)
+        if info["seen"]:
+            return info
         time.sleep(0.3)
-    return False
+    return {"seen": False, "engine": None, "fallback": False}
 
 
 def test_10_barge_in(ctx):
-    """Barge-in during speech. Pass: the follow-up answers (Paris), and both turns use qwen with
-    no fallback and the same reference voice."""
+    """Barge-in during speech. Pass: the follow-up answers (Paris) on qwen with clicky-voice.wav and
+    no fallback, and the first (cancelled) turn is qwen or was seen speaking with no fallback (see
+    check_barge). Records the follow-up's keyUp to firstAudio."""
     wait_owner_idle(ctx)
     long_ask = subprocess.Popen([FE.CLICKYCTL, json.dumps({"cmd": "ask", "text": LONG_QUESTION, "speak": True}),
                                  str(ASK_TIMEOUT_SECONDS)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
-        if not wait_for_speaking(180):
+        speaking = wait_for_speaking(180)
+        if not speaking["seen"]:
             long_ask.kill()
             return record(10, "error", False, "no speech started within 180 s")
         barge = FE.clickyctl({"cmd": "bargeIn"}, 30)
@@ -784,13 +964,14 @@ def test_10_barge_in(ctx):
         return record(10, "no-turn", False, "follow-up turn missing: %s" % (reply.get("error") or "no turnDir"), reply.get("turnDir"), first_turn)
     speech_state = FE.clickyctl({"cmd": "speechState"}, 15)
     answered = "paris" in str(second_turn.get("rawResponse") or "").lower()
-    same, reason = check_barge(first_turn, second_turn)
+    same, reason = check_barge(first_turn, second_turn, speaking)
     passed = answered and same
     if not answered:
         reason = "follow-up did not answer (no Paris)"
-    return record(10, "scored", passed, reason, first_reply.get("turnDir"), first_turn,
-                  {"followUpTurnDir": reply.get("turnDir"), "speechState": speech_state,
-                   "speech": [speech_identity(first_turn), speech_identity(second_turn)]})
+    return record(10, "scored", passed, reason, reply.get("turnDir"), second_turn,
+                  {"firstTurnDir": first_reply.get("turnDir"), "speaking": speaking, "speechState": speech_state,
+                   "speech": [speech_identity(first_turn), speech_identity(second_turn)],
+                   "followUpKeyUpToFirstAudioMs": key_up_to_first_audio_ms(second_turn)})
 
 
 TEST_NAMES = {
@@ -974,6 +1155,11 @@ def check_scratch_fixture(problems):
         shutil.rmtree(scratch_root, ignore_errors=True)
 
 
+def check_wallpaper_finders(problems):
+    for index, finder in enumerate(WALLPAPER_FINDERS):
+        problems.extend(FE.validate_finder(finder, "WALLPAPER_FINDERS[%d]" % index))
+
+
 def check_png_reader(problems):
     scratch = tempfile.mkdtemp(prefix="hard10-png-")
     try:
@@ -993,6 +1179,7 @@ def dry_run(selected):
     check_javascript(problems, notes)
     check_scratch_fixture(problems)
     check_png_reader(problems)
+    check_wallpaper_finders(problems)
     for number in selected:
         page = PAGE_OF[number]
         if page and not os.path.isfile(os.path.join(PAGE_DIRECTORY, page)):
