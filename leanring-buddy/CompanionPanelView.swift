@@ -908,6 +908,23 @@ struct CompanionPanelView: View {
 
     private var footerSection: some View {
         HStack {
+            // Opens the Diagnostics window; its checks run only from the buttons inside it.
+            Button(action: {
+                DiagnosticsWindowController.show(companionManager: companionManager)
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "stethoscope")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Diagnostics")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            Spacer()
+
             Button(action: {
                 NSApp.terminate(nil)
             }) {

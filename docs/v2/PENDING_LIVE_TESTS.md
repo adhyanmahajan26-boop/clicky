@@ -219,3 +219,24 @@ Compare the look with `~/Library/Logs/Clicky/renders/p6/type-card.png` (and `typ
 6. Expiry: wait 30 s → Type greys out; switch apps or click into another field → greys out; Esc
    closes the card without stopping Clicky's speech; changing focus after confirming (during the
    0.15 s settle) → "focus moved, nothing typed"; holding ⌘ after confirming for > 2 s → aborted.
+
+## P6.9 / P6.10 / P6.6
+
+### P6.9 Diagnostics (silent until you press a button)
+
+1. Open the menu bar panel and press Diagnostics (footer, left of Quit). The window shows permissions, the Qwen status and the newest turn's time to first audio. Nothing is requested.
+2. Press Check Claude and Check GitHub. Confirm no token text appears (only exit codes, `Logged in as`, and the scopes line).
+3. Press a self-test Run button only when you want that test to run (several open windows, play audio or drive the mouse). The result line shows Passed or Failed.
+4. Settings: change a v2 toggle, picker, stepper or list in the window and confirm the panel or the next turn behaves accordingly.
+5. Offscreen layout check: `~/Library/Logs/Clicky/renders/p6/diagnostics.png` (fake values; the toggles and pickers show placeholder glyphs in the render because AppKit controls don't draw offscreen).
+
+### P6.10 whiteboard PDF export
+
+1. Open a board and press `e` (or `boardCtl export`). Expect `~/Pictures/Clicky/whiteboard-<ts>.pdf` next to the PNG and the `.clickyboard`.
+2. Open the PDF in Preview: one page, the board's title and steps as selectable text, charts drawn (not blank).
+
+### P6.6 keep-warm LaunchAgent (generator only; nothing is installed or bootstrapped)
+
+1. The generator and decisions are covered by `swift test` (plist parses, plutil lint on a temp file, exact argv and env). No file is written to ~/Library/LaunchAgents and no launchctl is run by the app.
+2. Installing is not wired. It needs your yes: set `v2.voice.keepWarmAgent` and `v2.voice.keepWarmAgentApproved` (both in the Diagnostics settings list), then wire the install step before trying it.
+3. Not done yet: the app never calls `KeepWarmLaunchAgent.installPlanRequiringUserApproval`, and it doesn't adopt a running server through `adoptDecision` yet.

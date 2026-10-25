@@ -5,6 +5,8 @@
 //  Offscreen pictures of a board, fully revealed and nothing highlighted:
 //   - export: the whole board 1:1 under its title, at 2× (ImageRenderer),
 //     for ~/Pictures/Clicky/whiteboard-<timestamp>.png and the pasteboard
+//   - export PDF: the same picture as a vector PDF (title stays selectable
+//     text), for ~/Pictures/Clicky/whiteboard-<timestamp>.pdf
 //   - panel renders: the board as the panel shows it at a fixed size
 //     (goldens, the debug `boardCtl export` check)
 //  Swift Charts can come out blank in ImageRenderer on some systems; when
@@ -14,6 +16,7 @@
 //
 
 import AppKit
+import PDFKit
 import SwiftUI
 
 @MainActor
@@ -39,6 +42,34 @@ public enum WhiteboardExporter {
                       chartRects: chartRects(in: scene, offsetY: WhiteboardScene.headerHeight, cameraScale: camera.scale, translation: camera.translation))
     }
 
+    /// The whole board as a PDF page the board's size (title on top), drawn as vectors.
+    /// When a chart comes out blank in ImageRenderer the same fallback as the PNG applies:
+    /// the offscreen hosting view is drawn to PDF instead (NSView.dataWithPDF).
+    public static func exportPDFData(scene: WhiteboardScene, theme: WhiteboardTheme) -> Data? {
+        let boardSize = scene.layout.bounds.size
+        let state = WhiteboardRenderState.fullyRevealed(scene, camera: scene.actualSizeTransform)
+        let view = WhiteboardView(scene: scene, state: state, theme: theme, isStatic: true, showsHeader: true, showsSubtitle: false,
+                                  viewportSize: boardSize)
+        let size = CGSize(width: boardSize.width, height: boardSize.height + WhiteboardScene.headerHeight)
+        let framedView = view.frame(width: size.width, height: size.height)
+        let chartRects = chartRects(in: scene, offsetY: WhiteboardScene.headerHeight, cameraScale: 1, translation: .zero)
+
+        let renderer = ImageRenderer(content: framedView)
+        renderer.scale = exportScale
+        renderer.proposedSize = ProposedViewSize(size)
+        // The same check the PNG makes: if a chart's area is empty, use the hosting-view fallback.
+        if let previewImage = renderer.cgImage, !chartRects.contains(where: { isBlank(previewImage, rect: $0, scale: exportScale) }) {
+            return renderVectorPDF(renderer: renderer, size: size)
+        }
+        return cacheDisplayPDF(framedView, size: size)
+    }
+
+    /// Writes the board's PDF to `url` (atomically).
+    public static func exportPDF(scene: WhiteboardScene, theme: WhiteboardTheme, to url: URL) throws {
+        guard let pdfData = exportPDFData(scene: scene, theme: theme) else { throw CocoaError(.fileWriteUnknown) }
+        try pdfData.write(to: url, options: .atomic)
+    }
+
     public static func pngData(_ image: CGImage) -> Data? {
         let bitmap = NSBitmapImageRep(cgImage: image)
         return bitmap.representation(using: .png, properties: [:])
@@ -56,6 +87,29 @@ public enum WhiteboardExporter {
             return cacheDisplayImage(framedView, size: size, scale: scale) ?? image
         }
         return image
+    }
+
+    /// ImageRenderer drawn into a PDF context page by page (one page, the board's size).
+    static func renderVectorPDF<Content: View>(renderer: ImageRenderer<Content>, size: CGSize) -> Data? {
+        let pdfData = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: size)
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData),
+              let pdfContext = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+        renderer.render { _, drawContent in
+            pdfContext.beginPDFPage(nil)
+            drawContent(pdfContext)
+            pdfContext.endPDFPage()
+        }
+        pdfContext.closePDF()
+        return pdfData as Data
+    }
+
+    /// The chart fallback for PDF: the offscreen hosting view written out with NSView.dataWithPDF (no window).
+    static func cacheDisplayPDF<Content: View>(_ view: Content, size: CGSize) -> Data? {
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = CGRect(origin: .zero, size: size)
+        hostingView.layoutSubtreeIfNeeded()
+        return hostingView.dataWithPDF(inside: hostingView.bounds)
     }
 
     /// The fallback: an offscreen hosting view drawn into a bitmap (no window).
