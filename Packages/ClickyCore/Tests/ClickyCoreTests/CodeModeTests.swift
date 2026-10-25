@@ -838,3 +838,24 @@ private final class MockStepRunner: OutwardStepRunner {
         #expect(ClickySettings.defaultCodeRepoRoots == ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads", "~/jstest"])
     }
 }
+
+/// A silent test left a macOS "access your Documents folder" prompt on the owner's screen and blocked
+/// a code task: protected folders are never listed unless he turned on v2.code.searchProtectedFolders.
+@Test func repoScanNeverTouchesProtectedFoldersUnlessAllowed() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("clicky-home-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    for repo in ["mmi-website", "Documents/mmi-project", "Downloads/thing", "Projects/app"] {
+        try FileManager.default.createDirectory(atPath: "\(home)/\(repo)/.git", withIntermediateDirectories: true)
+    }
+    final class Listed: @unchecked Sendable { var paths: [String] = [] }
+    let listed = Listed()
+    var indexer = LocalRepoIndexer(git: HardenedGit(gitPath: "/usr/bin/git", ghPath: "/opt/gh", runner: ChildProcessCommandRunner()), roots: [home, "\(home)/Projects", "\(home)/Documents", "\(home)/Downloads"],
+                                   searchesProtectedFolders: false, homeDirectory: home)
+    indexer.listDirectory = { path in listed.paths.append(path); return try? FileManager.default.contentsOfDirectory(atPath: path) }
+    let folders = indexer.cloneFolders().map { ($0 as NSString).lastPathComponent }
+    #expect(Set(folders) == ["mmi-website", "app"])
+    #expect(!listed.paths.contains { LocalRepoIndexer.isProtected($0, homeDirectory: home) })
+
+    indexer.searchesProtectedFolders = true
+    #expect(Set(indexer.cloneFolders().map { ($0 as NSString).lastPathComponent }) == ["mmi-website", "app", "mmi-project", "thing"])
+}

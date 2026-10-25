@@ -132,6 +132,39 @@ def unwrap(reply):
     return reply if isinstance(reply, dict) else {}
 
 
+STEP_LINE = re.compile(r"^\s*(\d+)\.\s*([a-z_]+)\s*[—-]\s*(.*?)\s*[—-]\s*([a-z ]+?)(?:\s*\((.*)\))?\s*$", re.I)
+
+
+def status_task(obj):
+    """Clicky's actionsStatus: {active: task|null, last: task|null}; a task has steps as lines
+    "1. click — click #76 — done (pressed)" and tierDecisions [{step, verb, tier, reason, ...}]."""
+    snap = unwrap(obj)
+    task = snap.get("active") or snap.get("last")
+    return task if isinstance(task, dict) and isinstance(task.get("steps"), list) else None
+
+
+def steps_from_task(task):
+    decisions = [item for item in (task.get("tierDecisions") or []) if isinstance(item, dict)]
+    steps = []
+    for index, line in enumerate(task.get("steps") or []):
+        if isinstance(line, dict):
+            steps.append(line)
+            continue
+        match = STEP_LINE.match(str(line))
+        verb, description, status, detail = (match.group(2), match.group(3), match.group(4), match.group(5)) if match else ("", str(line), "", None)
+        decision = next((item for item in decisions if item.get("step") == description), decisions[index] if index < len(decisions) else {})
+        steps.append({"do": verb or decision.get("verb", ""), "description": description, "status": (status or "").strip().lower(),
+                      "detail": detail, "tier": decision.get("tier", ""), "reason": decision.get("reason", ""),
+                      "label": decision.get("label"), "app": decision.get("app")})
+    # Refused / confirm decisions with no executed line still count as steps for the checks.
+    described = {step.get("description") for step in steps}
+    for item in decisions:
+        if item.get("step") not in described and str(item.get("tier", "")).lower() in ("refused", "confirm"):
+            steps.append({"do": item.get("verb", ""), "description": item.get("step"), "tier": item.get("tier", ""),
+                          "status": "refused" if str(item.get("tier")).lower() == "refused" else "waiting", "reason": item.get("reason", "")})
+    return steps
+
+
 def action_steps(obj):
     """The step objects from a turn.json, an actionsStatus reply, or a bare list. Checks "steps"
     then "actions", and looks inside "result" for an actionsStatus reply."""
@@ -139,6 +172,9 @@ def action_steps(obj):
         return [step for step in obj if isinstance(step, dict)]
     if not isinstance(obj, dict):
         return []
+    task = status_task(obj)
+    if task is not None:
+        return steps_from_task(task)
     for key in ("steps", "actions"):
         value = obj.get(key)
         if isinstance(value, list):
@@ -176,6 +212,10 @@ def steps_with(steps, statuses):
 def task_flags(reply):
     """(done, cancelled) from an actionsStatus reply."""
     snap = unwrap(reply)
+    task = status_task(reply)
+    if task is not None and snap.get("active") is None:
+        status = str(task.get("status", "")).lower()
+        return status in ("done", "finished", "completed"), status in ("cancelled", "canceled")
     return bool(snap.get("done")), bool(snap.get("cancelled"))
 
 

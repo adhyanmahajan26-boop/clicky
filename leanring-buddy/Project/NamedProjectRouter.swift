@@ -206,6 +206,8 @@ final class NamedProjectRouter {
         var folders: [ProjectFolderCandidate] = []
         for directoryName in directoryNames.sorted() where ClaudeProjectDirectory.isCandidateName(directoryName, homeDirectory: homeDirectory) {
             let decodedPath = ClaudeProjectDirectory.decodedPath(fromDirectoryName: directoryName) { path in
+                // Never probe Desktop/Documents/Downloads unless the owner allowed it (macOS would ask him).
+                if !ClickySettings.searchesProtectedFolders && LocalRepoIndexer.isProtected(path, homeDirectory: homeDirectory) { return false }
                 var isDirectory: ObjCBool = false
                 return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
             }

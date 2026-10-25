@@ -85,6 +85,8 @@ public enum ClickySettings {
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+        /// Bool, default false: also search Desktop/Documents/Downloads for repos (macOS asks the owner once).
+        public static let codeSearchProtectedFolders = "v2.code.searchProtectedFolders"
         /// [String: String]: a spoken project name ("mahajan motor work") → the folder the owner picked for it.
         public static let codeProjectAliases = "v2.code.projectAliases"
         /// Bool, default true: short spoken updates (at most every 20 s) while the code agent works.
@@ -178,6 +180,7 @@ public enum ClickySettings {
         get { defaults.object(forKey: Keys.whiteboardFullScreen) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.whiteboardFullScreen) }
     }
+    public static var searchesProtectedFolders: Bool { defaults.object(forKey: Keys.codeSearchProtectedFolders) as? Bool ?? false }
     public static var isCodeEnabled: Bool { defaults.object(forKey: Keys.codeEnabled) as? Bool ?? false }
     public static var isTypeForMeEnabled: Bool { defaults.object(forKey: Keys.typeForMeEnabled) as? Bool ?? false }
     public static var isActionsEnabled: Bool { defaults.object(forKey: Keys.actionsEnabled) as? Bool ?? true }
