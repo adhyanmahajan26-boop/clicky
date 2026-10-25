@@ -7,8 +7,9 @@
 
 import CoreGraphics
 import Testing
-@testable import leanring_buddy
+@testable import Clicky
 
+@MainActor
 struct leanring_buddyTests {
 
     @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {

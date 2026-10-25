@@ -30,8 +30,22 @@ struct leanring_buddyApp: App {
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
     private let companionManager = CompanionManager()
+    #if DEBUG
+    private var debugCommandInbox: DebugCommandInbox?
+    #endif
+
+    /// True when the app is only hosting unit tests. Then it must stay inert:
+    /// no overlays, event tap, mic, voice server or debug inbox.
+    static var isHostingUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !Self.isHostingUnitTests else {
+            print("🧪 Clicky: hosting unit tests, not starting the companion")
+            return
+        }
+
         print("🎯 Clicky: Starting...")
         print("🎯 Clicky: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
 
@@ -42,6 +56,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
+        #if DEBUG
+        debugCommandInbox = DebugCommandInbox(companionManager: companionManager)
+        debugCommandInbox?.start()
+        #endif
         // Auto-open the panel if the user still needs to do something:
         // either they haven't onboarded yet, or permissions were revoked.
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
@@ -51,6 +69,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !Self.isHostingUnitTests else { return }
         companionManager.stop()
     }
 

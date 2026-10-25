@@ -100,7 +100,8 @@ final class ClaudeCodeBridge {
         systemPrompt: String,
         conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
         userPrompt: String,
-        onTextChunk: @MainActor @Sendable (String) -> Void
+        onTextChunk: @MainActor @Sendable (String) -> Void,
+        onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil
     ) async throws -> (text: String, duration: TimeInterval) {
         let startTime = Date()
 
@@ -148,9 +149,13 @@ final class ClaudeCodeBridge {
         // pipe buffer, so a blocking write here would stall the UI until the
         // CLI drains it. Closing stdin tells the CLI there are no more turns.
         let standardInputFileHandle = standardInputPipe.fileHandleForWriting
+        onPipelineStage?("handedToWriter")
         Task.detached {
             try? standardInputFileHandle.write(contentsOf: userMessageLine)
             try? standardInputFileHandle.close()
+            await MainActor.run {
+                onPipelineStage?("requestWritten")
+            }
         }
 
         return try await withTaskCancellationHandler {

@@ -38,18 +38,32 @@ final class CompanionSpeechOutput: ObservableObject {
         systemVoiceClient.selectVoice(identifier: voiceIdentifier)
     }
 
+    /// Which engine spoke the most recent answer ("qwen" or "system"), and
+    /// whether that was a fallback from Qwen. Read by the turn logger.
+    private(set) var lastSpeechEngineName: String?
+    private(set) var didLastSpeechFallBack = false
+
     func speakText(_ text: String) async throws {
+        didLastSpeechFallBack = false
         if usesQwenLocalVoice {
             do {
                 try await qwenLocalVoiceClient.speakText(text)
+                lastSpeechEngineName = "qwen"
                 return
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 print("⚠️ Qwen voice unavailable, using the Mac voice: \(error.localizedDescription)")
+                didLastSpeechFallBack = true
             }
         }
         try await systemVoiceClient.speakText(text)
+        lastSpeechEngineName = "system"
+    }
+
+    /// The engine a new answer would use right now, for the debug ping.
+    var currentEngineName: String {
+        usesQwenLocalVoice ? "qwen" : "system"
     }
 
     var isPlaying: Bool {

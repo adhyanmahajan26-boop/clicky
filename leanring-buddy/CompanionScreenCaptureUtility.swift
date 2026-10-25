@@ -19,6 +19,8 @@ struct CompanionScreenCapture {
     let displayFrame: CGRect
     let screenshotWidthInPixels: Int
     let screenshotHeightInPixels: Int
+    /// CGDirectDisplayID, so turn logs can say exactly which display this was.
+    let displayID: CGDirectDisplayID
 }
 
 @MainActor
@@ -118,7 +120,8 @@ enum CompanionScreenCaptureUtility {
                 displayHeightInPoints: Int(displayFrame.height),
                 displayFrame: displayFrame,
                 screenshotWidthInPixels: configuration.width,
-                screenshotHeightInPixels: configuration.height
+                screenshotHeightInPixels: configuration.height,
+                displayID: display.displayID
             ))
         }
 

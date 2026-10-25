@@ -7,3 +7,9 @@ releases/
 .claude/
 coding-plans/
 xcuserdata/
+build/
+Packages/ClickyCore/.build/
+Packages/ClickyCore/.swiftpm/
+__pycache__/
+*.pyc
+*.profraw

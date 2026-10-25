@@ -123,6 +123,8 @@ final class CompanionManager: ObservableObject {
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
+    /// When push-to-talk was last released; the turn log's keyUp time.
+    private var lastPushToTalkReleaseDate: Date?
 
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
@@ -532,7 +534,12 @@ final class CompanionManager: ObservableObject {
                         self?.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
+                        // Latency is measured from the moment the keys were released.
+                        let keyUpDate = self?.lastPushToTalkReleaseDate ?? Date()
+                        self?.sendTranscriptToClaudeWithScreenshot(
+                            transcript: finalTranscript,
+                            turnOptions: TurnOptions(keyUpDate: keyUpDate)
+                        )
                     }
                 )
             }
@@ -551,6 +558,7 @@ final class CompanionManager: ObservableObject {
             // Without this, a quick press-and-release drops the release event and
             // leaves the waveform overlay stuck on screen indefinitely.
             ClickyAnalytics.trackPushToTalkReleased()
+            lastPushToTalkReleaseDate = Date()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
@@ -793,7 +801,7 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Cuts off the buddy mid-sentence and abandons any answer in flight.
-    private func stopBuddySpeechAndCancelResponse() {
+    func stopBuddySpeechAndCancelResponse() {
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         clearDetectedElementLocation()
@@ -906,21 +914,40 @@ final class CompanionManager: ObservableObject {
     /// the spinner/processing state until TTS audio begins playing.
     /// Claude's response may include a [POINT:x,y:label] tag which triggers
     /// the buddy to fly to that element on screen.
-    private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+    /// Optional extras for one turn, used by the debug inbox's `ask`.
+    struct TurnOptions {
+        /// false = no TTS; tags still fire right away.
+        var speaksResponse = true
+        /// When the user finished asking (key up / transcript arrival).
+        var keyUpDate = Date()
+        /// Called once the turn has fully finished (or failed/cancelled) with
+        /// the turn's log directory.
+        var onTurnFinished: ((URL?, Error?) -> Void)?
+    }
+
+    func sendTranscriptToClaudeWithScreenshot(transcript: String, turnOptions requestedTurnOptions: TurnOptions? = nil) {
+        // Built here rather than as a default argument, which Swift would
+        // evaluate off the main actor.
+        let turnOptions = requestedTurnOptions ?? TurnOptions()
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         // Marks from the previous answer would be confusing next to a new one.
         clearLiveScreenMarks()
 
+        let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: turnOptions.keyUpDate)
+
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
+            var turnError: Error?
 
             do {
                 // Capture all connected screens so the AI has full context
                 let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                turnRecord?.markTiming("captureDone")
+                turnRecord?.recordScreens(screenCaptures)
 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { throw CancellationError() }
 
                 // Build image labels with the actual screenshot pixel dimensions
                 // so Claude's coordinate space matches the image it sees. We
@@ -942,10 +969,15 @@ final class CompanionManager: ObservableObject {
                     userPrompt: transcript,
                     onTextChunk: { _ in
                         // No streaming text display — spinner stays until TTS plays
+                        turnRecord?.markTiming("firstDelta")
+                    },
+                    onPipelineStage: { pipelineStageName in
+                        turnRecord?.markTiming(pipelineStageName)
                     }
                 )
+                turnRecord?.markTiming("result")
 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { throw CancellationError() }
 
                 // If the main brain split the question into helper workers, run
                 // them (on Haiku, at most four at once) and ask the main brain
@@ -961,79 +993,17 @@ final class CompanionManager: ObservableObject {
                         historyForAPI: historyForAPI
                     )
                 }
+                turnRecord?.rawResponse = companionWorkerRequests.isEmpty
+                    ? fullResponseText
+                    : fullResponseText + "\n\n--- final answer after workers ---\n" + mainBrainResponseText
 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { throw CancellationError() }
 
-                // Pull out the [MARK:...] tags first. They sit before the
-                // [POINT:...] tag, which must be last for its parser to find it.
-                let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: mainBrainResponseText)
-
-                // Parse the [POINT:...] tag from Claude's response
-                let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
-                let spokenText = parseResult.spokenText
-
-                // Handle element pointing if Claude returned coordinates.
-                // Switch to idle BEFORE setting the location so the triangle
-                // becomes visible and can fly to the target. Without this, the
-                // spinner hides the triangle and the flight animation is invisible.
-                let hasPointCoordinate = parseResult.coordinate != nil
-                if hasPointCoordinate {
-                    voiceState = .idle
-                }
-
-                // Pick the screen capture matching Claude's screen number,
-                // falling back to the cursor screen if not specified.
-                let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
-                        return screenCaptures[screenNumber - 1]
-                    }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
-                }()
-
-                if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
-                    // Claude's coordinates are in the screenshot's pixel space
-                    // (top-left origin, e.g. 1280x831). Scale to the display's
-                    // point space (e.g. 1512x982), then convert to AppKit global coords.
-                    let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
-                    let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
-                    let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
-                    let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
-                    let displayFrame = targetScreenCapture.displayFrame
-
-                    // Clamp to screenshot coordinate space
-                    let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                    let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
-
-                    // Scale from screenshot pixels to display points
-                    let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                    let displayLocalY = clampedY * (displayHeight / screenshotHeight)
-
-                    // Convert from top-left origin (screenshot) to bottom-left origin (AppKit)
-                    let appKitY = displayHeight - displayLocalY
-
-                    // Convert display-local coords to global screen coords
-                    let globalLocation = CGPoint(
-                        x: displayLocalX + displayFrame.origin.x,
-                        y: appKitY + displayFrame.origin.y
-                    )
-
-                    detectedElementScreenLocation = globalLocation
-                    detectedElementDisplayFrame = displayFrame
-                    ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
-                } else {
-                    print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
-                }
-
-                liveScreenMarks = Self.makeLiveScreenMarks(
-                    from: parsedLiveScreenMarkTags,
-                    screenCaptures: screenCaptures
+                let spokenText = presentLegacyTags(
+                    responseText: mainBrainResponseText,
+                    screenCaptures: screenCaptures,
+                    turnRecord: turnRecord
                 )
-                if !liveScreenMarks.isEmpty {
-                    print("✏️ Live marks: \(liveScreenMarks.map { "\($0.markKind) \($0.markLabel ?? "")" })")
-                }
 
                 // Save this exchange to conversation history (with the point tag
                 // stripped so it doesn't confuse future context)
@@ -1053,10 +1023,15 @@ final class CompanionManager: ObservableObject {
 
                 // Play the response via TTS. Keep the spinner (processing state)
                 // until the audio actually starts playing, then switch to responding.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if turnOptions.speaksResponse && !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
                         try await speechOutputClient.speakText(spokenText)
                         // speakText returns after player.play() — audio is now playing
+                        turnRecord?.markTiming("firstAudio")
+                        turnRecord?.speech = TurnRecord.SpeechEntry(
+                            engine: speechOutputClient.lastSpeechEngineName,
+                            fallback: speechOutputClient.didLastSpeechFallBack
+                        )
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
@@ -1066,11 +1041,19 @@ final class CompanionManager: ObservableObject {
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
+                turnError = CancellationError()
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
+                turnError = error
                 speakErrorFallback(for: error)
             }
+
+            if let turnRecord {
+                turnRecord.errorDescription = turnError.map { String(describing: $0) }
+                TurnLogger.finishTurn(turnRecord)
+            }
+            turnOptions.onTurnFinished?(turnRecord?.turnDirectoryURL, turnError)
 
             if !Task.isCancelled {
                 voiceState = .idle
@@ -1078,6 +1061,90 @@ final class CompanionManager: ObservableObject {
                 scheduleTransientHideIfNeeded()
             }
         }
+    }
+
+    /// Handles the tags at the end of an answer: draws its [MARK:...] live
+    /// marks and flies the buddy to its [POINT:...] target, logging each tag
+    /// to the turn record. Returns the text to speak (tags removed). Shared by
+    /// normal answers and the debug inbox's `marks` command.
+    @discardableResult
+    func presentLegacyTags(
+        responseText: String,
+        screenCaptures: [CompanionScreenCapture],
+        turnRecord: TurnRecord?
+    ) -> String {
+        // Pull out the [MARK:...] tags first. They sit before the
+        // [POINT:...] tag, which must be last for its parser to find it.
+        let (responseTextWithoutMarkTags, parsedLiveScreenMarkTags) = LiveScreenMarkTagParser.extractLiveScreenMarkTags(from: responseText)
+
+        // Parse the [POINT:...] tag from Claude's response
+        let parseResult = Self.parsePointingCoordinates(from: responseTextWithoutMarkTags)
+
+        // Handle element pointing if Claude returned coordinates.
+        // Switch to idle BEFORE setting the location so the triangle
+        // becomes visible and can fly to the target. Without this, the
+        // spinner hides the triangle and the flight animation is invisible.
+        if parseResult.coordinate != nil {
+            voiceState = .idle
+        }
+
+        // Pick the screen capture matching Claude's screen number,
+        // falling back to the cursor screen if not specified.
+        let pointScreenIndex: Int? = {
+            if let screenNumber = parseResult.screenNumber,
+               screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                return screenNumber - 1
+            }
+            return screenCaptures.firstIndex(where: { $0.isCursorScreen })
+        }()
+
+        // The POINT is logged after the MARKs so the turn log lists tags in
+        // the order Claude wrote them (MARKs come before the final POINT).
+        var pointTagForTurnLog: (screenNumber: Int, modelPixel: CGPoint, appKitPoint: CGPoint)?
+
+        if let pointCoordinate = parseResult.coordinate, let pointScreenIndex {
+            let targetScreenCapture = screenCaptures[pointScreenIndex]
+            // Claude's coordinates are in the screenshot's pixel space
+            // (top-left origin, e.g. 1280x535). Scale to the display's
+            // point space, then convert to AppKit global coords.
+            let globalLocation = Self.globalScreenLocation(
+                forScreenshotPixelCoordinate: pointCoordinate,
+                in: targetScreenCapture
+            )
+
+            detectedElementScreenLocation = globalLocation
+            detectedElementDisplayFrame = targetScreenCapture.displayFrame
+            pointTagForTurnLog = (pointScreenIndex + 1, pointCoordinate, globalLocation)
+            ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
+            print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
+        } else {
+            print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
+        }
+
+        liveScreenMarks = Self.makeLiveScreenMarks(
+            from: parsedLiveScreenMarkTags,
+            screenCaptures: screenCaptures,
+            turnRecord: turnRecord
+        )
+        if !liveScreenMarks.isEmpty {
+            print("✏️ Live marks: \(liveScreenMarks.map { "\($0.markKind) \($0.markLabel ?? "")" })")
+        }
+        if let pointTagForTurnLog {
+            turnRecord?.recordTag(
+                raw: Self.rawPointTag(in: responseTextWithoutMarkTags) ?? "[POINT]",
+                screenNumber: pointTagForTurnLog.screenNumber,
+                modelPixel: pointTagForTurnLog.modelPixel,
+                appKitPoint: pointTagForTurnLog.appKitPoint
+            )
+        }
+
+        return parseResult.spokenText
+    }
+
+    /// The literal [POINT:...] tag at the end of the text, for the turn log.
+    private static func rawPointTag(in responseText: String) -> String? {
+        guard let pointTagRange = responseText.range(of: #"\[POINT:[^\]]*\]\s*$"#, options: .regularExpression) else { return nil }
+        return responseText[pointTagRange].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -1224,7 +1291,8 @@ final class CompanionManager: ObservableObject {
     /// a screen that doesn't exist fall back to the cursor's screen.
     private static func makeLiveScreenMarks(
         from parsedLiveScreenMarkTags: [ParsedLiveScreenMarkTag],
-        screenCaptures: [CompanionScreenCapture]
+        screenCaptures: [CompanionScreenCapture],
+        turnRecord: TurnRecord? = nil
     ) -> [LiveScreenMark] {
         var liveScreenMarks: [LiveScreenMark] = []
 
@@ -1236,14 +1304,23 @@ final class CompanionManager: ObservableObject {
                 }
                 return screenCaptures.first(where: { $0.isCursorScreen })
             }()
-            guard let targetScreenCapture else { continue }
+            guard let targetScreenCapture,
+                  let targetScreenIndex = screenCaptures.firstIndex(where: { $0.displayID == targetScreenCapture.displayID }) else { continue }
+
+            let markGlobalScreenLocation = globalScreenLocation(
+                forScreenshotPixelCoordinate: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
+                in: targetScreenCapture
+            )
+            turnRecord?.recordTag(
+                raw: "[MARK:\(parsedLiveScreenMarkTag.markKind):\(parsedLiveScreenMarkTag.markLabel ?? "")]",
+                screenNumber: targetScreenIndex + 1,
+                modelPixel: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
+                appKitPoint: markGlobalScreenLocation
+            )
 
             liveScreenMarks.append(LiveScreenMark(
                 markKind: parsedLiveScreenMarkTag.markKind,
-                globalScreenLocation: globalScreenLocation(
-                    forScreenshotPixelCoordinate: parsedLiveScreenMarkTag.screenshotPixelCoordinate,
-                    in: targetScreenCapture
-                ),
+                globalScreenLocation: markGlobalScreenLocation,
                 markLabel: parsedLiveScreenMarkTag.markLabel,
                 orderInResponse: liveScreenMarks.count
             ))
