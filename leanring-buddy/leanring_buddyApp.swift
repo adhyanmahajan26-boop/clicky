@@ -29,6 +29,8 @@ struct leanring_buddyApp: App {
 @MainActor
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
+    /// The pill at the top centre of the screen (v2.notch.*).
+    private var notchPanelController: NotchPanelController?
     private let companionManager = CompanionManager()
     #if DEBUG
     private var debugCommandInbox: DebugCommandInbox?
@@ -56,6 +58,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
+        notchPanelController = NotchPanelController(companionManager: companionManager)
+        notchPanelController?.start()
         #if DEBUG
         debugCommandInbox = DebugCommandInbox(companionManager: companionManager)
         debugCommandInbox?.start()
@@ -70,6 +74,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         guard !Self.isHostingUnitTests else { return }
+        notchPanelController?.stop()
         companionManager.stop()
     }
 
