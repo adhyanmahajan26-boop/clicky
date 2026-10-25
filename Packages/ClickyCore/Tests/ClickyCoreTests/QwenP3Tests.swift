@@ -101,7 +101,9 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
         ["id": "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16", "loaded": false],
         ["id": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", "loaded": true]
     ]
-    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: models) == "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
+    // CustomVoice (one fixed speaker) wins whenever the server lists it, loaded or not.
+    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: models) == QwenTuning.customVoiceModelIdentifier)
+    #expect(QwenSupervisor.ttsModelIdentifier(fromModels: Array(models.prefix(1)) + [models[2]]) == "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
     #expect(QwenSupervisor.ttsModelIdentifier(fromModels: []) == QwenTuning.defaultModelIdentifier)
     #expect(!QwenSupervisor.supportsSpeakers(modelIdentifier: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"))
     #expect(QwenSupervisor.supportsSpeakers(modelIdentifier: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"))
@@ -115,9 +117,10 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
 
 @Test func watchdogAndOverrunFormulas() {
     #expect(QwenTuning.lookahead == 1)
-    #expect(abs(QwenTuning.watchdogSeconds(characters: 0) - 1.0) < 1e-9)
-    #expect(abs(QwenTuning.watchdogSeconds(characters: 15) - 1.6) < 1e-9)
-    #expect(abs(QwenTuning.watchdogSeconds(characters: 64) - (1.0 + 0.6 * 64 / 15)) < 1e-9)
+    // Generous: a slow segment is waited for, never swapped to another voice.
+    #expect(QwenTuning.watchdogSeconds(characters: 0) == 20)
+    #expect(QwenTuning.watchdogSeconds(characters: 30) == 20)
+    #expect(abs(QwenTuning.watchdogSeconds(characters: 300) - (10 + 3 * 20)) < 1e-9)
     #expect(QwenTuning.maxTokens(characters: 15) == 80)
     // Normal audio is never cut; 3x the estimate is.
     let normal = toneBursts([(1.0, 0)], lead: 0.1)
@@ -357,4 +360,10 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
     apple.playNext()
     apple.playNext()
     #expect(host.history == "One. Two.Three.")
+}
+
+@Test func requestBodyOmitsAnEmptyInstruct() {
+    let body = QwenTuning.requestBody(model: QwenTuning.customVoiceModelIdentifier, speech: "Hi.", speaker: "Ryan", instruct: "")
+    #expect(body["instruct"] == nil)
+    #expect(body["speaker"] as? String == "Ryan")
 }

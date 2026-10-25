@@ -22,6 +22,10 @@ public enum QwenTuning {
     public static let serverPort = 11234
     /// The model Clicky asks for when the server has no TTS model loaded yet.
     public static let defaultModelIdentifier = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+    /// Preferred whenever mlx-serve lists it: one fixed named speaker, so
+    /// every segment is the same voice (the Base model, given no reference
+    /// clip, picks a different voice per request).
+    public static let customVoiceModelIdentifier = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
     public static let mlxServeExecutablePath = "/Applications/MLX Core.app/Contents/MacOS/mlx-serve"
 
     /// Segments synthesized ahead of the one playing (probe: L = 1).
@@ -59,9 +63,11 @@ public enum QwenTuning {
         Double(max(0, characters)) / charactersPerSecond
     }
 
-    /// How long one synthesis may take before Apple speaks that segment.
+    /// How long one synthesis may take before Qwen counts as down (then the
+    /// Mac voice speaks the REST of the answer). Generous on purpose: a slow
+    /// segment is waited for, never swapped to another voice mid-answer.
     public static func watchdogSeconds(characters: Int) -> TimeInterval {
-        1.0 + 0.6 * estimatedAudioSeconds(characters: characters)
+        max(20, 10 + 3 * estimatedAudioSeconds(characters: characters))
     }
 
     /// Generation cap sent with every request (ignored by servers that don't know it).
@@ -75,15 +81,17 @@ public enum QwenTuning {
     /// caption keeps the original words.
     public static func requestBody(model: String, speech: String, speaker: String, instruct: String) -> [String: Any] {
         let ttsText = Lexicon.apply(speech)
-        return [
+        var body: [String: Any] = [
             "model": model,
             "input": ttsText,
             "speaker": speaker,
-            "instruct": instruct,
             "language": language,
             "response_format": "wav",
             "max_tokens": maxTokens(characters: ttsText.count)
         ]
+        // No instruct unless the user set one: the speaker's own delivery.
+        if !instruct.isEmpty { body["instruct"] = instruct }
+        return body
     }
 
     // MARK: Speed

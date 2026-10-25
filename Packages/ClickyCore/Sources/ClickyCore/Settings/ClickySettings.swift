@@ -47,7 +47,7 @@ public enum ClickySettings {
         public static let claudeEffortOverride = "v2.claude.effortOverride"
         /// String, Qwen CustomVoice speaker (default "Ryan"; the Base model ignores it).
         public static let qwenSpeaker = "v2.voice.qwen.speaker"
-        /// String, Qwen style instruction (default: warm conversational).
+        /// String, Qwen style instruction (default: none — the speaker's own delivery).
         public static let qwenInstruct = "v2.voice.qwen.instruct"
         /// Double, playback rate for both voices: 0.85, 1.0 (default), 1.15, 1.3.
         public static let voiceRate = "v2.voice.rate"
@@ -63,7 +63,7 @@ public enum ClickySettings {
 
     public static var qwenInstruct: String {
         let instruct = (defaults.string(forKey: Keys.qwenInstruct) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return instruct.isEmpty ? QwenTuning.instructPresets[0].instruct : instruct
+        return instruct
     }
 
     public static var voiceRate: Double {

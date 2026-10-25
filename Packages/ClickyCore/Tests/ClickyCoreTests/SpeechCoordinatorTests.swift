@@ -333,3 +333,38 @@ private struct SeededPlacerRandom: RandomNumberGenerator {
     statusRenderer.scale = 2
     try NSBitmapImageRep(cgImage: try #require(statusRenderer.cgImage)).representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("bubble-status.png"))
 }
+
+// MARK: - One voice per answer
+
+@MainActor
+@Test func aSlowSegmentStaysOnTheSameVoice() {
+    // Qwen takes its time on segment 2 (no failure): nothing goes to Apple.
+    let (coordinator, qwen, apple, host) = makeCoordinator()
+    coordinator.beginAnswer()
+    coordinator.enqueue(segment("first part here.", id: 1))
+    coordinator.enqueue(segment("second part, which is slow to make.", id: 2))
+    coordinator.streamDidFinish(spawnedWorkers: false)
+    qwen.playNext()
+    #expect(apple.queued.isEmpty)
+    qwen.playNext()
+    #expect(apple.log.filter { $0.hasPrefix("enqueue") }.isEmpty)
+    #expect(!coordinator.didUseFallback)
+    #expect(host.history == "first part here.second part, which is slow to make.")
+}
+
+@MainActor
+@Test func aDeadServerHandsTheWholeRestToAppleNeverBack() {
+    let (coordinator, qwen, apple, host) = makeCoordinator()
+    coordinator.beginAnswer()
+    let first = segment("first part here.", id: 1)
+    coordinator.enqueue(first)
+    qwen.queued.removeAll()
+    qwen.callbacks.onFailure([first], true)
+    coordinator.enqueue(segment("second part arrives later.", id: 2))
+    coordinator.streamDidFinish(spawnedWorkers: false)
+    #expect(qwen.queued.isEmpty)
+    #expect(apple.queued.map(\.id) == [1, 2])
+    apple.playNext()
+    apple.playNext()
+    #expect(host.history == "first part here.second part arrives later.")
+}

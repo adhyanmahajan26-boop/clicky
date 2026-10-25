@@ -17,10 +17,10 @@
 //  v2.caption.avOffsetMs. A POINT's "lead" progress looks 250 ms ahead.
 //  Runaway audio (over 3x its estimate) stops at its last pause.
 //
-//  Failures go back to the coordinator (onFailure), which hands them to
-//  the Apple voice: a request slower than its watchdog, or audio that
-//  won't play, loses only that segment (restOfAnswer: false, then Qwen
-//  again); a dead or refusing server loses the rest (restOfAnswer: true)
+//  One voice per answer: a slow segment is waited for (the watchdog is
+//  generous), never handed to another voice. Only a real failure (server
+//  gone, refused, watchdog exceeded, unplayable audio) hands the failed
+//  segment and the REST of the answer to the Mac voice (restOfAnswer: true)
 //  and the supervisor checks the server.
 //
 //  stopNow: epoch++, cancel every task, clear the queue, stop the player.
@@ -226,22 +226,19 @@ final class QwenSpeechEngine: SpeechEngine {
         callbacks.onAllPlayed()
     }
 
-    /// Hands `failedSegment` (already off the queue) back. Slow or unplayable:
-    /// only it (the coordinator holds the rest until Apple is done). A dead
-    /// or refusing server: it and everything queued.
+    /// Hands `failedSegment` (already off the queue) and everything queued
+    /// back: the rest of this answer is spoken by the Mac voice, so voices
+    /// never alternate within an answer.
     private func fail(_ error: Error, failedSegment: CaptionSegment) {
-        let isServerGone = !(error is QwenSlowSynthesisError) && (error is URLError || error is QwenLocalTTSError)
-        print("⚠️ Qwen voice failed (\(isServerGone ? "server" : "one segment")), handing over to the Mac voice: \(error.localizedDescription)")
+        print("⚠️ Qwen voice failed, the Mac voice speaks the rest of this answer: \(error.localizedDescription)")
         let failEpoch = epoch
-        if isServerGone {
-            let unspoken = [failedSegment] + queue.map(\.segment)
-            for prepared in queue { prepared.audioTask?.cancel() }
-            queue = []
+        let unspoken = [failedSegment] + queue.map(\.segment)
+        for prepared in queue { prepared.audioTask?.cancel() }
+        queue = []
+        if error is URLError || error is QwenLocalTTSError || error is QwenSlowSynthesisError {
             supervisor.serverMayHaveDied()
-            callbacks.onFailure(unspoken, true)
-        } else {
-            callbacks.onFailure([failedSegment], false)
         }
+        callbacks.onFailure(unspoken, true)
         // The coordinator may have stopped us (taking the queue back).
         guard epoch == failEpoch else { return }
         prefetch()
