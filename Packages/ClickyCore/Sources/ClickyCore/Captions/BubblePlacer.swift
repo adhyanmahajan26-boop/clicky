@@ -12,7 +12,8 @@
 //  companion (+4), 24×24 around the mouse, the POINT target, marks, and
 //  this segment's upcoming targets. While the companion flies it stays put.
 //  A slot that covers on-screen text (AX / OCR text bounds) is skipped too,
-//  so the bubble never sits on a table's rows; the dock ignores text (it's
+//  so the bubble never sits on a table's rows (only leaf text counts: a row
+//  frame around its cells is seen through); the dock ignores text (it's
 //  the last resort) but still keeps clear of the other obstacles.
 //
 
@@ -80,7 +81,8 @@ public enum BubblePlacer {
             avoided.append(CGRect(x: mouseLocation.x - mouseBoxSize / 2, y: mouseLocation.y - mouseBoxSize / 2, width: mouseBoxSize, height: mouseBoxSize))
         }
 
-        let nearbyText = input.textObstacles.filter { $0.area > 0 }
+        // Containers (an AX row around its cells' text) are seen through, as for marks.
+        let nearbyText = MarkDensity.leafTextBounds(input.textObstacles)
         func isFree(_ rect: CGRect) -> Bool {
             visible.contains(rect) && !avoided.contains { $0.intersects(rect) } && !nearbyText.contains { $0.intersects(rect) }
         }
@@ -123,8 +125,9 @@ import AppKit
 
 extension BubblePlacer {
     /// The bubble's size for `caption`: text measured at 15 pt in the
-    /// bubble's width, capped at `maxLines`, plus padding. The size doesn't
-    /// change as words are revealed (unrevealed text is drawn, just dimmed).
+    /// bubble's width, capped at `maxLines`, plus padding and the marks'
+    /// legend rows. The size doesn't change as words are revealed
+    /// (unrevealed text is drawn, just dimmed); it grows once per new mark.
     public static func estimatedBubbleSize(for caption: CaptionState, maxWidth: CGFloat, maxLines: Int) -> CGSize {
         let font = NSFont.systemFont(ofSize: CaptionBubbleMetrics.fontSize, weight: .medium)
         let text: String
@@ -137,8 +140,9 @@ extension BubblePlacer {
         let bounds = NSAttributedString(string: text.isEmpty ? " " : text, attributes: [.font: font])
             .boundingRect(with: CGSize(width: textWidth, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
-        let height = min(ceil(bounds.height), lineHeight * CGFloat(maxLines))
+        var height = min(ceil(bounds.height), lineHeight * CGFloat(maxLines))
         let width = caption.statusText != nil ? ceil(bounds.width) : textWidth
+        if caption.statusText == nil { height += CaptionBubbleMetrics.legendHeight(rowCount: caption.markLegend.count) }
         return CGSize(width: width + 2 * CaptionBubbleMetrics.horizontalPadding, height: height + 2 * CaptionBubbleMetrics.verticalPadding)
     }
 }

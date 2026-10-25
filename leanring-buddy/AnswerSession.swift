@@ -392,6 +392,7 @@ final class AnswerSession: SpeechCoordinatorHost {
             guard let self else { return }
             let prepared = await self.resolve(tag)
             self.preparedTags[index] = prepared
+            if case .mark = prepared { self.companionManager.markController.noteMarkPrepared() }
             if case .mark(let mark) = prepared, mark.source != .accessibility, let recheckName = mark.recheckName, !recheckName.isEmpty,
                let display = ScreenTopology.current().first(where: { $0.boundsCG.contains(mark.rectCG.center) }) {
                 let targetRect = mark.rectCG

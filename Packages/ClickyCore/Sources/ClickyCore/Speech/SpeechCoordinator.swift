@@ -30,6 +30,9 @@ public struct CaptionState: Equatable, Sendable {
     public var statusText: String?
     public var isFrozen = false
     public var isVisible = false
+    /// nearCursor marks: "1  Replace hello@…" lines under the caption, in
+    /// answer order. Set by the app as marks fire (the coordinator never does).
+    public var markLegend: [MarkLegendEntry] = []
 
     public init() {}
 }

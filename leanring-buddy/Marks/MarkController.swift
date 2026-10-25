@@ -14,6 +14,10 @@
 //  can underline dense rows and keep labels off text. When tracked marks
 //  scroll, the bounds inside their window are shifted by the same amount.
 //
+//  Labels follow v2.marks.labelStyle: `nearCursor` (default) puts numbered
+//  chips on the marks and publishes their words as the caption bubble's
+//  legend (onLegendChanged); `column` keeps the clear-space label column.
+//
 
 import AppKit
 import ClickyCore
@@ -24,6 +28,13 @@ final class MarkController {
     private(set) var drawings: [MarkDrawing] = []
     /// Called whenever the drawings change (CompanionManager publishes them).
     var onDrawingsChanged: (([MarkDrawing]) -> Void)?
+    /// nearCursor: the bubble's "1  …" lines for the marks on screen.
+    private(set) var legend: [MarkLegendEntry] = []
+    /// Called when the legend changes (CompanionManager puts it in the bubble).
+    var onLegendChanged: (([MarkLegendEntry]) -> Void)?
+    /// Marks resolved for this answer so far (fired or not): with two or
+    /// more on the way the first one gets its chip right away.
+    private var expectedMarkCount = 0
     /// Where the companion is parked while pointing: labels avoid it.
     var companionRect: CGRect? {
         didSet { if companionRect != oldValue { rebuild() } }
@@ -81,6 +92,13 @@ final class MarkController {
     /// A new answer: marks from now on are recorded in this turn.
     func startAnswer(turnRecord: TurnRecord?) {
         self.turnRecord = turnRecord
+        expectedMarkCount = 0
+    }
+
+    /// A mark tag of this answer resolved (it fires when its words are spoken).
+    func noteMarkPrepared() {
+        expectedMarkCount += 1
+        if !marks.isEmpty && expectedMarkCount >= 2 { rebuild() }
     }
 
     /// One mark, drawn as its words are spoken (the oldest goes past the max).
@@ -100,15 +118,23 @@ final class MarkController {
     func clear() {
         tracker.stopAll()
         marks = []
+        expectedMarkCount = 0
         companionRect = nil
         rebuild()
     }
 
     func rebuild() {
         let displays = ScreenTopology.current().map(MarkSceneDisplay.init)
-        drawings = MarkSceneBuilder.build(inputs: marks.map(\.sceneInput), displays: displays, companionRect: companionRect,
-                                          textObstacles: currentTextObstacles())
+        let labelStyle = ClickySettings.markLabelStyle
+        let inputs = marks.map(\.sceneInput)
+        drawings = MarkSceneBuilder.build(inputs: inputs, displays: displays, companionRect: companionRect,
+                                          textObstacles: currentTextObstacles(), labelStyle: labelStyle, expectedMarkCount: expectedMarkCount)
         onDrawingsChanged?(drawings)
+        let newLegend = MarkChips.legend(for: inputs, labelStyle: labelStyle, expectedMarkCount: expectedMarkCount)
+        if newLegend != legend {
+            legend = newLegend
+            onLegendChanged?(newLegend)
+        }
         recordDrawn()
     }
 

@@ -13,7 +13,12 @@
 //  space: next to an isolated outline when that's free, else in one shared
 //  column per display with leader arrows (LabelColumnPlacer). A step's
 //  number rides inside its label pill; a separate numbered disc is kept only
-//  for an outlined step with no label.
+//  for an outlined step with no label. That is the `column` label style.
+//
+//  The `nearCursor` style (the default, MarkChips): same shapes, but no text
+//  on screen. With 2+ marks each gets a small numbered chip at its
+//  underline's start / outline's top-left / arrow's tail, and the words go
+//  to the caption bubble's legend; a single mark gets neither.
 //
 
 import CoreGraphics
@@ -107,6 +112,9 @@ public struct MarkDrawing: Identifiable, Equatable, Sendable {
     public let labelStepNumber: Int?
     /// Thin arrow from a label placed away from its mark.
     public let leader: LeaderSpec?
+    /// nearCursor style: the small numbered chip on the mark.
+    public let chipCenter: CGPoint?
+    public let chipNumber: Int?
     /// The target sat on a dense text row (diagnostics).
     public let isDense: Bool
     public let isTentative: Bool
@@ -133,12 +141,44 @@ public struct MarkDrawing: Identifiable, Equatable, Sendable {
                 bounds = bounds.union(CGRect(origin: point, size: .zero))
             }
         }
+        if let chipCenter { bounds = bounds.union(MarkChips.rect(center: chipCenter)) }
         if let stepDiscCenter {
             let discRadius = MarkLayout.stepDiscDiameter / 2
             bounds = bounds.union(CGRect(x: stepDiscCenter.x - discRadius, y: stepDiscCenter.y - discRadius,
                                          width: MarkLayout.stepDiscDiameter, height: MarkLayout.stepDiscDiameter))
         }
         return bounds
+    }
+
+    /// What the caption bubble keeps clear of: the pieces actually painted
+    /// plus the marked text, not the whole bounding box (an underlined row's
+    /// empty right half is fine for the bubble).
+    public var paintedRects: [CGRect] {
+        if style == .spot { return [displayBounds] }
+        var rects: [CGRect] = []
+        if let underline {
+            let bandBottom = underline.start.y + MarkPalette.fineHaloWidth / 2
+            let top = min(targetCG.minY, bandBottom)
+            rects.append(CGRect(x: underline.start.x, y: top, width: underline.end.x - underline.start.x, height: bandBottom - top))
+        } else if let outline {
+            rects.append(outline.rect.insetBy(dx: -MarkPalette.fineHaloWidth / 2, dy: -MarkPalette.fineHaloWidth / 2))
+        } else {
+            rects.append(targetCG)
+        }
+        if let arrow { rects += [MarkLayout.padded(targetCG)] + MarkSceneBuilder.arrowRects(arrow) }
+        if let labelRect { rects.append(labelRect) }
+        if let leader {
+            rects.append([leader.start, leader.tip, leader.headLeft, leader.headRight].reduce(CGRect(origin: leader.start, size: .zero)) {
+                $0.union(CGRect(origin: $1, size: .zero))
+            }.insetBy(dx: -2, dy: -2))
+        }
+        if let chipCenter { rects.append(MarkChips.rect(center: chipCenter)) }
+        if let stepDiscCenter {
+            let discRadius = MarkLayout.stepDiscDiameter / 2
+            rects.append(CGRect(x: stepDiscCenter.x - discRadius, y: stepDiscCenter.y - discRadius,
+                                width: MarkLayout.stepDiscDiameter, height: MarkLayout.stepDiscDiameter))
+        }
+        return rects
     }
 
     public static func == (first: MarkDrawing, second: MarkDrawing) -> Bool {
@@ -148,6 +188,7 @@ public struct MarkDrawing: Identifiable, Equatable, Sendable {
             && first.labelRect == second.labelRect && first.labelText == second.labelText && first.isTentative == second.isTentative
             && first.isHidden == second.isHidden && first.opacity == second.opacity && first.displayID == second.displayID
             && first.labelStepNumber == second.labelStepNumber && first.leader == second.leader && first.isDense == second.isDense
+            && first.chipCenter == second.chipCenter && first.chipNumber == second.chipNumber
     }
 }
 
@@ -172,6 +213,10 @@ public enum MarkSceneBuilder {
         var labelSize: CGSize?
         var labelStepNumber: Int?
         var leader: LeaderSpec?
+        var chipCenter: CGPoint?
+        var chipNumber: Int?
+        /// Where the chip goes before nudging.
+        var chipSpot: CGPoint?
         var isDense = false
         /// What a leader points at.
         var attachRect: CGRect
@@ -182,15 +227,21 @@ public enum MarkSceneBuilder {
     /// `companionRect`: where the buddy is parked (an obstacle for labels).
     /// `textObstacles`: every text bound in the region (AX text / cell / row
     /// frames, OCR lines), CG; containers are seen through.
+    /// `labelStyle`: `.column` (the default here) keeps 2dfbab2's labels;
+    /// `.nearCursor` draws chips only (see MarkChips). `expectedMarkCount`:
+    /// marks already parsed for this answer, so the first one gets its chip
+    /// before the second is spoken.
     public static func build(inputs: [MarkSceneInput], displays: [MarkSceneDisplay], companionRect: CGRect? = nil,
-                             textObstacles: [CGRect] = []) -> [MarkDrawing] {
+                             textObstacles: [CGRect] = [], labelStyle: MarkLabelStyle = .column, expectedMarkCount: Int = 0) -> [MarkDrawing] {
         let leafTexts = MarkDensity.leafTextBounds(textObstacles)
+        let isNearCursor = labelStyle == .nearCursor
+        let hasChips = isNearCursor && MarkChips.isMultiTarget(markCount: inputs.count, expectedMarkCount: expectedMarkCount)
         var planned: [Planned] = []
         var previousStepDisc: CGPoint?
         var arrowObstacles: [CGRect] = (companionRect.map { [$0] } ?? []) + leafTexts
 
         // Pass 1: each mark's shape.
-        for input in inputs.sorted(by: { $0.order < $1.order }) {
+        for (answerIndex, input) in inputs.sorted(by: { $0.order < $1.order }).enumerated() {
             guard let markDisplay = display(for: input.rectCG, in: displays) else { continue }
             let target = input.rectCG
             let displayTexts = leafTexts.filter { $0.intersects(markDisplay.bounds) }
@@ -207,10 +258,12 @@ public enum MarkSceneBuilder {
                     let line = MarkDensity.underline(for: analysis, target: target, display: markDisplay.bounds)
                     plan.underline = line
                     plan.attachRect = (analysis.textSpan ?? target).union(underlineRect(line))
+                    plan.chipSpot = MarkChips.underlineSpot(lineStart: line.start, textLine: analysis.textSpan ?? target)
                 } else {
                     plan.outline = tight
                     plan.attachRect = tight.rect
-                    if stepNumber != nil && input.displayText == nil {
+                    plan.chipSpot = MarkChips.outlineSpot(tight.rect)
+                    if !isNearCursor && stepNumber != nil && input.displayText == nil {
                         // An outlined step with no words keeps its numbered disc.
                         let disc = MarkLayout.stepDiscCenter(ring: tight, visible: markDisplay.visible)
                         plan.stepDiscCenter = disc
@@ -225,15 +278,24 @@ public enum MarkSceneBuilder {
                 let line = MarkDensity.underline(for: analysis, target: target, display: markDisplay.bounds)
                 plan.underline = line
                 plan.attachRect = (analysis.textSpan ?? target).union(underlineRect(line))
+                plan.chipSpot = MarkChips.underlineSpot(lineStart: line.start, textLine: analysis.textSpan ?? target)
             case .spot:
                 plan.outline = MarkShapeSpec(kind: .roundedBox, rect: MarkLayout.padded(target).intersection(markDisplay.bounds), cornerRadius: 8)
                 plan.attachRect = MarkLayout.padded(target)
+                plan.chipSpot = plan.outline.map { MarkChips.outlineSpot($0.rect) }
             case .arrow:
-                let labelSize = input.displayText.map(LabelPlacer.size(for:))
-                plan.arrow = MarkLayout.arrow(target: target, visible: markDisplay.visible, labelSize: labelSize, obstacles: arrowObstacles)
-                plan.labelRect = plan.arrow?.labelRect
+                // nearCursor: the words go to the bubble, so no label space is reserved.
+                let labelSize = isNearCursor ? nil : input.displayText.map(LabelPlacer.size(for:))
+                let arrow = MarkLayout.arrow(target: target, visible: markDisplay.visible, labelSize: labelSize, obstacles: arrowObstacles)
+                plan.arrow = arrow
+                plan.labelRect = arrow.labelRect
+                plan.chipSpot = MarkChips.arrowSpot(arrow)
             }
-            if input.displayText != nil || plan.labelStepNumber != nil {
+            if isNearCursor {
+                plan.labelStepNumber = nil
+                plan.labelRect = nil
+                if hasChips { plan.chipNumber = MarkChips.number(for: input.style, index: answerIndex) }
+            } else if input.displayText != nil || plan.labelStepNumber != nil {
                 plan.labelSize = LabelPlacer.size(for: input.displayText, stepNumber: plan.labelStepNumber)
             }
 
@@ -255,8 +317,13 @@ public enum MarkSceneBuilder {
             planned.append(plan)
         }
 
-        // Pass 2: labels, against text, every mark's geometry, placed labels and the companion.
         let visibleIndexes = planned.indices.filter { !planned[$0].input.isHidden }
+        if isNearCursor {
+            placeChips(&planned, visibleIndexes: visibleIndexes, leafTexts: leafTexts, companionRect: companionRect)
+            return planned.map(drawing(for:))
+        }
+
+        // Pass 2: labels, against text, every mark's geometry, placed labels and the companion.
         var obstacles: [CGRect] = (companionRect.map { [$0] } ?? []) + leafTexts
         for index in visibleIndexes {
             obstacles += planned[index].geometry
@@ -306,15 +373,40 @@ public enum MarkSceneBuilder {
             }
         }
 
-        return planned.map { plan in
-            MarkDrawing(
-                id: plan.input.id, style: plan.input.style, targetCG: plan.input.rectCG, displayID: plan.display.displayID,
-                displayBounds: plan.display.bounds, outline: plan.outline, arrow: plan.arrow, underline: plan.underline,
-                stepDiscCenter: plan.stepDiscCenter, connectorFrom: plan.connectorFrom, labelRect: plan.labelRect,
-                labelText: plan.input.displayText, labelStepNumber: plan.labelRect == nil ? nil : plan.labelStepNumber,
-                leader: plan.leader, isDense: plan.isDense, isTentative: plan.input.isTentative, isHidden: plan.input.isHidden,
-                opacity: plan.input.opacity, order: plan.input.order
-            )
+        return planned.map(drawing(for:))
+    }
+
+    static func drawing(for plan: Planned) -> MarkDrawing {
+        MarkDrawing(
+            id: plan.input.id, style: plan.input.style, targetCG: plan.input.rectCG, displayID: plan.display.displayID,
+            displayBounds: plan.display.bounds, outline: plan.outline, arrow: plan.arrow, underline: plan.underline,
+            stepDiscCenter: plan.stepDiscCenter, connectorFrom: plan.connectorFrom, labelRect: plan.labelRect,
+            labelText: plan.input.displayText, labelStepNumber: plan.labelRect == nil ? nil : plan.labelStepNumber,
+            leader: plan.leader, chipCenter: plan.chipCenter, chipNumber: plan.chipCenter == nil ? nil : plan.chipNumber,
+            isDense: plan.isDense, isTentative: plan.input.isTentative, isHidden: plan.input.isHidden,
+            opacity: plan.input.opacity, order: plan.input.order
+        )
+    }
+
+    /// nearCursor: each numbered mark's chip, clear of text, every other
+    /// mark's geometry, the chips placed so far and the companion. A mark's
+    /// own underline is an obstacle too (the chip sits beside it); its own
+    /// outline and arrow are not (the chip rides on the corner / the tail).
+    static func placeChips(_ planned: inout [Planned], visibleIndexes: [Int], leafTexts: [CGRect], companionRect: CGRect?) {
+        var placedChips: [CGRect] = []
+        for index in visibleIndexes {
+            guard planned[index].chipNumber != nil, let spot = planned[index].chipSpot else { continue }
+            var obstacles = leafTexts + placedChips + (companionRect.map { [$0] } ?? [])
+            for otherIndex in visibleIndexes {
+                if otherIndex != index {
+                    obstacles += planned[otherIndex].geometry
+                } else if planned[index].underline != nil {
+                    obstacles += planned[index].geometry
+                }
+            }
+            let center = MarkChips.place(preferred: spot, obstacles: obstacles, visible: planned[index].display.visible)
+            planned[index].chipCenter = center
+            placedChips.append(MarkChips.rect(center: center).insetBy(dx: -2, dy: -2))
         }
     }
 

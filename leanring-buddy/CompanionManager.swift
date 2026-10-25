@@ -285,6 +285,7 @@ final class CompanionManager: ObservableObject {
         WBMathRenderer.install()
         _ = boardController
         markController.onDrawingsChanged = { [weak self] drawings in self?.markDrawings = drawings }
+        markController.onLegendChanged = { [weak self] legend in self?.showMarkLegend(legend) }
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
         }
@@ -1320,9 +1321,14 @@ final class CompanionManager: ObservableObject {
     private var captionHideTask: Task<Void, Never>?
     private static let captionHideDelaySeconds: UInt64 = 4
 
+    /// The answer ended but the bubble stays up: it holds the marks' legend.
+    private var isCaptionHeldForLegend = false
+
     func showCaption(_ caption: CaptionState) {
         captionHideTask?.cancel()
+        isCaptionHeldForLegend = false
         captionState = caption
+        captionState.markLegend = markController.legend
         // The board shows the words in its own subtitle bar.
         if isWhiteboardPanelOpen { captionState.isVisible = false }
         if caption.current != nil && voiceState == .processing {
@@ -1332,7 +1338,19 @@ final class CompanionManager: ObservableObject {
 
     func hideCaption() {
         captionHideTask?.cancel()
+        isCaptionHeldForLegend = false
         captionState.isVisible = false
+    }
+
+    /// nearCursor marks: their words ride in the bubble while they're on
+    /// screen; once they're cleared a bubble held for them goes too.
+    private func showMarkLegend(_ legend: [MarkLegendEntry]) {
+        guard captionState.markLegend != legend else { return }
+        captionState.markLegend = legend
+        if legend.isEmpty && isCaptionHeldForLegend {
+            isCaptionHeldForLegend = false
+            captionState.isVisible = false
+        }
     }
 
     /// Kills the in-flight Claude request (the coordinator's barge-in step).
@@ -1351,8 +1369,13 @@ final class CompanionManager: ObservableObject {
         captionHideTask?.cancel()
         captionHideTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: Self.captionHideDelaySeconds * 1_000_000_000)
-            guard !Task.isCancelled else { return }
-            self?.captionState.isVisible = false
+            guard !Task.isCancelled, let self else { return }
+            // The legend explains marks still on screen: keep it until they go.
+            if !self.captionState.markLegend.isEmpty {
+                self.isCaptionHeldForLegend = true
+                return
+            }
+            self.captionState.isVisible = false
         }
     }
 
