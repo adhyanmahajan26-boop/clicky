@@ -599,3 +599,24 @@ struct ArticleRenderTests {
         #expect(color.blueComponent < color.redComponent - 0.15, "stroke pixel \(color)")
     }
 }
+
+/// Live: Safari was frontmost with the owner's Netflix window first in the list; the reader picked it.
+@Test func articleWindowChoiceSkipsNetflix() {
+    let netflix = ArticleWindowChoice.Candidate(processIdentifier: 10, bundleIdentifier: "com.apple.Safari", windowNumber: 1,
+                                                frameCG: CGRect(x: -1920, y: 155, width: 1920, height: 1080), title: "Netflix")
+    let nasa = ArticleWindowChoice.Candidate(processIdentifier: 10, bundleIdentifier: "com.apple.Safari", windowNumber: 2,
+                                             frameCG: CGRect(x: 0, y: 25, width: 1700, height: 1400), title: "Black Hole Basics - NASA Science")
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 10, windows: [netflix, nasa])?.windowNumber == 2)
+    #expect(ArticleWindowChoice.choose(frontmostProcessIdentifier: 10, windows: [netflix]) == nil)
+}
+
+@Test func readFurtherHeuristicsAndExpanders() {
+    #expect(ArticleReadFurther.looksCutShort(text: "intro… Read more", characterCount: 9000, hitDeadline: false))
+    #expect(ArticleReadFurther.looksCutShort(text: "short", characterCount: 1200, hitDeadline: false))
+    #expect(!ArticleReadFurther.looksCutShort(text: String(repeating: "a ", count: 5000), characterCount: 10000, hitDeadline: false))
+    #expect(!ArticleReadFurther.looksCutShort(text: "x", characterCount: 100, hitDeadline: true))
+    #expect(ArticleReadFurther.isPlainExpander("Read more"))
+    #expect(ArticleReadFurther.isPlainExpander("Continue reading"))
+    #expect(!ArticleReadFurther.isPlainExpander("Subscribe to read more"))
+    #expect(!ArticleReadFurther.isPlainExpander("Sign in to continue reading"))
+}

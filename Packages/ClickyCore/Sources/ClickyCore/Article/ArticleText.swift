@@ -323,13 +323,20 @@ public enum ArticleWindowChoice {
         /// CG window number (front to back order is the array order).
         public var windowNumber: UInt32
         public var frameCG: CGRect
+        /// The window title (CG window name), when readable.
+        public var title: String?
 
-        public init(processIdentifier: Int32, bundleIdentifier: String?, windowNumber: UInt32, frameCG: CGRect) {
+        public init(processIdentifier: Int32, bundleIdentifier: String?, windowNumber: UInt32, frameCG: CGRect, title: String? = nil) {
             self.processIdentifier = processIdentifier
             self.bundleIdentifier = bundleIdentifier
             self.windowNumber = windowNumber
             self.frameCG = frameCG
+            self.title = title
         }
+
+        /// A window playing Netflix is never "the article" (a live read picked the owner's
+        /// full-screen Netflix window in Safari and got nothing).
+        public var isNetflix: Bool { title?.localizedCaseInsensitiveContains("netflix") ?? false }
     }
 
     public static let browserBundleIdentifiers: Set<String> = Set(ActionBrowserChoice.knownBrowsers.map(\.bundleIdentifier)).union([
@@ -343,7 +350,7 @@ public enum ArticleWindowChoice {
 
     /// `windows`: on-screen normal windows, front to back, Clicky's own already removed.
     public static func choose(frontmostProcessIdentifier: Int32?, windows: [Candidate]) -> Candidate? {
-        let usable = windows.filter { $0.frameCG.width >= 200 && $0.frameCG.height >= 150 }
+        let usable = windows.filter { $0.frameCG.width >= 200 && $0.frameCG.height >= 150 && !$0.isNetflix }
         if let frontmostProcessIdentifier,
            let frontmostWindow = usable.first(where: { $0.processIdentifier == frontmostProcessIdentifier }), isBrowser(frontmostWindow.bundleIdentifier) {
             return frontmostWindow
@@ -353,5 +360,30 @@ public enum ArticleWindowChoice {
             return frontmostWindow
         }
         return nil
+    }
+}
+
+/// P9 "read further": when an article's accessibility text looks cut short, Clicky scrolls and re-reads.
+public enum ArticleReadFurther {
+    public static let maximumPasses = 10
+    /// Under this many characters a page that says "read more" / lazy-loads is probably not all there.
+    public static let shortArticleCharacters = 6000
+
+    public static func looksCutShort(text: String, characterCount: Int, hitDeadline: Bool) -> Bool {
+        if hitDeadline { return false }  // a huge page: re-walking would hit the same limit
+        let lowered = text.lowercased()
+        let hasExpander = ["read more", "continue reading", "show more", "load more", "read the full", "keep reading"].contains { lowered.contains($0) }
+        return hasExpander || characterCount < shortArticleCharacters
+    }
+
+    /// A plain in-page expander, not a paywall or sign-in.
+    public static func isPlainExpander(_ label: String) -> Bool {
+        let lowered = label.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lowered.isEmpty, lowered.count <= 40 else { return false }
+        if ["subscribe", "sign in", "log in", "login", "sign up", "register", "trial", "paywall", "member", "buy"].contains(where: { lowered.contains($0) }) {
+            return false
+        }
+        return ["read more", "continue reading", "show more", "read full article", "read the full story", "load more", "keep reading", "expand"]
+            .contains { lowered.hasPrefix($0) }
     }
 }

@@ -85,7 +85,8 @@ enum ArticleReader {
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else { continue }
             let bundleIdentifier = NSRunningApplication(processIdentifier: ownerProcessIdentifier)?.bundleIdentifier
             candidates.append(ArticleWindowChoice.Candidate(processIdentifier: ownerProcessIdentifier, bundleIdentifier: bundleIdentifier,
-                                                           windowNumber: windowNumber, frameCG: bounds))
+                                                           windowNumber: windowNumber, frameCG: bounds,
+                                                           title: windowInfo[kCGWindowName as String] as? String))
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         guard let chosen = ArticleWindowChoice.choose(frontmostProcessIdentifier: frontmost == ownProcessIdentifier ? nil : frontmost, windows: candidates) else { return nil }
@@ -131,6 +132,49 @@ enum ArticleReader {
         var runElements = walk.elements
         print("📰 Article: AX walk visited \(walk.visitedCount) nodes, \(walk.nodes.count) runs, \(document.utf16Length) chars\(walk.didHitDeadline ? " (deadline)" : "")")
 
+        // P9 read further: the AX text looks cut short (lazy-loaded page, "read more"): expand plain
+        // in-page expanders, then scroll page by page and re-read until nothing new appears; then scroll back.
+        if document.utf16Length >= ArticleTextAssembler.minimumUsefulAccessibilityCharacters, let scroll, let windowElement = target.windowElement,
+           ArticleReadFurther.looksCutShort(text: document.text, characterCount: document.utf16Length, hitDeadline: walk.didHitDeadline),
+           !isCancelled() {
+            if let webArea = walk.webArea, pressReadMoreButtons(in: webArea) {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+            let viewport = viewportCG(webArea: walk.webArea, windowFrameCG: target.windowFrameCG)
+            let scrollPoint = CGPoint(x: viewport.midX, y: viewport.midY)
+            let pageStep = max(200, Int(viewport.height * 0.85))
+            var scrolledPixels = 0
+            var passesWithoutNewText = 0
+            for _ in 0..<ArticleReadFurther.maximumPasses {
+                if isCancelled() || document.isTruncated { break }
+                scroll(scrollPoint, pageStep)
+                scrolledPixels += pageStep
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                let uncheckedWindow = UncheckedAXElement(element: windowElement)
+                let furtherWalk = await Task.detached(priority: .userInitiated) {
+                    walkArticle(window: uncheckedWindow.element, deadline: ProcessInfo.processInfo.systemUptime + walkDeadlineSeconds)
+                }.value
+                let furtherDocument = ArticleTextAssembler.assemble(furtherWalk.nodes, title: title, url: furtherWalk.url ?? walk.url, maximumCharacters: maximumCharacters)
+                if furtherDocument.utf16Length > document.utf16Length + 40 {
+                    document = furtherDocument
+                    runElements = furtherWalk.elements
+                    walk = furtherWalk
+                    passesWithoutNewText = 0
+                } else {
+                    passesWithoutNewText += 1
+                    if passesWithoutNewText >= 2 { break }
+                }
+            }
+            print("📰 Article: read further over \(scrolledPixels) px → \(document.utf16Length) chars")
+            var remaining = scrolledPixels
+            while remaining > 0 {
+                let step = min(remaining, pageStep * 3)
+                scroll(scrollPoint, -step)
+                remaining -= step
+                try? await Task.sleep(nanoseconds: 60_000_000)
+            }
+        }
+
         if document.utf16Length < ArticleTextAssembler.minimumUsefulAccessibilityCharacters, let scroll, ClickySettings.articleScrollOCRFallback, !isCancelled() {
             let viewport = viewportCG(webArea: walk.webArea, windowFrameCG: target.windowFrameCG)
             let ocrDocument = await readByScrollingOCR(viewportCG: viewport, title: title, url: walk.url, maximumCharacters: maximumCharacters,
@@ -142,6 +186,28 @@ enum ArticleReader {
         }
         let milliseconds = Int((ProcessInfo.processInfo.systemUptime - startUptime) * 1000)
         return ArticleReadResult(document: document, runElements: runElements, webAreaElement: walk.webArea, target: target, readAt: Date(), milliseconds: milliseconds)
+    }
+
+    /// Presses plain in-page expanders ("read more", "continue reading", "show more"); never sign-in or
+    /// subscribe buttons. Breadth first, at most 3000 nodes. True when one was pressed.
+    static func pressReadMoreButtons(in webArea: AXUIElement) -> Bool {
+        var queue: [AXUIElement] = [webArea]
+        var visited = 0
+        var pressed = false
+        while !queue.isEmpty, visited < 3000 {
+            let element = queue.removeFirst()
+            visited += 1
+            let role = TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element) ?? ""
+            if role == kAXButtonRole as String || role == "AXLink" {
+                let label = [kAXTitleAttribute, kAXDescriptionAttribute].compactMap { TypeForMeAccessibility.stringAttribute($0 as String, of: element) }.joined(separator: " ")
+                if ArticleReadFurther.isPlainExpander(label) {
+                    pressed = AXUIElementPerformAction(element, kAXPressAction as CFString) == .success || pressed
+                    continue
+                }
+            }
+            queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element))
+        }
+        return pressed
     }
 
     /// The element whose frame is the page's viewport: the web area's scroll area (Safari), else the web area (Chrome).
