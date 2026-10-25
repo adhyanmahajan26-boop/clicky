@@ -62,6 +62,23 @@ public struct ClaudeArgs: Sendable {
         return commandArguments
     }
 
+    /// Code-mode preflight: one cheap headless turn with no tools, so its
+    /// system/init shows which tools can't be removed and which apiKeySource
+    /// the agent will see. Run from the empty session working directory.
+    /// --max-turns is hidden from `claude --help`; this run proves it works.
+    public static let preflightProbeArguments = [
+        "-p", "Reply OK",
+        "--tools", "",
+        "--max-turns", "1",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--model", "haiku",
+        "--setting-sources", "user",
+        "--settings", #"{"disableAllHooks":true}"#
+    ]
+
     /// The process environment for every call: the app's own, plus
     /// CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 so the user's ~/.claude/CLAUDE.md (and
     /// any project/auto memory) is not injected into Clicky's context.

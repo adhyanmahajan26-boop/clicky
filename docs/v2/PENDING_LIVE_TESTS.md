@@ -59,3 +59,38 @@ starts the app binary, so it was skipped in silent mode).
 8. Whether the TTS passes the Mac's echo cancellation with the mic open (open vs halfDuplex,
    `defaults write com.personal.clicky v2.voice.echoMode halfDuplex`).
 9. Hosted tests (`xcodebuild test -only-testing:leanring-buddyTests`); compiled, not run.
+
+## P5
+
+Code mode is off by default (`v2.code.enabled`); everything below needs the app running and the
+user present. Silent mode covered: `swift test` (fake `claude`/`gh` scripts, temp repos and a temp
+bare remote only), the app build, and build-for-testing.
+
+1. Sandbox probe: run `Tools/codeprobe.sh`. Any FAIL or INCONCLUSIVE → keep
+   `v2.code.bashAllowed` false (the default). Only an all-PASS run may set it true.
+2. Preflight probe: turn on "Code mode" in the menu-bar panel; the status line must say
+   "Ready as @<login>". `codeState` (debug inbox) shows the flag table: `--max-turns` must read
+   `probeVerified` (it's hidden from `claude --help` 2.1.301; the probe passes `--max-turns 1`),
+   `--append-system-prompt-file` `fallback` (rules.md inline via `--append-system-prompt`), and
+   `unremovableTools` should be empty. If the probe's init lists plugins or MCP servers the
+   preflight refuses (the agent's init would be rejected anyway) — note which.
+3. "in clicky, what does CompanionWorkers do?" → answered out loud, read-only. OK to run on
+   ~/Projects/clicky because ask_repo only reads (cwd = the clone, tools Read/Grep/Glob, no
+   worktree). Check afterwards: `git -C ~/Projects/clicky status` unchanged,
+   `~/.clicky/code/<task>/agent.jsonl` init shows `"tools":["Read","Grep","Glob"]`,
+   `permissionMode` acceptEdits, no MCP servers.
+4. Sandbox PR flow — needs the user's OK to create a throwaway repo first (never a real one):
+   a PR with one review comment → "fix the review comments on <sandbox> PR 1" → the panel shows
+   `o/n #1 @old→new`, the diff, the reply text, the quoted argv; Approve stays disabled until the
+   push dry-run finishes; Push & reply → `ls-remote` check, push, reply, resolve, then
+   `gh pr checks` polling (15 s, ≤ 20 min) spoken. Also: a `.github/workflows/` change is red
+   and blocks; editing a reply changes what's sent (and an edit after the click aborts);
+   `repo_change` with deliver local/branch/pr (PR only if `gh pr list --head` is empty);
+   "Clean up worktrees" asks when a worktree has unpushed commits.
+5. Review panel by hand: the look (compare with
+   `~/Library/Logs/Clicky/renders/p5/review-panel.png` from `swift test`), a click within 0.5 s
+   of the panel appearing is ignored, plain click for push/PR/comment/reply, a 1.5 s hold (with
+   the fill animation) for approve / request changes / merge / update branch, a short press on
+   those does nothing, Return only highlights the primary button for 5 s, Esc during
+   "Opening o/n #N" cancels, and the chooser appears for an ambiguous name.
+6. Hosted tests (`leanring-buddyTests/CodeModeControllerTests.swift`): compiled, not run.

@@ -9,7 +9,10 @@
 //  credentials stripped from the environment and git told to fail any
 //  auth. Clicky, not the agent, pushes and talks to GitHub afterwards.
 //  Flags the installed CLI doesn't list can be dropped (and reported), so
-//  preflight can refuse when a required one is missing.
+//  preflight can refuse when a required one is missing; a hidden
+//  --append-system-prompt-file falls back to --append-system-prompt with
+//  rules.md inline. `--permission-prompts none` makes anything that would
+//  ask for permission a denial instead of a wait.
 //
 
 import Foundation
@@ -100,6 +103,12 @@ public struct AgentInvocation: Sendable {
         "--disallowedTools": ["--disallowed-tools"]
     ]
 
+    /// A flag the CLI may hide, and the listed flag that carries the same
+    /// thing inline (rules.md's text instead of its path).
+    public static let flagFallbacks: [String: String] = [
+        "--append-system-prompt-file": "--append-system-prompt"
+    ]
+
     public var flagGroups: [FlagGroup] {
         var groups: [FlagGroup] = [
             FlagGroup(flag: "-p", tokens: ["-p", Self.neutralizedPrompt(prompt)]),
@@ -116,6 +125,8 @@ public struct AgentInvocation: Sendable {
             FlagGroup(flag: "--settings", tokens: ["--settings", settingsJSON]),
             FlagGroup(flag: "--append-system-prompt-file", tokens: ["--append-system-prompt-file", rulesFilePath]),
             FlagGroup(flag: "--json-schema", tokens: ["--json-schema", Self.outputJSONSchema]),
+            // Headless: anything that would ask for permission is denied, never waits.
+            FlagGroup(flag: "--permission-prompts", tokens: ["--permission-prompts", "none"]),
             FlagGroup(flag: "--setting-sources", tokens: ["--setting-sources", settingSources])
         ]
         switch session {
@@ -135,6 +146,8 @@ public struct AgentInvocation: Sendable {
         for group in flagGroups {
             if Self.isSupported(group.flag, by: supportedFlags) {
                 keptArguments += group.tokens
+            } else if let fallbackTokens = fallbackTokens(for: group.flag, supportedFlags: supportedFlags) {
+                keptArguments += fallbackTokens
             } else {
                 droppedFlags.append(group.flag)
             }
@@ -142,10 +155,22 @@ public struct AgentInvocation: Sendable {
         return (keptArguments, droppedFlags)
     }
 
+    /// The listed replacement for a hidden flag, when the CLI has it.
+    func fallbackTokens(for flag: String, supportedFlags: Set<String>) -> [String]? {
+        guard let fallbackFlag = Self.flagFallbacks[flag], supportedFlags.contains(fallbackFlag) else { return nil }
+        switch flag {
+        case "--append-system-prompt-file": return [fallbackFlag, rulesMarkdown]
+        default: return nil
+        }
+    }
+
     /// Required flags (for this session kind) the installed CLI lacks.
     public func missingRequiredFlags(supportedFlags: Set<String>) -> [String] {
         let usedFlags = Set(flagGroups.map(\.flag))
-        return Self.requiredFlags.filter { usedFlags.contains($0) && !Self.isSupported($0, by: supportedFlags) }
+        return Self.requiredFlags.filter { requiredFlag in
+            usedFlags.contains(requiredFlag) && !Self.isSupported(requiredFlag, by: supportedFlags)
+                && fallbackTokens(for: requiredFlag, supportedFlags: supportedFlags) == nil
+        }
     }
 
     static func isSupported(_ flag: String, by supportedFlags: Set<String>) -> Bool {

@@ -65,29 +65,34 @@ public enum SystemPromptBuilder {
     }
 
     public static func mainSystemPrompt(features: SystemPromptFeatures = .current) -> String {
+        mainSystemPrompt(features: features, sectionTexts: gatedSectionTexts)
+    }
+
+    /// The same, with the gated texts passed in (tests don't touch the global).
+    public static func mainSystemPrompt(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]) -> String {
         var sections = [coreSection]
         if features.contains(.grounding) {
-            sections.append(groundingSection(withBadges: features.contains(.badges), missingAbilities: missingAbilities(features: features)))
+            sections.append(groundingSection(withBadges: features.contains(.badges), missingAbilities: missingAbilities(features: features, sectionTexts: sectionTexts)))
         } else {
             if features.contains(.pointing) { sections.append(pointingSection) }
             if features.contains(.liveMarks) { sections.append(liveMarksSection) }
         }
         for gatedSection in GatedSection.allCases where features.contains(gatedSection.feature) {
-            if let sectionText = gatedSectionTexts[gatedSection] { sections.append(sectionText) }
+            if let sectionText = sectionTexts[gatedSection] { sections.append(sectionText) }
         }
         if features.contains(.helperWorkers) {
             sections.append(helperWorkersSection)
-            if features.contains(.grounding) { sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features))) }
+            if features.contains(.grounding) { sections.append(workerScopeSection(hasCode: isAvailable(.code, features: features, sectionTexts: sectionTexts))) }
         }
         return sections.joined(separator: "\n\n") + "\n"
     }
 
-    static func isAvailable(_ gatedSection: GatedSection, features: SystemPromptFeatures) -> Bool {
-        features.contains(gatedSection.feature) && gatedSectionTexts[gatedSection] != nil
+    static func isAvailable(_ gatedSection: GatedSection, features: SystemPromptFeatures, sectionTexts: [GatedSection: String]? = nil) -> Bool {
+        features.contains(gatedSection.feature) && (sectionTexts ?? gatedSectionTexts)[gatedSection] != nil
     }
 
-    static func missingAbilities(features: SystemPromptFeatures) -> [String] {
-        GatedSection.allCases.filter { !isAvailable($0, features: features) }.map(\.missingAbilityName)
+    static func missingAbilities(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]? = nil) -> [String] {
+        GatedSection.allCases.filter { !isAvailable($0, features: features, sectionTexts: sectionTexts) }.map(\.missingAbilityName)
     }
 
     /// Set-of-marks grounding: describes exactly the lines Clicky sends.

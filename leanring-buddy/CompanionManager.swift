@@ -105,6 +105,25 @@ final class CompanionManager: ObservableObject {
     /// Built-in Mac voice for spoken replies (free, offline).
     let speechOutputClient = CompanionSpeechOutput()
 
+    /// P5 Code mode: `<codetask>` blocks, the review panel and click-gated sends.
+    private(set) lazy var codeModeController = CodeModeController { [weak self] text in
+        self?.speakCodeModeLine(text)
+    }
+
+    /// Code-mode results arrive long after the answer; wait for any speech to end first.
+    private func speakCodeModeLine(_ text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let giveUpDate = Date().addingTimeInterval(20)
+            while self.speechOutputClient.isPlaying && Date() < giveUpDate {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            try? await self.speechOutputClient.speakText(trimmedText)
+        }
+    }
+
     /// Whether the Claude Code CLI is signed in. Checked on launch so the
     /// panel can prompt for `claude auth login` instead of failing silently.
     @Published private(set) var isClaudeCodeSignedIn = false
@@ -247,6 +266,9 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         runStartupGeometryCheck()
+        // The CODE prompt section exists from launch; it's only sent while Code mode is on.
+        CodeModePrompt.register()
+        escapeKeyConsumers.append { [weak self] in self?.codeModeController.handleEscapeKey() ?? false }
         markController.onDrawingsChanged = { [weak self] drawings in self?.markDrawings = drawings }
         groundingCoordinator.effectiveMaxEdgeProvider = { [weak self] in
             ClickySettings.effectiveMaxEdge(forModelIdentifier: self?.lastResolvedModelIdentifier)
@@ -958,7 +980,7 @@ final class CompanionManager: ObservableObject {
         if !isGroundingActiveThisSession {
             promptFeatures.remove([.grounding, .badges])
         }
-        // Gated sections (their text arrives with P4/P5/P6; until then a gate changes nothing).
+        // Gated sections (P5's code text is registered at start; P4/P6 arrive later).
         if ClickySettings.isWhiteboardAutoEnabled { promptFeatures.insert(.whiteboard) }
         if ClickySettings.isCodeEnabled { promptFeatures.insert(.code) }
         if ClickySettings.isTypeForMeEnabled { promptFeatures.insert(.typing) }

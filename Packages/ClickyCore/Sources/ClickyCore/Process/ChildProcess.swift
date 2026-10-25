@@ -211,6 +211,16 @@ public final class ChildProcess: @unchecked Sendable {
         cancel(reason: .cancelled)
     }
 
+    /// SIGKILL the whole group now, no SIGINT grace (a rejected agent init:
+    /// it must not get to run a single tool). The result says `.cancelled`.
+    public func killImmediately() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !hasLeaderExited else { return }
+        if endReason == nil { endReason = .cancelled }
+        signalGroupLocked(SIGKILL)
+    }
+
     /// While a tool runs the agent may print nothing for minutes; pause the
     /// idle timeout until it finishes. Turning it off restarts the idle clock.
     public func markToolInFlight(_ inFlight: Bool) {
