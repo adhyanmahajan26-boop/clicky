@@ -70,6 +70,8 @@ final class CompanionManager: ObservableObject {
     /// Clicking the resting spark opens the dashboard.
     let sparkClickTarget = CompanionSparkClickTarget()
     private(set) lazy var agentsWindowController = AgentsWindowController(agentsCenter: agentsCenter, actions: makeAgentsDashboardActions())
+    /// The Voices window and the spoken voice switches ("next voice", "use voice 3", "previous voice", "show voices").
+    private(set) lazy var voiceGalleryController = VoiceGalleryController(speechOutput: speechOutputClient)
     /// The brain record started at key-down ("listening"), adopted by the turn that follows.
     private var listeningBrainAgentID: String?
     /// The brain record of the answer in flight (its phase follows voiceState).
@@ -1389,6 +1391,14 @@ final class CompanionManager: ObservableObject {
         // extra text (code-mode continuations, "whiteboard that") never send.
         if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
            projectBridge.handleSpokenTranscript(transcript, speaks: turnOptions.speaksResponse).isHandledLocally {
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // "next voice", "use voice 3", "previous voice", "show voices": switched here,
+        // no brain turn. The new voice says one short line only if this turn speaks.
+        if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
+           let voiceGalleryCommand = VoiceGalleryCommand.parse(transcript) {
+            voiceGalleryController.perform(voiceGalleryCommand, speaks: turnOptions.speaksResponse)
             turnOptions.onTurnFinished?(nil, nil)
             return
         }

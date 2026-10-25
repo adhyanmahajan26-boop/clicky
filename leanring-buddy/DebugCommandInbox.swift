@@ -23,6 +23,8 @@
 //    projectSend {transcript, speak=true} → the "send this to my project …" trigger + outbox
 //                               write, as for a spoken transcript: {sent, id, path} or {sent:false, reason}
 //    projectStatus            → the Agents dashboard's project tasks (phase, note, link) and the bridge's settings
+//    voiceGallery             → the voice gallery's entries (number, id, engine, pitch, files, enabled) and the active one
+//    voiceSelect {index | id} → chooses a gallery voice exactly like "Use this voice", without speaking
 //    (codeTask also takes {frontWindow: {bundle, title, document, terminalCwd}} to stand
 //     in for the front window when task.repo is "this")
 //    board {path}             → a .jsonl board or a raw answer file, drawn and narrated as if Claude said it
@@ -380,6 +382,22 @@ final class DebugCommandInbox {
 
         case "projectStatus":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.projectBridge.statusSnapshot(), errorMessage: nil)
+
+        case "voiceGallery":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.voiceGalleryController.debugSnapshot(), errorMessage: nil)
+
+        case "voiceSelect":
+            // {index: N} (1-based, as the gallery shows it) or {id: "voice3" | "apple:<identifier>"}. Never speaks.
+            let requestedNumber = (commandObject["index"] as? Int) ?? (commandObject["index"] as? String).flatMap(Int.init)
+            let requestedEntryID = commandObject["id"] as? String
+            guard requestedNumber != nil || requestedEntryID != nil else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "voiceSelect needs \"index\" or \"id\"")
+                return
+            }
+            let (chosenEntry, failureReason) = companionManager.voiceGalleryController.debugSelect(number: requestedNumber, entryID: requestedEntryID)
+            var result = companionManager.voiceGalleryController.debugSnapshot()
+            result["selected"] = failureReason == nil ? (chosenEntry?.id ?? NSNull()) : NSNull()
+            reply(commandIdentifier: commandIdentifier, isSuccess: failureReason == nil, result: result, errorMessage: failureReason)
 
         case "markRegion":
             // Test-only: drop marks outside this CG rect ({"rectCG": [x, y, w, h]}) or allow all again ({"clear": true}).

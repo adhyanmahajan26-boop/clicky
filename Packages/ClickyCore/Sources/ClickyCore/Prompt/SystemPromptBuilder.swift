@@ -77,7 +77,7 @@ public enum SystemPromptBuilder {
 
     /// The same, with the gated texts passed in (tests don't touch the global).
     public static func mainSystemPrompt(features: SystemPromptFeatures, sectionTexts: [GatedSection: String]) -> String {
-        var sections = [coreSection, snapshotSection, AgentsDashboardTag.promptLine]
+        var sections = [coreSection, snapshotSection, AgentsDashboardTag.promptLine, VoiceGalleryCommand.promptLine]
         if features.contains(.grounding) {
             sections.append(groundingSection(withBadges: features.contains(.badges), missingAbilities: missingAbilities(features: features, sectionTexts: sectionTexts)))
         } else {

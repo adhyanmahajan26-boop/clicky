@@ -75,6 +75,8 @@ public enum ClickySettings {
         public static let ttsPortOverride = "v2.debug.ttsPortOverride"
         /// String path, the WAV every Qwen segment clones (default ~/.clicky/voice/clicky-voice.wav).
         public static let qwenReferenceClip = "v2.voice.qwen.referenceClip"
+        /// String, the voice-gallery entry id that was active before the last switch ("previous voice"). Written by the gallery.
+        public static let voiceGalleryPrevious = "v2.voice.gallery.previous"
         /// Bool, default false: the code agent may get Bash (set true only by a passing sandbox probe).
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.

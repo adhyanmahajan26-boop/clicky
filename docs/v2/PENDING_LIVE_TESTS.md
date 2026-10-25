@@ -391,3 +391,23 @@ Unit-tested in ClickyCore (`ProjectBridgeTests`); these need the running app:
    `v2.project.enabled -bool false` → the phrase goes to the brain as an ordinary question.
 6. Debug inbox: `{"cmd":"projectSend","transcript":"send this to my project x","speak":false}` →
    `{sent, id, path}`; `{"cmd":"projectStatus"}` lists the task.
+
+## Voice gallery
+
+Unit-tested in ClickyCore (`VoiceGalleryTests`: manifest, order, phrases, cycling, settings writes, the
+reference-clip reload, renders in `~/Library/Logs/Clicky/renders/voice/`); these need the running app:
+1. Menu bar panel → Voice → "Voices…" opens the "Voices" window: voice1–6, the current voice (7), then the
+   installed Apple Enhanced/Premium English voices. Nothing plays until a Play button is pressed; Play on a
+   cloned voice plays its `voiceN-sample.wav`, on an Apple voice speaks the manifest's sampleText; Stop and
+   closing the window stop it.
+2. "Use this voice" on voice 3 (silent): `v2.voice.qwen.referenceClip` = the absolute path of
+   `voice3-ref.wav`, `usesQwenLocalVoice` = true, and the next answer is cloned from voice 3 (the client
+   re-reads the clip; no relaunch). On an Apple voice: `selectedSpeechVoiceIdentifier` set, Qwen off.
+3. Push-to-talk "next voice" / "change your voice" → the next gallery voice says "How's this voice?" in that
+   voice, with no brain turn. "use voice 3" / "voice number three" → voice 3 + the same line. "previous voice"
+   / "go back to the old voice" → the voice before the last switch. "show voices" → the window comes front
+   without taking focus. "use voice 42" → "There's no voice 42. I have N."
+4. Switching from an Apple voice to a Qwen one while the Qwen server is cold: the line may come out in the
+   Mac voice (fallback) while Qwen warms up; the next answer should be in the cloned voice.
+5. Debug inbox: `{"cmd":"voiceGallery"}` lists entries + active; `{"cmd":"voiceSelect","index":3}` switches
+   silently; `{"cmd":"ask","text":"next voice","speak":false}` switches without speaking.

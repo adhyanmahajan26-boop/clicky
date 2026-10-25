@@ -51,16 +51,23 @@ final class QwenLocalTTSClient {
     /// The TTS model the server has loaded (set by the supervisor).
     var loadedModelIdentifier = QwenTuning.defaultModelIdentifier
 
-    /// The one voice every segment clones (v2.voice.qwen.referenceClip), read
-    /// once and kept as base64; nil when the clip is missing.
-    private(set) lazy var referenceClipBase64: String? = {
-        let path = (ClickySettings.qwenReferenceClipPath as NSString).expandingTildeInPath
-        guard let clipData = FileManager.default.contents(atPath: path), PCMAudio(wavData: clipData) != nil else {
-            print("⚠️ Qwen voice: no reference clip at \(path); each answer may sound different")
-            return nil
-        }
-        return clipData.base64EncodedString()
-    }()
+    /// The one voice every segment clones (v2.voice.qwen.referenceClip), kept
+    /// as base64 per path: when the voice gallery points the setting at
+    /// another clip, the next request reads that file. nil when the clip is missing.
+    private let referenceClipCache = ReferenceClipCache { path in
+        let base64 = ReferenceClipCache.loadWAVBase64(atPath: path)
+        if base64 == nil { print("⚠️ Qwen voice: no reference clip at \(path); each answer may sound different") }
+        return base64
+    }
+
+    var referenceClipBase64: String? {
+        referenceClipCache.base64(forPath: ClickySettings.qwenReferenceClipPath)
+    }
+
+    /// Forces the next request to re-read the clip (the gallery calls it on every switch).
+    func reloadReferenceClip() {
+        referenceClipCache.invalidate()
+    }
 
     /// Base (cloning the reference clip) whenever a clip exists.
     var modelIdentifier: String {

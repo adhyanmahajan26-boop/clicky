@@ -39,7 +39,11 @@ struct CompanionPanelView: View {
                 CompanionVoicePickerRow(
                     speechOutput: companionManager.speechOutputClient,
                     systemVoiceClient: companionManager.speechOutputClient.systemVoiceClient,
-                    qwenServerSupervisor: companionManager.speechOutputClient.qwenServerSupervisor
+                    qwenServerSupervisor: companionManager.speechOutputClient.qwenServerSupervisor,
+                    openVoiceGallery: {
+                        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+                        companionManager.voiceGalleryController.showWindow(activatesClicky: true)
+                    }
                 )
                     .padding(.horizontal, 16)
 
@@ -1011,6 +1015,8 @@ private struct CompanionVoicePickerRow: View {
     @ObservedObject var speechOutput: CompanionSpeechOutput
     @ObservedObject var systemVoiceClient: SystemVoiceTTSClient
     @ObservedObject var qwenServerSupervisor: QwenServerSupervisor
+    /// Opens the Voices window (the voice gallery).
+    let openVoiceGallery: () -> Void
     @AppStorage(ClickySettings.Keys.qwenSpeaker) private var qwenSpeaker = QwenTuning.defaultSpeaker
     @AppStorage(ClickySettings.Keys.qwenInstruct) private var qwenInstruct = QwenTuning.instructPresets[0].instruct
 
@@ -1028,6 +1034,22 @@ private struct CompanionVoicePickerRow: View {
                 Spacer()
 
                 voiceMenu
+
+                // The gallery: every cloned and Mac voice with Play and "Use this voice".
+                Button(action: openVoiceGallery) {
+                    Text("Voices…")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Voice gallery")
 
                 Button(action: {
                     speechOutput.previewVoice()
@@ -1146,7 +1168,7 @@ private struct CompanionVoicePickerRow: View {
             }
 
             if qwenServerSupervisor.client.referenceClipBase64 == nil {
-                Text("No reference voice clip at ~/.clicky/voice/clicky-voice.wav, so the voice may change between answers.")
+                Text("No reference voice clip at \(ClickySettings.qwenReferenceClipPath), so the voice may change between answers.")
                     .font(.system(size: 10))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)

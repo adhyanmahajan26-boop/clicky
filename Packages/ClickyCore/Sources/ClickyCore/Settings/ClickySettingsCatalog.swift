@@ -75,6 +75,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Qwen style instruction. Empty means the speaker's own delivery."),
         ClickySettingsEntry(key: ClickySettings.Keys.qwenReferenceClip, kind: .text(defaultValue: ""),
                             explanation: "WAV the Qwen voice is cloned from. Empty means \(QwenTuning.referenceClipDefaultPath)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.voiceGalleryPrevious, kind: .text(defaultValue: ""),
+                            explanation: "Voice-gallery id that was active before the last switch (\"previous voice\" goes back to it). Written by the gallery."),
         ClickySettingsEntry(key: ClickySettings.Keys.voiceRate, kind: .number(defaultValue: 1.0, range: 0.85...1.3, step: 0.15),
                             explanation: "Playback rate for both voices (0.85, 1.0, 1.15 or 1.3)."),
         ClickySettingsEntry(key: ClickySettings.Keys.ttsPortOverride, kind: .integer(defaultValue: 0, range: 0...65535, step: 1),
