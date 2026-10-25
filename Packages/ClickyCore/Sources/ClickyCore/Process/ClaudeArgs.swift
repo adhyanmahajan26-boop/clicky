@@ -73,18 +73,27 @@ public struct ClaudeArgs: Sendable {
     /// system/init shows which tools can't be removed and which apiKeySource
     /// the agent will see. Run from the empty session working directory.
     /// --max-turns is hidden from `claude --help`; this run proves it works.
-    public static let preflightProbeArguments = [
-        "-p", "Reply OK",
-        "--tools", "",
-        "--max-turns", "1",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--strict-mcp-config",
-        "--no-session-persistence",
-        "--model", "haiku",
-        "--setting-sources", "user",
-        "--settings", #"{"disableAllHooks":true}"#
-    ]
+    /// Same plugin isolation as the agent: no settings files, every plugin
+    /// it reports switched off, no skills. A plugin that still shows up here
+    /// would make the agent's init fail.
+    public static func preflightProbeArguments(disabling disabledPluginSources: [String] = AgentInvocation.builtinPluginSources, disablesSkills: Bool = true) -> [String] {
+        let probeSettings: [String: Any] = ["disableAllHooks": true, "enabledPlugins": AgentInvocation.disabledPluginsObject(disabledPluginSources)]
+        return [
+            "-p", "Reply OK",
+            "--tools", "",
+            "--max-turns", "1",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+            "--model", "haiku",
+            "--setting-sources", ""
+        ] + (disablesSkills ? ["--disable-slash-commands"] : []) + [
+            "--settings", AgentInvocation.jsonString(probeSettings)
+        ]
+    }
+
+    public static var preflightProbeArguments: [String] { preflightProbeArguments(disabling: AgentInvocation.builtinPluginSources) }
 
     /// The process environment for every call: the app's own, plus
     /// CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 so the user's ~/.claude/CLAUDE.md (and

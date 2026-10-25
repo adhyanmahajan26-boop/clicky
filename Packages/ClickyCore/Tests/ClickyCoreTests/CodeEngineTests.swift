@@ -96,9 +96,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tools) tools="$2"; shift ;;
     --permission-mode) mode="$2"; shift ;;
+    --json-schema) schema=1; shift ;;
   esac
   shift
 done
+# Like the real CLI: --json-schema adds the StructuredOutput tool.
+if [ -n "${schema:-}" ]; then tools="$tools,StructuredOutput"; fi
 cwd=$(pwd)
 tools_json=$(printf '%s' "$tools" | sed 's/,/","/g')
 if [ -n "${FAKE_INIT_OVERRIDE:-}" ]; then
@@ -139,6 +142,7 @@ Options:
   --append-system-prompt <prompt>       Append a system prompt to the default
   --bare                                Minimal mode: skip hooks ...
                                         --settings, --agents, --plugin-dir.
+  --disable-slash-commands              Disable all skills
   --disallowedTools, --disallowed-tools <tools...>
       Comma or space-separated list of tool names to deny
   --include-partial-messages            Include partial message chunks as they
@@ -226,7 +230,7 @@ struct CodeAgentRunnerTests {
         let workPath = sandbox.path("work")
         try FileManager.default.createDirectory(atPath: workPath, withIntermediateDirectories: true)
         let invocation = sampleInvocation(sandbox: sandbox, readOnly: readOnly)
-        let expectation = AgentInitExpectation(expectedTools: Set(invocation.tools), apiKeySource: "none", worktreePath: workPath)
+        let expectation = AgentInitExpectation(expectedTools: Set(invocation.expectedInitTools(supportedFlags: allFlags())), apiKeySource: "none", worktreePath: workPath)
         let configuration = AgentRunConfiguration(claudePath: agentPath, invocation: invocation, supportedFlags: allFlags(), expectation: expectation,
                                                   workingDirectory: workPath, baseEnvironment: testBaseEnvironment.merging(extraEnvironment) { $1 },
                                                   timeouts: .total(60), initTimeoutSeconds: initTimeoutSeconds)
@@ -250,12 +254,12 @@ struct CodeAgentRunnerTests {
     /// Each bad field → initRejected with that failure, and the agent (which
     /// ignores SIGINT/SIGTERM and would sleep 300 s) is SIGKILLed at once.
     @Test func eachBadInitFieldKillsTheAgent() async throws {
-        let base: [String: Any] = ["type": "system", "subtype": "init", "permissionMode": "acceptEdits", "tools": ["Read", "Edit", "Write", "Glob", "Grep"],
+        let base: [String: Any] = ["type": "system", "subtype": "init", "permissionMode": "acceptEdits", "tools": ["Read", "Edit", "Write", "Glob", "Grep", "StructuredOutput"],
                                    "mcp_servers": [], "plugins": [], "apiKeySource": "none", "cwd": "__CWD__"]
         let cases: [(String, [String: Any], (AgentInitFailure) -> Bool)] = [
             ("permissionMode", ["permissionMode": "default"], { if case .permissionMode = $0 { return true }; return false }),
             ("bypass", ["permissionMode": "bypassPermissions"], { if case .permissionMode = $0 { return true }; return false }),
-            ("extra tool", ["tools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash"]], { if case .tools(let unexpected, _) = $0 { return unexpected == ["Bash"] }; return false }),
+            ("extra tool", ["tools": ["Read", "Edit", "Write", "Glob", "Grep", "StructuredOutput", "Bash"]], { if case .tools(let unexpected, _) = $0 { return unexpected == ["Bash"] }; return false }),
             ("missing tool", ["tools": ["Read"]], { if case .tools = $0 { return true }; return false }),
             ("mcp", ["mcp_servers": [["name": "evil", "status": "connected"]]], { $0 == .mcpServers(["evil"]) }),
             ("plugins", ["plugins": [["name": "helper"]]], { $0 == .plugins(["helper"]) }),
@@ -646,14 +650,26 @@ struct GitHubCommandTests {
 
 @Suite(.serialized)
 struct CodePreflightTests {
-    private func fakeTools(_ sandbox: CodeSandbox, ghAuthExit: Int = 0, probeHasPlugins: Bool = false) throws -> CodeToolPaths {
+    enum ProbePlugins { case none, switchable, sticky }
+
+    /// `.switchable`: the probe reports helper@market unless --settings switches it off
+    /// (like a real plugin); `.sticky`: it's reported whatever the settings say.
+    private func fakeTools(_ sandbox: CodeSandbox, ghAuthExit: Int = 0, probePlugins: ProbePlugins = .none) throws -> CodeToolPaths {
         try claudeHelpFixture.write(toFile: sandbox.path("help.txt"), atomically: true, encoding: .utf8)
-        let plugins = probeHasPlugins ? #"[{"name":"helper"}]"# : "[]"
+        let probeLog = sandbox.path("probe-args.log")
+        let pluginLine: String
+        switch probePlugins {
+        case .none: pluginLine = #"plugins='[]'"#
+        case .sticky: pluginLine = #"plugins='[{"name":"helper","source":"helper@market"}]'"#
+        case .switchable: pluginLine = #"case "$*" in *'"helper@market":false'*) plugins='[]' ;; *) plugins='[{"name":"helper","source":"helper@market"}]' ;; esac"#
+        }
         let claudePath = try sandbox.writeScript("fake-claude.sh", """
             case "$1" in
               --help) cat '\(sandbox.path("help.txt"))' ;;
               auth) exit 0 ;;
-              -p) printf '%s\\n' '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"plugins":\(plugins),"apiKeySource":"none","cwd":"/x"}'
+              -p) printf '%s\\n' "$*" >> '\(probeLog)'
+                  \(pluginLine)
+                  printf '%s\\n' '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"plugins":'"$plugins"',"apiKeySource":"none","cwd":"/x"}'
                   printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"OK"}' ;;
             esac
             """)
@@ -676,6 +692,24 @@ struct CodePreflightTests {
         #expect(report.effectiveSupportedFlags.contains("--max-turns"))
         #expect(report.droppedOptionalFlags.isEmpty)
         #expect(report.flagTable.contains("--append-system-prompt-file"))
+        #expect(report.disabledPluginSources == AgentInvocation.builtinPluginSources)
+        #expect(report.spokenExplanation == "Code mode is ready.")
+        // One probe, with the agent's isolation (no settings files, skills off).
+        let probeLines = try String(contentsOfFile: sandbox.path("probe-args.log"), encoding: .utf8).split(separator: "\n")
+        #expect(probeLines.count == 1)
+        #expect(probeLines.first?.contains("--disable-slash-commands") == true && probeLines.first?.contains("cc-plugin-telemetry@builtin") == true)
+    }
+
+    /// A plugin the probe sees is switched off and the probe re-run; the agent gets the same list.
+    @Test func switchesOffAPluginTheProbeSaw() async throws {
+        let sandbox = try CodeSandbox()
+        defer { sandbox.cleanUp() }
+        let report = await CodePreflight(tools: try fakeTools(sandbox, probePlugins: .switchable), runner: ChildProcessCommandRunner(), environment: testBaseEnvironment,
+                                         probeWorkingDirectory: sandbox.root).run()
+        #expect(report.isReady, "\(report.statusLine)")
+        #expect(report.disabledPluginSources == AgentInvocation.builtinPluginSources + ["helper@market"])
+        let probeLines = try String(contentsOfFile: sandbox.path("probe-args.log"), encoding: .utf8).split(separator: "\n")
+        #expect(probeLines.count == 2)
     }
 
     @Test func failsWithAReason() async throws {
@@ -684,9 +718,15 @@ struct CodePreflightTests {
         let ghSignedOut = await CodePreflight(tools: try fakeTools(sandbox, ghAuthExit: 1), runner: ChildProcessCommandRunner(), environment: testBaseEnvironment,
                                               probeWorkingDirectory: sandbox.root).run()
         #expect(!ghSignedOut.isReady && ghSignedOut.statusLine.contains("gh auth status"))
-        let withPlugins = await CodePreflight(tools: try fakeTools(sandbox, probeHasPlugins: true), runner: ChildProcessCommandRunner(), environment: testBaseEnvironment,
+        #expect(ghSignedOut.spokenExplanation.contains("gh auth login"))
+        // A plugin that loads even when switched off: off, with what to do.
+        let withPlugins = await CodePreflight(tools: try fakeTools(sandbox, probePlugins: .sticky), runner: ChildProcessCommandRunner(), environment: testBaseEnvironment,
                                               probeWorkingDirectory: sandbox.root).run()
-        #expect(!withPlugins.isReady && withPlugins.statusLine.contains("plugins"))
+        #expect(!withPlugins.isReady && withPlugins.statusLine.contains("plugins (helper)"))
+        #expect(withPlugins.remedy?.contains("claude update") == true)
+        #expect(withPlugins.spokenExplanation.hasPrefix("Code mode can't run: Claude Code still loads plugins (helper)"))
+        #expect(withPlugins.spokenExplanation.hasSuffix("turn code mode off and on again to recheck."))
+        #expect(CodePreflight.spokenList(["a", "b", "c", "d"]) == "a, b, c and 1 more" && CodePreflight.spokenList(["a", "b"]) == "a and b")
     }
 
     @Test func probeEnvironmentStripsKeys() {

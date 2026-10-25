@@ -333,9 +333,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tools) tools="$2"; shift ;;
     --permission-mode) mode="$2"; shift ;;
+    --json-schema) schema=1; shift ;;
   esac
   shift
 done
+# Like the real CLI: --json-schema adds the StructuredOutput tool.
+if [ -n "${schema:-}" ]; then tools="$tools,StructuredOutput"; fi
 cwd=$(pwd)
 target="${FAKE_TARGET:-README.md}"
 tools_json=$(printf '%s' "$tools" | sed 's/,/","/g')
@@ -462,6 +465,74 @@ struct CodeModeLiveEngineTests {
         if let branch = review.worktree?.branch { _ = try? await sandbox.git(["branch", "-D", branch], in: scratchPath) }
         await manager.removeAllClickyRefs(clonePath: scratchPath)
         #expect(try await manager.clickyWorktrees(clonePath: scratchPath).isEmpty)
+    }
+}
+
+// MARK: - Live: the real Claude Code CLI, end to end
+
+/// `CLICKY_LIVE_AGENT_REPO=<a throwaway clone of ~/Projects/clicky-scratch> swift test --filter liveAgent`
+/// runs the real preflight (real `claude`, a fake `gh` so nothing reaches GitHub) and then one real
+/// repo_change through CodeTaskEngine with Bash on, as the app does after a passing codeprobe. The
+/// agent's init must validate (no plugins, MCP servers or extra tools), the change lands in a Clicky
+/// worktree, and `python3 -m unittest` passes there. The clone's own branch is left as it was.
+@Suite(.serialized)
+struct CodeModeLiveAgentTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CLICKY_LIVE_AGENT_REPO"] != nil), .timeLimit(.minutes(15)))
+    func liveAgentAddsMultiply() async throws {
+        let repoPath = (ProcessInfo.processInfo.environment["CLICKY_LIVE_AGENT_REPO"]! as NSString).expandingTildeInPath
+        let claudePath = try #require(await ExecutablePath.which("claude"))
+        let sandbox = try CodeSandbox()
+        defer { sandbox.cleanUp() }
+        let ghPath = try sandbox.writeScript("fake-gh.sh", """
+            case "$1 $2" in
+              "auth status") exit 0 ;;
+              "api user") echo tester ;;
+              *) exit 1 ;;
+            esac
+            """)
+        let tools = CodeToolPaths(git: "/usr/bin/git", gh: ghPath, claude: claudePath)
+        let baseOID = try await sandbox.git(["rev-parse", "HEAD"], in: repoPath)
+
+        let preflight = await CodePreflight(tools: tools, runner: ChildProcessCommandRunner(), probeWorkingDirectory: sandbox.root).run()
+        print("live preflight: \(preflight.statusLine) · disabled plugins \(preflight.disabledPluginSources) · unremovable \(preflight.unremovableTools)")
+        #expect(preflight.isReady, "\(preflight.spokenExplanation)")
+        guard preflight.isReady else { return }
+
+        let engine = CodeTaskEngine(tools: tools, preflight: preflight, runner: ChildProcessCommandRunner(),
+                                    workspaceRootURL: sandbox.rootURL.appendingPathComponent("code"), worktreesRootURL: sandbox.rootURL.appendingPathComponent("worktrees"),
+                                    isBashAllowed: true)
+        let task = try CodeTask.decode(blockBody: #"{"action":"repo_change","repo":"this","instructions":"add a function multiply(a,b) to utils.py with a unittest","deliver":"pr"}"#)
+        let repository = ResolvedRepository(remote: GitHubRemote(owner: RepoMatcher.localOnlyOwner, name: (repoPath as NSString).lastPathComponent), clonePath: repoPath, isLocalOnly: true)
+        let preparation = try await engine.prepare(task, repository: repository)
+        guard case .review(let review) = preparation else { Issue.record("expected a review, got \(preparation)"); return }
+
+        // The agent's own init event, as the validator saw it.
+        let transcript = try String(contentsOf: review.workspace.agentTranscriptURL, encoding: .utf8)
+        let initLine = try #require(transcript.split(separator: "\n").first { $0.contains(#""subtype":"init""#) })
+        let initEvent = try #require(JSONSerialization.jsonObject(with: Data(initLine.utf8)) as? [String: Any])
+        print("live init: tools \(initEvent["tools"] ?? "-") · plugins \(initEvent["plugins"] ?? "-") · mcp \(initEvent["mcp_servers"] ?? "-") · skills \((initEvent["skills"] as? [Any])?.count ?? -1) · permissionMode \(initEvent["permissionMode"] ?? "-")")
+        #expect(AgentInitValidator.namedEntries(initEvent["plugins"]).isEmpty)
+        #expect(AgentInitValidator.namedEntries(initEvent["mcp_servers"]).isEmpty)
+        #expect(review.agentReport?.outcome.isSuccess == true)
+
+        let worktree = try #require(review.worktree)
+        print("live diff (\(review.content.diffFiles.map(\.displayPath))):\n\(review.diffText.prefix(2000))")
+        #expect(review.diffText.contains("def multiply"))
+        let unittest = try await ChildProcess.run(executable: "/usr/bin/env", arguments: ["python3", "-m", "unittest", "-v"],
+                                                  environment: ["PATH": "/usr/bin:/bin:/opt/homebrew/bin", "PYTHONDONTWRITEBYTECODE": "1"], workingDirectory: worktree.path, timeouts: .total(60))
+        print("live unittest: exit \(unittest.exitStatus.map(String.init) ?? "signal")\n\(unittest.standardErrorText.suffix(800))")
+        #expect(unittest.succeeded)
+        // More tests than the one the scratch repo starts with: the new unittest ran too.
+        let ranLine = unittest.standardErrorText.split(separator: "\n").first { $0.hasPrefix("Ran ") }
+        let ranCount = ranLine.flatMap { Int($0.split(separator: " ")[1]) } ?? 0
+        #expect(ranCount >= 2, "\(ranCount) tests ran")
+
+        // The clone's branch is where it was; remove the Clicky worktree and branch.
+        #expect(try await sandbox.git(["rev-parse", "HEAD"], in: repoPath) == baseOID)
+        let manager = engine.worktreeManager
+        for entry in try await manager.clickyWorktrees(clonePath: repoPath) { try await manager.remove(entry, clonePath: repoPath) }
+        _ = try? await sandbox.git(["branch", "-D", worktree.branch], in: repoPath)
+        await manager.removeAllClickyRefs(clonePath: repoPath)
     }
 }
 

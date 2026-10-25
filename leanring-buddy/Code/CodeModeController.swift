@@ -278,7 +278,7 @@ final class CodeModeController: ObservableObject {
         setPhase("Checking code mode")
         let report = await ensurePreflight()
         guard report.isReady, let toolPaths else {
-            speak("Code mode can't run: \(report.failureReason ?? "the preflight failed").")
+            speak(report.spokenExplanation)
             return
         }
         setPhase("Finding \(task.repo)")
@@ -913,6 +913,8 @@ final class CodeModeController: ObservableObject {
             snapshot["droppedFlags"] = preflightReport.droppedOptionalFlags
             snapshot["viewer"] = preflightReport.viewerLogin ?? NSNull()
             snapshot["unremovableTools"] = preflightReport.unremovableTools
+            snapshot["disabledPlugins"] = preflightReport.disabledPluginSources
+            snapshot["preflightExplanation"] = preflightReport.spokenExplanation
         }
         if let review = activeReview {
             snapshot["review"] = [
@@ -945,6 +947,13 @@ final class CodeModeController: ObservableObject {
             "codeModeChipVisible": chipController.isVisible,
             "narrateProgress": ClickySettings.isCodeProgressNarrationEnabled
         ]
+        if let preflightReport {
+            // Why code mode is off and what to do, as it would be spoken.
+            status["preflightReady"] = preflightReport.isReady
+            status["preflightExplanation"] = preflightReport.spokenExplanation
+            status["preflightRemedy"] = preflightReport.remedy.map { $0 as Any } ?? NSNull()
+            status["disabledPlugins"] = preflightReport.disabledPluginSources
+        }
         if let activeQueuedTask {
             var taskStatus = describe(activeQueuedTask.task)
             if let frontWindow = activeQueuedTask.context.frontWindow {

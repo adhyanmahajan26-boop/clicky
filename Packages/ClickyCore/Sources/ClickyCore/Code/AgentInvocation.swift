@@ -22,6 +22,13 @@
 //  too, plus its own denyRead), and Bash text naming them or any path
 //  outside the worktree is denied. All of it is per invocation; nothing
 //  is written to ~/.claude.
+//  No plugins, user skills or user settings: --setting-sources never
+//  includes "user" (that is where installed plugins, ~/.claude/skills and
+//  the user's own allow rules come from), --settings sets every plugin the
+//  CLI still reports (its built-in ones, plus any the preflight probe saw)
+//  to false in "enabledPlugins" (flag settings outrank project settings),
+//  and --disable-slash-commands turns all skills off. AgentInitValidator
+//  still rejects an init that lists any plugin at all.
 //
 
 import Foundation
@@ -92,8 +99,15 @@ public struct AgentInvocation: Sendable {
     /// From the probe (ClickySettings.isCodeBashAllowed); ignored unless own and editing.
     public var bashAllowed: Bool
     public var session: Session
+    /// Plugin sources ("name@marketplace") set to false in --settings "enabledPlugins".
+    public var disabledPluginSources: [String]
 
-    public init(prompt: String, contextDirectoryPath: String, outboxDirectoryPath: String, emptyGHConfigDirectoryPath: String, ownership: Ownership, isReadOnly: Bool, bashAllowed: Bool, session: Session) {
+    /// Plugins the CLI itself ships ("…@builtin"); they load even with no setting sources.
+    /// The preflight probe adds any other plugin it sees (see CodePreflight).
+    public static let builtinPluginSources = ["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin", "cc-plugin-plugin-authoring@builtin"]
+
+    public init(prompt: String, contextDirectoryPath: String, outboxDirectoryPath: String, emptyGHConfigDirectoryPath: String, ownership: Ownership, isReadOnly: Bool, bashAllowed: Bool, session: Session,
+                disabledPluginSources: [String] = AgentInvocation.builtinPluginSources) {
         self.prompt = prompt
         self.contextDirectoryPath = contextDirectoryPath
         self.outboxDirectoryPath = outboxDirectoryPath
@@ -102,6 +116,7 @@ public struct AgentInvocation: Sendable {
         self.isReadOnly = isReadOnly
         self.bashAllowed = bashAllowed
         self.session = session
+        self.disabledPluginSources = disabledPluginSources
     }
 
     public var rulesFilePath: String { (contextDirectoryPath as NSString).appendingPathComponent("rules.md") }
@@ -117,9 +132,21 @@ public struct AgentInvocation: Sendable {
         return editingTools
     }
 
-    /// Project settings could widen the Bash allowlist (permission allow
-    /// rules merge across sources), so a run with Bash never loads them.
-    public var settingSources: String { ownership == .own && !includesBash ? "user,project" : "user" }
+    /// The tools the agent's system/init should list: `tools`, plus the
+    /// CLI's StructuredOutput tool when --json-schema is passed (it only
+    /// returns the final JSON). AgentInitValidator rejects anything else.
+    public static let structuredOutputTool = "StructuredOutput"
+
+    public func expectedInitTools(supportedFlags: Set<String>) -> [String] {
+        Self.isSupported("--json-schema", by: supportedFlags) ? tools + [Self.structuredOutputTool] : tools
+    }
+
+    /// Never "user": that source brings the user's installed plugins, their
+    /// ~/.claude/skills and their own permission allow rules. Project
+    /// settings could widen the Bash allowlist (permission allow rules merge
+    /// across sources), so a run with Bash, or on someone else's PR, loads no
+    /// settings files at all ("" — only --settings applies).
+    public var settingSources: String { ownership == .own && !includesBash ? "project" : "" }
 
     /// The home folder the sandbox paths are spelled out under.
     public var homeDirectoryPath: String = NSHomeDirectory()
@@ -169,7 +196,9 @@ public struct AgentInvocation: Sendable {
             FlagGroup(flag: "--json-schema", tokens: ["--json-schema", Self.outputJSONSchema]),
             // Headless: anything that would ask for permission is denied, never waits.
             FlagGroup(flag: "--permission-prompts", tokens: ["--permission-prompts", "none"]),
-            FlagGroup(flag: "--setting-sources", tokens: ["--setting-sources", settingSources])
+            FlagGroup(flag: "--setting-sources", tokens: ["--setting-sources", settingSources]),
+            // No skills (built-in, project or user) in the agent's run.
+            FlagGroup(flag: "--disable-slash-commands", tokens: ["--disable-slash-commands"])
         ]
         switch session {
         case .new(let identifier): groups.append(FlagGroup(flag: "--session-id", tokens: ["--session-id", identifier]))
@@ -284,6 +313,7 @@ public struct AgentInvocation: Sendable {
         if includesBash { permissions["allow"] = allowedPermissionRules }
         var settings: [String: Any] = [
             "disableAllHooks": true,
+            "enabledPlugins": Self.disabledPluginsObject(disabledPluginSources),
             "permissions": permissions,
             "env": environmentOverrides
         ]
@@ -302,6 +332,11 @@ public struct AgentInvocation: Sendable {
     }
 
     public var settingsJSON: String { Self.jsonString(settingsObject) }
+
+    /// {"source": false, …} for --settings "enabledPlugins".
+    public static func disabledPluginsObject(_ pluginSources: [String]) -> [String: Bool] {
+        Dictionary(pluginSources.map { ($0, false) }, uniquingKeysWith: { first, _ in first })
+    }
 
     static func jsonString(_ object: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return "{}" }
