@@ -90,6 +90,12 @@ public enum ClickySettings {
         public static let agentsSparkClickOpensDashboard = "v2.agents.sparkClickOpensDashboard"
         /// Int, finished agents kept in agents-history.json (default 50).
         public static let agentsHistoryLimit = "v2.agents.historyLimit"
+        /// Bool, default true: the Dynamic Island-style pill at the top of the screen.
+        public static let notchEnabled = "v2.notch.enabled"
+        /// "main" (default: the display with the menu bar, screens[0]) or "cursor".
+        public static let notchDisplay = "v2.notch.display"
+        /// Bool, default true: hide the pill while a full-screen app covers its display.
+        public static let notchHideOverFullscreen = "v2.notch.hideOverFullscreen"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -263,6 +269,22 @@ public enum ClickySettings {
     public static var isAgentsSparkClickEnabled: Bool { defaults.object(forKey: Keys.agentsSparkClickOpensDashboard) as? Bool ?? true }
     public static var agentsHistoryLimit: Int { min(500, max(10, defaults.object(forKey: Keys.agentsHistoryLimit) as? Int ?? AgentStore.defaultMaximumFinishedRecords)) }
     public static var isCodeProgressNarrationEnabled: Bool { defaults.object(forKey: Keys.codeNarrateProgress) as? Bool ?? true }
+
+    // MARK: - Notch
+
+    /// Which display the notch pill sits on.
+    public enum NotchDisplayChoice: String, CaseIterable, Sendable {
+        /// screens[0], the display with the menu bar (never NSScreen.main, which follows focus).
+        case main
+        /// The display the pointer is on.
+        case cursor
+    }
+
+    public static var isNotchEnabled: Bool { defaults.object(forKey: Keys.notchEnabled) as? Bool ?? true }
+    public static var notchDisplay: NotchDisplayChoice {
+        defaults.string(forKey: Keys.notchDisplay).flatMap(NotchDisplayChoice.init(rawValue:)) ?? .main
+    }
+    public static var isNotchHiddenOverFullScreen: Bool { defaults.object(forKey: Keys.notchHideOverFullscreen) as? Bool ?? true }
 
     // MARK: - P6.2 Type this for me
 

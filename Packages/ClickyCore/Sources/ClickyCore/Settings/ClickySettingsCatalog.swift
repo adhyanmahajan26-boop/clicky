@@ -117,6 +117,14 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.agentsHistoryLimit, kind: .integer(defaultValue: 50, range: 10...500, step: 10),
                             explanation: "Finished agents kept in the dashboard's history (agents-history.json)."),
 
+        // Notch.
+        ClickySettingsEntry(key: ClickySettings.Keys.notchEnabled, kind: .toggle(defaultValue: true),
+                            explanation: "Show the Clicky pill at the top centre of the screen (hover it for agents, the caption and quick actions)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.notchDisplay, kind: .choice(options: ClickySettings.NotchDisplayChoice.allCases.map(\.rawValue), defaultValue: "main"),
+                            explanation: "main: the display with the menu bar. cursor: the display the pointer is on."),
+        ClickySettingsEntry(key: ClickySettings.Keys.notchHideOverFullscreen, kind: .toggle(defaultValue: true),
+                            explanation: "Hide the pill while a full-screen app (a video, a game) covers its display."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

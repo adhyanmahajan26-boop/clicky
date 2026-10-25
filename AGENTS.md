@@ -80,7 +80,8 @@ Helper workers: the main request may reply with a short heads-up plus `[WORKER:s
 | `HandsFreeSessionCaptureStore.swift` | ~65 | Saves a session's full-resolution captures into its own folder and reveals them in Finder. |
 | `LiveScreenMark.swift` | ~140 | Live mark model and `[MARK:...]` tag parser (circles, arrows, numbered steps). Pure Foundation. |
 | `LiveScreenMarksOverlayView.swift` | ~215 | Draws live marks in the overlay with staggered draw-in animations. |
-| `ClaudeCompanionView.swift` | ~140 | Spark shape and the companion view: breathing/spinning coordinator spark plus 0–4 orbiting worker minis. |
+| `ClaudeCompanionView.swift` | ~140 | The companion view: breathing/spinning coordinator spark plus 0–4 orbiting worker minis. The spark shape itself is `ClickyCore/Companion/ClaudeSparkShape.swift` (shared with the notch). |
+| `Notch/NotchPanelController.swift` | ~380 | The Dynamic Island-style pill at the top centre of the screen (`v2.notch.*`): a never-key `NotchPanel` hosting ClickyCore's `NotchView`, fed from voiceState, `captionState`, `AgentsCenter.store` and Code mode. Hover expands it (0.4 s collapse grace); hidden while a full-screen window covers its display. Pure parts (geometry, status text, full-screen decision, hover state machine) are in `ClickyCore/Notch/`. |
 | `CompanionActivitySource.swift` | ~90 | Protocol for what the companion shows (thinking, workers), the 4-worker visible cap, and the simulated debug source. |
 | `CompanionWorkers.swift` | ~230 | `[WORKER:...]` tag parser and `CompanionWorkerRunner`: Haiku workers, 4 concurrent with a queue, cancellation, activity source. |
 | `ClaudeCodeBridge.swift` | ~280 | Runs Claude through the local Claude Code CLI on the user's subscription. Streams text, maps CLI errors, checks sign-in status. |
