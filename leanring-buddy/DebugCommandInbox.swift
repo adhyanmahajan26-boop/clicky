@@ -181,6 +181,19 @@ final class DebugCommandInbox {
 
     private func handleCommand(commandName: String, commandObject: [String: Any], commandIdentifier: String) {
         switch commandName {
+        case "sparkTest":
+            // The same as Setup's "Test the spark": spin plus three orbiting helpers for 6 s.
+            let simulatedSource = companionManager.simulatedCompanionActivitySource
+            companionManager.showOverlayForSparkTest()
+            simulatedSource.setSimulatedCoordinatorThinking(true)
+            simulatedSource.setSimulatedWorkingWorkerCount(3)
+            Task {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                simulatedSource.setSimulatedWorkingWorkerCount(0)
+                simulatedSource.setSimulatedCoordinatorThinking(false)
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["workers": 3], errorMessage: nil)
+
         case "ping":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: pingResult(), errorMessage: nil)
 

@@ -510,6 +510,14 @@ final class CompanionManager: ObservableObject {
         isOverlayVisible = true
     }
 
+    /// Setup's "Test the spark": the overlay has to be up to show it.
+    func showOverlayForSparkTest() {
+        guard !isOverlayVisible else { return }
+        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        isOverlayVisible = true
+        scheduleTransientHideIfNeeded()
+    }
+
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
         detectedElementDisplayFrame = nil

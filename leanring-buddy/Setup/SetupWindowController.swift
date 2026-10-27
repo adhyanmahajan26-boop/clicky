@@ -318,6 +318,20 @@ final class SetupModel: ObservableObject {
         }
     }
 
+    /// Shows the spark spinning with three helpers orbiting for 6 seconds,
+    /// so you can see the animation works on this Mac without asking anything.
+    func testSpark() {
+        let simulatedSource = companionManager.simulatedCompanionActivitySource
+        companionManager.showOverlayForSparkTest()
+        simulatedSource.setSimulatedCoordinatorThinking(true)
+        simulatedSource.setSimulatedWorkingWorkerCount(3)
+        Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            simulatedSource.setSimulatedWorkingWorkerCount(0)
+            simulatedSource.setSimulatedCoordinatorThinking(false)
+        }
+    }
+
     // MARK: - Finish
 
     func finish() {
@@ -427,8 +441,14 @@ private struct SetupView: View {
 
                 GroupBox(label: Text("5. Check everything").font(.headline)) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Button(model.isChecking ? "Checking…" : "Check everything") { model.checkEverything() }
-                            .disabled(model.isChecking)
+                        HStack {
+                            Button(model.isChecking ? "Checking…" : "Check everything") { model.checkEverything() }
+                                .disabled(model.isChecking)
+                            Button("Test the spark") { model.testSpark() }
+                        }
+                        Text("Test the spark: the spark by your pointer should spin with three small sparks orbiting it for 6 seconds.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
                         ForEach(model.checkLines, id: \.self) { line in
                             Text(line)
                                 .font(.system(size: 12))
