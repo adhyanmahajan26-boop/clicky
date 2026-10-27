@@ -43,9 +43,21 @@ final class QwenLocalTTSClient {
         FileManager.default.isExecutableFile(atPath: mlxServeExecutableURL.path)
     }
 
+    /// Another Mac's voice server (Setup), used instead of this Mac's mlx-serve.
+    static var remoteServerURL: URL? { ClickySettings.remoteVoiceServerURL }
+
+    /// The voice can work: MLX Core here, or a voice server on another Mac.
+    static var isAvailable: Bool { remoteServerURL != nil || isAvailableOnThisMac }
+
     /// 11234, or the debug override (v2.debug.ttsPortOverride).
     static var serverPort: Int { ClickySettings.ttsPortOverride ?? QwenTuning.serverPort }
-    static var serverBaseURL: URL { URL(string: "http://\(QwenTuning.serverHost):\(serverPort)")! }
+    static var serverBaseURL: URL { remoteServerURL ?? URL(string: "http://\(QwenTuning.serverHost):\(serverPort)")! }
+
+    /// The remote server's key as a bearer token (local requests carry none).
+    private static func authorize(_ request: inout URLRequest) {
+        guard remoteServerURL != nil, let serverKey = ClickySecrets.read(.voiceServerKey) else { return }
+        request.setValue("Bearer \(serverKey)", forHTTPHeaderField: "Authorization")
+    }
 
     private let urlSession: URLSession
     /// The TTS model the server has loaded (set by the supervisor).
@@ -84,6 +96,7 @@ final class QwenLocalTTSClient {
         speechRequest.httpMethod = "POST"
         speechRequest.timeoutInterval = 60
         speechRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        Self.authorize(&speechRequest)
         speechRequest.httpBody = try JSONSerialization.data(withJSONObject: QwenTuning.requestBody(
             model: modelIdentifier,
             speech: speech,
@@ -117,9 +130,11 @@ final class QwenLocalTTSClient {
     }
 
     /// GET /v1/models: the `data` array, or nil if nothing answers.
-    func fetchModels(timeoutSeconds: TimeInterval = 1.5) async -> [[String: Any]]? {
+    func fetchModels(timeoutSeconds: TimeInterval? = nil) async -> [[String: Any]]? {
+        let timeoutSeconds = timeoutSeconds ?? (Self.remoteServerURL != nil ? 5 : 1.5)
         var modelsRequest = URLRequest(url: Self.serverBaseURL.appendingPathComponent("v1/models"))
         modelsRequest.timeoutInterval = timeoutSeconds
+        Self.authorize(&modelsRequest)
         guard let (modelsData, response) = try? await urlSession.data(for: modelsRequest),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let modelsObject = try? JSONSerialization.jsonObject(with: modelsData) as? [String: Any]

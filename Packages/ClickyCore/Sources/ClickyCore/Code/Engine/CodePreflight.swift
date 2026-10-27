@@ -112,6 +112,7 @@ public struct CodePreflight: Sendable {
             !key.hasPrefix("ANTHROPIC_") && !["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK"].contains(key)
         }
         probeEnvironment["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+        if let apiKey = ClickySettings.anthropicAPIKeyForCalls { probeEnvironment["ANTHROPIC_API_KEY"] = apiKey }
         return probeEnvironment
     }
 

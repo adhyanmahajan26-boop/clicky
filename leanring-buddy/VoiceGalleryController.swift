@@ -43,7 +43,7 @@ final class VoiceGalleryController: NSObject, ObservableObject {
         previewSynthesizer.delegate = self
     }
 
-    private var isQwenAvailable: Bool { QwenLocalTTSClient.isAvailableOnThisMac }
+    private var isQwenAvailable: Bool { QwenLocalTTSClient.isAvailable }
 
     /// Re-reads the manifest, the installed voices and the settings.
     func refresh() {

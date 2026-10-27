@@ -130,6 +130,12 @@ public enum ClickySettings {
         public static let wakeFollowUpSeconds = "v2.wake.followUpSeconds"
         /// Bool, default true (P8): simple commands (volume, media, windows, apps, tabs, scrolling…) run locally without Claude.
         public static let voiceFastPathEnabled = "v2.voice.fastPath"
+        /// "subscription" (default: Claude Code's own sign-in) or "apiKey" (the Anthropic API key in the Keychain is passed as ANTHROPIC_API_KEY).
+        public static let brainAuthMode = "v2.brain.authMode"
+        /// String, default "": a Qwen voice server on another Mac (e.g. http://adhyans-mac-studio.local:11240). Its key is in the Keychain.
+        public static let remoteVoiceServerURL = "v2.voice.remote.url"
+        /// Bool, default false: the setup window was finished once (it opens by itself until then).
+        public static let setupCompleted = "v2.setup.completed"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -375,5 +381,41 @@ public enum ClickySettings {
     public static let defaultTypeForMeBlockedBundleIDs = defaultValueBlockedBundleIDs
     public static var typeForMeBlockedBundleIDs: Set<String> {
         Set(defaults.stringArray(forKey: Keys.typeForMeBlockedBundleIDs) ?? defaultTypeForMeBlockedBundleIDs)
+    }
+
+    // MARK: - Setup (brain sign-in and voice server)
+
+    public enum BrainAuthMode: String, CaseIterable, Sendable {
+        /// Claude Code's own sign-in (`claude auth login`, Pro or Max plan).
+        case subscription
+        /// An Anthropic API key from the Keychain, passed to Claude Code as ANTHROPIC_API_KEY.
+        case apiKey
+    }
+
+    public static var brainAuthMode: BrainAuthMode {
+        get { defaults.string(forKey: Keys.brainAuthMode).flatMap(BrainAuthMode.init(rawValue:)) ?? .subscription }
+        set { defaults.set(newValue.rawValue, forKey: Keys.brainAuthMode) }
+    }
+
+    /// The other Mac's voice server, or nil when the voice runs on this Mac.
+    public static var remoteVoiceServerURL: URL? {
+        get {
+            let text = (defaults.string(forKey: Keys.remoteVoiceServerURL) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, let url = URL(string: text), let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https", url.host != nil else { return nil }
+            return url
+        }
+        set { defaults.set(newValue?.absoluteString ?? "", forKey: Keys.remoteVoiceServerURL) }
+    }
+
+    public static var isSetupCompleted: Bool {
+        get { defaults.object(forKey: Keys.setupCompleted) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.setupCompleted) }
+    }
+
+    /// The API key for Claude Code when the owner picked API-key mode, else nil.
+    public static var anthropicAPIKeyForCalls: String? {
+        guard brainAuthMode == .apiKey else { return nil }
+        return ClickySecrets.read(.anthropicAPIKey)
     }
 }

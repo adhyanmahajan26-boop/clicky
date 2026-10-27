@@ -38,7 +38,7 @@ final class CompanionSpeechOutput: ObservableObject {
 
     /// Qwen is the default whenever MLX Core is installed.
     @Published private(set) var usesQwenLocalVoice: Bool =
-        QwenLocalTTSClient.isAvailableOnThisMac
+        QwenLocalTTSClient.isAvailable
             && (UserDefaults.standard.object(forKey: CompanionSpeechOutput.usesQwenLocalVoiceUserDefaultsKey) as? Bool ?? true)
 
     /// The coordinator currently speaking (an answer or a one-off line).

@@ -70,6 +70,23 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             menuBarPanelManager?.showPanelOnLaunch()
         }
         registerAsLoginItemIfNeeded()
+        if SetupWindowController.isNeededAtLaunch {
+            showSetupWindow()
+        }
+    }
+
+    /// Opening Clicky again while it runs (its menu-bar icon may be hidden
+    /// behind the notch) brings back Setup and the panel.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !Self.isHostingUnitTests else { return false }
+        showSetupWindow()
+        return false
+    }
+
+    private func showSetupWindow() {
+        SetupWindowController.show(companionManager: companionManager) { [weak self] in
+            self?.menuBarPanelManager?.showPanelOnLaunch()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

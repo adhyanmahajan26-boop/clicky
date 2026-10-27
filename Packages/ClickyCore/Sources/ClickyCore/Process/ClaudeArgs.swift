@@ -103,6 +103,7 @@ public struct ClaudeArgs: Sendable {
     public static func environment(base baseEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
         var callEnvironment = baseEnvironment
         callEnvironment["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+        if let apiKey = ClickySettings.anthropicAPIKeyForCalls { callEnvironment["ANTHROPIC_API_KEY"] = apiKey }
         return callEnvironment
     }
 

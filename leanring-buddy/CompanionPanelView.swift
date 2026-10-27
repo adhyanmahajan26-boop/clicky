@@ -881,6 +881,7 @@ struct CompanionPanelView: View {
     private var claudeCodeConnectionButton: some View {
         Button(action: {
             companionManager.refreshClaudeCodeSignInStatus()
+            if !companionManager.isClaudeCodeSignedIn { openSetupWindow() }
         }) {
             HStack(spacing: 8) {
                 Image(systemName: companionManager.isClaudeCodeSignedIn ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -888,11 +889,13 @@ struct CompanionPanelView: View {
                     .foregroundColor(companionManager.isClaudeCodeSignedIn ? DS.Colors.success : DS.Colors.warning)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(companionManager.isClaudeCodeSignedIn ? "Claude subscription connected" : "Claude Code is signed out")
+                    Text(companionManager.isClaudeCodeSignedIn
+                         ? (ClickySettings.brainAuthMode == .apiKey ? "Claude API key connected" : "Claude subscription connected")
+                         : "Claude isn't connected")
                         .font(.system(size: 12, weight: .semibold))
                     Text(companionManager.isClaudeCodeSignedIn
-                         ? "Answers run on your plan through Claude Code."
-                         : "Run claude auth login in Terminal, then click here.")
+                         ? (ClickySettings.brainAuthMode == .apiKey ? "Answers are billed to your API key." : "Answers run on your plan through Claude Code.")
+                         : "Click to open Setup.")
                         .font(.system(size: 10))
                         .foregroundColor(DS.Colors.textTertiary)
                 }
@@ -912,6 +915,10 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    private func openSetupWindow() {
+        SetupWindowController.show(companionManager: companionManager) {}
     }
 
     // MARK: - Footer
@@ -942,6 +949,23 @@ struct CompanionPanelView: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .medium))
                     Text("Agents…")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .padding(.leading, 10)
+
+            Spacer()
+
+            Button(action: {
+                openSetupWindow()
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Setup…")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundColor(DS.Colors.textTertiary)
@@ -1190,7 +1214,7 @@ private struct CompanionVoicePickerRow: View {
 
     private var voiceMenu: some View {
         Menu {
-            if QwenLocalTTSClient.isAvailableOnThisMac {
+            if QwenLocalTTSClient.isAvailable {
                 Button("Qwen · local AI voice (best)") {
                     speechOutput.selectQwenLocalVoice()
                     speechOutput.previewVoice()

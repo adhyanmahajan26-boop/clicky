@@ -387,6 +387,8 @@ final class ClaudeCodeBridge {
     /// user to run `claude auth login` instead of failing silently.
     static func checkIsSignedIn() async -> Bool {
         guard let claudeCodeExecutableURL = locateClaudeCodeExecutable() else { return false }
+        // API-key mode signs every call in with the saved key.
+        if ClickySettings.brainAuthMode == .apiKey { return ClickySettings.anthropicAPIKeyForCalls != nil }
 
         return await Task.detached {
             let authStatusProcess = Process()

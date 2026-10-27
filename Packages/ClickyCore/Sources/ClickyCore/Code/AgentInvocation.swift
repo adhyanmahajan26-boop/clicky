@@ -397,6 +397,8 @@ public struct AgentInvocation: Sendable {
             !key.hasPrefix("ANTHROPIC_") && !Self.strippedEnvironmentKeys.contains(key)
         }
         for (key, value) in environmentOverrides { agentEnvironment[key] = value }
+        // API-key mode: the owner's own key is the agent's only way to sign in.
+        if let apiKey = ClickySettings.anthropicAPIKeyForCalls { agentEnvironment["ANTHROPIC_API_KEY"] = apiKey }
         return agentEnvironment
     }
 

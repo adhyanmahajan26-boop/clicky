@@ -163,6 +163,14 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.articleMaximumCharacters, kind: .integer(defaultValue: 30_000, range: 5_000...60_000, step: 5_000),
                             explanation: "The most characters of an article Clicky reads and sends to Claude for highlights and notes."),
 
+        // Setup (brain sign-in and voice server).
+        ClickySettingsEntry(key: ClickySettings.Keys.brainAuthMode, kind: .choice(options: ClickySettings.BrainAuthMode.allCases.map(\.rawValue), defaultValue: "subscription"),
+                            explanation: "subscription: Claude Code's own sign-in. apiKey: the Anthropic API key saved in Setup."),
+        ClickySettingsEntry(key: ClickySettings.Keys.remoteVoiceServerURL, kind: .text(defaultValue: ""),
+                            explanation: "A Qwen voice server on another Mac (set in Setup). Empty means this Mac's own voice."),
+        ClickySettingsEntry(key: ClickySettings.Keys.setupCompleted, kind: .toggle(defaultValue: false),
+                            explanation: "The Setup window was finished once (it opens by itself until then)."),
+
         // Other.
         ClickySettingsEntry(key: ClickySettings.Keys.typeForMeEnabled, kind: .toggle(defaultValue: false),
                             explanation: "Turn on the type-for-me feature."),

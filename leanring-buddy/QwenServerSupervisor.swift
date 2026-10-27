@@ -60,6 +60,16 @@ final class QwenServerSupervisor: ObservableObject {
         }
     }
 
+    /// Setup changed where the voice runs: forget the old server and connect again.
+    func reconnect() {
+        superviseTask?.cancel()
+        superviseTask = nil
+        isReady = false
+        isUnavailable = false
+        status = "Qwen not started"
+        start()
+    }
+
     /// A request failed hard (connection refused, bad status): check again,
     /// respawning at most once per minute.
     func serverMayHaveDied() {
@@ -84,6 +94,12 @@ final class QwenServerSupervisor: ObservableObject {
     // MARK: - Supervision
 
     private func supervise() async {
+        // Another Mac's server: nothing to adopt or spawn, just reach it.
+        if let remoteServerURL = QwenLocalTTSClient.remoteServerURL {
+            status = "Qwen connecting to \(remoteServerURL.host ?? "voice server")…"
+            await connectAndWarm(modelsTimeoutSeconds: 10)
+            return
+        }
         let port = QwenLocalTTSClient.serverPort
         let lsofOutput = await Self.runLsof(port: port)
         let isResponding = await client.fetchModels() != nil
@@ -119,8 +135,15 @@ final class QwenServerSupervisor: ObservableObject {
             status = "Qwen connecting…"
         }
 
-        guard let models = await waitForModels(timeoutSeconds: QwenTuning.serverStartupTimeoutSeconds) else {
-            markUnavailable("Qwen unavailable: server didn't answer")
+        await connectAndWarm(modelsTimeoutSeconds: QwenTuning.serverStartupTimeoutSeconds)
+    }
+
+    /// Waits for the server's model list, then warms the model with "Hi.".
+    private func connectAndWarm(modelsTimeoutSeconds: TimeInterval) async {
+        guard let models = await waitForModels(timeoutSeconds: modelsTimeoutSeconds) else {
+            markUnavailable(QwenLocalTTSClient.remoteServerURL != nil
+                            ? "Qwen unavailable: voice server didn't answer (same Wi-Fi? right key?)"
+                            : "Qwen unavailable: server didn't answer")
             return
         }
         client.loadedModelIdentifier = QwenSupervisor.ttsModelIdentifier(fromModels: models)
