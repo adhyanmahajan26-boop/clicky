@@ -68,3 +68,49 @@ struct ResearchTests {
         #expect(ResearchPrompts.fileStem(topic: "Black holes: basics!", date: Date(timeIntervalSince1970: 0)).hasPrefix("black-holes-basics-"))
     }
 }
+
+struct ResearchTriggerHardPhrasesTests {
+    @Test func linkJobsInTheOwnersWords() {
+        let linkJobs: [(String, Int)] = [
+            ("search these 3 links on my screen using haiku agents", 3),
+            ("spawn haiku agents and research the links on my screen", 3),
+            ("use two helpers to read these two articles", 2),
+            ("summarize these four pages", 4),
+            ("hey claudia check out the top three results", 3),
+            ("compare these 2 sites for me", 2),
+            ("deploy sub agents on these links", 3),
+            ("go through the 3 links on the screen with high coo agents", 3),
+            ("read these articles with helpers", 3)
+        ]
+        for (phrase, count) in linkJobs {
+            let request = ResearchTrigger.parse(phrase)
+            #expect(request?.source == .links(count: count), "\(phrase)")
+        }
+    }
+
+    @Test func notLinkJobs() {
+        for phrase in ["search the web for the best electric cars of 2026", "read this article and highlight the important parts",
+                       "open these links", "what's on this page", "point at the search bar", "whiteboard how links in a chain work"] {
+            if case .links = ResearchTrigger.parse(phrase)?.source { Issue.record("\(phrase) became a links job") }
+        }
+    }
+
+    @Test func pickerParsesAndFallsBack() {
+        #expect(ResearchLinkPicker.parsePick("Sure: [3, 7, 9]", candidateCount: 10) == [3, 7, 9])
+        #expect(ResearchLinkPicker.parsePick("[3, 3, 42, 1]", candidateCount: 10) == [3, 1])
+        let window = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let candidates = [
+            ResearchLinkCandidate(url: URL(string: "https://www.google.com/")!, text: "Google", frame: CGRect(x: 10, y: 10, width: 60, height: 20)),
+            ResearchLinkCandidate(url: URL(string: "https://example.com/login")!, text: "Sign in", frame: CGRect(x: 900, y: 10, width: 60, height: 20)),
+            ResearchLinkCandidate(url: URL(string: "https://cardekho.com/ev")!, text: "67 Electric Cars in India 2026", frame: CGRect(x: 100, y: 200, width: 400, height: 24)),
+            ResearchLinkCandidate(url: URL(string: "https://carwale.com/ev")!, text: "Electric Cars in India - October 2026", frame: CGRect(x: 100, y: 300, width: 400, height: 24)),
+            ResearchLinkCandidate(url: URL(string: "https://caranddriver.com/ev")!, text: "Best Electric Vehicles for 2026, Tested", frame: CGRect(x: 100, y: 400, width: 400, height: 24)),
+            ResearchLinkCandidate(url: URL(string: "https://offscreen.com/x")!, text: "Below the fold result title", frame: CGRect(x: 100, y: 1200, width: 400, height: 24))
+        ]
+        let visible = ResearchLinkPicker.visibleCandidates(candidates, windowFrame: window)
+        #expect(!visible.contains { $0.url.host == "offscreen.com" })
+        let picked = ResearchLinkPicker.heuristicPick(visible, count: 3, pageURL: URL(string: "https://www.google.com/search?q=ev"))
+        #expect(picked.map { $0.url.host! } == ["cardekho.com", "carwale.com", "caranddriver.com"])
+        #expect(ResearchLinkPicker.unwrapRedirect(URL(string: "https://www.google.com/url?q=https://carwale.com/ev&sa=U")!).host == "carwale.com")
+    }
+}

@@ -20,8 +20,18 @@ import ClickyCore
 import Foundation
 
 @MainActor
-final class ResearchController {
+final class ResearchController: CompanionActivitySource {
     private weak var companionManager: CompanionManager?
+    /// Research helpers orbit the spark like the brain's own workers.
+    private(set) var workers: [CompanionWorkerActivity] = []
+    var coordinatorIsThinking: Bool { false }
+    var onActivityChanged: (() -> Void)?
+
+    private func setHelper(_ agentID: String, title: String, isWorking: Bool) {
+        workers.removeAll { $0.id == agentID }
+        if isWorking { workers.append(CompanionWorkerActivity(id: agentID, workerTitle: title, isWorking: true)) }
+        onActivityChanged?()
+    }
     private var researchTask: Task<Void, Never>?
     private var parentAgentID: String?
     /// For researchStatus (tests): the last run's outcome.
@@ -49,6 +59,8 @@ final class ResearchController {
         guard let researchTask else { return false }
         researchTask.cancel()
         self.researchTask = nil
+        workers.removeAll()
+        onActivityChanged?()
         companionManager?.agentsCenter.finish(parentAgentID, status: .cancelled)
         lastStatus["state"] = "cancelled"
         return true
@@ -68,19 +80,33 @@ final class ResearchController {
         self.parentAgentID = parentAgentID
         agentsCenter.setCancelHandler(parentAgentID) { [weak self] in self?.cancel() }
         lastStatus = ["state": "collecting", "topic": topic]
-        let screenLinks: [URL]
-        if case .links(let count) = request.source, request.namedURLs.count < count {
-            screenLinks = Self.linksOnScreen(maximum: count, allowsLocalHostForTests: allowsLocalHostForTests)
-        } else {
-            screenLinks = []
-        }
+        let needsScreenLinks: Bool
+        if case .links(let count) = request.source, request.namedURLs.count < count { needsScreenLinks = true } else { needsScreenLinks = false }
 
         researchTask = Task { [weak self] in
             guard let self else { return }
+            // Chrome builds a page's accessibility tree on the first query: a fresh tab can show no links, so look again.
+            var screenPage: ScreenLinks?
+            if needsScreenLinks {
+                for attempt in 0..<4 {
+                    screenPage = Self.visibleLinksOnScreen(allowsLocalHostForTests: allowsLocalHostForTests)
+                    if screenPage != nil || Task.isCancelled { break }
+                    print("🔎 Research: no visible links yet (try \(attempt + 1)), looking again")
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                }
+            }
             var urls = request.namedURLs
             switch request.source {
             case .links(let count):
-                for url in screenLinks where !urls.contains(url) && urls.count < count { urls.append(url) }
+                if let screenPage {
+                    let picked = await Self.pickLinks(screenPage, request: request.question, count: count - urls.count)
+                    if let pageTitle = screenPage.pageTitle, !pageTitle.isEmpty {
+                        let pageName = pageTitle.replacingOccurrences(of: " - Google Chrome", with: "").replacingOccurrences(of: " - Google Search", with: "")
+                        self.lastStatus["topic"] = "Links from \(pageName.prefix(50))"
+                    }
+                    agentsCenter.log(parentAgentID, "picked \(picked.count) of \(screenPage.candidates.count) visible links (\(screenPage.pickMethod))")
+                    for url in picked where !urls.contains(url) && urls.count < count { urls.append(url) }
+                }
             case .topic(let text):
                 urls += await Self.searchResults(for: text, maximum: 3)
             }
@@ -98,7 +124,7 @@ final class ResearchController {
             self.lastStatus["state"] = "writing"
             let brief = await Self.synthesize(question: request.question, reports: reports)
             guard !Task.isCancelled else { return }
-            self.present(topic: topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
+            self.present(topic: self.lastStatus["topic"] as? String ?? topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
         }
     }
 
@@ -117,9 +143,12 @@ final class ResearchController {
         let jobs = urls.enumerated().map { (index: $0.offset + 1, url: $0.element) }
         return await withTaskGroup(of: Report.self) { group in
             for job in jobs {
-                let agentID = agentsCenter.begin(kind: .worker, title: "[\(job.index)] \(job.url.host ?? job.url.absoluteString)",
+                let helperTitle = "[\(job.index)] \(job.url.host ?? job.url.absoluteString)"
+                let agentID = agentsCenter.begin(kind: .worker, title: helperTitle,
                                                  model: CompanionWorkerRunner.workerClaudeModel, parentID: parentAgentID)
-                group.addTask {
+                setHelper(agentID, title: helperTitle, isWorking: true)
+                group.addTask { [weak self] in
+                    defer { Task { @MainActor in self?.setHelper(agentID, title: helperTitle, isWorking: false) } }
                     let page = await Self.fetchReadableText(job.url, allowsLocalHostForTests: allowsLocalHostForTests)
                     guard let page, !page.text.isEmpty, !ReadableText.looksWalled(page.text) else {
                         await MainActor.run { agentsCenter.finish(agentID, status: .failed, errorDescription: "couldn't read the page") }
@@ -205,29 +234,101 @@ final class ResearchController {
         return words.isEmpty ? "links" : words
     }
 
-    /// Links on the page in front (the browser window the article reader would pick), in page order,
-    /// one per site, search engines and non-public addresses skipped.
-    static func linksOnScreen(maximum: Int, allowsLocalHostForTests: Bool) -> [URL] {
-        guard let window = ArticleReader.findArticleWindow()?.windowElement else { return [] }
+    /// The visible links of the page in front (the browser window the article reader would pick).
+    struct ScreenLinks {
+        var candidates: [ResearchLinkCandidate]
+        var windowFrame: CGRect
+        var pageTitle: String?
+        var pageURL: URL?
+        var pickMethod = "model"
+    }
+
+    static func visibleLinksOnScreen(allowsLocalHostForTests: Bool) -> ScreenLinks? {
+        guard let target = ArticleReader.findArticleWindow(), let window = target.windowElement else { return nil }
         var queue: [AXUIElement] = [window]
         var visited = 0
-        var seenHosts = Set<String>()
-        var urls: [URL] = []
-        while !queue.isEmpty, visited < 6000, urls.count < maximum {
+        var candidates: [ResearchLinkCandidate] = []
+        var pageURL: URL?
+        while !queue.isEmpty, visited < 8000 {
             let element = queue.removeFirst()
             visited += 1
-            if TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element) == "AXLink" {
+            let role = TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element)
+            if role == "AXWebArea", pageURL == nil {
                 var value: CFTypeRef?
-                if AXUIElementCopyAttributeValue(element, kAXURLAttribute as CFString, &value) == .success, let url = value as? URL ?? (value as? NSURL) as URL?,
-                   ResearchURLPolicy.isAllowed(url, allowsLocalHostForTests: allowsLocalHostForTests), !ResearchURLPolicy.isSearchEngine(url),
-                   let host = url.host?.lowercased(), allowsLocalHostForTests || seenHosts.insert(host).inserted {
-                    if !urls.contains(url) { urls.append(url) }
+                if AXUIElementCopyAttributeValue(element, kAXURLAttribute as CFString, &value) == .success {
+                    pageURL = value as? URL ?? (value as? NSURL) as URL?
+                }
+            }
+            if role == "AXLink" {
+                var value: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXURLAttribute as CFString, &value) == .success,
+                   let rawURL = value as? URL ?? (value as? NSURL) as URL?,
+                   let frame = TypeForMeAccessibility.frameCG(of: element) {
+                    let url = ResearchLinkPicker.unwrapRedirect(rawURL)
+                    if ResearchURLPolicy.isAllowed(url, allowsLocalHostForTests: allowsLocalHostForTests), !ResearchURLPolicy.isSearchEngine(url) {
+                        candidates.append(ResearchLinkCandidate(url: url, text: linkText(element), frame: frame))
+                    }
                 }
                 continue
             }
             queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element))
         }
-        return urls
+        let visible = ResearchLinkPicker.visibleCandidates(candidates, windowFrame: target.windowFrameCG)
+        print("🔎 Research: \(candidates.count) links in the page, \(visible.count) visible")
+        guard !visible.isEmpty else { return nil }
+        return ScreenLinks(candidates: visible, windowFrame: target.windowFrameCG,
+                           pageTitle: TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: window), pageURL: pageURL)
+    }
+
+    /// A link's words: its title or description, else the text inside it.
+    private static func linkText(_ element: AXUIElement) -> String {
+        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute] {
+            if let text = TypeForMeAccessibility.stringAttribute(attribute, of: element)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                return text
+            }
+        }
+        var pieces: [String] = []
+        var queue = TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element)
+        var visited = 0
+        while !queue.isEmpty, visited < 40, pieces.joined(separator: " ").count < 160 {
+            let child = queue.removeFirst()
+            visited += 1
+            if let value = TypeForMeAccessibility.stringAttribute(kAXValueAttribute, of: child)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                pieces.append(value)
+            }
+            queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: child))
+        }
+        return pieces.joined(separator: " ")
+    }
+
+    /// The links he means: a quick Haiku call over the numbered visible links, else the heuristic.
+    static func pickLinks(_ screenPage: ScreenLinks, request: String, count: Int) async -> [URL] {
+        guard count > 0 else { return [] }
+        let prompt = ResearchLinkPicker.pickerPrompt(request: request, count: count, pageTitle: screenPage.pageTitle, pageURL: screenPage.pageURL,
+                                                     candidates: screenPage.candidates, windowFrame: screenPage.windowFrame)
+        let pickTask = Task { () -> [Int] in
+            guard let turn = try? await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+                systemPromptFileName: "research-link-picker-prompt.md",
+                systemPrompt: "You pick which links on a web page a person means. Reply with only a JSON array of numbers.",
+                contentBlocks: [.text(prompt)]) else { return [] }
+            return ResearchLinkPicker.parsePick(turn.text, candidateCount: screenPage.candidates.count)
+        }
+        let timeout = Task { try? await Task.sleep(nanoseconds: 25_000_000_000); pickTask.cancel() }
+        let picked = await pickTask.value
+        timeout.cancel()
+        if !picked.isEmpty {
+            print("🔎 Research: Haiku picked \(picked)")
+            return picked.prefix(count).map { screenPage.candidates[$0 - 1].url }
+        }
+        print("🔎 Research: picker failed, using the heuristic")
+        return ResearchLinkPicker.heuristicPick(screenPage.candidates, count: count, pageURL: screenPage.pageURL).map(\.url)
+    }
+
+    /// Search results with their titles (the board's links strip).
+    static func searchResultPages(for topic: String, maximum: Int) async -> [(url: URL, title: String)] {
+        guard let searchURL = ResearchSearchResults.searchURL(for: topic),
+              let html = await fetchHTML(searchURL, allowsLocalHostForTests: false) else { return [] }
+        return ResearchSearchResults.results(fromHTML: html, maximum: maximum)
     }
 
     static func searchResults(for topic: String, maximum: Int) async -> [URL] {

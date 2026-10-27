@@ -460,6 +460,7 @@ final class CompanionManager: ObservableObject {
         speechOutputClient.warmUpIfNeeded()
         addCompanionActivitySource(companionWorkerRunner)
         addCompanionActivitySource(simulatedCompanionActivitySource)
+        addCompanionActivitySource(researchController)
         // Agents dashboard: the brain record follows voiceState; code tasks report in; the spark opens it.
         codeModeController.agentsCenter = agentsCenter
         projectBridge.start()
@@ -1513,7 +1514,12 @@ final class CompanionManager: ObservableObject {
         if ClickySettings.isProjectBridgeEnabled { promptFeatures.insert(.projectBridge) }
         // P7: the ACTIONS section (open apps, click, type, highlight, summarize…).
         if ClickySettings.isActionsEnabled { promptFeatures.insert(.actions) }
-        return SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+        let mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+        // Unasked boards open small at the side of the screen.
+        if ClickySettings.isWhiteboardAutoEnabled && modeHint.line == nil && promptFeatures.contains(.whiteboard) {
+            return mainPrompt + "\n\n" + WhiteboardPromptSection.sideBoardText
+        }
+        return mainPrompt
     }
 
     /// How many earlier exchanges are sent with each question (text only).

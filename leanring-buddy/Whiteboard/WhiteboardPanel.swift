@@ -48,7 +48,7 @@ final class WhiteboardPanel: NSPanel {
     static var debugForcedDisplayID: CGDirectDisplayID?
 
     /// The board's frame on the screen the mouse is on (or the debug-forced display).
-    static func frame(fullScreen: Bool) -> NSRect {
+    static func frame(fullScreen: Bool, side: Bool = false) -> NSRect {
         let mouseLocation = NSEvent.mouseLocation
         let forcedScreen = debugForcedDisplayID.flatMap { displayID in
             NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID }
@@ -56,6 +56,12 @@ final class WhiteboardPanel: NSPanel {
         let screen = forcedScreen ?? NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         guard !fullScreen else { return visibleFrame }
+        if side {
+            // Docked at the right edge, a third of the screen wide: the owner keeps working next to it.
+            let width = min(visibleFrame.width - 32, max(520, visibleFrame.width * 0.34))
+            let height = min(visibleFrame.height - 32, max(460, visibleFrame.height * 0.72))
+            return NSRect(x: visibleFrame.maxX - width - 16, y: visibleFrame.midY - height / 2, width: width, height: height)
+        }
         return visibleFrame.insetBy(dx: visibleFrame.width * 0.06, dy: visibleFrame.height * 0.06)
     }
 }
@@ -67,20 +73,109 @@ struct WhiteboardPanelRootView: View {
 
     var body: some View {
         let palette = boardController.theme.palette
-        ZStack {
-            palette.background
-            if let scene = boardController.scene, let renderState = boardController.renderState {
-                WhiteboardView(scene: scene, state: renderState, theme: boardController.theme, reducesMotion: reducesMotion)
-            } else if !boardController.shellWorkerTitles.isEmpty {
-                WhiteboardShellView(workerTitles: boardController.shellWorkerTitles, palette: palette, reducesMotion: reducesMotion)
-            } else {
-                Text(AttributedString(boardController.placeholderText))
-                    .font(.system(size: 20, weight: .medium, design: .rounded))
-                    .foregroundColor(palette.mutedInk)
+        VStack(spacing: 0) {
+            ZStack(alignment: .topTrailing) {
+                palette.background
+                Group {
+                    if let scene = boardController.scene, let renderState = boardController.renderState {
+                        WhiteboardView(scene: scene, state: renderState, theme: boardController.theme, reducesMotion: reducesMotion)
+                    } else if !boardController.shellWorkerTitles.isEmpty {
+                        WhiteboardShellView(workerTitles: boardController.shellWorkerTitles, palette: palette, reducesMotion: reducesMotion)
+                    } else {
+                        Text(AttributedString(boardController.placeholderText))
+                            .font(.system(size: 20, weight: .medium, design: .rounded))
+                            .foregroundColor(palette.mutedInk)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                boardControls(palette: palette)
+            }
+            if !boardController.relatedLinks.isEmpty {
+                linksStrip(palette: palette)
+                    .frame(height: BoardController.linksStripHeight)
             }
         }
+        .background(palette.background)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(palette.ink.opacity(0.12), lineWidth: 1))
+    }
+}
+
+extension WhiteboardPanelRootView {
+    /// × closes; the arrows grow the side board into the big one (then full screen).
+    func boardControls(palette: WhiteboardPalette) -> some View {
+        HStack(spacing: 6) {
+            Button(action: { boardController.expand() }) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .help("Expand the board")
+            .accessibilityLabel("Expand board")
+            Button(action: { boardController.close() }) {
+                Image(systemName: "xmark")
+            }
+            .help("Close the board (Esc)")
+            .accessibilityLabel("Close board")
+        }
+        .buttonStyle(BoardControlButtonStyle(palette: palette))
+        .padding(10)
+    }
+
+    /// Search results for the board's topic, each clickable, plus "Deep research" and "Expand".
+    func linksStrip(palette: WhiteboardPalette) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Read more")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(palette.mutedInk)
+                Spacer()
+                Button(action: { boardController.startDeepResearch() }) {
+                    Label(boardController.deepResearchStarted ? "Researching with Haiku agents…" : "Deep research (Haiku agents)",
+                          systemImage: "sparkles")
+                }
+                .disabled(boardController.deepResearchStarted)
+                .accessibilityLabel("Deep research")
+                if boardController.isSideBoard {
+                    Button(action: { boardController.expand() }) {
+                        Label("Expand", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                }
+            }
+            .buttonStyle(BoardControlButtonStyle(palette: palette, isWide: true))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(boardController.relatedLinks) { link in
+                        Button(action: { NSWorkspace.shared.open(link.url) }) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(link.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                                Text(link.url.host ?? "").font(.system(size: 9)).foregroundColor(palette.mutedInk).lineLimit(1)
+                            }
+                            .frame(maxWidth: 220, alignment: .leading)
+                        }
+                        .buttonStyle(BoardControlButtonStyle(palette: palette, isWide: true))
+                        .help(link.url.absoluteString)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(palette.ink.opacity(0.04))
+    }
+}
+
+/// A small rounded button in the board's own colours.
+struct BoardControlButtonStyle: ButtonStyle {
+    let palette: WhiteboardPalette
+    var isWide = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: isWide ? 11 : 12, weight: .semibold))
+            .foregroundColor(palette.ink)
+            .padding(.horizontal, isWide ? 9 : 7)
+            .padding(.vertical, isWide ? 5 : 6)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.ink.opacity(configuration.isPressed ? 0.16 : 0.08)))
+            .contentShape(Rectangle())
     }
 }
 

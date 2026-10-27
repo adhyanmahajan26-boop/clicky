@@ -56,6 +56,13 @@ public enum WhiteboardPromptSection {
         everything else is drawn by you as usual: the agenda, the recap and any section you keep. never use helpers for a board about one idea.
         """#
 
+    /// Added when Clicky may draw without being asked (v2.whiteboard.auto) and the
+    /// turn has no MODE line: a small board docked at the side of the screen.
+    public static let sideBoardText = #"""
+        side boards:
+        even when the user didn't ask for a board, draw one when their question is a concept that a picture explains much better than words: how a system, machine or process works, an architecture, how several things compare, a cycle, math or an algorithm. it opens small at the side of their screen while you talk, so keep it to one idea: skip the agenda and recap sections, use one or two sections, at most 14 elements and 6 steps. the app shows search links for the topic under it, with buttons to expand the board or deep-research the links, so you can mention "the links under the board" when more reading would help. never draw one for simple facts, small talk, quick definitions, anything about the user's own screen or apps (where is…, how do i… in this app), or when they asked you to do something.
+        """#
+
     /// The system prompt of a helper drawing one board section (P6.7): CWB
     /// JSONL for that section only, every id starting with "<section>_".
     public static func workerSectionSystemPrompt(sectionIdentifier: String, sectionTitle: String) -> String {

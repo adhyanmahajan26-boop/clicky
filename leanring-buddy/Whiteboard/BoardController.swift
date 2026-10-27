@@ -29,6 +29,21 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     @Published private(set) var theme = WhiteboardTheme(settingValue: ClickySettings.whiteboardTheme)
     @Published private(set) var shellWorkerTitles: [String] = []
     @Published private(set) var placeholderText = "Drawing the board…"
+    /// A board Clicky drew without being asked opens small, docked at the side of the screen.
+    @Published private(set) var isSideBoard = false
+    /// Search results for the board's topic, shown under it with "Deep research" and "Expand".
+    @Published private(set) var relatedLinks: [RelatedLink] = []
+    @Published private(set) var deepResearchStarted = false
+    private var relatedLinksTitle: String?
+
+    struct RelatedLink: Identifiable, Equatable {
+        let url: URL
+        let title: String
+        var id: String { url.absoluteString }
+    }
+
+    /// Height of the links strip under the board.
+    static let linksStripHeight: CGFloat = 76
 
     static let realScreenDimmedAlpha: CGFloat = 0.25
     static let zoomStep: CGFloat = 1.2
@@ -77,6 +92,7 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     func showDrawingPlaceholder(title: String?, session: AnswerSession) {
         if let title, !title.isEmpty { placeholderText = "Drawing “\(title)”…" } else { placeholderText = "Drawing the board…" }
         clearOlderBoard(for: session)
+        decideSize(for: session)
         openPanel()
     }
 
@@ -85,6 +101,7 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         clearOlderBoard(for: session)
         shellSession = session
         shellWorkerTitles.append(workerTitle)
+        decideSize(for: session)
         openPanel()
     }
 
@@ -138,8 +155,10 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         shellWorkerTitles = []
         shellSession = nil
         turnRecord?.boardTitle = orderedBoard.title
+        decideSize(for: session)
         openPanel()
         rebuildScene()
+        fetchRelatedLinks(for: orderedBoard.title)
         let nextSegmentID = (scripts.last?.segments.last?.id ?? (firstSegmentID - 1)) + 1
         apply(narrator?.start(at: clockNow) ?? [])
         if scripts.isEmpty {
@@ -164,8 +183,53 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         publishState()
     }
 
+    /// Asked for ("whiteboard…", "diagram…") → the big board; drawn on Clicky's own initiative → the side board.
+    /// Decided once per board, when it first opens.
+    private func decideSize(for session: AnswerSession) {
+        guard panel?.isVisible != true else { return }
+        isSideBoard = !session.isWhiteboardTurn
+    }
+
+    private var currentPanelFrame: NSRect {
+        isSideBoard ? WhiteboardPanel.frame(fullScreen: false, side: true) : WhiteboardPanel.frame(fullScreen: ClickySettings.isWhiteboardFullScreen)
+    }
+
+    /// The side board grows into the big one (the board is laid out again for the new size).
+    func expand() {
+        if isSideBoard {
+            isSideBoard = false
+        } else {
+            guard !ClickySettings.isWhiteboardFullScreen else { return }
+            ClickySettings.isWhiteboardFullScreen = true
+        }
+        panel?.setFrame(currentPanelFrame, display: true, animate: true)
+        rebuildScene()
+    }
+
+    /// "Deep research": one Haiku agent per link, then a cited brief in the notes panel.
+    func startDeepResearch() {
+        guard !relatedLinks.isEmpty, let title = board?.title else { return }
+        deepResearchStarted = true
+        let request = ResearchRequest(source: .links(count: relatedLinks.count), question: "research \(title)", namedURLs: relatedLinks.map(\.url))
+        companionManager.researchController.start(request, speaks: true)
+    }
+
+    private func fetchRelatedLinks(for title: String) {
+        guard relatedLinksTitle != title else { return }
+        relatedLinksTitle = title
+        relatedLinks = []
+        deepResearchStarted = false
+        Task { [weak self] in
+            let pages = await ResearchController.searchResultPages(for: title, maximum: 4)
+            guard let self, self.relatedLinksTitle == title else { return }
+            self.relatedLinks = pages.map { RelatedLink(url: $0.url, title: $0.title) }
+            self.rebuildScene()
+            print("🔗 Board links for “\(title)”: \(self.relatedLinks.count)")
+        }
+    }
+
     private func openPanel() {
-        let panelFrame = WhiteboardPanel.frame(fullScreen: ClickySettings.isWhiteboardFullScreen)
+        let panelFrame = currentPanelFrame
         if panel == nil {
             let newPanel = WhiteboardPanel(contentRect: panelFrame)
             newPanel.delegate = self
@@ -234,7 +298,9 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     // MARK: - Scene
 
     private var viewportSize: CGSize {
-        let panelSize = panel?.contentView?.bounds.size ?? WhiteboardPanel.frame(fullScreen: ClickySettings.isWhiteboardFullScreen).size
+        var panelSize = panel?.contentView?.bounds.size ?? currentPanelFrame.size
+        // The links strip takes the bottom of the panel.
+        if !relatedLinks.isEmpty { panelSize.height = max(200, panelSize.height - Self.linksStripHeight) }
         return WhiteboardScene.viewportSize(forPanelSize: panelSize)
     }
 
@@ -486,8 +552,9 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
 
     func toggleFullScreen() {
         ClickySettings.isWhiteboardFullScreen.toggle()
+        isSideBoard = false
         guard let panel else { return }
-        panel.setFrame(WhiteboardPanel.frame(fullScreen: ClickySettings.isWhiteboardFullScreen), display: true, animate: false)
+        panel.setFrame(currentPanelFrame, display: true, animate: false)
         rebuildScene()
     }
 
@@ -643,7 +710,12 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     /// For the debug inbox's `boardCtl state`.
     func stateSummary() -> [String: Any] {
         var summary: [String: Any] = ["open": isOpen, "hasBoard": board != nil, "theme": theme.rawValue,
-                                      "fullScreen": ClickySettings.isWhiteboardFullScreen]
+                                      "fullScreen": ClickySettings.isWhiteboardFullScreen, "side": isSideBoard,
+                                      "links": relatedLinks.map(\.url.absoluteString), "deepResearchStarted": deepResearchStarted]
+        if let panelFrame = panel?.frame, isOpen {
+            summary["panelFrame"] = [panelFrame.minX, panelFrame.minY, panelFrame.width, panelFrame.height]
+            if let screenFrame = panel?.screen?.visibleFrame { summary["screenFrame"] = [screenFrame.minX, screenFrame.minY, screenFrame.width, screenFrame.height] }
+        }
         if let board {
             summary["title"] = board.title
             summary["sections"] = board.sections.map(\.id)

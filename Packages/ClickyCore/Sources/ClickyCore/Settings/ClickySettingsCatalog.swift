@@ -96,7 +96,7 @@ public enum ClickySettingsCatalog {
                             explanation: "Milliseconds added to the Qwen audio clock for captions."),
 
         // Whiteboard.
-        ClickySettingsEntry(key: ClickySettings.Keys.whiteboardAuto, kind: .toggle(defaultValue: false),
+        ClickySettingsEntry(key: ClickySettings.Keys.whiteboardAuto, kind: .toggle(defaultValue: true),
                             explanation: "Gate for the whiteboard prompt section (off by default)."),
         ClickySettingsEntry(key: ClickySettings.Keys.whiteboardTheme, kind: .choice(options: ["paper", "chalk", "dark"], defaultValue: "paper"),
                             explanation: "The board's look."),

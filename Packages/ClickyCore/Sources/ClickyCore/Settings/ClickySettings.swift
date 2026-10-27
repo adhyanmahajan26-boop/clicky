@@ -198,7 +198,8 @@ public enum ClickySettings {
         defaults.object(forKey: Keys.captionAVOffsetMs) as? Double ?? 0
     }
 
-    public static var isWhiteboardAutoEnabled: Bool { defaults.object(forKey: Keys.whiteboardAuto) as? Bool ?? false }
+    /// Default on: Clicky may draw a small side board for a complex concept without being asked.
+    public static var isWhiteboardAutoEnabled: Bool { defaults.object(forKey: Keys.whiteboardAuto) as? Bool ?? true }
     /// "paper" | "chalk" | "dark"; anything else reads as "paper".
     public static var whiteboardTheme: String {
         let theme = defaults.string(forKey: Keys.whiteboardTheme)?.lowercased() ?? "paper"

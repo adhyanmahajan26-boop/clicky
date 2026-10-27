@@ -598,6 +598,8 @@ final class DebugCommandInbox {
             case "pause": boardController.togglePause()
             case "export": result["exported"] = boardController.exportBoard()?.path ?? NSNull()
             case "close": boardController.close()
+            case "expand": boardController.expand()
+            case "deepResearch": boardController.startDeepResearch()
             case "state": break
             default:
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil,
