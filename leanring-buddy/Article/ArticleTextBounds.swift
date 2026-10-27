@@ -37,7 +37,10 @@ nonisolated enum ArticleTextBounds {
     static func lineRects(element: AXUIElement, runText: String, range: Range<Int>, webArea: AXUIElement?) -> Measurement {
         AXUIElementSetMessagingTimeout(element, 0.3)
         let runLength = runText.utf16.count
-        let clampedRange = max(0, range.lowerBound)..<min(runLength, range.upperBound)
+        // A run whose text came back shorter (or empty) than when it was read
+        // would make lowerBound > upperBound, which traps; clamp both ends.
+        let clampedLowerBound = min(max(0, range.lowerBound), runLength)
+        let clampedRange = clampedLowerBound..<max(clampedLowerBound, min(runLength, range.upperBound))
         guard !clampedRange.isEmpty else { return Measurement(lineRects: [], method: nil) }
 
         for method in [Method.boundsForRange, .textMarkers] {
