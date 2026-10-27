@@ -374,6 +374,15 @@ final class CompanionManager: ObservableObject {
     /// tracks the newest model in that family.
     @Published var selectedModel: String = ClickyModels.main
 
+    /// Silent mode: listen and answer on screen, never speak (v2.voice.silent).
+    @Published private(set) var isSilentModeEnabled = ClickySettings.isSilentModeEnabled
+
+    func setSilentModeEnabled(_ enabled: Bool) {
+        ClickySettings.isSilentModeEnabled = enabled
+        isSilentModeEnabled = enabled
+        if enabled { speechOutputClient.activeCoordinator?.bargeIn(.newQuestion) }
+    }
+
     func setSelectedModel(_ model: String) {
         ClickyModels.main = model
         selectedModel = ClickyModels.main
@@ -963,6 +972,14 @@ final class CompanionManager: ObservableObject {
 
     /// "stop listening" turns the wake word off until "start listening" or the menu toggle.
     private func performWakeListeningCommand(_ wakeListeningCommand: WakeListeningCommand, speaks: Bool) {
+        if wakeListeningCommand == .silentModeOn || wakeListeningCommand == .silentModeOff {
+            setSilentModeEnabled(wakeListeningCommand == .silentModeOn)
+            let confirmation = isSilentModeEnabled
+                ? "Silent mode on. I'm still listening; answers show on screen."
+                : "Okay, I'll talk again."
+            Task { try? await speechOutputClient.speakText(confirmation) }
+            return
+        }
         let enables = wakeListeningCommand == .startListening
         wakeWordController.setEnabled(enables)
         guard speaks else { return }
@@ -1869,6 +1886,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var captionState = CaptionState()
     private var captionHideTask: Task<Void, Never>?
     private static let captionHideDelaySeconds: UInt64 = 4
+    private static let silentCaptionHideDelaySeconds: UInt64 = 10
 
     /// The answer ended but the bubble stays up: it holds the marks' legend.
     private var isCaptionHeldForLegend = false
@@ -1917,7 +1935,9 @@ final class CompanionManager: ObservableObject {
         print("🧠 Conversation history: \(conversationHistory.count) exchanges\(wasInterrupted ? " (interrupted)" : "")")
         captionHideTask?.cancel()
         captionHideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.captionHideDelaySeconds * 1_000_000_000)
+            // Silent mode: the caption is the whole answer, so it stays up longer.
+            let hideDelaySeconds = ClickySettings.isSilentModeEnabled ? Self.silentCaptionHideDelaySeconds : Self.captionHideDelaySeconds
+            try? await Task.sleep(nanoseconds: hideDelaySeconds * 1_000_000_000)
             guard !Task.isCancelled, let self else { return }
             // The legend explains marks still on screen: keep it until they go.
             if !self.captionState.markLegend.isEmpty {

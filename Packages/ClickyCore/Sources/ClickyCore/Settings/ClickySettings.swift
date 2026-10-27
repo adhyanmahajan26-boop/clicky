@@ -134,6 +134,9 @@ public enum ClickySettings {
         public static let brainAuthMode = "v2.brain.authMode"
         /// String, default "": a Qwen voice server on another Mac (e.g. http://adhyans-mac-studio.local:11240). Its key is in the Keychain.
         public static let remoteVoiceServerURL = "v2.voice.remote.url"
+        /// Bool, default false: silent mode. Clicky still listens and answers (captions, marks,
+        /// boards, actions) but never speaks. "silent mode" / "talk again" or the panel toggle.
+        public static let silentMode = "v2.voice.silent"
         /// String model id for helper workers, research and mark checks (default claude-haiku-5-5).
         public static let modelsHelper = "v2.models.helper"
         /// String model id for the code agent (default claude-sonnet-5-5).
@@ -410,6 +413,11 @@ public enum ClickySettings {
             return url
         }
         set { defaults.set(newValue?.absoluteString ?? "", forKey: Keys.remoteVoiceServerURL) }
+    }
+
+    public static var isSilentModeEnabled: Bool {
+        get { defaults.object(forKey: Keys.silentMode) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.silentMode) }
     }
 
     public static var isSetupCompleted: Bool {

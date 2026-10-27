@@ -320,6 +320,9 @@ public struct WakeWordGate: Sendable {
 public enum WakeListeningCommand: Equatable, Sendable {
     case stopListening
     case startListening
+    /// Keep listening and answering, but show answers instead of speaking them.
+    case silentModeOn
+    case silentModeOff
 
     static let stopPhrases: Set<String> = [
         "stop listening", "stop listening for me", "pause listening", "stop the wake word", "turn off the wake word",
@@ -329,6 +332,14 @@ public enum WakeListeningCommand: Equatable, Sendable {
         "start listening", "resume listening", "start listening again", "listen again", "turn on the wake word",
         "turn on wake word", "start the wake word"
     ]
+    static let silentOnPhrases: Set<String> = [
+        "silent mode", "silent mode on", "turn on silent mode", "go silent", "be silent", "quiet mode", "quiet mode on",
+        "turn on quiet mode", "mute yourself", "dont talk", "stop talking out loud", "just listen", "only listen"
+    ]
+    static let silentOffPhrases: Set<String> = [
+        "silent mode off", "turn off silent mode", "talk again", "speak again", "you can talk again", "unmute yourself",
+        "quiet mode off", "turn off quiet mode", "start talking again"
+    ]
     static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "claudia", "clicky", "please", "now", "um", "uh", "so"]
 
     public static func parse(_ transcript: String) -> WakeListeningCommand? {
@@ -337,6 +348,8 @@ public enum WakeListeningCommand: Equatable, Sendable {
         let phrase = words.joined(separator: " ")
         if stopPhrases.contains(phrase) { return .stopListening }
         if startPhrases.contains(phrase) { return .startListening }
+        if silentOnPhrases.contains(phrase) { return .silentModeOn }
+        if silentOffPhrases.contains(phrase) { return .silentModeOff }
         return nil
     }
 }

@@ -77,11 +77,21 @@ final class CompanionSpeechOutput: ObservableObject {
     }
 
     /// A coordinator for one answer: the selected voice, the Mac voice behind it.
+    private let readingPaceEngine = ReadingPaceSpeechEngine()
+    /// A second one: the coordinator gives primary and fallback their own callbacks.
+    private let readingPaceFallbackEngine = ReadingPaceSpeechEngine()
+
     func makeCoordinator(host: SpeechCoordinatorHost) -> SpeechCoordinator {
         activeCoordinator?.bargeIn(.newQuestion)
         let usesQwen = isQwenPrimary
-        let primary: SpeechEngine = usesQwen ? qwenEngine : appleEngine
-        let fallback: SpeechEngine = usesQwen ? appleEngine : appleFallbackEngine
+        var primary: SpeechEngine = usesQwen ? qwenEngine : appleEngine
+        var fallback: SpeechEngine = usesQwen ? appleEngine : appleFallbackEngine
+        // Silent mode: nothing is spoken, but captions, marks and board steps
+        // keep the rhythm of a spoken answer (paced at reading speed).
+        if ClickySettings.isSilentModeEnabled {
+            primary = readingPaceEngine
+            fallback = readingPaceFallbackEngine
+        }
         let coordinator = SpeechCoordinator(primaryEngine: primary, fallbackEngine: fallback, host: host)
         activeCoordinator = coordinator
         return coordinator

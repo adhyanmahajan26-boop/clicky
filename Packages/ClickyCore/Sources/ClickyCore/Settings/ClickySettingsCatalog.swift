@@ -168,6 +168,8 @@ public enum ClickySettingsCatalog {
                             explanation: "subscription: Claude Code's own sign-in. apiKey: the Anthropic API key saved in Setup."),
         ClickySettingsEntry(key: ClickySettings.Keys.remoteVoiceServerURL, kind: .text(defaultValue: ""),
                             explanation: "A Qwen voice server on another Mac (set in Setup). Empty means this Mac's own voice."),
+        ClickySettingsEntry(key: ClickySettings.Keys.silentMode, kind: .toggle(defaultValue: false),
+                            explanation: "Silent mode: answers show as captions, marks and boards, but Clicky never speaks."),
         ClickySettingsEntry(key: ClickySettings.Keys.modelsHelper, kind: .text(defaultValue: ClickyModels.haiku),
                             explanation: "Model id for helper workers, research and mark checks."),
         ClickySettingsEntry(key: ClickySettings.Keys.modelsCode, kind: .text(defaultValue: ClickyModels.sonnet),

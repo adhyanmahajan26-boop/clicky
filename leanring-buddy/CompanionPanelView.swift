@@ -101,6 +101,12 @@ struct CompanionPanelView: View {
                 Spacer()
                     .frame(height: 8)
 
+                silentModeToggleRow
+                    .padding(.horizontal, 16)
+
+                Spacer()
+                    .frame(height: 8)
+
                 CodeModeSettingsRow(codeModeController: companionManager.codeModeController)
                     .padding(.horizontal, 16)
             }
@@ -632,6 +638,40 @@ struct CompanionPanelView: View {
     }
 
 
+
+    // MARK: - Silent Mode Toggle
+
+    private var silentModeToggleRow: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: companionManager.isSilentModeEnabled ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Silent mode")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                    Text("Listens and answers on screen, never speaks")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { companionManager.isSilentModeEnabled },
+                set: { companionManager.setSilentModeEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.accent)
+            .scaleEffect(0.8)
+        }
+        .padding(.vertical, 4)
+    }
 
     // MARK: - Show Clicky Cursor Toggle
 

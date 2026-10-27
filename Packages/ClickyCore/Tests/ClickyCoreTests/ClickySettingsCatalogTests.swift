@@ -68,3 +68,13 @@ struct ClickySettingsCatalogTests {
         #expect(legacy?.sectionName == "pre-v2")
     }
 }
+
+struct SilentModeCommandTests {
+    @Test func silentModePhrasesParse() {
+        #expect(WakeListeningCommand.parse("hey claudia silent mode") == .silentModeOn)
+        #expect(WakeListeningCommand.parse("just listen") == .silentModeOn)
+        #expect(WakeListeningCommand.parse("okay you can talk again") == .silentModeOff)
+        #expect(WakeListeningCommand.parse("silent mode off") == .silentModeOff)
+        #expect(WakeListeningCommand.parse("what is silent mode in iOS") == nil)
+    }
+}
