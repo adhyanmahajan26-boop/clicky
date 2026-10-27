@@ -188,6 +188,11 @@ final class HandsFreeListeningSession {
         }
 
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        // A tap with an empty format raises an Objective-C exception and kills the app.
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            print("⚠️ Hands-free: the mic has no usable format, not listening")
+            return
+        }
         print("🎙️ Hands-free: mic format \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channel(s), echo cancellation \(inputNode.isVoiceProcessingEnabled ? "on" : "off")")
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(

@@ -548,6 +548,12 @@ final class BuddyDictationManager: NSObject, ObservableObject {
 
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        // A tap with a 0 Hz / 0 channel format raises an Objective-C exception and kills the app
+        // (no mic permission yet, no input device, or the speech services are off).
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            throw NSError(domain: "BuddyDictationManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The microphone isn't available. Check Microphone permission in System Settings."])
+        }
 
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in

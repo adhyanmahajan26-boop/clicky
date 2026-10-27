@@ -151,7 +151,7 @@ final class ResearchController {
     private static func synthesize(question: String, reports: [Report]) async -> String {
         let prompt = ResearchPrompts.synthesisPrompt(question: question, reports: reports.map { ($0.index, $0.url, $0.title, $0.text) })
         do {
-            let turn = try await ClaudeCodeBridge(model: "sonnet").runTurn(systemPromptFileName: "research-synthesis-prompt.md",
+            let turn = try await ClaudeCodeBridge(model: ClickyModels.main).runTurn(systemPromptFileName: "research-synthesis-prompt.md",
                                                                            systemPrompt: ResearchPrompts.synthesisSystemPrompt,
                                                                            contentBlocks: [.text(prompt)])
             return turn.text.trimmingCharacters(in: .whitespacesAndNewlines)

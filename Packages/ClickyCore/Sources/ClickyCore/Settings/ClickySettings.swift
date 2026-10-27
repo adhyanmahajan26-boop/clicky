@@ -134,6 +134,10 @@ public enum ClickySettings {
         public static let brainAuthMode = "v2.brain.authMode"
         /// String, default "": a Qwen voice server on another Mac (e.g. http://adhyans-mac-studio.local:11240). Its key is in the Keychain.
         public static let remoteVoiceServerURL = "v2.voice.remote.url"
+        /// String model id for helper workers, research and mark checks (default claude-haiku-5-5).
+        public static let modelsHelper = "v2.models.helper"
+        /// String model id for the code agent (default claude-sonnet-5-5).
+        public static let modelsCode = "v2.models.code"
         /// Bool, default false: the setup window was finished once (it opens by itself until then).
         public static let setupCompleted = "v2.setup.completed"
     }

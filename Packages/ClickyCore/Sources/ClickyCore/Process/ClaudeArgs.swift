@@ -86,7 +86,7 @@ public struct ClaudeArgs: Sendable {
             "--verbose",
             "--strict-mcp-config",
             "--no-session-persistence",
-            "--model", "haiku",
+            "--model", ClickyModels.helper,
             "--setting-sources", ""
         ] + (disablesSkills ? ["--disable-slash-commands"] : []) + [
             "--settings", AgentInvocation.jsonString(probeSettings)

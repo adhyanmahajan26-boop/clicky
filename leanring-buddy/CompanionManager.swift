@@ -372,12 +372,12 @@ final class CompanionManager: ObservableObject {
     /// The Claude model used for voice responses. Persisted to UserDefaults.
     /// Stored as a Claude Code model alias ("sonnet" / "opus") so it always
     /// tracks the newest model in that family.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeCodeModelAlias") ?? "sonnet"
+    @Published var selectedModel: String = ClickyModels.main
 
     func setSelectedModel(_ model: String) {
-        selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeCodeModelAlias")
-        claudeCodeBridge.model = model
+        ClickyModels.main = model
+        selectedModel = ClickyModels.main
+        claudeCodeBridge.model = selectedModel
     }
 
     /// User preference for whether the Clicky cursor should be shown.

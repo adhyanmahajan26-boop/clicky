@@ -15,6 +15,7 @@
 import AppKit
 import ClickyCore
 import Combine
+import Speech
 import SwiftUI
 
 enum VoiceSource: String, CaseIterable, Identifiable {
@@ -43,11 +44,19 @@ final class SetupModel: ObservableObject {
     @Published private(set) var isTestingBrain = false
 
     @Published var voiceSource: VoiceSource
+
+    @Published var mainModel = ClickyModels.main { didSet { companionManager.setSelectedModel(mainModel) } }
+    @Published var helperModel = ClickyModels.helper { didSet { ClickyModels.helper = helperModel } }
+    @Published var codeModel = ClickyModels.code { didSet { ClickyModels.code = codeModel } }
     @Published var voiceServerURLField = ClickySettings.remoteVoiceServerURL?.absoluteString ?? ""
     @Published var voiceServerKeyField = ""
     @Published private(set) var hasSavedVoiceServerKey = ClickySecrets.read(.voiceServerKey) != nil
     @Published private(set) var voiceTestStatus = ""
     @Published private(set) var isTestingVoice = false
+
+    /// "Check everything": one line per thing Clicky needs, ✓ or ✗ with the fix.
+    @Published private(set) var checkLines: [String] = []
+    @Published private(set) var isChecking = false
 
     private let companionManager: CompanionManager
     let showPanel: () -> Void
@@ -129,7 +138,7 @@ final class SetupModel: ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: executablePath)
-                process.arguments = ["-p", "Reply with exactly one word: ready", "--model", "haiku", "--output-format", "text"]
+                process.arguments = ["-p", "Reply with exactly one word: ready", "--model", ClickyModels.main, "--output-format", "json"]
                 process.environment = ClaudeArgs.environment()
                 if let workingDirectoryURL = try? ClaudeArgs.prepareSessionWorkingDirectory() {
                     process.currentDirectoryURL = workingDirectoryURL
@@ -152,8 +161,18 @@ final class SetupModel: ObservableObject {
                 let output = String(data: outputData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let shortOutput = String(output.suffix(240))
-                if process.terminationStatus == 0, !output.isEmpty {
-                    continuation.resume(returning: (true, shortOutput))
+                // The JSON result names the model that really answered, so an old Claude Code shows up here.
+                // stderr notes can come before the JSON, which is the last line.
+                let jsonLine = output.split(separator: "\n").last.map(String.init) ?? output
+                if process.terminationStatus == 0,
+                   let resultObject = try? JSONSerialization.jsonObject(with: Data(jsonLine.utf8)) as? [String: Any],
+                   resultObject["is_error"] as? Bool != true {
+                    let answer = (resultObject["result"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let answeringModels = ((resultObject["modelUsage"] as? [String: Any])?.keys).map { $0.sorted().joined(separator: ", ") } ?? "unknown model"
+                    continuation.resume(returning: (true, "\(answer) (\(answeringModels))"))
+                } else if let resultObject = try? JSONSerialization.jsonObject(with: Data(jsonLine.utf8)) as? [String: Any] {
+                    let message = resultObject["result"] as? String ?? shortOutput
+                    continuation.resume(returning: (false, String(message.prefix(240)) + " If the model isn't found, update Claude Code: claude update"))
                 } else {
                     let hint = output.isEmpty ? "Claude Code exited with status \(process.terminationStatus)." : shortOutput
                     continuation.resume(returning: (false, hint))
@@ -237,6 +256,66 @@ final class SetupModel: ObservableObject {
         try? FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.copyItem(at: bundledClipURL, to: destinationURL)
         print("🔊 Setup: installed the bundled voice clip at \(destinationPath)")
+    }
+
+    // MARK: - Check everything
+
+    func checkEverything() {
+        isChecking = true
+        companionManager.refreshAllPermissions()
+        var lines: [String] = []
+        lines.append(companionManager.hasMicrophonePermission ? "✓ Microphone" : "✗ Microphone: grant it in the permissions panel")
+        lines.append(companionManager.hasAccessibilityPermission ? "✓ Accessibility"
+                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Clicky can't click or type")
+        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Clicky")
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        if speechStatus != .authorized {
+            lines.append("✗ Speech Recognition: not allowed yet (it's asked the first time you talk)")
+        } else if speechRecognizer?.isAvailable != true {
+            lines.append("✗ Speech Recognition: unavailable. Turn on Dictation in System Settings › Keyboard")
+        } else {
+            lines.append("✓ Speech Recognition" + (speechRecognizer?.supportsOnDeviceRecognition == true ? " (on-device)" : ""))
+        }
+        checkLines = lines + ["… checking Claude Code"]
+        let claudeCodeExecutablePath = claudeCodePath
+        Task {
+            var claudeLines: [String] = []
+            if let claudeCodeExecutablePath {
+                let version = await Self.runQuietly(executablePath: claudeCodeExecutablePath, arguments: ["--version"])
+                claudeLines.append("✓ Claude Code \(version.isEmpty ? "(version unknown)" : version)")
+                let (succeeded, output) = await Self.runClaudeTestCall(executablePath: claudeCodeExecutablePath)
+                claudeLines.append(succeeded ? "✓ Claude answers: \(output)" : "✗ Claude: \(output)")
+            } else {
+                claudeLines.append("✗ Claude Code isn't installed: press Install above")
+            }
+            let speechOutput = companionManager.speechOutputClient
+            if speechOutput.usesQwenLocalVoice {
+                let isReady = await speechOutput.qwenServerSupervisor.waitUntilReady(timeoutSeconds: 30)
+                claudeLines.append(isReady ? "✓ \(speechOutput.qwenServerSupervisor.status)" : "✗ \(speechOutput.qwenServerSupervisor.status) (the Mac voice speaks instead)")
+            } else {
+                claudeLines.append("✓ Voice: built-in Mac voice")
+            }
+            checkLines = lines + claudeLines
+            isChecking = false
+        }
+    }
+
+    private nonisolated static func runQuietly(executablePath: String, arguments: [String]) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executablePath)
+                process.arguments = arguments
+                let outputPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = FileHandle.nullDevice
+                guard (try? process.run()) != nil else { continuation.resume(returning: ""); return }
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                continuation.resume(returning: String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            }
+        }
     }
 
     // MARK: - Finish
@@ -323,12 +402,39 @@ private struct SetupView: View {
                 GroupBox(label: Text("2. Voice").font(.headline)) {
                     voiceSection.padding(8)
                 }
-                GroupBox(label: Text("3. Permissions").font(.headline)) {
+                GroupBox(label: Text("3. Models").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        modelPicker("Answers", selection: $model.mainModel)
+                        modelPicker("Helpers, research, mark checks", selection: $model.helperModel)
+                        modelPicker("Code tasks", selection: $model.codeModel)
+                        Text("Clicky passes these exact model ids to Claude Code.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+                GroupBox(label: Text("4. Permissions").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Clicky needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
                             .font(.system(size: 12))
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Open the permissions panel") { model.showPanel() }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+
+                GroupBox(label: Text("5. Check everything").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button(model.isChecking ? "Checking…" : "Check everything") { model.checkEverything() }
+                            .disabled(model.isChecking)
+                        ForEach(model.checkLines, id: \.self) { line in
+                            Text(line)
+                                .font(.system(size: 12))
+                                .foregroundColor(line.hasPrefix("✗") ? .orange : .primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -343,6 +449,17 @@ private struct SetupView: View {
             .padding(20)
         }
         .frame(minWidth: 520, minHeight: 600)
+    }
+
+    private func modelPicker(_ title: String, selection: Binding<String>) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(ClickyModels.options, id: \.identifier) { option in
+                Text(option.label).tag(option.identifier)
+            }
+            if !ClickyModels.options.contains(where: { $0.identifier == selection.wrappedValue }) {
+                Text(selection.wrappedValue).tag(selection.wrappedValue)
+            }
+        }
     }
 
     private var brainSection: some View {

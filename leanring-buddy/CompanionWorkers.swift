@@ -14,6 +14,7 @@
 //  running worker shows up as a mini spark orbiting the companion.
 //
 
+import ClickyCore
 import Foundation
 
 /// One sub-task the main brain asked for.
@@ -40,7 +41,7 @@ final class CompanionWorkerRunner: CompanionActivitySource {
     /// Workers run on Haiku: their sub-tasks are small, and speed matters
     /// more than depth since the user is waiting on the spoken answer. The
     /// main brain keeps whatever model the user picked.
-    static let workerClaudeModel = "haiku"
+    static var workerClaudeModel: String { ClickyModels.helper }
 
     /// A fresh bridge per worker so parallel requests never share state.
     static func makeWorkerClaudeCodeBridge() -> ClaudeCodeBridge {

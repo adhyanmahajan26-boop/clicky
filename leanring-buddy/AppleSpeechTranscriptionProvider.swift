@@ -32,6 +32,10 @@ final class AppleSpeechTranscriptionProvider: BuddyTranscriptionProvider {
         guard let speechRecognizer = Self.makeBestAvailableSpeechRecognizer() else {
             throw AppleSpeechTranscriptionProviderError(message: "dictation is not available on this mac.")
         }
+        // Off when Dictation / Siri is turned off or the speech service is down: say so instead of failing later.
+        guard speechRecognizer.isAvailable else {
+            throw AppleSpeechTranscriptionProviderError(message: "Speech recognition is off. Turn on Dictation in System Settings > Keyboard, then try again.")
+        }
 
         return try AppleSpeechTranscriptionSession(
             speechRecognizer: speechRecognizer,

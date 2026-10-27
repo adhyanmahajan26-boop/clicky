@@ -152,7 +152,7 @@ final class ClaudeCodeBridge {
         }
         let systemPromptFileURL = try ClaudeArgs.writePromptFile(named: systemPromptFileName, contents: systemPrompt)
         let claudeArgs = ClaudeArgs(
-            model: model,
+            model: ClickyModels.resolve(model),
             systemPromptFileURL: systemPromptFileURL,
             effortLevel: effortLevel,
             persistentSessionIdentifier: persistentSessionIdentifier,

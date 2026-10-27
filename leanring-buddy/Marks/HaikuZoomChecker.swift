@@ -24,7 +24,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class HaikuZoomChecker {
-    private let bridge = ClaudeCodeBridge(model: "haiku")
+    private let bridge = ClaudeCodeBridge(model: ClickyModels.helper)
     /// Bumped for every new question; a check for an older one applies nothing.
     private(set) var questionNumber = 0
 

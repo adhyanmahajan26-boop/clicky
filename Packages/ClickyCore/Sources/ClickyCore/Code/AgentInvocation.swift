@@ -57,7 +57,7 @@ public struct AgentInvocation: Sendable {
         case forkOwnerSession(identifier: String, fallbackNewIdentifier: String)
     }
 
-    public static let model = "sonnet"
+    public static var model: String { ClickyModels.code }
     public static let maximumTurns = 60
     public static let permissionMode = "acceptEdits"
     public static let forbiddenTokens = ["--dangerously-skip-permissions", "bypassPermissions", "--bare"]

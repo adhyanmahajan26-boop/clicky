@@ -597,7 +597,7 @@ private final class MockStepRunner: OutwardStepRunner {
         #expect(argv.first == "-p")
         #expect(value(after: "--output-format", in: argv) == "stream-json")
         #expect(argv.contains("--verbose") && argv.contains("--include-partial-messages") && argv.contains("--strict-mcp-config"))
-        #expect(value(after: "--model", in: argv) == "sonnet")
+        #expect(value(after: "--model", in: argv) == ClickyModels.code)
         #expect(value(after: "--permission-mode", in: argv) == "acceptEdits")
         #expect(value(after: "--max-turns", in: argv) == "60")
         #expect(value(after: "--add-dir", in: argv) == "/Users/me/.clicky/code/task1/ctx")
