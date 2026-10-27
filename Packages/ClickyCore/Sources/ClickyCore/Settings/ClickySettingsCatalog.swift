@@ -174,6 +174,10 @@ public enum ClickySettingsCatalog {
                             explanation: "Model id for helper workers, research and mark checks."),
         ClickySettingsEntry(key: ClickySettings.Keys.modelsCode, kind: .text(defaultValue: ClickyModels.sonnet),
                             explanation: "Model id for the Claude Code agent that edits code."),
+        ClickySettingsEntry(key: ClickySettings.Keys.updateFeedURL, kind: .text(defaultValue: ""),
+                            explanation: "Where updates come from (a GitHub latest-release API URL). Empty means Claudia's updates repo."),
+        ClickySettingsEntry(key: ClickySettings.Keys.updateAutoCheck, kind: .toggle(defaultValue: true),
+                            explanation: "Check for an update at launch and every 6 hours. Installing always waits for you to press Update."),
         ClickySettingsEntry(key: ClickySettings.Keys.setupCompleted, kind: .toggle(defaultValue: false),
                             explanation: "The Setup window was finished once (it opens by itself until then)."),
 

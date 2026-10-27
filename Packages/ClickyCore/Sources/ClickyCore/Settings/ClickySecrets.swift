@@ -15,6 +15,8 @@ public enum ClickySecrets {
     public enum Item: String, CaseIterable, Sendable {
         case anthropicAPIKey = "anthropic-api-key"
         case voiceServerKey = "voice-server-key"
+        /// Read-only GitHub token, only for a private updates repo.
+        case updateToken = "update-token"
     }
 
     static let service = "com.personal.clicky.secrets"

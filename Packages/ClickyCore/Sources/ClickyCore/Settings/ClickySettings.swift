@@ -141,6 +141,10 @@ public enum ClickySettings {
         public static let modelsHelper = "v2.models.helper"
         /// String model id for the code agent (default claude-sonnet-5-5).
         public static let modelsCode = "v2.models.code"
+        /// String, default "": the updates feed (a GitHub "latest release" API URL). Empty = UpdateFeed.defaultFeedURL.
+        public static let updateFeedURL = "v2.update.feedURL"
+        /// Bool, default true: check for an update at launch and every 6 hours (installing always waits for the owner).
+        public static let updateAutoCheck = "v2.update.autoCheck"
         /// Bool, default false: the setup window was finished once (it opens by itself until then).
         public static let setupCompleted = "v2.setup.completed"
     }
@@ -420,6 +424,13 @@ public enum ClickySettings {
         get { defaults.object(forKey: Keys.silentMode) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.silentMode) }
     }
+
+    public static var updateFeedURL: URL {
+        let text = (defaults.string(forKey: Keys.updateFeedURL) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // https only (plain http just for a loopback test feed).
+        return URL(string: text).flatMap { $0.scheme == "https" || ($0.scheme == "http" && $0.host == "127.0.0.1") ? $0 : nil } ?? UpdateFeed.defaultFeedURL
+    }
+    public static var isUpdateAutoCheckEnabled: Bool { defaults.object(forKey: Keys.updateAutoCheck) as? Bool ?? true }
 
     public static var isSetupCompleted: Bool {
         get { defaults.object(forKey: Keys.setupCompleted) as? Bool ?? false }

@@ -257,6 +257,8 @@ final class CompanionManager: ObservableObject {
     private(set) lazy var projectBridge = ProjectBridgeController(companionManager: self)
     /// P9: background research with Haiku helpers ("research these links").
     private(set) lazy var researchController = ResearchController(companionManager: self)
+    /// One-click updates from the updates repo.
+    let updateController = UpdateController()
 
     /// P6.2 "Type this for me": the <type> card, its confirm gate and the insertion.
     private(set) lazy var typeForMeController = TypeForMeController { [weak self] text in
@@ -461,6 +463,7 @@ final class CompanionManager: ObservableObject {
         addCompanionActivitySource(companionWorkerRunner)
         addCompanionActivitySource(simulatedCompanionActivitySource)
         addCompanionActivitySource(researchController)
+        updateController.startAutomaticChecks()
         // Agents dashboard: the brain record follows voiceState; code tasks report in; the spark opens it.
         codeModeController.agentsCenter = agentsCenter
         projectBridge.start()

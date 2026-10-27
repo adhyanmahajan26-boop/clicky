@@ -60,6 +60,16 @@ final class SetupModel: ObservableObject {
 
     private let companionManager: CompanionManager
     let showPanel: () -> Void
+    var updateController: UpdateController { companionManager.updateController }
+    @Published var updateTokenField = ""
+    @Published private(set) var hasSavedUpdateToken = ClickySecrets.read(.updateToken) != nil
+
+    func saveUpdateToken() {
+        ClickySecrets.write(.updateToken, value: updateTokenField)
+        updateTokenField = ""
+        hasSavedUpdateToken = ClickySecrets.read(.updateToken) != nil
+        Task { await updateController.check() }
+    }
 
     init(companionManager: CompanionManager, showPanel: @escaping () -> Void) {
         self.companionManager = companionManager
@@ -460,6 +470,12 @@ private struct SetupView: View {
                     .padding(8)
                 }
 
+                GroupBox(label: Text("6. Updates").font(.headline)) {
+                    UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
+                                  hasSavedToken: model.hasSavedUpdateToken, saveToken: { model.saveUpdateToken() })
+                        .padding(8)
+                }
+
                 HStack {
                     Spacer()
                     Button("Done") { model.finish() }
@@ -578,5 +594,60 @@ private struct SetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+/// Version, Check for updates / Update now, and the optional token for a private updates repo.
+private struct UpdateSection: View {
+    @ObservedObject var updateController: UpdateController
+    @Binding var tokenField: String
+    let hasSavedToken: Bool
+    let saveToken: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("This is Clicky \(updateController.currentVersionLabel)")
+                    .font(.system(size: 12))
+                Spacer()
+                if let release = updateController.availableRelease {
+                    Button("Update now to build \(release.build)") { updateController.installAvailableUpdate() }
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Check for updates") { Task { await updateController.check() } }
+                        .disabled(updateController.state == .checking)
+                }
+            }
+            Text(statusLine)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let release = updateController.availableRelease, !release.notes.isEmpty {
+                Text(release.notes)
+                    .font(.system(size: 11))
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                SecureField(hasSavedToken ? "Updates token saved (only for a private updates repo)" : "Updates token (only for a private updates repo)",
+                            text: $tokenField)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") { saveToken() }
+                    .disabled(tokenField.isEmpty)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var statusLine: String {
+        switch updateController.state {
+        case .idle: return "Clicky checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
+        case .checking: return "Checking…"
+        case .upToDate: return "✓ You have the newest build."
+        case .available: return "A newer build is ready. Clicky quits, updates itself and reopens."
+        case .installing(let message): return message
+        case .failed(let message): return "✗ \(message)"
+        }
     }
 }

@@ -181,6 +181,20 @@ final class DebugCommandInbox {
 
     private func handleCommand(commandName: String, commandObject: [String: Any], commandIdentifier: String) {
         switch commandName {
+        case "updateCheck":
+            Task {
+                await self.companionManager.updateController.check()
+                let state = self.companionManager.updateController.state
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                           result: ["state": "\(state)", "currentBuild": self.companionManager.updateController.currentBuild], errorMessage: nil)
+            }
+
+        case "updateInstall":
+            // Downloads, verifies and relaunches into the new build (this process quits).
+            reply(commandIdentifier: commandIdentifier, isSuccess: companionManager.updateController.availableRelease != nil,
+                  result: ["state": "\(companionManager.updateController.state)"], errorMessage: nil)
+            companionManager.updateController.installAvailableUpdate()
+
         case "sparkTest":
             // The same as Setup's "Test the spark": spin plus three orbiting helpers for 6 s.
             let simulatedSource = companionManager.simulatedCompanionActivitySource

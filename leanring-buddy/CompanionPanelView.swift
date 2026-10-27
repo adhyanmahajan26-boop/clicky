@@ -122,6 +122,9 @@ struct CompanionPanelView: View {
             Spacer()
                 .frame(height: 12)
 
+            UpdateBannerRow(updateController: companionManager.updateController)
+                .padding(.horizontal, 16)
+
             Divider()
                 .background(DS.Colors.borderSubtle)
                 .padding(.horizontal, 16)
@@ -1298,5 +1301,40 @@ private struct CompanionVoicePickerRow: View {
         default: qualityLabel = ""
         }
         return "\(voice.name) (\(voice.language))\(qualityLabel)"
+    }
+}
+
+
+/// "Update available" with an Update now button, only while a newer build is out.
+private struct UpdateBannerRow: View {
+    @ObservedObject var updateController: UpdateController
+
+    var body: some View {
+        switch updateController.state {
+        case .available(let release):
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundColor(DS.Colors.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Update available")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(DS.Colors.textPrimary)
+                    Text("Build \(release.build)")
+                        .font(.system(size: 10))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                Spacer()
+                Button("Update now") { updateController.installAvailableUpdate() }
+                    .pointerCursor()
+            }
+            .padding(.vertical, 8)
+        case .installing(let message):
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(DS.Colors.textSecondary)
+                .padding(.vertical, 8)
+        default:
+            EmptyView()
+        }
     }
 }
