@@ -146,10 +146,10 @@ public struct NotchView: View {
             if layout.hasPhysicalNotch {
                 // The hardware notch hides the middle: logo in the left wing, status in the right.
                 HStack(spacing: 0) {
-                    logo.frame(width: NotchGeometry.physicalNotchWingWidth)
+                    logo.frame(width: layout.wingWidth)
                     Spacer().frame(width: layout.notchRect.width)
                     statusLabel
-                        .frame(width: NotchGeometry.physicalNotchWingWidth - 10, alignment: .leading)
+                        .frame(width: layout.wingWidth - 10, alignment: .leading)
                         .padding(.trailing, 10)
                 }
             } else if content.statusText.isEmpty {

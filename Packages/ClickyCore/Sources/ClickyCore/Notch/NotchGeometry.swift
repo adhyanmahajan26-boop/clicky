@@ -26,10 +26,14 @@ public struct NotchScreenMetrics: Equatable, Sendable {
     /// space left and right of the housing (nil without one).
     public var auxiliaryTopLeftArea: CGRect?
     public var auxiliaryTopRightArea: CGRect?
+    /// This display's menu bar height (frame top minus visible-frame top; 0 when it auto-hides).
+    public var menuBarHeight: CGFloat
 
-    public init(screenFrame: CGRect, safeAreaTopInset: CGFloat = 0, auxiliaryTopLeftArea: CGRect? = nil, auxiliaryTopRightArea: CGRect? = nil) {
+    public init(screenFrame: CGRect, safeAreaTopInset: CGFloat = 0, auxiliaryTopLeftArea: CGRect? = nil, auxiliaryTopRightArea: CGRect? = nil,
+                menuBarHeight: CGFloat = 0) {
         self.screenFrame = screenFrame
         self.safeAreaTopInset = safeAreaTopInset
+        self.menuBarHeight = menuBarHeight
         self.auxiliaryTopLeftArea = auxiliaryTopLeftArea
         self.auxiliaryTopRightArea = auxiliaryTopRightArea
     }
@@ -41,11 +45,14 @@ public struct NotchLayout: Equatable, Sendable {
     public let notchRect: CGRect
     public let hasPhysicalNotch: Bool
     public let screenFrame: CGRect
+    /// Logo / status wings beside a real notch, scaled to that notch.
+    public let wingWidth: CGFloat
 
-    public init(notchRect: CGRect, hasPhysicalNotch: Bool, screenFrame: CGRect) {
+    public init(notchRect: CGRect, hasPhysicalNotch: Bool, screenFrame: CGRect, wingWidth: CGFloat = NotchGeometry.physicalNotchWingWidth) {
         self.notchRect = notchRect
         self.hasPhysicalNotch = hasPhysicalNotch
         self.screenFrame = screenFrame
+        self.wingWidth = wingWidth
     }
 
     /// The height of the collapsed pill and of the expanded panel's header row.
@@ -110,17 +117,27 @@ public enum NotchGeometry {
             if notchWidth > 0 {
                 let notchHeight = metrics.safeAreaTopInset
                 let notchRect = CGRect(x: screenFrame.minX + leftArea.width, y: screenFrame.maxY - notchHeight, width: notchWidth, height: notchHeight)
-                return NotchLayout(notchRect: notchRect, hasPhysicalNotch: true, screenFrame: screenFrame)
+                // Wings in proportion to this Mac's notch (a 14" and a 13" Air differ), never wider than the free menu bar.
+                let wingWidth = min(max(notchWidth * 0.42, 56), 96, min(leftArea.width, rightArea.width) * 0.5)
+                return NotchLayout(notchRect: notchRect, hasPhysicalNotch: true, screenFrame: screenFrame, wingWidth: wingWidth)
             }
         }
-        let notchRect = CGRect(x: screenFrame.midX - virtualNotchSize.width / 2, y: screenFrame.maxY - virtualNotchSize.height,
-                               width: virtualNotchSize.width, height: virtualNotchSize.height)
+        // No notch: a virtual one in proportion to the display, as tall as its menu bar.
+        let size = virtualNotchSize(screenWidth: screenFrame.width, menuBarHeight: metrics.menuBarHeight)
+        let notchRect = CGRect(x: screenFrame.midX - size.width / 2, y: screenFrame.maxY - size.height, width: size.width, height: size.height)
         return NotchLayout(notchRect: notchRect, hasPhysicalNotch: false, screenFrame: screenFrame)
+    }
+
+    /// 12 % of the display's width (160–260 pt), as tall as its menu bar (24–40 pt; 32 when the bar auto-hides).
+    public static func virtualNotchSize(screenWidth: CGFloat, menuBarHeight: CGFloat) -> CGSize {
+        let width = min(max(screenWidth * 0.12, 160), 260)
+        let height = menuBarHeight > 0 ? min(max(menuBarHeight, 24), 40) : virtualNotchSize.height
+        return CGSize(width: width.rounded(), height: height.rounded())
     }
 
     /// The black body of the collapsed pill (without the top flares).
     public static func collapsedBodySize(layout: NotchLayout) -> CGSize {
-        let bodyWidth = layout.hasPhysicalNotch ? layout.notchRect.width + 2 * physicalNotchWingWidth : layout.notchRect.width
+        let bodyWidth = layout.hasPhysicalNotch ? layout.notchRect.width + 2 * layout.wingWidth : layout.notchRect.width
         return CGSize(width: bodyWidth, height: layout.notchRect.height)
     }
 

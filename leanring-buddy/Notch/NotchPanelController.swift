@@ -188,7 +188,8 @@ final class NotchPanelController: NSObject {
 
     private static func metrics(of screen: NSScreen) -> NotchScreenMetrics {
         NotchScreenMetrics(screenFrame: screen.frame, safeAreaTopInset: screen.safeAreaInsets.top,
-                           auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea, auxiliaryTopRightArea: screen.auxiliaryTopRightArea)
+                           auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea, auxiliaryTopRightArea: screen.auxiliaryTopRightArea,
+                           menuBarHeight: max(0, screen.frame.maxY - screen.visibleFrame.maxY))
     }
 
     private func refreshPlacementAndVisibility() {

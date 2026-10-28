@@ -7,13 +7,13 @@ import Testing
 // MARK: - Geometry
 
 struct NotchGeometryTests {
-    /// The owner's ultrawide: no camera housing, so a virtual 200 × 32 notch.
+    /// The owner's ultrawide: no camera housing, so a virtual notch 12 % of its width (capped at 260) × 32.
     static let ultrawide = NotchScreenMetrics(screenFrame: CGRect(x: 0, y: 0, width: 3440, height: 1440))
 
     @Test func ultrawideGetsAVirtualNotchFlushWithTheTopCentre() {
         let layout = NotchGeometry.layout(for: Self.ultrawide)
         #expect(!layout.hasPhysicalNotch)
-        #expect(layout.notchRect == CGRect(x: 1620, y: 1408, width: 200, height: 32))
+        #expect(layout.notchRect == CGRect(x: 1590, y: 1408, width: 260, height: 32))
         #expect(layout.notchRect.maxY == 1440)
         #expect(layout.notchRect.midX == 1720)
     }
@@ -33,7 +33,9 @@ struct NotchGeometryTests {
         #expect(layout.notchRect == CGRect(x: 662, y: 950, width: 188, height: 32))
         // Wings on both sides for the logo and the status.
         let collapsed = NotchGeometry.collapsedSize(layout: layout)
-        #expect(collapsed.width == 188 + 2 * NotchGeometry.physicalNotchWingWidth + 2 * NotchGeometry.topFlareRadius)
+        // Wings in proportion to the housing: 42 % of 188.
+        #expect(abs(layout.wingWidth - 188 * 0.42) < 0.001)
+        #expect(collapsed.width == 188 + 2 * layout.wingWidth + 2 * NotchGeometry.topFlareRadius)
         #expect(collapsed.height == 32)
         let frame = NotchGeometry.panelFrame(layout: layout, size: collapsed)
         #expect(frame.midX == layout.notchRect.midX)
@@ -43,13 +45,21 @@ struct NotchGeometryTests {
     @Test func safeAreaWithoutAuxiliaryAreasFallsBackToVirtual() {
         let layout = NotchGeometry.layout(for: NotchScreenMetrics(screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982), safeAreaTopInset: 32))
         #expect(!layout.hasPhysicalNotch)
-        #expect(layout.notchRect.size == NotchGeometry.virtualNotchSize)
+        #expect(layout.notchRect.size == NotchGeometry.virtualNotchSize(screenWidth: 1512, menuBarHeight: 0))
+        #expect(layout.notchRect.width == 181)
+    }
+
+    @Test func virtualNotchFollowsTheDisplaysProportionsAndMenuBar() {
+        let laptop = NotchGeometry.layout(for: NotchScreenMetrics(screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), menuBarHeight: 24))
+        #expect(laptop.notchRect.size == CGSize(width: 173, height: 24))
+        let small = NotchGeometry.virtualNotchSize(screenWidth: 1024, menuBarHeight: 50)
+        #expect(small == CGSize(width: 160, height: 40))
     }
 
     @Test func collapsedAndExpandedSizes() {
         let layout = NotchGeometry.layout(for: Self.ultrawide)
         let collapsed = NotchGeometry.collapsedSize(layout: layout)
-        #expect(collapsed == CGSize(width: 200 + 2 * NotchGeometry.topFlareRadius, height: 32))
+        #expect(collapsed == CGSize(width: 260 + 2 * NotchGeometry.topFlareRadius, height: 32))
 
         let empty = NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false)
         #expect(empty.width == NotchGeometry.expandedBodyWidth + 2 * NotchGeometry.topFlareRadius)
