@@ -195,6 +195,19 @@ final class DebugCommandInbox {
                   result: ["state": "\(companionManager.updateController.state)"], errorMessage: nil)
             companionManager.updateController.installAvailableUpdate()
 
+        case "closeTabs":
+            // Tests: {titles:[…]} closes the eval's own pages; {} closes the tabs Clicky opened.
+            let titles = commandObject["titles"] as? [String] ?? []
+            let closed = titles.isEmpty ? BrowserTabTracker.shared.closeTracked() : BrowserTabTracker.shared.closeTabs(titleContaining: titles)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["closed": closed], errorMessage: nil)
+
+        case "tabsStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["tracked": BrowserTabTracker.shared.trackedTabs.map(\.title),
+                           "chromeTabs": NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first.map {
+                               BrowserTabTracker.tabs(processIdentifier: $0.processIdentifier).compactMap { TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0) }
+                           } ?? []], errorMessage: nil)
+
         case "sparkTest":
             // The same as Setup's "Test the spark": spin plus three orbiting helpers for 6 s.
             let simulatedSource = companionManager.simulatedCompanionActivitySource

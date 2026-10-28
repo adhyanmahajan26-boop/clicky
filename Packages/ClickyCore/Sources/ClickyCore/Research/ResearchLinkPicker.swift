@@ -57,7 +57,7 @@ public enum ResearchLinkPicker {
             lines.append("\(index + 1). y=\(y) \"\(text)\" → \(candidate.url.absoluteString)")
         }
         lines.append("")
-        lines.append("Pick the \(count) links the owner means. They mean the main content: search results, the articles or items in a list, or sites they named. Never navigation, menus, logos, sign-in, ads, footers, \"more\" or filter links, or links back to the search engine. If they named sites or titles, pick those. Otherwise take one link per result (a result's title link, not its sub-links or \"page 2\" links), from different sites when you can, nearest the top first.")
+        lines.append("Pick the \(count) links the owner means. They mean the main content: search results, the articles or items in a list, or sites they named. Never navigation, menus, logos, sign-in, ads, footers, \"more\" or filter links, links back to the search engine, citation or footnote numbers, identifier/database links (Wikidata, ISBN, DOI, authority control) or sister projects (Commons, Wiktionary). If they named sites or titles, pick those. Otherwise take one link per result (a result's title link, not its sub-links or \"page 2\" links), from different sites when you can, nearest the top first.")
         lines.append("Answer with only a JSON array of the numbers, for example [3, 7, 9].")
         return lines.joined(separator: "\n")
     }

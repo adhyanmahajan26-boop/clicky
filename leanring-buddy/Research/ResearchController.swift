@@ -88,7 +88,7 @@ final class ResearchController: CompanionActivitySource {
             // Chrome builds a page's accessibility tree on the first query: a fresh tab can show no links, so look again.
             var screenPage: ScreenLinks?
             if needsScreenLinks {
-                for attempt in 0..<4 {
+                for attempt in 0..<8 {
                     screenPage = Self.visibleLinksOnScreen(allowsLocalHostForTests: allowsLocalHostForTests)
                     if screenPage != nil || Task.isCancelled { break }
                     print("🔎 Research: no visible links yet (try \(attempt + 1)), looking again")

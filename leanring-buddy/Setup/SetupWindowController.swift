@@ -46,6 +46,18 @@ final class SetupModel: ObservableObject {
     @Published var voiceSource: VoiceSource
 
     @Published var mainModel = ClickyModels.main { didSet { companionManager.setSelectedModel(mainModel) } }
+    /// The brain switch: which agent the answers run on (the model list below follows it).
+    @Published var brainProvider = BrainModel(setting: ClickyModels.main).provider {
+        didSet {
+            guard brainProvider != BrainModel(setting: mainModel).provider else { return }
+            if let firstModel = catalog.defaultModel(for: brainProvider) { mainModel = firstModel }
+            // Helpers follow the brain unless they already use it.
+            if BrainModel(setting: helperModel).provider != brainProvider {
+                helperModel = brainProvider == .claude ? ClickyModels.haiku : mainModel
+            }
+        }
+    }
+    let catalog = BrainCatalog.shared
     @Published var helperModel = ClickyModels.helper { didSet { ClickyModels.helper = helperModel } }
     @Published var codeModel = ClickyModels.code { didSet { ClickyModels.code = codeModel } }
     @Published var voiceServerURLField = ClickySettings.remoteVoiceServerURL?.absoluteString ?? ""
@@ -125,6 +137,18 @@ final class SetupModel: ObservableObject {
     /// One real call through Claude Code with the chosen sign-in.
     func testBrain() {
         saveBrainChoice()
+        let brainModel = BrainModel(setting: ClickyModels.main)
+        if !brainModel.isClaude {
+            isTestingBrain = true
+            brainTestStatus = "Asking \(brainModel.provider.displayName)…"
+            Task {
+                let (succeeded, output) = await Self.runOtherBrainTestCall(brainModel)
+                isTestingBrain = false
+                brainTestStatus = succeeded ? "✓ \(output)" : "✗ \(output)"
+                companionManager.refreshClaudeCodeSignInStatus()
+            }
+            return
+        }
         guard let claudeCodeExecutablePath = claudeCodePath else {
             brainTestStatus = "Claude Code isn't installed yet. Press Install, then Check."
             return
@@ -140,6 +164,17 @@ final class SetupModel: ObservableObject {
             isTestingBrain = false
             brainTestStatus = succeeded ? "✓ Claude answered: \(output)" : "✗ \(output)"
             companionManager.refreshClaudeCodeSignInStatus()
+        }
+    }
+
+    /// One real turn on a Codex / Cursor / OpenCode model.
+    static func runOtherBrainTestCall(_ brainModel: BrainModel) async -> (Bool, String) {
+        do {
+            let turn = try await BrainCLIRunner.runTurn(model: brainModel, systemPrompt: "Reply with exactly one word.",
+                                                        contentBlocks: [.text("Reply with exactly one word: ready")], onTextChunk: { _ in })
+            return (true, "\(brainModel.provider.displayName) answered: \(turn.text.prefix(60)) (\(brainModel.modelIdentifier))")
+        } catch {
+            return (false, error.localizedDescription)
         }
     }
 
@@ -294,8 +329,11 @@ final class SetupModel: ObservableObject {
             if let claudeCodeExecutablePath {
                 let version = await Self.runQuietly(executablePath: claudeCodeExecutablePath, arguments: ["--version"])
                 claudeLines.append("✓ Claude Code \(version.isEmpty ? "(version unknown)" : version)")
-                let (succeeded, output) = await Self.runClaudeTestCall(executablePath: claudeCodeExecutablePath)
-                claudeLines.append(succeeded ? "✓ Claude answers: \(output)" : "✗ Claude: \(output)")
+                let brainModel = BrainModel(setting: ClickyModels.main)
+                let (succeeded, output) = brainModel.isClaude
+                    ? await Self.runClaudeTestCall(executablePath: claudeCodeExecutablePath)
+                    : await Self.runOtherBrainTestCall(brainModel)
+                claudeLines.append(succeeded ? "✓ Brain answers: \(output)" : "✗ Brain: \(output)")
             } else {
                 claudeLines.append("✗ Claude Code isn't installed: press Install above")
             }
@@ -428,12 +466,7 @@ private struct SetupView: View {
                 }
                 GroupBox(label: Text("3. Models").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
-                        modelPicker("Answers", selection: $model.mainModel)
-                        modelPicker("Helpers, research, mark checks", selection: $model.helperModel)
-                        modelPicker("Code tasks", selection: $model.codeModel)
-                        Text("Clicky passes these exact model ids to Claude Code.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                        BrainSwitchSection(model: model, catalog: model.catalog)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -487,7 +520,7 @@ private struct SetupView: View {
         .frame(minWidth: 520, minHeight: 600)
     }
 
-    private func modelPicker(_ title: String, selection: Binding<String>) -> some View {
+    func modelPicker(_ title: String, selection: Binding<String>) -> some View {
         Picker(title, selection: selection) {
             ForEach(ClickyModels.options, id: \.identifier) { option in
                 Text(option.label).tag(option.identifier)
@@ -648,6 +681,63 @@ private struct UpdateSection: View {
         case .available: return "A newer build is ready. Clicky quits, updates itself and reopens."
         case .installing(let message): return message
         case .failed(let message): return "✗ \(message)"
+        }
+    }
+}
+
+
+/// The brain switch (Claude / ChatGPT / Cursor / OpenCode, the agents T3 Code drives) and its models.
+private struct BrainSwitchSection: View {
+    @ObservedObject var model: SetupModel
+    @ObservedObject var catalog: BrainCatalog
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Brain", selection: $model.brainProvider) {
+                ForEach(BrainProvider.allCases, id: \.self) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+            if let note = catalog.notes[model.brainProvider] {
+                Text(note).font(.system(size: 11)).foregroundColor(.orange)
+            }
+            modelMenu("Answers", selection: $model.mainModel, providers: [model.brainProvider])
+            modelMenu("Helpers, research, mark checks", selection: $model.helperModel, providers: BrainProvider.allCases)
+            modelMenu("Code tasks (Claude Code)", selection: $model.codeModel, providers: [.claude])
+            if BrainModel(setting: model.mainModel).sendsScreenshotsToThirdParty || BrainModel(setting: model.helperModel).sendsScreenshotsToThirdParty {
+                Text("This OpenCode model runs in someone else's cloud: your screenshots go to that provider. Local models (lmstudio/…) stay on your Mac.")
+                    .font(.system(size: 11)).foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text(catalog.isLoading ? "Loading models…" : "Models come from your subscriptions: Claude Code, Codex (ChatGPT), Cursor Agent and OpenCode, the same agents T3 Code uses.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Refresh") { catalog.load(force: true) }
+            }
+        }
+        .onAppear { catalog.load() }
+    }
+
+    private func modelMenu(_ title: String, selection: Binding<String>, providers: [BrainProvider]) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(providers, id: \.self) { provider in
+                let identifiers = catalog.models[provider] ?? []
+                if !identifiers.isEmpty {
+                    Section(provider.displayName) {
+                        ForEach(identifiers, id: \.self) { identifier in
+                            let setting = BrainModel(provider: provider, modelIdentifier: identifier).setting
+                            Text(catalog.label(for: setting)).tag(setting)
+                        }
+                    }
+                }
+            }
+            let known = providers.flatMap { provider in (catalog.models[provider] ?? []).map { BrainModel(provider: provider, modelIdentifier: $0).setting } }
+            if !known.contains(selection.wrappedValue) {
+                Text(catalog.label(for: selection.wrappedValue)).tag(selection.wrappedValue)
+            }
         }
     }
 }

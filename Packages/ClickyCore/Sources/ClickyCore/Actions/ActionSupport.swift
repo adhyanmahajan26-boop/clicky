@@ -184,3 +184,17 @@ public enum ActionsDebugAXError: Error, Equatable, Sendable {
         }
     }
 }
+
+/// "close the tabs you opened", "clean up your tabs", "close all the tabs you opened".
+public enum BrowserTabCleanupCommand {
+    public static func matches(_ transcript: String) -> Bool {
+        let text = transcript.lowercased().replacingOccurrences(of: "[^a-z ]", with: "", options: .regularExpression)
+        let patterns = [
+            "close (?:all )?(?:of )?(?:the |your |those )?tabs (?:that )?you opened",
+            "clean ?up (?:the |your |those )?tabs",
+            "close (?:all )?(?:of )?your tabs",
+            "close (?:the |those )?(?:search |clicky )tabs"
+        ]
+        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+}

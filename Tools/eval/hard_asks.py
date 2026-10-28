@@ -114,12 +114,20 @@ def case_research_google():
 
 
 def case_research_named():
+    """Names two of the sites that are on screen right now (Google's results change from day to day)."""
     open_page("https://www.google.com/search?q=best+electric+cars+2026")
-    ask("research the cardekho and car and driver links with two haiku agents")
+    ask("research these 3 links on my screen with haiku agents")
+    on_screen = [host(u) for u in wait_research().get("urls") or []]
+    if len(on_screen) < 3:
+        return False, f"couldn't find 3 results on screen: {on_screen}"
+    named = [on_screen[0], on_screen[2]]
+    spoken = [h.split(".")[0] for h in named]
+    open_page("https://www.google.com/search?q=best+electric+cars+2026")
+    ask(f"research the {spoken[0]} and {spoken[1]} links with two haiku agents")
     status = wait_research()
     hosts = sorted(host(u) for u in status.get("urls") or [])
-    ok = hosts == ["caranddriver.com", "cardekho.com"] and status.get("state") == "done"
-    return ok, f"got={hosts} state={status.get('state')}"
+    ok = hosts == sorted(named) and status.get("state") == "done"
+    return ok, f"named={spoken} got={hosts} state={status.get('state')}"
 
 
 def case_research_subagents():
@@ -150,7 +158,7 @@ def case_research_wiki():
     ask("spawn haiku agents and research the first 2 links in this article")
     status = wait_research()
     urls = status.get("urls") or []
-    chrome = [u for u in urls if re.search(r"(Special:|Main_Page|wikimediafoundation|Help:|Wikipedia:|Portal:|donate)", u)]
+    chrome = [u for u in urls if re.search(r"(Special:|Main_Page|wikimediafoundation|Help:|Wikipedia:|Portal:|donate|wikidata|commons\.wikimedia|#cite)", u)]
     ok = len(urls) == 2 and not chrome and status.get("state") == "done"
     return ok, f"got={urls} chrome={chrome} state={status.get('state')}"
 
@@ -235,9 +243,12 @@ def case_point():
 
 def case_search_action():
     ask("search google for weather in delhi")
-    time.sleep(6)
-    status = ctl({"cmd": "actionsStatus"}, 10).get("result") or {}
-    last = status.get("last") or {}
+    last = {}
+    for _ in range(15):
+        time.sleep(2)
+        last = (ctl({"cmd": "actionsStatus"}, 10).get("result") or {}).get("last") or {}
+        if "weather" in (last.get("goal") or "") and last.get("status") in ("done", "failed", "cancelled"):
+            break
     ok = last.get("status") == "done" and any("search" in step for step in last.get("steps") or [])
     return ok, f"status={last.get('status')} steps={last.get('steps')}"
 
@@ -253,6 +264,21 @@ def case_article():
         if len(highlights) >= 3:
             break
     return len(highlights) >= 3, f"highlights={len(highlights)}"
+
+
+def case_tabs():
+    """Two searches in a row leave one Clicky tab: the first search's tab is closed when the second opens."""
+    first, second = "weather in mumbai", "weather in chennai"
+    ask(f"search google for {first}")
+    time.sleep(10)
+    ask(f"search google for {second}")
+    time.sleep(10)
+    status = ctl({"cmd": "tabsStatus"}, 10).get("result") or {}
+    tabs = [t.lower() for t in status.get("chromeTabs") or []]
+    first_open = any(first in t for t in tabs)
+    second_open = any(second in t for t in tabs)
+    ok = second_open and not first_open
+    return ok, f"first open={first_open} second open={second_open} tracked={status.get('tracked')}"
 
 
 def case_silent():
@@ -277,6 +303,7 @@ CASES = {
     "point": case_point,
     "search-action": case_search_action,
     "article": case_article,
+    "tabs": case_tabs,
     "silent": case_silent,
 }
 
@@ -296,6 +323,11 @@ def main():
         except Exception as error:  # a broken case is a failed case
             passed, detail = False, f"error: {error}"
         results.append((name, passed, detail, time.time() - started))
+        # Close the pages this run opened (only these titles), so Chrome doesn't fill up with test tabs.
+        ctl({"cmd": "closeTabs", "titles": ["best electric cars 2026 - Google", "weather in delhi - Google", "weather in mumbai - Google",
+                                            "weather in chennai - Google", "James Webb Space Telescope - Wikipedia",
+                                            "Four-stroke engine - Wikipedia"]}, 10)
+        ctl({"cmd": "closeTabs"}, 10)
         print(f"{'PASS' if passed else 'FAIL'}  {name:16s} {time.time() - started:5.0f}s  {detail}", flush=True)
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")

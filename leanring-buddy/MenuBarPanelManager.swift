@@ -12,6 +12,7 @@
 //
 
 import AppKit
+import ClickyCore
 import SwiftUI
 
 extension Notification.Name {
@@ -73,37 +74,19 @@ final class MenuBarPanelManager: NSObject {
 
     /// Draws the clicky triangle as a menu bar icon. Uses the same shape
     /// and rotation as the in-app cursor so the menu bar icon matches.
+    /// Claudia's spark as a template image (macOS tints it for light and dark menu bars).
     private func makeClickyMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
-        let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
-        image.lockFocus()
-
-        let triangleSize = iconSize * 0.7
-        let cx = iconSize * 0.50
-        let cy = iconSize * 0.50
-        let height = triangleSize * sqrt(3.0) / 2.0
-
-        let top = CGPoint(x: cx, y: cy + height / 1.5)
-        let bottomLeft = CGPoint(x: cx - triangleSize / 2, y: cy - height / 3)
-        let bottomRight = CGPoint(x: cx + triangleSize / 2, y: cy - height / 3)
-
-        let angle = 35.0 * .pi / 180.0
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let dx = point.x - cx, dy = point.y - cy
-            let cosA = CGFloat(cos(angle)), sinA = CGFloat(sin(angle))
-            return CGPoint(x: cx + cosA * dx - sinA * dy, y: cy + sinA * dx + cosA * dy)
+        let image = NSImage(size: NSSize(width: iconSize, height: iconSize), flipped: true) { bounds in
+            let sparkRect = bounds.insetBy(dx: 1.5, dy: 1.5)
+            let path = ClaudeSparkShape().path(in: sparkRect).cgPath
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.addPath(path)
+            context.setFillColor(NSColor.black.cgColor)
+            context.fillPath()
+            return true
         }
-
-        let path = NSBezierPath()
-        path.move(to: rotate(top))
-        path.line(to: rotate(bottomLeft))
-        path.line(to: rotate(bottomRight))
-        path.close()
-
-        NSColor.black.setFill()
-        path.fill()
-
-        image.unlockFocus()
+        image.isTemplate = true
         return image
     }
 

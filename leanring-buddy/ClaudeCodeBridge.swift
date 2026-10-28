@@ -171,6 +171,8 @@ final class ClaudeCodeBridge {
     /// CLI's start-up. Already waiting with these settings: nothing to do.
     @discardableResult
     func prespawnStandbyProcess(systemPromptFileName: String, systemPrompt: String, effortLevel: String?, maximumTurns: Int? = nil) -> Bool {
+        // Only Claude Code keeps a process waiting; the other brains start per turn.
+        guard BrainModel(setting: ClickyModels.resolve(model)).isClaude else { return false }
         do {
             let launchSpec = try makeLaunchSpec(systemPromptFileName: systemPromptFileName, systemPrompt: systemPrompt,
                                                 effortLevel: effortLevel, maximumTurns: maximumTurns)
@@ -208,6 +210,12 @@ final class ClaudeCodeBridge {
         onPipelineStage: (@MainActor @Sendable (String) -> Void)? = nil,
         onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)? = nil
     ) async throws -> ClaudeTurnResult {
+        // The brain switch: a Codex / Cursor / OpenCode model runs one turn through its own CLI.
+        let brainModel = BrainModel(setting: ClickyModels.resolve(model))
+        if !brainModel.isClaude {
+            return try await BrainCLIRunner.runTurn(model: brainModel, systemPrompt: systemPrompt, contentBlocks: contentBlocks,
+                                                    persistentSessionIdentifier: persistentSessionIdentifier, onTextChunk: onTextChunk, onStreamEvent: onStreamEvent, onProcessReady: onProcessReady)
+        }
         let startTime = Date()
 
         let launchSpec = try makeLaunchSpec(systemPromptFileName: systemPromptFileName, systemPrompt: systemPrompt, effortLevel: effortLevel,
@@ -386,6 +394,9 @@ final class ClaudeCodeBridge {
     /// Asks Claude Code whether it's signed in, so the panel can tell the
     /// user to run `claude auth login` instead of failing silently.
     static func checkIsSignedIn() async -> Bool {
+        // Another brain: ready when its CLI is installed (it says so itself if it isn't signed in).
+        let brainModel = BrainModel(setting: ClickyModels.main)
+        if !brainModel.isClaude { return BrainCLIRunner.locateExecutable(for: brainModel.provider) != nil }
         guard let claudeCodeExecutableURL = locateClaudeCodeExecutable() else { return false }
         // API-key mode signs every call in with the saved key.
         if ClickySettings.brainAuthMode == .apiKey { return ClickySettings.anthropicAPIKeyForCalls != nil }

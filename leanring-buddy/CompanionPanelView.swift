@@ -737,11 +737,7 @@ struct CompanionPanelView: View {
 
             Spacer()
 
-            HStack(spacing: 0) {
-                modelOptionButton(label: "Haiku", modelID: ClickyModels.haiku)
-                modelOptionButton(label: "Sonnet", modelID: ClickyModels.sonnet)
-                modelOptionButton(label: "Opus", modelID: ClickyModels.opus)
-            }
+            BrainMenu(companionManager: companionManager, catalog: BrainCatalog.shared)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.white.opacity(0.06))
@@ -1336,5 +1332,39 @@ private struct UpdateBannerRow: View {
         default:
             EmptyView()
         }
+    }
+}
+
+
+/// The panel's brain switch: every model from every brain, grouped (Claude, ChatGPT, Cursor, OpenCode).
+private struct BrainMenu: View {
+    @ObservedObject var companionManager: CompanionManager
+    @ObservedObject var catalog: BrainCatalog
+
+    var body: some View {
+        Menu {
+            ForEach(BrainProvider.allCases, id: \.self) { provider in
+                let identifiers = catalog.models[provider] ?? []
+                if !identifiers.isEmpty {
+                    Section(provider.displayName) {
+                        ForEach(identifiers, id: \.self) { identifier in
+                            let setting = BrainModel(provider: provider, modelIdentifier: identifier).setting
+                            Button((companionManager.selectedModel == setting ? "✓ " : "") + catalog.label(for: setting)) {
+                                companionManager.setSelectedModel(setting)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            let current = BrainModel(setting: companionManager.selectedModel)
+            Text(current.isClaude ? catalog.label(for: companionManager.selectedModel) : "\(current.provider.displayName) · \(current.modelIdentifier)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textPrimary)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .onAppear { catalog.load() }
     }
 }

@@ -434,8 +434,11 @@ final class ActionExecutor {
             guard let url = target.url, let browserApplicationURL = target.browserApplicationURL else { return (.failed(reason: "no browser to open it in"), nil) }
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
+            // One Clicky tab at a time: the tabs of earlier searches close before the next one opens.
+            BrowserTabTracker.shared.closeEarlierTabs()
             do {
-                _ = try await NSWorkspace.shared.open([url], withApplicationAt: browserApplicationURL, configuration: configuration)
+                let browser = try await NSWorkspace.shared.open([url], withApplicationAt: browserApplicationURL, configuration: configuration)
+                BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
                 return (.done(detail: target.facts?.applicationName.map { "in \($0)" }), nil)
             } catch {
                 return (.failed(reason: "the browser didn't open the link"), nil)

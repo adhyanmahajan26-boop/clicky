@@ -1607,6 +1607,15 @@ final class CompanionManager: ObservableObject {
             turnOptions.onTurnFinished?(nil, nil)
             return
         }
+        // "close the tabs you opened": the browser tabs Clicky opened for searches and links.
+        if turnOptions.extraUserText == nil, BrowserTabCleanupCommand.matches(transcript) {
+            let closedCount = BrowserTabTracker.shared.closeTracked()
+            if turnOptions.speaksResponse {
+                Task { try? await speechOutputClient.speakText(closedCount == 0 ? "There are no tabs of mine open." : "Closed \(closedCount) tab\(closedCount == 1 ? "" : "s").") }
+            }
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
         // P7: "stop listening" / "start listening" switch the wake word (push-to-talk or a wake turn).
         if turnOptions.extraUserText == nil, let wakeListeningCommand = WakeListeningCommand.parse(transcript) {
             performWakeListeningCommand(wakeListeningCommand, speaks: turnOptions.speaksResponse)
