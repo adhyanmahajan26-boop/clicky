@@ -38,6 +38,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var notchPanelController: NotchPanelController?
     private let companionManager = CompanionManager()
     private var controlInbox: ClaudiaControlInbox?
+    /// Claudia's UI page (T3 Code's Claudia section), on 127.0.0.1 only.
+    private var uiServer: ClaudiaUIServer?
     #if DEBUG
     private var debugCommandInbox: DebugCommandInbox?
     #endif
@@ -79,6 +81,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         // Claudia inside T3 Code: the `claudia` MCP server talks to this running app through the control inbox.
         controlInbox = ClaudiaControlInbox(companionManager: companionManager)
         controlInbox?.start()
+        if let controlInbox {
+            uiServer = ClaudiaUIServer(controlInbox: controlInbox, companionManager: companionManager)
+            uiServer?.start()
+        }
         if SetupWindowController.isNeededAtLaunch {
             showSetupWindow()
         }

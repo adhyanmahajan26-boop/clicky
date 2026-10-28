@@ -67,7 +67,8 @@ final class ClaudiaControlInbox {
                 reply(identifier, ok: false, result: nil, error: "expected a JSON object with \"cmd\"")
                 continue
             }
-            handle(commandName, command, identifier)
+            _ = commandName
+            execute(command) { [weak self] ok, result, error in self?.reply(identifier, ok: ok, result: result, error: error) }
         }
     }
 
@@ -83,7 +84,11 @@ final class ClaudiaControlInbox {
 
     // MARK: - Commands
 
-    private func handle(_ commandName: String, _ command: [String: Any], _ identifier: String) {
+    /// Runs one command (from the inbox or Claudia's UI page) and answers through `respond`.
+    func execute(_ command: [String: Any], respond: @escaping @MainActor (Bool, Any?, String?) -> Void) {
+        let commandName = command["cmd"] as? String ?? ""
+        let identifier = "cmd-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
         switch commandName {
         case "status":
             reply(identifier, ok: true, result: [
@@ -124,8 +129,8 @@ final class ClaudiaControlInbox {
                 turnOptions: CompanionManager.TurnOptions(speaksResponse: speaks, keyUpDate: Date(), onTurnFinished: { [weak self] turnDirectoryURL, turnError in
                     Task { @MainActor in
                         let answer = turnDirectoryURL.flatMap { Self.spokenAnswer(inTurn: $0) } ?? ""
-                        self?.reply(identifier, ok: turnError == nil, result: ["answer": answer, "board": self?.companionManager.boardController.stateSummary() ?? [:]],
-                                    error: turnError.map { String(describing: $0) })
+                        respond(turnError == nil, ["answer": answer, "board": self?.companionManager.boardController.stateSummary() ?? [:]],
+                                turnError.map { String(describing: $0) })
                     }
                 })
             )
@@ -188,6 +193,59 @@ final class ClaudiaControlInbox {
             default: break
             }
             reply(identifier, ok: true, result: boardController.stateSummary(), error: nil)
+
+        case "settings":
+            // Claudia's UI page: read, and change any of the given keys.
+            if let brain = command["brain"] as? String, !brain.isEmpty { companionManager.setSelectedModel(brain) }
+            if let helper = command["helper"] as? String, !helper.isEmpty { ClickyModels.helper = helper }
+            if let silent = command["silentMode"] as? Bool { companionManager.setSilentModeEnabled(silent) }
+            if let sparkMode = (command["sparkMode"] as? String).flatMap(ClickySettings.SparkMode.init(rawValue:)) { ClickySettings.sparkMode = sparkMode }
+            if let screenName = command["claudiaScreen"] as? String { ClickySettings.claudiaScreenName = screenName }
+            if let autoBoard = command["autoBoard"] as? Bool { UserDefaults.standard.set(autoBoard, forKey: ClickySettings.Keys.whiteboardAuto) }
+            let catalog = BrainCatalog.shared
+            catalog.load()
+            reply(identifier, ok: true, result: [
+                "brain": companionManager.selectedModel,
+                "helper": ClickyModels.helper,
+                "silentMode": ClickySettings.isSilentModeEnabled,
+                "sparkMode": ClickySettings.sparkMode.rawValue,
+                "claudiaScreen": ClickySettings.claudiaScreenName,
+                "autoBoard": ClickySettings.isWhiteboardAutoEnabled,
+                "screens": NSScreen.screens.map(\.localizedName),
+                "models": Dictionary(uniqueKeysWithValues: BrainProvider.allCases.map { provider in
+                    (provider.rawValue, (catalog.models[provider] ?? []).map { BrainModel(provider: provider, modelIdentifier: $0).setting })
+                }),
+                "providerNames": Dictionary(uniqueKeysWithValues: BrainProvider.allCases.map { ($0.rawValue, $0.displayName) }),
+                "version": companionManager.updateController.currentVersionLabel
+            ], error: nil)
+
+        case "turns":
+            // The conversation: newest turns first, words only.
+            let limit = command["limit"] as? Int ?? 30
+            let turnsDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clicky/turns", isDirectory: true)
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: turnsDirectory.path)) ?? []).sorted(by: >)
+            var turns: [[String: Any]] = []
+            for name in names where turns.count < limit {
+                let turnURL = turnsDirectory.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: turnURL.appendingPathComponent("turn.json")),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let transcript = object["transcript"] as? String, !transcript.hasPrefix("debug ") else { continue }
+                turns.append(["id": name, "you": transcript, "claudia": Self.spokenAnswer(inTurn: turnURL) ?? "",
+                              "board": object["boardTitle"] as? String ?? NSNull()])
+            }
+            reply(identifier, ok: true, result: turns, error: nil)
+
+        case "listen":
+            // The page's Talk button: Claudia's own hands-free listening (her mic, on this Mac).
+            if command["on"] as? Bool ?? true {
+                if !companionManager.isHandsFreeSessionActive { companionManager.startHandsFreeSession() }
+            } else if companionManager.isHandsFreeSessionActive {
+                companionManager.endHandsFreeSession()
+            }
+            reply(identifier, ok: true, result: ["listening": companionManager.isHandsFreeSessionActive], error: nil)
+
+        case "researchLatest":
+            reply(identifier, ok: true, result: companionManager.researchController.lastStatus, error: nil)
 
         case "stop":
             companionManager.speechOutputClient.activeCoordinator?.bargeIn(.newQuestion)
