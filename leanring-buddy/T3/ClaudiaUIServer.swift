@@ -123,7 +123,7 @@ final class ClaudiaUIServer {
     }
 
     /// T3 Code's web UI runs at 127.0.0.1:3773 (its server port; the dev web server uses 5733).
-    static let t3CodeOrigins = ["http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
+    static let t3CodeOrigins = ["http://127.0.0.1:3783", "http://localhost:3783", "http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
 
     static func isT3Code(_ request: HTTPRequest) -> Bool {
         let source = request.headers["origin"] ?? request.headers["referer"] ?? ""
