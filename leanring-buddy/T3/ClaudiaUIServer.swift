@@ -85,6 +85,17 @@ final class ClaudiaUIServer {
 
     private func respond(to request: HTTPRequest, on connection: NWConnection) {
         let path = request.path.split(separator: "?").first.map(String.init) ?? "/"
+        // T3 Code's Claudia section checks she's running (no token, says nothing else).
+        if path == "/health" {
+            return send(connection, status: 200, type: "application/json", body: Data(#"{"ok":true}"#.utf8),
+                        extraHeaders: Self.isT3Code(request) ? ["Access-Control-Allow-Origin": request.headers["origin"] ?? "*"] : [:])
+        }
+        // Embedded in T3 Code (its own page at 127.0.0.1:3773): the token is filled in for that page only.
+        if request.method == "GET" && path == "/t3" {
+            guard Self.isT3Code(request) else { return send(connection, status: 403, type: "text/plain", body: Data("Only T3 Code can embed Claudia.".utf8)) }
+            let page = ClaudiaUIPage.html.replacingOccurrences(of: "/*CLAUDIA_TOKEN*/\"\"", with: "\"\(token)\"")
+            return send(connection, status: 200, type: "text/html; charset=utf-8", body: Data(page.utf8))
+        }
         if request.method == "GET" && (path == "/" || path == "/index.html") {
             guard request.query["token"] == token else { return send(connection, status: 403, type: "text/plain", body: Data("Open Claudia from her app (Setup › Claudia in T3 Code).".utf8)) }
             return send(connection, status: 200, type: "text/html; charset=utf-8", body: Data(ClaudiaUIPage.html.utf8))
@@ -111,9 +122,18 @@ final class ClaudiaUIServer {
         }
     }
 
-    private func send(_ connection: NWConnection, status: Int, type: String, body: Data) {
+    /// T3 Code's web UI runs at 127.0.0.1:3773 (its server port; the dev web server uses 5733).
+    static let t3CodeOrigins = ["http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
+
+    static func isT3Code(_ request: HTTPRequest) -> Bool {
+        let source = request.headers["origin"] ?? request.headers["referer"] ?? ""
+        return t3CodeOrigins.contains { source == $0 || source.hasPrefix($0 + "/") }
+    }
+
+    private func send(_ connection: NWConnection, status: Int, type: String, body: Data, extraHeaders: [String: String] = [:]) {
         let reason = [200: "OK", 403: "Forbidden", 404: "Not Found"][status] ?? "OK"
         var head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\n"
+        for (name, value) in extraHeaders { head += "\(name): \(value)\r\n" }
         head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }

@@ -104,7 +104,7 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
   </aside>
 </main>
 <script>
-const token = new URLSearchParams(location.search).get("token") || "";
+const token = new URLSearchParams(location.search).get("token") || /*CLAUDIA_TOKEN*/"";
 async function api(cmd, body = {}) {
   const response = await fetch("/api/" + cmd, { method: "POST", headers: { "Content-Type": "application/json", "X-Claudia-Token": token }, body: JSON.stringify(body) });
   return response.json();
