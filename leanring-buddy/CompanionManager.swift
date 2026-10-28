@@ -1517,7 +1517,11 @@ final class CompanionManager: ObservableObject {
         if ClickySettings.isProjectBridgeEnabled { promptFeatures.insert(.projectBridge) }
         // P7: the ACTIONS section (open apps, click, type, highlight, summarize…).
         if ClickySettings.isActionsEnabled { promptFeatures.insert(.actions) }
-        let mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+        var mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+        // A screen of its own: searches and links open in Claudia's own browser window there.
+        if let claudiaScreen = ClaudiaScreen.picked, ClickySettings.isActionsEnabled {
+            mainPrompt += "\n\nyour own screen: you have a display of your own (\"\(claudiaScreen.localizedName)\"). to search the web or open a site, always use a search or open_url step: they open in your own browser window on that display, so the user's windows stay as they are. never switch to the user's browser and type a search into it, unless they ask you to do something in a specific window of theirs."
+        }
         // Unasked boards open small at the side of the screen.
         if ClickySettings.isWhiteboardAutoEnabled && modeHint.line == nil && promptFeatures.contains(.whiteboard) {
             return mainPrompt + "\n\n" + WhiteboardPromptSection.sideBoardText
@@ -2048,7 +2052,7 @@ final class CompanionManager: ObservableObject {
         return answerSession.coordinator.spokenText
     }
 
-    /// If the cursor is in transient mode (user toggled "Show Clicky" off),
+    /// If the cursor is in transient mode (user toggled "Show Claudia" off),
     /// waits for TTS playback and any pointing animation to finish, then
     /// fades out the overlay after a 1-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
@@ -2131,7 +2135,7 @@ final class CompanionManager: ObservableObject {
     }
 
     static let companionWorkerSystemPrompt = """
-    you're a fast helper working for clicky, a voice assistant. clicky's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
+    you're a fast helper working for claudia, a voice assistant. claudia's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
 
     // MARK: - Onboarding Prompt

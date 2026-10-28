@@ -53,7 +53,8 @@ final class WhiteboardPanel: NSPanel {
         let forcedScreen = debugForcedDisplayID.flatMap { displayID in
             NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID }
         }
-        let screen = forcedScreen ?? NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.screens.first
+        // Claudia's own screen when one is picked, else the pointer's.
+        let screen = forcedScreen ?? ClaudiaScreen.picked ?? NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         guard !fullScreen else { return visibleFrame }
         if side {

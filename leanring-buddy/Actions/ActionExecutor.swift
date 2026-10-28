@@ -79,6 +79,12 @@ final class ActionExecutor {
         self.companionManager = companionManager
     }
 
+    /// Browsers that take `--new-window <url>`.
+    static let chromiumBrowserBundleIdentifiers: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "com.brave.Browser",
+        "com.microsoft.edgemac", "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "org.chromium.Chromium"
+    ]
+
     // MARK: - Resolve (read only)
 
     func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String) -> ResolvedActionTarget {
@@ -424,7 +430,9 @@ final class ActionExecutor {
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             do {
-                _ = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                let launched = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                // A freshly opened app goes to Claudia's screen (an app already open stays where the owner has it).
+                ClaudiaScreen.moveFrontWindow(of: launched)
                 return (.done(detail: nil), nil)
             } catch {
                 return (.failed(reason: "the app didn't open"), nil)
@@ -436,6 +444,20 @@ final class ActionExecutor {
             configuration.activates = true
             // One Clicky tab at a time: the tabs of earlier searches close before the next one opens.
             BrowserTabTracker.shared.closeEarlierTabs()
+            // Claudia's own screen: a Chromium browser gets a new window there, so the owner's windows stay put.
+            if ClaudiaScreen.picked != nil, let bundleIdentifier = Bundle(url: browserApplicationURL)?.bundleIdentifier,
+               Self.chromiumBrowserBundleIdentifiers.contains(bundleIdentifier) {
+                let opener = Process()
+                opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                opener.arguments = ["-na", browserApplicationURL.path, "--args", "--new-window", url.absoluteString]
+                if (try? opener.run()) != nil {
+                    opener.waitUntilExit()
+                    let browser = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first
+                    ClaudiaScreen.moveFrontWindow(of: browser)
+                    BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
+                    return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Claudia's screen"), nil)
+                }
+            }
             do {
                 let browser = try await NSWorkspace.shared.open([url], withApplicationAt: browserApplicationURL, configuration: configuration)
                 BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)

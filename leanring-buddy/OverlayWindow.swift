@@ -164,7 +164,7 @@ struct BlueCursorView: View {
     /// Only during the return flight can cursor movement cancel the animation.
     @State private var isReturningToCursor: Bool = false
 
-    private let fullWelcomeMessage = "hey! i'm clicky"
+    private let fullWelcomeMessage = "hey! i'm claudia"
 
     var body: some View {
         let _ = OverlayPerfMonitor.shared.note(.overlayBodyEvaluations)
@@ -390,6 +390,18 @@ struct BlueCursorView: View {
     private func startTrackingCursor() {
         CursorFollowDriver.shared.unsubscribe(cursorFollowSubscription)
         cursorFollowSubscription = CursorFollowDriver.shared.subscribe {
+            // Docked spark: it lives in a corner of Claudia's screen instead of following the pointer.
+            if ClickySettings.sparkMode == .docked, let dockScreen = ClaudiaScreen.forDockedSpark {
+                let dockPoint = ClaudiaScreen.dockedSparkPoint(on: dockScreen)
+                let isHomeScreen = self.screenFrame.contains(dockPoint)
+                if self.isCursorOnThisScreen != isHomeScreen {
+                    self.isCursorOnThisScreen = isHomeScreen
+                    OverlayPerfMonitor.shared.note(.cursorStateWrites)
+                }
+                guard self.buddyNavigationMode == .followingCursor else { return }
+                self.setCursorPositionIfChanged(self.convertScreenPointToSwiftUICoordinates(dockPoint))
+                return
+            }
             let mouseLocation = NSEvent.mouseLocation
             let isOnThisScreenNow = self.screenFrame.contains(mouseLocation)
             if self.isCursorOnThisScreen != isOnThisScreenNow {

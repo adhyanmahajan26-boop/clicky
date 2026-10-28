@@ -141,6 +141,11 @@ public enum ClickySettings {
         public static let modelsHelper = "v2.models.helper"
         /// String model id for the code agent (default claude-sonnet-5-5).
         public static let modelsCode = "v2.models.code"
+        /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
+        public static let sparkMode = "v2.spark.mode"
+        /// String, default "": the display Claudia uses for itself (its spark, boards, notes and the windows it opens).
+        /// A display's localized name; empty means wherever the pointer is.
+        public static let claudiaScreenName = "v2.screen.claudia"
         /// String, default "": the updates feed (a GitHub "latest release" API URL). Empty = UpdateFeed.defaultFeedURL.
         public static let updateFeedURL = "v2.update.feedURL"
         /// Bool, default true: check for an update at launch and every 6 hours (installing always waits for the owner).
@@ -423,6 +428,21 @@ public enum ClickySettings {
     public static var isSilentModeEnabled: Bool {
         get { defaults.object(forKey: Keys.silentMode) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.silentMode) }
+    }
+
+    public enum SparkMode: String, CaseIterable, Sendable {
+        case cursor
+        case docked
+    }
+
+    public static var sparkMode: SparkMode {
+        get { defaults.string(forKey: Keys.sparkMode).flatMap(SparkMode.init(rawValue:)) ?? .cursor }
+        set { defaults.set(newValue.rawValue, forKey: Keys.sparkMode) }
+    }
+
+    public static var claudiaScreenName: String {
+        get { (defaults.string(forKey: Keys.claudiaScreenName) ?? "").trimmingCharacters(in: .whitespaces) }
+        set { defaults.set(newValue, forKey: Keys.claudiaScreenName) }
     }
 
     public static var updateFeedURL: URL {

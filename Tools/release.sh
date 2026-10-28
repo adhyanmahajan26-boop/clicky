@@ -19,9 +19,13 @@ echo "Building Clicky build $BUILD…"
 xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configuration Release \
   -derivedDataPath "$DERIVED" CURRENT_PROJECT_VERSION="$BUILD" build > "$OUT/build-$BUILD.log" 2>&1 \
   || { tail -20 "$OUT/build-$BUILD.log"; exit 1; }
-APP="$DERIVED/Build/Products/Release/Clicky.app"
+BUILT="$DERIVED/Build/Products/Release/Clicky.app"
+# Shipped as Claudia.app (the bundle's display name is Claudia; the folder name is what Finder shows).
+STAGE="$OUT/stage-$BUILD"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+APP="$STAGE/Claudia.app"
+ditto "$BUILT" "$APP"
 codesign --verify --deep --strict "$APP"
-ZIP="$OUT/Clicky-$BUILD.zip"
+ZIP="$OUT/Claudia-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"

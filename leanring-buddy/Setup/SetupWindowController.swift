@@ -125,13 +125,13 @@ final class SetupModel: ObservableObject {
 
     /// Opens Terminal running Anthropic's installer for Claude Code.
     func installClaudeCode() {
-        Self.runInTerminal("curl -fsSL https://claude.ai/install.sh | bash && echo && echo 'Done. Go back to Clicky and press Check again.'")
+        Self.runInTerminal("curl -fsSL https://claude.ai/install.sh | bash && echo && echo 'Done. Go back to Claudia and press Check again.'")
     }
 
     /// Opens Terminal running `claude auth login`.
     func signInToClaudeCode() {
         let claudeCommand = claudeCodePath.map { "'\($0)'" } ?? "~/.local/bin/claude"
-        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Clicky and press Test.'")
+        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Claudia and press Test.'")
     }
 
     /// One real call through Claude Code with the chosen sign-in.
@@ -311,8 +311,8 @@ final class SetupModel: ObservableObject {
         var lines: [String] = []
         lines.append(companionManager.hasMicrophonePermission ? "✓ Microphone" : "✗ Microphone: grant it in the permissions panel")
         lines.append(companionManager.hasAccessibilityPermission ? "✓ Accessibility"
-                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Clicky can't click or type")
-        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Clicky")
+                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Claudia can't click or type")
+        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Claudia")
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         if speechStatus != .authorized {
@@ -426,7 +426,7 @@ enum SetupWindowController {
             let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
                                          styleMask: [.titled, .closable, .resizable],
                                          backing: .buffered, defer: false)
-            createdWindow.title = "Clicky Setup"
+            createdWindow.title = "Claudia Setup"
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = NSHostingView(rootView: SetupView(model: model))
             createdWindow.center()
@@ -451,9 +451,9 @@ private struct SetupView: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Set up Clicky")
+                Text("Set up Claudia")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Clicky lives in the menu bar (the sparkle icon). If you can't see it, open Clicky again from Applications to bring this window back.")
+                Text("Claudia lives in the menu bar (the spark icon). If you can't see it, open Claudia again from Applications to bring this window back.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -473,7 +473,7 @@ private struct SetupView: View {
                 }
                 GroupBox(label: Text("4. Permissions").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Clicky needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
+                        Text("Claudia needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
                             .font(.system(size: 12))
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Open the permissions panel") { model.showPanel() }
@@ -503,7 +503,12 @@ private struct SetupView: View {
                     .padding(8)
                 }
 
-                GroupBox(label: Text("6. Updates").font(.headline)) {
+                GroupBox(label: Text("6. Claudia's screen and spark").font(.headline)) {
+                    ClaudiaScreenSection()
+                        .padding(8)
+                }
+
+                GroupBox(label: Text("7. Updates").font(.headline)) {
                     UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
                                   hasSavedToken: model.hasSavedUpdateToken, saveToken: { model.saveUpdateToken() })
                         .padding(8)
@@ -544,7 +549,7 @@ private struct SetupView: View {
                 }
                 Button("Check") { model.refreshClaudeCodePath() }
             }
-            Text("Clicky talks to Claude through Claude Code, whichever way you sign in.")
+            Text("Claudia thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor or OpenCode.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
@@ -612,7 +617,7 @@ private struct SetupView: View {
                         .foregroundColor(.secondary)
                 }
             } else if model.voiceSource == .thisMac, !model.isMLXCoreInstalled {
-                Text("MLX Core isn't installed on this Mac, so Clicky will use the Mac voice.")
+                Text("MLX Core isn't installed on this Mac, so Claudia will use the Mac voice.")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
             }
@@ -641,7 +646,7 @@ private struct UpdateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("This is Clicky \(updateController.currentVersionLabel)")
+                Text("This is Claudia \(updateController.currentVersionLabel)")
                     .font(.system(size: 12))
                 Spacer()
                 if let release = updateController.availableRelease {
@@ -675,10 +680,10 @@ private struct UpdateSection: View {
 
     private var statusLine: String {
         switch updateController.state {
-        case .idle: return "Clicky checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
+        case .idle: return "Claudia checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
         case .checking: return "Checking…"
         case .upToDate: return "✓ You have the newest build."
-        case .available: return "A newer build is ready. Clicky quits, updates itself and reopens."
+        case .available: return "A newer build is ready. Claudia quits, updates itself and reopens."
         case .installing(let message): return message
         case .failed(let message): return "✗ \(message)"
         }
@@ -739,5 +744,38 @@ private struct BrainSwitchSection: View {
                 Text(catalog.label(for: selection.wrappedValue)).tag(selection.wrappedValue)
             }
         }
+    }
+}
+
+
+/// Which display Claudia uses for itself, and whether the spark follows the pointer.
+private struct ClaudiaScreenSection: View {
+    @State private var screenName = ClickySettings.claudiaScreenName
+    @State private var sparkMode = ClickySettings.sparkMode
+    private let screenNames = NSScreen.screens.map(\.localizedName)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Claudia's screen", selection: $screenName) {
+                Text("None: wherever my pointer is").tag("")
+                ForEach(screenNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+                if !screenName.isEmpty && !screenNames.contains(screenName) {
+                    Text("\(screenName) (not connected)").tag(screenName)
+                }
+            }
+            .onChange(of: screenName) { _, newValue in ClickySettings.claudiaScreenName = newValue }
+            Text("With a screen picked, Claudia opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
+                .font(.system(size: 11)).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("Spark", selection: $sparkMode) {
+                Text("Follows my pointer").tag(ClickySettings.SparkMode.cursor)
+                Text("Lives on its own (corner of Claudia's screen)").tag(ClickySettings.SparkMode.docked)
+            }
+            .pickerStyle(.radioGroup)
+            .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

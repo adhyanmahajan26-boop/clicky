@@ -74,8 +74,10 @@ public enum UpdateFeed {
     }
 
     /// The shell script that swaps the app once Clicky has quit, then opens the new one.
+    /// The new app keeps its own file name (Clicky.app → Claudia.app), next to where the old one was.
     public static func installScript(processIdentifier: Int32, newAppPath: String, installedAppPath: String) -> String {
         func quoted(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let targetAppPath = (installedAppPath as NSString).deletingLastPathComponent + "/" + (newAppPath as NSString).lastPathComponent
         return """
         #!/bin/zsh
         # Waits for Clicky (pid \(processIdentifier)) to quit, swaps in the new app and opens it.
@@ -83,13 +85,15 @@ public enum UpdateFeed {
         backup=\(quoted(installedAppPath + ".previous"))
         rm -rf "$backup"
         mv \(quoted(installedAppPath)) "$backup" || exit 1
-        if ditto \(quoted(newAppPath)) \(quoted(installedAppPath)); then
-          xattr -dr com.apple.quarantine \(quoted(installedAppPath)) 2>/dev/null
+        \(targetAppPath == installedAppPath ? "" : "rm -rf " + quoted(targetAppPath))
+        if ditto \(quoted(newAppPath)) \(quoted(targetAppPath)); then
+          xattr -dr com.apple.quarantine \(quoted(targetAppPath)) 2>/dev/null
           rm -rf "$backup"
+          open \(quoted(targetAppPath))
         else
-          rm -rf \(quoted(installedAppPath)); mv "$backup" \(quoted(installedAppPath))
+          rm -rf \(quoted(targetAppPath)); mv "$backup" \(quoted(installedAppPath))
+          open \(quoted(installedAppPath))
         fi
-        open \(quoted(installedAppPath))
         """
     }
 }
