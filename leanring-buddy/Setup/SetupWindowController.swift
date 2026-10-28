@@ -508,7 +508,12 @@ private struct SetupView: View {
                         .padding(8)
                 }
 
-                GroupBox(label: Text("7. Updates").font(.headline)) {
+                GroupBox(label: Text("7. Claudia in T3 Code").font(.headline)) {
+                    T3IntegrationSection()
+                        .padding(8)
+                }
+
+                GroupBox(label: Text("8. Updates").font(.headline)) {
                     UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
                                   hasSavedToken: model.hasSavedUpdateToken, saveToken: { model.saveUpdateToken() })
                         .padding(8)
@@ -775,6 +780,39 @@ private struct ClaudiaScreenSection: View {
             }
             .pickerStyle(.radioGroup)
             .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+/// "Add Claudia to T3 Code": every agent T3 Code runs gets Claudia's tools.
+private struct T3IntegrationSection: View {
+    @State private var resultLines: [String] = []
+    @State private var isWorking = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Gives every T3 Code thread (Claude, ChatGPT, Cursor, OpenCode) Claudia's tools: see your screen, point and mark, whiteboards, research with Haiku agents, search, click and type, and her voice.")
+                .font(.system(size: 11)).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button(isWorking ? "Adding…" : "Add Claudia to T3 Code") {
+                    isWorking = true
+                    Task.detached {
+                        let outcome = ClaudiaT3Integration.install()
+                        await MainActor.run {
+                            resultLines = outcome.lines + [outcome.succeeded ? "Restart T3 Code threads to pick it up." : "Some agents weren't updated."]
+                            isWorking = false
+                        }
+                    }
+                }
+                .disabled(isWorking)
+                Spacer()
+            }
+            ForEach(resultLines, id: \.self) { line in
+                Text(line).font(.system(size: 12))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

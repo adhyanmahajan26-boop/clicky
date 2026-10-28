@@ -281,11 +281,40 @@ def case_tabs():
     return ok, f"first open={first_open} second open={second_open} tracked={status.get('tracked')}"
 
 
+def case_t3_mcp():
+    """Claudia inside T3 Code: a Claude Code agent (as T3 runs it) uses the claudia MCP tools to see and mark the screen."""
+    import glob, tempfile
+    app = sorted(glob.glob(os.path.expanduser("~/Library/Developer/Xcode/DerivedData/leanring-buddy-*/Build/Products/Debug/Clicky.app")))[0]
+    config = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    json.dump({"mcpServers": {"claudia": {"command": app + "/Contents/MacOS/Clicky", "args": ["--mcp"]}}}, config)
+    config.close()
+    prompt = ("With the claudia tools: call claudia_see_screen, then claudia_show with speak=false to put "
+              "[MARK:1:<id>:Here|test mark] on any button you can see on screen 1. Reply DONE when it worked.")
+    completed = subprocess.run([os.path.expanduser("~/.local/bin/claude"), "-p", prompt, "--mcp-config", config.name, "--strict-mcp-config",
+                                "--allowedTools", "mcp__claudia__claudia_see_screen,mcp__claudia__claudia_show",
+                                "--model", "claude-sonnet-5-5", "--output-format", "text"],
+                               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, cwd="/tmp")
+    os.unlink(config.name)
+    turns = sorted(glob.glob(os.path.expanduser("~/Library/Logs/Clicky/turns/*")))
+    last = {}
+    if turns:
+        try:
+            last = json.load(open(os.path.join(turns[-1], "turn.json")))
+        except (OSError, ValueError):
+            pass
+    marks = [t for t in last.get("tags") or [] if t.get("kind") == "mark"]
+    ok = last.get("transcript") == "T3 Code: show" and len(marks) >= 1
+    return ok, f"agent said {completed.stdout.strip()[-60:]!r}, marks={len(marks)}"
+
+
 def case_silent():
+    was_on = subprocess.run(["defaults", "read", "com.personal.clicky", "v2.voice.silent"], capture_output=True, text=True).stdout.strip()
     ask("silent mode")
     on = subprocess.run(["defaults", "read", "com.personal.clicky", "v2.voice.silent"], capture_output=True, text=True).stdout.strip()
     ask("talk again", fresh=False)
     off = subprocess.run(["defaults", "read", "com.personal.clicky", "v2.voice.silent"], capture_output=True, text=True).stdout.strip()
+    if was_on == "1":
+        subprocess.run(["defaults", "write", "com.personal.clicky", "v2.voice.silent", "-bool", "YES"])
     return on == "1" and off == "0", f"on={on} off={off}"
 
 
@@ -304,6 +333,7 @@ CASES = {
     "search-action": case_search_action,
     "article": case_article,
     "tabs": case_tabs,
+    "t3-mcp": case_t3_mcp,
     "silent": case_silent,
 }
 
@@ -315,6 +345,8 @@ def main():
     names = [n.strip() for n in arguments.only.split(",") if n.strip()] or list(CASES)
     if not ctl({"cmd": "ping"}, 10).get("ok"):
         sys.exit("Clicky isn't answering the debug inbox")
+    # The tests never talk: a test-only mute, the owner's voice setting is left alone.
+    ctl({"cmd": "testMute", "on": True}, 10)
     results = []
     for name in names:
         started = time.time()
@@ -329,6 +361,7 @@ def main():
                                             "Four-stroke engine - Wikipedia"]}, 10)
         ctl({"cmd": "closeTabs"}, 10)
         print(f"{'PASS' if passed else 'FAIL'}  {name:16s} {time.time() - started:5.0f}s  {detail}", flush=True)
+    ctl({"cmd": "testMute", "on": False}, 10)
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")
     sys.exit(1 if failed else 0)

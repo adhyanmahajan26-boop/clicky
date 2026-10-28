@@ -77,6 +77,9 @@ final class CompanionSpeechOutput: ObservableObject {
     }
 
     /// A coordinator for one answer: the selected voice, the Mac voice behind it.
+    /// Debug inbox "testMute": the hard tests run silent without changing the owner's voice setting.
+    static var isMutedForTests = false
+
     private let readingPaceEngine = ReadingPaceSpeechEngine()
     /// A second one: the coordinator gives primary and fallback their own callbacks.
     private let readingPaceFallbackEngine = ReadingPaceSpeechEngine()
@@ -88,7 +91,7 @@ final class CompanionSpeechOutput: ObservableObject {
         var fallback: SpeechEngine = usesQwen ? appleEngine : appleFallbackEngine
         // Silent mode: nothing is spoken, but captions, marks and board steps
         // keep the rhythm of a spoken answer (paced at reading speed).
-        if ClickySettings.isSilentModeEnabled {
+        if ClickySettings.isSilentModeEnabled || Self.isMutedForTests {
             primary = readingPaceEngine
             fallback = readingPaceFallbackEngine
         }

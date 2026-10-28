@@ -14,6 +14,11 @@ import SwiftUI
 struct leanring_buddyApp: App {
     @NSApplicationDelegateAdaptor(CompanionAppDelegate.self) var appDelegate
 
+    init() {
+        // `--mcp`: Claudia's MCP server for T3 Code and its agents (no UI; talks to the running Claudia).
+        if CommandLine.arguments.contains("--mcp") { ClaudiaMCPServer.runForever() }
+    }
+
     var body: some Scene {
         // The app lives entirely in the menu bar panel managed by the AppDelegate.
         // This empty Settings scene satisfies SwiftUI's requirement for at least
@@ -32,6 +37,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     /// The pill at the top centre of the screen (v2.notch.*).
     private var notchPanelController: NotchPanelController?
     private let companionManager = CompanionManager()
+    private var controlInbox: ClaudiaControlInbox?
     #if DEBUG
     private var debugCommandInbox: DebugCommandInbox?
     #endif
@@ -70,6 +76,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             menuBarPanelManager?.showPanelOnLaunch()
         }
         registerAsLoginItemIfNeeded()
+        // Claudia inside T3 Code: the `claudia` MCP server talks to this running app through the control inbox.
+        controlInbox = ClaudiaControlInbox(companionManager: companionManager)
+        controlInbox?.start()
         if SetupWindowController.isNeededAtLaunch {
             showSetupWindow()
         }

@@ -208,6 +208,16 @@ final class DebugCommandInbox {
                                BrowserTabTracker.tabs(processIdentifier: $0.processIdentifier).compactMap { TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0) }
                            } ?? []], errorMessage: nil)
 
+        case "testMute":
+            // {on: true|false}: every voice is silent (captions still pace) while the hard tests run.
+            CompanionSpeechOutput.isMutedForTests = commandObject["on"] as? Bool ?? true
+            if CompanionSpeechOutput.isMutedForTests { companionManager.speechOutputClient.activeCoordinator?.bargeIn(.newQuestion) }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["muted": CompanionSpeechOutput.isMutedForTests], errorMessage: nil)
+
+        case "t3Install":
+            let outcome = ClaudiaT3Integration.install()
+            reply(commandIdentifier: commandIdentifier, isSuccess: outcome.succeeded, result: ["lines": outcome.lines], errorMessage: nil)
+
         case "sparkTest":
             // The same as Setup's "Test the spark": spin plus three orbiting helpers for 6 s.
             let simulatedSource = companionManager.simulatedCompanionActivitySource

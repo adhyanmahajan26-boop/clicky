@@ -1469,6 +1469,32 @@ final class CompanionManager: ObservableObject {
         sendTranscriptToClaudeWithScreenshot(transcript: "go deeper on part \(sectionNumber)", turnOptions: turnOptions)
     }
 
+    /// Plays an answer written elsewhere (T3 Code's `show`): its words are spoken and its tags run
+    /// ([POINT]/[MARK] against `groundedTurn`, the screen the agent saw, else a fresh look; boards; actions).
+    func playAnswer(_ answerText: String, groundedTurn seenTurn: GroundedTurn?, speaks: Bool, transcript: String) async -> URL? {
+        let turnRecord = TurnLogger.beginTurn(transcript: transcript, keyUpDate: Date())
+        let groundedTurn: GroundedTurn
+        if let seenTurn {
+            groundedTurn = seenTurn
+        } else {
+            guard let freshTurn = try? await groundingCoordinator.prepareTurn(keyUpDate: Date()) else { return nil }
+            groundedTurn = freshTurn
+        }
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        markController.startAnswer(turnRecord: turnRecord)
+        let answerSession = AnswerSession(transcript: transcript, groundedTurn: groundedTurn, turnRecord: turnRecord,
+                                          companionManager: self, speaksResponse: speaks)
+        currentAnswerSession = answerSession
+        turnRecord?.rawResponse = answerText
+        answerSession.handle(.messageStart(id: UUID().uuidString))
+        answerSession.handle(.textDelta(answerText))
+        answerSession.handle(.result(text: answerText, isError: false, subtype: "success"))
+        await answerSession.waitUntilFinished()
+        if let turnRecord { TurnLogger.finishTurn(turnRecord) }
+        return turnRecord?.turnDirectoryURL
+    }
+
     #if DEBUG
     /// The debug inbox's `board`: an answer text (or a bare board's JSONL)
     /// played as if Claude had just said it, through the real answer path.
