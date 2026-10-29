@@ -27,6 +27,17 @@ struct leanring_buddyApp: App {
         Settings {
             EmptyView()
         }
+        .commands {
+            // Theo ▸ Settings… (⌘,) opens Theo's own window on its Settings tab.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    if let companionManager = CompanionAppDelegate.sharedCompanionManager {
+                        TheoHomeWindowController.show(companionManager: companionManager, tab: .settings)
+                    }
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
     }
 }
 
@@ -38,6 +49,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     /// The pill at the top centre of the screen (v2.notch.*).
     private var notchPanelController: NotchPanelController?
     private let companionManager = CompanionManager()
+    /// For the app menu's Settings… command.
+    static var sharedCompanionManager: CompanionManager?
     private var controlInbox: ClaudiaControlInbox?
     /// Claudia's UI page (T3 Code's Claudia section), on 127.0.0.1 only.
     private var uiServer: ClaudiaUIServer?
@@ -65,6 +78,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         ClickyAnalytics.configure()
         ClickyAnalytics.trackAppOpened()
 
+        Self.sharedCompanionManager = companionManager
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
         notchPanelController = NotchPanelController(companionManager: companionManager)
@@ -86,8 +100,12 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             uiServer = ClaudiaUIServer(controlInbox: controlInbox, companionManager: companionManager)
             uiServer?.start()
         }
+        // Theo is a Dock app with its own window (Settings › Show Theo in the Dock turns that off).
+        NSApp.setActivationPolicy(ClickySettings.showsInDock ? .regular : .accessory)
         if SetupGuideWindowController.isNeededAtLaunch {
             SetupGuideWindowController.show(companionManager: companionManager)
+        } else if ClickySettings.showsInDock {
+            TheoHomeWindowController.show(companionManager: companionManager)
         }
     }
 
@@ -96,7 +114,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !Self.isHostingUnitTests else { return false }
         if ClickySettings.isSetupCompleted {
-            showSetupWindow()
+            TheoHomeWindowController.show(companionManager: companionManager)
         } else {
             SetupGuideWindowController.show(companionManager: companionManager)
         }

@@ -35,7 +35,11 @@ final class ClaudiaControlInbox {
     /// The grounded turn from the last `see`, so `show` resolves the element ids the agent saw.
     private var lastSeen: (turn: GroundedTurn, date: Date)?
 
+    /// The running inbox, for Theo's own window (Ask tab).
+    static weak var shared: ClaudiaControlInbox?
+
     init(companionManager: CompanionManager) {
+        defer { Self.shared = self }
         self.companionManager = companionManager
     }
 

@@ -43,7 +43,9 @@ final class SetupGuideModel: ObservableObject {
         }
     }
 
-    @Published var step: Step = .welcome
+    @Published var step: Step = Step(rawValue: ClickySettings.setupGuideStep) ?? .welcome {
+        didSet { ClickySettings.setupGuideStep = step.rawValue }
+    }
     /// nil until the owner picks one: no brain is chosen for them.
     @Published var chosenBrain: BrainProvider? = ClickySettings.setupGuideBrainChosen ? BrainModel(setting: ClickyModels.main).provider : nil
     @Published private(set) var installedBrains: [BrainProvider: Bool] = [:]
@@ -118,7 +120,9 @@ final class SetupGuideModel: ObservableObject {
 
     func finish() {
         ClickySettings.isSetupCompleted = true
+        ClickySettings.setupGuideStep = 0
         SetupGuideWindowController.close()
+        TheoHomeWindowController.show(companionManager: companionManager)
     }
 }
 
@@ -145,7 +149,7 @@ enum SetupGuideWindowController {
             created.title = "Set up Theo"
             created.titlebarAppearsTransparent = true
             created.isReleasedWhenClosed = false
-            created.contentView = NSHostingView(rootView: SetupGuideView(model: model, companionManager: companionManager))
+            created.contentView = FirstMouseHostingView(rootView: SetupGuideView(model: model, companionManager: companionManager))
             created.center()
             if let screen = ClaudiaScreen.picked {
                 let frame = screen.visibleFrame
@@ -153,10 +157,9 @@ enum SetupGuideWindowController {
             }
             window = created
         }
-        window?.level = .floating
-        window?.orderFrontRegardless()
-        window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
     }
 
     static func close() { window?.orderOut(nil) }
@@ -503,6 +506,17 @@ private struct T3CodeStep: View {
                 if model.t3Apps.isEmpty {
                     Text("No T3 Code app found in Applications. You can still add Theo to the agents; T3 Code picks it up when you install it.")
                         .font(.system(size: 12)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if !model.t3Apps.contains(where: { $0.lastPathComponent == "T3 Code Cursor Assistant.app" }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles.rectangle.stack").foregroundStyle(accentGradient)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("T3 Code Cursor Assistant: T3 Code with Theo built in").font(.system(size: 12.5, weight: .medium))
+                            Text("A Theo page and a notes button in every thread. Runs beside T3 Code Nightly.").font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button("Download") { NSWorkspace.shared.open(TheoHomeWindowController.t3BuiltInDownloadURL) }
+                    }
                 }
                 ForEach(model.t3Apps, id: \.self) { app in
                     HStack(spacing: 8) {

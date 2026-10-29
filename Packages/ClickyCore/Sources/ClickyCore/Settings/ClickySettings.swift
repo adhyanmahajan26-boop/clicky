@@ -478,6 +478,18 @@ public enum ClickySettings {
     }
     public static var isUpdateAutoCheckEnabled: Bool { defaults.object(forKey: Keys.updateAutoCheck) as? Bool ?? true }
 
+    /// Default true: Theo has a Dock icon and its own window; false keeps it in the menu bar only.
+    public static var showsInDock: Bool {
+        get { defaults.object(forKey: "v2.app.showsInDock") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "v2.app.showsInDock") }
+    }
+
+    /// The Setup guide step reached, so a relaunch resumes there.
+    public static var setupGuideStep: Int {
+        get { defaults.integer(forKey: "v2.setup.guideStep") }
+        set { defaults.set(newValue, forKey: "v2.setup.guideStep") }
+    }
+
     /// True once the owner picked a brain in the Setup guide (nothing is preselected before that).
     public static var setupGuideBrainChosen: Bool {
         get { defaults.bool(forKey: "v2.setup.guideBrainChosen") }

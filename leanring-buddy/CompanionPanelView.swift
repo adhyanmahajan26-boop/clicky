@@ -919,23 +919,26 @@ struct CompanionPanelView: View {
     /// subscription. Clicking re-checks, so after running `claude auth login`
     /// in Terminal the user can confirm without restarting the app.
     private var claudeCodeConnectionButton: some View {
-        Button(action: {
+        // The brain the owner picked (Claude, Codex, Cursor or OpenCode), not always Claude.
+        let brain = BrainModel(setting: ClickyModels.main).provider
+        let isConnected = brain == .claude ? companionManager.isClaudeCodeSignedIn : BrainCLIRunner.locateExecutable(for: brain) != nil
+        return Button(action: {
             companionManager.refreshClaudeCodeSignInStatus()
-            if !companionManager.isClaudeCodeSignedIn { openSetupWindow() }
+            if !isConnected { SetupGuideWindowController.show(companionManager: companionManager, step: .brain) }
         }) {
             HStack(spacing: 8) {
-                Image(systemName: companionManager.isClaudeCodeSignedIn ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                Image(systemName: isConnected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(companionManager.isClaudeCodeSignedIn ? DS.Colors.success : DS.Colors.warning)
+                    .foregroundColor(isConnected ? DS.Colors.success : DS.Colors.warning)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(companionManager.isClaudeCodeSignedIn
-                         ? (ClickySettings.brainAuthMode == .apiKey ? "Claude API key connected" : "Claude subscription connected")
-                         : "Claude isn't connected")
+                    Text(brain == .claude
+                         ? (isConnected ? (ClickySettings.brainAuthMode == .apiKey ? "Claude API key connected" : "Claude subscription connected") : "Claude isn't connected")
+                         : (isConnected ? "\(brain.displayName) connected" : "\(brain.displayName) isn't installed"))
                         .font(.system(size: 12, weight: .semibold))
-                    Text(companionManager.isClaudeCodeSignedIn
-                         ? (ClickySettings.brainAuthMode == .apiKey ? "Answers are billed to your API key." : "Answers run on your plan through Claude Code.")
-                         : "Click to open Setup.")
+                    Text(isConnected
+                         ? "Theo thinks with \(brain.displayName). Change it in Setup."
+                         : "Click to open the Setup guide.")
                         .font(.system(size: 10))
                         .foregroundColor(DS.Colors.textTertiary)
                 }

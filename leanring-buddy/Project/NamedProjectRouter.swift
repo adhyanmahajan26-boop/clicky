@@ -377,11 +377,6 @@ final class ProjectPickCardPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// Lets the first click reach a row in the never-key panel.
-private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
 @MainActor
 final class ProjectPickCardModel: ObservableObject {
     @Published var title = ""

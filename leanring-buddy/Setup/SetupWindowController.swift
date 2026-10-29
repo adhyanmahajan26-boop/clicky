@@ -432,7 +432,7 @@ enum SetupWindowController {
                                          backing: .buffered, defer: false)
             createdWindow.title = "Theo Setup"
             createdWindow.isReleasedWhenClosed = false
-            createdWindow.contentView = NSHostingView(rootView: SetupView(model: model))
+            createdWindow.contentView = FirstMouseHostingView(rootView: SetupView(model: model))
             createdWindow.center()
             // On Claudia's own screen when one is picked.
             if let screen = ClaudiaScreen.picked {
