@@ -25,6 +25,8 @@ STAGE="$OUT/stage-$BUILD"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 APP="$STAGE/Theo.app"
 ditto "$BUILT" "$APP"
 codesign --verify --deep --strict "$APP"
+# Signed with the Apple Development identity (never ad hoc), so macOS keeps Theo's permissions across updates.
+codesign -dv --verbose=2 "$APP" 2>&1 | grep -q "^Authority=Apple Development" || { echo "Theo.app isn't signed with the Apple Development identity"; exit 1; }
 ZIP="$OUT/Theo-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
