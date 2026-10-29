@@ -1,0 +1,24 @@
+Big O describes how an algorithm's work grows with input size, and binary search is log n because it halves the problem each step.
+
+<whiteboard>
+{"wb":1,"title":"Big O and binary search","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"What is Big O","q":"explain big o notation"},{"id":"q2","title":"Why binary search is O(log n)","q":"how is binary search o of log n"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["What Big O means","Why binary search is O(log n)"],"ordered":true}
+{"el":"text","id":"d1","sec":"q1","text":"Big O: how the work grows as the input size n grows","size":"l"}
+{"el":"text","id":"d2","sec":"q1","text":"Drop constants and small terms: 3n + 10 is O(n)","size":"m","near":"d1","pos":"bottom"}
+{"el":"table","id":"t1","sec":"q1","cols":["Big O","Name","Example"],"rows":[["O(1)","constant","array index lookup"],["O(log n)","logarithmic","binary search"],["O(n)","linear","scan a list"],["O(n log n)","linearithmic","merge sort"],["O(n^2)","quadratic","nested loops"]]}
+{"el":"flow","id":"f1","sec":"q2","src":"flowchart LR\nA[16 items] --> B[8] --> C[4] --> D[2] --> E[1]"}
+{"el":"math","id":"m1","sec":"q2","tex":"\\frac{n}{2^k}=1 \\Rightarrow k=\\log_2 n"}
+{"el":"code","id":"c1","sec":"q2","lang":"python","text":"def search(a, x):\n    lo, hi = 0, len(a) - 1\n    while lo <= hi:\n        mid = (lo + hi) // 2\n        if a[mid] == x: return mid\n        if a[mid] < x: lo = mid + 1\n        else: hi = mid - 1\n    return -1","hl":[4,6,7]}
+{"el":"chart","id":"ch1","sec":"q2","kind":"bar","title":"Max steps for n items","data":[["16",4],["1,024",10],["1,048,576",20]]}
+{"el":"callout","id":"co1","sec":"q2","target":"ch1","style":"tip","text":"A million items takes only about 20 steps"}
+{"el":"list","id":"r1","sec":"recap","title":"Key points","items":["Big O measures growth, not exact time","Ignore constants and lower terms","Binary search halves the range each step","Halving n down to 1 takes log2 n steps"],"ordered":false}
+{"step":1,"show":["ag"],"say":"we'll cover what big o means, then why binary search is log n.","focus":"agenda"}
+{"step":2,"show":["d1"],"hl":["d1"],"say":"big o describes how the number of steps an algorithm takes grows as the input gets bigger.","focus":"q1"}
+{"step":3,"show":["d2"],"say":"we ignore constants and small terms, so three n plus ten is just order n.","cue":{"d2":"constants"}}
+{"step":4,"show":["t1"],"hl":["t1"],"say":"here are the common ones, from constant at the fast end up to quadratic, which gets slow quickly.","point":"t1"}
+{"step":5,"show":["f1"],"hl":["f1"],"say":"binary search checks the middle and throws away half the items, so sixteen becomes eight, then four, two, one.","cue":{"f1":"half"},"focus":"q2"}
+{"step":6,"show":["m1"],"hl":["m1"],"say":"after k halvings, n over two to the k hits one, which solves to k equals log base two of n.","point":"m1"}
+{"step":7,"show":["c1"],"hl":["c1"],"say":"in code, each loop computes the middle and moves low or high past it, so the range halves every pass.","point":"c1"}
+{"step":8,"show":["ch1","co1"],"hl":["ch1"],"say":"that's why a million items needs only about twenty steps.","cue":{"ch1":"million"}}
+{"step":9,"show":["r1"],"say":"so big o measures growth, and halving the range each time is exactly what makes binary search log n.","focus":"recap"}
+</whiteboard>

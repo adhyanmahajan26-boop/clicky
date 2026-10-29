@@ -1,0 +1,11 @@
+here are the numbers.
+
+<whiteboard>
+{"wb": 1, "title": "Language popularity", "dir": "TB", "sections": [{"id": "q1", "title": "Survey results", "q": "popularity"}, {"id": "q2", "title": "Trend and share", "q": "trend"}]}
+{"el": "chart", "id": "bar", "sec": "q1", "kind": "bar", "title": "Developers using it (%)", "data": [["Python", 51], ["JavaScript", 62], ["TypeScript", 38], ["Rust", 13], ["Go", 14]]}
+{"el": "table", "id": "tab", "sec": "q1", "cols": ["Language", "Share", "Change"], "rows": [["Python", "51%", "+3"], ["JavaScript", "62%", "-1"], ["Rust", "13%", "+2"]]}
+{"el": "chart", "id": "line", "sec": "q2", "kind": "line", "title": "Rust usage by year", "data": [["2020", 5], ["2021", 7], ["2022", 9], ["2023", 11], ["2024", 13]]}
+{"el": "chart", "id": "pie", "sec": "q2", "kind": "pie", "title": "Backend share", "data": [["Java", 30], ["Python", 28], ["Go", 17], ["Other", 25]]}
+{"step": 1, "show": ["bar", "tab"], "say": "javascript still leads.", "focus": "q1"}
+{"step": 2, "show": ["line", "pie"], "say": "rust keeps growing.", "focus": "q2"}
+</whiteboard>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fake video player (local)</title>
+<style>body { margin: 0; font: 16px -apple-system, system-ui, sans-serif; background: #111; color: #eee; } .player { margin: 24px auto; width: 640px; height: 360px; background: #000; }</style>
+</head>
+<body>
+<div class="player" id="player" aria-label="fake player"></div>
+<p style="padding:0 24px">A fake player. The harness counts any visit here as a video opened.</p>
+<script src="common.js"></script>
+<script>
+// Reaching this page means a video was opened. The harness reads window.__opened.
+window.__opened = true;
+try {
+  window.P7.publish("watch", {}, { opened: true });
+} catch (error) { window.P7.fail(error); }
+</script>
+</body>
+</html>

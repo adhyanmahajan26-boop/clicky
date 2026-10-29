@@ -1,0 +1,31 @@
+Branches are just movable pointers to commits, and merging joins two lines of history back together, so let me draw it out.
+
+<whiteboard>
+{"wb":1,"title":"Git branching and merging","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Branching and merging","q":"how does git branching and merging work?"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Commits and branch pointers","Branching off","Merging back together","Conflicts"],"ordered":true}
+{"el":"box","id":"c1","sec":"q1","text":"C1","shape":"circle","color":"blue"}
+{"el":"box","id":"c2","sec":"q1","text":"C2","shape":"circle","color":"blue"}
+{"el":"arrow","id":"a1","sec":"q1","from":"c2","to":"c1","text":"parent","style":"solid","head":"end"}
+{"el":"box","id":"c3","sec":"q1","text":"C3 (feature work)","shape":"circle","color":"green"}
+{"el":"box","id":"c4","sec":"q1","text":"C4 (main work)","shape":"circle","color":"blue"}
+{"el":"arrow","id":"a2","sec":"q1","from":"c3","to":"c2","style":"solid","head":"end"}
+{"el":"arrow","id":"a3","sec":"q1","from":"c4","to":"c2","style":"solid","head":"end"}
+{"el":"box","id":"bm","sec":"q1","text":"main","shape":"pill","color":"blue"}
+{"el":"box","id":"bf","sec":"q1","text":"feature","shape":"pill","color":"green"}
+{"el":"arrow","id":"a4","sec":"q1","from":"bm","to":"c4","style":"dashed","head":"end"}
+{"el":"arrow","id":"a5","sec":"q1","from":"bf","to":"c3","style":"dashed","head":"end"}
+{"el":"code","id":"cmd","sec":"q1","lang":"bash","text":"git switch -c feature\ngit commit -m \"feature work\"\ngit switch main\ngit merge feature","hl":[1,4]}
+{"el":"box","id":"mg","sec":"q1","text":"M (merge commit)","shape":"circle","color":"purple"}
+{"el":"arrow","id":"a6","sec":"q1","from":"mg","to":"c4","style":"solid","head":"end"}
+{"el":"arrow","id":"a7","sec":"q1","from":"mg","to":"c3","style":"solid","head":"end"}
+{"el":"callout","id":"cf","sec":"q1","target":"mg","style":"warning","text":"If both sides changed the same lines, git stops and asks you to resolve the conflict."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["A branch is just a pointer to a commit","Branching is cheap, it only creates a pointer","Merge joins histories with a merge commit","Conflicts need a manual fix, then commit"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at what a branch really is, how you branch off, how merging joins things back, and what happens with conflicts.","focus":"agenda"}
+{"step":2,"show":["c1","c2","a1"],"hl":["a1"],"say":"Git history is a chain of commits, and each commit points back to its parent.","cue":{"a1":"parent"},"focus":"q1"}
+{"step":3,"show":["bm"],"hl":["bm"],"say":"A branch is nothing more than a small label pointing at one commit, like main here.","cue":{"bm":"label"},"point":"bm"}
+{"step":4,"show":["cmd","bf","c3","a2","a5"],"hl":["bf","cmd"],"say":"When you create a feature branch, git just makes a new pointer. Your next commit, C3, moves only that pointer forward.","cue":{"bf":"feature","c3":"commit"},"point":"c3"}
+{"step":5,"show":["c4","a3","a4"],"hl":["c4"],"say":"Meanwhile main can move on too, so now the history has diverged into two lines.","cue":{"c4":"main"},"point":"c4"}
+{"step":6,"show":["mg","a6","a7"],"hl":["mg"],"say":"Merging feature into main creates a merge commit with two parents, which ties both lines together.","cue":{"mg":"merge"},"point":"mg"}
+{"step":7,"show":["cf"],"hl":["cf"],"say":"If both sides edited the same lines, git can't decide for you, so you fix the conflict by hand and commit.","cue":{"cf":"conflict"},"point":"cf"}
+{"step":8,"show":["rc"],"hl":["rc"],"say":"So: branches are cheap pointers, and merging joins histories, pausing only when you need to settle a conflict.","focus":"recap"}
+</whiteboard>

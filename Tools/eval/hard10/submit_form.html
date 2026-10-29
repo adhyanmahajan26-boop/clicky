@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact</title>
+<style>
+html, body { margin: 0; background: #eef0f3; color: #1d1d1f; font: 15px -apple-system, Helvetica, Arial, sans-serif; }
+main { box-sizing: border-box; width: 520px; margin: 60px auto; padding: 28px; background: #ffffff; border-radius: 14px;
+       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08); }
+h1 { margin: 0 0 18px; font-size: 22px; }
+label { display: block; margin-bottom: 14px; font-size: 13px; color: #515158; }
+input, textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 9px 10px; border: 1px solid #c7c7cc; border-radius: 8px; font: inherit; }
+textarea { height: 110px; resize: none; }
+.row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+button { height: 36px; padding: 0 18px; border-radius: 8px; border: 1px solid #c7c7cc; background: #ffffff; font: inherit; }
+button.primary { background: #0a64d8; border-color: #0a64d8; color: #ffffff; }
+</style>
+</head>
+<body data-page="submit_form">
+<main>
+  <h1>Contact us</h1>
+  <label>Subject <input type="text" placeholder="What is this about?"></label>
+  <label>Message <textarea placeholder="Write a message"></textarea></label>
+  <div class="row">
+    <button type="button" id="cancel">Cancel</button>
+    <button type="button" id="submit" class="primary">Submit</button>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  try {
+    const submit = document.getElementById("submit");
+    const cancel = document.getElementById("cancel");
+    Hard10.publish("submit_form", { submit: Hard10.rectOf(submit), cancel: Hard10.rectOf(cancel) });
+  } catch (error) {
+    Hard10.fail(error);
+  }
+})();
+</script>
+</body>
+</html>

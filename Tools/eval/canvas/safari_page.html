@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lumen Docs</title>
+<style>
+  body { margin: 0; font: 16px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #1d2939; background: #fff; }
+  header { display: flex; align-items: center; gap: 28px; padding: 16px 48px; border-bottom: 1px solid #eaecf0; }
+  header .brand { font-weight: 700; font-size: 20px; margin-right: 24px; }
+  header a { color: #344054; text-decoration: none; }
+  header input { margin-left: auto; padding: 6px 10px; width: 220px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px; }
+  header button, main button { padding: 7px 14px; border-radius: 6px; border: 1px solid #d0d5dd; background: #fff; font-size: 14px; }
+  header button.primary, main button.primary { background: #155eef; color: #fff; border-color: #155eef; }
+  main { padding: 32px 48px; max-width: 900px; }
+  pre { background: #f2f4f7; padding: 14px; border-radius: 8px; }
+  section.faq a { display: block; margin: 8px 0; color: #155eef; }
+  footer { padding: 24px 48px; border-top: 1px solid #eaecf0; display: flex; gap: 24px; font-size: 14px; }
+  footer a { color: #667085; }
+</style>
+</head>
+<body>
+<!-- Safari fixture for final_eval.py (real web AX: AXLink / AXButton / AXHeading / AXTextField). -->
+<header>
+  <span class="brand">Lumen</span>
+  <a href="#home">Home</a>
+  <a href="#docs">Docs</a>
+  <a href="#pricing">Pricing</a>
+  <a href="#blog">Blog</a>
+  <input type="search" placeholder="Search docs" aria-label="Search docs">
+  <button class="primary">Sign in</button>
+</header>
+<main>
+  <h1>Getting started</h1>
+  <p>Install the Lumen CLI, then run <code>lumen init</code> in your project folder.</p>
+  <pre>brew install lumen
+lumen init my-app</pre>
+  <button>Copy code</button>
+  <button class="primary">Download for macOS</button>
+  <h2>Next steps</h2>
+  <p><a href="#changelog">Read the changelog</a> or <a href="#api">browse the API reference</a>.</p>
+  <section class="faq">
+    <h2>FAQ</h2>
+    <a href="#faq1">Q: How do I reset my password?</a>
+    <a href="#faq2">Q: Can I use Lumen offline?</a>
+    <a href="#faq3">Q: Where are my projects stored?</a>
+    <a href="#faq4">Q: How do I cancel my plan?</a>
+  </section>
+</main>
+<footer>
+  <a href="#privacy">Privacy</a>
+  <a href="#terms">Terms</a>
+  <a href="#contact">Contact</a>
+  <a href="#status">Status</a>
+</footer>
+</body>
+</html>

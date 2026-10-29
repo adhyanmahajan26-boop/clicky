@@ -1,0 +1,15 @@
+worker/node_modules/
+worker/.dev.vars
+.DS_Store
+*.xcuserstate
+build/
+releases/
+.claude/
+coding-plans/
+xcuserdata/
+build/
+Packages/ClickyCore/.build/
+Packages/ClickyCore/.swiftpm/
+__pycache__/
+*.pyc
+*.profraw

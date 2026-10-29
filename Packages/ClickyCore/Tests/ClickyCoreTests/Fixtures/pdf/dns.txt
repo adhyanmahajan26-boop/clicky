@@ -1,0 +1,25 @@
+here's how a dns lookup walks from your browser down to the answer.
+
+<whiteboard>
+{"wb":1,"title":"How DNS resolution works","dir":"LR","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Resolving example.com","q":"how does dns resolution work"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Browser asks a resolver","Resolver asks root, then TLD, then authoritative","Answer comes back and gets cached"],"ordered":true}
+{"el":"box","id":"br","sec":"q1","text":"Browser","shape":"round","color":"blue","icon":"safari"}
+{"el":"box","id":"rec","sec":"q1","text":"Recursive resolver (your ISP or 1.1.1.1)","shape":"round","color":"purple","icon":"server.rack"}
+{"el":"box","id":"root","sec":"q1","text":"Root server","shape":"rect","color":"orange"}
+{"el":"box","id":"tld","sec":"q1","text":".com TLD server","shape":"rect","color":"green"}
+{"el":"box","id":"auth","sec":"q1","text":"Authoritative server for example.com","shape":"rect","color":"red"}
+{"el":"arrow","id":"a1","sec":"q1","from":"br","to":"rec","text":"where is example.com?","style":"solid","head":"end"}
+{"el":"arrow","id":"a2","sec":"q1","from":"rec","to":"root","text":"who handles .com?","style":"solid","head":"both"}
+{"el":"arrow","id":"a3","sec":"q1","from":"rec","to":"tld","text":"who handles example.com?","style":"solid","head":"both"}
+{"el":"arrow","id":"a4","sec":"q1","from":"rec","to":"auth","text":"what is its ip?","style":"solid","head":"both"}
+{"el":"arrow","id":"a5","sec":"q1","from":"rec","to":"br","text":"ip address, cached","style":"dashed","head":"end"}
+{"el":"callout","id":"c1","sec":"q1","target":"rec","style":"tip","text":"Each answer is cached for its time to live, so repeat lookups are instant."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["The resolver does the legwork, not your browser","Root points to TLD, TLD points to authoritative","The authoritative server holds the real ip","Caching makes most lookups skip all of this"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"here's the plan: the browser asks a resolver, the resolver walks down the dns hierarchy, and the answer gets cached.","focus":"agenda"}
+{"step":2,"show":["br","rec","a1"],"hl":["a1"],"say":"your browser asks a recursive resolver, usually run by your internet provider or something like one dot one dot one dot one, where example dot com lives.","cue":{"br":"browser","rec":"recursive resolver","a1":"where"},"point":"rec","focus":"q1"}
+{"step":3,"show":["root","a2"],"hl":["root"],"say":"if it doesn't already know, the resolver asks a root server, which doesn't know the address but points to the servers for dot com.","cue":{"root":"root server","a2":"points"},"point":"root","focus":"q1"}
+{"step":4,"show":["tld","a3"],"hl":["tld"],"say":"the dot com server then points the resolver to the authoritative server for example dot com.","cue":{"tld":"dot com","a3":"points"},"point":"tld","focus":"q1"}
+{"step":5,"show":["auth","a4"],"hl":["auth"],"say":"that authoritative server holds the real record and hands back the I P address.","cue":{"auth":"authoritative server","a4":"hands back"},"point":"auth","focus":"q1"}
+{"step":6,"show":["a5","c1"],"hl":["a5","c1"],"say":"the resolver returns the address to your browser and caches it, so the next lookup skips the whole trip.","cue":{"a5":"returns","c1":"caches"},"point":"a5","focus":"q1"}
+{"step":7,"show":["rc"],"hl":["rc"],"say":"so the resolver does the legwork, the hierarchy narrows from root to dot com to the authoritative server, and caching makes most lookups instant.","focus":"recap"}
+</whiteboard>

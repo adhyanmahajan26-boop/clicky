@@ -1,0 +1,29 @@
+A process and a thread differ mainly in memory, so I'll sketch that and then when to pick each.
+
+<whiteboard>
+{"wb":1,"title":"Process vs thread","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"The difference","q":"what's the difference between a process and a thread"},{"id":"q2","title":"When to use each","q":"when would i use each"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Process vs thread","When to use each"],"ordered":true}
+{"el":"box","id":"pa","sec":"q1","text":"Process A: own memory","shape":"rect","color":"blue"}
+{"el":"box","id":"pb","sec":"q1","text":"Process B: own memory","shape":"rect","color":"blue"}
+{"el":"arrow","id":"ipc","sec":"q1","from":"pa","to":"pb","text":"IPC: pipes, sockets","style":"dashed","head":"both"}
+{"el":"box","id":"ta","sec":"q1","text":"Thread 1","shape":"round","color":"green"}
+{"el":"box","id":"tb","sec":"q1","text":"Thread 2","shape":"round","color":"green"}
+{"el":"box","id":"sh","sec":"q1","text":"Shared heap","shape":"cyl","color":"orange"}
+{"el":"arrow","id":"a1","sec":"q1","from":"ta","to":"sh","head":"both"}
+{"el":"arrow","id":"a2","sec":"q1","from":"tb","to":"sh","head":"both"}
+{"el":"table","id":"cmp","sec":"q1","cols":["","Process","Thread"],"rows":[["Memory","Isolated","Shared"],["Crash","Only itself","Can take down all"],["Startup cost","Heavier","Lighter"],["Communication","IPC","Shared variables"]]}
+{"el":"list","id":"u1","sec":"q2","title":"Use processes for","items":["Isolation and security","Fault tolerance, like browser tabs","Using separate cores in Python","Running untrusted code"],"ordered":false}
+{"el":"list","id":"u2","sec":"q2","title":"Use threads for","items":["Tasks sharing lots of data","Keeping a UI responsive","Many cheap concurrent tasks","Parallel work in one program"],"ordered":false}
+{"el":"callout","id":"warn","sec":"q2","target":"u2","style":"warning","text":"Shared memory means race conditions. Use locks or message passing."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Process: isolated memory, safer, heavier","Thread: shared memory, faster, riskier","Pick processes for isolation, threads for sharing"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at how they differ, then when to reach for each.","focus":"agenda"}
+{"step":2,"show":["pa","pb"],"hl":["pa","pb"],"say":"A process is a running program with its own private memory, so process A can't see process B's data.","cue":{"pa":"process","pb":"B's"},"focus":"q1"}
+{"step":3,"show":["ipc"],"hl":["ipc"],"say":"To talk to each other, they need inter-process communication, like pipes or sockets.","point":"ipc"}
+{"step":4,"show":["ta","tb","sh"],"hl":["sh"],"say":"Threads live inside a process, and they all share that process's memory.","cue":{"ta":"Threads","sh":"memory"}}
+{"step":5,"show":["a1","a2"],"hl":["a1","a2"],"say":"Both threads read and write the same heap, which is fast and convenient, but also dangerous."}
+{"step":6,"show":["cmp"],"hl":["cmp"],"say":"So processes are isolated and heavier to start, while threads are lighter but a bug in one can take down the lot.","focus":"cmp"}
+{"step":7,"show":["u1"],"hl":["u1"],"say":"Use processes when you want isolation, like browser tabs, or to run untrusted code, or to use multiple cores in Python.","focus":"q2"}
+{"step":8,"show":["u2"],"hl":["u2"],"say":"Use threads when tasks need to share a lot of data, or you want a responsive UI with cheap concurrency."}
+{"step":9,"show":["warn"],"hl":["warn"],"say":"Just remember that shared memory brings race conditions, so guard it with locks or pass messages instead.","point":"warn"}
+{"step":10,"show":["rc"],"hl":["rc"],"say":"Processes give you safety, threads give you speed and sharing, so pick based on whether isolation or shared data matters more.","focus":"recap"}
+</whiteboard>

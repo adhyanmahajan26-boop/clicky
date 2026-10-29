@@ -1,0 +1,502 @@
+//
+//  TargetResolver.swift
+//  ClickyCore
+//
+//  Turns a tag's target into a real frame on screen (CG points):
+//
+//   #n[@x,y]  the registry element, refreshed. If the model's hint is far
+//             off and its name doesn't match, a much better-matching
+//             element near the hint wins; a near-duplicate of the same kind
+//             close by can be re-snapped to. An unlabelled id is never
+//             overridden. (0.98)
+//   #a-#b     union of the refreshed frames, one display only. (0.95)
+//   "text"    AX text ranges (AXBoundsForRange), AX buttons/links titled
+//             the query, and OCR words, exact before fuzzy, ranked by
+//             TextMatchQuality (titled control > whole line > word-boundary
+//             hit > hit inside a longer token such as a URL), page before
+//             browser chrome, case-exact first; ~k picks the k-th in
+//             front-window/reading order, else the best nearest the cursor;
+//             "in #n" limits the search. (0.95 / 0.8 fuzzy / 0.7 in-token,
+//             never textExact)
+//   box on text  an explicit box on OCR text ("text", or an ocr element)
+//             snaps to the smallest AX element holding it (a card, image,
+//             button or cell ≤ 20 % of the display): the model named the
+//             card, not the words. (textCard)
+//   x,y / box the smallest small element containing the point (+6 pt), else
+//             the nearest within R; snap when 0.6·sim + 0.4·(1 − d/R) ≥ 0.55
+//             (0.85), else the raw point (0.5).
+//
+
+import CoreGraphics
+import Foundation
+
+public struct ResolvedTarget: Sendable {
+    public enum Method: String, Sendable {
+        case element, elementResnapped, elementAlternative, span, textExact, textFuzzy, textCard, imageCard, snapped, raw
+    }
+
+    public var frameCG: CGRect
+    public var pointCG: CGPoint
+    public var confidence: Double
+    public var method: Method
+    public var elementID: Int?
+    public var displayID: CGDirectDisplayID
+    public var label: String?
+    public var processIdentifier: pid_t?
+    public var axNode: AXNodeReference?
+    /// Filled in by HitTestVerifier.
+    public var verified: Bool?
+    public var occludedByPID: pid_t?
+}
+
+/// Live reads the resolver needs (the app implements these with AX).
+public protocol GroundingLiveLookup {
+    /// The element's current frame, or nil if it's gone.
+    func refreshedFrame(of element: GroundingElement) -> CGRect?
+    /// Frames of `query` inside an AX text element (AXBoundsForRange).
+    func textRanges(of query: String, in element: GroundingElement) -> [(frameCG: CGRect, isFuzzy: Bool)]
+    /// The same hits with their match quality (whole / token / inside a
+    /// longer token). The default classifies them against the element's
+    /// value/label.
+    func textMatches(of query: String, in element: GroundingElement) -> [TextRangeMatch]
+}
+
+public extension GroundingLiveLookup {
+    func textMatches(of query: String, in element: GroundingElement) -> [TextRangeMatch] {
+        TextMatchClassifier.classify(rangeHits: textRanges(of: query, in: element), query: query, text: element.value ?? element.label)
+    }
+}
+
+public struct TargetResolver {
+    public let registry: ElementRegistry
+    public let framesByScreenNumber: [Int: CaptureFrame]
+    public let cursorCG: CGPoint
+    public let windowStack: WindowStack?
+    public let lookup: GroundingLiveLookup
+
+    public init(registry: ElementRegistry, framesByScreenNumber: [Int: CaptureFrame], cursorCG: CGPoint, windowStack: WindowStack?, lookup: GroundingLiveLookup) {
+        self.registry = registry
+        self.framesByScreenNumber = framesByScreenNumber
+        self.cursorCG = cursorCG
+        self.windowStack = windowStack
+        self.lookup = lookup
+    }
+
+    public func resolve(_ tag: ParsedTag) -> ResolvedTarget? {
+        guard let resolved = resolveTarget(tag) else { return nil }
+        guard tag.kind == .mark, tag.style == .box, tag.hasExplicitStyle else { return resolved }
+        let isOCRText: Bool
+        switch resolved.method {
+        case .textExact, .textFuzzy: isOCRText = resolved.axNode == nil && resolved.elementID == nil
+        case .element, .elementResnapped, .elementAlternative: isOCRText = resolved.elementID.flatMap { registry[$0] }?.source == .ocr
+        default: isOCRText = false
+        }
+        let photo: GroundingElement? = {
+            if let elementID = resolved.elementID, let image = registry[elementID], image.role == .image { return image }
+            // A raw box drawn over a photo ([MARK:box:x,y,w,h:Name]): treat it as that photo.
+            guard resolved.method == .raw || resolved.method == .snapped else { return nil }
+            return photoMatching(resolved.frameCG, displayID: resolved.displayID)
+        }()
+        let rawPhotoStack: CGRect? = {
+            // A raw box over a photo whose element Chrome hadn't named yet: grow it over the
+            // product's call-to-action button stacked under it (it is in the list when the photo isn't).
+            guard photo == nil, resolved.method == .raw || resolved.method == .snapped else { return nil }
+            return productStack(anchor: resolved.frameCG, displayID: resolved.displayID, processIdentifier: nil, buttonGap: 80)
+        }()
+        if !isOCRText, let productFrame = photo.flatMap({ productStack(around: $0) }) ?? rawPhotoStack {
+            // A box on a product photo covers the product: the photo plus the name / price / button
+            // stacked with it (a live run boxed only the photos of three product cards).
+            return ResolvedTarget(frameCG: productFrame, pointCG: productFrame.center, confidence: resolved.confidence, method: .imageCard,
+                                  elementID: resolved.elementID, displayID: resolved.displayID, label: resolved.label,
+                                  processIdentifier: resolved.processIdentifier, axNode: resolved.axNode)
+        }
+        guard isOCRText, let (cardID, card) = containingCard(of: resolved.frameCG, displayID: resolved.displayID) else { return resolved }
+        let cardFrame = lookup.refreshedFrame(of: card) ?? card.visibleFrameCG
+        return ResolvedTarget(frameCG: cardFrame, pointCG: cardFrame.center, confidence: resolved.confidence, method: .textCard, elementID: cardID,
+                              displayID: card.displayID, label: resolved.label ?? card.label, processIdentifier: card.processIdentifier,
+                              axNode: card.axNode)
+    }
+
+    /// The photo plus the AX text / buttons stacked in its column (left edges within 8 pt, each
+    /// starting within 24 pt of the one above, none wider than the photo + 16 pt): a product card
+    /// whose container isn't an element. nil when nothing is stacked with it.
+    func productStack(around image: GroundingElement) -> CGRect? {
+        productStack(anchor: image.visibleFrameCG, displayID: image.displayID, processIdentifier: image.processIdentifier, buttonGap: 24)
+    }
+
+    /// `buttonGap`: how far below the stack a button / link may start and still join it (a card's
+    /// "Add to cart" sits under the name and price, which may be missing from the list).
+    func productStack(anchor imageFrame: CGRect, displayID: CGDirectDisplayID, processIdentifier: pid_t?, buttonGap: CGFloat) -> CGRect? {
+        func inColumn(_ frame: CGRect) -> Bool {
+            abs(frame.minX - imageFrame.minX) <= 8 && frame.width <= imageFrame.width + 16
+        }
+        let accessibilityElements = registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+            element.source == .accessibility && !element.isBehind && element.displayID == displayID
+                && (processIdentifier == nil || element.processIdentifier == processIdentifier) && [.text, .button, .link].contains(element.role)
+                && inColumn(element.visibleFrameCG)
+        }
+        let buttonFrames = Set(accessibilityElements.filter { $0.role != .text }.map { "\($0.visibleFrameCG)" })
+        // OCR lines fill in text the element list left out (a price, a name).
+        let ocrFrames = registry.allOCRLines.filter { $0.displayID == displayID && inColumn($0.frameCG) }.map(\.frameCG)
+        let candidates = (accessibilityElements.map(\.visibleFrameCG) + ocrFrames).sorted { $0.minY < $1.minY }
+        var union = imageFrame
+        for frame in candidates where frame.minY >= union.maxY - 2 {
+            let gapLimit: CGFloat = buttonFrames.contains("\(frame)") ? buttonGap : 24
+            guard frame.minY - union.maxY <= gapLimit else { break }
+            union = union.union(frame)
+            if buttonFrames.contains("\(frame)") && buttonGap > 24 { break }  // the CTA ends the card
+        }
+        return union == imageFrame ? nil : union
+    }
+
+    /// The AX photo a raw box was drawn over (≥ 60 % overlap both ways), if any.
+    func photoMatching(_ rect: CGRect, displayID: CGDirectDisplayID) -> GroundingElement? {
+        registry.orderedIDs.compactMap { registry[$0] }.filter { element in
+            element.role == .image && element.source == .accessibility && !element.isBehind && element.displayID == displayID
+        }.first { element in
+            let overlap = element.visibleFrameCG.intersection(rect).area
+            return overlap >= 0.6 * element.visibleFrameCG.area && overlap >= 0.6 * rect.area
+        }
+    }
+
+    /// Roles that make a card-like box around text.
+    static let cardRoles: Set<GroundingRole> = [.link, .button, .image, .cell, .row, .tab, .menuItem]
+
+    /// The smallest visible AX element (card roles) whose frame holds
+    /// `textFrame`, bigger than it and at most 20 % of the display.
+    func containingCard(of textFrame: CGRect, displayID: CGDirectDisplayID) -> (Int, GroundingElement)? {
+        let displayArea = frame(forDisplay: displayID)?.display.boundsCG.area ?? .greatestFiniteMagnitude
+        return registry.orderedIDs.compactMap { elementID -> (Int, GroundingElement)? in
+            guard let element = registry[elementID], element.source == .accessibility, !element.isBehind, element.displayID == displayID,
+                  Self.cardRoles.contains(element.role) else { return nil }
+            let cardFrame = element.visibleFrameCG
+            guard cardFrame.insetBy(dx: -2, dy: -2).contains(textFrame), cardFrame.area >= 1.3 * textFrame.area,
+                  cardFrame.area <= 0.2 * displayArea else { return nil }
+            return (elementID, element)
+        }.min { $0.1.visibleFrameCG.area < $1.1.visibleFrameCG.area }
+    }
+
+    func resolveTarget(_ tag: ParsedTag) -> ResolvedTarget? {
+        switch tag.target {
+        case .none:
+            return nil
+        case .element(let elementID, let hint):
+            return resolveElement(elementID: elementID, hint: hint, tag: tag)
+        case .span(let fromID, let toID):
+            return resolveSpan(fromID: fromID, toID: toID)
+        case .text(let query, let occurrence, let scopeID):
+            return resolveText(query: query, occurrence: occurrence, scopeID: scopeID)
+        case .point(let modelPixel):
+            guard let frame = framesByScreenNumber[tag.effectiveScreenNumber] else { return nil }
+            return resolvePoint(frame.cg(fromModelPx: modelPixel), rawRect: nil, name: tag.name, frame: frame)
+        case .box(let modelRect):
+            guard let frame = framesByScreenNumber[tag.effectiveScreenNumber] else { return nil }
+            let rawRect = frame.cgRect(fromModelPxRect: modelRect)
+            return resolvePoint(rawRect.center, rawRect: rawRect, name: tag.name, frame: frame)
+        }
+    }
+
+    // MARK: - Element
+
+    func resolveElement(elementID: Int, hint: CGPoint?, tag: ParsedTag) -> ResolvedTarget? {
+        guard let element = registry[elementID] else {
+            return tag.name.flatMap { resolveText(query: $0, occurrence: nil, scopeID: nil) }
+        }
+        guard let refreshedFrame = lookup.refreshedFrame(of: element) else {
+            // The element went away: look for its text instead.
+            return (element.label ?? tag.name).flatMap { resolveText(query: $0, occurrence: nil, scopeID: nil) }
+        }
+        var chosenElement = element
+        var chosenFrame = refreshedFrame
+        var chosenID = elementID
+        var method = ResolvedTarget.Method.element
+
+        let hasOwnLabel = element.label?.isEmpty == false
+        if hasOwnLabel, let name = tag.name {
+            let similarity = LabelSimilarity.labelSim(name, candidates: element.matchableTexts)
+            let hintCG: CGPoint? = hint.flatMap { hintPixel in
+                frame(forDisplay: element.displayID).map { $0.cg(fromModelPx: hintPixel) }
+            }
+            let farThreshold = max(80, 1.5 * hypot(refreshedFrame.width, refreshedFrame.height))
+            if let hintCG, refreshedFrame.edgeDistance(to: hintCG) > farThreshold, similarity < 0.5 {
+                // The id looks wrong: the model's name and hint agree on something else.
+                let alternatives = registry.orderedIDs.compactMap { candidateID -> (Int, GroundingElement, Double, Double)? in
+                    guard let candidate = registry[candidateID], candidate.displayID == element.displayID else { return nil }
+                    let candidateSimilarity = LabelSimilarity.labelSim(name, candidates: candidate.matchableTexts)
+                    let proximity = max(0, 1 - Double(candidate.visibleFrameCG.edgeDistance(to: hintCG)) / 400)
+                    return (candidateID, candidate, candidateSimilarity, 0.7 * candidateSimilarity + 0.3 * proximity)
+                }
+                if let bestAlternative = alternatives.max(by: { $0.3 < $1.3 }), bestAlternative.2 >= 0.85 {
+                    chosenID = bestAlternative.0
+                    chosenElement = bestAlternative.1
+                    chosenFrame = lookup.refreshedFrame(of: bestAlternative.1) ?? bestAlternative.1.visibleFrameCG
+                    method = .elementAlternative
+                }
+            } else if similarity < 0.5 {
+                // A same-kind neighbour within 150 pt that matches the name well.
+                let nearbyMatch = registry.orderedIDs.compactMap { candidateID -> (Int, GroundingElement, CGFloat)? in
+                    guard candidateID != elementID, let candidate = registry[candidateID], candidate.role == element.role,
+                          candidate.displayID == element.displayID,
+                          LabelSimilarity.labelSim(name, candidates: candidate.matchableTexts) >= 0.85 else { return nil }
+                    let distance = hypot(candidate.visibleFrameCG.midX - refreshedFrame.midX, candidate.visibleFrameCG.midY - refreshedFrame.midY)
+                    return distance <= 150 ? (candidateID, candidate, distance) : nil
+                }.min { $0.2 < $1.2 }
+                if let nearbyMatch {
+                    chosenID = nearbyMatch.0
+                    chosenElement = nearbyMatch.1
+                    chosenFrame = lookup.refreshedFrame(of: nearbyMatch.1) ?? nearbyMatch.1.visibleFrameCG
+                    method = .elementResnapped
+                }
+            }
+        }
+
+        return ResolvedTarget(frameCG: chosenFrame, pointCG: chosenFrame.center, confidence: 0.98, method: method, elementID: chosenID,
+                              displayID: chosenElement.displayID, label: chosenElement.label, processIdentifier: chosenElement.processIdentifier,
+                              axNode: chosenElement.axNode)
+    }
+
+    // MARK: - Span
+
+    func resolveSpan(fromID: Int, toID: Int) -> ResolvedTarget? {
+        let idRange = min(fromID, toID)...max(fromID, toID)
+        let spanElements = idRange.compactMap { registry[$0] }
+        guard let firstElement = spanElements.first else { return nil }
+        let frames = spanElements
+            .filter { $0.displayID == firstElement.displayID }
+            .map { lookup.refreshedFrame(of: $0) ?? $0.visibleFrameCG }
+        guard let unionFrame = frames.dropFirst().reduce(frames.first, { partialUnion, nextFrame in partialUnion?.union(nextFrame) }) else { return nil }
+        return ResolvedTarget(frameCG: unionFrame, pointCG: unionFrame.center, confidence: 0.95, method: .span, elementID: idRange.lowerBound,
+                              displayID: firstElement.displayID, label: firstElement.label, processIdentifier: firstElement.processIdentifier, axNode: nil)
+    }
+
+    // MARK: - Text
+
+    struct TextCandidate {
+        let frameCG: CGRect
+        let isFuzzy: Bool
+        let quality: TextMatchQuality
+        let isCaseExact: Bool
+        /// An AX button/link whose title is the query.
+        let isAXControl: Bool
+        /// In a browser's tab strip / address bar.
+        var isBrowserChrome = false
+        let zIndex: Int
+        let displayID: CGDirectDisplayID
+        let processIdentifier: pid_t?
+        let axNode: AXNodeReference?
+        let elementID: Int?
+
+        /// Lower is better: exact before fuzzy; a titled AX control, then a
+        /// whole line, then a word-boundary hit, then a hit inside a longer
+        /// token; page before browser chrome; case-exact first.
+        var rankKey: (Int, Int, Int, Int) {
+            (isFuzzy ? 1 : 0, isAXControl ? -1 : quality.rawValue, isBrowserChrome ? 1 : 0, isCaseExact ? 0 : 1)
+        }
+
+        func ranks(before other: TextCandidate) -> Bool { rankKey < other.rankKey }
+    }
+
+    /// Roles whose title alone can be a text target's match ("Submit" button).
+    static let titledControlRoles: Set<GroundingRole> = [.button, .link, .menuItem]
+
+    func resolveText(query: String, occurrence: Int?, scopeID: Int?) -> ResolvedTarget? {
+        var candidates: [TextCandidate] = []
+
+        for elementID in registry.orderedIDs {
+            guard let element = registry[elementID], element.source == .accessibility else { continue }
+            for textMatch in lookup.textMatches(of: query, in: element) {
+                candidates.append(TextCandidate(frameCG: textMatch.frameCG, isFuzzy: textMatch.isFuzzy, quality: textMatch.quality,
+                                                isCaseExact: textMatch.isCaseExact, isAXControl: false, zIndex: element.windowZIndex,
+                                                displayID: element.displayID, processIdentifier: element.processIdentifier,
+                                                axNode: element.axNode, elementID: elementID))
+            }
+            // A visible button/link titled exactly the query.
+            if Self.titledControlRoles.contains(element.role), !element.isBehind,
+               TextMatchClassifier.isWholeMatch(query: query, text: element.label),
+               let frame = lookup.refreshedFrame(of: element) {
+                let isCaseExact = TextMatchClassifier.isCaseExactWholeMatch(query: query, text: element.label)
+                candidates.append(TextCandidate(frameCG: frame, isFuzzy: false, quality: .whole, isCaseExact: isCaseExact, isAXControl: true,
+                                                zIndex: element.windowZIndex, displayID: element.displayID,
+                                                processIdentifier: element.processIdentifier, axNode: element.axNode, elementID: elementID))
+            }
+        }
+        for ocrLine in registry.allOCRLines {
+            let lineLength = LabelSimilarity.normalize(ocrLine.text).count
+            for occurrenceMatch in TextMatchClassifier.occurrences(of: query, in: ocrLine.text) {
+                // A match covering all but ≤ 2 characters of the line is the
+                // line (OCR often adds or drops a stray character at the end;
+                // a proportional slice would just shift the box).
+                let matchFrame = occurrenceMatch.range.count >= lineLength - 2
+                    ? ocrLine.frameCG
+                    : OCREngine.substringFrame(of: occurrenceMatch.range, inLineOfLength: lineLength, lineFrameCG: ocrLine.frameCG)
+                // AX already covers this spot: keep the AX candidate.
+                if candidates.contains(where: { candidate in
+                    candidate.elementID != nil && (candidate.frameCG.intersectionOverUnion(with: matchFrame) > 0.5
+                        || (candidate.isAXControl && candidate.frameCG.insetBy(dx: -4, dy: -4).contains(matchFrame.center)))
+                }) { continue }
+                let ownerWindow = windowStack?.windows.first { $0.isApplicationWindowLayer && $0.boundsCG.contains(matchFrame.center) }
+                candidates.append(TextCandidate(frameCG: matchFrame, isFuzzy: occurrenceMatch.isFuzzy, quality: occurrenceMatch.quality,
+                                                isCaseExact: occurrenceMatch.isCaseExact, isAXControl: false,
+                                                zIndex: ownerWindow.flatMap { windowStack?.zIndex(of: $0.windowID) } ?? Int.max / 2,
+                                                displayID: ocrLine.displayID, processIdentifier: ownerWindow?.processIdentifier,
+                                                axNode: nil, elementID: nil))
+            }
+        }
+
+        if let scopeID, let scopeElement = registry[scopeID] {
+            let scopeFrame = (lookup.refreshedFrame(of: scopeElement) ?? scopeElement.visibleFrameCG).insetBy(dx: -4, dy: -4)
+            candidates = candidates.filter { scopeFrame.contains($0.frameCG.center) }
+        }
+        let chromeBands = TextMatchClassifier.browserChromeBands(registry: registry, windowStack: windowStack)
+        if !chromeBands.isEmpty {
+            for index in candidates.indices where chromeBands.contains(where: { $0.contains(candidates[index].frameCG.center) }) {
+                candidates[index].isBrowserChrome = true
+            }
+        }
+        let exactCandidates = candidates.filter { !$0.isFuzzy }
+        var pool = exactCandidates.isEmpty ? candidates : exactCandidates
+        guard !pool.isEmpty else { return nil }
+
+        let chosen: TextCandidate
+        if let occurrence, occurrence >= 1 {
+            // The k-th of the real hits: hits inside longer tokens only count when there's nothing else.
+            if pool.contains(where: { $0.isAXControl || $0.quality != .inToken }) {
+                pool = pool.filter { $0.isAXControl || $0.quality != .inToken }
+            }
+            let ordered = pool.sorted { first, second in
+                if first.zIndex != second.zIndex { return first.zIndex < second.zIndex }
+                let firstLine = Int((first.frameCG.minY / 12).rounded(.down))
+                let secondLine = Int((second.frameCG.minY / 12).rounded(.down))
+                if firstLine != secondLine { return firstLine < secondLine }
+                return first.frameCG.minX < second.frameCG.minX
+            }
+            chosen = ordered[min(occurrence, ordered.count) - 1]
+        } else {
+            // Best-ranked first; among equals, the one nearest the cursor.
+            chosen = pool.min { first, second in
+                if first.rankKey != second.rankKey { return first.ranks(before: second) }
+                return first.frameCG.edgeDistance(to: cursorCG) < second.frameCG.edgeDistance(to: cursorCG)
+            }!
+        }
+        // A hit inside a longer token (a URL, a path) is never an exact text match.
+        let isLooseMatch = chosen.isFuzzy || (!chosen.isAXControl && chosen.quality == .inToken)
+        return ResolvedTarget(frameCG: chosen.frameCG, pointCG: chosen.frameCG.center,
+                              confidence: chosen.isFuzzy ? 0.8 : (isLooseMatch ? 0.7 : 0.95),
+                              method: isLooseMatch ? .textFuzzy : .textExact, elementID: chosen.elementID, displayID: chosen.displayID,
+                              label: query, processIdentifier: chosen.processIdentifier, axNode: chosen.axNode)
+    }
+
+    // MARK: - Point / box
+
+    /// P6.1: a point Haiku named on a zoom-check crop, snapped like an x,y
+    /// tag (`frame` is the crop's frame; it supplies the display).
+    public func snapPoint(_ pointCG: CGPoint, name: String?, frame: CaptureFrame) -> ResolvedTarget {
+        resolvePoint(pointCG, rawRect: nil, name: name, frame: frame)
+    }
+
+    func resolvePoint(_ pointCG: CGPoint, rawRect: CGRect?, name: String?, frame: CaptureFrame) -> ResolvedTarget {
+        let screenRect = frame.display.boundsCG
+        let searchRadius = max(24, 0.012 * screenRect.width)
+        let smallElements = registry.orderedIDs.compactMap { elementID -> (Int, GroundingElement)? in
+            guard let element = registry[elementID], element.displayID == frame.display.displayID,
+                  element.visibleFrameCG.area < 0.25 * screenRect.area else { return nil }
+            return (elementID, element)
+        }
+
+        let containing = smallElements
+            .filter { $0.1.visibleFrameCG.insetBy(dx: -6, dy: -6).contains(pointCG) }
+            .min { $0.1.visibleFrameCG.area < $1.1.visibleFrameCG.area }
+        let nearest = containing ?? smallElements
+            .map { ($0, $0.1.visibleFrameCG.edgeDistance(to: pointCG)) }
+            .filter { $0.1 <= searchRadius }
+            .min { $0.1 < $1.1 }?.0
+
+        let rawResult = ResolvedTarget(frameCG: rawRect ?? CGRect(x: pointCG.x, y: pointCG.y, width: 0, height: 0), pointCG: pointCG,
+                                       confidence: 0.5, method: .raw, elementID: nil, displayID: frame.display.displayID,
+                                       label: name, processIdentifier: nil, axNode: nil)
+        guard let (elementID, element) = nearest else { return rawResult }
+
+        let distance = Double(element.visibleFrameCG.edgeDistance(to: pointCG))
+        let similarity = name.map { LabelSimilarity.labelSim($0, candidates: element.matchableTexts) } ?? 0.5
+        let snapScore = 0.6 * similarity + 0.4 * (1 - min(1, distance / Double(searchRadius)))
+        guard snapScore >= 0.55 else { return rawResult }
+        let snappedFrame = lookup.refreshedFrame(of: element) ?? element.visibleFrameCG
+        return ResolvedTarget(frameCG: snappedFrame, pointCG: snappedFrame.center, confidence: 0.85, method: .snapped, elementID: elementID,
+                              displayID: element.displayID, label: element.label, processIdentifier: element.processIdentifier, axNode: element.axNode)
+    }
+
+    private func frame(forDisplay displayID: CGDirectDisplayID) -> CaptureFrame? {
+        framesByScreenNumber.values.first { $0.display.displayID == displayID }
+    }
+}
+
+// MARK: - Verification
+
+/// Checks a resolved target is really what's at that spot (≤ 5 ms per tag):
+/// an app-scoped hit test that reaches the element within 8 parents, else a
+/// same-app hit whose label matches. Anything else on top is recorded as
+/// the occluding app.
+public enum HitTestVerifier {
+    public static func verify(_ target: inout ResolvedTarget, ax: AXQuerying, ownProcessIdentifier: pid_t, windowStack: WindowStack?) {
+        guard let targetPID = target.processIdentifier, targetPID != 0 else {
+            target.verified = nil
+            return
+        }
+
+        // One system-wide hit test usually settles it: whatever is on top.
+        let systemWideHit = ax.systemWideElement(at: target.pointCG)
+        let systemWideHitPID = systemWideHit.flatMap { ax.processIdentifier(of: $0) }
+
+        if let systemWideHitPID, systemWideHitPID != targetPID {
+            if systemWideHitPID == ownProcessIdentifier {
+                // Our own overlay is on top: hit-test inside the target app and
+                // decide coverage from the window stack.
+                if let targetNode = target.axNode {
+                    let applicationNode = ax.applicationNode(processIdentifier: targetPID)
+                    if let appScopedHit = ax.element(at: target.pointCG, inApplication: applicationNode),
+                       isTarget(targetNode, reachableFrom: appScopedHit, ax: ax, targetPID: targetPID, targetLabel: target.label) {
+                        target.verified = true
+                    }
+                }
+                applyWindowStackRule(&target, targetPID: targetPID, windowStack: windowStack)
+            } else {
+                // Another app's window covers it.
+                target.verified = false
+                target.occludedByPID = systemWideHitPID
+            }
+            return
+        }
+
+        if let targetNode = target.axNode, let systemWideHit {
+            target.verified = isTarget(targetNode, reachableFrom: systemWideHit, ax: ax, targetPID: targetPID, targetLabel: target.label)
+            if target.verified == true { return }
+        }
+        applyWindowStackRule(&target, targetPID: targetPID, windowStack: windowStack)
+    }
+
+    /// The hit is the target, one of its ≤ 8 ancestors is, or it's a
+    /// same-app element whose label matches (> 0.8).
+    private static func isTarget(_ targetNode: AXNodeReference, reachableFrom hitNode: AXNodeReference, ax: AXQuerying, targetPID: pid_t, targetLabel: String?) -> Bool {
+        var currentNode: AXNodeReference? = hitNode
+        for _ in 0...8 {
+            guard let node = currentNode else { break }
+            if ax.isEqual(node, targetNode) { return true }
+            currentNode = ax.parent(of: node)
+        }
+        if ax.processIdentifier(of: hitNode) == targetPID, let targetLabel, let hitAttributes = ax.attributes(of: hitNode),
+           LabelSimilarity.labelSim(targetLabel, candidates: [hitAttributes.title, hitAttributes.elementDescription]) > 0.8 {
+            return true
+        }
+        return false
+    }
+
+    private static func applyWindowStackRule(_ target: inout ResolvedTarget, targetPID: pid_t, windowStack: WindowStack?) {
+        guard let windowStack else { return }
+        if windowStack.isBehind(point: target.pointCG, processIdentifier: targetPID) {
+            target.verified = false
+            target.occludedByPID = windowStack.windows.first { ($0.isApplicationWindowLayer || $0.layer == 101) && $0.boundsCG.contains(target.pointCG) }?.processIdentifier
+        } else if target.verified == nil {
+            target.verified = true
+        }
+    }
+}

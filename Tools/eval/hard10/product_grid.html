@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen and Home</title>
+<style>
+html, body { margin: 0; background: #f4f5f7; color: #1d1d1f; font: 14px -apple-system, Helvetica, Arial, sans-serif; }
+header { padding: 20px 28px; font-size: 22px; font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(3, 300px); gap: 16px; padding: 0 28px 20px; justify-content: start; }
+.card { box-sizing: border-box; width: 300px; height: 215px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+        background: #ffffff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+.card img { width: 272px; height: 90px; border-radius: 8px; object-fit: cover; }
+.name { font-size: 15px; font-weight: 600; }
+.price { font-size: 16px; font-weight: 700; }
+.add { margin-top: auto; height: 32px; border: 0; border-radius: 8px; background: #1d1d1f; color: #ffffff; font-size: 13px; }
+</style>
+</head>
+<body data-page="product_grid">
+<header>Kitchen and Home</header>
+<div class="grid" id="grid"></div>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  // Three products are red (#d32f2f, #e53935, #c62828); the rest are not.
+  const PRODUCTS = [
+    { name: "Harbor Mug", price: 32, color: "#2f5d8c" },
+    { name: "Crimson Kettle", price: 129, color: "#d32f2f", red: true },
+    { name: "Sage Planter", price: 48, color: "#6b8f5e" },
+    { name: "Sunflower Bowl", price: 27, color: "#e0b400" },
+    { name: "Scarlet Pitcher", price: 64, color: "#e53935", red: true },
+    { name: "Slate Tumbler", price: 21, color: "#5f6b7a" },
+    { name: "Fern Lamp", price: 150, color: "#2e7d4f" },
+    { name: "Cherry Lamp", price: 89, color: "#c62828", red: true },
+    { name: "Teal Tray", price: 55, color: "#00897b" }
+  ];
+
+  function artwork(color) {
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='272' height='90'>" +
+      "<rect width='272' height='90' fill='" + color + "'/>" +
+      "<circle cx='136' cy='90' r='50' fill='rgba(255,255,255,0.35)'/>" +
+      "<rect x='96' y='64' width='80' height='14' rx='7' fill='rgba(0,0,0,0.25)'/></svg>";
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }
+
+  try {
+    const grid = document.getElementById("grid");
+    const items = {};
+    const red = [];
+    const images = [];
+    PRODUCTS.forEach(function (product, index) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const image = document.createElement("img");
+      image.alt = product.name;
+      image.src = artwork(product.color);
+      images.push(image);
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = product.name;
+      const price = document.createElement("div");
+      price.className = "price";
+      price.textContent = "$" + product.price;
+      const add = document.createElement("button");
+      add.className = "add";
+      add.type = "button";
+      add.textContent = "Add to cart";
+      card.append(image, name, price, add);
+      grid.appendChild(card);
+      items["card_" + index] = Hard10.rectOf(card);
+      items["price_" + index] = Hard10.rectOf(price);
+      items["image_" + index] = Hard10.rectOf(image);
+      if (product.red) red.push("card_" + index);
+    });
+    Promise.all(images.map(function (image) {
+      return image.complete ? Promise.resolve() : new Promise(function (resolve) {
+        image.onload = resolve;
+        image.onerror = resolve;
+      });
+    })).then(function () {
+      Hard10.publish("product_grid", items, { red: red });
+    }).catch(Hard10.fail);
+  } catch (error) {
+    Hard10.fail(error);
+  }
+})();
+</script>
+</body>
+</html>

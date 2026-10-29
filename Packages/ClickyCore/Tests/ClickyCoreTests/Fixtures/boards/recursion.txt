@@ -1,0 +1,22 @@
+Recursion means a function solves a problem by calling itself on smaller versions of it, and Fibonacci shows that perfectly.
+
+<whiteboard>
+{"wb":1,"title":"Recursion with Fibonacci","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Recursion via Fibonacci","q":"explain recursion using the fibonacci sequence"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["The Fibonacci rule","Base case and recursive case","The call tree","The hidden cost"],"ordered":true}
+{"el":"math","id":"rule","sec":"q1","tex":"F(n) = F(n-1) + F(n-2)"}
+{"el":"code","id":"code","sec":"q1","lang":"python","text":"def fib(n):\n    if n < 2:\n        return n\n    return fib(n-1) + fib(n-2)","hl":[2,3]}
+{"el":"box","id":"base","sec":"q1","text":"Base case: fib(0)=0, fib(1)=1","shape":"round","color":"green"}
+{"el":"box","id":"rec","sec":"q1","text":"Recursive case: fib(n-1) + fib(n-2)","shape":"round","color":"blue"}
+{"el":"arrow","id":"a1","sec":"q1","from":"rec","to":"base","text":"shrinks toward","style":"dashed","head":"end"}
+{"el":"flow","id":"tree","sec":"q1","src":"flowchart TB\nA[\"fib(4)\"] --> B[\"fib(3)\"]\nA --> C[\"fib(2)\"]\nB --> D[\"fib(2)\"]\nB --> E[\"fib(1)\"]\nC --> F[\"fib(1)\"]\nC --> G[\"fib(0)\"]\nD --> H[\"fib(1)\"]\nD --> I[\"fib(0)\"]"}
+{"el":"callout","id":"warn","sec":"q1","target":"tree","style":"warning","text":"fib(2) is computed twice. The repeated work grows exponentially."}
+{"el":"callout","id":"fix","sec":"q1","target":"warn","style":"tip","text":"Fix it by caching results (memoization)."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["A recursive function calls itself on a smaller input","The base case stops the recursion","Each call waits for its sub-calls to return","Naive Fibonacci repeats work; memoize to fix it"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at the Fibonacci rule, its base and recursive cases, the call tree, and the cost hiding inside it.","focus":"agenda"}
+{"step":2,"show":["rule"],"hl":["rule"],"say":"Each Fibonacci number is the sum of the two before it, so the answer is defined in terms of smaller versions of itself.","point":"rule","focus":"q1"}
+{"step":3,"show":["code"],"hl":["code"],"say":"In code, that's a function that calls itself twice, once with n minus one and once with n minus two.","point":"code","focus":"code"}
+{"step":4,"show":["base","rec","a1"],"hl":["base","rec"],"say":"Every recursion needs a base case, here zero and one, that answers directly, and a recursive case that moves toward it.","cue":{"base":"base","rec":"recursive"},"point":"base","focus":"q1"}
+{"step":5,"show":["tree"],"hl":["tree"],"say":"Calling fib of four branches into smaller calls, and those branches keep splitting until they hit the base cases.","point":"tree","focus":"tree"}
+{"step":6,"show":["warn","fix"],"hl":["warn"],"say":"Notice fib of two is computed twice, and that waste explodes as n grows. Caching each result fixes it.","cue":{"warn":"twice","fix":"Caching"},"point":"warn","focus":"tree"}
+{"step":7,"show":["rc"],"hl":["rc"],"say":"So recursion is a base case plus a smaller version of the same problem, and Fibonacci also teaches you to watch for repeated work.","focus":"recap"}
+</whiteboard>

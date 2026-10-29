@@ -1,0 +1,22 @@
+Here's a quick board on how HTTPS works.
+
+<whiteboard>
+{"wb":1,"title":"How HTTPS works","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"The handshake","q":"how does https work"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["Browser and server say hello","Server proves who it is","Both derive a secret key","Data flows encrypted"],"ordered":true}
+{"el":"box","id":"client","sec":"q1","text":"Browser","shape":"round","color":"blue","icon":"desktopcomputer"}
+{"el":"box","id":"server","sec":"q1","text":"Web server","shape":"round","color":"green","icon":"server.rack"}
+{"el":"arrow","id":"a1","sec":"q1","from":"client","to":"server","text":"ClientHello + key share","style":"solid"}
+{"el":"arrow","id":"a2","sec":"q1","from":"server","to":"client","text":"certificate + key share","style":"solid"}
+{"el":"box","id":"chk","sec":"q1","text":"Check certificate against trusted authorities","shape":"note","color":"orange","icon":"checkmark.seal"}
+{"el":"box","id":"keys","sec":"q1","text":"Same secret session key on both sides","shape":"pill","color":"purple","icon":"key"}
+{"el":"arrow","id":"a3","sec":"q1","from":"client","to":"server","text":"encrypted requests and responses","style":"thick","head":"both"}
+{"el":"callout","id":"c1","sec":"q1","target":"keys","style":"tip","text":"The key itself is never sent over the wire."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Certificate proves the server's identity","Key exchange creates a shared secret","Fast symmetric encryption protects the data","Nobody in the middle can read or alter it"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll go through the hello, the identity check, the key, and then the encrypted traffic.","focus":"agenda"}
+{"step":2,"show":["client","server","a1"],"hl":["a1"],"say":"First the browser sends a hello to the server, listing what encryption it supports along with its half of a key exchange.","cue":{"a1":"hello"},"point":"a1","focus":"q1"}
+{"step":3,"show":["a2"],"hl":["a2"],"say":"The server answers with its certificate and its own half of the key exchange.","cue":{"a2":"certificate"},"point":"a2"}
+{"step":4,"show":["chk"],"hl":["chk"],"say":"The browser checks that the certificate was signed by an authority it trusts and matches the site's name.","cue":{"chk":"checks"},"point":"chk"}
+{"step":5,"show":["keys","c1"],"hl":["keys"],"say":"Both sides now combine their halves to get the same secret key, without ever sending it across the network.","cue":{"keys":"secret key","c1":"sending"},"point":"keys"}
+{"step":6,"show":["a3"],"hl":["a3"],"say":"From here on, everything between them is encrypted with that key, so anyone in the middle sees only scrambled bytes.","cue":{"a3":"encrypted"},"point":"a3"}
+{"step":7,"show":["rc"],"hl":["rc"],"say":"So HTTPS gives you identity, privacy, and tamper protection, all set up in one quick handshake.","focus":"recap"}
+</whiteboard>

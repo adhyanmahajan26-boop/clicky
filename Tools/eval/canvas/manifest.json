@@ -1,0 +1,139 @@
+{
+  "_doc": "Single source for the canvas pages (they fetch this file) and for final_eval.py --dry-run (row keys must be listed here). Positions are NOT here: each page computes them in JS from ?seed= and publishes the truth (viewport CSS px) in window.__truth and <script id=truth>.",
+  "pages": {
+    "text": {
+      "file": "text.html",
+      "items": [
+        {"key": "deploy_failed", "text": "Deploy failed", "font": "600 20px Helvetica", "color": "#b42318"},
+        {"key": "total", "text": "Total: 1,284", "font": "18px Helvetica", "color": "#1d2939"},
+        {"key": "rate_limit", "text": "429 Too Many Requests", "font": "16px Menlo", "color": "#b54708"},
+        {"key": "x42", "text": "x = 42", "font": "italic 22px Georgia", "color": "#344054"},
+        {"key": "build", "text": "build #7731", "font": "15px Menlo", "color": "#475467"},
+        {"key": "latency", "text": "latency p95 812 ms", "font": "16px Helvetica", "color": "#1d2939"},
+        {"key": "email", "text": "ops@example.test", "font": "15px Helvetica", "color": "#155eef"},
+        {"key": "disk_full", "text": "ERROR: disk full", "font": "bold 16px Menlo", "color": "#d92d20"},
+        {"key": "version", "text": "v2.3.1", "font": "14px Menlo", "color": "#667085"},
+        {"key": "retry", "text": "Retry in 30s", "font": "15px Helvetica", "color": "#475467"},
+        {"key": "revenue", "text": "Q3 revenue", "font": "bold 24px Helvetica", "color": "#101828"},
+        {"key": "ok", "text": "OK", "font": "bold 18px Helvetica", "color": "#079455"}
+      ],
+      "decoys": ["Deploy queued", "Total items", "x = 24", "build #7713", "Q2 revenue", "Retry now"]
+    },
+    "dots": {
+      "file": "dots.html",
+      "variants": {
+        "default": {
+          "dots": [
+            {"key": "dot_red", "color": "#e5484d", "r": 14},
+            {"key": "dot_green", "color": "#30a46c", "r": 14},
+            {"key": "dot_blue", "color": "#0090ff", "r": 14},
+            {"key": "dot_yellow", "color": "#ffc53d", "r": 14},
+            {"key": "dot_purple", "color": "#8e4ec6", "r": 14},
+            {"key": "dot_orange", "color": "#f76b15", "r": 14},
+            {"key": "dot_pink", "color": "#d6409f", "r": 14},
+            {"key": "dot_teal", "color": "#12a594", "r": 14},
+            {"key": "dot_small_black", "color": "#111111", "r": 5}
+          ],
+          "decoy_count": 6,
+          "decoy_color": "#b9bbc6"
+        },
+        "many": {
+          "dots": [
+            {"key": "red_1", "color": "#e5484d", "r": 12},
+            {"key": "red_2", "color": "#e5484d", "r": 12},
+            {"key": "red_3", "color": "#e5484d", "r": 12},
+            {"key": "red_4", "color": "#e5484d", "r": 12},
+            {"key": "blue_1", "color": "#0090ff", "r": 12},
+            {"key": "blue_2", "color": "#0090ff", "r": 12},
+            {"key": "blue_3", "color": "#0090ff", "r": 12},
+            {"key": "green_1", "color": "#30a46c", "r": 12}
+          ],
+          "decoy_count": 0,
+          "decoy_color": "#b9bbc6"
+        }
+      }
+    },
+    "shapes": {
+      "file": "shapes.html",
+      "variants": {
+        "default": {
+          "shapes": [
+            {"key": "orange_triangle", "shape": "triangle", "color": "#f76b15", "size": 56},
+            {"key": "blue_square", "shape": "square", "color": "#0090ff", "size": 48},
+            {"key": "green_star", "shape": "star", "color": "#30a46c", "size": 60},
+            {"key": "red_circle", "shape": "circle", "color": "#e5484d", "size": 50},
+            {"key": "black_hexagon", "shape": "hexagon", "color": "#1c2024", "size": 54},
+            {"key": "purple_diamond", "shape": "diamond", "color": "#8e4ec6", "size": 52}
+          ]
+        },
+        "triangles": {
+          "shapes": [
+            {"key": "triangle_1", "shape": "triangle", "color": "#f76b15", "size": 44},
+            {"key": "triangle_2", "shape": "triangle", "color": "#0090ff", "size": 44},
+            {"key": "triangle_3", "shape": "triangle", "color": "#30a46c", "size": 44},
+            {"key": "square_1", "shape": "square", "color": "#f76b15", "size": 40},
+            {"key": "circle_1", "shape": "circle", "color": "#0090ff", "size": 40}
+          ]
+        }
+      }
+    },
+    "chart": {
+      "file": "chart.html",
+      "bars": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+      "keys": ["bar_jan", "bar_feb", "bar_mar", "bar_apr", "bar_may", "bar_jun", "bar_max", "bar_min", "chart_title", "legend", "axis_y"]
+    },
+    "table": {
+      "file": "table.html",
+      "_doc": "Notion-style dense DOM table: 18 rows of 28 px. ?seed= shuffles the row order; ?spread=k1,...,k5 puts those tasks on the non-adjacent rows 2, 5, 8, 11, 14. Keys task_* are whole rows; task_*_text are the title-cell text spans (the underline rule's truth). All cell text spans are published as truth.texts (labels must not cover them).",
+      "tasks": [
+        {"key": "task_email", "title": "Replace hello@yourstudio.com", "status": "Todo", "owner": "Addy"},
+        {"key": "task_title", "title": "Rename site title, add favicon", "status": "Todo", "owner": "Addy"},
+        {"key": "task_hero", "title": "Swap the hero image", "status": "In progress", "owner": "Mira"},
+        {"key": "task_pricing", "title": "Update pricing to $49", "status": "Todo", "owner": "Addy"},
+        {"key": "task_demo", "title": "Delete the demo row", "status": "Todo", "owner": "Jon"},
+        {"key": "task_fonts", "title": "Self-host the fonts", "status": "Done", "owner": "Mira"},
+        {"key": "task_og", "title": "Add Open Graph image", "status": "Todo", "owner": "Jon"},
+        {"key": "task_404", "title": "Design a 404 page", "status": "Backlog", "owner": "Mira"},
+        {"key": "task_analytics", "title": "Set up privacy-friendly analytics", "status": "Todo", "owner": "Addy"},
+        {"key": "task_sitemap", "title": "Generate sitemap.xml", "status": "Done", "owner": "Jon"},
+        {"key": "task_alt", "title": "Write alt text for images", "status": "In progress", "owner": "Mira"},
+        {"key": "task_forms", "title": "Hook up the contact form", "status": "Todo", "owner": "Addy"},
+        {"key": "task_dark", "title": "Check dark mode contrast", "status": "Backlog", "owner": "Jon"},
+        {"key": "task_lighthouse", "title": "Run Lighthouse audit", "status": "Todo", "owner": "Mira"},
+        {"key": "task_domain", "title": "Point the domain at Netlify", "status": "Done", "owner": "Addy"},
+        {"key": "task_legal", "title": "Add privacy policy and terms", "status": "Todo", "owner": "Jon"},
+        {"key": "task_blog", "title": "Migrate three blog posts", "status": "Backlog", "owner": "Mira"},
+        {"key": "task_launch", "title": "Post the launch tweet", "status": "Backlog", "owner": "Addy"}
+      ]
+    },
+    "video": {
+      "file": "video.html",
+      "src": "video/dots.mp4",
+      "width": 1280,
+      "height": 720,
+      "duration": 12,
+      "_doc": "Squares drawn by make_video.py with ffmpeg drawbox. Each segment holds still for 4 s; the page pauses at ?t= (use a segment midpoint).",
+      "segments": [
+        {"start": 0, "end": 4, "squares": [
+          {"key": "v_red", "color": "red", "rect": [160, 120, 64, 64]},
+          {"key": "v_blue", "color": "blue", "rect": [980, 520, 64, 64]},
+          {"key": "v_green", "color": "green", "rect": [600, 300, 48, 48]}
+        ]},
+        {"start": 4, "end": 8, "squares": [
+          {"key": "v_red", "color": "red", "rect": [1040, 140, 64, 64]},
+          {"key": "v_blue", "color": "blue", "rect": [220, 560, 64, 64]},
+          {"key": "v_yellow", "color": "yellow", "rect": [640, 420, 56, 56]}
+        ]},
+        {"start": 8, "end": 12, "squares": [
+          {"key": "v_green", "color": "green", "rect": [90, 600, 48, 48]},
+          {"key": "v_yellow", "color": "yellow", "rect": [1120, 80, 56, 56]},
+          {"key": "v_red", "color": "red", "rect": [560, 180, 40, 40]}
+        ]}
+      ]
+    },
+    "terminal": {
+      "_doc": "Not a browser page: final_eval.py prints terminal/<file> in a new Terminal window (a .command script) and takes the truth from axfind {bundle com.apple.Terminal, role AXTextArea, text}.",
+      "files": ["build_log.txt", "test_run.txt"]
+    }
+  }
+}
