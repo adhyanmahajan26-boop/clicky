@@ -2,13 +2,13 @@
 //  CompanionManager.swift
 //  leanring-buddy
 //
-//  Central state manager for the companion voice mode. Owns the push-to-talk
-//  pipeline (dictation manager + global shortcut monitor + overlay) and
-//  exposes observable voice state for the panel UI.
+//  Theo's hub: what Theo is doing right now (idle, hearing you, thinking,
+//  answering), the permissions it holds, push-to-talk, the spark overlay,
+//  and every turn from your words to the spoken, marked-up answer.
 //
 
-import ClickyCore
 import AVFoundation
+import ClickyCore
 import Combine
 import Foundation
 import os
@@ -16,29 +16,35 @@ import ScreenCaptureKit
 import Speech
 import SwiftUI
 
+/// Theo's voice loop, as the UI shows it.
 enum CompanionVoiceState {
+    /// Waiting (wake word or push-to-talk).
     case idle
+    /// Push-to-talk held: recording.
     case listening
+    /// Words in, answer not started yet.
     case processing
+    /// Speaking or showing the answer.
     case responding
 }
 
 @MainActor
 final class CompanionManager: ObservableObject {
     @Published private(set) var voiceState: CompanionVoiceState = .idle
+    /// The last thing you said (push-to-talk or wake word).
     @Published private(set) var lastTranscript: String?
+    /// Microphone loudness while push-to-talk records (0…1), for the level meter.
     @Published private(set) var currentAudioPowerLevel: CGFloat = 0
+
+    // Privileges, re-read every 1.5 s.
     @Published private(set) var hasAccessibilityPermission = false
     @Published private(set) var hasScreenRecordingPermission = false
     @Published private(set) var hasMicrophonePermission = false
     @Published private(set) var hasScreenContentPermission = false
 
-    /// Screen location (global AppKit coords) of a detected UI element the
-    /// buddy should fly to and point at. Parsed from Claude's response;
-    /// observed by BlueCursorView to trigger the flight animation.
+    /// Where the spark should fly and point (global AppKit point), from the answer's POINT tag.
     @Published var detectedElementScreenLocation: CGPoint?
-    /// The display frame (global AppKit coords) of the screen the detected
-    /// element is on, so BlueCursorView knows which screen overlay should animate.
+    /// The frame of the screen that point is on, so only that screen's layer flies.
     @Published var detectedElementDisplayFrame: CGRect?
 
     /// Rings, arrows, steps etc. Claude drew for the current answer, laid out
@@ -190,27 +196,21 @@ final class CompanionManager: ObservableObject {
         visibleCompanionWorkers = CompanionActivityLimits.visibleWorkers(from: companionActivitySources.flatMap(\.workers))
     }
 
-    // MARK: - Onboarding Prompt Bubble
+    // MARK: - First-run hint
 
-    /// "press control + option…" hint streamed character-by-character on the
-    /// cursor after the first-run welcome text, so a new user knows what to do.
+    /// The hint typed out next to the spark after Theo's first hello.
     @Published var onboardingPromptText: String = ""
     @Published var onboardingPromptOpacity: Double = 0.0
     @Published var showOnboardingPrompt: Bool = false
 
-    let buddyDictationManager = PushToTalkRecorder()
-    let globalPushToTalkShortcutMonitor = PushToTalkKeys()
-    let overlayWindowManager = OverlayWindowManager()
-    // Response text is now displayed inline on the cursor overlay via
-    // streamingResponseText, so no separate response overlay manager is needed.
+    let pushToTalkRecorder = PushToTalkRecorder()
+    let pushToTalkKeys = PushToTalkKeys()
+    let sparkOverlay = SparkOverlayManager()
 
-    /// Claude runs through the local Claude Code CLI on the user's
-    /// subscription — no API key or proxy server involved.
-    private lazy var claudeCodeBridge: ClaudeCodeBridge = {
-        return ClaudeCodeBridge(model: selectedModel)
-    }()
+    /// The brain: Claude Code (or another agent CLI) on your own subscription.
+    private lazy var claudeCodeBridge = ClaudeCodeBridge(model: selectedModel)
 
-    /// Built-in Mac voice for spoken replies (free, offline).
+    /// Theo's voice: Qwen on this Mac, a voice server, or the Mac voice.
     let speechOutputClient = CompanionSpeechOutput()
     /// P7: "hey theo" / "hey clicky", heard on-device (see WakeWordController).
     private(set) lazy var wakeWordController = WakeWordController(speechOutput: speechOutputClient, audioEngineHub: speechOutputClient.audioEngineHub)
@@ -405,11 +405,11 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
 
         if enabled {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.hasShownOverlayBefore = true
+            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         } else {
-            overlayWindowManager.hideOverlay()
+            sparkOverlay.hideOverlay()
             isOverlayVisible = false
         }
     }
@@ -487,8 +487,8 @@ final class CompanionManager: ObservableObject {
         // were revoked (e.g. signing change), don't show the cursor — the
         // panel will show the permissions UI instead.
         if hasCompletedOnboarding && allPermissionsGranted && isClickyCursorEnabled {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.hasShownOverlayBefore = true
+            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         }
     }
@@ -509,14 +509,14 @@ final class CompanionManager: ObservableObject {
 
         // Show the overlay for the first time — isFirstAppearance triggers
         // the welcome animation, then the push-to-talk hint
-        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
     }
 
     /// Setup's "Test the spark": the overlay has to be up to show it.
     func showOverlayForSparkTest() {
         guard !isOverlayVisible else { return }
-        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
         scheduleTransientHideIfNeeded()
     }
@@ -556,9 +556,9 @@ final class CompanionManager: ObservableObject {
         wakeWordController.stop()
         wakeWordVoiceStateCancellable?.cancel()
         escapeKeyCancellable?.cancel()
-        globalPushToTalkShortcutMonitor.stop()
-        buddyDictationManager.cancelCurrentDictation()
-        overlayWindowManager.hideOverlay()
+        pushToTalkKeys.stop()
+        pushToTalkRecorder.cancelCurrentDictation()
+        sparkOverlay.hideOverlay()
         transientHideTask?.cancel()
 
         currentResponseTask?.cancel()
@@ -589,9 +589,9 @@ final class CompanionManager: ObservableObject {
         if hasAccessibilityPermission != currentlyHasAccessibility { hasAccessibilityPermission = currentlyHasAccessibility }
 
         if currentlyHasAccessibility {
-            globalPushToTalkShortcutMonitor.start()
+            pushToTalkKeys.start()
         } else {
-            globalPushToTalkShortcutMonitor.stop()
+            pushToTalkKeys.stop()
         }
 
         let currentlyHasScreenRecording = TheoPermissions.isScreenRecordingGranted
@@ -662,8 +662,8 @@ final class CompanionManager: ObservableObject {
 
                     // If onboarding was already completed, show the cursor overlay now
                     if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
-                        overlayWindowManager.hasShownOverlayBefore = true
-                        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+                        sparkOverlay.hasShownOverlayBefore = true
+                        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                         isOverlayVisible = true
                     }
                 }
@@ -711,7 +711,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func bindAudioPowerLevel() {
-        audioPowerCancellable = buddyDictationManager.$currentAudioPowerLevel
+        audioPowerCancellable = pushToTalkRecorder.$currentAudioPowerLevel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] powerLevel in
                 self?.currentAudioPowerLevel = powerLevel
@@ -719,10 +719,10 @@ final class CompanionManager: ObservableObject {
     }
 
     private func bindVoiceStateObservation() {
-        voiceStateCancellable = buddyDictationManager.$isRecordingFromKeyboardShortcut
+        voiceStateCancellable = pushToTalkRecorder.$isRecordingFromKeyboardShortcut
             .combineLatest(
-                buddyDictationManager.$isFinalizingTranscript,
-                buddyDictationManager.$isPreparingToRecord
+                pushToTalkRecorder.$isFinalizingTranscript,
+                pushToTalkRecorder.$isPreparingToRecord
             )
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isRecording, isFinalizing, isPreparing in
@@ -753,7 +753,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func bindShortcutTransitions() {
-        shortcutTransitionCancellable = globalPushToTalkShortcutMonitor
+        shortcutTransitionCancellable = pushToTalkKeys
             .transitions
             .receive(on: DispatchQueue.main)
             .sink { [weak self] transition in
@@ -768,7 +768,7 @@ final class CompanionManager: ObservableObject {
             // During a hands-free session the mic is already open, so holding
             // the shortcut does nothing — a double-tap ends the session instead.
             guard !isHandsFreeSessionActive else { return }
-            guard !buddyDictationManager.isDictationInProgress else { return }
+            guard !pushToTalkRecorder.isDictationInProgress else { return }
 
             // P7: the wake listener closes its mic first (a turn it was
             // hearing is dropped) and opens it again after key-up.
@@ -783,8 +783,8 @@ final class CompanionManager: ObservableObject {
 
             // If the cursor is hidden, bring it back transiently for this interaction
             if !isClickyCursorEnabled && !isOverlayVisible {
-                overlayWindowManager.hasShownOverlayBefore = true
-                overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+                sparkOverlay.hasShownOverlayBefore = true
+                sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                 isOverlayVisible = true
             }
 
@@ -818,7 +818,7 @@ final class CompanionManager: ObservableObject {
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
-                await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
+                await pushToTalkRecorder.startPushToTalkFromKeyboardShortcut(
                     currentDraftText: "",
                     updateDraftText: { _ in
                         // Partial transcripts are hidden (waveform-only UI)
@@ -854,14 +854,14 @@ final class CompanionManager: ObservableObject {
             lastPushToTalkReleaseDate = Date()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
-            buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            pushToTalkRecorder.stopPushToTalkFromKeyboardShortcut()
             // The dictation engine stopped above; the wake word may listen again.
             speechOutputClient.audioEngineHub.releaseMicrophone(for: .pushToTalk)
 
             if wasShortcutDoubleTapped {
                 // The two quick taps each started a (silent) push-to-talk
                 // recording — throw those away before opening the session mic.
-                buddyDictationManager.cancelCurrentDictation(preserveDraftText: false)
+                pushToTalkRecorder.cancelCurrentDictation(preserveDraftText: false)
                 startHandsFreeSession()
             }
         case .none:
@@ -908,7 +908,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func wakeWordDidFire(initialTurnText: String) {
-        guard !isHandsFreeSessionActive, !buddyDictationManager.isDictationInProgress else {
+        guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress else {
             wakeWordController.cancelCurrentTurn()
             return
         }
@@ -916,8 +916,8 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = nil
         if !isClickyCursorEnabled && !isOverlayVisible {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.hasShownOverlayBefore = true
+            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         }
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -935,7 +935,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func wakeWordTurnDidFinish(turnText: String) {
-        guard voiceState == .listening, !buddyDictationManager.isDictationInProgress, !isHandsFreeSessionActive else { return }
+        guard voiceState == .listening, !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive else { return }
         voiceState = .idle
         lastTranscript = turnText
         // Latency is measured from the end of speech, as push-to-talk does from key-up.
@@ -947,7 +947,7 @@ final class CompanionManager: ObservableObject {
 
     /// P8: words inside the follow-up window (no wake word): the listening state without the Pop.
     private func wakeWordFollowUpCommandDidStart() {
-        guard !isHandsFreeSessionActive, !buddyDictationManager.isDictationInProgress, voiceState == .idle else {
+        guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress, voiceState == .idle else {
             wakeWordController.cancelCurrentTurn()
             return
         }
@@ -965,7 +965,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func wakeWordTurnWasAbandoned() {
-        guard voiceState == .listening, !buddyDictationManager.isDictationInProgress else { return }
+        guard voiceState == .listening, !pushToTalkRecorder.isDictationInProgress else { return }
         voiceState = .idle
         claudeCodeBridge.reapStandbyProcess()
         zoomChecker.reapStandby()
@@ -1046,8 +1046,8 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = nil
         if !isOverlayVisible {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.hasShownOverlayBefore = true
+            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         }
 
@@ -1355,7 +1355,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func bindEscapeKey() {
-        escapeKeyCancellable = globalPushToTalkShortcutMonitor
+        escapeKeyCancellable = pushToTalkKeys
             .escapePressed
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
@@ -2115,7 +2115,7 @@ final class CompanionManager: ObservableObject {
             // Pause 1s after everything finishes, then fade out
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
-            overlayWindowManager.fadeOutAndHideOverlay()
+            sparkOverlay.fadeOutAndHideOverlay()
             isOverlayVisible = false
         }
     }

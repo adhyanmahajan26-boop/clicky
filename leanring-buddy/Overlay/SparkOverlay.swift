@@ -35,7 +35,7 @@ final class SparkOverlayWindow: NSWindow {
 
 /// Puts a spark layer on each screen, and rebuilds them when screens change.
 @MainActor
-final class OverlayWindowManager {
+final class SparkOverlayManager {
     private var windows: [SparkOverlayWindow] = []
     /// The first show of a launch fades the spark in and says hello.
     var hasShownOverlayBefore = false
