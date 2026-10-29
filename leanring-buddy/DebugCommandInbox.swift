@@ -257,6 +257,10 @@ final class DebugCommandInbox {
             if let section = commandObject["section"] as? Int { SetupWindowController.scroll(toSection: section) }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
 
+        case "showPanel":
+            NotificationCenter.default.post(name: .theoShowPanel, object: nil)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
+
         case "showGuide":
             // {step?: 0 welcome … 6 done}
             let step = (commandObject["step"] as? Int).flatMap(SetupGuideModel.Step.init(rawValue:))

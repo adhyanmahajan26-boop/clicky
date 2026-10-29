@@ -52,7 +52,7 @@ public struct WakeWordMatch: Equatable, Sendable {
 }
 
 public struct WakeWordMatcher: Sendable {
-    public static let defaultPhrases = ["hey theo", "hey claudia", "hey clicky"]
+    public static let defaultPhrases = ["hey theo", "hey claudia"]
     /// A gap this long between two words starts a new utterance segment.
     public static let segmentPauseSeconds: TimeInterval = 0.6
 
