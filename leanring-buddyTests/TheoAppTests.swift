@@ -1,8 +1,6 @@
 //
-//  leanring_buddyTests.swift
+//  TheoAppTests.swift
 //  leanring-buddyTests
-//
-//  Created by thorfinn on 3/2/26.
 //
 
 import ClickyCore
@@ -12,33 +10,12 @@ import Testing
 @testable import Clicky
 
 @MainActor
-struct leanring_buddyTests {
+struct TheoAppTests {
 
-    @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
-        let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
-            hasPermissionNow: false,
-            hasAttemptedSystemPrompt: false
-        )
-
-        #expect(presentationDestination == .systemPrompt)
-    }
-
-    @Test func repeatedPermissionRequestOpensSystemSettings() async throws {
-        let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
-            hasPermissionNow: false,
-            hasAttemptedSystemPrompt: true
-        )
-
-        #expect(presentationDestination == .systemSettings)
-    }
-
-    @Test func knownGrantedScreenRecordingPermissionSkipsTheGate() async throws {
-        let shouldTreatPermissionAsGranted = WindowPositionManager.shouldTreatScreenRecordingPermissionAsGrantedForSessionLaunch(
-            hasScreenRecordingPermissionNow: false,
-            hasPreviouslyConfirmedScreenRecordingPermission: true
-        )
-
-        #expect(shouldTreatPermissionAsGranted)
+    @Test func permissionAsksPromptOnceThenOpenSettings() {
+        #expect(PermissionAskOutcome.next(isGranted: false, promptedThisLaunch: false) == .systemPrompt)
+        #expect(PermissionAskOutcome.next(isGranted: false, promptedThisLaunch: true) == .systemSettings)
+        #expect(PermissionAskOutcome.next(isGranted: true, promptedThisLaunch: true) == .alreadyGranted)
     }
 
     @Test func handsFreeCommandsIgnoreFillerWordsAndPunctuation() async throws {
@@ -184,5 +161,4 @@ struct leanring_buddyTests {
         #expect(HandsFreeVoiceCommand.parse("okay clicky, copy the answer") == .copyLastAnswer)
         #expect(HandsFreeVoiceCommand.parse("copy that file to the desktop") == nil)
     }
-
 }

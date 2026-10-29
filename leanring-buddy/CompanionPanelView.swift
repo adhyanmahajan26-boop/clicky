@@ -16,7 +16,7 @@ struct CompanionPanelView: View {
     @State private var emailInput: String = ""
     /// True once Screen Recording was requested this launch: the grant only
     /// applies after a relaunch, so the row swaps Grant for Relaunch.
-    @State private var isScreenRecordingRelaunchOffered = WindowPositionManager.hasRequestedScreenRecordingDuringCurrentLaunch
+    @State private var isScreenRecordingRelaunchOffered = TheoPermissions.askedForScreenRecordingThisLaunch
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -355,7 +355,7 @@ struct CompanionPanelView: View {
                     Button(action: {
                         // Triggers the system accessibility prompt (AXIsProcessTrustedWithOptions)
                         // on first attempt, then opens System Settings on subsequent attempts.
-                        WindowPositionManager.requestAccessibilityPermission()
+                        TheoPermissions.askForAccessibility()
                     }) {
                         Text("Grant")
                             .font(.system(size: 11, weight: .semibold))
@@ -374,8 +374,8 @@ struct CompanionPanelView: View {
                         // Reveals the app in Finder so the user can drag it into
                         // the Accessibility list if it doesn't appear automatically
                         // (common with unsigned dev builds).
-                        WindowPositionManager.revealAppInFinder()
-                        WindowPositionManager.openAccessibilitySettings()
+                        TheoPermissions.revealInFinder()
+                        TheoPermissions.openAccessibilitySettings()
                     }) {
                         Text("Find App")
                             .font(.system(size: 11, weight: .semibold))
@@ -437,7 +437,7 @@ struct CompanionPanelView: View {
             } else if isScreenRecordingRelaunchOffered {
                 Button(action: {
                     // macOS only applies Screen Recording to a fresh launch.
-                    WindowPositionManager.relaunchApp()
+                    TheoPermissions.relaunch()
                 }) {
                     Text("Relaunch")
                         .font(.system(size: 11, weight: .semibold))
@@ -457,7 +457,7 @@ struct CompanionPanelView: View {
                     // attempt (auto-adds app to the list), then opens System Settings
                     // on subsequent attempts. Either way it only applies after a
                     // relaunch, so offer that next.
-                    WindowPositionManager.requestScreenRecordingPermission()
+                    TheoPermissions.askForScreenRecording()
                     isScreenRecordingRelaunchOffered = true
                 }) {
                     Text("Grant")

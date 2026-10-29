@@ -453,10 +453,10 @@ private struct PermissionsStep: View {
                 SFSpeechRecognizer.requestAuthorization { _ in }
             }
             row("Accessibility", "So Theo can point at and click the right things", companionManager.hasAccessibilityPermission) {
-                _ = WindowPositionManager.requestAccessibilityPermission()
+                _ = TheoPermissions.askForAccessibility()
             }
             row("Screen recording", "So Theo can see your screens", companionManager.hasScreenRecordingPermission) {
-                _ = WindowPositionManager.requestScreenRecordingPermission()
+                _ = TheoPermissions.askForScreenRecording()
             }
         }
         .onReceive(ticker) { _ in

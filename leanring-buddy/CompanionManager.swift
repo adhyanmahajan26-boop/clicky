@@ -585,7 +585,7 @@ final class CompanionManager: ObservableObject {
         // Every assignment below only happens on a change: this runs every
         // 1.5 s and each @Published write (even an equal one) re-renders every
         // overlay and panel view observing CompanionManager.
-        let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
+        let currentlyHasAccessibility = TheoPermissions.isAccessibilityGranted
         if hasAccessibilityPermission != currentlyHasAccessibility { hasAccessibilityPermission = currentlyHasAccessibility }
 
         if currentlyHasAccessibility {
@@ -594,7 +594,7 @@ final class CompanionManager: ObservableObject {
             globalPushToTalkShortcutMonitor.stop()
         }
 
-        let currentlyHasScreenRecording = WindowPositionManager.hasScreenRecordingPermission()
+        let currentlyHasScreenRecording = TheoPermissions.isScreenRecordingGranted
         if hasScreenRecordingPermission != currentlyHasScreenRecording { hasScreenRecordingPermission = currentlyHasScreenRecording }
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
