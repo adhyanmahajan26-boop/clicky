@@ -85,6 +85,22 @@ final class ClaudiaUIServer {
 
     private func respond(to request: HTTPRequest, on connection: NWConnection) {
         let path = request.path.split(separator: "?").first.map(String.init) ?? "/"
+        let corsHeaders: [String: String] = Self.isT3Code(request) ? [
+            "Access-Control-Allow-Origin": request.headers["origin"] ?? "*",
+            "Access-Control-Allow-Headers": "Content-Type, X-Claudia-Token",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Vary": "Origin"
+        ] : [:]
+        // T3 Code calls the API from its own page: answer the CORS preflight.
+        if request.method == "OPTIONS" {
+            return send(connection, status: corsHeaders.isEmpty ? 403 : 204, type: "text/plain", body: Data(), extraHeaders: corsHeaders)
+        }
+        // T3 Code (only) gets the token, so its native Notes and assistant UI can call the API.
+        if path == "/t3-token" {
+            guard !corsHeaders.isEmpty else { return send(connection, status: 403, type: "text/plain", body: Data("T3 Code only".utf8)) }
+            let body = (try? JSONSerialization.data(withJSONObject: ["token": token, "name": ClickySettings.assistantName])) ?? Data()
+            return send(connection, status: 200, type: "application/json", body: body, extraHeaders: corsHeaders)
+        }
         // T3 Code's Claudia section checks she's running (no token, says nothing else).
         if path == "/health" {
             return send(connection, status: 200, type: "application/json", body: Data(#"{"ok":true}"#.utf8),
@@ -110,7 +126,7 @@ final class ClaudiaUIServer {
                   let data = try? Data(contentsOf: item.url) else {
                 return send(connection, status: 404, type: "text/plain", body: Data("not found".utf8))
             }
-            return send(connection, status: 200, type: "image/png", body: data)
+            return send(connection, status: 200, type: "image/png", body: data, extraHeaders: corsHeaders)
         }
         if commandName == "board.png" {
             guard let exported = companionManager.boardController.exportBoard() else {
@@ -126,12 +142,13 @@ final class ClaudiaUIServer {
         controlInbox.execute(command) { [weak self] ok, result, error in
             let object: [String: Any] = ["ok": ok, "result": result ?? NSNull(), "error": error ?? NSNull()]
             let body = (JSONSerialization.isValidJSONObject(object) ? try? JSONSerialization.data(withJSONObject: object) : nil) ?? Data(#"{"ok":false}"#.utf8)
-            self?.send(connection, status: 200, type: "application/json", body: body)
+            self?.send(connection, status: 200, type: "application/json", body: body, extraHeaders: corsHeaders)
         }
     }
 
     /// T3 Code's web UI runs at 127.0.0.1:3773 (its server port; the dev web server uses 5733).
-    static let t3CodeOrigins = ["http://127.0.0.1:3783", "http://localhost:3783", "http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
+    /// T3 Code's packaged app loads its UI from t3code://app (t3code-dev:// in development).
+    static let t3CodeOrigins = ["t3code://app", "t3code-dev://app", "http://127.0.0.1:3783", "http://localhost:3783", "http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
 
     static func isT3Code(_ request: HTTPRequest) -> Bool {
         let source = request.headers["origin"] ?? request.headers["referer"] ?? ""
@@ -139,7 +156,7 @@ final class ClaudiaUIServer {
     }
 
     private func send(_ connection: NWConnection, status: Int, type: String, body: Data, extraHeaders: [String: String] = [:]) {
-        let reason = [200: "OK", 403: "Forbidden", 404: "Not Found"][status] ?? "OK"
+        let reason = [200: "OK", 204: "No Content", 403: "Forbidden", 404: "Not Found"][status] ?? "OK"
         var head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\n"
         for (name, value) in extraHeaders { head += "\(name): \(value)\r\n" }
         head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"

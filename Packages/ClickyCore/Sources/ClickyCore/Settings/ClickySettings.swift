@@ -143,6 +143,8 @@ public enum ClickySettings {
         public static let modelsCode = "v2.models.code"
         /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
         public static let sparkMode = "v2.spark.mode"
+        /// String, default "Claudia": what the assistant is called (UI, T3 Code, how it names itself, and "hey <name>").
+        public static let assistantName = "v2.assistant.name"
         /// Colour theme of the notes panel and Claudia's UI page: "system" (default), "claude", "midnight", "paper", "neon", "forest".
         public static let uiTheme = "v2.ui.theme"
         /// The companion's look: "claude" (default), "codex", "antigravity", "grok", "orb", "star" or "atom".
@@ -386,7 +388,9 @@ public enum ClickySettings {
         let phrases = (defaults.stringArray(forKey: Keys.wakePhrases) ?? WakeWordMatcher.defaultPhrases)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return phrases
+        // "hey <name>" always wakes the assistant by the name the owner gave it.
+        let namePhrase = "hey " + assistantName.lowercased()
+        return phrases.contains(namePhrase) ? phrases : phrases + [namePhrase]
     }
 
     public static var wakeLocaleSetting: WakeLocaleSetting { WakeLocaleSetting.parse(defaults.string(forKey: Keys.wakeLocale)) }
@@ -442,6 +446,14 @@ public enum ClickySettings {
     public static var sparkMode: SparkMode {
         get { defaults.string(forKey: Keys.sparkMode).flatMap(SparkMode.init(rawValue:)) ?? .cursor }
         set { defaults.set(newValue.rawValue, forKey: Keys.sparkMode) }
+    }
+
+    public static var assistantName: String {
+        get {
+            let name = (defaults.string(forKey: Keys.assistantName) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? "Claudia" : String(name.prefix(32))
+        }
+        set { defaults.set(newValue, forKey: Keys.assistantName) }
     }
 
     public static var uiTheme: ClaudiaTheme {

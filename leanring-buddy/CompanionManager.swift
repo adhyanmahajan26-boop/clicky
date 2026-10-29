@@ -1544,6 +1544,11 @@ final class CompanionManager: ObservableObject {
         // P7: the ACTIONS section (open apps, click, type, highlight, summarize…).
         if ClickySettings.isActionsEnabled { promptFeatures.insert(.actions) }
         var mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
+        // The name the owner gave the assistant (v2.assistant.name).
+        let assistantName = ClickySettings.assistantName
+        if assistantName.lowercased() != "claudia" {
+            mainPrompt = mainPrompt.replacingOccurrences(of: "you're claudia (built on clicky)", with: "you're \(assistantName.lowercased())")
+        }
         // A screen of its own: searches and links open in Claudia's own browser window there.
         if let claudiaScreen = ClaudiaScreen.picked, ClickySettings.isActionsEnabled {
             mainPrompt += "\n\nyour own screen: you have a display of your own (\"\(claudiaScreen.localizedName)\"). to search the web or open a site, always use a search or open_url step: they open in your own browser window on that display, so the user's windows stay as they are. never switch to the user's browser and type a search into it, unless they ask you to do something in a specific window of theirs."

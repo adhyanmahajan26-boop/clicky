@@ -203,6 +203,7 @@ final class ClaudiaControlInbox {
             if let screenName = command["claudiaScreen"] as? String { ClickySettings.claudiaScreenName = screenName }
             if let style = (command["sparkStyle"] as? String).flatMap(CompanionIconStyle.init(rawValue:)) { ClickySettings.sparkStyle = style }
             if let theme = (command["theme"] as? String).flatMap(ClaudiaTheme.init(rawValue:)) { ClickySettings.uiTheme = theme }
+            if let name = command["assistantName"] as? String, !name.trimmingCharacters(in: .whitespaces).isEmpty { ClickySettings.assistantName = name }
             if let autoBoard = command["autoBoard"] as? Bool { UserDefaults.standard.set(autoBoard, forKey: ClickySettings.Keys.whiteboardAuto) }
             let catalog = BrainCatalog.shared
             catalog.load()
@@ -213,6 +214,7 @@ final class ClaudiaControlInbox {
                 "sparkMode": ClickySettings.sparkMode.rawValue,
                 "sparkStyle": ClickySettings.sparkStyle.rawValue,
                 "theme": ClickySettings.uiTheme.rawValue,
+                "assistantName": ClickySettings.assistantName,
                 "themes": ClaudiaTheme.allCases.map { ["id": $0.rawValue, "name": $0.displayName] },
                 "palette": ClickySettings.uiTheme.palette.map { palette -> [String: String] in
                     ["bg": ClaudiaTheme.cssHex(palette.background), "panel": ClaudiaTheme.cssHex(palette.panel), "panel2": ClaudiaTheme.cssHex(palette.line),
