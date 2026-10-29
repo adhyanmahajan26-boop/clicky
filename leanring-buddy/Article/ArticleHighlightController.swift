@@ -567,11 +567,8 @@ final class ArticleHighlightController {
                 notesPanelHiddenForFocus = false
             }
         } else {
+            // Only the highlights follow the article window; the notes stay up until the owner closes them.
             overlayPanel?.orderOut(nil)
-            if notesPanel?.isVisible ?? false {
-                notesPanel?.orderOut(nil)
-                notesPanelHiddenForFocus = true
-            }
         }
     }
 

@@ -45,6 +45,22 @@ public struct NotchActions {
                                            showAgentsWindow: {}, setCodeModeEnabled: { _ in })
 }
 
+/// How the pill looks: the theme's colours, and whether it floats free (a rounded
+/// capsule anywhere on screen) instead of hanging from the top edge like a notch.
+public struct NotchStyle: Equatable, Sendable {
+    public var fillHex: UInt32
+    public var accentHex: UInt32
+    public var isFloating: Bool
+
+    public init(fillHex: UInt32 = 0x000000, accentHex: UInt32 = 0xD97757, isFloating: Bool = false) {
+        self.fillHex = fillHex
+        self.accentHex = accentHex
+        self.isFloating = isFloating
+    }
+
+    public static let `default` = NotchStyle()
+}
+
 /// The pill outline: flush with the screen's top edge, with small outward
 /// flares where it meets the edge and rounded bottom corners.
 public struct NotchShape: Shape {
@@ -90,13 +106,16 @@ public struct NotchView: View {
     let actions: NotchActions
     /// Set for offscreen renders: the logo is drawn at this moment instead of animating.
     let fixedAnimationDate: Date?
+    let style: NotchStyle
     @Environment(\.colorScheme) private var colorScheme
 
     public static let expandSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
     /// How long the spring takes to settle (the app shrinks the window after it).
     public static let springSettleSeconds: TimeInterval = 0.5
 
-    public init(content: NotchContent, layout: NotchLayout, isExpanded: Bool, actions: NotchActions, fixedAnimationDate: Date? = nil) {
+    public init(content: NotchContent, layout: NotchLayout, isExpanded: Bool, actions: NotchActions, fixedAnimationDate: Date? = nil,
+                style: NotchStyle = .default) {
+        self.style = style
         self.content = content
         self.layout = layout
         self.isExpanded = isExpanded
@@ -116,11 +135,32 @@ public struct NotchView: View {
                    bottomCornerRadius: isExpanded ? NotchGeometry.expandedBottomCornerRadius : NotchGeometry.collapsedBottomCornerRadius)
     }
 
+    /// Busy: listening, thinking, speaking, or helpers running. The edge glows in the theme's accent.
+    private var isBusy: Bool { content.phase != .idle || !content.orbitingAgentIDs.isEmpty }
+
+    private var outline: AnyShape {
+        if style.isFloating {
+            let pill = NotchGeometry.collapsedSize(layout: layout)
+            return AnyShape(RoundedRectangle(cornerRadius: isExpanded ? 20 : pill.height / 2, style: .continuous))
+        }
+        return AnyShape(pillShape)
+    }
+
     public var body: some View {
         let pillSize = Self.pillSize(content: content, layout: layout, isExpanded: isExpanded)
+        let accent = Color(cgColor: CompanionIconStyle.color(style.accentHex))
         ZStack(alignment: .top) {
-            pillShape.fill(Color.black)
-            pillShape.stroke(Color.white.opacity(colorScheme == .dark ? 0.14 : 0), lineWidth: 1)
+            outline.fill(Color(cgColor: CompanionIconStyle.color(style.fillHex)))
+            if isBusy {
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: fixedAnimationDate != nil)) { timeline in
+                    let seconds = (fixedAnimationDate ?? timeline.date).timeIntervalSinceReferenceDate
+                    outline.stroke(AngularGradient(colors: [accent, accent.opacity(0.15), accent.opacity(0.6), accent.opacity(0.15), accent],
+                                                   center: .center, angle: .degrees(seconds.truncatingRemainder(dividingBy: 2.4) / 2.4 * 360)),
+                                   lineWidth: 1.6)
+                }
+            } else {
+                outline.stroke(Color.white.opacity(colorScheme == .dark || style.isFloating ? 0.14 : 0), lineWidth: 1)
+            }
             if isExpanded {
                 expandedContent
                     .transition(.opacity.animation(.easeOut(duration: 0.18).delay(0.08)))
@@ -130,8 +170,9 @@ public struct NotchView: View {
             }
         }
         .frame(width: pillSize.width, height: pillSize.height, alignment: .top)
-        .clipShape(pillShape)
-        .contentShape(pillShape)
+        .clipShape(outline)
+        .contentShape(outline)
+        .shadow(color: isBusy ? accent.opacity(0.45) : .black.opacity(style.isFloating ? 0.35 : 0), radius: isBusy ? 10 : 8, y: style.isFloating ? 4 : 0)
         .animation(Self.expandSpring, value: isExpanded)
         .animation(Self.expandSpring, value: pillSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -167,7 +208,7 @@ public struct NotchView: View {
         .contentShape(Rectangle())
         .onTapGesture { actions.expand() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(content.statusText.isEmpty ? "Clicky" : "Clicky, \(content.statusText)")
+        .accessibilityLabel(content.statusText.isEmpty ? "Theo" : "Theo, \(content.statusText)")
         .accessibilityAddTraits(.isButton)
     }
 

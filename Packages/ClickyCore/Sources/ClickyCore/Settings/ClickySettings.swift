@@ -478,6 +478,32 @@ public enum ClickySettings {
     }
     public static var isUpdateAutoCheckEnabled: Bool { defaults.object(forKey: Keys.updateAutoCheck) as? Bool ?? true }
 
+    /// Where Theo's pill lives: hanging from the top like a notch, floating anywhere (drag it), or in a corner.
+    public enum IslandPlacement: String, CaseIterable, Sendable {
+        case notch, floating, corner
+        public var displayName: String {
+            switch self {
+            case .notch: return "Notch (top centre)"
+            case .floating: return "Floating (drag it anywhere)"
+            case .corner: return "Top-right corner"
+            }
+        }
+    }
+
+    public static var islandPlacement: IslandPlacement {
+        get { IslandPlacement(rawValue: defaults.string(forKey: "v2.island.placement") ?? "") ?? .notch }
+        set { defaults.set(newValue.rawValue, forKey: "v2.island.placement") }
+    }
+
+    /// The floating pill's top-centre, in global AppKit points (nil until it's dragged).
+    public static var islandFloatingAnchor: CGPoint? {
+        get {
+            guard let values = defaults.array(forKey: "v2.island.anchor") as? [Double], values.count == 2 else { return nil }
+            return CGPoint(x: values[0], y: values[1])
+        }
+        set { defaults.set(newValue.map { [Double($0.x), Double($0.y)] }, forKey: "v2.island.anchor") }
+    }
+
     /// Default true: Theo has a Dock icon and its own window; false keeps it in the menu bar only.
     public static var showsInDock: Bool {
         get { defaults.object(forKey: "v2.app.showsInDock") as? Bool ?? true }

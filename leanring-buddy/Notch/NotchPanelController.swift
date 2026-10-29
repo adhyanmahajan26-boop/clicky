@@ -43,6 +43,7 @@ final class NotchViewModel: ObservableObject {
     @Published var content = NotchContent()
     @Published var layout = NotchLayout.sample(hasPhysicalNotch: false)
     @Published var isExpanded = false
+    @Published var style = NotchStyle.default
 }
 
 @MainActor
@@ -64,6 +65,9 @@ final class NotchPanelController: NSObject {
     /// The screen the pill is on now (its display id), and whether it's shown.
     private var currentDisplayID: CGDirectDisplayID?
     private var isPanelShown = false
+    /// True while Theo is speaking an answer (the pill stays open to show it).
+    private var isShowingAnswer = false
+    private var lastPlacement = ClickySettings.islandPlacement
     private var showsOverFullScreenApps = !ClickySettings.isNotchHiddenOverFullScreen
     /// The pill's frame in global AppKit points (the part the pointer counts on).
     private var visiblePillFrame: CGRect = .zero
@@ -168,6 +172,11 @@ final class NotchPanelController: NSObject {
             != NotchView.pillSize(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
         if newContent != viewModel.content { viewModel.content = newContent }
         if sizeChanged { applyPanelFrame() }
+        let answering = newContent.phase == .speaking && newContent.captionText != nil
+        if answering != isShowingAnswer {
+            isShowingAnswer = answering
+            applyPresentation()
+        }
     }
 
     // MARK: - Placement and visibility
@@ -187,7 +196,11 @@ final class NotchPanelController: NSObject {
     }
 
     private static func metrics(of screen: NSScreen) -> NotchScreenMetrics {
-        NotchScreenMetrics(screenFrame: screen.frame, safeAreaTopInset: screen.safeAreaInsets.top,
+        // Floating or in a corner, the pill never wraps the hardware notch.
+        if ClickySettings.islandPlacement != .notch {
+            return NotchScreenMetrics(screenFrame: screen.frame, menuBarHeight: max(0, screen.frame.maxY - screen.visibleFrame.maxY))
+        }
+        return NotchScreenMetrics(screenFrame: screen.frame, safeAreaTopInset: screen.safeAreaInsets.top,
                            auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea, auxiliaryTopRightArea: screen.auxiliaryTopRightArea,
                            menuBarHeight: max(0, screen.frame.maxY - screen.visibleFrame.maxY))
     }
@@ -209,13 +222,16 @@ final class NotchPanelController: NSObject {
         }
 
         let panel = panel ?? makePanel()
+        refreshStyle()
         if showsOverFullScreenApps != !hidesOverFullScreen {
             showsOverFullScreenApps = !hidesOverFullScreen
             panel.collectionBehavior = NotchPanel.collectionBehavior(showsOverFullScreenApps: showsOverFullScreenApps)
         }
         // Move to another display only while collapsed (never yank it from under the pointer).
         let newLayout = NotchGeometry.layout(for: Self.metrics(of: screen))
-        if (displayID != currentDisplayID || newLayout != viewModel.layout) && !viewModel.isExpanded {
+        let placement = ClickySettings.islandPlacement
+        if (displayID != currentDisplayID || newLayout != viewModel.layout || placement != lastPlacement) && !viewModel.isExpanded {
+            lastPlacement = placement
             currentDisplayID = displayID
             viewModel.layout = newLayout
             applyPanelFrame(immediately: true)
@@ -253,6 +269,7 @@ final class NotchPanelController: NSObject {
         // The panel's frame is Clicky's to set; SwiftUI never resizes it.
         newHostingView.sizingOptions = []
         newHostingView.onPointerActivity = { [weak self] in self?.pointerActivity() }
+        newHostingView.onDrag = { [weak self] delta in self?.dragPanel(by: delta) }
         newPanel.contentView = newHostingView
         panel = newPanel
         hostingView = newHostingView
@@ -268,7 +285,7 @@ final class NotchPanelController: NSObject {
         guard let panel else { return }
         let layout = viewModel.layout
         let targetSize = NotchView.pillSize(content: viewModel.content, layout: layout, isExpanded: viewModel.isExpanded)
-        let targetFrame = NotchGeometry.panelFrame(layout: layout, size: targetSize)
+        let targetFrame = frame(for: targetSize, layout: layout)
         visiblePillFrame = targetFrame
         panelShrinkTask?.cancel()
 
@@ -278,13 +295,65 @@ final class NotchPanelController: NSObject {
             if currentFrame != targetFrame { panel.setFrame(targetFrame, display: true) }
             return
         }
-        let holdingFrame = NotchGeometry.panelFrame(layout: layout, size: NotchGeometry.unionSize(currentFrame.size, targetSize))
+        let holdingFrame = frame(for: NotchGeometry.unionSize(currentFrame.size, targetSize), layout: layout)
         if currentFrame != holdingFrame { panel.setFrame(holdingFrame, display: true) }
         panelShrinkTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(NotchView.springSettleSeconds * 1_000_000_000))
             guard !Task.isCancelled, let self, let panel = self.panel else { return }
             panel.setFrame(targetFrame, display: true)
         }
+    }
+
+    /// The panel frame for a pill size: under the notch, at the floating anchor, or in the top-right corner.
+    private func frame(for size: CGSize, layout: NotchLayout) -> CGRect {
+        let screenFrame = layout.screenFrame
+        switch ClickySettings.islandPlacement {
+        case .notch:
+            return NotchGeometry.panelFrame(layout: layout, size: size)
+        case .corner:
+            let screen = NSScreen.screens.first { $0.frame == screenFrame }
+            let visible = screen?.visibleFrame ?? screenFrame
+            return CGRect(x: visible.maxX - size.width - 14, y: visible.maxY - size.height - 10, width: size.width, height: size.height)
+        case .floating:
+            let defaultAnchor = CGPoint(x: screenFrame.midX, y: (NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame.maxY ?? screenFrame.maxY) - 12)
+            let anchor = ClickySettings.islandFloatingAnchor ?? defaultAnchor
+            let onScreen = NSScreen.screens.first { $0.frame.contains(anchor) }?.frame ?? screenFrame
+            var frame = CGRect(x: anchor.x - size.width / 2, y: anchor.y - size.height, width: size.width, height: size.height)
+            // Near the bottom it opens upward instead.
+            if frame.minY < onScreen.minY + 8 { frame.origin.y = min(anchor.y, onScreen.maxY - size.height) }
+            frame.origin.x = min(max(frame.minX, onScreen.minX + 4), onScreen.maxX - size.width - 4)
+            return frame
+        }
+    }
+
+    /// The theme's colours (dark themes fill the pill; light ones keep it black) and the floating look.
+    private func refreshStyle() {
+        let theme = ClickySettings.uiTheme
+        let palette = theme.palette
+        let isDarkTheme = palette.map { (($0.background >> 16) & 0xFF) < 0x80 } ?? false
+        let fill: UInt32 = isDarkTheme ? (palette?.background ?? 0) : 0x000000
+        let accent: UInt32 = palette?.accent ?? ClickySettings.sparkStyle.glowHex
+        let style = NotchStyle(fillHex: fill, accentHex: accent, isFloating: ClickySettings.islandPlacement != .notch)
+        if style != viewModel.style { viewModel.style = style }
+    }
+
+    /// Dragging a floating pill moves it; the spot is remembered.
+    fileprivate func dragPanel(by delta: CGPoint) {
+        guard ClickySettings.islandPlacement == .floating, let panel else { return }
+        var origin = panel.frame.origin
+        origin.x += delta.x
+        origin.y += delta.y
+        panel.setFrameOrigin(origin)
+        visiblePillFrame = panel.frame
+        ClickySettings.islandFloatingAnchor = CGPoint(x: panel.frame.midX, y: panel.frame.maxY)
+    }
+
+    /// Settings changed (placement or theme): re-lay out now.
+    func placementDidChange() {
+        guard let screen = targetScreen() else { return }
+        viewModel.layout = NotchGeometry.layout(for: Self.metrics(of: screen))
+        refreshStyle()
+        applyPanelFrame(immediately: true)
     }
 
     // MARK: - Hover and clicks
@@ -321,7 +390,8 @@ final class NotchPanelController: NSObject {
     }
 
     private func applyPresentation() {
-        let isExpanded = presentationStateMachine.isExpanded
+        // While Theo talks, the pill opens on its own so the words are visible.
+        let isExpanded = presentationStateMachine.isExpanded || isShowingAnswer
         guard viewModel.isExpanded != isExpanded else { return }
         if isExpanded { rebuildContent() }
         viewModel.isExpanded = isExpanded
@@ -365,7 +435,7 @@ struct NotchRootView: View {
 
     var body: some View {
         let _ = OverlayPerfMonitor.shared.note(.notchBodyEvaluations)
-        NotchView(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded, actions: actions)
+        NotchView(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded, actions: actions, style: viewModel.style)
     }
 }
 
@@ -373,6 +443,20 @@ struct NotchRootView: View {
 /// SwiftUI directly; hover comes from an .activeAlways tracking area.
 final class NotchHostingView: NSHostingView<NotchRootView> {
     var onPointerActivity: (() -> Void)?
+    var onDrag: ((CGPoint) -> Void)?
+    private var lastDragLocation: CGPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        lastDragLocation = NSEvent.mouseLocation
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let location = NSEvent.mouseLocation
+        if let last = lastDragLocation { onDrag?(CGPoint(x: location.x - last.x, y: location.y - last.y)) }
+        lastDragLocation = location
+        super.mouseDragged(with: event)
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

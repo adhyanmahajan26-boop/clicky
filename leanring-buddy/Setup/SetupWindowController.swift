@@ -71,6 +71,7 @@ final class SetupModel: ObservableObject {
     @Published private(set) var isChecking = false
 
     private let companionManager: CompanionManager
+    var companionManagerForGuide: CompanionManager { companionManager }
     let showPanel: () -> Void
     /// Demo recordings / "show me the voice settings": the section to scroll to.
     @Published var scrollTarget: Int?
@@ -427,10 +428,11 @@ enum SetupWindowController {
         if window == nil {
             // As tall as the screen allows (up to 960 pt), so most sections show at once.
             let windowHeight = min(960, max(600, ((ClaudiaScreen.picked ?? NSScreen.main)?.visibleFrame.height ?? 800) - 60))
-            let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: windowHeight),
-                                         styleMask: [.titled, .closable, .resizable],
+            let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: min(windowHeight, 640)),
+                                         styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                                          backing: .buffered, defer: false)
-            createdWindow.title = "Theo Setup"
+            createdWindow.title = "Theo Settings"
+            createdWindow.titlebarAppearsTransparent = true
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = FirstMouseHostingView(rootView: SetupView(model: model))
             createdWindow.center()
@@ -466,106 +468,133 @@ enum SetupWindowController {
 
 private struct SetupView: View {
     @ObservedObject var model: SetupModel
+    @State private var page: Page = .brain
+
+    /// All settings, one page at a time (a sidebar instead of one long scroll).
+    enum Page: Int, CaseIterable, Identifiable {
+        case brain, voice, permissions, look, t3, updates
+        var id: Int { rawValue }
+        var title: String {
+            switch self {
+            case .brain: return "Brain and models"
+            case .voice: return "Voice"
+            case .permissions: return "Permissions and checks"
+            case .look: return "Screen, pill and look"
+            case .t3: return "T3 Code extension"
+            case .updates: return "Updates"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .brain: return "brain"
+            case .voice: return "waveform"
+            case .permissions: return "checkmark.shield"
+            case .look: return "sparkles"
+            case .t3: return "puzzlepiece.extension"
+            case .updates: return "arrow.down.circle"
+            }
+        }
+        /// The old numbered sections (1 Claude … 8 Updates) → pages, for showSetup {section}.
+        static func forSection(_ section: Int) -> Page {
+            switch section {
+            case 1, 3: return .brain
+            case 2: return .voice
+            case 4, 5: return .permissions
+            case 6: return .look
+            case 7: return .t3
+            default: return .updates
+            }
+        }
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Set up Theo")
-                    .font(.system(size: 20, weight: .semibold))
-                Text("Theo lives in the menu bar (the spark icon). If you can't see it, open Theo again from Applications to bring this window back.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Color.clear.frame(height: 0).id(1)
-
-                GroupBox(label: Text("1. Claude").font(.headline)) {
-                    brainSection.padding(8)
-                }
-                Color.clear.frame(height: 0).id(2)
-                GroupBox(label: Text("2. Voice").font(.headline)) {
-                    voiceSection.padding(8)
-                }
-                Color.clear.frame(height: 0).id(3)
-                GroupBox(label: Text("3. Models").font(.headline)) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        BrainSwitchSection(model: model, catalog: model.catalog)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                }
-                Color.clear.frame(height: 0).id(4)
-                GroupBox(label: Text("4. Permissions").font(.headline)) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Theo needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
-                            .font(.system(size: 12))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Open the permissions panel") { model.showPanel() }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                }
-
-                Color.clear.frame(height: 0).id(5)
-
-                GroupBox(label: Text("5. Check everything").font(.headline)) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Button(model.isChecking ? "Checking…" : "Check everything") { model.checkEverything() }
-                                .disabled(model.isChecking)
-                            Button("Test the spark") { model.testSpark() }
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Settings").font(.system(size: 13, weight: .semibold)).foregroundColor(.secondary).padding(.bottom, 10).padding(.leading, 10)
+                ForEach(Page.allCases) { item in
+                    Button(action: { page = item }) {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.symbol).frame(width: 18)
+                            Text(item.title).font(.system(size: 13, weight: page == item ? .semibold : .regular))
+                            Spacer()
                         }
-                        Text("Test the spark: the spark by your pointer should spin with three small sparks orbiting it for 6 seconds.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        ForEach(model.checkLines, id: \.self) { line in
-                            Text(line)
-                                .font(.system(size: 12))
-                                .foregroundColor(line.hasPrefix("✗") ? .orange : .primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(page == item ? Color.secondary.opacity(0.16) : Color.clear))
+                        .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .buttonStyle(.plain)
                 }
-
-                Color.clear.frame(height: 0).id(6)
-
-                GroupBox(label: Text("6. Theo's screen and spark").font(.headline)) {
-                    ClaudiaScreenSection()
-                        .padding(8)
-                }
-
-                Color.clear.frame(height: 0).id(7)
-
-                GroupBox(label: Text("7. T3 Code extension").font(.headline)) {
-                    T3IntegrationSection()
-                        .padding(8)
-                }
-
-                Color.clear.frame(height: 0).id(8)
-
-                GroupBox(label: Text("8. Updates").font(.headline)) {
-                    UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
-                                  hasSavedToken: model.hasSavedUpdateToken, saveToken: { model.saveUpdateToken() })
-                        .padding(8)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Done") { model.finish() }
-                        .keyboardShortcut(.defaultAction)
-                }
+                Spacer()
+                Button("Done") { model.finish() }.keyboardShortcut(.defaultAction).padding(.leading, 10)
             }
-            .padding(20)
+            .padding(.horizontal, 10).padding(.top, 40).padding(.bottom, 16)
+            .frame(width: 230)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(Color.secondary.opacity(0.06))
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(page.title).font(.system(size: 22, weight: .bold))
+                    pageContent
+                }
+                .padding(28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .frame(minWidth: 780, minHeight: 560)
         .onChange(of: model.scrollTarget) { _, target in
             guard let target else { return }
-            withAnimation(.easeInOut(duration: 0.6)) { proxy.scrollTo(target, anchor: .top) }
+            withAnimation(.easeInOut(duration: 0.2)) { page = Page.forSection(target) }
         }
+    }
+
+    @ViewBuilder private var pageContent: some View {
+        switch page {
+        case .brain:
+            card { brainSection }
+            card { BrainSwitchSection(model: model, catalog: model.catalog) }
+        case .voice:
+            card { voiceSection }
+        case .permissions:
+            card {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Theo needs Microphone, Speech Recognition, Accessibility and Screen Recording.")
+                        .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Open the Setup guide's permissions") { SetupGuideWindowController.show(companionManager: model.companionManagerForGuide, step: .permissions) }
+                        Button("Open the permissions panel") { model.showPanel() }
+                    }
+                }
+            }
+            card {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Button(model.isChecking ? "Checking…" : "Check everything") { model.checkEverything() }.disabled(model.isChecking)
+                        Button("Test the spark") { model.testSpark() }
+                    }
+                    ForEach(model.checkLines, id: \.self) { line in
+                        Text(line).font(.system(size: 12)).foregroundColor(line.hasPrefix("✗") ? .orange : .primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        case .look:
+            card { ClaudiaScreenSection() }
+        case .t3:
+            card { T3IntegrationSection() }
+        case .updates:
+            card {
+                UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
+                              hasSavedToken: model.hasSavedUpdateToken, saveToken: { model.saveUpdateToken() })
+            }
         }
-        .frame(minWidth: 520, minHeight: 600)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.06)))
     }
 
     func modelPicker(_ title: String, selection: Binding<String>) -> some View {
@@ -797,6 +826,7 @@ struct ClaudiaScreenSection: View {
     @State private var sparkMode = ClickySettings.sparkMode
     @State private var sparkStyle = ClickySettings.sparkStyle
     @State private var theme = ClickySettings.uiTheme
+    @State private var placement = ClickySettings.islandPlacement
     private let screenNames = NSScreen.screens.map(\.localizedName)
 
     var body: some View {
@@ -814,6 +844,10 @@ struct ClaudiaScreenSection: View {
             Text("With a screen picked, Theo opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Picker("Theo's pill", selection: $placement) {
+                ForEach(ClickySettings.IslandPlacement.allCases, id: \.self) { item in Text(item.displayName).tag(item) }
+            }
+            .onChange(of: placement) { _, newValue in ClickySettings.islandPlacement = newValue }
             Picker("Spark", selection: $sparkMode) {
                 Text("Follows my pointer").tag(ClickySettings.SparkMode.cursor)
                 Text("Lives on its own (corner of Theo's screen)").tag(ClickySettings.SparkMode.docked)
