@@ -1237,6 +1237,8 @@ final class CompanionManager: ObservableObject {
     /// cancels any answer in flight, and ends a hands-free session. A key
     /// panel that's open consumes it first.
     private func handleEscapeKeyPressed() {
+        // Article highlights always go on Escape (the notes panel stays until it's closed).
+        if !articleController.highlights.isEmpty { articleController.removeHighlights() }
         if escapeKeyConsumers.contains(where: { $0() }) { return }
         if let activeCoordinator = speechOutputClient.activeCoordinator, activeCoordinator.isSpeaking {
             // Barge-in: the caption is hidden.
