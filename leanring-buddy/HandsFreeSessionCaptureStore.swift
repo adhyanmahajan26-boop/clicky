@@ -35,7 +35,7 @@ final class HandsFreeSessionCaptureStore {
     /// Returns the saved file's URL.
     @discardableResult
     func captureCursorScreenAndSave() async throws -> URL {
-        let pngData = try await CompanionScreenCaptureUtility.captureCursorScreenAsFullResolutionPNG()
+        let pngData = try await PointerScreenShot.capturePNG()
 
         try FileManager.default.createDirectory(at: sessionFolderURL, withIntermediateDirectories: true)
 
