@@ -53,6 +53,9 @@ enum ClaudiaMCPServer {
              description: "Control Claudia's whiteboard: next, back, replay, pause, expand, close, export (PDF + PNG), or state.",
              properties: ["action": ["type": "string", "enum": ["state", "next", "back", "replay", "pause", "expand", "close", "export"]]],
              required: ["action"]),
+        Tool(name: "claudia_attachments",
+             description: "The notes and marked screenshots the user picked in Claudia's Notes tab to use for coding (article notes, research briefs, whiteboards, screenshots with marks). Call this when the user says to use Claudia's notes or screenshots for the code.",
+             properties: [:], required: []),
         Tool(name: "claudia_stop",
              description: "Stop Claudia talking and anything she's doing.",
              properties: [:], required: []),
@@ -125,6 +128,7 @@ enum ClaudiaMCPServer {
                                             "speak": arguments["speak"] ?? false]; timeout = 320
         case "claudia_whiteboard": command = ["cmd": "board", "action": arguments["action"] ?? "state"]
         case "claudia_stop": command = ["cmd": "stop"]
+        case "claudia_attachments": command = ["cmd": "attachments"]
         case "claudia_status": command = ["cmd": "status"]
         default: return text("Unknown tool \(name).", isError: true)
         }
@@ -144,6 +148,19 @@ enum ClaudiaMCPServer {
                 }
                 if index < elements.count { content.append(["type": "text", "text": "screen\(index + 1) elements:\n\(elements[index])"]) }
             }
+            return ["content": content, "isError": false]
+        }
+        if name == "claudia_attachments", ok, let result = result as? [String: Any] {
+            var content: [[String: Any]] = []
+            for note in result["notes"] as? [[String: Any]] ?? [] {
+                content.append(["type": "text", "text": "# \(note["title"] as? String ?? "Note")\n\n\(note["text"] as? String ?? "")"])
+            }
+            for image in result["images"] as? [[String: Any]] ?? [] {
+                guard let path = image["path"] as? String, let data = FileManager.default.contents(atPath: path) else { continue }
+                content.append(["type": "text", "text": "Screenshot: \(image["title"] as? String ?? "")"])
+                content.append(["type": "image", "data": data.base64EncodedString(), "mimeType": "image/png"])
+            }
+            if content.isEmpty { content.append(["type": "text", "text": "Nothing is picked in Claudia's Notes tab yet."]) }
             return ["content": content, "isError": false]
         }
         if name == "claudia_ask", let answer = (result as? [String: Any])?["answer"] as? String {

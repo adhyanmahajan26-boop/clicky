@@ -218,6 +218,16 @@ final class DebugCommandInbox {
             let outcome = ClaudiaT3Integration.install()
             reply(commandIdentifier: commandIdentifier, isSuccess: outcome.succeeded, result: ["lines": outcome.lines], errorMessage: nil)
 
+        case "moveToClaudiaScreen":
+            // Demo recordings: an app's front window goes to Claudia's screen.
+            let bundleIdentifier = commandObject["bundleId"] as? String ?? ""
+            ClaudiaScreen.moveFrontWindow(of: NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
+
+        case "showSetup":
+            SetupWindowController.show(companionManager: companionManager) {}
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
+
         case "sparkTest":
             // The same as Setup's "Test the spark": spin plus three orbiting helpers for 6 s.
             let simulatedSource = companionManager.simulatedCompanionActivitySource

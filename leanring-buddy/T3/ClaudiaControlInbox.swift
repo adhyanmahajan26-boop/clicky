@@ -255,6 +255,65 @@ final class ClaudiaControlInbox {
             }
             reply(identifier, ok: true, result: ["listening": companionManager.isHandsFreeSessionActive], error: nil)
 
+        case "library":
+            // The Notes tab: notes, research briefs, whiteboards and marked screenshots, with the "use in code" ticks.
+            reply(identifier, ok: true, result: ClaudiaLibrary.items().map(\.dictionary), error: nil)
+
+        case "librarySelect":
+            guard let itemID = command["id"] as? String else { return reply(identifier, ok: false, result: nil, error: "librarySelect needs \"id\"") }
+            var selected = ClaudiaLibrary.selectedIDs
+            if command["selected"] as? Bool ?? true { selected.insert(itemID) } else { selected.remove(itemID) }
+            ClaudiaLibrary.selectedIDs = selected
+            reply(identifier, ok: true, result: ["selected": Array(selected)], error: nil)
+
+        case "libraryText":
+            guard let item = (command["id"] as? String).flatMap(ClaudiaLibrary.item(id:)), !item.isImage else {
+                return reply(identifier, ok: false, result: nil, error: "no such note")
+            }
+            reply(identifier, ok: true, result: ["title": item.title, "text": (try? String(contentsOf: item.url, encoding: .utf8)) ?? ""], error: nil)
+
+        case "markScreen":
+            // A screenshot of the screen with Claudia's marks on it, saved into the library.
+            let request = SnapshotRequest(target: .screen, includesClickyOverlay: true)
+            let markRectsCG = companionManager.markController.marks.map(\.rectCG)
+            Task {
+                do {
+                    let result = try await SnapshotCapture.capture(request: request, markRectsCG: markRectsCG)
+                    reply(identifier, ok: true, result: ["path": result.fileURL.path, "id": ClaudiaLibrary.id(for: result.fileURL)], error: nil)
+                } catch {
+                    reply(identifier, ok: false, result: nil, error: error.localizedDescription)
+                }
+            }
+
+        case "projects":
+            Task {
+                let repositories = await companionManager.codeModeController.localRepositoriesForProjectLookup()
+                reply(identifier, ok: true, result: repositories.map { ["path": $0.folderPath, "name": URL(fileURLWithPath: $0.folderPath).lastPathComponent] }, error: nil)
+            }
+
+        case "useInCode":
+            // Starts a Claude Code task in the chosen project with the ticked notes and screenshots attached.
+            guard let projectPath = command["project"] as? String, !projectPath.isEmpty,
+                  let instructions = command["instructions"] as? String, !instructions.isEmpty else {
+                return reply(identifier, ok: false, result: nil, error: "useInCode needs \"project\" and \"instructions\"")
+            }
+            var attachments = ClaudiaLibrary.selectedItems.filter(\.isImage).map(\.url)
+            if let notesBundle = ClaudiaLibrary.writeSelectedNotesBundle() { attachments.append(notesBundle) }
+            let fullInstructions = instructions + (attachments.isEmpty ? "" :
+                "\n\nUse the notes and screenshots the owner attached in .clicky-attachments/ (read every file there first).")
+            let displayName = URL(fileURLWithPath: projectPath).lastPathComponent
+            companionManager.codeModeController.startNamedProjectTask(rootPath: projectPath, displayName: displayName, instructions: fullInstructions,
+                                                                      transcript: "T3 Code: \(instructions)", launchOptions: CodeTaskLaunchOptions(attachmentFileURLs: attachments))
+            reply(identifier, ok: true, result: ["project": displayName, "attachments": attachments.map(\.lastPathComponent)], error: nil)
+
+        case "attachments":
+            // For a T3 Code agent: the ticked notes as text and the ticked screenshots as image files.
+            let items = ClaudiaLibrary.selectedItems
+            reply(identifier, ok: true, result: [
+                "notes": items.filter { !$0.isImage }.map { ["title": $0.title, "text": (try? String(contentsOf: $0.url, encoding: .utf8)) ?? ""] },
+                "images": items.filter(\.isImage).map { ["title": $0.title, "path": $0.url.path] }
+            ], error: nil)
+
         case "researchLatest":
             reply(identifier, ok: true, result: companionManager.researchController.lastStatus, error: nil)
 

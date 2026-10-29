@@ -104,6 +104,14 @@ final class ClaudiaUIServer {
             return send(connection, status: 403, type: "application/json", body: Data(#"{"ok":false,"error":"bad token"}"#.utf8))
         }
         let commandName = String(path.dropFirst("/api/".count))
+        // A library image (whiteboard or screenshot) for the Notes tab.
+        if commandName == "file" {
+            guard let item = request.query["id"].flatMap(ClaudiaLibrary.item(id:)), item.isImage,
+                  let data = try? Data(contentsOf: item.url) else {
+                return send(connection, status: 404, type: "text/plain", body: Data("not found".utf8))
+            }
+            return send(connection, status: 200, type: "image/png", body: data)
+        }
         if commandName == "board.png" {
             guard let exported = companionManager.boardController.exportBoard() else {
                 return send(connection, status: 404, type: "text/plain", body: Data("no board".utf8))

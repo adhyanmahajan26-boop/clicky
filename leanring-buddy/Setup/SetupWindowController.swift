@@ -430,6 +430,11 @@ enum SetupWindowController {
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = NSHostingView(rootView: SetupView(model: model))
             createdWindow.center()
+            // On Claudia's own screen when one is picked.
+            if let screen = ClaudiaScreen.picked {
+                let frame = screen.visibleFrame
+                createdWindow.setFrameOrigin(NSPoint(x: frame.midX - createdWindow.frame.width / 2, y: frame.midY - createdWindow.frame.height / 2))
+            }
             window = createdWindow
         }
         // An accessory app can't always take focus at launch (macOS stops

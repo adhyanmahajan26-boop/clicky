@@ -52,6 +52,19 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
 .muted { color:var(--muted); font-size:12px; }
 .status { font-size:12px; color:var(--muted); }
 .empty { color:var(--muted); text-align:center; margin:auto; padding:40px; }
+.tabs { display:flex; gap:4px; padding:8px 16px 0; border-bottom:1px solid var(--line); background:var(--panel); }
+.tabs button { border-radius:8px 8px 0 0; border-bottom:none; background:transparent; }
+.tabs button.active { background:var(--bg); border-color:var(--line); color:var(--accent); }
+#notesView { display:none; flex:1; min-height:0; overflow:auto; padding:16px; }
+.lib { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px; display:flex; flex-direction:column; gap:6px; cursor:pointer; }
+.card.selected { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+.card img { width:100%; height:120px; object-fit:cover; border-radius:8px; background:#fff; }
+.card .kind { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--accent); }
+.card .title { font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.card label { font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+.codebar { position:sticky; top:0; background:var(--bg); padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; z-index:1; }
+#notePreview { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; margin-top:12px; display:none; font-size:13px; max-height:360px; overflow:auto; }
 </style>
 </head>
 <body>
@@ -65,6 +78,17 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
 </header>
 <main>
   <div class="chat">
+    <div class="tabs"><button id="tabChat" class="active">Conversation</button><button id="tabNotes">Notes</button></div>
+    <div id="notesView">
+      <div class="codebar">
+        <div class="row"><strong>Code with your notes</strong><span class="muted" id="pickedCount"></span><span class="spacer"></span><button id="markScreen">📸 Marked screenshot now</button></div>
+        <div class="row"><select id="project" style="flex:1"><option value="">Choose a project…</option></select></div>
+        <div class="row"><input type="text" id="codeInstructions" placeholder="What to build or change, e.g. 'make the homepage match my notes and the marked screenshot'" style="flex:1"><button class="primary" id="startCode">Start coding</button></div>
+        <div class="muted" id="codeStatus">Tick notes and screenshots below, then start: Claude Code gets them as attachments. Any T3 Code thread can also ask Claudia for them (claudia_attachments).</div>
+      </div>
+      <div class="lib" id="library"></div>
+      <div id="notePreview"></div>
+    </div>
     <div id="turns"><div class="empty">Ask Claudia anything about your screen, or have her draw, research or do something.</div></div>
     <div class="composer">
       <textarea id="ask" placeholder="Ask Claudia… (Enter to send, Shift+Enter for a new line)"></textarea>
@@ -200,6 +224,65 @@ async function send() {
   loadTurns(); loadBoard(); loadResearch();
 }
 
+let currentTab = "chat";
+function showTab(tab) {
+  currentTab = tab;
+  $("tabChat").classList.toggle("active", tab === "chat");
+  $("tabNotes").classList.toggle("active", tab === "notes");
+  $("turns").style.display = tab === "chat" ? "flex" : "none";
+  document.querySelector(".composer").style.display = tab === "chat" ? "flex" : "none";
+  $("notesView").style.display = tab === "notes" ? "block" : "none";
+  if (tab === "notes") { loadLibrary(); loadProjects(); }
+}
+$("tabChat").onclick = () => showTab("chat");
+$("tabNotes").onclick = () => showTab("notes");
+
+async function loadLibrary() {
+  const reply = await api("library");
+  if (!reply.ok) return;
+  const items = reply.result;
+  $("pickedCount").textContent = `${items.filter((i) => i.selected).length} picked`;
+  $("library").innerHTML = items.length ? items.map((item) => `
+    <div class="card ${item.selected ? "selected" : ""}" data-id="${item.id}" data-image="${item.isImage}">
+      <div class="kind">${escapeHTML(item.kind)}</div>
+      ${item.isImage ? `<img loading="lazy" src="/api/file?id=${encodeURIComponent(item.id)}&token=${encodeURIComponent(token)}">` : ""}
+      <div class="title" title="${escapeHTML(item.title)}">${escapeHTML(item.title)}</div>
+      <div class="muted">${new Date(item.date).toLocaleString()}</div>
+      <label><input type="checkbox" ${item.selected ? "checked" : ""} data-pick="${item.id}"> Use in code</label>
+    </div>`).join("") : '<div class="empty">No notes yet. Ask Claudia to highlight an article, research something, draw a whiteboard, or take a marked screenshot.</div>';
+  document.querySelectorAll("[data-pick]").forEach((box) => box.onclick = async (event) => {
+    event.stopPropagation();
+    await api("librarySelect", { id: box.dataset.pick, selected: box.checked });
+    loadLibrary();
+  });
+  document.querySelectorAll(".card").forEach((card) => card.onclick = async () => {
+    const preview = $("notePreview");
+    if (card.dataset.image === "true") { preview.style.display = "none"; return; }
+    const note = await api("libraryText", { id: card.dataset.id });
+    if (note.ok) { preview.textContent = note.result.text; preview.style.display = "block"; preview.scrollIntoView({ behavior: "smooth" }); }
+  });
+}
+async function loadProjects() {
+  const reply = await api("projects");
+  if (!reply.ok) return;
+  const select = $("project"), current = select.value;
+  select.innerHTML = '<option value="">Choose a project…</option>' + reply.result.map((p) => `<option value="${escapeHTML(p.path)}">${escapeHTML(p.name)}</option>`).join("");
+  select.value = current;
+}
+$("markScreen").onclick = async () => {
+  $("codeStatus").textContent = "Taking a screenshot with Claudia's marks…";
+  const reply = await api("markScreen");
+  if (reply.ok) { await api("librarySelect", { id: reply.result.id, selected: true }); $("codeStatus").textContent = "Saved and picked for code."; }
+  else $("codeStatus").textContent = reply.error || "Couldn't take it.";
+  loadLibrary();
+};
+$("startCode").onclick = async () => {
+  const project = $("project").value, instructions = $("codeInstructions").value.trim();
+  if (!project || !instructions) { $("codeStatus").textContent = "Pick a project and say what to do."; return; }
+  const reply = await api("useInCode", { project, instructions });
+  $("codeStatus").textContent = reply.ok ? `Claude Code is working in ${reply.result.project} with ${reply.result.attachments.length} attachment(s). Follow it in Claudia's Agents dashboard.` : (reply.error || "Couldn't start.");
+};
+
 $("send").onclick = send;
 $("ask").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
 $("stop").onclick = () => api("stop");
@@ -234,6 +317,7 @@ $("research").onclick = async () => {
 };
 if (matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
 loadSettings(); loadTurns(); loadBoard(); loadResearch();
+if (location.hash === "#notes") showTab("notes");
 setInterval(() => { loadTurns(); loadBoard(); loadResearch(); }, 3000);
 </script>
 </body>
