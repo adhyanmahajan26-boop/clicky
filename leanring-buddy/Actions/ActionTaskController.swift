@@ -163,6 +163,13 @@ final class ActionTaskController {
 
     // MARK: - The batch
 
+    /// A click in a task the owner started with "do it for me" (the steps Claudia had marked).
+    static func isClickForMeClick(_ step: ActionStep, transcript: String) -> Bool {
+        guard ClickForMeCommand.matches(transcript) else { return false }
+        if case .click = step { return true }
+        return false
+    }
+
     private func startBatch(plan: ActionPlan, steps: [ActionStep], groundedTurn: GroundedTurn, session: AnswerSession?,
                             screenChangedEarlier: Bool, approvedFirstStep: Bool) {
         guard let task else { return }
@@ -220,10 +227,13 @@ final class ActionTaskController {
                 speakRefusal(decision.refusalLine(for: step))
                 stoppedEarly = true
                 continue
-            case .confirm where !(approvedFirstStep && offset == 0):
+            case .confirm where !(approvedFirstStep && offset == 0) && !Self.isClickForMeClick(step, transcript: task.loop.ownerTranscript):
                 pauseForConfirmation(step: step, decision: decision, target: target, remainingSteps: Array(steps[offset...]), plan: plan,
                                      groundedTurn: groundedTurn, session: session, screenChangedEarlier: screenChanged)
                 return
+            case .confirm where Self.isClickForMeClick(step, transcript: task.loop.ownerTranscript):
+                // "Do it for me": the owner asked for exactly these clicks, so each gets the countdown instead of a confirm card.
+                fallthrough
             case .countdown:
                 let countdownSeconds = ClickySettings.actionsCountdownSeconds
                 task.phase = .countdown
