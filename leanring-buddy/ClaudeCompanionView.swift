@@ -110,6 +110,14 @@ final class CompanionSparkLayerView: NSView {
     /// The look picked in Setup (v2.spark.style); its colours, shape and spin speed.
     private var style = ClickySettings.sparkStyle
     private var fillColor: CGColor { CompanionIconStyle.color(style.fillHex) }
+    private var miniColor: CGColor { CompanionIconStyle.color(style.miniHex) }
+    /// The style's gradient over the spark (masked by its shape), and its halo ring behind it.
+    private let gradientLayer = CAGradientLayer()
+    private let gradientMaskLayer = CAShapeLayer()
+    private let haloLayer = CAShapeLayer()
+    private static let pulseKey = "pulse"
+    private static let twinkleKey = "twinkle"
+    private static let haloSpinKey = "haloSpin"
     private var glowColor: CGColor { CompanionIconStyle.color(style.glowHex) }
     private var styleObserver: NSObjectProtocol?
     private static let breathingKey = "breathing"
@@ -123,7 +131,14 @@ final class CompanionSparkLayerView: NSView {
         companionLayer.masksToBounds = false
         orbitLayer.masksToBounds = false
         companionLayer.addSublayer(orbitLayer)
+        companionLayer.addSublayer(haloLayer)
         companionLayer.addSublayer(coordinatorLayer)
+        coordinatorLayer.addSublayer(gradientLayer)
+        gradientLayer.mask = gradientMaskLayer
+        gradientLayer.startPoint = CGPoint(x: 0, y: 0)
+        gradientLayer.endPoint = CGPoint(x: 1, y: 1)
+        haloLayer.fillColor = nil
+        haloLayer.lineWidth = 1.5
         layer?.addSublayer(companionLayer)
         companionLayer.shadowOffset = .zero
         companionLayer.shadowOpacity = 0
@@ -151,9 +166,16 @@ final class CompanionSparkLayerView: NSView {
             companionLayer.shadowColor = glowColor
             coordinatorLayer.fillColor = fillColor
             coordinatorLayer.shadowColor = glowColor
+            let stops = style.gradientHexes.map { CompanionIconStyle.color($0) }
+            gradientLayer.colors = stops.count > 1 ? stops : nil
+            gradientLayer.isHidden = stops.count < 2
+            haloLayer.strokeColor = CompanionIconStyle.color(style.glowHex, alpha: 0.55)
+            haloLayer.lineDashPattern = style.halo == .dashedRing ? [4, 3] : [0.01, 5]
+            haloLayer.lineCap = .round
+            haloLayer.isHidden = style.halo == .none
             for slotLayer in workerSlotLayers.values {
                 guard let miniLayer = slotLayer.sublayers?.first as? CAShapeLayer else { continue }
-                miniLayer.fillColor = fillColor
+                miniLayer.fillColor = miniColor
                 miniLayer.shadowColor = glowColor
             }
         }
@@ -181,6 +203,7 @@ final class CompanionSparkLayerView: NSView {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
         for shapeLayer in allShapeLayers() { shapeLayer.contentsScale = scale }
+        gradientLayer.contentsScale = scale
     }
 
     // MARK: - Geometry
@@ -206,6 +229,12 @@ final class CompanionSparkLayerView: NSView {
             coordinatorLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
             coordinatorLayer.path = Self.sparkPath(side: coordinatorSide, isYDown: isYDown, style: style)
             coordinatorLayer.shadowPath = coordinatorLayer.path
+            gradientLayer.frame = coordinatorLayer.bounds
+            gradientMaskLayer.frame = coordinatorLayer.bounds
+            gradientMaskLayer.path = coordinatorLayer.path
+            haloLayer.bounds = coordinatorLayer.bounds
+            haloLayer.position = coordinatorLayer.position
+            haloLayer.path = style.haloPath(in: coordinatorLayer.bounds)
             for (workerID, slotLayer) in workerSlotLayers {
                 slotLayer.bounds = CGRect(origin: .zero, size: bounds.size)
                 slotLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
@@ -308,6 +337,9 @@ final class CompanionSparkLayerView: NSView {
         let isLive = configuration.isAnimationRunning && configuration.opacity > 0 && window != nil
         coordinatorLayer.removeAnimation(forKey: Self.breathingKey)
         coordinatorLayer.removeAnimation(forKey: Self.spinKey)
+        coordinatorLayer.removeAnimation(forKey: Self.pulseKey)
+        gradientLayer.removeAnimation(forKey: Self.twinkleKey)
+        haloLayer.removeAnimation(forKey: Self.haloSpinKey)
         orbitLayer.removeAnimation(forKey: Self.orbitKey)
         for slotLayer in workerSlotLayers.values {
             (slotLayer.sublayers?.first)?.removeAnimation(forKey: Self.spinKey)
@@ -316,6 +348,25 @@ final class CompanionSparkLayerView: NSView {
 
         if configuration.isThinking {
             coordinatorLayer.add(Self.spin(degreesPerSecond: ClaudeCompanionView.coordinatorThinkingSpinDegreesPerSecond * style.spinSpeedMultiplier, sign: clockwiseSign), forKey: Self.spinKey)
+            // The style's own moves: the halo turns the other way, a heartbeat pulse, a twinkle.
+            if style.halo != .none {
+                haloLayer.add(Self.spin(degreesPerSecond: 90, sign: -clockwiseSign), forKey: Self.haloSpinKey)
+            }
+            if style.pulsesWhileThinking {
+                let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+                pulse.values = [1, 1.14, 0.95, 1.05, 1]
+                pulse.keyTimes = [0, 0.18, 0.4, 0.6, 1]
+                pulse.duration = 1.1
+                pulse.repeatCount = .infinity
+                coordinatorLayer.add(pulse, forKey: Self.pulseKey)
+            }
+            if style.twinklesWhileThinking {
+                let twinkle = CAKeyframeAnimation(keyPath: "opacity")
+                twinkle.values = [1, 0.45, 1, 0.7, 1]
+                twinkle.duration = 1.3
+                twinkle.repeatCount = .infinity
+                gradientLayer.add(twinkle, forKey: Self.twinkleKey)
+            }
         } else {
             let breathing = CABasicAnimation(keyPath: "transform.scale")
             breathing.fromValue = 1 - ClaudeCompanionView.idleBreathingAmplitude
@@ -325,6 +376,10 @@ final class CompanionSparkLayerView: NSView {
             breathing.repeatCount = .infinity
             breathing.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)  // ≈ the old sine
             coordinatorLayer.add(breathing, forKey: Self.breathingKey)
+            // Idle: the halo drifts slowly.
+            if style.halo != .none {
+                haloLayer.add(Self.spin(degreesPerSecond: 12, sign: -clockwiseSign), forKey: Self.haloSpinKey)
+            }
         }
 
         if !configuration.workerIDs.isEmpty {
@@ -382,7 +437,7 @@ final class CompanionSparkLayerView: NSView {
                 let slotLayer = CALayer()
                 slotLayer.masksToBounds = false
                 let miniLayer = CAShapeLayer()
-                miniLayer.fillColor = fillColor
+                miniLayer.fillColor = miniColor
                 miniLayer.shadowColor = glowColor
                 miniLayer.shadowOffset = .zero
                 miniLayer.shadowOpacity = 0.7
@@ -449,7 +504,7 @@ final class CompanionSparkLayerView: NSView {
     // MARK: - Helpers
 
     private func allShapeLayers() -> [CAShapeLayer] {
-        [coordinatorLayer] + workerSlotLayers.values.compactMap { $0.sublayers?.first as? CAShapeLayer }
+        [coordinatorLayer, gradientMaskLayer, haloLayer] + workerSlotLayers.values.compactMap { $0.sublayers?.first as? CAShapeLayer }
     }
 
     private func withoutActions(_ body: () -> Void) {

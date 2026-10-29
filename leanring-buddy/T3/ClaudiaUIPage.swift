@@ -100,6 +100,7 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
       <h2>Screen and spark</h2>
       <div class="row"><label>Her screen</label><select id="claudiaScreen"></select></div>
       <div class="row"><label>Style</label><select id="sparkStyle"></select></div>
+      <div class="row"><label>Theme</label><select id="theme"></select></div>
       <div class="row"><label>Spark</label><select id="sparkMode"><option value="cursor">Follows my pointer</option><option value="docked">Lives on its own</option></select></div>
     </section>
   </aside>
@@ -148,6 +149,9 @@ async function loadSettings(change = {}) {
   $("sparkMode").value = settings.sparkMode;
   $("sparkStyle").innerHTML = (settings.sparkStyles || []).map((s) => `<option value="${s.id}">${escapeHTML(s.name)}</option>`).join("");
   $("sparkStyle").value = settings.sparkStyle;
+  $("theme").innerHTML = (settings.themes || []).map((t) => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("");
+  $("theme").value = settings.theme;
+  applyPalette(settings.palette || {});
   $("autoBoard").value = String(settings.autoBoard);
   const screenSelect = $("claudiaScreen");
   screenSelect.innerHTML = '<option value="">Wherever my pointer is</option>' + settings.screens.map((s) => `<option>${escapeHTML(s)}</option>`).join("");
@@ -210,6 +214,13 @@ $("brain").onchange = (e) => loadSettings({ brain: e.target.value });
 $("helper").onchange = (e) => loadSettings({ helper: e.target.value });
 $("sparkMode").onchange = (e) => loadSettings({ sparkMode: e.target.value });
 $("sparkStyle").onchange = (e) => loadSettings({ sparkStyle: e.target.value });
+$("theme").onchange = (e) => loadSettings({ theme: e.target.value });
+function applyPalette(palette) {
+  const root = document.documentElement.style;
+  for (const name of ["bg", "panel", "panel2", "line", "text", "muted", "accent"]) {
+    if (palette[name]) root.setProperty("--" + name, palette[name]); else root.removeProperty("--" + name);
+  }
+}
 $("claudiaScreen").onchange = (e) => loadSettings({ claudiaScreen: e.target.value });
 $("autoBoard").onchange = (e) => loadSettings({ autoBoard: e.target.value === "true" });
 document.querySelectorAll("[data-board]").forEach((b) => b.onclick = async () => { await api("board", { action: b.dataset.board }); loadBoard(); });

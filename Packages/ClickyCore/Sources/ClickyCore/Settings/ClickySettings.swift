@@ -143,6 +143,8 @@ public enum ClickySettings {
         public static let modelsCode = "v2.models.code"
         /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
         public static let sparkMode = "v2.spark.mode"
+        /// Colour theme of the notes panel and Claudia's UI page: "system" (default), "claude", "midnight", "paper", "neon", "forest".
+        public static let uiTheme = "v2.ui.theme"
         /// The companion's look: "claude" (default), "codex", "antigravity", "grok", "orb", "star" or "atom".
         public static let sparkStyle = "v2.spark.style"
         /// String, default "": the display Claudia uses for itself (its spark, boards, notes and the windows it opens).
@@ -440,6 +442,11 @@ public enum ClickySettings {
     public static var sparkMode: SparkMode {
         get { defaults.string(forKey: Keys.sparkMode).flatMap(SparkMode.init(rawValue:)) ?? .cursor }
         set { defaults.set(newValue.rawValue, forKey: Keys.sparkMode) }
+    }
+
+    public static var uiTheme: ClaudiaTheme {
+        get { defaults.string(forKey: Keys.uiTheme).flatMap(ClaudiaTheme.init(rawValue:)) ?? .system }
+        set { defaults.set(newValue.rawValue, forKey: Keys.uiTheme) }
     }
 
     public static var sparkStyle: CompanionIconStyle {

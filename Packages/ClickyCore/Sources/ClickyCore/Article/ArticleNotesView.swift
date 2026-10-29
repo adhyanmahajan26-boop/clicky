@@ -53,13 +53,15 @@ public struct ArticleNotesViewActions {
 }
 
 public enum ArticleNotesColors {
-    public static let highlighterYellow = Color(red: 1.0, green: 0.86, blue: 0.2)
-    static let panelBackground = Color(nsColor: .windowBackgroundColor)
-    static let primaryText = Color(nsColor: .labelColor)
-    static let secondaryText = Color(nsColor: .secondaryLabelColor)
-    static let tertiaryText = Color(nsColor: .tertiaryLabelColor)
-    static let separator = Color(nsColor: .separatorColor)
-    static let rowHover = Color(nsColor: .labelColor).opacity(0.06)
+    // The theme picked in Setup (v2.ui.theme); "system" keeps the Mac's colours.
+    private static var palette: ClaudiaTheme.Palette? { ClickySettings.uiTheme.palette }
+    public static var highlighterYellow: Color { palette.map { ClaudiaTheme.color($0.highlighter) } ?? Color(red: 1.0, green: 0.86, blue: 0.2) }
+    static var panelBackground: Color { palette.map { ClaudiaTheme.color($0.panel) } ?? Color(nsColor: .windowBackgroundColor) }
+    static var primaryText: Color { palette.map { ClaudiaTheme.color($0.text) } ?? Color(nsColor: .labelColor) }
+    static var secondaryText: Color { palette.map { ClaudiaTheme.color($0.secondary) } ?? Color(nsColor: .secondaryLabelColor) }
+    static var tertiaryText: Color { palette.map { ClaudiaTheme.color($0.tertiary) } ?? Color(nsColor: .tertiaryLabelColor) }
+    static var separator: Color { palette.map { ClaudiaTheme.color($0.line) } ?? Color(nsColor: .separatorColor) }
+    static var rowHover: Color { primaryText.opacity(0.06) }
 }
 
 public struct ArticleNotesView: View {
@@ -197,7 +199,7 @@ struct StreamingText: View {
     var text: Text {
         Text(visible.settled)
             + Text(visible.tail).foregroundColor(ArticleNotesColors.primaryText.opacity(0.45))
-            + Text(visible.hasCaret ? "\u{258D}" : "").foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+            + Text(visible.hasCaret ? "\u{258D}" : "").foregroundColor(ClickySettings.uiTheme.palette.map { ClaudiaTheme.color($0.accent) } ?? Color(red: 0.85, green: 0.47, blue: 0.34))
     }
 
     var body: some View { text }

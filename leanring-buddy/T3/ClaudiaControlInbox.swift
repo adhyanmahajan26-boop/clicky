@@ -202,6 +202,7 @@ final class ClaudiaControlInbox {
             if let sparkMode = (command["sparkMode"] as? String).flatMap(ClickySettings.SparkMode.init(rawValue:)) { ClickySettings.sparkMode = sparkMode }
             if let screenName = command["claudiaScreen"] as? String { ClickySettings.claudiaScreenName = screenName }
             if let style = (command["sparkStyle"] as? String).flatMap(CompanionIconStyle.init(rawValue:)) { ClickySettings.sparkStyle = style }
+            if let theme = (command["theme"] as? String).flatMap(ClaudiaTheme.init(rawValue:)) { ClickySettings.uiTheme = theme }
             if let autoBoard = command["autoBoard"] as? Bool { UserDefaults.standard.set(autoBoard, forKey: ClickySettings.Keys.whiteboardAuto) }
             let catalog = BrainCatalog.shared
             catalog.load()
@@ -211,6 +212,13 @@ final class ClaudiaControlInbox {
                 "silentMode": ClickySettings.isSilentModeEnabled,
                 "sparkMode": ClickySettings.sparkMode.rawValue,
                 "sparkStyle": ClickySettings.sparkStyle.rawValue,
+                "theme": ClickySettings.uiTheme.rawValue,
+                "themes": ClaudiaTheme.allCases.map { ["id": $0.rawValue, "name": $0.displayName] },
+                "palette": ClickySettings.uiTheme.palette.map { palette -> [String: String] in
+                    ["bg": ClaudiaTheme.cssHex(palette.background), "panel": ClaudiaTheme.cssHex(palette.panel), "panel2": ClaudiaTheme.cssHex(palette.line),
+                     "line": ClaudiaTheme.cssHex(palette.line), "text": ClaudiaTheme.cssHex(palette.text), "muted": ClaudiaTheme.cssHex(palette.secondary),
+                     "accent": ClaudiaTheme.cssHex(palette.accent)]
+                } ?? [:],
                 "sparkStyles": CompanionIconStyle.allCases.map { ["id": $0.rawValue, "name": $0.displayName] },
                 "claudiaScreen": ClickySettings.claudiaScreenName,
                 "autoBoard": ClickySettings.isWhiteboardAutoEnabled,

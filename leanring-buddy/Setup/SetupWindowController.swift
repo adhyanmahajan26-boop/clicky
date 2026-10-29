@@ -758,6 +758,7 @@ private struct ClaudiaScreenSection: View {
     @State private var screenName = ClickySettings.claudiaScreenName
     @State private var sparkMode = ClickySettings.sparkMode
     @State private var sparkStyle = ClickySettings.sparkStyle
+    @State private var theme = ClickySettings.uiTheme
     private let screenNames = NSScreen.screens.map(\.localizedName)
 
     var body: some View {
@@ -781,15 +782,18 @@ private struct ClaudiaScreenSection: View {
             }
             .pickerStyle(.radioGroup)
             .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
+            Picker("Notes and T3 theme", selection: $theme) {
+                ForEach(ClaudiaTheme.allCases, id: \.self) { theme in Text(theme.displayName).tag(theme) }
+            }
+            .onChange(of: theme) { _, newValue in ClickySettings.uiTheme = newValue }
             Text("Spark style").font(.system(size: 12, weight: .medium))
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                 ForEach(CompanionIconStyle.allCases, id: \.self) { style in
                     Button(action: { sparkStyle = style; ClickySettings.sparkStyle = style }) {
                         VStack(spacing: 6) {
-                            CompanionIconShape(style: style)
-                                .fill(Color(cgColor: CompanionIconStyle.color(style.fillHex)))
-                                .shadow(color: Color(cgColor: CompanionIconStyle.color(style.glowHex)).opacity(0.8), radius: 5)
+                            CompanionIconPreview(style: style)
                                 .frame(width: 30, height: 30)
+                                .padding(6)
                             Text(style.displayName).font(.system(size: 10)).multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity, minHeight: 66)
