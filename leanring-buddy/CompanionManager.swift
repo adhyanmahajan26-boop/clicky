@@ -293,8 +293,7 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Conversation history so Claude remembers prior exchanges within a session.
-    /// Each entry is the user's transcript and Claude's response.
+    /// This session's exchanges (your words, Theo's answer), sent along so Theo remembers.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
 
     /// False when the startup geometry check found AppKit and CG display
@@ -341,39 +340,33 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// The currently running AI response task, if any. Cancelled when the user
-    /// speaks again so a new response can begin immediately.
+    /// The answer being produced; a new question cancels it.
     private var currentResponseTask: Task<Void, Never>?
     /// When push-to-talk was last released; the turn log's keyUp time.
     private var lastPushToTalkReleaseDate: Date?
 
+    // Subscriptions and timers for push-to-talk and the permission poll.
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
-    private var accessibilityCheckTimer: Timer?
+    private var permissionPollTimer: Timer?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
-
-    /// Permission changes go to the unified log (not just the Xcode console)
-    /// so they can be checked with `log show --predicate 'subsystem == "com.personal.clicky"'`.
+    /// Permission changes in the unified log: `log show --predicate 'subsystem == "com.personal.clicky"'`.
     private let permissionLogger = Logger(subsystem: "com.personal.clicky", category: "permissions")
+    /// Push-to-talk's start, which can still be pending when the keys come up.
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
-    /// Scheduled hide for transient cursor mode — cancelled if the user
-    /// speaks again before the delay elapses.
+    /// With the spark hidden by choice, it shows for one exchange and then fades; this is that fade.
     private var transientHideTask: Task<Void, Never>?
 
-    /// True when all three required permissions (accessibility, screen recording,
-    /// microphone) are granted. Used by the panel to show a single "all good" state.
+    /// Everything Theo needs is allowed.
     var allPermissionsGranted: Bool {
-        hasAccessibilityPermission && hasScreenRecordingPermission && hasMicrophonePermission && hasScreenContentPermission
+        [hasAccessibilityPermission, hasScreenRecordingPermission, hasMicrophonePermission, hasScreenContentPermission].allSatisfy { $0 }
     }
 
-    /// Whether the blue cursor overlay is currently visible on screen.
-    /// Used by the panel to show accurate status text ("Active" vs "Ready").
+    /// The spark layer is on screen.
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    /// Stored as a Claude Code model alias ("sonnet" / "opus") so it always
-    /// tracks the newest model in that family.
+    /// The answer model (ClickyModels.main: "codex:…" etc. for other brains).
     @Published var selectedModel: String = ClickyModels.main
 
     /// Silent mode: listen and answer on screen, never speak (v2.voice.silent).
@@ -391,44 +384,33 @@ final class CompanionManager: ObservableObject {
         claudeCodeBridge.model = selectedModel
     }
 
-    /// User preference for whether the Clicky cursor should be shown.
-    /// When toggled off, the overlay is hidden and push-to-talk is disabled.
-    /// Persisted to UserDefaults so the choice survives app restarts.
-    @Published var isClickyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
-        ? true
-        : UserDefaults.standard.bool(forKey: "isClickyCursorEnabled")
+    /// "Show the spark by my pointer" (stored under its old key so the choice carries over).
+    @Published var isClickyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") as? Bool ?? true
 
     func setClickyCursorEnabled(_ enabled: Bool) {
         isClickyCursorEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "isClickyCursorEnabled")
         transientHideTask?.cancel()
         transientHideTask = nil
-
-        if enabled {
-            sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-            isOverlayVisible = true
-        } else {
-            sparkOverlay.hideOverlay()
-            isOverlayVisible = false
-        }
+        enabled ? putSparkOnScreens(greeting: false) : takeSparkOffScreens()
     }
 
-    /// Whether the user has completed onboarding at least once. Persisted
-    /// to UserDefaults so the Start button only appears on first launch.
+    /// Shows the spark layer on every screen (`greeting` plays the first-run hello).
+    func putSparkOnScreens(greeting: Bool) {
+        if !greeting { sparkOverlay.hasShownOverlayBefore = true }
+        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        isOverlayVisible = true
+    }
+
+    private func takeSparkOffScreens() {
+        sparkOverlay.hideOverlay()
+        isOverlayVisible = false
+    }
+
+    /// Set once the first-run hello has played.
     var hasCompletedOnboarding: Bool {
         get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
         set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
-    }
-
-    /// The upstream app gated onboarding behind an email signup form. This
-    /// personal build has no signup, so the gate is always considered passed.
-    @Published var hasSubmittedEmail: Bool = true
-
-    /// Kept so the panel's (now hidden) email field still compiles. Nothing
-    /// is sent anywhere.
-    func submitEmail(_ email: String) {
-        hasSubmittedEmail = true
     }
 
     func start() {
@@ -473,7 +455,7 @@ final class CompanionManager: ObservableObject {
         }
         startWakeWord()
         refreshAllPermissions()
-        print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        print("🔑 Theo start: accessibility \(hasAccessibilityPermission), screen \(hasScreenRecordingPermission), mic \(hasMicrophonePermission), screen content \(hasScreenContentPermission)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
@@ -481,36 +463,23 @@ final class CompanionManager: ObservableObject {
         bindEscapeKey()
         _ = claudeCodeBridge
         refreshClaudeCodeSignInStatus()
-
-        // If the user already completed onboarding AND all permissions are
-        // still granted, show the cursor overlay immediately. If permissions
-        // were revoked (e.g. signing change), don't show the cursor — the
-        // panel will show the permissions UI instead.
-        if hasCompletedOnboarding && allPermissionsGranted && isClickyCursorEnabled {
-            sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-            isOverlayVisible = true
-        }
+        showSparkIfReady()
     }
 
-    /// Called by BlueCursorView after the buddy finishes its pointing
-    /// animation and returns to cursor-following mode.
-    /// Triggers the onboarding sequence — dismisses the panel and shows the
-    /// overlay for the first time so the welcome text and the
-    /// "press control + option" hint play.
-    func triggerOnboarding() {
-        // Post notification so the panel manager can dismiss the panel
-        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-
-        // Mark onboarding as completed so the Start button won't appear
-        // again on future launches — the cursor will auto-show instead
+    /// Once everything is allowed the spark appears; the very first time it says hello.
+    func showSparkIfReady() {
+        guard allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible else { return }
+        let isFirstTime = !hasCompletedOnboarding
         hasCompletedOnboarding = true
+        putSparkOnScreens(greeting: isFirstTime)
+    }
 
-
-        // Show the overlay for the first time — isFirstAppearance triggers
-        // the welcome animation, then the push-to-talk hint
-        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-        isOverlayVisible = true
+    /// Plays the first-run hello again (and closes the menu-bar panel so it doesn't cover it).
+    func triggerOnboarding() {
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        hasCompletedOnboarding = true
+        sparkOverlay.hasShownOverlayBefore = false
+        putSparkOnScreens(greeting: true)
     }
 
     /// Setup's "Test the spark": the overlay has to be up to show it.
@@ -554,318 +523,215 @@ final class CompanionManager: ObservableObject {
         speechOutputClient.shutDown()
         endHandsFreeSession()
         wakeWordController.stop()
-        wakeWordVoiceStateCancellable?.cancel()
-        escapeKeyCancellable?.cancel()
+        [wakeWordVoiceStateCancellable, escapeKeyCancellable, agentsVoiceStateCancellable,
+         shortcutTransitionCancellable, voiceStateCancellable, audioPowerCancellable].forEach { $0?.cancel() }
         pushToTalkKeys.stop()
         pushToTalkRecorder.cancelCurrentDictation()
         sparkOverlay.hideOverlay()
         transientHideTask?.cancel()
-
         currentResponseTask?.cancel()
         currentResponseTask = nil
-        agentsVoiceStateCancellable?.cancel()
         projectBridge.stop()
         sparkClickTarget.reset()
         agentsCenter.saveNow(waitsForWrite: true)
-        shortcutTransitionCancellable?.cancel()
-        voiceStateCancellable?.cancel()
-        audioPowerCancellable?.cancel()
-        accessibilityCheckTimer?.invalidate()
-        accessibilityCheckTimer = nil
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
     }
+
+    // MARK: - Permissions
 
     private var hasLoggedPermissionStateThisLaunch = false
 
+    /// Re-reads every privilege. Each @Published value is only written when it changes,
+    /// because every write re-renders the overlays and panels watching this object.
     func refreshAllPermissions() {
-        let previouslyHadAccessibility = hasAccessibilityPermission
-        let previouslyHadScreenRecording = hasScreenRecordingPermission
-        let previouslyHadMicrophone = hasMicrophonePermission
-        let previouslyHadAll = allPermissionsGranted
+        let before = (hasAccessibilityPermission, hasScreenRecordingPermission, hasMicrophonePermission)
 
-        // Every assignment below only happens on a change: this runs every
-        // 1.5 s and each @Published write (even an equal one) re-renders every
-        // overlay and panel view observing CompanionManager.
-        let currentlyHasAccessibility = TheoPermissions.isAccessibilityGranted
-        if hasAccessibilityPermission != currentlyHasAccessibility { hasAccessibilityPermission = currentlyHasAccessibility }
+        let accessibility = TheoPermissions.isAccessibilityGranted
+        if hasAccessibilityPermission != accessibility { hasAccessibilityPermission = accessibility }
+        // The keyboard listener needs Accessibility.
+        accessibility ? pushToTalkKeys.start() : pushToTalkKeys.stop()
 
-        if currentlyHasAccessibility {
-            pushToTalkKeys.start()
-        } else {
-            pushToTalkKeys.stop()
-        }
+        let screenRecording = TheoPermissions.isScreenRecordingGranted
+        if hasScreenRecordingPermission != screenRecording { hasScreenRecordingPermission = screenRecording }
 
-        let currentlyHasScreenRecording = TheoPermissions.isScreenRecordingGranted
-        if hasScreenRecordingPermission != currentlyHasScreenRecording { hasScreenRecordingPermission = currentlyHasScreenRecording }
+        let microphone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if hasMicrophonePermission != microphone { hasMicrophonePermission = microphone }
 
-        let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        let currentlyHasMicrophone = micAuthStatus == .authorized
-        if hasMicrophonePermission != currentlyHasMicrophone { hasMicrophonePermission = currentlyHasMicrophone }
-
-        // Log permission state on changes (and on the first check of a launch)
-        if !hasLoggedPermissionStateThisLaunch
-            || previouslyHadAccessibility != hasAccessibilityPermission
-            || previouslyHadScreenRecording != hasScreenRecordingPermission
-            || previouslyHadMicrophone != hasMicrophonePermission {
-            hasLoggedPermissionStateThisLaunch = true
-            let speechRecognitionStatus = SFSpeechRecognizer.authorizationStatus() == .authorized ? "authorized" : "not authorized (\(SFSpeechRecognizer.authorizationStatus().rawValue))"
-            let permissionSummary = "accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), speech: \(speechRecognitionStatus)"
-            print("🔑 Permissions — \(permissionSummary)")
-            permissionLogger.notice("Permissions — \(permissionSummary, privacy: .public)")
-        }
-
-        // Track individual permission grants as they happen
-        if !previouslyHadAccessibility && hasAccessibilityPermission {
-        }
-        if !previouslyHadScreenRecording && hasScreenRecordingPermission {
-        }
-        if !previouslyHadMicrophone && hasMicrophonePermission {
-        }
-        // Screen content permission is persisted — once the user has approved the
-        // SCShareableContent picker, we don't need to re-check it.
+        // The screen-content picker's approval is remembered once seen.
         if !hasScreenContentPermission, UserDefaults.standard.bool(forKey: "hasScreenContentPermission") {
             hasScreenContentPermission = true
         }
 
-        if !previouslyHadAll && allPermissionsGranted {
+        let after = (hasAccessibilityPermission, hasScreenRecordingPermission, hasMicrophonePermission)
+        if !hasLoggedPermissionStateThisLaunch || before != after {
+            hasLoggedPermissionStateThisLaunch = true
+            let speech = SFSpeechRecognizer.authorizationStatus() == .authorized ? "yes" : "no"
+            let line = "accessibility \(after.0), screen \(after.1), mic \(after.2), screen content \(hasScreenContentPermission), speech \(speech)"
+            print("🔑 Permissions: \(line)")
+            permissionLogger.notice("Permissions: \(line, privacy: .public)")
         }
+        showSparkIfReady()
     }
 
-    /// Triggers the macOS screen content picker by performing a dummy
-    /// screenshot capture. Once the user approves, we persist the grant
-    /// so they're never asked again during onboarding.
+    /// Asks macOS for screen content by taking one tiny capture (that's what brings up its picker),
+    /// and remembers the approval.
     @Published private(set) var isRequestingScreenContent = false
 
     func requestScreenContentPermission() {
         guard !isRequestingScreenContent else { return }
         isRequestingScreenContent = true
         Task {
+            var approved = false
             do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let display = content.displays.first else {
-                    await MainActor.run { isRequestingScreenContent = false }
-                    return
-                }
-                let filter = SCContentFilter(display: display, excludingWindows: [])
-                let config = SCStreamConfiguration()
-                config.width = 320
-                config.height = 240
-                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                // Verify the capture actually returned real content — a 0x0 or
-                // fully-empty image means the user denied the prompt.
-                let didCapture = image.width > 0 && image.height > 0
-                print("🔑 Screen content capture result — width: \(image.width), height: \(image.height), didCapture: \(didCapture)")
-                await MainActor.run {
-                    isRequestingScreenContent = false
-                    guard didCapture else { return }
-                    hasScreenContentPermission = true
-                    UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
-
-                    // If onboarding was already completed, show the cursor overlay now
-                    if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
-                        sparkOverlay.hasShownOverlayBefore = true
-                        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                        isOverlayVisible = true
-                    }
+                let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                if let display = shareable.displays.first {
+                    let settings = SCStreamConfiguration()
+                    settings.width = 160
+                    settings.height = 120
+                    let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []),
+                                                                           configuration: settings)
+                    approved = image.width > 0 && image.height > 0
                 }
             } catch {
-                print("⚠️ Screen content permission request failed: \(error)")
-                await MainActor.run { isRequestingScreenContent = false }
+                print("⚠️ Screen content request failed: \(error)")
             }
+            isRequestingScreenContent = false
+            guard approved else { return }
+            hasScreenContentPermission = true
+            UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
+            showSparkIfReady()
         }
     }
 
-    // MARK: - Private
-
-    /// Triggers the system microphone prompt if the user has never been asked.
-    /// Once granted/denied the status sticks and polling picks it up.
+    /// The Mac's microphone prompt, if it was never shown.
     private func promptForMicrophoneIfNotDetermined() {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            Task { @MainActor [weak self] in
-                self?.hasMicrophonePermission = granted
-            }
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            Task { @MainActor [weak self] in self?.hasMicrophonePermission = granted }
         }
     }
 
-    /// Polls all permissions frequently so the UI updates live after the
-    /// user grants them in System Settings. Screen Recording is the exception —
-    /// macOS requires an app restart for that one to take effect.
+    /// Re-checks every 1.5 s and whenever Theo comes to the front (back from System Settings).
+    /// Screen Recording still needs a relaunch to take effect.
     private func startPermissionPolling() {
-        accessibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshAllPermissions()
-            }
+        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.refreshAllPermissions() }
         }
-
-        // Coming back from System Settings activates Clicky (e.g. clicking its
-        // menu bar icon), so re-check right away instead of waiting for the timer.
-        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshAllPermissions()
-            }
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor [weak self] in self?.refreshAllPermissions() }
         }
     }
 
+    // MARK: - Push-to-talk
+
+    /// The recorder's loudness feeds the spark's level meter.
     private func bindAudioPowerLevel() {
         audioPowerCancellable = pushToTalkRecorder.$currentAudioPowerLevel
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] powerLevel in
-                self?.currentAudioPowerLevel = powerLevel
-            }
+            .sink { [weak self] level in self?.currentAudioPowerLevel = level }
     }
 
+    /// Recording → listening; finishing or getting ready → processing; otherwise idle.
+    /// While an answer is being given, the answer pipeline owns the state.
     private func bindVoiceStateObservation() {
-        voiceStateCancellable = pushToTalkRecorder.$isRecordingFromKeyboardShortcut
-            .combineLatest(
-                pushToTalkRecorder.$isFinalizingTranscript,
-                pushToTalkRecorder.$isPreparingToRecord
-            )
+        voiceStateCancellable = Publishers.CombineLatest3(pushToTalkRecorder.$isRecordingFromKeyboardShortcut,
+                                                          pushToTalkRecorder.$isFinalizingTranscript,
+                                                          pushToTalkRecorder.$isPreparingToRecord)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isRecording, isFinalizing, isPreparing in
-                guard let self else { return }
-                // Don't override .responding — the AI response pipeline
-                // manages that state directly until streaming finishes.
-                guard self.voiceState != .responding else { return }
-
-                if isFinalizing {
-                    self.voiceState = .processing
-                } else if isRecording {
+            .sink { [weak self] recording, finishing, preparing in
+                guard let self, self.voiceState != .responding else { return }
+                if recording {
                     self.voiceState = .listening
-                } else if isPreparing {
+                } else if finishing || preparing {
                     self.voiceState = .processing
                 } else {
                     self.voiceState = .idle
-                    // If the user pressed and released the hotkey without
-                    // saying anything, no response task runs — schedule the
-                    // transient hide here so the overlay doesn't get stuck.
-                    // Only do this when no response is in flight, otherwise
-                    // the brief idle gap between recording and processing
-                    // would prematurely hide the overlay.
-                    if self.currentResponseTask == nil {
-                        self.scheduleTransientHideIfNeeded()
-                    }
+                    // Keys tapped with nothing said: no answer will hide a temporary spark, so do it here.
+                    if self.currentResponseTask == nil { self.scheduleTransientHideIfNeeded() }
                 }
             }
     }
 
     private func bindShortcutTransitions() {
-        shortcutTransitionCancellable = pushToTalkKeys
-            .transitions
+        shortcutTransitionCancellable = pushToTalkKeys.transitions
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] transition in
-                self?.handleShortcutTransition(transition)
-            }
+            .sink { [weak self] transition in self?.handleShortcutTransition(transition) }
     }
 
     private func handleShortcutTransition(_ transition: PushToTalkTransition) {
         switch transition {
-        case .pressed:
-            lastShortcutPressDate = Date()
-            // During a hands-free session the mic is already open, so holding
-            // the shortcut does nothing — a double-tap ends the session instead.
-            guard !isHandsFreeSessionActive else { return }
-            guard !pushToTalkRecorder.isDictationInProgress else { return }
+        case .pressed: pushToTalkPressed()
+        case .released: pushToTalkReleased()
+        case .none: break
+        }
+    }
 
-            // P7: the wake listener closes its mic first (a turn it was
-            // hearing is dropped) and opens it again after key-up.
-            speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)
+    /// Keys down: stop whatever Theo is saying, get the screens and the brain ready, start recording.
+    private func pushToTalkPressed() {
+        lastShortcutPressDate = Date()
+        // Hands-free already has the mic open; a double tap ends it instead.
+        guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress else { return }
 
-            // Start reading the screens while the user is still talking.
-            groundingCoordinator.prewarm()
+        // The wake listener gives up the mic until key-up.
+        speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)
+        groundingCoordinator.prewarm()
+        transientHideTask?.cancel()
+        transientHideTask = nil
+        // With the spark hidden by choice it still shows for this exchange.
+        if !isClickyCursorEnabled && !isOverlayVisible { putSparkOnScreens(greeting: false) }
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Cancel any pending transient hide so the overlay stays visible
-            transientHideTask?.cancel()
-            transientHideTask = nil
+        // Barge in: voices off, caption frozen, the answer in flight cancelled.
+        speechOutputClient.stopVoicesNow()
+        speechOutputClient.activeCoordinator?.bargeIn(.pushToTalk)
+        currentResponseTask?.cancel()
+        speechOutputClient.stopPlayback()
+        clearDetectedElementLocation()
 
-            // If the cursor is hidden, bring it back transiently for this interaction
-            if !isClickyCursorEnabled && !isOverlayVisible {
-                sparkOverlay.hasShownOverlayBefore = true
-                sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                isOverlayVisible = true
+        // Start the brain now so key-up only has to send the words.
+        prespawnMainBrainStandby()
+        zoomChecker.prespawnStandbyIfEnabled()
+
+        if showOnboardingPrompt {
+            withAnimation(.easeOut(duration: 0.3)) { onboardingPromptOpacity = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                self.showOnboardingPrompt = false
+                self.onboardingPromptText = ""
             }
+        }
 
-            // Dismiss the menu bar panel so it doesn't cover the screen
-            NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-
-            // Barge-in: silence the voices first, then cut off the answer
-            // (its caption freezes) and cancel any response in flight.
-            speechOutputClient.stopVoicesNow()
-            speechOutputClient.activeCoordinator?.bargeIn(.pushToTalk)
-            currentResponseTask?.cancel()
-            speechOutputClient.stopPlayback()
-            clearDetectedElementLocation()
-
-            // Start the CLI now so key-up only has to write the message.
-            prespawnMainBrainStandby()
-            zoomChecker.prespawnStandbyIfEnabled()
-
-            // Dismiss the onboarding prompt if it's showing
-            if showOnboardingPrompt {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    onboardingPromptOpacity = 0.0
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    self.showOnboardingPrompt = false
-                    self.onboardingPromptText = ""
-                }
+        pendingKeyboardShortcutStartTask?.cancel()
+        pendingKeyboardShortcutStartTask = Task {
+            await pushToTalkRecorder.startPushToTalkFromKeyboardShortcut(currentDraftText: "", updateDraftText: { _ in }) { [weak self] words in
+                guard let self else { return }
+                // "slower" / "faster" on their own change the voice speed; no brain turn.
+                if self.applyVoiceSpeedCommandIfExact(words) { return }
+                self.lastTranscript = words
+                print("🗣️ Heard: \(words)")
+                self.sendTranscriptToClaudeWithScreenshot(transcript: words,
+                                                         turnOptions: TurnOptions(keyUpDate: self.lastPushToTalkReleaseDate ?? Date()))
             }
-    
+        }
+    }
 
-
-            pendingKeyboardShortcutStartTask?.cancel()
-            pendingKeyboardShortcutStartTask = Task {
-                await pushToTalkRecorder.startPushToTalkFromKeyboardShortcut(
-                    currentDraftText: "",
-                    updateDraftText: { _ in
-                        // Partial transcripts are hidden (waveform-only UI)
-                    },
-                    submitDraftText: { [weak self] finalTranscript in
-                        // A bare "slower" / "faster" changes the voice speed, no Claude.
-                        if self?.applyVoiceSpeedCommandIfExact(finalTranscript) == true { return }
-                        self?.lastTranscript = finalTranscript
-                        print("🗣️ Companion received transcript: \(finalTranscript)")
-                        // Latency is measured from the moment the keys were released.
-                        let keyUpDate = self?.lastPushToTalkReleaseDate ?? Date()
-                        self?.sendTranscriptToClaudeWithScreenshot(
-                            transcript: finalTranscript,
-                            turnOptions: TurnOptions(keyUpDate: keyUpDate)
-                        )
-                    }
-                )
-            }
-        case .released:
-            let wasShortcutDoubleTapped = registerShortcutReleaseAndDetectDoubleTap()
-
-            if isHandsFreeSessionActive {
-                if wasShortcutDoubleTapped {
-                    endHandsFreeSession()
-                }
-                return
-            }
-
-            // Cancel the pending start task in case the user released the shortcut
-            // before the async startPushToTalk had a chance to begin recording.
-            // Without this, a quick press-and-release drops the release event and
-            // leaves the waveform overlay stuck on screen indefinitely.
-            lastPushToTalkReleaseDate = Date()
-            pendingKeyboardShortcutStartTask?.cancel()
-            pendingKeyboardShortcutStartTask = nil
-            pushToTalkRecorder.stopPushToTalkFromKeyboardShortcut()
-            // The dictation engine stopped above; the wake word may listen again.
-            speechOutputClient.audioEngineHub.releaseMicrophone(for: .pushToTalk)
-
-            if wasShortcutDoubleTapped {
-                // The two quick taps each started a (silent) push-to-talk
-                // recording — throw those away before opening the session mic.
-                pushToTalkRecorder.cancelCurrentDictation(preserveDraftText: false)
-                startHandsFreeSession()
-            }
-        case .none:
-            break
+    /// Keys up: stop recording (the words arrive a moment later). Two quick taps start hands-free.
+    private func pushToTalkReleased() {
+        let isDoubleTap = registerShortcutReleaseAndDetectDoubleTap()
+        if isHandsFreeSessionActive {
+            if isDoubleTap { endHandsFreeSession() }
+            return
+        }
+        lastPushToTalkReleaseDate = Date()
+        // A press released before recording began must still end cleanly.
+        pendingKeyboardShortcutStartTask?.cancel()
+        pendingKeyboardShortcutStartTask = nil
+        pushToTalkRecorder.stopPushToTalkFromKeyboardShortcut()
+        speechOutputClient.audioEngineHub.releaseMicrophone(for: .pushToTalk)
+        if isDoubleTap {
+            // The two taps each recorded a sliver of silence: throw them away.
+            pushToTalkRecorder.cancelCurrentDictation(preserveDraftText: false)
+            startHandsFreeSession()
         }
     }
 
@@ -2083,66 +1949,41 @@ final class CompanionManager: ObservableObject {
         return answerSession.coordinator.spokenText
     }
 
-    /// If the cursor is in transient mode (user toggled "Show Theo" off),
-    /// waits for TTS playback and any pointing animation to finish, then
-    /// fades out the overlay after a 1-second pause. Cancelled automatically
-    /// if the user starts another push-to-talk interaction.
+    /// With the spark hidden by choice it appears for one exchange; once the voice, any pointing
+    /// flight and the marks are done, it waits a second and fades. A new question cancels this.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
-
         transientHideTask?.cancel()
         transientHideTask = Task {
-            // Wait for TTS audio to finish playing
-            while speechOutputClient.isPlaying {
+            @MainActor func stillBusy() -> Bool { speechOutputClient.isPlaying || detectedElementScreenLocation != nil || hasLiveScreenMarks }
+            while stillBusy() {
                 try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
+                if Task.isCancelled { return }
             }
-
-            // Wait for pointing animation to finish (location is cleared
-            // when the buddy flies back to the cursor)
-            while detectedElementScreenLocation != nil {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-            }
-
-            // Keep the overlay up while live marks are showing, otherwise
-            // they'd vanish the moment the buddy stops talking.
-            while hasLiveScreenMarks {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-            }
-
-            // Pause 1s after everything finishes, then fade out
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard !Task.isCancelled else { return }
+            if Task.isCancelled { return }
             sparkOverlay.fadeOutAndHideOverlay()
             isOverlayVisible = false
         }
     }
 
-    /// Speaks a short explanation when a response fails, so the user hears
-    /// what to fix instead of the buddy going quiet. The most common cause is
-    /// Claude Code being signed out or out of subscription usage.
+    /// When an answer fails, Theo says why in plain words instead of going quiet.
     private func speakErrorFallback(for error: Error) {
-        let utterance: String
+        let brainName = BrainModel(setting: selectedModel).provider.displayName
+        let line: String
         switch error {
         case ClaudeCodeBridgeError.claudeCodeNotInstalled:
-            utterance = "I can't find Claude Code on this Mac. Install it, then sign in."
+            line = "I can't find \(brainName) on this Mac. Open my Setup guide to install it and sign in."
         case ClaudeCodeBridgeError.claudeCodeReportedError(let message)
             where message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("login"):
-            utterance = "I'm signed out of Claude. Run claude auth login in Terminal, then try again."
-        case ClaudeCodeBridgeError.claudeCodeReportedError(let message)
-            where message.localizedCaseInsensitiveContains("limit"):
-            utterance = "You've hit your Claude usage limit for now. Try again a bit later."
+            line = "I'm signed out of \(brainName). Sign in again from my Setup guide, then ask me again."
+        case ClaudeCodeBridgeError.claudeCodeReportedError(let message) where message.localizedCaseInsensitiveContains("limit"):
+            line = "You've hit your usage limit for now. Try again a bit later."
         default:
-            utterance = "Something went wrong talking to Claude. Check the Xcode console for details."
+            line = "Something went wrong reaching my brain. Diagnostics in the menu bar has the details."
         }
         refreshClaudeCodeSignInStatus()
-        // Same voice as normal answers. (This used a throwaway
-        // NSSpeechSynthesizer before, which was freed mid-sentence and cut off.)
-        Task {
-            try? await speechOutputClient.speakText(utterance)
-        }
+        Task { try? await speechOutputClient.speakText(line) }
         voiceState = .responding
     }
 
@@ -2169,38 +2010,27 @@ final class CompanionManager: ObservableObject {
     you're a fast helper working for theo, a voice assistant. theo's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
 
-    // MARK: - Onboarding Prompt
+    // MARK: - First-run hint
 
+    /// Types "hold control + option and say hi" next to the spark after the hello, then fades it.
     func startOnboardingPromptStream() {
-        let message = "press control + option and introduce yourself"
+        let hint = "hold control + option and say hi"
         onboardingPromptText = ""
         showOnboardingPrompt = true
-        onboardingPromptOpacity = 0.0
-
-        withAnimation(.easeIn(duration: 0.4)) {
-            onboardingPromptOpacity = 1.0
-        }
-
-        var currentIndex = 0
-        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { timer in
-            guard currentIndex < message.count else {
-                timer.invalidate()
-                // Auto-dismiss after 10 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    guard self.showOnboardingPrompt else { return }
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.onboardingPromptOpacity = 0.0
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        self.showOnboardingPrompt = false
-                        self.onboardingPromptText = ""
-                    }
-                }
-                return
+        withAnimation(.easeIn(duration: 0.4)) { onboardingPromptOpacity = 1 }
+        for count in 1...hint.count {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(count) * 0.03) {
+                guard self.showOnboardingPrompt else { return }
+                self.onboardingPromptText = String(hint.prefix(count))
             }
-            let index = message.index(message.startIndex, offsetBy: currentIndex)
-            self.onboardingPromptText.append(message[index])
-            currentIndex += 1
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(hint.count) * 0.03 + 10) {
+            guard self.showOnboardingPrompt else { return }
+            withAnimation(.easeOut(duration: 0.3)) { self.onboardingPromptOpacity = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                self.showOnboardingPrompt = false
+                self.onboardingPromptText = ""
+            }
         }
     }
 }
