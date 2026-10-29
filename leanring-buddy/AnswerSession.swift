@@ -795,6 +795,8 @@ final class AnswerSession: SpeechCoordinatorHost {
         companionManager.upcomingTargetRectsCG = []
         self.wasInterrupted = wasInterrupted
         companionManager.speechOutputClient.recordFinished(coordinator)
+        // Remembered for "do it for me": the steps this answer marked.
+        if rawResponse.contains("[MARK:") { companionManager.lastRawAnswerWithMarks = rawResponse }
         var history = wasInterrupted ? historyText : HistoryTagRewriter.wordsForHistory(Self.removingWhiteboardBlocks(rawResponse))
         if presentedBoard, let boardHistory = companionManager.boardController.historyEntry(spokenHistory: history, session: self) {
             history = boardHistory

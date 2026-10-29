@@ -140,6 +140,8 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
     func presentLive(board newBoard: WBBoard, session: AnswerSession, coordinator: SpeechCoordinator, turnRecord newTurnRecord: TurnRecord?,
                      firstSegmentID: Int, segmenterOptions newSegmenterOptions: NarrationSegmenter.Options) -> Int {
         stopOwnSpeech()
+        // An edit of the open board ("add a box after login", same title): swapped in place, shown whole at once.
+        let isEditOfOpenBoard = isOpen && board.map { $0.title.lowercased() == newBoard.title.lowercased() } == true
         let orderedBoard = WBLayoutAdapter.agendaFirstRecapLast(newBoard)
         board = orderedBoard
         segmenterOptions = newSegmenterOptions
@@ -161,7 +163,7 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         fetchRelatedLinks(for: orderedBoard.title)
         let nextSegmentID = (scripts.last?.segments.last?.id ?? (firstSegmentID - 1)) + 1
         apply(narrator?.start(at: clockNow) ?? [])
-        if scripts.isEmpty {
+        if scripts.isEmpty || isEditOfOpenBoard {
             // A board without steps is shown whole.
             narrator?.revealEverything()
             publishState()

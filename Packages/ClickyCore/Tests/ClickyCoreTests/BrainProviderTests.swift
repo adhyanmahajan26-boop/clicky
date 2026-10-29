@@ -41,3 +41,16 @@ struct BrainBlockRepairTests {
         #expect(BrainCLI.repairBlockTags("<whiteboard>\n{}\n</whiteboard]\n") == "<whiteboard>\n{}\n</whiteboard>\n")
     }
 }
+
+struct ClickForMeTests {
+    @Test func phrasesAndSteps() {
+        for phrase in ["do it for me", "hey claudia, can you do it for me", "make the clicks for me", "click them for me", "click the steps for me"] {
+            #expect(ClickForMeCommand.matches(phrase), "\(phrase)")
+        }
+        for phrase in ["what does this button do", "click the blue button", "how do I do it"] {
+            #expect(!ClickForMeCommand.matches(phrase), "\(phrase)")
+        }
+        let answer = "open settings [MARK:1:12:Bluetooth|click here] then [MARK:2:40,50:screen2:Toggle|turn it on]"
+        #expect(ClickForMeCommand.markedSteps(inAnswer: answer) == ["1. Bluetooth — click here", "2. Toggle — turn it on"])
+    }
+}

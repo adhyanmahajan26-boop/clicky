@@ -198,3 +198,39 @@ public enum BrowserTabCleanupCommand {
         return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
     }
 }
+
+/// "Do it for me" / "make the clicks for me" / "click them for me" after a step-by-step answer:
+/// Claudia clicks the steps she just marked, in order.
+public enum ClickForMeCommand {
+    public static func matches(_ transcript: String) -> Bool {
+        let text = transcript.lowercased().replacingOccurrences(of: "[^a-z ]", with: "", options: .regularExpression)
+        let patterns = [
+            "^(?:(?:hey )?(?:claudia|clicky) )?(?:please )?(?:can you |could you )?do (?:it|that|them|this|those steps) for me",
+            "(?:make|do) the clicks? for me", "click (?:it|them|those|these|that) for me", "click (?:through )?(?:the |those |these )?steps? for me",
+            "^(?:please )?(?:go ahead and )?click (?:them|those|it)$", "you (?:do|click) it", "^do (?:the )?steps(?: for me)?$"
+        ]
+        return patterns.contains { text.trimmingCharacters(in: .whitespaces).range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// "1. Bluetooth | click here" from each [MARK:n:target:label|note] of an answer, in step order.
+    public static func markedSteps(inAnswer answer: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: #"\[MARK:(\d+):[^:\]]*(?::screen\d+)?:([^\]|]*)\|?([^\]]*)\]"#) else { return [] }
+        let range = NSRange(answer.startIndex..., in: answer)
+        let steps = expression.matches(in: answer, range: range).compactMap { match -> (Int, String)? in
+            guard let numberRange = Range(match.range(at: 1), in: answer), let number = Int(answer[numberRange]) else { return nil }
+            let label = Range(match.range(at: 2), in: answer).map { String(answer[$0]) } ?? ""
+            let note = Range(match.range(at: 3), in: answer).map { String(answer[$0]) } ?? ""
+            return (number, "\(number). \(label)\(note.isEmpty ? "" : " — \(note)")")
+        }
+        return steps.sorted { $0.0 < $1.0 }.map(\.1)
+    }
+
+    /// Added to the turn: the brain answers with one actions block that clicks those steps on the fresh screen.
+    public static func instruction(markedSteps: String) -> String {
+        """
+        the user wants you to do the steps you just marked, for them. your marked steps were:
+        \(markedSteps)
+        reply with one short spoken line and ONE <actions> block that clicks each step in order on this fresh screen (use the element ids from the new lists; add a short wait step after a click that opens a new page or pane, then continue). when a step needs a choice the user didn't make (a toggle to turn on or off, a value), do it the way your steps said. set "done":true on the last step.
+        """
+    }
+}

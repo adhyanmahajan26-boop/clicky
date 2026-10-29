@@ -440,6 +440,24 @@ final class DebugCommandInbox {
                 reply(commandIdentifier: commandIdentifier, isSuccess: isSuccess, result: result, errorMessage: errorMessage)
             }
 
+        case "voiceAsk":
+            // Tests: a spoken WAV through the on-device wake recognizer (real speech-to-text, no mic),
+            // then the heard words run as a normal turn. Output follows testMute, so tests stay silent.
+            guard let filePath = commandObject["path"] as? String, !filePath.isEmpty else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "voiceAsk needs \"path\"")
+                return
+            }
+            let fileURL = URL(fileURLWithPath: (filePath as NSString).expandingTildeInPath)
+            Task {
+                let (_, feedResult, feedError) = await companionManager.wakeWordController.feedFile(at: fileURL)
+                let detections = feedResult["detections"] as? [[String: Any]] ?? []
+                guard let heardText = detections.compactMap({ $0["turnText"] as? String }).first(where: { !$0.isEmpty }) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: feedResult, errorMessage: feedError ?? "no wake phrase or no words after it")
+                    return
+                }
+                startAsk(questionText: heardText, speaksResponse: true, commandIdentifier: commandIdentifier)
+            }
+
         case "wakeFeedChain":
             guard let filePath = commandObject["path"] as? String, !filePath.isEmpty else {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "wakeFeedChain needs \"path\"")

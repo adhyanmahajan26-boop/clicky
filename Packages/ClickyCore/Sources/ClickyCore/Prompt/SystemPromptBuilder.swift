@@ -252,7 +252,7 @@ public struct ModeHint: Equatable, Sendable {
     public let effort: String?
 
     private static let noBoardPattern = try! NSRegularExpression(pattern: #"\bno (white ?)?board\b"#, options: [.caseInsensitive])
-    private static let boardPattern = try! NSRegularExpression(pattern: #"\b(white ?board|diagram|visuali[sz]e)\b"#, options: [.caseInsensitive])
+    private static let boardPattern = try! NSRegularExpression(pattern: #"\b(white ?board|diagram|visuali[sz]e|flow ?charts?|mind ?maps?)\b"#, options: [.caseInsensitive])
 
     /// A turn that must answer with a board ("whiteboard that", "go deeper on 2").
     public static let whiteboard = ModeHint(line: "MODE: whiteboard", effort: "medium")

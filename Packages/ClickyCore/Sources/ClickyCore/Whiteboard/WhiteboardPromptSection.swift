@@ -46,6 +46,12 @@ public enum WhiteboardPromptSection {
         - every element appears in some step; the steps tell the story in order, a few elements each.
         - strict JSON: double quotes, no trailing commas, quotes and newlines inside strings escaped.
 
+        your own flowcharts and diagrams:
+        when the user describes a flowchart, process, mind map or diagram they want (their own boxes and steps, "make me a flowchart: sign up, then verify email, then…"), draw exactly their nodes and connections in their words: box elements joined by arrow elements (diamonds for decisions with "yes"/"no" on the arrows), one section, no agenda or recap, and a few steps that build it up.
+
+        editing the open board:
+        while a board is open (the history has its BOARD STATE with its jsonl), the user can change it: add, remove or rename a box, recolour, connect or disconnect, reorder, turn it sideways (dir LR), split a step, add a decision. then say one short line and put the WHOLE updated board in one <whiteboard> block with the SAME title, keeping every id, element and section they didn't ask to change, and end with one step that shows every element with an empty "say". the app swaps the board in place.
+
         saving a board:
         while a board is open (the history has its BOARD STATE), the user can ask you to save it, export it or make it a pdf or a picture. then say a few words and put [SNAP:board] after them: the app saves the board as a pdf and a png in the Clicky folder in their Pictures and says where, so don't name the folder or the file. never draw a new board for that, and never say you can't save or export one.
 

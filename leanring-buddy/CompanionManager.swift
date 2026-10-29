@@ -1622,7 +1622,12 @@ final class CompanionManager: ObservableObject {
     func sendTranscriptToClaudeWithScreenshot(transcript: String, turnOptions requestedTurnOptions: TurnOptions? = nil) {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
-        let turnOptions = requestedTurnOptions ?? TurnOptions()
+        var turnOptions = requestedTurnOptions ?? TurnOptions()
+        // "Do it for me" after a step-by-step answer: Claudia clicks the steps she marked, in order
+        // (an actions block on the fresh screen, with the usual countdown and safety tiers).
+        if turnOptions.extraUserText == nil, ClickForMeCommand.matches(transcript), let markedSteps = lastMarkedStepsDescription {
+            turnOptions.extraUserText = ClickForMeCommand.instruction(markedSteps: markedSteps)
+        }
         // P7: while an action task runs, the owner's own words are a yes/no to its
         // confirm card, "stop", or a new request (which ends the task first).
         if turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil,
@@ -1943,6 +1948,15 @@ final class CompanionManager: ObservableObject {
     private(set) var currentAnswerSession: AnswerSession?
     /// The last answer's spoken text ("Copy last answer", "copy that").
     @Published private(set) var lastAnswerText: String?
+
+    /// The numbered steps the last answer marked ("1. Bluetooth — click here…"), for "do it for me".
+    var lastMarkedStepsDescription: String? {
+        guard let raw = lastRawAnswerWithMarks else { return nil }
+        let steps = ClickForMeCommand.markedSteps(inAnswer: raw)
+        return steps.isEmpty ? nil : steps.joined(separator: "\n")
+    }
+    /// The raw text of the newest answer that had [MARK:…] steps.
+    var lastRawAnswerWithMarks: String?
     /// The caption bubble's content (all overlays read it).
     @Published private(set) var captionState = CaptionState()
     private var captionHideTask: Task<Void, Never>?
