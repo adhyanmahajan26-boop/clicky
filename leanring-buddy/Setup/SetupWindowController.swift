@@ -72,6 +72,8 @@ final class SetupModel: ObservableObject {
 
     private let companionManager: CompanionManager
     let showPanel: () -> Void
+    /// Demo recordings / "show me the voice settings": the section to scroll to.
+    @Published var scrollTarget: Int?
     var updateController: UpdateController { companionManager.updateController }
     @Published var updateTokenField = ""
     @Published private(set) var hasSavedUpdateToken = ClickySecrets.read(.updateToken) != nil
@@ -423,7 +425,9 @@ enum SetupWindowController {
         model.refreshClaudeCodePath()
 
         if window == nil {
-            let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
+            // As tall as the screen allows (up to 960 pt), so most sections show at once.
+            let windowHeight = min(960, max(600, ((ClaudiaScreen.picked ?? NSScreen.main)?.visibleFrame.height ?? 800) - 60))
+            let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: windowHeight),
                                          styleMask: [.titled, .closable, .resizable],
                                          backing: .buffered, defer: false)
             createdWindow.title = "Claudia Setup"
@@ -445,6 +449,14 @@ enum SetupWindowController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Scrolls Setup to a numbered section (1 Claude … 8 Updates).
+    static func hide() { window?.orderOut(nil) }
+
+    static func scroll(toSection section: Int) {
+        model?.scrollTarget = nil
+        model?.scrollTarget = section
+    }
+
     static func close() {
         window?.orderOut(nil)
     }
@@ -454,6 +466,7 @@ private struct SetupView: View {
     @ObservedObject var model: SetupModel
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Set up Claudia")
@@ -463,12 +476,16 @@ private struct SetupView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                Color.clear.frame(height: 0).id(1)
+
                 GroupBox(label: Text("1. Claude").font(.headline)) {
                     brainSection.padding(8)
                 }
+                Color.clear.frame(height: 0).id(2)
                 GroupBox(label: Text("2. Voice").font(.headline)) {
                     voiceSection.padding(8)
                 }
+                Color.clear.frame(height: 0).id(3)
                 GroupBox(label: Text("3. Models").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
                         BrainSwitchSection(model: model, catalog: model.catalog)
@@ -476,6 +493,7 @@ private struct SetupView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                 }
+                Color.clear.frame(height: 0).id(4)
                 GroupBox(label: Text("4. Permissions").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Claudia needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
@@ -486,6 +504,8 @@ private struct SetupView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                 }
+
+                Color.clear.frame(height: 0).id(5)
 
                 GroupBox(label: Text("5. Check everything").font(.headline)) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -508,15 +528,21 @@ private struct SetupView: View {
                     .padding(8)
                 }
 
+                Color.clear.frame(height: 0).id(6)
+
                 GroupBox(label: Text("6. Claudia's screen and spark").font(.headline)) {
                     ClaudiaScreenSection()
                         .padding(8)
                 }
 
+                Color.clear.frame(height: 0).id(7)
+
                 GroupBox(label: Text("7. Claudia in T3 Code").font(.headline)) {
                     T3IntegrationSection()
                         .padding(8)
                 }
+
+                Color.clear.frame(height: 0).id(8)
 
                 GroupBox(label: Text("8. Updates").font(.headline)) {
                     UpdateSection(updateController: model.updateController, tokenField: $model.updateTokenField,
@@ -531,6 +557,11 @@ private struct SetupView: View {
                 }
             }
             .padding(20)
+        }
+        .onChange(of: model.scrollTarget) { _, target in
+            guard let target else { return }
+            withAnimation(.easeInOut(duration: 0.6)) { proxy.scrollTo(target, anchor: .top) }
+        }
         }
         .frame(minWidth: 520, minHeight: 600)
     }

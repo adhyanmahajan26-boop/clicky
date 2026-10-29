@@ -38,6 +38,8 @@ enum ClaudiaScreen {
     static func moveFrontWindow(of application: NSRunningApplication?) {
         guard let application, let screen = picked else { return }
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        // Electron apps (T3 Code, Slack…) only expose their windows once asked to.
+        AXUIElementSetAttributeValue(applicationElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         Task { @MainActor in
             // The window may take a moment to appear (a fresh app or a new browser window).
             for _ in 0..<10 {

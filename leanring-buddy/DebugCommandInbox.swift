@@ -224,8 +224,41 @@ final class DebugCommandInbox {
             ClaudiaScreen.moveFrontWindow(of: NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
 
+        case "axPressTitled":
+            // Demo recordings only: presses the first element in an app's front window whose title or
+            // description is exactly `title` (Electron apps get AXManualAccessibility first).
+            guard let bundleIdentifier = commandObject["bundleId"] as? String, let title = commandObject["title"] as? String,
+                  let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "axPressTitled needs a running bundleId and a title")
+                return
+            }
+            let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+            AXUIElementSetAttributeValue(applicationElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            Task {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                var queue = TypeForMeAccessibility.elementArrayAttribute(kAXWindowsAttribute, of: applicationElement)
+                var visited = 0
+                var pressed = false
+                while !queue.isEmpty, visited < 20_000, !pressed {
+                    let element = queue.removeFirst()
+                    visited += 1
+                    let labels = [kAXTitleAttribute, kAXDescriptionAttribute].compactMap { TypeForMeAccessibility.stringAttribute($0, of: element) }
+                    if labels.contains(where: { $0.trimmingCharacters(in: .whitespaces) == title }) {
+                        pressed = AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+                        if pressed { break }
+                    }
+                    queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element))
+                }
+                reply(commandIdentifier: commandIdentifier, isSuccess: pressed, result: ["visited": visited], errorMessage: pressed ? nil : "no element titled \(title)")
+            }
+
         case "showSetup":
             SetupWindowController.show(companionManager: companionManager) {}
+            if let section = commandObject["section"] as? Int { SetupWindowController.scroll(toSection: section) }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
+
+        case "hideSetup":
+            SetupWindowController.hide()
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: nil, errorMessage: nil)
 
         case "sparkTest":
