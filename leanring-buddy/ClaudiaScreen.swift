@@ -66,7 +66,7 @@ enum ClaudiaScreen {
                 }
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 let landed = TypeForMeAccessibility.frameCG(of: window).map { targetCG.contains(CGPoint(x: $0.midX, y: $0.midY)) } ?? false
-                print("🖥️ Moved \(application.localizedName ?? "a window") to Claudia's screen (\(screen.localizedName)): size \(sizeResult.rawValue), position \(positionResult.rawValue), landed \(landed)")
+                print("🖥️ Moved \(application.localizedName ?? "a window") to Theo's screen (\(screen.localizedName)): size \(sizeResult.rawValue), position \(positionResult.rawValue), landed \(landed)")
                 if !landed { continue }
                 return
             }

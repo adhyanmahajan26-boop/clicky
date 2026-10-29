@@ -183,7 +183,7 @@ final class GroundingCoordinator {
     private(set) var lastOCRMillisecondsByDisplay: [CGDirectDisplayID: Double] = [:]
     /// Shown in the panel when AX isn't available.
     var groundingLimitationReason: String? {
-        AXIsProcessTrusted() ? nil : "Accessibility is off, so Claudia can only read the screen (OCR)."
+        AXIsProcessTrusted() ? nil : "Accessibility is off, so Theo can only read the screen (OCR)."
     }
 
     /// Observers + enhanced-UI tracking (once, from the app's start).

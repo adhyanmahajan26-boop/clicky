@@ -53,7 +53,7 @@ public enum WakeWordInactiveReason: String, Equatable, Sendable, CaseIterable {
         case .microphoneNotAuthorized: return "Off: microphone permission is needed"
         case .speechRecognitionNotAuthorized: return "Off: speech recognition permission is needed"
         case .recognizerUnavailable: return "Off: speech recognition isn't available right now"
-        case .noUsablePhrases: return "Off: no usable wake phrases (each needs two words, like \"hey claudia\")"
+        case .noUsablePhrases: return "Off: no usable wake phrases (each needs two words, like \"hey theo\")"
         case .microphoneInUseByAnotherApp: return "Paused: another app is using the microphone"
         case .bluetoothMicrophone: return "Paused: the mic is a Bluetooth headset (listening would lower its sound quality)"
         case .screenLocked: return "Paused: screen locked"

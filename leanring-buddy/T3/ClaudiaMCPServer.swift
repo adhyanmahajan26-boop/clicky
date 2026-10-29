@@ -27,8 +27,8 @@ enum ClaudiaMCPServer {
 
     static let tools: [Tool] = [
         Tool(name: "claudia_ask",
-             description: "Hand a request to Claudia, the user's on-screen companion on this Mac. She looks at the user's screens and answers with her own brain: spoken out loud, with numbered marks on the real screen, a whiteboard for concepts, background research with Haiku agents, or actions (open apps and sites, search, click, type, highlight an article). Use it for anything to do with the user's screen or for explaining something visually. Returns her answer's words.",
-             properties: ["text": ["type": "string", "description": "What to ask or tell Claudia, in plain words (as the user would say it)."],
+             description: "Hand a request to Theo, the user's on-screen companion on this Mac. She looks at the user's screens and answers with her own brain: spoken out loud, with numbered marks on the real screen, a whiteboard for concepts, background research with Haiku agents, or actions (open apps and sites, search, click, type, highlight an article). Use it for anything to do with the user's screen or for explaining something visually. Returns her answer's words.",
+             properties: ["text": ["type": "string", "description": "What to ask or tell Theo, in plain words (as the user would say it)."],
                           "speak": ["type": "boolean", "description": "Say the answer out loud (default true)."]],
              required: ["text"]),
         Tool(name: "claudia_see_screen",
@@ -36,13 +36,13 @@ enum ClaudiaMCPServer {
              properties: [:], required: []),
         Tool(name: "claudia_show",
              description: """
-             Play an answer you wrote through Claudia: the words are spoken and her tags run on the user's screen (ids from the last claudia_see_screen). Tags: [POINT:<id>] flies the spark to an element; [MARK:<n>:<id>:<label>|<short note>] draws numbered step <n> on it; ids can also be "x,y:screen2" pixels of that screenshot. A <whiteboard>…</whiteboard> block draws a whiteboard (JSON lines: a header {"wb":1,"title":…,"dir":"TB","sections":[…]}, then elements {"el":"box"|"arrow"|"list"|"text"|"table"|"code"|"math"|"chart",…}, then steps {"step":1,"show":[ids],"say":"…"}). An <actions>{"goal":"…","steps":[{"do":"open_app","name":"…"},{"do":"search","query":"…","engine":"google"},{"do":"open_url","url":"…"},{"do":"click","id":12},{"do":"type","id":12,"text":"…","enter":true},{"do":"highlight","targets":["exact sentence"]}]}</actions> block does things on screen.
+             Play an answer you wrote through Theo: the words are spoken and her tags run on the user's screen (ids from the last claudia_see_screen). Tags: [POINT:<id>] flies the spark to an element; [MARK:<n>:<id>:<label>|<short note>] draws numbered step <n> on it; ids can also be "x,y:screen2" pixels of that screenshot. A <whiteboard>…</whiteboard> block draws a whiteboard (JSON lines: a header {"wb":1,"title":…,"dir":"TB","sections":[…]}, then elements {"el":"box"|"arrow"|"list"|"text"|"table"|"code"|"math"|"chart",…}, then steps {"step":1,"show":[ids],"say":"…"}). An <actions>{"goal":"…","steps":[{"do":"open_app","name":"…"},{"do":"search","query":"…","engine":"google"},{"do":"open_url","url":"…"},{"do":"click","id":12},{"do":"type","id":12,"text":"…","enter":true},{"do":"highlight","targets":["exact sentence"]}]}</actions> block does things on screen.
              """,
              properties: ["text": ["type": "string", "description": "Spoken words with tags and blocks."],
                           "speak": ["type": "boolean", "description": "Speak the words (default true)."]],
              required: ["text"]),
         Tool(name: "claudia_say",
-             description: "Claudia says one line out loud (it also shows as a caption).",
+             description: "Theo says one line out loud (it also shows as a caption).",
              properties: ["text": ["type": "string"]], required: ["text"]),
         Tool(name: "claudia_research",
              description: "Claudia's research agents: one Haiku agent reads each page, then a brief with [n] citations opens in her notes panel. Give urls, or just a question/topic to search for, or say e.g. 'the 3 links on my screen'. Waits for the brief (up to 5 minutes) and returns it.",
@@ -50,17 +50,17 @@ enum ClaudiaMCPServer {
                           "speak": ["type": "boolean", "description": "Say 'your research is ready' when done (default false)."]],
              required: ["question"]),
         Tool(name: "claudia_whiteboard",
-             description: "Control Claudia's whiteboard: next, back, replay, pause, expand, close, export (PDF + PNG), or state.",
+             description: "Control Theo's whiteboard: next, back, replay, pause, expand, close, export (PDF + PNG), or state.",
              properties: ["action": ["type": "string", "enum": ["state", "next", "back", "replay", "pause", "expand", "close", "export"]]],
              required: ["action"]),
         Tool(name: "claudia_attachments",
-             description: "The notes and marked screenshots the user picked in Claudia's Notes tab to use for coding (article notes, research briefs, whiteboards, screenshots with marks). Call this when the user says to use Claudia's notes or screenshots for the code.",
+             description: "The notes and marked screenshots the user picked in Theo's Notes tab to use for coding (article notes, research briefs, whiteboards, screenshots with marks). Call this when the user says to use Theo's notes or screenshots for the code.",
              properties: [:], required: []),
         Tool(name: "claudia_stop",
-             description: "Stop Claudia talking and anything she's doing.",
+             description: "Stop Theo talking and anything she's doing.",
              properties: [:], required: []),
         Tool(name: "claudia_status",
-             description: "Claudia's brain model, screens, voice and permissions.",
+             description: "Theo's brain model, screens, voice and permissions.",
              properties: [:], required: [])
     ]
 
@@ -82,8 +82,8 @@ enum ClaudiaMCPServer {
                 send(identifier, result: [
                     "protocolVersion": (params["protocolVersion"] as? String) ?? protocolVersion,
                     "capabilities": ["tools": [:]],
-                    "serverInfo": ["name": "claudia", "version": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"],
-                    "instructions": "Claudia is the user's voice and screen companion on this Mac. Use her tools to see the screen, point things out, draw whiteboards, research links with Haiku agents, act on screen, and talk to the user."
+                    "serverInfo": ["name": "theo", "version": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"],
+                    "instructions": "Theo is the user's voice and screen companion on this Mac. Use her tools to see the screen, point things out, draw whiteboards, research links with Haiku agents, act on screen, and talk to the user."
                 ])
             case "ping":
                 send(identifier, result: [:])
@@ -132,8 +132,8 @@ enum ClaudiaMCPServer {
         case "claudia_status": command = ["cmd": "status"]
         default: return text("Unknown tool \(name).", isError: true)
         }
-        guard ensureClaudiaRunning() else { return text("Claudia isn't running and couldn't be opened.", isError: true) }
-        guard let reply = sendToClaudia(command, timeout: timeout) else { return text("Claudia didn't answer in time.", isError: true) }
+        guard ensureClaudiaRunning() else { return text("Theo isn't running and couldn't be opened.", isError: true) }
+        guard let reply = sendToClaudia(command, timeout: timeout) else { return text("Theo didn't answer in time.", isError: true) }
         let ok = reply["ok"] as? Bool ?? false
         let error = reply["error"] as? String
         let result = reply["result"]
@@ -160,11 +160,11 @@ enum ClaudiaMCPServer {
                 content.append(["type": "text", "text": "Screenshot: \(image["title"] as? String ?? "")"])
                 content.append(["type": "image", "data": data.base64EncodedString(), "mimeType": "image/png"])
             }
-            if content.isEmpty { content.append(["type": "text", "text": "Nothing is picked in Claudia's Notes tab yet."]) }
+            if content.isEmpty { content.append(["type": "text", "text": "Nothing is picked in Theo's Notes tab yet."]) }
             return ["content": content, "isError": false]
         }
         if name == "claudia_ask", let answer = (result as? [String: Any])?["answer"] as? String {
-            return text(answer.isEmpty ? (ok ? "Claudia answered on screen." : (error ?? "Claudia couldn't answer.")) : answer, isError: !ok)
+            return text(answer.isEmpty ? (ok ? "Theo answered on screen." : (error ?? "Theo couldn't answer.")) : answer, isError: !ok)
         }
         if name == "claudia_research", let status = result as? [String: Any] {
             let brief = status["brief"] as? String ?? ""
@@ -172,7 +172,7 @@ enum ClaudiaMCPServer {
             let body = brief.isEmpty ? "Research ended: \(status["state"] as? String ?? "unknown")." : brief + "\n\nSources:\n" + sources.enumerated().map { "[\($0.offset + 1)] \($0.element)" }.joined(separator: "\n")
             return text(body, isError: !ok)
         }
-        if !ok { return text(error ?? "Claudia couldn't do that.", isError: true) }
+        if !ok { return text(error ?? "Theo couldn't do that.", isError: true) }
         let resultText = result.flatMap { value -> String? in
             guard JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return nil }
             return String(data: data, encoding: .utf8)

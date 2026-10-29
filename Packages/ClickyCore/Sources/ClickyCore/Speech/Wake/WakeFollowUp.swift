@@ -160,7 +160,7 @@ public enum WakeFollowUpEndPhrase {
         "thank you", "thanks a lot", "thank you so much", "ok thanks", "okay thanks", "ok thank you", "okay thank you", "bye", "goodbye", "bye bye",
         "thats all for now", "thats it for now", "no thats all", "no thats it", "no more", "great thanks", "perfect thanks", "cool thanks"
     ]
-    static let fillerWords: Set<String> = ["hey", "claudia", "clicky", "um", "uh", "so", "alright", "all right", "well", "yeah", "yes"]
+    static let fillerWords: Set<String> = ["hey", "theo", "claudia", "clicky", "um", "uh", "so", "alright", "all right", "well", "yeah", "yes"]
 
     public static func isEndPhrase(_ text: String) -> Bool {
         let words = WakeWordMatcher.normalizedWords(in: text)

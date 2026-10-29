@@ -78,7 +78,7 @@ enum DiagnosticsWindowController {
             let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 760),
                                          styleMask: [.titled, .closable, .resizable],
                                          backing: .buffered, defer: false)
-            createdWindow.title = "Claudia Diagnostics"
+            createdWindow.title = "Theo Diagnostics"
             // Closing hides the window; the model and its last results stay for the next open.
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = NSHostingView(rootView: DiagnosticsHostView(model: model))

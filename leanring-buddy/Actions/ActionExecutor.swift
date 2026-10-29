@@ -455,7 +455,7 @@ final class ActionExecutor {
                     let browser = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first
                     ClaudiaScreen.moveFrontWindow(of: browser)
                     BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
-                    return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Claudia's screen"), nil)
+                    return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Theo's screen"), nil)
                 }
             }
             do {

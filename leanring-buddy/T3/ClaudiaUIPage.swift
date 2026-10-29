@@ -16,7 +16,7 @@ enum ClaudiaUIPage {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claudia</title>
+<title>Theo</title>
 <style>
 :root { --bg:#141312; --panel:#1c1b19; --panel2:#24221f; --line:#2f2c29; --text:#ece8e3; --muted:#9a948c; --accent:#d97757; --ok:#7fb069; --bad:#e06c5b; }
 :root[data-theme="light"] { --bg:#f7f5f2; --panel:#ffffff; --panel2:#f1eee9; --line:#e2ddd6; --text:#1f1d1a; --muted:#6f6a63; }
@@ -36,7 +36,7 @@ main { flex:1; display:grid; grid-template-columns:minmax(0,1fr) 380px; min-heig
 .chat { display:flex; flex-direction:column; min-height:0; }
 #turns { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column-reverse; gap:14px; }
 .turn .you { align-self:flex-end; background:var(--panel2); border:1px solid var(--line); border-radius:12px 12px 4px 12px; padding:8px 12px; max-width:80%; margin-left:auto; width:fit-content; }
-.turn .claudia { margin-top:6px; padding:2px 2px; max-width:92%; white-space:pre-wrap; }
+.turn .theo { margin-top:6px; padding:2px 2px; max-width:92%; white-space:pre-wrap; }
 .turn .board { color:var(--accent); font-size:12px; margin-top:4px; }
 .composer { border-top:1px solid var(--line); padding:12px 16px; display:flex; gap:8px; align-items:flex-end; background:var(--panel); }
 .composer textarea { flex:1; resize:none; height:44px; }
@@ -69,11 +69,11 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
 </head>
 <body>
 <header>
-  <h1><svg class="spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l1.6 7.1 5.6-4.6-3.4 6.4 7.2.6-6.9 2.2 5 5.3-6.6-3-1.2 7.1-1.3-7.1-6.6 3 5-5.3-6.9-2.2 7.2-.6-3.4-6.4 5.6 4.6z"/></svg> Claudia</h1>
+  <h1><svg class="spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l1.6 7.1 5.6-4.6-3.4 6.4 7.2.6-6.9 2.2 5 5.3-6.6-3-1.2 7.1-1.3-7.1-6.6 3 5-5.3-6.9-2.2 7.2-.6-3.4-6.4 5.6 4.6z"/></svg> Theo</h1>
   <span id="version" class="status"></span>
   <span class="spacer"></span>
-  <button id="talk" title="Talk to Claudia (her mic, hands-free)">🎙 Talk</button>
-  <button id="voice" title="Claudia speaks her answers">🔊 Voice on</button>
+  <button id="talk" title="Talk to Theo (her mic, hands-free)">🎙 Talk</button>
+  <button id="voice" title="Theo speaks her answers">🔊 Voice on</button>
   <button id="stop" title="Stop talking and anything in flight">■ Stop</button>
 </header>
 <main>
@@ -84,14 +84,14 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
         <div class="row"><strong>Code with your notes</strong><span class="muted" id="pickedCount"></span><span class="spacer"></span><button id="markScreen">📸 Marked screenshot now</button></div>
         <div class="row"><select id="project" style="flex:1"><option value="">Choose a project…</option></select></div>
         <div class="row"><input type="text" id="codeInstructions" placeholder="What to build or change, e.g. 'make the homepage match my notes and the marked screenshot'" style="flex:1"><button class="primary" id="startCode">Start coding</button></div>
-        <div class="muted" id="codeStatus">Tick notes and screenshots below, then start: Claude Code gets them as attachments. Any T3 Code thread can also ask Claudia for them (claudia_attachments).</div>
+        <div class="muted" id="codeStatus">Tick notes and screenshots below, then start: Claude Code gets them as attachments. Any T3 Code thread can also ask Theo for them (claudia_attachments).</div>
       </div>
       <div class="lib" id="library"></div>
       <div id="notePreview"></div>
     </div>
-    <div id="turns"><div class="empty">Ask Claudia anything about your screen, or have her draw, research or do something.</div></div>
+    <div id="turns"><div class="empty">Ask Theo anything about your screen, or have her draw, research or do something.</div></div>
     <div class="composer">
-      <textarea id="ask" placeholder="Ask Claudia… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <textarea id="ask" placeholder="Ask Theo… (Enter to send, Shift+Enter for a new line)"></textarea>
       <button class="primary" id="send">Ask</button>
     </div>
   </div>
@@ -110,7 +110,7 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
       </div>
       <div class="row"><label>Auto boards</label><select id="autoBoard"><option value="true">Small side board for complex questions</option><option value="false">Only when I ask</option></select></div>
       <div id="boardStatus" class="muted">No board open.</div>
-      <img id="boardImage" alt="Claudia's whiteboard">
+      <img id="boardImage" alt="Theo's whiteboard">
     </section>
     <section>
       <h2>Research</h2>
@@ -190,7 +190,7 @@ async function loadTurns() {
   lastTurnsKey = key;
   const container = $("turns");
   if (!reply.result.length) return;
-  container.innerHTML = reply.result.map((t) => `<div class="turn"><div class="you">${escapeHTML(t.you)}</div><div class="claudia">${escapeHTML(t.claudia)}</div>${t.board ? `<div class="board">▦ Whiteboard: ${escapeHTML(t.board)}</div>` : ""}</div>`).join("");
+  container.innerHTML = reply.result.map((t) => `<div class="turn"><div class="you">${escapeHTML(t.you)}</div><div class="theo">${escapeHTML(t.claudia)}</div>${t.board ? `<div class="board">▦ Whiteboard: ${escapeHTML(t.board)}</div>` : ""}</div>`).join("");
 }
 
 async function loadBoard() {
@@ -216,7 +216,7 @@ async function send() {
   const container = $("turns");
   const pending = document.createElement("div");
   pending.className = "turn";
-  pending.innerHTML = `<div class="you">${escapeHTML(text)}</div><div class="claudia muted">Claudia is thinking…</div>`;
+  pending.innerHTML = `<div class="you">${escapeHTML(text)}</div><div class="theo muted">Theo is thinking…</div>`;
   if (container.querySelector(".empty")) container.innerHTML = "";
   container.prepend(pending);
   await api("ask", { text, speak: !settings.silentMode });
@@ -249,7 +249,7 @@ async function loadLibrary() {
       <div class="title" title="${escapeHTML(item.title)}">${escapeHTML(item.title)}</div>
       <div class="muted">${new Date(item.date).toLocaleString()}</div>
       <label><input type="checkbox" ${item.selected ? "checked" : ""} data-pick="${item.id}"> Use in code</label>
-    </div>`).join("") : '<div class="empty">No notes yet. Ask Claudia to highlight an article, research something, draw a whiteboard, or take a marked screenshot.</div>';
+    </div>`).join("") : '<div class="empty">No notes yet. Ask Theo to highlight an article, research something, draw a whiteboard, or take a marked screenshot.</div>';
   document.querySelectorAll("[data-pick]").forEach((box) => box.onclick = async (event) => {
     event.stopPropagation();
     await api("librarySelect", { id: box.dataset.pick, selected: box.checked });
@@ -270,7 +270,7 @@ async function loadProjects() {
   select.value = current;
 }
 $("markScreen").onclick = async () => {
-  $("codeStatus").textContent = "Taking a screenshot with Claudia's marks…";
+  $("codeStatus").textContent = "Taking a screenshot with Theo's marks…";
   const reply = await api("markScreen");
   if (reply.ok) { await api("librarySelect", { id: reply.result.id, selected: true }); $("codeStatus").textContent = "Saved and picked for code."; }
   else $("codeStatus").textContent = reply.error || "Couldn't take it.";
@@ -280,7 +280,7 @@ $("startCode").onclick = async () => {
   const project = $("project").value, instructions = $("codeInstructions").value.trim();
   if (!project || !instructions) { $("codeStatus").textContent = "Pick a project and say what to do."; return; }
   const reply = await api("useInCode", { project, instructions });
-  $("codeStatus").textContent = reply.ok ? `Claude Code is working in ${reply.result.project} with ${reply.result.attachments.length} attachment(s). Follow it in Claudia's Agents dashboard.` : (reply.error || "Couldn't start.");
+  $("codeStatus").textContent = reply.ok ? `Claude Code is working in ${reply.result.project} with ${reply.result.attachments.length} attachment(s). Follow it in Theo's Agents dashboard.` : (reply.error || "Couldn't start.");
 };
 
 $("send").onclick = send;

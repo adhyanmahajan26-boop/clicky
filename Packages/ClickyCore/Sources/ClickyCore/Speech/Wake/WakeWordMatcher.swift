@@ -2,12 +2,12 @@
 //  WakeWordMatcher.swift
 //  ClickyCore
 //
-//  P7 wake word ("hey claudia", "hey clicky"). Pure parts only: the words
+//  P7 wake word ("hey theo", "hey clicky"). Pure parts only: the words
 //  the on-device recognizer heard go in, a match (or nothing) comes out.
 //
 //  - The phrase counts only at the start of an utterance segment: the first
 //    word of the recognition request, or the first word after a pause of at
-//    least 0.6 s. "I told claudia" or "and then hey clicky" mid-sentence
+//    least 0.6 s. "I told theo" or "and then hey clicky" mid-sentence
 //    never wake Clicky.
 //  - A phrase is a greeting plus a name. "hey" also accepts "hi", "hay",
 //    "okay" / "ok"; the name accepts the usual ASR spellings (cloudia,
@@ -34,7 +34,7 @@ public struct WakeTranscriptWord: Equatable, Sendable {
 }
 
 public struct WakeWordMatch: Equatable, Sendable {
-    /// The configured phrase that matched ("hey claudia").
+    /// The configured phrase that matched ("hey theo").
     public let phrase: String
     /// The words (indexes into the transcript) that are the wake phrase.
     public let wordRange: Range<Int>
@@ -52,11 +52,11 @@ public struct WakeWordMatch: Equatable, Sendable {
 }
 
 public struct WakeWordMatcher: Sendable {
-    public static let defaultPhrases = ["hey claudia", "hey clicky"]
+    public static let defaultPhrases = ["hey theo", "hey claudia", "hey clicky"]
     /// A gap this long between two words starts a new utterance segment.
     public static let segmentPauseSeconds: TimeInterval = 0.6
 
-    /// Greetings that stand in for each other ("hey claudia" = "hi claudia" = "okay claudia").
+    /// Greetings that stand in for each other ("hey theo" = "hi theo" = "okay theo").
     /// P8: en-IN partials also hear "hai", "he", "hii", "heyy". ("hello" stays its own greeting:
     /// a custom "hello computer" shouldn't answer to "hey computer".)
     static let interchangeableGreetings: Set<String> = ["hey", "hi", "hay", "hei", "heya", "okay", "ok", "hai", "he", "hii", "heyy", "hy"]
@@ -72,6 +72,7 @@ public struct WakeWordMatcher: Sendable {
     /// Spellings the recognizer is known to produce for the built-in names
     /// (checked before the fuzzy rule, which also catches most of them).
     static let knownNameSpellings: [String: Set<String>] = [
+        "theo": ["theo", "teo", "thio", "tio", "theyo", "theodore"],
         "claudia": ["claudia", "cloudia", "clodia", "claudio", "klaudia", "claudya", "claudiya", "clawdia", "klodia", "glaudia", "claudias"],
         "clicky": ["clicky", "clickey", "kliki", "clicki", "klicky", "kliky", "clickie", "clikki", "cliky", "cliquey", "klickie"]
     ]
@@ -216,7 +217,7 @@ public struct WakeWordMatcher: Sendable {
 
     // MARK: - Text helpers
 
-    /// Lowercase letters and digits only ("Claudia," → "claudia", "it's" → "its").
+    /// Lowercase letters and digits only ("Theo," → "theo", "it's" → "its").
     public static func normalizedWord(_ word: String) -> String {
         String(word.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
     }
@@ -296,7 +297,7 @@ public struct WakeWordGate: Sendable {
     public init() {}
 
     /// `recentClickySpokenWords`: every word Clicky said in the EchoGuard window.
-    /// `allowsBargeIn` (v2.wake.bargeIn): "Hey Claudia" while Clicky talks interrupts it — then only
+    /// `allowsBargeIn` (v2.wake.bargeIn): "Hey Theo" while Clicky talks interrupts it — then only
     /// the echo check guards against Clicky's own voice (it rarely says the name).
     public mutating func decide(at date: Date, isClickySpeaking: Bool, lastClickySpeechEndDate: Date?,
                                 recentClickySpokenWords: Set<String>, matcher: WakeWordMatcher, allowsBargeIn: Bool = false) -> Decision {
@@ -316,7 +317,7 @@ public struct WakeWordGate: Sendable {
 // MARK: - "stop listening" / "start listening"
 
 /// The spoken switch for the wake word. Whole utterance only, with the
-/// wake phrase and politeness words ignored ("hey claudia, stop listening please").
+/// wake phrase and politeness words ignored ("hey theo, stop listening please").
 public enum WakeListeningCommand: Equatable, Sendable {
     case stopListening
     case startListening
@@ -340,7 +341,7 @@ public enum WakeListeningCommand: Equatable, Sendable {
         "silent mode off", "turn off silent mode", "talk again", "speak again", "you can talk again", "unmute yourself",
         "quiet mode off", "turn off quiet mode", "start talking again"
     ]
-    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "claudia", "clicky", "please", "now", "um", "uh", "so"]
+    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "please", "now", "um", "uh", "so"]
 
     public static func parse(_ transcript: String) -> WakeListeningCommand? {
         let words = WakeWordMatcher.normalizedWords(in: transcript).filter { !ignoredWords.contains($0) }
@@ -369,20 +370,20 @@ public enum UtteranceEndRule {
 
 /// How long a wake turn waits for words after the phrase, and its cap.
 public enum WakeTurnLimits {
-    /// "hey claudia" and then nothing: give up (counted as a likely false wake).
+    /// "hey theo" and then nothing: give up (counted as a likely false wake).
     public static let noSpeechAfterWakeSeconds: TimeInterval = 5
     public static let maximumTurnSeconds: TimeInterval = 30
 }
 
 // MARK: - Barge-in "stop"
 
-/// A short standalone "stop" while Clicky talks or acts ("stop", "wait", "claudia stop", "ruko", "bas").
-/// The whole utterance segment must be stop words (at most 4 words, a leading "hey claudia"/"clicky"
+/// A short standalone "stop" while Clicky talks or acts ("stop", "wait", "theo stop", "ruko", "bas").
+/// The whole utterance segment must be stop words (at most 4 words, a leading "hey theo"/"clicky"
 /// ignored), so a "stop" inside a longer sentence never counts; and the stop word must not be one
 /// Clicky itself just said (its voice reaches the mic).
 public enum WakeStopCommand {
     static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "enough", "quiet", "shush", "hold", "pause", "cancel"]
-    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "claudia", "clicky", "it", "now", "please", "on", "talking",
+    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "it", "now", "please", "on", "talking",
                                           "be", "jao", "jaao", "karo", "that", "the"]
 
     public static func isStopUtterance(_ words: [String], recentClickySpokenWords: Set<String> = []) -> Bool {

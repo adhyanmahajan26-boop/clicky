@@ -34,7 +34,7 @@ final class CompanionSpeechOutput: ObservableObject {
     private(set) lazy var appleFallbackEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
 
     private static let usesQwenLocalVoiceUserDefaultsKey = "usesQwenLocalVoice"
-    static let voicePreviewSentence = "Hey, I'm Claudia. This is how I'll sound when I answer you."
+    static let voicePreviewSentence = "Hey, I'm Theo. This is how I'll sound when I answer you."
 
     /// Qwen is the default whenever MLX Core is installed.
     @Published private(set) var usesQwenLocalVoice: Bool =

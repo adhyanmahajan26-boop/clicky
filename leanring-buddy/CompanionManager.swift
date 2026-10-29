@@ -212,7 +212,7 @@ final class CompanionManager: ObservableObject {
 
     /// Built-in Mac voice for spoken replies (free, offline).
     let speechOutputClient = CompanionSpeechOutput()
-    /// P7: "hey claudia" / "hey clicky", heard on-device (see WakeWordController).
+    /// P7: "hey theo" / "hey clicky", heard on-device (see WakeWordController).
     private(set) lazy var wakeWordController = WakeWordController(speechOutput: speechOutputClient, audioEngineHub: speechOutputClient.audioEngineHub)
     private var wakeWordVoiceStateCancellable: AnyCancellable?
 
@@ -996,7 +996,7 @@ final class CompanionManager: ObservableObject {
         wakeWordController.setEnabled(enables)
         guard speaks else { return }
         let confirmation = enables
-            ? "Okay, I'm listening for hey Claudia again."
+            ? "Okay, I'm listening for hey Theo again."
             : "Okay, I've stopped listening for my name. Say start listening with the shortcut to turn it back on."
         Task { try? await speechOutputClient.speakText(confirmation) }
     }
@@ -1546,8 +1546,8 @@ final class CompanionManager: ObservableObject {
         var mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
         // The name the owner gave the assistant (v2.assistant.name).
         let assistantName = ClickySettings.assistantName
-        if assistantName.lowercased() != "claudia" {
-            mainPrompt = mainPrompt.replacingOccurrences(of: "you're claudia (built on clicky)", with: "you're \(assistantName.lowercased())")
+        if assistantName.lowercased() != "theo" {
+            mainPrompt = mainPrompt.replacingOccurrences(of: "you're theo (built on clicky)", with: "you're \(assistantName.lowercased())")
         }
         // A screen of its own: searches and links open in Claudia's own browser window there.
         if let claudiaScreen = ClaudiaScreen.picked, ClickySettings.isActionsEnabled {
@@ -2097,7 +2097,7 @@ final class CompanionManager: ObservableObject {
         return answerSession.coordinator.spokenText
     }
 
-    /// If the cursor is in transient mode (user toggled "Show Claudia" off),
+    /// If the cursor is in transient mode (user toggled "Show Theo" off),
     /// waits for TTS playback and any pointing animation to finish, then
     /// fades out the overlay after a 1-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
@@ -2180,7 +2180,7 @@ final class CompanionManager: ObservableObject {
     }
 
     static let companionWorkerSystemPrompt = """
-    you're a fast helper working for claudia, a voice assistant. claudia's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
+    you're a fast helper working for theo, a voice assistant. theo's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
 
     // MARK: - Onboarding Prompt

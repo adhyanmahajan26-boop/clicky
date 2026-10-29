@@ -48,7 +48,7 @@ final class ClaudiaUIServer {
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: Self.port)!)
         parameters.allowLocalEndpointReuse = true
         guard let listener = try? NWListener(using: parameters) else {
-            print("⚠️ Claudia UI: couldn't listen on 127.0.0.1:\(Self.port)")
+            print("⚠️ Theo UI: couldn't listen on 127.0.0.1:\(Self.port)")
             return
         }
         listener.newConnectionHandler = { [weak self] connection in
@@ -108,12 +108,12 @@ final class ClaudiaUIServer {
         }
         // Embedded in T3 Code (its own page at 127.0.0.1:3773): the token is filled in for that page only.
         if request.method == "GET" && path == "/t3" {
-            guard Self.isT3Code(request) else { return send(connection, status: 403, type: "text/plain", body: Data("Only T3 Code can embed Claudia.".utf8)) }
+            guard Self.isT3Code(request) else { return send(connection, status: 403, type: "text/plain", body: Data("Only T3 Code can embed Theo.".utf8)) }
             let page = ClaudiaUIPage.html.replacingOccurrences(of: "/*CLAUDIA_TOKEN*/\"\"", with: "\"\(token)\"")
             return send(connection, status: 200, type: "text/html; charset=utf-8", body: Data(page.utf8))
         }
         if request.method == "GET" && (path == "/" || path == "/index.html") {
-            guard request.query["token"] == token else { return send(connection, status: 403, type: "text/plain", body: Data("Open Claudia from her app (Setup › Claudia in T3 Code).".utf8)) }
+            guard request.query["token"] == token else { return send(connection, status: 403, type: "text/plain", body: Data("Open Theo from her app (Setup › Theo in T3 Code).".utf8)) }
             return send(connection, status: 200, type: "text/html; charset=utf-8", body: Data(ClaudiaUIPage.html.utf8))
         }
         guard path.hasPrefix("/api/"), request.headers["x-claudia-token"] == token || request.query["token"] == token else {

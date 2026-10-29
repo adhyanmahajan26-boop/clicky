@@ -8,7 +8,7 @@
 //  for one command and the facts the app read is here too.
 //
 //  - Whole-utterance matching only, after dropping the wake phrase and
-//    politeness ("hey claudia, could you turn the volume up please").
+//    politeness ("hey theo, could you turn the volume up please").
 //    "what's the volume of a sphere" or "open the second link and summarize
 //    it" never match: anything that isn't exactly a command goes to Claude.
 //  - en-IN ASR quirks are accepted ("new tap", "close the tap", "volume
@@ -202,7 +202,7 @@ public enum VoiceFastPathParser {
     static let maximumWordCount = 12
 
     static let leadingFillers: [String] = [
-        "hey claudia", "hey clicky", "hi claudia", "okay claudia", "ok claudia", "claudia", "clicky",
+        "hey theo", "hey clicky", "hi theo", "okay theo", "ok theo", "theo", "claudia", "clicky",
         "please", "can you", "could you", "would you", "will you", "can u", "could u", "would you please", "can you please",
         "could you please", "i want you to", "i want to", "i'd like you to", "id like you to", "i need you to", "kindly",
         "just", "now", "okay", "ok", "so", "and", "um", "uh", "alright", "hey", "go ahead and", "quickly", "actually"

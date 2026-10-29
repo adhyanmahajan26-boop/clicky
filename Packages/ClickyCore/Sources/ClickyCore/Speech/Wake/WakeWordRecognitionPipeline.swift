@@ -146,7 +146,7 @@ public final class WakeWordRecognitionPipeline: @unchecked Sendable {
         let startAudioSeconds: TimeInterval
         /// Pipeline clock when each word index was first heard (used when the recognizer has no word times).
         var wordFirstHeardSeconds: [TimeInterval] = []
-        /// Segment starts already reported, so one "hey claudia" is one candidate.
+        /// Segment starts already reported, so one "hey theo" is one candidate.
         var reportedSegmentStarts: Set<Int> = []
         var reportedStopSegments: Set<Int> = []
         var latestWords: [WakeTranscriptWord] = []

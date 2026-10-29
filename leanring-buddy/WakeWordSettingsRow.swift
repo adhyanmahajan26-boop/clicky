@@ -51,8 +51,8 @@ struct WakeWordSettingsRow: View {
 
     private var statusText: String {
         switch wakeWordController.state {
-        case .armed: return "Say “hey Claudia” or “hey Clicky”. Heard on this Mac only."
-        case .off(.disabledInSettings): return "Off. Turn on to start a question with “hey Claudia”."
+        case .armed: return "Say “hey Theo” or “hey Clicky”. Heard on this Mac only."
+        case .off(.disabledInSettings): return "Off. Turn on to start a question with “hey Theo”."
         default: return wakeWordController.state.displayText
         }
     }

@@ -75,12 +75,12 @@ enum ClaudiaLibrary {
     static func writeSelectedNotesBundle() -> URL? {
         let notes = selectedItems.filter { !$0.isImage }
         guard !notes.isEmpty else { return nil }
-        var text = "# Notes from Claudia\n\nThe owner picked these notes for this task.\n"
+        var text = "# Notes from Theo\n\nThe owner picked these notes for this task.\n"
         for note in notes {
             let body = (try? String(contentsOf: note.url, encoding: .utf8)) ?? ""
             text += "\n\n---\n\n## \(note.title)\n\n\(body)"
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("claudia-notes-\(UUID().uuidString.prefix(8)).md")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("theo-notes-\(UUID().uuidString.prefix(8)).md")
         return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil ? url : nil
     }
 }

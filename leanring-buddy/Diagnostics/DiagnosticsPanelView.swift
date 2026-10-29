@@ -161,7 +161,7 @@ struct DiagnosticsPanelView: View {
             TextListSettingRow(entry: entry, defaultValue: defaultValue)
         case .internalData:
             SettingRowChrome(entry: entry) {
-                Text("Written by Claudia")
+                Text("Written by Theo")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
             }

@@ -198,7 +198,7 @@ struct CompanionPanelView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if companionManager.allPermissionsGranted {
-            Text("You're all set. Hit Start to meet Claudia.")
+            Text("You're all set. Hit Start to meet Theo.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(DS.Colors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -209,7 +209,7 @@ struct CompanionPanelView: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(DS.Colors.textSecondary)
 
-                Text("Some permissions were revoked. Grant all four below to keep using Claudia.")
+                Text("Some permissions were revoked. Grant all four below to keep using Theo.")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -217,7 +217,7 @@ struct CompanionPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Your personal Claudia.")
+                Text("Your personal Theo.")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(DS.Colors.textSecondary)
 
@@ -226,7 +226,7 @@ struct CompanionPanelView: View {
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Claudia only takes a screenshot while you talk to it. Screenshots go to the brain you picked and are not saved.")
+                Text("Theo only takes a screenshot while you talk to it. Screenshots go to the brain you picked and are not saved.")
                     .font(.system(size: 11))
                     .foregroundColor(Color(red: 0.9, green: 0.4, blue: 0.4))
                     .fixedSize(horizontal: false, vertical: true)
@@ -481,7 +481,7 @@ struct CompanionPanelView: View {
     /// Clicky's signature changes, System Settings can still show an old Clicky
     /// entry switched on that no longer applies to this build.
     private var staleSettingsEntryHint: some View {
-        Text("Already on in Settings? Select Claudia, press −, then add it again.")
+        Text("Already on in Settings? Select Theo, press −, then add it again.")
             .font(.system(size: 10))
             .foregroundColor(DS.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -686,7 +686,7 @@ struct CompanionPanelView: View {
                     .foregroundColor(DS.Colors.textTertiary)
                     .frame(width: 16)
 
-                Text("Show Claudia")
+                Text("Show Theo")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(DS.Colors.textSecondary)
             }
@@ -1022,7 +1022,7 @@ struct CompanionPanelView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "power")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Quit Claudia")
+                    Text("Quit Theo")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundColor(DS.Colors.textTertiary)

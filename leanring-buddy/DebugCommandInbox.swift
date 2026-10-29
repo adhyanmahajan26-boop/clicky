@@ -21,7 +21,7 @@
 //                               (no mic, no speaker): detections with times and latency
 //    wakeFeedBatch {paths, locale?} → P8: each file through its own pipeline (locale "en-IN" / "en-US"
 //                               or the live one): per-file detections, woke, and the wake rate
-//    wakeFeedChain {path, locale?, dryRun=true} → P8: "hey claudia, <cmd1>" … "<cmd2>" … "that's all"
+//    wakeFeedChain {path, locale?, dryRun=true} → P8: "hey theo, <cmd1>" … "<cmd2>" … "that's all"
 //                               through recognizer + matcher + follow-up window; every command through
 //                               the fast-path parser only (nothing executed): {wakes, wakeTurn,
 //                               followUpCommands: [{text, recognized, parsed}], commands, endedBy}

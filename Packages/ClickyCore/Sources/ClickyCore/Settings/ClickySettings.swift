@@ -91,7 +91,7 @@ public enum ClickySettings {
         public static let codeBashAllowed = "v2.code.bashAllowed"
         /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
-        /// Bool, default true: "stop" / "Hey Claudia" interrupt Clicky while it talks or acts.
+        /// Bool, default true: "stop" / "Hey Theo" interrupt Clicky while it talks or acts.
         public static let wakeBargeIn = "v2.wake.bargeIn"
         /// Bool, default false: also search Desktop/Documents/Downloads for repos (macOS asks the owner once).
         public static let codeSearchProtectedFolders = "v2.code.searchProtectedFolders"
@@ -118,10 +118,10 @@ public enum ClickySettings {
         public static let projectEnabled = "v2.project.enabled"
         /// Bool, default true: say short updates when the project replies (thread started, done, failed).
         public static let projectSpeakUpdates = "v2.project.speakUpdates"
-        /// Bool, default true (P7): listen on-device for the wake phrase ("hey claudia").
+        /// Bool, default true (P7): listen on-device for the wake phrase ("hey theo").
         /// "stop listening" turns it off, "start listening" (push-to-talk) or the menu toggle back on.
         public static let wakeEnabled = "v2.wake.enabled"
-        /// [String], default ["hey claudia", "hey clicky"]: greeting + name pairs (fuzzy ASR spellings accepted).
+        /// [String], default ["hey theo", "hey clicky"]: greeting + name pairs (fuzzy ASR spellings accepted).
         public static let wakePhrases = "v2.wake.phrases"
         /// "auto" (default) | "en-IN" | "en-US" (P8): the on-device wake recognizer's language. auto starts with the
         /// system locale and moves to the other English one if its requests keep failing (at most once per 10 min).
@@ -143,7 +143,7 @@ public enum ClickySettings {
         public static let modelsCode = "v2.models.code"
         /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
         public static let sparkMode = "v2.spark.mode"
-        /// String, default "Claudia": what the assistant is called (UI, T3 Code, how it names itself, and "hey <name>").
+        /// String, default "Theo": what the assistant is called (UI, T3 Code, how it names itself, and "hey <name>").
         public static let assistantName = "v2.assistant.name"
         /// Colour theme of the notes panel and Claudia's UI page: "system" (default), "claude", "midnight", "paper", "neon", "forest".
         public static let uiTheme = "v2.ui.theme"
@@ -451,7 +451,7 @@ public enum ClickySettings {
     public static var assistantName: String {
         get {
             let name = (defaults.string(forKey: Keys.assistantName) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? "Claudia" : String(name.prefix(32))
+            return name.isEmpty ? "Theo" : String(name.prefix(32))
         }
         set { defaults.set(newValue, forKey: Keys.assistantName) }
     }

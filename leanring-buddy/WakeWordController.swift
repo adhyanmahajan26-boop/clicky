@@ -2,7 +2,7 @@
 //  WakeWordController.swift
 //  leanring-buddy
 //
-//  P7: "Hey Claudia" / "Hey Clicky" on-device wake word.
+//  P7: "Hey Theo" / "Hey Clicky" on-device wake word.
 //
 //  - Mic: its own small AVAudioEngine with one input tap (no voice
 //    processing, 4096-frame buffers). It yields whenever push-to-talk or
@@ -371,7 +371,7 @@ final class WakeWordController: ObservableObject {
 
     /// While Clicky talks (and 1.5 s after) no audio reaches the recognizer.
     func refreshSpeechSuppression() {
-        // P9 barge-in: keep listening while Clicky talks so "stop" / "Hey Claudia" can interrupt it.
+        // P9 barge-in: keep listening while Clicky talks so "stop" / "Hey Theo" can interrupt it.
         let isSuppressed = isClickySpeakingOrJustSpoke && !ClickySettings.isWakeBargeInEnabled
         pipeline?.setSuppressed(isSuppressed && !isCapturingTurn)
         speechSuppressionRecheckTask?.cancel()
@@ -803,7 +803,7 @@ final class WakeWordController: ObservableObject {
                        "wakeRate": fileURLs.isEmpty ? 0 : Double(wokeCount) / Double(fileURLs.count)], nil)
     }
 
-    /// P8 `wakeFeedChain {path}`: "hey claudia, <cmd1>" … "<cmd2>" … "that's all" through the recognizer, the
+    /// P8 `wakeFeedChain {path}`: "hey theo, <cmd1>" … "<cmd2>" … "that's all" through the recognizer, the
     /// matcher and the follow-up window. `describeCommand` turns each command into the fast path's dry-run
     /// description (nothing is executed). The trailing 11 s of silence lets the window end on silence too.
     func feedChain(at fileURL: URL, localeIdentifier: String?,

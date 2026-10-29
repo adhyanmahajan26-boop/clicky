@@ -133,7 +133,7 @@ final class SetupModel: ObservableObject {
     /// Opens Terminal running `claude auth login`.
     func signInToClaudeCode() {
         let claudeCommand = claudeCodePath.map { "'\($0)'" } ?? "~/.local/bin/claude"
-        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Claudia and press Test.'")
+        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Theo and press Test.'")
     }
 
     /// One real call through Claude Code with the chosen sign-in.
@@ -313,8 +313,8 @@ final class SetupModel: ObservableObject {
         var lines: [String] = []
         lines.append(companionManager.hasMicrophonePermission ? "✓ Microphone" : "✗ Microphone: grant it in the permissions panel")
         lines.append(companionManager.hasAccessibilityPermission ? "✓ Accessibility"
-                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Claudia can't click or type")
-        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Claudia")
+                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Theo can't click or type")
+        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Theo")
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         if speechStatus != .authorized {
@@ -430,7 +430,7 @@ enum SetupWindowController {
             let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: windowHeight),
                                          styleMask: [.titled, .closable, .resizable],
                                          backing: .buffered, defer: false)
-            createdWindow.title = "Claudia Setup"
+            createdWindow.title = "Theo Setup"
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = NSHostingView(rootView: SetupView(model: model))
             createdWindow.center()
@@ -453,8 +453,10 @@ enum SetupWindowController {
     static func hide() { window?.orderOut(nil) }
 
     static func scroll(toSection section: Int) {
+        // Reset first, on its own run-loop turn, so asking for the same section again still scrolls
+        // (and a window that's just opening has its scroll view by then).
         model?.scrollTarget = nil
-        model?.scrollTarget = section
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { model?.scrollTarget = section }
     }
 
     static func close() {
@@ -469,9 +471,9 @@ private struct SetupView: View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Set up Claudia")
+                Text("Set up Theo")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Claudia lives in the menu bar (the spark icon). If you can't see it, open Claudia again from Applications to bring this window back.")
+                Text("Theo lives in the menu bar (the spark icon). If you can't see it, open Theo again from Applications to bring this window back.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -496,7 +498,7 @@ private struct SetupView: View {
                 Color.clear.frame(height: 0).id(4)
                 GroupBox(label: Text("4. Permissions").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Claudia needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
+                        Text("Theo needs Microphone, Speech Recognition, Accessibility and Screen Recording. The menu-bar panel has a button for each.")
                             .font(.system(size: 12))
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Open the permissions panel") { model.showPanel() }
@@ -530,14 +532,14 @@ private struct SetupView: View {
 
                 Color.clear.frame(height: 0).id(6)
 
-                GroupBox(label: Text("6. Claudia's screen and spark").font(.headline)) {
+                GroupBox(label: Text("6. Theo's screen and spark").font(.headline)) {
                     ClaudiaScreenSection()
                         .padding(8)
                 }
 
                 Color.clear.frame(height: 0).id(7)
 
-                GroupBox(label: Text("7. Claudia in T3 Code").font(.headline)) {
+                GroupBox(label: Text("7. T3 Code extension").font(.headline)) {
                     T3IntegrationSection()
                         .padding(8)
                 }
@@ -590,7 +592,7 @@ private struct SetupView: View {
                 }
                 Button("Check") { model.refreshClaudeCodePath() }
             }
-            Text("Claudia thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor or OpenCode.")
+            Text("Theo thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor or OpenCode.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
@@ -658,7 +660,7 @@ private struct SetupView: View {
                         .foregroundColor(.secondary)
                 }
             } else if model.voiceSource == .thisMac, !model.isMLXCoreInstalled {
-                Text("MLX Core isn't installed on this Mac, so Claudia will use the Mac voice.")
+                Text("MLX Core isn't installed on this Mac, so Theo will use the Mac voice.")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
             }
@@ -687,7 +689,7 @@ private struct UpdateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("This is Claudia \(updateController.currentVersionLabel)")
+                Text("This is Theo \(updateController.currentVersionLabel)")
                     .font(.system(size: 12))
                 Spacer()
                 if let release = updateController.availableRelease {
@@ -721,10 +723,10 @@ private struct UpdateSection: View {
 
     private var statusLine: String {
         switch updateController.state {
-        case .idle: return "Claudia checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
+        case .idle: return "Theo checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
         case .checking: return "Checking…"
         case .upToDate: return "✓ You have the newest build."
-        case .available: return "A newer build is ready. Claudia quits, updates itself and reopens."
+        case .available: return "A newer build is ready. Theo quits, updates itself and reopens."
         case .installing(let message): return message
         case .failed(let message): return "✗ \(message)"
         }
@@ -799,7 +801,7 @@ private struct ClaudiaScreenSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Claudia's screen", selection: $screenName) {
+            Picker("Theo's screen", selection: $screenName) {
                 Text("None: wherever my pointer is").tag("")
                 ForEach(screenNames, id: \.self) { name in
                     Text(name).tag(name)
@@ -809,12 +811,12 @@ private struct ClaudiaScreenSection: View {
                 }
             }
             .onChange(of: screenName) { _, newValue in ClickySettings.claudiaScreenName = newValue }
-            Text("With a screen picked, Claudia opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
+            Text("With a screen picked, Theo opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Picker("Spark", selection: $sparkMode) {
                 Text("Follows my pointer").tag(ClickySettings.SparkMode.cursor)
-                Text("Lives on its own (corner of Claudia's screen)").tag(ClickySettings.SparkMode.docked)
+                Text("Lives on its own (corner of Theo's screen)").tag(ClickySettings.SparkMode.docked)
             }
             .pickerStyle(.radioGroup)
             .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
@@ -846,34 +848,111 @@ private struct ClaudiaScreenSection: View {
 }
 
 
-/// "Add Claudia to T3 Code": every agent T3 Code runs gets Claudia's tools.
+/// The T3 Code extension, shown like an extension listing: what it adds, which agents
+/// have it, and install / update / remove.
 private struct T3IntegrationSection: View {
     @State private var resultLines: [String] = []
     @State private var isWorking = false
+    @State private var status = ClaudiaT3Integration.status()
+
+    private var name: String { ClickySettings.assistantName }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Gives every T3 Code thread (Claude, ChatGPT, Cursor, OpenCode) Claudia's tools: see your screen, point and mark, whiteboards, research with Haiku agents, search, click and type, and her voice.")
-                .font(.system(size: 11)).foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button(isWorking ? "Adding…" : "Add Claudia to T3 Code") {
-                    isWorking = true
-                    Task.detached {
-                        let outcome = ClaudiaT3Integration.install()
-                        await MainActor.run {
-                            resultLines = outcome.lines + [outcome.succeeded ? "Restart T3 Code threads to pick it up." : "Some agents weren't updated."]
-                            isWorking = false
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45), Color(red: 0.75, green: 0.27, blue: 0.9)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: "sparkles").font(.system(size: 20, weight: .semibold)).foregroundColor(.white)
                 }
-                .disabled(isWorking)
+                .frame(width: 44, height: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("\(name) for T3 Code").font(.system(size: 14, weight: .semibold))
+                        Text("v\(ClaudiaT3Integration.extensionVersion)").font(.system(size: 10)).foregroundColor(.secondary)
+                    }
+                    Text("Cursor assistant extension · notes, screen, whiteboards and research for every agent")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
                 Spacer()
+                statusBadge
+            }
+
+            HStack(spacing: 6) {
+                ForEach(ClaudiaT3Integration.skillNames, id: \.self) { skill in
+                    Text("$" + skill)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                }
+            }
+
+            VStack(spacing: 0) {
+                agentRow("Claude Code", symbol: "asterisk", installed: status.claude)
+                Divider()
+                agentRow("Codex (ChatGPT)", symbol: "hexagon", installed: status.codex)
+                Divider()
+                agentRow("OpenCode", symbol: "chevron.left.forwardslash.chevron.right", installed: status.openCode)
+            }
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+
+            HStack(spacing: 8) {
+                Button(action: { run(install: true) }) {
+                    Label(isWorking ? "Working…" : (status.anyInstalled ? "Update extension" : "Install extension"),
+                          systemImage: status.anyInstalled ? "arrow.triangle.2.circlepath" : "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isWorking)
+                if status.anyInstalled {
+                    Button("Remove") { run(install: false) }.disabled(isWorking)
+                }
+                Spacer()
+                Text("Restart T3 Code threads after installing").font(.system(size: 10.5)).foregroundColor(.secondary)
             }
             ForEach(resultLines, id: \.self) { line in
-                Text(line).font(.system(size: 12))
+                Text(line).font(.system(size: 11.5)).foregroundColor(line.hasPrefix("✗") ? .red : .secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { status = ClaudiaT3Integration.status() }
+    }
+
+    @ViewBuilder private var statusBadge: some View {
+        let installed = status.anyInstalled
+        HStack(spacing: 4) {
+            Circle().fill(installed ? Color.green : Color.secondary).frame(width: 6, height: 6)
+            Text(installed ? "Installed" : "Not installed").font(.system(size: 11, weight: .medium))
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Capsule().fill((installed ? Color.green : Color.secondary).opacity(0.14)))
+    }
+
+    private func agentRow(_ title: String, symbol: String, installed: Bool?) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).frame(width: 16).foregroundColor(.secondary)
+            Text(title).font(.system(size: 12))
+            Spacer()
+            switch installed {
+            case .some(true): Label("Added", systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundColor(.green)
+            case .some(false): Text("Not added").font(.system(size: 11)).foregroundColor(.secondary)
+            case .none: Text("Not on this Mac").font(.system(size: 11)).foregroundColor(.secondary.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+    }
+
+    private func run(install: Bool) {
+        isWorking = true
+        resultLines = []
+        Task.detached {
+            let outcome = install ? ClaudiaT3Integration.install() : ClaudiaT3Integration.uninstall()
+            let fresh = ClaudiaT3Integration.status()
+            await MainActor.run {
+                resultLines = outcome.lines
+                status = fresh
+                isWorking = false
+            }
+        }
     }
 }
