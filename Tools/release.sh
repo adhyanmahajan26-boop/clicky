@@ -20,12 +20,12 @@ xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configurati
   -derivedDataPath "$DERIVED" CURRENT_PROJECT_VERSION="$BUILD" build > "$OUT/build-$BUILD.log" 2>&1 \
   || { tail -20 "$OUT/build-$BUILD.log"; exit 1; }
 BUILT="$DERIVED/Build/Products/Release/Clicky.app"
-# Shipped as Claudia.app (the bundle's display name is Claudia; the folder name is what Finder shows).
+# Shipped as Theo.app (the display name is Theo; the folder name is what Finder shows).
 STAGE="$OUT/stage-$BUILD"; rm -rf "$STAGE"; mkdir -p "$STAGE"
-APP="$STAGE/Claudia.app"
+APP="$STAGE/Theo.app"
 ditto "$BUILT" "$APP"
 codesign --verify --deep --strict "$APP"
-ZIP="$OUT/Claudia-$BUILD.zip"
+ZIP="$OUT/Theo-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
@@ -36,6 +36,6 @@ if [[ "${CLICKY_RELEASE_DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run: not published."
   exit 0
 fi
-gh release create "build-$BUILD" "$ZIP" --repo "$REPO" --title "Claudia build $BUILD" \
+gh release create "build-$BUILD" "$ZIP" --repo "$REPO" --title "Theo build $BUILD" \
   --notes "$(printf '%s\n\nsha256: %s\n' "$NOTES" "$SHA")"
 echo "Published build-$BUILD to $REPO"

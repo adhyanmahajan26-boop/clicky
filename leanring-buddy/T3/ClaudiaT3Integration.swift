@@ -59,8 +59,40 @@ enum ClaudiaT3Integration {
         return status
     }
 
+    /// The agents the extension can go into.
+    enum Agent: String, CaseIterable, Identifiable {
+        case claude, codex, openCode
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .claude: return "Claude Code"
+            case .codex: return "Codex (ChatGPT)"
+            case .openCode: return "OpenCode"
+            }
+        }
+        var isOnThisMac: Bool {
+            switch self {
+            case .claude: return ClaudeCodeBridge.locateClaudeCodeExecutable() != nil
+            case .codex: return FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path)
+                || BrainCLIRunner.locateExecutable(for: .codex) != nil
+            case .openCode: return BrainCLIRunner.locateExecutable(for: .opencode) != nil
+            }
+        }
+    }
+
+    /// The T3 Code apps on this Mac (the official ones and the Cursor Assistant build).
+    static var t3Apps: [URL] {
+        let names = ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code Cursor Assistant.app"]
+        let folders = ["/Applications", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
+        return folders.flatMap { folder in names.map { URL(fileURLWithPath: folder).appendingPathComponent($0) } }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     /// Writes the extension and installs it in every agent that's installed. Safe to run again (updates it).
-    static func install() -> Outcome {
+    static func install() -> Outcome { install(agents: Set(Agent.allCases)) }
+
+    /// Writes the extension and installs it in the agents picked (that are on this Mac).
+    static func install(agents: Set<Agent>) -> Outcome {
         var outcome = Outcome()
         let executable = executablePath
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -81,7 +113,7 @@ enum ClaudiaT3Integration {
             return outcome
         }
 
-        if let claude = ClaudeCodeBridge.locateClaudeCodeExecutable() {
+        if agents.contains(.claude), let claude = ClaudeCodeBridge.locateClaudeCodeExecutable() {
             // The plugin brings the tools, so the older user-scope servers go (no duplicate tools).
             for name in ["claudia", "theo"] { _ = run(claude.path, ["mcp", "remove", "--scope", "user", name]) }
             _ = run(claude.path, ["plugin", "marketplace", "remove", "theo"])
@@ -92,8 +124,9 @@ enum ClaudiaT3Integration {
         }
 
         let codexConfigURL = home.appendingPathComponent(".codex/config.toml")
-        if FileManager.default.fileExists(atPath: codexConfigURL.deletingLastPathComponent().path) {
+        if agents.contains(.codex) {
             do {
+                try FileManager.default.createDirectory(at: codexConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let existing = (try? String(contentsOf: codexConfigURL, encoding: .utf8)) ?? ""
                 try codexConfig(existing: existing, executable: executable).write(to: codexConfigURL, atomically: true, encoding: .utf8)
                 let skills = home.appendingPathComponent(".codex/skills")
@@ -111,7 +144,7 @@ enum ClaudiaT3Integration {
             }
         }
 
-        if BrainCLIRunner.locateExecutable(for: .opencode) != nil {
+        if agents.contains(.openCode), BrainCLIRunner.locateExecutable(for: .opencode) != nil {
             let openCodeConfigURL = home.appendingPathComponent(".config/opencode/opencode.json")
             do {
                 try FileManager.default.createDirectory(at: openCodeConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)

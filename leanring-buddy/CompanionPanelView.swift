@@ -958,7 +958,7 @@ struct CompanionPanelView: View {
     }
 
     private func openSetupWindow() {
-        SetupWindowController.show(companionManager: companionManager) {}
+        SetupGuideWindowController.show(companionManager: companionManager)
     }
 
     // MARK: - Footer

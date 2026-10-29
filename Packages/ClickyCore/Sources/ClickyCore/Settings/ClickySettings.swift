@@ -478,6 +478,12 @@ public enum ClickySettings {
     }
     public static var isUpdateAutoCheckEnabled: Bool { defaults.object(forKey: Keys.updateAutoCheck) as? Bool ?? true }
 
+    /// True once the owner picked a brain in the Setup guide (nothing is preselected before that).
+    public static var setupGuideBrainChosen: Bool {
+        get { defaults.bool(forKey: "v2.setup.guideBrainChosen") }
+        set { defaults.set(newValue, forKey: "v2.setup.guideBrainChosen") }
+    }
+
     public static var isSetupCompleted: Bool {
         get { defaults.object(forKey: Keys.setupCompleted) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.setupCompleted) }

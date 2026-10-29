@@ -7,6 +7,7 @@
 //  opens a floating panel with companion voice controls.
 //
 
+import ClickyCore
 import ServiceManagement
 import SwiftUI
 
@@ -85,8 +86,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             uiServer = ClaudiaUIServer(controlInbox: controlInbox, companionManager: companionManager)
             uiServer?.start()
         }
-        if SetupWindowController.isNeededAtLaunch {
-            showSetupWindow()
+        if SetupGuideWindowController.isNeededAtLaunch {
+            SetupGuideWindowController.show(companionManager: companionManager)
         }
     }
 
@@ -94,7 +95,11 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     /// behind the notch) brings back Setup and the panel.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !Self.isHostingUnitTests else { return false }
-        showSetupWindow()
+        if ClickySettings.isSetupCompleted {
+            showSetupWindow()
+        } else {
+            SetupGuideWindowController.show(companionManager: companionManager)
+        }
         return false
     }
 

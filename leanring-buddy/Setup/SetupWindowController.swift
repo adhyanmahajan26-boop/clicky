@@ -792,7 +792,7 @@ private struct BrainSwitchSection: View {
 
 
 /// Which display Claudia uses for itself, and whether the spark follows the pointer.
-private struct ClaudiaScreenSection: View {
+struct ClaudiaScreenSection: View {
     @State private var screenName = ClickySettings.claudiaScreenName
     @State private var sparkMode = ClickySettings.sparkMode
     @State private var sparkStyle = ClickySettings.sparkStyle
@@ -850,7 +850,7 @@ private struct ClaudiaScreenSection: View {
 
 /// The T3 Code extension, shown like an extension listing: what it adds, which agents
 /// have it, and install / update / remove.
-private struct T3IntegrationSection: View {
+struct T3IntegrationSection: View {
     @State private var resultLines: [String] = []
     @State private var isWorking = false
     @State private var status = ClaudiaT3Integration.status()
