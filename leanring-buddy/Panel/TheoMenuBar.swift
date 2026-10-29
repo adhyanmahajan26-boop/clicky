@@ -127,6 +127,7 @@ struct TheoPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var speech: CompanionSpeechOutput
     @ObservedObject private var catalog = BrainCatalog.shared
+    @ObservedObject private var signIn = BrainSignIn.shared
     @ObservedObject private var wake: WakeWordController
     @ObservedObject private var code: CodeModeController
     let close: () -> Void
@@ -146,12 +147,9 @@ struct TheoPanelView: View {
             header
             if !companionManager.allPermissionsGranted || !speechAllowed { permissionsBanner }
             tiles
-            VStack(spacing: 0) {
-                brainPicker
-                Divider().overlay(DS.Colors.borderSubtle).padding(.leading, 40)
-                voicePicker
-            }
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
+            brainSwitcher
+            voicePicker
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
             footer
         }
         .padding(14)
@@ -160,7 +158,7 @@ struct TheoPanelView: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(DS.Colors.borderSubtle, lineWidth: 1))
         .environment(\.colorScheme, .dark)
         .onReceive(ticker) { _ in speechAllowed = SFSpeechRecognizer.authorizationStatus() == .authorized }
-        .onAppear { catalog.load() }
+        .onAppear { catalog.load(); signIn.refresh() }
     }
 
     // MARK: Header
@@ -175,19 +173,26 @@ struct TheoPanelView: View {
         }
     }
 
+    private var isBusy: Bool { companionManager.voiceState != .idle || companionManager.isHandsFreeSessionActive || companionManager.isCompanionCoordinatorThinking }
+
     private var header: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45)],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                Image(systemName: "sparkle").font(.system(size: 13, weight: .bold)).foregroundColor(.white)
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isBusy)) { timeline in
+                let spin = isBusy ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2 * 360 : 0
+                ZStack {
+                    Circle().fill(LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .shadow(color: DS.Colors.accent.opacity(isBusy ? 0.8 : 0.25), radius: isBusy ? 10 : 4)
+                    CompanionIconShape(style: ClickySettings.sparkStyle).fill(Color.white).frame(width: 15, height: 15).rotationEffect(.degrees(spin))
+                }
             }
             .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(ClickySettings.assistantName).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 HStack(spacing: 5) {
-                    Circle().fill(status.color).frame(width: 6, height: 6)
+                    PulsingDot(color: status.color, isPulsing: isBusy)
                     Text(status.text).font(.system(size: 11)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                        .contentTransition(.opacity).animation(.easeOut(duration: 0.2), value: status.text)
                 }
             }
             Spacer()
@@ -261,52 +266,89 @@ struct TheoPanelView: View {
                 ZStack {
                     Circle().fill(isOn ? DS.Colors.accent : Color.white.opacity(0.1))
                     Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundColor(isOn ? .white : DS.Colors.textSecondary)
+                        .symbolEffect(.bounce, value: isOn)
                 }
                 .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                     Text(detail).font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                        .contentTransition(.opacity)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isOn)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TileButtonStyle(isOn: isOn))
         .pointerCursor()
     }
 
     // MARK: Brain and voice
 
-    private var brainPicker: some View {
-        let brain = BrainModel(setting: companionManager.selectedModel)
-        return HStack(spacing: 10) {
-            Image(systemName: "brain").frame(width: 20).foregroundColor(DS.Colors.textSecondary)
-            Text("Brain").font(.system(size: 12.5)).foregroundColor(DS.Colors.textPrimary)
-            Spacer()
-            Menu {
+    /// Which agent Theo thinks with. These are the same sign-ins T3 Code uses, so if a brain works in T3 Code it works here.
+    private var brainSwitcher: some View {
+        let current = BrainModel(setting: companionManager.selectedModel).provider
+        let symbols: [BrainProvider: String] = [.claude: "asterisk", .codex: "hexagon", .cursor: "cursorarrow.rays", .opencode: "chevron.left.forwardslash.chevron.right"]
+        let short: [BrainProvider: String] = [.claude: "Claude", .codex: "ChatGPT", .cursor: "Cursor", .opencode: "OpenCode"]
+        let state = signIn.states[current] ?? .checking
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
                 ForEach(BrainProvider.allCases, id: \.self) { provider in
-                    let models = catalog.models[provider] ?? []
-                    if !models.isEmpty {
-                        Section(provider.displayName) {
-                            ForEach(models, id: \.self) { identifier in
-                                let setting = BrainModel(provider: provider, modelIdentifier: identifier).setting
-                                Button(action: { companionManager.setSelectedModel(setting) }) {
-                                    if setting == companionManager.selectedModel { Label(catalog.label(for: setting), systemImage: "checkmark") }
-                                    else { Text(catalog.label(for: setting)) }
-                                }
-                            }
+                    let providerState = signIn.states[provider] ?? .checking
+                    Button(action: { switchBrain(to: provider) }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: symbols[provider] ?? "circle").font(.system(size: 14, weight: .semibold))
+                            Text(short[provider] ?? "").font(.system(size: 10, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 8)
+                        .overlay(alignment: .topTrailing) {
+                            Circle().fill(providerState.isReady ? DS.Colors.success : (providerState == .checking ? DS.Colors.textTertiary : DS.Colors.warning))
+                                .frame(width: 6, height: 6).padding(5)
                         }
                     }
+                    .buttonStyle(TileButtonStyle(isOn: provider == current))
+                    .help("\(provider.displayName): \(providerState.label)")
+                    .pointerCursor()
                 }
-            } label: {
-                Text(catalog.label(for: companionManager.selectedModel)).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
             }
-            .menuStyle(.borderlessButton).fixedSize()
-            .help(brain.provider.displayName)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: current)
+            HStack(spacing: 8) {
+                Text(state.isReady ? "Signed in" : state.label).font(.system(size: 11)).foregroundColor(state.isReady ? DS.Colors.success : DS.Colors.warning).help(state.label)
+                if state == .signedOut {
+                    Button("Sign in") { SetupModel.runInTerminal(current.signInCommand) }
+                        .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
+                } else if state == .notInstalled {
+                    Button("Set up") { close(); SetupGuideWindowController.show(companionManager: companionManager, step: .brain) }
+                        .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
+                }
+                Spacer()
+                Menu {
+                    ForEach(catalog.models[current] ?? [], id: \.self) { identifier in
+                        let setting = BrainModel(provider: current, modelIdentifier: identifier).setting
+                        Button(action: { companionManager.setSelectedModel(setting) }) {
+                            if setting == companionManager.selectedModel { Label(catalog.label(for: setting), systemImage: "checkmark") }
+                            else { Text(catalog.label(for: setting)) }
+                        }
+                    }
+                } label: {
+                    Text(catalog.label(for: companionManager.selectedModel)).font(.system(size: 11.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            .padding(.horizontal, 2)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
+    }
+
+    private func switchBrain(to provider: BrainProvider) {
+        guard provider != BrainModel(setting: companionManager.selectedModel).provider else { return }
+        catalog.load()
+        guard let model = catalog.defaultModel(for: provider) else { return }
+        companionManager.setSelectedModel(model)
+        // Helpers follow the brain (Haiku when it's Claude).
+        ClickyModels.helper = provider == .claude ? ClickyModels.haiku : model
+        signIn.refresh(force: true)
     }
 
     private var voicePicker: some View {
@@ -371,6 +413,44 @@ private struct FlowRow<Content: View>: View {
             ForEach(rows, id: \.self) { row in
                 HStack(spacing: 6) { ForEach(row, id: \.self) { content($0) } }
             }
+        }
+    }
+}
+
+/// A tile that lifts a little under the pointer, sinks when pressed, and fills when on.
+struct TileButtonStyle: ButtonStyle {
+    let isOn: Bool
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(isOn ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isOn ? DS.Colors.accent.opacity(0.18) : DS.Colors.surface.opacity(isHovering ? 1.6 : 1))
+            )
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(isOn ? DS.Colors.accent.opacity(0.55) : Color.white.opacity(isHovering ? 0.12 : 0.04), lineWidth: 1))
+            .scaleEffect(configuration.isPressed ? 0.96 : (isHovering ? 1.02 : 1))
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: isHovering)
+            .onHover { isHovering = $0 }
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// A status dot that breathes while Theo is busy.
+struct PulsingDot: View {
+    let color: Color
+    let isPulsing: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isPulsing)) { timeline in
+            let phase = isPulsing ? (sin(timeline.date.timeIntervalSinceReferenceDate * 5) + 1) / 2 : 0
+            ZStack {
+                Circle().fill(color.opacity(0.35)).frame(width: 6 + 6 * phase, height: 6 + 6 * phase)
+                Circle().fill(color).frame(width: 6, height: 6)
+            }
+            .frame(width: 12, height: 12)
         }
     }
 }
