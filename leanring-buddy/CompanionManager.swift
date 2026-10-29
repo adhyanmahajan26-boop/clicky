@@ -1576,7 +1576,7 @@ final class CompanionManager: ObservableObject {
         let brainAgentID = beginBrainAgent(transcript: transcript)
 
         currentResponseTask = Task {
-            // Stay in processing (spinner) state — no streaming text displayed
+            // Thinking: the spark spins until the first words are ready.
             voiceState = .processing
             var turnError: Error?
             /// Kept outside the do block so an interrupted answer can still log what it spoke.
@@ -1661,7 +1661,7 @@ final class CompanionManager: ObservableObject {
                     )
                 }
             } catch is CancellationError {
-                // User spoke again — response was interrupted
+                // A new question or "stop" cut this answer off.
                 turnError = CancellationError()
                 // Log what actually played before the interrupt (the entry
                 // after waitUntilFinished is never reached on this path).

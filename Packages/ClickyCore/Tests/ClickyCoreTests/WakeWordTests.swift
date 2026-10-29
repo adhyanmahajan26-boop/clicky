@@ -30,9 +30,13 @@ struct WakeWordMatcherTests {
         #expect(match(text)?.phrase == "hey claudia", "\(text)")
     }
 
-    @Test(arguments: ["hey clicky", "Hey Clicky!", "hey clickey", "hey kliki", "hi clicky", "okay clicky", "hey klicky", "hey clickie", "hey click y"])
-    func clickyVariantsWake(_ text: String) {
-        #expect(match(text)?.phrase == "hey clicky", "\(text)")
+    @Test(arguments: ["hey theo", "Hey Theo!", "hey teo", "hey thio", "hi theo", "okay theo", "hey dio", "hey deo"])
+    func theoVariantsWake(_ text: String) {
+        #expect(match(text)?.phrase == "hey theo", "\(text)")
+    }
+
+    @Test func theOldNameNoLongerWakes() {
+        #expect(match("hey clicky") == nil)
     }
 
     @Test(arguments: [
@@ -48,7 +52,7 @@ struct WakeWordMatcherTests {
     @Test func remainderIsTheStartOfTheTurn() {
         #expect(match("hey claudia, open notes")?.remainderText == "open notes")
         #expect(match("hey claudia what's on my screen")?.remainderText == "what's on my screen")
-        #expect(match("hey clicky")?.remainderText == "")
+        #expect(match("hey theo")?.remainderText == "")
         #expect(match("okay cloud ia - send this to my project")?.remainderText == "send this to my project")
     }
 
@@ -91,7 +95,7 @@ struct WakeWordMatcherTests {
 
     @Test func nameWordsInSpokenTextAreFound() {
         #expect(matcher.containsNameWord(["you", "can", "call", "me", "claudia"]))
-        #expect(matcher.containsNameWord(["clickey"]))
+        #expect(matcher.containsNameWord(["thio"]))
         #expect(!matcher.containsNameWord(["claude", "said", "click", "here"]))
     }
 
@@ -126,14 +130,14 @@ struct WakeWordGateTests {
     @Test func ignoredWhenClickyJustSaidTheName() {
         var gate = WakeWordGate()
         let decision = gate.decide(at: start, isClickySpeaking: false, lastClickySpeechEndDate: start.addingTimeInterval(-3),
-                                   recentClickySpokenWords: ["hey", "im", "clicky"], matcher: matcher)
+                                   recentClickySpokenWords: ["hey", "im", "theo"], matcher: matcher)
         #expect(decision == .ignoredEcho)
         #expect(gate.lastFireDate == nil)
     }
 
     @Test func echoGuardWordsFeedTheGate() {
         var echoGuard = EchoGuard()
-        echoGuard.recordSpoken("Hey, I'm Clicky. This is how I'll sound.", at: start)
+        echoGuard.recordSpoken("Hey, I'm Theo. This is how I'll sound.", at: start)
         var gate = WakeWordGate()
         #expect(gate.decide(at: start.addingTimeInterval(2), isClickySpeaking: false, lastClickySpeechEndDate: start,
                             recentClickySpokenWords: echoGuard.recentSpokenWords(at: start.addingTimeInterval(2)), matcher: matcher) == .ignoredEcho)

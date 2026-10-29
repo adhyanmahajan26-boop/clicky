@@ -107,8 +107,8 @@ struct TheoAppTests {
     }
 
     @Test func workersRunOnHaiku() async throws {
-        #expect(CompanionWorkerRunner.workerClaudeModel == "haiku")
-        #expect(CompanionWorkerRunner.makeWorkerClaudeCodeBridge().model == "haiku")
+        #expect(CompanionWorkerRunner.workerClaudeModel == ClickyModels.haiku)
+        #expect(CompanionWorkerRunner.makeWorkerClaudeCodeBridge().model == ClickyModels.haiku)
     }
 
     @MainActor
