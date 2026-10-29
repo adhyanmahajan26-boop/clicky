@@ -107,7 +107,11 @@ final class CompanionSparkLayerView: NSView {
     /// angles are multiplied by it so everything turns clockwise on screen as before.
     private var clockwiseSign: CGFloat = 1
 
-    private static let orange = NSColor(DS.Colors.overlayCompanionOrange).cgColor
+    /// The look picked in Setup (v2.spark.style); its colours, shape and spin speed.
+    private var style = ClickySettings.sparkStyle
+    private var fillColor: CGColor { CompanionIconStyle.color(style.fillHex) }
+    private var glowColor: CGColor { CompanionIconStyle.color(style.glowHex) }
+    private var styleObserver: NSObjectProtocol?
     private static let breathingKey = "breathing"
     private static let spinKey = "spin"
     private static let orbitKey = "orbit"
@@ -121,17 +125,39 @@ final class CompanionSparkLayerView: NSView {
         companionLayer.addSublayer(orbitLayer)
         companionLayer.addSublayer(coordinatorLayer)
         layer?.addSublayer(companionLayer)
-        companionLayer.shadowColor = Self.orange
         companionLayer.shadowOffset = .zero
         companionLayer.shadowOpacity = 0
-        coordinatorLayer.fillColor = Self.orange
-        coordinatorLayer.shadowColor = Self.orange
         coordinatorLayer.shadowOffset = .zero
+        applyStyleColors()
         layoutLayers()
+        // A new style from Setup: reshape and recolour everything in place.
+        styleObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, ClickySettings.sparkStyle != self.style else { return }
+                self.style = ClickySettings.sparkStyle
+                self.applyStyleColors()
+                self.lastLayoutKey = nil
+                self.layoutLayers()
+                if let configuration = self.configuration { self.applyAnimations(for: configuration) }
+            }
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func applyStyleColors() {
+        withoutActions {
+            companionLayer.shadowColor = glowColor
+            coordinatorLayer.fillColor = fillColor
+            coordinatorLayer.shadowColor = glowColor
+            for slotLayer in workerSlotLayers.values {
+                guard let miniLayer = slotLayer.sublayers?.first as? CAShapeLayer else { continue }
+                miniLayer.fillColor = fillColor
+                miniLayer.shadowColor = glowColor
+            }
+        }
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -178,7 +204,7 @@ final class CompanionSparkLayerView: NSView {
             let coordinatorSide = ClaudeCompanionView.coordinatorSparkDiameter
             coordinatorLayer.bounds = CGRect(x: 0, y: 0, width: coordinatorSide, height: coordinatorSide)
             coordinatorLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-            coordinatorLayer.path = Self.sparkPath(side: coordinatorSide, isYDown: isYDown)
+            coordinatorLayer.path = Self.sparkPath(side: coordinatorSide, isYDown: isYDown, style: style)
             coordinatorLayer.shadowPath = coordinatorLayer.path
             for (workerID, slotLayer) in workerSlotLayers {
                 slotLayer.bounds = CGRect(origin: .zero, size: bounds.size)
@@ -198,15 +224,15 @@ final class CompanionSparkLayerView: NSView {
         let side = ClaudeCompanionView.workerSparkDiameter
         miniLayer.bounds = CGRect(x: 0, y: 0, width: side, height: side)
         miniLayer.position = CGPoint(x: bounds.midX + ClaudeCompanionView.workerOrbitRadius, y: bounds.midY)
-        miniLayer.path = Self.sparkPath(side: side, isYDown: isYDown)
+        miniLayer.path = Self.sparkPath(side: side, isYDown: isYDown, style: style)
         miniLayer.shadowPath = miniLayer.path
     }
 
     /// ClaudeSparkShape's path; flipped vertically when the layer space is y-up
     /// so the uneven rays look exactly as SwiftUI drew them.
-    private static func sparkPath(side: CGFloat, isYDown: Bool) -> CGPath {
+    private static func sparkPath(side: CGFloat, isYDown: Bool, style: CompanionIconStyle) -> CGPath {
         let rect = CGRect(x: 0, y: 0, width: side, height: side)
-        let path = ClaudeSparkShape().path(in: rect).cgPath
+        let path = style.path(in: rect)
         guard !isYDown else { return path }
         var flip = CGAffineTransform(translationX: 0, y: side).scaledBy(x: 1, y: -1)
         return path.copy(using: &flip) ?? path
@@ -289,7 +315,7 @@ final class CompanionSparkLayerView: NSView {
         guard isLive else { return }
 
         if configuration.isThinking {
-            coordinatorLayer.add(Self.spin(degreesPerSecond: ClaudeCompanionView.coordinatorThinkingSpinDegreesPerSecond, sign: clockwiseSign), forKey: Self.spinKey)
+            coordinatorLayer.add(Self.spin(degreesPerSecond: ClaudeCompanionView.coordinatorThinkingSpinDegreesPerSecond * style.spinSpeedMultiplier, sign: clockwiseSign), forKey: Self.spinKey)
         } else {
             let breathing = CABasicAnimation(keyPath: "transform.scale")
             breathing.fromValue = 1 - ClaudeCompanionView.idleBreathingAmplitude
@@ -356,8 +382,8 @@ final class CompanionSparkLayerView: NSView {
                 let slotLayer = CALayer()
                 slotLayer.masksToBounds = false
                 let miniLayer = CAShapeLayer()
-                miniLayer.fillColor = Self.orange
-                miniLayer.shadowColor = Self.orange
+                miniLayer.fillColor = fillColor
+                miniLayer.shadowColor = glowColor
                 miniLayer.shadowOffset = .zero
                 miniLayer.shadowOpacity = 0.7
                 miniLayer.shadowRadius = 4

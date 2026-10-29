@@ -176,6 +176,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Model id for the Claude Code agent that edits code."),
         ClickySettingsEntry(key: ClickySettings.Keys.sparkMode, kind: .choice(options: ClickySettings.SparkMode.allCases.map(\.rawValue), defaultValue: "cursor"),
                             explanation: "cursor: the spark follows your pointer. docked: it lives on its own in a corner of Claudia's screen."),
+        ClickySettingsEntry(key: ClickySettings.Keys.sparkStyle, kind: .choice(options: CompanionIconStyle.allCases.map(\.rawValue), defaultValue: "claude"),
+                            explanation: "The companion's look and spin: Claude spark, Codex-, Antigravity- or Grok-style, or a custom orb, star or atom."),
         ClickySettingsEntry(key: ClickySettings.Keys.claudiaScreenName, kind: .text(defaultValue: ""),
                             explanation: "The display Claudia uses for itself (spark, boards, notes, windows it opens). Empty: wherever your pointer is."),
         ClickySettingsEntry(key: ClickySettings.Keys.updateFeedURL, kind: .text(defaultValue: ""),

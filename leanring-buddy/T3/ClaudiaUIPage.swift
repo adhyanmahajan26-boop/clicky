@@ -99,6 +99,7 @@ section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; col
     <section>
       <h2>Screen and spark</h2>
       <div class="row"><label>Her screen</label><select id="claudiaScreen"></select></div>
+      <div class="row"><label>Style</label><select id="sparkStyle"></select></div>
       <div class="row"><label>Spark</label><select id="sparkMode"><option value="cursor">Follows my pointer</option><option value="docked">Lives on its own</option></select></div>
     </section>
   </aside>
@@ -145,6 +146,8 @@ async function loadSettings(change = {}) {
   $("voice").textContent = settings.silentMode ? "🔇 Silent" : "🔊 Voice on";
   $("voice").classList.toggle("on", !settings.silentMode);
   $("sparkMode").value = settings.sparkMode;
+  $("sparkStyle").innerHTML = (settings.sparkStyles || []).map((s) => `<option value="${s.id}">${escapeHTML(s.name)}</option>`).join("");
+  $("sparkStyle").value = settings.sparkStyle;
   $("autoBoard").value = String(settings.autoBoard);
   const screenSelect = $("claudiaScreen");
   screenSelect.innerHTML = '<option value="">Wherever my pointer is</option>' + settings.screens.map((s) => `<option>${escapeHTML(s)}</option>`).join("");
@@ -206,6 +209,7 @@ $("talk").onclick = async () => {
 $("brain").onchange = (e) => loadSettings({ brain: e.target.value });
 $("helper").onchange = (e) => loadSettings({ helper: e.target.value });
 $("sparkMode").onchange = (e) => loadSettings({ sparkMode: e.target.value });
+$("sparkStyle").onchange = (e) => loadSettings({ sparkStyle: e.target.value });
 $("claudiaScreen").onchange = (e) => loadSettings({ claudiaScreen: e.target.value });
 $("autoBoard").onchange = (e) => loadSettings({ autoBoard: e.target.value === "true" });
 document.querySelectorAll("[data-board]").forEach((b) => b.onclick = async () => { await api("board", { action: b.dataset.board }); loadBoard(); });

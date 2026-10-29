@@ -757,6 +757,7 @@ private struct BrainSwitchSection: View {
 private struct ClaudiaScreenSection: View {
     @State private var screenName = ClickySettings.claudiaScreenName
     @State private var sparkMode = ClickySettings.sparkMode
+    @State private var sparkStyle = ClickySettings.sparkStyle
     private let screenNames = NSScreen.screens.map(\.localizedName)
 
     var body: some View {
@@ -780,6 +781,25 @@ private struct ClaudiaScreenSection: View {
             }
             .pickerStyle(.radioGroup)
             .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
+            Text("Spark style").font(.system(size: 12, weight: .medium))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+                ForEach(CompanionIconStyle.allCases, id: \.self) { style in
+                    Button(action: { sparkStyle = style; ClickySettings.sparkStyle = style }) {
+                        VStack(spacing: 6) {
+                            CompanionIconShape(style: style)
+                                .fill(Color(cgColor: CompanionIconStyle.color(style.fillHex)))
+                                .shadow(color: Color(cgColor: CompanionIconStyle.color(style.glowHex)).opacity(0.8), radius: 5)
+                                .frame(width: 30, height: 30)
+                            Text(style.displayName).font(.system(size: 10)).multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 66)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.75)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(sparkStyle == style ? Color.accentColor : Color.clear, lineWidth: 2))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

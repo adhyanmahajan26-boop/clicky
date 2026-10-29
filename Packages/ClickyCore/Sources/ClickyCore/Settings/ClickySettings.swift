@@ -143,6 +143,8 @@ public enum ClickySettings {
         public static let modelsCode = "v2.models.code"
         /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
         public static let sparkMode = "v2.spark.mode"
+        /// The companion's look: "claude" (default), "codex", "antigravity", "grok", "orb", "star" or "atom".
+        public static let sparkStyle = "v2.spark.style"
         /// String, default "": the display Claudia uses for itself (its spark, boards, notes and the windows it opens).
         /// A display's localized name; empty means wherever the pointer is.
         public static let claudiaScreenName = "v2.screen.claudia"
@@ -438,6 +440,11 @@ public enum ClickySettings {
     public static var sparkMode: SparkMode {
         get { defaults.string(forKey: Keys.sparkMode).flatMap(SparkMode.init(rawValue:)) ?? .cursor }
         set { defaults.set(newValue.rawValue, forKey: Keys.sparkMode) }
+    }
+
+    public static var sparkStyle: CompanionIconStyle {
+        get { defaults.string(forKey: Keys.sparkStyle).flatMap(CompanionIconStyle.init(rawValue:)) ?? .claude }
+        set { defaults.set(newValue.rawValue, forKey: Keys.sparkStyle) }
     }
 
     public static var claudiaScreenName: String {

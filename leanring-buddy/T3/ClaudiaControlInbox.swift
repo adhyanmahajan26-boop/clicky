@@ -201,6 +201,7 @@ final class ClaudiaControlInbox {
             if let silent = command["silentMode"] as? Bool { companionManager.setSilentModeEnabled(silent) }
             if let sparkMode = (command["sparkMode"] as? String).flatMap(ClickySettings.SparkMode.init(rawValue:)) { ClickySettings.sparkMode = sparkMode }
             if let screenName = command["claudiaScreen"] as? String { ClickySettings.claudiaScreenName = screenName }
+            if let style = (command["sparkStyle"] as? String).flatMap(CompanionIconStyle.init(rawValue:)) { ClickySettings.sparkStyle = style }
             if let autoBoard = command["autoBoard"] as? Bool { UserDefaults.standard.set(autoBoard, forKey: ClickySettings.Keys.whiteboardAuto) }
             let catalog = BrainCatalog.shared
             catalog.load()
@@ -209,6 +210,8 @@ final class ClaudiaControlInbox {
                 "helper": ClickyModels.helper,
                 "silentMode": ClickySettings.isSilentModeEnabled,
                 "sparkMode": ClickySettings.sparkMode.rawValue,
+                "sparkStyle": ClickySettings.sparkStyle.rawValue,
+                "sparkStyles": CompanionIconStyle.allCases.map { ["id": $0.rawValue, "name": $0.displayName] },
                 "claudiaScreen": ClickySettings.claudiaScreenName,
                 "autoBoard": ClickySettings.isWhiteboardAutoEnabled,
                 "screens": NSScreen.screens.map(\.localizedName),
