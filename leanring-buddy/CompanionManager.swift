@@ -198,8 +198,8 @@ final class CompanionManager: ObservableObject {
     @Published var onboardingPromptOpacity: Double = 0.0
     @Published var showOnboardingPrompt: Bool = false
 
-    let buddyDictationManager = BuddyDictationManager()
-    let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
+    let buddyDictationManager = PushToTalkRecorder()
+    let globalPushToTalkShortcutMonitor = PushToTalkKeys()
     let overlayWindowManager = OverlayWindowManager()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
@@ -506,7 +506,6 @@ final class CompanionManager: ObservableObject {
         // again on future launches — the cursor will auto-show instead
         hasCompletedOnboarding = true
 
-        ClickyAnalytics.trackOnboardingStarted()
 
         // Show the overlay for the first time — isFirstAppearance triggers
         // the welcome animation, then the push-to-talk hint
@@ -616,13 +615,10 @@ final class CompanionManager: ObservableObject {
 
         // Track individual permission grants as they happen
         if !previouslyHadAccessibility && hasAccessibilityPermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "accessibility")
         }
         if !previouslyHadScreenRecording && hasScreenRecordingPermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "screen_recording")
         }
         if !previouslyHadMicrophone && hasMicrophonePermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "microphone")
         }
         // Screen content permission is persisted — once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
@@ -631,7 +627,6 @@ final class CompanionManager: ObservableObject {
         }
 
         if !previouslyHadAll && allPermissionsGranted {
-            ClickyAnalytics.trackAllPermissionsGranted()
         }
     }
 
@@ -664,7 +659,6 @@ final class CompanionManager: ObservableObject {
                     guard didCapture else { return }
                     hasScreenContentPermission = true
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
-                    ClickyAnalytics.trackPermissionGranted(permission: "screen_content")
 
                     // If onboarding was already completed, show the cursor overlay now
                     if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
@@ -760,14 +754,14 @@ final class CompanionManager: ObservableObject {
 
     private func bindShortcutTransitions() {
         shortcutTransitionCancellable = globalPushToTalkShortcutMonitor
-            .shortcutTransitionPublisher
+            .transitions
             .receive(on: DispatchQueue.main)
             .sink { [weak self] transition in
                 self?.handleShortcutTransition(transition)
             }
     }
 
-    private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
+    private func handleShortcutTransition(_ transition: PushToTalkTransition) {
         switch transition {
         case .pressed:
             lastShortcutPressDate = Date()
@@ -821,7 +815,6 @@ final class CompanionManager: ObservableObject {
             }
     
 
-            ClickyAnalytics.trackPushToTalkStarted()
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
@@ -835,7 +828,6 @@ final class CompanionManager: ObservableObject {
                         if self?.applyVoiceSpeedCommandIfExact(finalTranscript) == true { return }
                         self?.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
-                        ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
                         // Latency is measured from the moment the keys were released.
                         let keyUpDate = self?.lastPushToTalkReleaseDate ?? Date()
                         self?.sendTranscriptToClaudeWithScreenshot(
@@ -859,7 +851,6 @@ final class CompanionManager: ObservableObject {
             // before the async startPushToTalk had a chance to begin recording.
             // Without this, a quick press-and-release drops the release event and
             // leaves the waveform overlay stuck on screen indefinitely.
-            ClickyAnalytics.trackPushToTalkReleased()
             lastPushToTalkReleaseDate = Date()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
@@ -947,7 +938,6 @@ final class CompanionManager: ObservableObject {
         guard voiceState == .listening, !buddyDictationManager.isDictationInProgress, !isHandsFreeSessionActive else { return }
         voiceState = .idle
         lastTranscript = turnText
-        ClickyAnalytics.trackUserMessageSent(transcript: turnText)
         // Latency is measured from the end of speech, as push-to-talk does from key-up.
         sendTranscriptToClaudeWithScreenshot(transcript: turnText, turnOptions: TurnOptions(keyUpDate: Date()))
         if currentResponseTask == nil { scheduleTransientHideIfNeeded() }
@@ -1227,7 +1217,6 @@ final class CompanionManager: ObservableObject {
         }
 
         lastTranscript = finishedUtterance
-        ClickyAnalytics.trackUserMessageSent(transcript: finishedUtterance)
         sendTranscriptToClaudeWithScreenshot(transcript: finishedUtterance)
     }
 
@@ -1367,7 +1356,7 @@ final class CompanionManager: ObservableObject {
 
     private func bindEscapeKey() {
         escapeKeyCancellable = globalPushToTalkShortcutMonitor
-            .escapeKeyPressedPublisher
+            .escapePressed
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
                 self?.handleEscapeKeyPressed()
@@ -1787,7 +1776,6 @@ final class CompanionManager: ObservableObject {
                     recordBrainUsage(followUpStreamUsage, brainAgentID: brainAgentID, turnRecord: turnRecord)
                 }
                 turnRecord?.rawResponse = answerSession.rawResponse
-                ClickyAnalytics.trackAIResponseReceived(response: answerSession.rawResponse)
 
                 // Until the last word is spoken (or the answer is interrupted).
                 await withTaskCancellationHandler {
@@ -1818,7 +1806,6 @@ final class CompanionManager: ObservableObject {
                     turnRecord?.speech.playedSegments = 0
                 }
             } catch {
-                ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
                 turnError = error
                 speakErrorFallback(for: error)
@@ -2042,7 +2029,6 @@ final class CompanionManager: ObservableObject {
         detectedElementDisplayFrame = frame.display.frameAppKit
         pointTargetCG = target.frameCG
         lastFlightSource = .screen
-        ClickyAnalytics.trackElementPointed(elementLabel: target.label)
     }
 
     /// Where the companion last flew for a POINT: the real screen or the board.
