@@ -36,6 +36,15 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var category: String?
     /// The avatar's shape: "orb" (default), "square", "sparkle", "clover", "flower", "heart" or "star".
     var shape: String?
+    /// Off: the bot doesn't answer, run routines or join group chats (nil = on).
+    var enabled: Bool?
+    /// "member" (default), "lead" (directs its group chats) or "ceo" (may direct any bot).
+    var authority: String?
+    /// Bots this one may message directly from its own chat (besides what its authority allows).
+    var canMessage: [String]?
+
+    var isOn: Bool { enabled ?? true }
+    var authorityLevel: String { authority ?? (primary ? "ceo" : "member") }
 
     var isProjectHandler: Bool { (category ?? BotImport.defaultCategory(id)) == "project" }
 
@@ -246,6 +255,11 @@ final class BotsStore: ObservableObject {
     /// Sends your message to a bot's own chat and streams its reply in.
     func send(_ text: String, to botID: String) {
         guard let bot = bot(botID), replying[botID] == nil else { return }
+        guard bot.isOn else {
+            post(BotChatMessage(author: "user", text: text), to: botID)
+            post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
+            return
+        }
         var record = conversation(botID)
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[botID] = record
@@ -259,7 +273,9 @@ final class BotsStore: ObservableObject {
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
-        reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
+        reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
+            if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
+        }
     }
 
     /// Posts to the Project room.
@@ -293,7 +309,7 @@ final class BotsStore: ObservableObject {
         let room = group.roomID
         let team = members(of: group)
         let headID = group.headID
-        for bot in targets where replying[bot.id] == nil {
+        for bot in targets where replying[bot.id] == nil && bot.isOn {
             let record = conversation(room)
             let seen = record.seen[bot.id] ?? 0
             let newMessages = Array(record.messages.dropFirst(seen))
@@ -680,6 +696,11 @@ enum BotPrompts {
         }
         if bot.provider == "grok" {
             parts.append(BotPrompts.routineHowTo)
+        let reachable = BotsStore.shared.reachable(from: bot)
+        if !reachable.isEmpty {
+            parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
+                         "they answer you in the chat and you then carry on: " + reachable.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
+        }
         parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
@@ -763,6 +784,9 @@ struct BotsLayout: Codable, Equatable {
         var id: String = UUID().uuidString
         var name: String
         var items: [String] = []
+        /// A sub-category sits inside another section.
+        var parentID: String?
+        var collapsed: Bool?
     }
 
     func section(of item: String) -> Section? { sections.first { $0.items.contains(item) } }
@@ -868,6 +892,9 @@ extension BotsStore {
         }
         guard let bot = bot(routine.target) else {
             return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The bot is gone."))
+        }
+        guard bot.isOn else {
+            return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "skipped", summary: "\(bot.name) is turned off."))
         }
         guard replying[bot.id] == nil else {
             // Busy right now: a scheduled run waits a minute instead of being lost.
@@ -977,5 +1004,82 @@ extension BotsStore {
     fileprivate func noteUnread(_ message: BotChatMessage, in conversationID: String) {
         guard message.author != "user", conversationID != viewing else { return }
         unread[conversationID, default: 0] += 1
+    }
+}
+
+// MARK: - Categories, on/off and bots messaging each other
+
+extension BotsStore {
+    /// Top-level categories, then each one's sub-categories.
+    var rootSections: [BotsLayout.Section] { layout.sections.filter { $0.parentID == nil } }
+    func subsections(of sectionID: String) -> [BotsLayout.Section] { layout.sections.filter { $0.parentID == sectionID } }
+
+    func addSection(named name: String, parentID: String? = nil) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        layout.sections.append(BotsLayout.Section(name: trimmed, parentID: parentID))
+        writeLayout()
+    }
+
+    func toggleCollapsed(_ sectionID: String) {
+        guard let index = layout.sections.firstIndex(where: { $0.id == sectionID }) else { return }
+        layout.sections[index].collapsed = !(layout.sections[index].collapsed ?? false)
+        writeLayout()
+    }
+
+    func setEnabled(_ on: Bool, botID: String) {
+        guard var bot = bot(botID) else { return }
+        bot.enabled = on
+        save(bot)
+    }
+
+    /// Whom a bot may message: a CEO anyone, a lead the bots of the group chats it heads, plus anyone you allowed.
+    func reachable(from bot: NativeBot) -> [NativeBot] {
+        let others = bots.filter { $0.id != bot.id && $0.isOn }
+        switch bot.authorityLevel {
+        case "ceo": return others
+        case "lead":
+            let led = Set(groupsLed(by: bot.id).flatMap(\.memberIDs)).union(bot.canMessage ?? [])
+            return others.filter { led.contains($0.id) }
+        default:
+            let allowed = Set(bot.canMessage ?? [])
+            return others.filter { allowed.contains($0.id) }
+        }
+    }
+
+    /// After a bot answers in its own chat: any bot it @mentions (and may reach) answers there, then the
+    /// first bot reads the answers and carries on. A few hops at most.
+    func relayMentions(from bot: NativeBot, answer: String, in conversationID: String, hop: Int) {
+        guard hop < 3 else { return }
+        let targets = BotPrompts.mentioned(in: answer, bots: reachable(from: bot)).filter { replying[$0.id] == nil }
+        guard !targets.isEmpty else { return }
+        var answers: [String] = []
+        var remaining = targets.count
+        for target in targets {
+            let prompt = BotPrompts.persona(bot: target, team: bots) + "\n\n---\n\n\(bot.name) (\(bot.authorityLevel)) asks you, in " +
+                "Addy's chat with \(bot.name):\n\n\(answer)\n\nAnswer \(bot.name) directly and briefly."
+            relayTurn(target, prompt: prompt, in: conversationID) { [weak self] reply in
+                guard let self else { return }
+                if let reply { answers.append("\(target.name): \(reply)") }
+                remaining -= 1
+                guard remaining == 0, !answers.isEmpty, self.replying[bot.id] == nil else { return }
+                // The asking bot reads what came back and finishes the job.
+                let followUp = "Replies from the bots you asked:\n\n" + answers.joined(separator: "\n\n") +
+                    "\n\nCarry on for Addy with this."
+                let session = self.conversation(conversationID).sessions[bot.id]
+                self.relayTurn(bot, prompt: followUp, in: conversationID, session: session) { [weak self] final in
+                    if let final, let self { self.relayMentions(from: bot, answer: final, in: conversationID, hop: hop + 1) }
+                }
+            }
+        }
+    }
+}
+
+extension BotsStore {
+    /// One turn of a bot in someone else's chat (a bot it was messaged by), shown there under its own name.
+    fileprivate func relayTurn(_ bot: NativeBot, prompt: String, in conversationID: String, session: String? = nil,
+                               then: @escaping (String?) -> Void) {
+        let session = session ?? conversation(conversationID).sessions[bot.id]
+        reply(bot: bot, in: conversationID, prompt: prompt, session: session, then: then)
     }
 }

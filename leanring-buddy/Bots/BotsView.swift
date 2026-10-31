@@ -392,6 +392,8 @@ struct BotChatScreen: View {
     @State private var draft = ""
     /// Replies that were there when the chat opened show at once; new ones type in.
     @State private var settledIDs: Set<String> = []
+    /// The text each bot last streamed here, so its finished message doesn't type out a second time.
+    @State private var lastLive: [String: String] = [:]
     @State private var showsModelSettings = false
     @State private var showsDetails = false
     @State private var editsGroup = false
@@ -452,8 +454,22 @@ struct BotChatScreen: View {
                     .padding(.horizontal, 24).padding(.vertical, 22)
                     .frame(maxWidth: .infinity)
                 }
-                .onChange(of: record.messages.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) } }
-                .onChange(of: inProgress.map(\.1.count).reduce(0, +)) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: record.messages.count) { _, _ in
+                    if let last = record.messages.last, let streamed = lastLive[last.author], streamed.count > 20,
+                       last.text.hasPrefix(String(streamed.prefix(20))) {
+                        // Already typed out live: the saved copy just stays.
+                        settledIDs.insert(last.id)
+                        lastLive[last.author] = nil
+                    }
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) }
+                }
+                .onChange(of: inProgress.map { "\($0.0.id):\($0.1.count / 200)" }) { _, _ in
+                    for (bot, text) in inProgress where !text.isEmpty { lastLive[bot.id] = text }
+                }
+                .onChange(of: inProgress.map(\.1.count).reduce(0, +) / 240) { _, _ in
+                    // Follows a streaming reply every few lines rather than on every chunk.
+                    proxy.scrollTo("end", anchor: .bottom)
+                }
                 .onDisappear { if store.viewing == conversationID { store.viewing = nil } }
                 .onAppear {
                     store.viewing = conversationID
@@ -651,41 +667,80 @@ struct BotLine: View {
     let animatesIn: Bool
     /// Still streaming from the engine.
     let isLive: Bool
-    @State private var shown = 0
+    /// The reveal is time-based: `anchorCount` characters were showing at `anchorDate`, and it advances
+    /// at `rate` characters a second from there (faster when far behind the stream).
+    @State private var anchorDate = Date()
+    @State private var anchorCount = 0
+    @State private var total = 0
+    @State private var rate: Double = 320
+    @State private var finished = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            BotAvatar(bot: bot, size: 34, state: isTyping ? .typing : .idle)
+            BotAvatar(bot: bot, size: 34, state: typing ? .typing : .idle)
             VStack(alignment: .leading, spacing: 4) {
                 if showsName {
                     Text(bot.name).font(.system(size: 11.5, weight: .semibold)).foregroundColor(bot.accentColor)
                 }
-                if isTyping {
-                    (Text(String(text.prefix(shown))) + Text(" ")).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
-                        .overlay(alignment: .bottomTrailing) { CometCaret(color: bot.accentColor).offset(x: 10, y: -4) }
+                if typing {
+                    // About 30 redraws a second, and only the paragraph being typed is laid out again:
+                    // finished paragraphs are drawn once, with their final formatting.
+                    TimelineView(.animation(minimumInterval: 1 / 30, paused: false)) { context in
+                        typedContent(count: shownCount(at: context.date))
+                    }
                 } else {
-                    BotRichText(text: text)
+                    RichBlock(text: text).equatable()
                     if !isLive { BotMessageActions(text: text).padding(.top, 2) }
                 }
             }
             .padding(.top, 6)
             Spacer(minLength: 40)
         }
-        .task(id: text.count) { await typeOut() }
-        .onAppear { if !animatesIn { shown = text.count } }
-    }
-
-    private var isTyping: Bool { animatesIn && (isLive || shown < text.count) }
-
-    /// Reveals the text a few characters per frame, faster when far behind the stream.
-    private func typeOut() async {
-        guard animatesIn else { shown = text.count; return }
-        while shown < text.count {
-            let left = text.count - shown
-            shown += max(1, left / 22)
-            try? await Task.sleep(nanoseconds: 16_000_000)
+        .onAppear {
+            total = text.count
+            if !animatesIn { finished = true; anchorCount = total }
+        }
+        .onChange(of: text) { _, newText in
+            let now = Date()
+            anchorCount = shownCount(at: now)
+            anchorDate = now
+            total = newText.count
+            rate = max(320, Double(total - anchorCount) * 2.5)
+        }
+        .task(id: total) {
+            // Marks the reveal done once it has caught up and the stream has ended.
+            while !finished {
+                if !isLive && shownCount(at: Date()) >= total { finished = true; break }
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
         }
     }
+
+    private var typing: Bool { animatesIn && !finished }
+
+    private func shownCount(at date: Date) -> Int {
+        min(total, anchorCount + Int(date.timeIntervalSince(anchorDate) * rate))
+    }
+
+    @ViewBuilder private func typedContent(count: Int) -> some View {
+        let shown = String(text.prefix(count))
+        let split = shown.range(of: "\n\n", options: .backwards)
+        let done = split.map { String(shown[..<$0.lowerBound]) } ?? ""
+        let current = split.map { String(shown[$0.upperBound...]) } ?? shown
+        VStack(alignment: .leading, spacing: 8) {
+            if !done.isEmpty { RichBlock(text: done).equatable() }
+            HStack(alignment: .lastTextBaseline, spacing: 3) {
+                Text(current).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary).lineSpacing(3)
+                CometCaret(color: bot.accentColor)
+            }
+        }
+    }
+}
+
+/// Formatted text that redraws only when its words change.
+struct RichBlock: View, Equatable {
+    let text: String
+    var body: some View { BotRichText(text: text) }
 }
 
 /// Inline Markdown (bold, italics, code, links) for finished replies.
@@ -795,12 +850,11 @@ struct CometCaret: View {
     let color: Color
     @State private var pulse = false
     var body: some View {
+        // A plain pulsing dot: no blurred shadows to redraw with every typed character.
         Circle().fill(color)
-            .frame(width: 8, height: 8)
-            .shadow(color: color, radius: pulse ? 7 : 3)
-            .shadow(color: color.opacity(0.5), radius: 10, x: -6)
-            .scaleEffect(pulse ? 0.65 : 1)
-            .onAppear { withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { pulse = true } }
+            .frame(width: 7, height: 7)
+            .opacity(pulse ? 0.35 : 1)
+            .onAppear { withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { pulse = true } }
     }
 }
 
