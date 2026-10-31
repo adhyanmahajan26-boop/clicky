@@ -126,7 +126,8 @@ enum ArticleReader {
     /// Reads the whole article: AX first, scroll + OCR when that has too little text.
     /// `scroll(pointCG, pixels)` posts one tagged scroll (positive = down); nil = never scroll.
     static func read(target: ArticleWindowTarget, maximumCharacters: Int,
-                     scroll: ((CGPoint, Int) -> Void)?, isCancelled: @escaping () -> Bool) async -> ArticleReadResult {
+                     scroll: ((CGPoint, Int) -> Void)?, isCancelled: @escaping () -> Bool,
+                     onFirstPass: ((ArticleReadResult) -> Void)? = nil) async -> ArticleReadResult {
         let startUptime = ProcessInfo.processInfo.systemUptime
         var walk = ArticleAXWalk()
         if let windowElement = target.windowElement {
@@ -140,6 +141,11 @@ enum ArticleReader {
         let title = walk.title ?? windowTitle
         var document = ArticleTextAssembler.assemble(walk.nodes, title: title, url: walk.url, maximumCharacters: maximumCharacters)
         var runElements = walk.elements
+        // Hand the caller the first pass right away so notes can start while later passes still scroll.
+        if let onFirstPass, document.utf16Length > 0 {
+            onFirstPass(ArticleReadResult(document: document, runElements: runElements, webAreaElement: walk.webArea, target: target, readAt: Date(),
+                                          milliseconds: Int((ProcessInfo.processInfo.systemUptime - startUptime) * 1000)))
+        }
         print("📰 Article: AX walk visited \(walk.visitedCount) nodes, \(walk.nodes.count) runs, \(document.utf16Length) chars\(walk.didHitDeadline ? " (deadline)" : "")")
 
         // P9 read further: the AX text looks cut short (lazy-loaded page, "read more"): expand plain
@@ -148,7 +154,7 @@ enum ArticleReader {
            ArticleReadFurther.looksCutShort(text: document.text, characterCount: document.utf16Length, hitDeadline: walk.didHitDeadline),
            !isCancelled() {
             if let webArea = walk.webArea, pressReadMoreButtons(in: webArea) {
-                try? await Task.sleep(nanoseconds: 600_000_000)
+                await waitForContentChange(webArea: walk.webArea, maximumMilliseconds: 600)
             }
             let viewport = viewportCG(webArea: walk.webArea, windowFrameCG: target.windowFrameCG)
             let scrollPoint = CGPoint(x: viewport.midX, y: viewport.midY)
@@ -159,7 +165,7 @@ enum ArticleReader {
                 if isCancelled() || document.isTruncated { break }
                 scroll(scrollPoint, pageStep)
                 scrolledPixels += pageStep
-                try? await Task.sleep(nanoseconds: 450_000_000)
+                await waitForContentChange(webArea: walk.webArea, maximumMilliseconds: 450)
                 let uncheckedWindow = UncheckedAXElement(element: windowElement)
                 let furtherWalk = await Task.detached(priority: .userInitiated) {
                     walkArticle(window: uncheckedWindow.element, deadline: ProcessInfo.processInfo.systemUptime + walkDeadlineSeconds)
@@ -181,7 +187,7 @@ enum ArticleReader {
                 let step = min(remaining, pageStep * 3)
                 scroll(scrollPoint, -step)
                 remaining -= step
-                try? await Task.sleep(nanoseconds: 60_000_000)
+                try? await Task.sleep(nanoseconds: 25_000_000)
             }
         }
 
@@ -196,6 +202,37 @@ enum ArticleReader {
         }
         let milliseconds = Int((ProcessInfo.processInfo.systemUptime - startUptime) * 1000)
         return ArticleReadResult(document: document, runElements: runElements, webAreaElement: walk.webArea, target: target, readAt: Date(), milliseconds: milliseconds)
+    }
+
+    /// A cheap fingerprint of the page's AX tree (child counts of the first ~80 elements, breadth first).
+    /// It changes when lazy-loaded content is added, so it replaces fixed sleeps.
+    nonisolated static func contentSignature(webArea: AXUIElement?) -> Int {
+        guard let webArea else { return 0 }
+        var hasher = Hasher()
+        var queue: [AXUIElement] = [webArea]
+        var index = 0
+        while index < queue.count, index < 80 {
+            let children = TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: queue[index])
+            hasher.combine(children.count)
+            queue.append(contentsOf: children.prefix(12))
+            index += 1
+        }
+        return hasher.finalize()
+    }
+
+    /// Polls every 80 ms and returns as soon as the page's content fingerprint changes (after at least
+    /// 80 ms), or after `maximumMilliseconds` (the old fixed wait) when nothing changes.
+    static func waitForContentChange(webArea: AXUIElement?, maximumMilliseconds: Int) async {
+        guard let webArea else { try? await Task.sleep(nanoseconds: UInt64(maximumMilliseconds) * 1_000_000); return }
+        let unchecked = UncheckedAXElement(element: webArea)
+        let before = await Task.detached(priority: .userInitiated) { contentSignature(webArea: unchecked.element) }.value
+        var waited = 0
+        while waited < maximumMilliseconds {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            waited += 80
+            let now = await Task.detached(priority: .userInitiated) { contentSignature(webArea: unchecked.element) }.value
+            if now != before { return }
+        }
     }
 
     /// Presses plain in-page expanders ("read more", "continue reading", "show more"); never sign-in or
@@ -399,7 +436,7 @@ enum ArticleReader {
             if assembled.isTruncated || pageIndex == maximumOCRPages - 1 { break }
             scroll(scrollPoint, pageStep)
             scrolledPixels += pageStep
-            try? await Task.sleep(nanoseconds: 380_000_000)
+            try? await Task.sleep(nanoseconds: 200_000_000)
         }
         // Back to where the owner was.
         if scrolledPixels > 0 {
@@ -408,7 +445,7 @@ enum ArticleReader {
                 let step = min(remaining, pageStep * 3)
                 scroll(scrollPoint, -step)
                 remaining -= step
-                try? await Task.sleep(nanoseconds: 60_000_000)
+                try? await Task.sleep(nanoseconds: 25_000_000)
             }
         }
         return ArticleTextAssembler.assembleOCRPages(pages, title: title, url: url, maximumCharacters: maximumCharacters)

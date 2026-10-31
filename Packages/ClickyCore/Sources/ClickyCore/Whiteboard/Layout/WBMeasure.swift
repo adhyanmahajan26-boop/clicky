@@ -57,16 +57,9 @@ public enum WBMeasure {
 
     // MARK: Fonts
 
+    /// The board's text font: SF Pro (medium) for a clean, modern look. Measuring and drawing both go through here.
     public static func handFont(size: CGFloat) -> NSFont {
-        cachedFont(key: "hand\(size)") {
-            if let chalkboardFont = NSFont(name: handwrittenFontName, size: size) { return chalkboardFont }
-            let systemFont = NSFont.systemFont(ofSize: size)
-            if let roundedDescriptor = systemFont.fontDescriptor.withDesign(.rounded),
-               let roundedFont = NSFont(descriptor: roundedDescriptor, size: size) {
-                return roundedFont
-            }
-            return systemFont
-        }
+        cachedFont(key: "hand\(size)") { NSFont.systemFont(ofSize: size, weight: .medium) }
     }
 
     public static func monospacedFont(size: CGFloat) -> NSFont {

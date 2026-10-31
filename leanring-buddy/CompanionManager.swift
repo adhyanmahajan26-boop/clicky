@@ -30,6 +30,8 @@ enum CompanionVoiceState {
 
 @MainActor
 final class CompanionManager: ObservableObject {
+    /// The running app's manager, for views made outside the home window (the bots' Clicky card).
+    static weak var current: CompanionManager?
     @Published private(set) var voiceState: CompanionVoiceState = .idle
     /// The last thing you said (push-to-talk or wake word).
     @Published private(set) var lastTranscript: String?

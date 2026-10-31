@@ -120,6 +120,42 @@ final class ClaudiaControlInbox {
             }
             let encoded = (try? JSONEncoder().encode(store.routines)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
             reply(identifier, ok: true, result: encoded ?? [], error: nil)
+        case "botCreate":
+            // {name, description, instructions, provider, model, group, authority, canMessage, enabled}
+            let store = BotsStore.shared
+            guard let name = command["name"] as? String, !name.isEmpty else { reply(identifier, ok: false, result: nil, error: "Needs a name."); return }
+            let provider = command["provider"] as? String ?? "opencode"
+            var bot = store.addBot(name: name, description: command["description"] as? String ?? "",
+                                   instructions: command["instructions"] as? String ?? "You are \(name).",
+                                   provider: provider,
+                                   model: command["model"] as? String ?? (provider == "claude" ? "claude-sonnet-5-5" : "opencode/deepseek-v4.1-flash-free"),
+                                   groupID: command["group"] as? String)
+            if let authority = command["authority"] as? String { bot.authority = authority }
+            if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
+            if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
+            if let apps = command["apps"] as? [String] { bot.apps = apps }
+            store.save(bot)
+            reply(identifier, ok: true, result: ["id": bot.id], error: nil)
+        case "botUpdate":
+            // {id, enabled?, authority?, canMessage?, primary?: true}
+            let store = BotsStore.shared
+            guard let id = command["id"] as? String, var bot = store.bot(id) else { reply(identifier, ok: false, result: nil, error: "No such bot."); return }
+            if command["primary"] as? Bool == true { store.makePrimary(id); bot = store.bot(id) ?? bot }
+            if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
+            if let authority = command["authority"] as? String { bot.authority = authority }
+            if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
+            store.save(bot)
+            reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary], error: nil)
+        case "botDelete":
+            guard let id = command["id"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs id."); return }
+            BotsStore.shared.deleteBot(id)
+            reply(identifier, ok: true, result: ["deleted": id], error: nil)
+        case "botChat":
+            // The last messages of a chat: {id: bot id, "team" or "group-<id>", limit}
+            let id = command["id"] as? String ?? BotsStore.teamID
+            let limit = command["limit"] as? Int ?? 10
+            let messages = BotsStore.shared.conversation(id).messages.suffix(limit).map { ["author": $0.author, "text": $0.text] }
+            reply(identifier, ok: true, result: Array(messages), error: nil)
         case "groupSave":
             // Adds or updates a bot group: {id, name, head, members, symbol}.
             guard let id = command["id"] as? String, !id.isEmpty, let name = command["name"] as? String else {

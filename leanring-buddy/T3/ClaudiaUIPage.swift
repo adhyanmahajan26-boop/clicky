@@ -182,6 +182,7 @@ async function loadSettings(change = {}) {
   screenSelect.value = settings.claudiaScreen || "";
 }
 
+let lastBoardKey = null, lastResearchKey = null, lastLibraryKey = null;
 async function loadTurns() {
   const reply = await api("turns", { limit: 40 });
   if (!reply.ok) return;
@@ -197,6 +198,9 @@ async function loadBoard() {
   const reply = await api("board", { action: "state" });
   if (!reply.ok) return;
   const board = reply.result;
+  const boardKey = JSON.stringify(board);
+  if (boardKey === lastBoardKey) return;
+  lastBoardKey = boardKey;
   $("boardStatus").textContent = board.open ? `${board.title || "Board"} · step ${board.currentStep || 0} of ${board.steps || 0}${board.side ? " · side board" : ""}` : (board.hasBoard ? `${board.title} (closed)` : "No board open.");
 }
 
@@ -204,6 +208,9 @@ async function loadResearch() {
   const reply = await api("researchLatest");
   if (!reply.ok) return;
   const r = reply.result || {};
+  const researchKey = JSON.stringify([r.state, r.topic, r.brief, (r.sources || []).map((s) => s.url)]);
+  if (researchKey === lastResearchKey) return;
+  lastResearchKey = researchKey;
   $("researchState").textContent = r.state && r.state !== "idle" ? `${r.topic || "Research"}: ${r.state}` : "";
   $("brief").textContent = r.brief || "";
   $("sources").innerHTML = (r.sources || []).map((s, i) => `<a href="${escapeHTML(s.url)}" target="_blank" rel="noreferrer">[${i + 1}] ${escapeHTML(s.url)}</a>`).join("");
@@ -241,6 +248,9 @@ async function loadLibrary() {
   const reply = await api("library");
   if (!reply.ok) return;
   const items = reply.result;
+  const libraryKey = JSON.stringify(items);
+  if (libraryKey === lastLibraryKey) return;
+  lastLibraryKey = libraryKey;
   $("pickedCount").textContent = `${items.filter((i) => i.selected).length} picked`;
   $("library").innerHTML = items.length ? items.map((item) => `
     <div class="card ${item.selected ? "selected" : ""}" data-id="${item.id}" data-image="${item.isImage}">

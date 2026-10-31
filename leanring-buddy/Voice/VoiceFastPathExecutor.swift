@@ -387,6 +387,11 @@ final class VoiceFastPathExecutor {
     // MARK: Keys and scrolling
 
     private func postKey(_ combo: ActionKeyCombo) {
+        // Theo has its own screen: the key goes to the front app's process without warping or refocusing anything.
+        if BackgroundInput.isActive, let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            BackgroundInput.postKey(processIdentifier: frontmostProcessIdentifier, combo: combo)
+            return
+        }
         var flags: CGEventFlags = []
         if combo.modifiers.contains(.command) { flags.insert(.maskCommand) }
         if combo.modifiers.contains(.shift) { flags.insert(.maskShift) }
@@ -403,6 +408,15 @@ final class VoiceFastPathExecutor {
         if let keyCombo = scrollCommand.keyCombo {
             postKey(keyCombo)
             return .done(detail: "pressed \(keyCombo.displayText)", acknowledgement: command.acknowledgement())
+        }
+        if BackgroundInput.isActive, let frontmostApplication = NSWorkspace.shared.frontmostApplication {
+            // Posted to the front app's process at its window's middle: the real pointer never moves.
+            let windowFrameCG = ActionExecutor.focusedWindow(processIdentifier: frontmostApplication.processIdentifier).flatMap(TypeForMeAccessibility.frameCG)
+            let scrollPoint = windowFrameCG.map { CGPoint(x: $0.midX, y: $0.midY) } ?? (CGEvent(source: nil)?.location ?? .zero)
+            let lines: Int32 = scrollCommand == .up ? 12 : -12
+            if BackgroundInput.scroll(processIdentifier: frontmostApplication.processIdentifier, at: scrollPoint, verticalLines: lines) != nil {
+                return .done(detail: "scrolled \(scrollCommand.rawValue)", acknowledgement: command.acknowledgement())
+            }
         }
         // Scroll events go to the window under the pointer: if it isn't over the front window, move it there (tagged).
         let mouseLocationCG = CGEvent(source: nil)?.location ?? .zero

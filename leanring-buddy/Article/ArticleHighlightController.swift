@@ -413,6 +413,8 @@ final class ArticleHighlightController {
 
     /// One tagged pixel scroll at a point (positive = content moves up, i.e. scroll down).
     static func postScroll(at pointCG: CGPoint, pixels: Int) {
+        // Theo has its own screen: deliver the scroll to the app under the point; the real pointer doesn't move.
+        if BackgroundInput.isActive, BackgroundInput.scroll(atCG: pointCG, pixels: pixels) { return }
         guard let event = CGEvent(scrollWheelEvent2Source: CGEventSource(stateID: .hidSystemState), units: .pixel, wheelCount: 1,
                                   wheel1: Int32(clamping: -pixels), wheel2: 0, wheel3: 0) else { return }
         SyntheticEvents.stamp(event)

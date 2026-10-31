@@ -130,6 +130,7 @@ struct TheoPanelView: View {
     @ObservedObject private var signIn = BrainSignIn.shared
     @ObservedObject private var wake: WakeWordController
     @ObservedObject private var code: CodeModeController
+    @ObservedObject private var look = LookSettings.shared
     let close: () -> Void
     @State private var speechAllowed = SFSpeechRecognizer.authorizationStatus() == .authorized
     private let ticker = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
@@ -147,6 +148,7 @@ struct TheoPanelView: View {
             header
             if !companionManager.allPermissionsGranted || !speechAllowed { permissionsBanner }
             tiles
+            cursorRow
             brainSwitcher
             voicePicker
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
@@ -376,11 +378,40 @@ struct TheoPanelView: View {
         .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
+    // MARK: Cursor
+
+    /// Every spark style as a small tile: one click changes the cursor.
+    private var cursorRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Cursor").font(.system(size: 12.5)).foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Text(look.sparkStyle.displayName).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                ForEach(CompanionIconStyle.allCases, id: \.self) { style in
+                    let selected = look.sparkStyle == style
+                    Button(action: { look.sparkStyle = style }) {
+                        CompanionIconPreview(style: style)
+                            .frame(width: 20, height: 20)
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.55)))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? DS.Colors.accent : Color.white.opacity(0.06), lineWidth: selected ? 2 : 1))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help(style.displayName).pointerCursor()
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
+    }
+
     // MARK: Footer
 
     private var footer: some View {
         HStack(spacing: 14) {
-            link("Settings") { close(); TheoHomeWindowController.show(companionManager: companionManager, tab: .settings) }
+            link("All settings") { close(); TheoHomeWindowController.show(companionManager: companionManager, tab: .settings) }
             link("Setup guide") { close(); SetupGuideWindowController.show(companionManager: companionManager) }
             link("Diagnostics") { close(); DiagnosticsWindowController.show(companionManager: companionManager) }
             Spacer()

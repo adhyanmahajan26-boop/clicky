@@ -62,6 +62,17 @@ enum ClaudiaScreen {
         CGPoint(x: screen.visibleFrame.maxX - 70, y: screen.visibleFrame.minY + 70)
     }
 
+    /// Moves one specific window (already raised) onto Claudia's screen, same size clamped. No activation.
+    static func move(window: AXUIElement, of application: NSRunningApplication?) {
+        guard let screen = picked, let frameCG = TypeForMeAccessibility.frameCG(of: window) else { return }
+        let targetCG = CGDisplayBounds(screen.displayID)
+        guard !targetCG.contains(CGPoint(x: frameCG.midX, y: frameCG.midY)) else { return }
+        var size = CGSize(width: min(frameCG.width, targetCG.width - 40), height: min(frameCG.height, targetCG.height - 80))
+        var origin = CGPoint(x: targetCG.minX + (targetCG.width - size.width) / 2, y: targetCG.minY + 40)
+        if let sizeValue = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) }
+        if let positionValue = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) }
+    }
+
     /// Moves an app's front window onto Claudia's screen (same size, clamped), when a screen is picked.
     static func moveFrontWindow(of application: NSRunningApplication?) {
         guard let application, let screen = picked else { return }

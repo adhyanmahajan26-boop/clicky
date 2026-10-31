@@ -98,7 +98,7 @@ public enum ClickySettingsCatalog {
         // Whiteboard.
         ClickySettingsEntry(key: ClickySettings.Keys.whiteboardAuto, kind: .toggle(defaultValue: true),
                             explanation: "Gate for the whiteboard prompt section (off by default)."),
-        ClickySettingsEntry(key: ClickySettings.Keys.whiteboardTheme, kind: .choice(options: ["paper", "chalk", "dark"], defaultValue: "paper"),
+        ClickySettingsEntry(key: ClickySettings.Keys.whiteboardTheme, kind: .choice(options: ["paper", "chalk", "dark"], defaultValue: "dark"),
                             explanation: "The board's look."),
         ClickySettingsEntry(key: ClickySettings.Keys.whiteboardFullScreen, kind: .toggle(defaultValue: false),
                             explanation: "The board panel fills the screen's visible frame."),

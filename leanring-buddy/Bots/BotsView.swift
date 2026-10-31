@@ -36,12 +36,34 @@ struct BotsRootView: View {
     /// Inside Theo's home window, Connectors is its own tab instead.
     var showsConnectors = true
 
+    /// The settings column on the right (Grok Bot's details), shown unless you close it.
+    @AppStorage("v3.bots.inspector") private var showsInspector = true
+
     var body: some View {
         HStack(spacing: 0) {
             sidebar
             Divider().overlay(Color.white.opacity(0.06))
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if inspectorTarget != nil {
+                        Button { withAnimation(.easeOut(duration: 0.18)) { showsInspector.toggle() } } label: {
+                            Image(systemName: "sidebar.right").font(.system(size: 13))
+                                .foregroundColor(showsInspector ? DS.Colors.accentText : DS.Colors.textSecondary)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain).help(showsInspector ? "Hide settings" : "Show settings")
+                        .padding(.top, 12).padding(.trailing, 10)
+                    }
+                }
+            if showsInspector, let target = inspectorTarget {
+                Divider().overlay(Color.white.opacity(0.06))
+                switch target {
+                case .clicky: ClickyInspector().transition(.move(edge: .trailing))
+                case .bot(let id): BotInspector(store: store, botID: id).id(id).transition(.move(edge: .trailing))
+                default: EmptyView()
+                }
+            }
         }
         .background(DS.Colors.background)
         .preferredColorScheme(.dark)
@@ -67,7 +89,7 @@ struct BotsRootView: View {
                         .keyboardShortcut("n", modifiers: .command)
                     Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2.badge.plus") }
                     Divider()
-                    Button { namingSectionFor = ""; sectionName = "" } label: { Label("New section", systemImage: "folder.badge.plus") }
+                    Button { namingSectionFor = ""; sectionName = "" } label: { Label("New category", systemImage: "folder.badge.plus") }
                 } label: {
                     Image(systemName: "plus").font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                         .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.08)))
@@ -80,25 +102,17 @@ struct BotsRootView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     let pinned = store.layout.pinned.filter(itemExists)
                     if !pinned.isEmpty {
-                        sectionTitle("Pinned")
+                        sectionTitle("Pinned").dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                         ForEach(pinned, id: \.self) { item in itemRow(item) }
                     }
-                    ForEach(store.layout.sections) { section in
-                        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) }
-                        sectionHeader(section)
-                        ForEach(items, id: \.self) { item in itemRow(item) }
-                        if items.isEmpty {
-                            Text("Right-click a bot › Move to section").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                                .padding(.horizontal, 12).padding(.vertical, 2)
-                        }
-                    }
+                    ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
                     let loose = looseItems
                     if !loose.groups.isEmpty {
-                        sectionTitle("Group chats")
+                        sectionTitle("Group chats").dropTarget { items in items.forEach { unfile($0) } }
                         ForEach(loose.groups, id: \.self) { item in itemRow(item) }
                     }
                     if !loose.bots.isEmpty {
-                        sectionTitle("Bots")
+                        sectionTitle("Bots").dropTarget { items in items.forEach { unfile($0) } }
                         ForEach(loose.bots, id: \.self) { item in itemRow(item) }
                     }
                     if store.bots.count <= 1 && store.groups.isEmpty {
@@ -163,14 +177,19 @@ struct BotsRootView: View {
         }
         .sheet(item: Binding(get: { namingSectionFor.map { NamingRequest(item: $0) } }, set: { if $0 == nil { namingSectionFor = nil } })) { request in
             VStack(alignment: .leading, spacing: 14) {
-                Text("New section").font(.system(size: 16, weight: .semibold))
+                Text(request.item.hasPrefix("rename:") ? "Rename category" : request.item.hasPrefix("sub:") ? "New sub-category" : "New category")
+                    .font(.system(size: 16, weight: .semibold))
                 TextField("Work, Side projects, Daily…", text: $sectionName).textFieldStyle(.roundedBorder).frame(width: 300)
                 HStack {
                     Spacer()
                     Button("Cancel") { namingSectionFor = nil }.keyboardShortcut(.cancelAction)
-                    Button("Create") {
-                        if request.item.isEmpty {
-                            store.move("", toSection: nil, newSectionName: sectionName)
+                    Button(request.item.hasPrefix("rename:") ? "Rename" : "Create") {
+                        if request.item.hasPrefix("rename:") {
+                            store.renameSection(String(request.item.dropFirst(7)), to: sectionName)
+                        } else if request.item.hasPrefix("sub:") {
+                            store.addSection(named: sectionName, parentID: String(request.item.dropFirst(4)))
+                        } else if request.item.isEmpty {
+                            store.addSection(named: sectionName)
                         } else {
                             store.move(request.item, toSection: nil, newSectionName: sectionName)
                         }
@@ -248,7 +267,7 @@ struct BotsRootView: View {
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
                 let routineCount = store.routines(for: bot.id).filter { !$0.paused }.count
                 sidebarRow(.bot(bot.id), title: bot.name,
-                           subtitle: (bot.primary ? "Primary · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : ""),
+                           subtitle: bot.isOn ? (bot.primary ? "Primary · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : "") : "Off",
                            star: bot.primary, unread: store.unread[bot.id] ?? 0) {
                     BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
                 }
@@ -263,17 +282,21 @@ struct BotsRootView: View {
             }
         }
         .contextMenu { itemMenu(item) }
+        .draggable(item) {
+            Text(itemName(item)).font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Capsule().fill(DS.Colors.accent))
+        }
     }
 
     @ViewBuilder private func itemMenu(_ item: String) -> some View {
         Button(store.isPinned(item) ? "Unpin" : "Pin to top") { store.setPinned(!store.isPinned(item), item) }
-        Menu("Move to section") {
+        Menu("Move to category") {
             ForEach(store.layout.sections) { section in
                 Button(section.name) { store.move(item, toSection: section.id) }
                     .disabled(section.items.contains(item))
             }
             if !store.layout.sections.isEmpty { Divider() }
-            Button("New section…") { namingSectionFor = item; sectionName = "" }
+            Button("New category…") { namingSectionFor = item; sectionName = "" }
             if store.layout.section(of: item) != nil {
                 Button("Take out of section") { store.move(item, toSection: nil) }
             }
@@ -281,6 +304,8 @@ struct BotsRootView: View {
         if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
             Divider()
             Button("Details and routines…") { detailsBot = bot }
+            Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
+            if !bot.primary { Button("Make primary ★") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
             Divider()
             Button("Edit group chat…") { editingGroup = group }
@@ -308,16 +333,57 @@ struct BotsRootView: View {
         if item.hasPrefix("group:") { store.deleteGroup(String(item.dropFirst(6))) }
     }
 
-    private func sectionHeader(_ section: BotsLayout.Section) -> some View {
-        HStack {
+    /// A category with its bots and its sub-categories, indented; drop bots on its name to file them.
+    private func sectionTree(_ section: BotsLayout.Section, depth: Int) -> AnyView {
+        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) }
+        let children = store.subsections(of: section.id)
+        let collapsed = section.collapsed ?? false
+        return AnyView(VStack(alignment: .leading, spacing: 2) {
+            sectionHeader(section, collapsed: collapsed)
+            if !collapsed {
+                ForEach(items, id: \.self) { item in itemRow(item) }
+                ForEach(children) { child in sectionTree(child, depth: depth + 1) }
+                if items.isEmpty && children.isEmpty {
+                    Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                        .padding(.horizontal, 8)
+                        .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
+                }
+            }
+        }
+        .padding(.leading, depth == 0 ? 0 : 12))
+    }
+
+    private func sectionHeader(_ section: BotsLayout.Section, collapsed: Bool) -> some View {
+        HStack(spacing: 5) {
+            Button { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } } label: {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 8.5, weight: .bold))
+                    .frame(width: 10)
+            }
+            .buttonStyle(.plain).foregroundColor(DS.Colors.textTertiary)
             Text(section.name.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
             Spacer()
+            Menu {
+                Button("New sub-category…") { namingSectionFor = "sub:\(section.id)"; sectionName = "" }
+                Button("Rename…") { namingSectionFor = "rename:\(section.id)"; sectionName = section.name }
+                Divider()
+                Button("Delete category (keeps its bots)", role: .destructive) { store.deleteSection(section.id) }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 10)).foregroundColor(DS.Colors.textTertiary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
         .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
         .contentShape(Rectangle())
-        .contextMenu {
-            Button("Delete section (keeps its bots)", role: .destructive) { store.deleteSection(section.id) }
-        }
+        .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
+    }
+
+    /// Takes an item out of its category (and pins) back to the plain lists.
+    private func unfile(_ item: String) {
+        store.move(item, toSection: nil)
+        store.setPinned(false, item)
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -352,6 +418,16 @@ struct BotsRootView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// What the settings column shows: the open bot, or Clicky.
+    private var inspectorTarget: BotsPane? {
+        switch selection.pane {
+        case .bot(let id): return store.bot(id) == nil ? nil : .bot(id)
+        case .clicky: return .clicky
+        case .team: return store.group(BotGroup.projectID)?.headID == nil ? store.primary.map { .bot($0.id) } : nil
+        default: return nil
+        }
     }
 
     @ViewBuilder private var detail: some View {
@@ -519,23 +595,17 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
-            if let bot {
-                Button { showsModelSettings = true } label: {
-                    Label("Model settings", systemImage: "slider.horizontal.3")
-                }
-                .buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary).font(.system(size: 12))
-                .popover(isPresented: $showsModelSettings, arrowEdge: .bottom) {
-                    BotModelSettings(bot: bot) { store.save($0) }
-                }
-            }
-            Button("New chat") {
+            Button {
                 store.clearConversation(conversationID)
                 settledIDs = []
+            } label: {
+                Label("New chat", systemImage: "square.and.pencil").font(.system(size: 12))
             }
-            .buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary).font(.system(size: 12))
+            .buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary)
             .disabled(!inProgress.isEmpty)
         }
-        .padding(.horizontal, 18).padding(.vertical, 12)
+        // Room on the right for the settings-column button.
+        .padding(.leading, 18).padding(.trailing, 46).padding(.vertical, 12)
     }
 
     private var emptyState: some View {
@@ -899,7 +969,7 @@ struct ConnectorsScreen: View {
         return HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07))
-                Image(systemName: connector.symbol).font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
+                AppLogo(connector: connector, size: 22)
             }
             .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 3) {
@@ -1126,4 +1196,27 @@ struct BotModelSettings: View {
     }
 
     private func commit() { onChange(bot) }
+}
+
+extension View {
+    /// Accepts sidebar items ("bot:<id>", "group:<id>", "clicky") dragged onto this view, with a highlight.
+    func dropTarget(_ perform: @escaping ([String]) -> Void) -> some View {
+        modifier(SidebarDropTarget(perform: perform))
+    }
+}
+
+private struct SidebarDropTarget: ViewModifier {
+    let perform: ([String]) -> Void
+    @State private var isTargeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 8).fill(isTargeted ? DS.Colors.accent.opacity(0.18) : .clear))
+            .dropDestination(for: String.self) { items, _ in
+                let valid = items.filter { $0 == "clicky" || $0.hasPrefix("bot:") || $0.hasPrefix("group:") }
+                guard !valid.isEmpty else { return false }
+                withAnimation(.easeOut(duration: 0.15)) { perform(valid) }
+                return true
+            } isTargeted: { isTargeted = $0 }
+    }
 }

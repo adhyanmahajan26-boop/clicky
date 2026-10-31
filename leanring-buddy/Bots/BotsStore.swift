@@ -1083,3 +1083,28 @@ extension BotsStore {
         reply(bot: bot, in: conversationID, prompt: prompt, session: session, then: then)
     }
 }
+
+extension BotsStore {
+    /// Makes a bot the primary one (the star): it leads by default, gets the T3 hand-off in its own chat
+    /// and takes the old primary's pinned spot.
+    func makePrimary(_ botID: String) {
+        guard let old = primary, old.id != botID, var new = bot(botID) else { return }
+        var demoted = old
+        demoted.primary = false
+        if demoted.authority == nil { demoted.authority = "lead" }
+        new.primary = true
+        new.enabled = true
+        if new.authority == nil { new.authority = "ceo" }
+        if !new.instructions.contains("```prompt") { new.instructions += "\n\n" + BotImport.primaryInstructions }
+        save(demoted)
+        save(new)
+        if let index = layout.pinned.firstIndex(of: "bot:\(old.id)") {
+            layout.pinned[index] = "bot:\(new.id)"
+            layout.pinned.removeAll { $0 == "bot:\(new.id)" }
+            layout.pinned.insert("bot:\(new.id)", at: min(index, layout.pinned.count))
+        } else if !layout.pinned.contains("bot:\(new.id)") {
+            layout.pinned.insert("bot:\(new.id)", at: 0)
+        }
+        writeLayout()
+    }
+}

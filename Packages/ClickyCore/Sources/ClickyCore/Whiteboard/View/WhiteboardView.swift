@@ -76,47 +76,74 @@ public struct WhiteboardView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(WBAccent.gradient)
             Text(AttributedString(scene.board.title.isEmpty ? "Whiteboard" : scene.board.title))
-                .font(WBViewFonts.hand(20))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(palette.ink)
                 .lineLimit(1)
             Spacer(minLength: 8)
             if state.isPaused {
-                Text(AttributedString("paused"))
-                    .font(WBViewFonts.hand(15))
-                    .foregroundColor(palette.mutedInk)
-            }
-            Text(AttributedString(state.stepLabel))
-                .font(WBViewFonts.hand(15))
+                HStack(spacing: 4) {
+                    Image(systemName: "pause.fill").font(.system(size: 8, weight: .bold))
+                    Text(AttributedString("Paused")).font(.system(size: 11, weight: .semibold))
+                }
                 .foregroundColor(palette.mutedInk)
-                .monospacedDigit()
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(palette.ink.opacity(0.08)))
+            }
+            WBStepProgress(label: state.stepLabel, palette: palette)
         }
         .padding(.horizontal, 18)
         .frame(height: WhiteboardScene.headerHeight)
+        .overlay(alignment: .bottom) { Rectangle().fill(palette.ink.opacity(0.07)).frame(height: 1) }
     }
 
     private var subtitleBar: some View {
         ZStack {
             Rectangle().fill(palette.barBackground)
             Text(AttributedString(state.subtitle))
-                .font(WBViewFonts.hand(17))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundColor(palette.barText)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 28)
         }
         .frame(height: WhiteboardScene.subtitleBarHeight)
+        .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
+    }
+
+    /// A faint dot grid behind the board (fixed to the viewport, the camera moves over it).
+    private var dotGrid: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 26
+            let dotColor = palette.ink.opacity(palette.isDark ? 0.075 : 0.085)
+            var y: CGFloat = spacing / 2
+            while y < size.height {
+                var x: CGFloat = spacing / 2
+                while x < size.width {
+                    context.fill(Path(ellipseIn: CGRect(x: x - 0.9, y: y - 0.9, width: 1.8, height: 1.8)), with: .color(dotColor))
+                    x += spacing
+                }
+                y += spacing
+            }
+        }
+        .frame(width: viewportSize.width, height: viewportSize.height)
     }
 
     private var viewport: some View {
-        Group {
-            if isStatic || reducesMotion {
-                boardContent(now: .infinity)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !isAnimating(at: Date().timeIntervalSinceReferenceDate))) { context in
-                    boardContent(now: context.date.timeIntervalSinceReferenceDate)
+        ZStack(alignment: .topLeading) {
+            dotGrid
+            Group {
+                if isStatic || reducesMotion {
+                    boardContent(now: .infinity)
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !isAnimating(at: Date().timeIntervalSinceReferenceDate))) { context in
+                        boardContent(now: context.date.timeIntervalSinceReferenceDate)
+                    }
                 }
             }
         }
@@ -125,7 +152,7 @@ public struct WhiteboardView: View {
         .overlay {
             if let statusText = state.statusText {
                 Text(AttributedString(statusText))
-                    .font(WBViewFonts.hand(22))
+                    .font(.system(size: 17, weight: .medium))
                     .foregroundColor(palette.mutedInk)
             }
         }
@@ -144,6 +171,58 @@ public struct WhiteboardView: View {
             .offset(x: camera.translation.dx, y: camera.translation.dy)
             .frame(width: viewportSize.width, height: viewportSize.height, alignment: .topLeading)
             .animation(isStatic || reducesMotion ? nil : .spring(duration: scene.cameraPlan.springDuration), value: camera)
+    }
+}
+
+// MARK: - Accent and step progress
+
+/// Theo's orange -> pink -> purple accent.
+enum WBAccent {
+    static let orange = Color(.sRGB, red: 1.0, green: 0.55, blue: 0.30, opacity: 1)
+    static let pink = Color(.sRGB, red: 0.96, green: 0.36, blue: 0.62, opacity: 1)
+    static let purple = Color(.sRGB, red: 0.62, green: 0.40, blue: 0.96, opacity: 1)
+    static let gradient = LinearGradient(colors: [orange, pink, purple], startPoint: .leading, endPoint: .trailing)
+}
+
+/// "3 / 8" as dots (up to 10 steps) or a thin bar, with the numeric label.
+struct WBStepProgress: View {
+    let label: String
+    let palette: WhiteboardPalette
+
+    private var parsed: (current: Int, total: Int)? {
+        let parts = label.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]), total > 0 else { return nil }
+        return (min(current, total), total)
+    }
+
+    var body: some View {
+        if let parsed {
+            HStack(spacing: 10) {
+                if parsed.total <= 10 {
+                    HStack(spacing: 4) {
+                        ForEach(0..<parsed.total, id: \.self) { index in
+                            Capsule()
+                                .fill(index < parsed.current ? AnyShapeStyle(WBAccent.gradient) : AnyShapeStyle(palette.ink.opacity(0.14)))
+                                .frame(width: index == parsed.current - 1 ? 16 : 6, height: 6)
+                        }
+                    }
+                    .animation(.spring(duration: 0.35), value: parsed.current)
+                } else {
+                    Capsule().fill(palette.ink.opacity(0.14)).frame(width: 90, height: 5)
+                        .overlay(alignment: .leading) {
+                            GeometryReader { proxy in
+                                Capsule().fill(WBAccent.gradient).frame(width: proxy.size.width * CGFloat(parsed.current) / CGFloat(parsed.total))
+                            }
+                        }
+                }
+                Text(AttributedString("\(parsed.current) / \(parsed.total)"))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(palette.mutedInk)
+                    .monospacedDigit()
+            }
+        } else if !label.isEmpty {
+            Text(AttributedString(label)).font(.system(size: 11.5, weight: .semibold)).foregroundColor(palette.mutedInk)
+        }
     }
 }
 
@@ -211,7 +290,7 @@ struct WBBoardCanvasView: View {
                         .multilineTextAlignment(.center)
                         .minimumScaleFactor(0.7)
                         .frame(width: labelRect.width, height: labelRect.height)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(palette.background.opacity(0.92)))
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.background.opacity(0.94)))
                         .opacity(WBRevealClock.fraction(elapsed - WhiteboardAnimation.arrow * 0.6, over: 0.25)
                                  * opacity(forOwner: scene.adapted.owner(ofEdge: placedEdge.edgeIndex), highlightSet: highlightSet))
                         .offset(x: labelRect.minX, y: labelRect.minY)
@@ -250,16 +329,22 @@ struct WBBoardCanvasView: View {
         for placedElement in scene.layout.elements {
             guard let owner = scene.adapted.ownerIdentifiers[placedElement.id], highlightSet.contains(owner),
                   clock.elapsed(owner: owner) != nil else { continue }
-            let haloRect = placedElement.rect.insetBy(dx: -7, dy: -7)
+            let haloRect = placedElement.rect.insetBy(dx: -5, dy: -5)
             var isRound = placedElement.shape == .ellipse
             if case .box(let box)? = scene.adapted.nodeElements[placedElement.id]?.payload { isRound = box.shape == .circle }
-            let haloPath = isRound ? Path(ellipseIn: haloRect) : Path(roundedRect: haloRect, cornerRadius: 12)
-            context.stroke(haloPath, with: .color(palette.halo), style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+            let haloPath = isRound ? Path(ellipseIn: haloRect) : Path(roundedRect: haloRect, cornerRadius: 16, style: .continuous)
+            context.drawLayer { layer in
+                layer.addFilter(.blur(radius: 5))
+                layer.stroke(haloPath, with: .color(palette.halo), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
+            }
         }
         for placedEdge in scene.layout.edges {
             guard let owner = scene.adapted.owner(ofEdge: placedEdge.edgeIndex), highlightSet.contains(owner),
                   clock.elapsed(owner: owner) != nil, scene.board.element(withIdentifier: owner)?.kind == .arrow else { continue }
-            context.stroke(Path(placedEdge.path), with: .color(palette.halo), style: StrokeStyle(lineWidth: 10, lineCap: .round, lineJoin: .round))
+            context.drawLayer { layer in
+                layer.addFilter(.blur(radius: 4))
+                layer.stroke(Path(placedEdge.path), with: .color(palette.halo), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
+            }
         }
 
         // Outlines and fills.
@@ -293,13 +378,12 @@ struct WBBoardCanvasView: View {
             sectionContext.opacity = WBRevealClock.fraction(firstElapsed, over: WhiteboardAnimation.sectionFade)
             if showsFrames {
                 let frameRect = placedSection.rect.insetBy(dx: 4, dy: 4)
-                sectionContext.fill(Path(roundedRect: frameRect, cornerRadius: 14), with: .color(palette.sectionFill))
-                var generator = RoughGenerator(elementID: "section." + placedSection.id, options: Self.sectionRoughOptions)
-                sectionContext.stroke(Path(RoughPath.cgPath(generator.rectangle(frameRect))), with: .color(palette.sectionStroke),
-                                      style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+                let framePath = Path(roundedRect: frameRect, cornerRadius: 18, style: .continuous)
+                sectionContext.fill(framePath, with: .color(palette.sectionFill))
+                sectionContext.stroke(framePath, with: .color(palette.sectionStroke), style: StrokeStyle(lineWidth: 1))
             }
             if let title = placedSection.title, let titleRect = placedSection.titleRect {
-                sectionContext.draw(Text(AttributedString(title)).font(WBViewFonts.hand(WBSectionLayout.titleFontSize)).foregroundColor(palette.ink),
+                sectionContext.draw(Text(AttributedString(title)).font(.system(size: WBSectionLayout.titleFontSize, weight: .semibold)).foregroundColor(palette.ink),
                                     in: titleRect.insetBy(dx: -2, dy: -2))
             }
         }
@@ -312,39 +396,55 @@ struct WBBoardCanvasView: View {
     }()
 
     private func drawOutline(of element: WBElement, placed: WBPlacedElement, elapsed: TimeInterval, in context: inout GraphicsContext) {
-        let strokeStyle = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+        let strokeStyle = StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)
+        let shadowColor = Color.black.opacity(palette.isDark ? 0.35 : 0.10)
         switch element.payload {
         case .box(let box):
             let progress = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.boxOutline)
             let shapes = WBShapePaths.box(shape: box.shape, rect: placed.rect, seedIdentifier: placed.id)
+            let accent = palette.stroke(for: box.color)
+            context.drawLayer { layer in
+                layer.addFilter(.shadow(color: shadowColor.opacity(progress), radius: 9, x: 0, y: 4))
+                layer.fill(shapes.fill, with: .color(palette.defaultBoxFill.opacity(progress)))
+            }
             context.fill(shapes.fill, with: .color(palette.fill(for: box.color).opacity(progress)))
-            context.stroke(shapes.outline.trimmedPath(from: 0, to: progress), with: .color(palette.stroke(for: box.color)), style: strokeStyle)
+            context.stroke(shapes.outline.trimmedPath(from: 0, to: progress), with: .color(accent.opacity(0.9)), style: strokeStyle)
             if let detail = shapes.detail, progress >= 1 {
-                context.stroke(detail, with: .color(palette.stroke(for: box.color)), style: strokeStyle)
+                context.stroke(detail, with: .color(accent.opacity(0.9)), style: strokeStyle)
             }
         case .callout(let callout):
             let progress = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.boxOutline)
             let calloutColor = palette.calloutColor(callout.style)
             let shapes = WBShapePaths.box(shape: .round, rect: placed.rect, seedIdentifier: placed.id)
             context.fill(shapes.fill, with: .color(calloutColor.opacity(palette.fillOpacity * progress)))
-            context.stroke(shapes.outline.trimmedPath(from: 0, to: progress), with: .color(calloutColor), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            context.stroke(shapes.outline.trimmedPath(from: 0, to: progress), with: .color(calloutColor.opacity(0.85)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+            // A colour bar on the leading edge.
+            let barRect = CGRect(x: placed.rect.minX + 1, y: placed.rect.minY + 10, width: 3, height: max(0, placed.rect.height - 20))
+            context.fill(Path(roundedRect: barRect, cornerRadius: 1.5), with: .color(calloutColor.opacity(progress)))
         case .code:
             let progress = WBRevealClock.fraction(elapsed, over: 0.2)
-            context.fill(Path(roundedRect: placed.rect, cornerRadius: 8), with: .color(palette.codeBackground.opacity(progress)))
+            let codePath = Path(roundedRect: placed.rect, cornerRadius: 12, style: .continuous)
+            context.fill(codePath, with: .color(palette.codeBackground.opacity(progress)))
+            context.stroke(codePath, with: .color(palette.ink.opacity(0.08 * progress)), style: StrokeStyle(lineWidth: 1))
         case .chart:
             let progress = WBRevealClock.fraction(elapsed, over: 0.2)
-            context.fill(Path(roundedRect: placed.rect, cornerRadius: 10), with: .color(palette.defaultBoxFill.opacity(progress)))
+            let chartPath = Path(roundedRect: placed.rect, cornerRadius: 12, style: .continuous)
+            context.drawLayer { layer in
+                layer.addFilter(.shadow(color: shadowColor.opacity(progress), radius: 8, x: 0, y: 3))
+                layer.fill(chartPath, with: .color(palette.defaultBoxFill.opacity(progress)))
+            }
+            context.stroke(chartPath, with: .color(palette.ink.opacity(0.08 * progress)), style: StrokeStyle(lineWidth: 1))
         case .table:
             let progress = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.tableFade)
-            var generator = RoughGenerator(elementID: placed.id, options: Self.sectionRoughOptions)
-            context.stroke(Path(RoughPath.cgPath(generator.rectangle(placed.rect))).trimmedPath(from: 0, to: progress),
-                           with: .color(palette.ink.opacity(0.7)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            let tablePath = Path(roundedRect: placed.rect, cornerRadius: 10, style: .continuous)
+            context.fill(tablePath, with: .color(palette.defaultBoxFill.opacity(progress)))
+            context.stroke(tablePath, with: .color(palette.ink.opacity(0.16 * progress)), style: StrokeStyle(lineWidth: 1))
         case .divider:
             let progress = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.arrow)
-            var generator = RoughGenerator(elementID: placed.id)
-            let midY = placed.rect.midY
-            let linePath = Path(RoughPath.cgPath(generator.line(from: CGPoint(x: placed.rect.minX, y: midY), to: CGPoint(x: placed.rect.maxX, y: midY))))
-            context.stroke(linePath.trimmedPath(from: 0, to: progress), with: .color(palette.mutedInk), style: strokeStyle)
+            var linePath = Path()
+            linePath.move(to: CGPoint(x: placed.rect.minX, y: placed.rect.midY))
+            linePath.addLine(to: CGPoint(x: placed.rect.maxX, y: placed.rect.midY))
+            context.stroke(linePath.trimmedPath(from: 0, to: progress), with: .color(palette.ink.opacity(0.18)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
         default:
             break
         }
@@ -353,13 +453,14 @@ struct WBBoardCanvasView: View {
     private func drawEdge(_ placedEdge: WBPlacedEdge, arrow: WBArrow?, elapsed: TimeInterval, in context: inout GraphicsContext) {
         let progress = WBRevealClock.fraction(elapsed, over: WhiteboardAnimation.arrow)
         let paths = WBShapePaths.edge(placedEdge, head: arrow?.head ?? .end)
-        let lineWidth: CGFloat = arrow?.style == .thick ? 3.6 : 2
-        let dash: [CGFloat] = arrow?.style == .dashed ? [9, 7] : []
-        let color = palette.ink.opacity(0.85)
+        let lineWidth: CGFloat = arrow?.style == .thick ? 3 : 1.8
+        let dash: [CGFloat] = arrow?.style == .dashed ? [7, 6] : []
+        let color = palette.ink.opacity(0.62)
         context.stroke(paths.body.trimmedPath(from: 0, to: progress), with: .color(color),
                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round, dash: dash))
         if progress >= 1 {
-            context.stroke(paths.heads, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+            context.fill(paths.heads, with: .color(color))
+            context.stroke(paths.heads, with: .color(color), style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
         }
     }
 }
@@ -375,36 +476,38 @@ enum WBShapePaths {
     }
 
     static func box(shape: WBBoxShape, rect: CGRect, seedIdentifier: String) -> BoxShapes {
-        var generator = RoughGenerator(elementID: seedIdentifier)
         switch shape {
         case .rect:
-            return BoxShapes(outline: Path(RoughPath.cgPath(generator.rectangle(rect))), fill: Path(rect), detail: nil)
-        case .round, .pill:
-            let radius = shape == .pill ? rect.height / 2 : min(14, rect.height / 3)
-            let points = roundedRectPoints(rect, radius: radius)
-            return BoxShapes(outline: Path(RoughPath.cgPath(generator.curve(through: points + [points[0]]))),
-                             fill: Path(roundedRect: rect, cornerRadius: radius), detail: nil)
+            let path = Path(roundedRect: rect, cornerRadius: min(12, rect.height / 3), style: .continuous)
+            return BoxShapes(outline: path, fill: path, detail: nil)
+        case .round:
+            let path = Path(roundedRect: rect, cornerRadius: min(16, rect.height / 2.5), style: .continuous)
+            return BoxShapes(outline: path, fill: path, detail: nil)
+        case .pill:
+            let path = Path(roundedRect: rect, cornerRadius: rect.height / 2, style: .continuous)
+            return BoxShapes(outline: path, fill: path, detail: nil)
         case .diamond:
-            let corners = [CGPoint(x: rect.midX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.midY),
-                           CGPoint(x: rect.midX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.midY)]
-            var fillPath = Path()
-            fillPath.addLines(corners)
-            fillPath.closeSubpath()
-            return BoxShapes(outline: Path(RoughPath.cgPath(generator.linearPath(corners, closed: true))), fill: fillPath, detail: nil)
+            var path = Path()
+            path.addLines([CGPoint(x: rect.midX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.midY),
+                           CGPoint(x: rect.midX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.midY)])
+            path.closeSubpath()
+            return BoxShapes(outline: path, fill: path, detail: nil)
         case .circle:
-            return BoxShapes(outline: Path(RoughPath.cgPath(generator.ellipse(in: rect))), fill: Path(ellipseIn: rect), detail: nil)
+            let path = Path(ellipseIn: rect)
+            return BoxShapes(outline: path, fill: path, detail: nil)
         case .cyl:
             let capHeight = min(18, rect.height / 3)
             let topCap = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: capHeight)
-            var outline = Path(RoughPath.cgPath(generator.ellipse(in: topCap)))
-            outline.addPath(Path(RoughPath.cgPath(generator.line(from: CGPoint(x: rect.minX, y: topCap.midY), to: CGPoint(x: rect.minX, y: rect.maxY - capHeight / 2)))))
-            let bottomArc = (0...8).map { index -> CGPoint in
-                let angle = Double.pi * Double(index) / 8
-                return CGPoint(x: rect.midX - cos(angle) * rect.width / 2, y: rect.maxY - capHeight / 2 + sin(angle) * capHeight / 2)
+            var outline = Path(ellipseIn: topCap)
+            outline.move(to: CGPoint(x: rect.minX, y: topCap.midY))
+            outline.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - capHeight / 2))
+            let bottomArc = (0...24).map { index -> CGPoint in
+                let angle = Double.pi * Double(index) / 24
+                return CGPoint(x: rect.minX + rect.width / 2 - cos(angle) * rect.width / 2, y: rect.maxY - capHeight / 2 + sin(angle) * capHeight / 2)
             }
-            outline.addPath(Path(RoughPath.cgPath(generator.curve(through: bottomArc))))
-            outline.addPath(Path(RoughPath.cgPath(generator.line(from: CGPoint(x: rect.maxX, y: rect.maxY - capHeight / 2), to: CGPoint(x: rect.maxX, y: topCap.midY)))))
-            var fillPath = Path(roundedRect: CGRect(x: rect.minX, y: topCap.midY, width: rect.width, height: rect.height - capHeight), cornerRadius: 0)
+            outline.addLines(bottomArc)
+            outline.addLine(to: CGPoint(x: rect.maxX, y: topCap.midY))
+            var fillPath = Path(CGRect(x: rect.minX, y: topCap.midY, width: rect.width, height: rect.height - capHeight))
             fillPath.addEllipse(in: topCap)
             fillPath.addEllipse(in: CGRect(x: rect.minX, y: rect.maxY - capHeight, width: rect.width, height: capHeight))
             return BoxShapes(outline: outline, fill: fillPath, detail: nil)
@@ -412,13 +515,12 @@ enum WBShapePaths {
             let fold = min(16, rect.height / 3)
             let corners = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX - fold, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY + fold),
                            CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
-            var fillPath = Path()
-            fillPath.addLines(corners)
-            fillPath.closeSubpath()
-            var foldGenerator = RoughGenerator(elementID: seedIdentifier + ".fold")
-            let foldPath = Path(RoughPath.cgPath(foldGenerator.linearPath([CGPoint(x: rect.maxX - fold, y: rect.minY), CGPoint(x: rect.maxX - fold, y: rect.minY + fold),
-                                                                           CGPoint(x: rect.maxX, y: rect.minY + fold)], closed: false)))
-            return BoxShapes(outline: Path(RoughPath.cgPath(generator.linearPath(corners, closed: true))), fill: fillPath, detail: foldPath)
+            var outline = Path()
+            outline.addLines(corners)
+            outline.closeSubpath()
+            var foldPath = Path()
+            foldPath.addLines([CGPoint(x: rect.maxX - fold, y: rect.minY), CGPoint(x: rect.maxX - fold, y: rect.minY + fold), CGPoint(x: rect.maxX, y: rect.minY + fold)])
+            return BoxShapes(outline: outline, fill: outline, detail: foldPath)
         }
     }
 
@@ -452,16 +554,27 @@ enum WBShapePaths {
     }
 
     static func edge(_ placedEdge: WBPlacedEdge, head: WBArrowHead) -> (body: Path, heads: Path) {
-        var generator = RoughGenerator(elementID: RoughPath.edgeID(of: placedEdge))
-        let body = Path(RoughPath.cgPath(generator.curve(through: placedEdge.points)))
+        let body = Path(placedEdge.path)
         var heads = Path()
+        func addHead(tip: CGPoint, from source: CGPoint) {
+            let dx = tip.x - source.x, dy = tip.y - source.y
+            let length = hypot(dx, dy)
+            guard length > 0.001 else { return }
+            let direction = CGPoint(x: dx / length, y: dy / length)
+            let normal = CGPoint(x: -direction.y, y: direction.x)
+            let headLength: CGFloat = 11, halfWidth: CGFloat = 4.8
+            let back = CGPoint(x: tip.x - direction.x * headLength, y: tip.y - direction.y * headLength)
+            heads.addLines([tip, CGPoint(x: back.x + normal.x * halfWidth, y: back.y + normal.y * halfWidth),
+                            CGPoint(x: back.x - normal.x * halfWidth, y: back.y - normal.y * halfWidth)])
+            heads.closeSubpath()
+        }
         if head != .none, let lastSegment = placedEdge.segments.last {
             let tangentSource = lastSegment.control2 == lastSegment.end ? lastSegment.start : lastSegment.control2
-            heads.addPath(Path(RoughPath.cgPath(generator.arrowhead(tip: lastSegment.end, comingFrom: tangentSource))))
+            addHead(tip: lastSegment.end, from: tangentSource)
         }
         if head == .both, let firstSegment = placedEdge.segments.first {
             let tangentSource = firstSegment.control1 == firstSegment.start ? firstSegment.end : firstSegment.control1
-            heads.addPath(Path(RoughPath.cgPath(generator.arrowhead(tip: firstSegment.start, comingFrom: tangentSource))))
+            addHead(tip: firstSegment.start, from: tangentSource)
         }
         return (body, heads)
     }

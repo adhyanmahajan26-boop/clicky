@@ -454,6 +454,12 @@ enum SetupWindowController {
     /// Scrolls Setup to a numbered section (1 Claude … 8 Updates).
     static func hide() { window?.orderOut(nil) }
 
+    /// The one SetupModel, shared with the Settings tab in the Home window (so it reuses these sections).
+    static func sharedModel(companionManager: CompanionManager) -> SetupModel {
+        if model == nil { model = SetupModel(companionManager: companionManager, showPanel: {}) }
+        return model!
+    }
+
     static func scroll(toSection section: Int) {
         // Reset first, on its own run-loop turn, so asking for the same section again still scrolls
         // (and a window that's just opening has its scroll view by then).
@@ -466,9 +472,16 @@ enum SetupWindowController {
     }
 }
 
-private struct SetupView: View {
+struct SetupView: View {
     @ObservedObject var model: SetupModel
     @State private var page: Page = .brain
+    /// Set when a page's content is embedded in another screen (the Home window's Settings tab): no sidebar.
+    var forcedPage: Page?
+
+    init(model: SetupModel, forcedPage: Page? = nil) {
+        self.model = model
+        self.forcedPage = forcedPage
+    }
 
     /// All settings, one page at a time (a sidebar instead of one long scroll).
     enum Page: Int, CaseIterable, Identifiable {
@@ -508,6 +521,10 @@ private struct SetupView: View {
     }
 
     var body: some View {
+        if let forcedPage { content(for: forcedPage) } else { windowBody }
+    }
+
+    private var windowBody: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Settings").font(.system(size: 13, weight: .semibold)).foregroundColor(.secondary).padding(.bottom, 10).padding(.leading, 10)
@@ -548,7 +565,9 @@ private struct SetupView: View {
         }
     }
 
-    @ViewBuilder private var pageContent: some View {
+    @ViewBuilder private var pageContent: some View { content(for: page) }
+
+    @ViewBuilder func content(for page: Page) -> some View {
         switch page {
         case .brain:
             card { brainSection }
@@ -820,48 +839,76 @@ private struct BrainSwitchSection: View {
 }
 
 
+/// The look values (spark style, theme, pill, spark mode, Theo's screen) as live shared state:
+/// every panel observes this, and a change made anywhere (menu bar, Look tab, defaults) refreshes them all.
+@MainActor
+final class LookSettings: ObservableObject {
+    static let shared = LookSettings()
+
+    @Published var sparkStyle = ClickySettings.sparkStyle { didSet { if ClickySettings.sparkStyle != sparkStyle { ClickySettings.sparkStyle = sparkStyle } } }
+    @Published var theme = ClickySettings.uiTheme { didSet { if ClickySettings.uiTheme != theme { ClickySettings.uiTheme = theme } } }
+    @Published var placement = ClickySettings.islandPlacement { didSet { if ClickySettings.islandPlacement != placement { ClickySettings.islandPlacement = placement } } }
+    @Published var sparkMode = ClickySettings.sparkMode { didSet { if ClickySettings.sparkMode != sparkMode { ClickySettings.sparkMode = sparkMode } } }
+    @Published var screenName = ClickySettings.claudiaScreenName { didSet { if ClickySettings.claudiaScreenName != screenName { ClickySettings.claudiaScreenName = screenName } } }
+    @Published private(set) var screenNames = NSScreen.screens.map(\.localizedName)
+    private var cancellables = Set<AnyCancellable>()
+
+    private init() {
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &cancellables)
+    }
+
+    func reload() {
+        if sparkStyle != ClickySettings.sparkStyle { sparkStyle = ClickySettings.sparkStyle }
+        if theme != ClickySettings.uiTheme { theme = ClickySettings.uiTheme }
+        if placement != ClickySettings.islandPlacement { placement = ClickySettings.islandPlacement }
+        if sparkMode != ClickySettings.sparkMode { sparkMode = ClickySettings.sparkMode }
+        if screenName != ClickySettings.claudiaScreenName { screenName = ClickySettings.claudiaScreenName }
+        let names = NSScreen.screens.map(\.localizedName)
+        if names != screenNames { screenNames = names }
+    }
+}
+
+
 /// Which display Claudia uses for itself, and whether the spark follows the pointer.
 struct ClaudiaScreenSection: View {
-    @State private var screenName = ClickySettings.claudiaScreenName
-    @State private var sparkMode = ClickySettings.sparkMode
-    @State private var sparkStyle = ClickySettings.sparkStyle
-    @State private var theme = ClickySettings.uiTheme
-    @State private var placement = ClickySettings.islandPlacement
-    private let screenNames = NSScreen.screens.map(\.localizedName)
+    @ObservedObject private var look = LookSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Theo's screen", selection: $screenName) {
+            Picker("Theo's screen", selection: $look.screenName) {
                 Text("None: wherever my pointer is").tag("")
-                ForEach(screenNames, id: \.self) { name in
+                ForEach(look.screenNames, id: \.self) { name in
                     Text(name).tag(name)
                 }
-                if !screenName.isEmpty && !screenNames.contains(screenName) {
-                    Text("\(screenName) (not connected)").tag(screenName)
+                if !look.screenName.isEmpty && !look.screenNames.contains(look.screenName) {
+                    Text("\(look.screenName) (not connected)").tag(look.screenName)
                 }
             }
-            .onChange(of: screenName) { _, newValue in ClickySettings.claudiaScreenName = newValue }
             Text("With a screen picked, Theo opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Picker("Theo's pill", selection: $placement) {
+            Picker("Theo's pill", selection: $look.placement) {
                 ForEach(ClickySettings.IslandPlacement.allCases, id: \.self) { item in Text(item.displayName).tag(item) }
             }
-            .onChange(of: placement) { _, newValue in ClickySettings.islandPlacement = newValue }
-            Picker("Spark", selection: $sparkMode) {
+            Picker("Spark", selection: $look.sparkMode) {
                 Text("Follows my pointer").tag(ClickySettings.SparkMode.cursor)
                 Text("Lives on its own (corner of Theo's screen)").tag(ClickySettings.SparkMode.docked)
             }
             .pickerStyle(.radioGroup)
-            .onChange(of: sparkMode) { _, newValue in ClickySettings.sparkMode = newValue }
-            Picker("Notes and T3 theme", selection: $theme) {
+            Picker("Notes and T3 theme", selection: $look.theme) {
                 ForEach(ClaudiaTheme.allCases, id: \.self) { theme in Text(theme.displayName).tag(theme) }
             }
-            .onChange(of: theme) { _, newValue in ClickySettings.uiTheme = newValue }
             Text("Spark style").font(.system(size: 12, weight: .medium))
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                 ForEach(CompanionIconStyle.allCases, id: \.self) { style in
-                    Button(action: { sparkStyle = style; ClickySettings.sparkStyle = style }) {
+                    Button(action: { look.sparkStyle = style }) {
                         VStack(spacing: 6) {
                             CompanionIconPreview(style: style)
                                 .frame(width: 30, height: 30)
@@ -871,7 +918,7 @@ struct ClaudiaScreenSection: View {
                         .frame(maxWidth: .infinity, minHeight: 66)
                         .padding(6)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.75)))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(sparkStyle == style ? Color.accentColor : Color.clear, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(look.sparkStyle == style ? Color.accentColor : Color.clear, lineWidth: 2))
                     }
                     .buttonStyle(.plain)
                 }

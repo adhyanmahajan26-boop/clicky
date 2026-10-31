@@ -21,7 +21,7 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 enum TheoHomeWindowController {
     private static var window: NSWindow?
-    static let t3BuiltInDownloadURL = URL(string: "https://github.com/adhyanmahajan26-boop/claudia-releases/releases/latest")!
+    static let t3BuiltInDownloadURL = URL(string: "https://github.com/adhyanmahajan26-boop/clicky/releases/latest")!
 
     static func show(companionManager: CompanionManager, tab: TheoHomeView.Tab = .home) {
         if window == nil {
@@ -217,77 +217,114 @@ private struct NotesTab: View {
     @State private var items: [ClaudiaLibrary.Item] = []
     @State private var selected: Set<String> = ClaudiaLibrary.selectedIDs
     @State private var filter = "all"
+    @State private var query = ""
+    @State private var pendingDelete: ClaudiaLibrary.Item?
+
+    private static let filters: [(id: String, title: String, symbol: String)] = [
+        ("all", "All", "square.grid.2x2"), ("notes", "Articles", "doc.text"), ("research", "Research", "sparkle.magnifyingglass"),
+        ("whiteboard", "Whiteboards", "scribble.variable"), ("screenshot", "Screenshots", "camera.viewfinder"),
+    ]
+
+    private func count(for filterID: String) -> Int {
+        filterID == "all" ? items.count : items.filter { $0.kind == filterID }.count
+    }
+
+    private var visibleItems: [ClaudiaLibrary.Item] {
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return items.filter { item in
+            (filter == "all" || item.kind == filter) && (needle.isEmpty || item.title.lowercased().contains(needle) || item.kind.contains(needle))
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .bottom) {
-                PageHeader(title: "Notes", subtitle: "Everything Theo saved. Tick “Use in code” and attach it from any T3 Code thread.")
-                Spacer()
-                Picker("", selection: $filter) {
-                    Text("All").tag("all"); Text("Notes").tag("notes"); Text("Research").tag("research")
-                    Text("Whiteboards").tag("whiteboard"); Text("Screenshots").tag("screenshot")
-                }
-                .pickerStyle(.segmented).frame(width: 420)
-            }
-            Text("\(selected.count) picked for code").font(.system(size: 12, weight: .medium)).foregroundColor(.accentColor)
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 14)], spacing: 14) {
-                    ForEach(items.filter { filter == "all" || $0.kind == filter }, id: \.id) { item in
-                        card(item)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text("Notes").font(.system(size: 26, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+                            Text("\(items.count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                                .foregroundColor(DS.Colors.textSecondary)
+                                .padding(.horizontal, 8).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.white.opacity(0.08)))
+                        }
+                        Text("Everything Theo saved. Pick notes to attach them to code tasks.")
+                            .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
                     }
+                    Spacer()
+                    if !selected.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill").font(.system(size: 12))
+                            Text("\(selected.count) picked for code").font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(DS.Colors.textPrimary)
+                        .padding(.horizontal, 11).padding(.vertical, 6)
+                        .background(Capsule().fill(NotesAccent.gradient.opacity(0.28)))
+                        .overlay(Capsule().strokeBorder(NotesAccent.gradient, lineWidth: 1))
+                        .transition(.opacity)
+                    }
+                    NotesSearchField(text: $query)
                 }
-                .padding(.bottom, 20)
+                HStack(spacing: 8) {
+                    ForEach(Self.filters, id: \.id) { entry in
+                        NotesFilterChip(title: entry.title, symbol: entry.symbol, count: count(for: entry.id), isActive: filter == entry.id) {
+                            withAnimation(.easeOut(duration: 0.18)) { filter = entry.id }
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            ScrollView {
+                if visibleItems.isEmpty {
+                    NotesEmptyState(isFiltering: !items.isEmpty)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 236, maximum: 340), spacing: 18)], spacing: 18) {
+                        ForEach(visibleItems, id: \.id) { item in
+                            NotesLibraryCard(item: item, isPicked: selected.contains(item.id),
+                                             onTogglePick: { togglePick(item) }, onDelete: { pendingDelete = item })
+                        }
+                    }
+                    .padding(.vertical, 6).padding(.horizontal, 2).padding(.bottom, 24)
+                }
             }
         }
         .padding(.horizontal, 32).padding(.top, 32)
-        .onAppear(perform: reload)
-    }
-
-    private func reload() {
-        items = ClaudiaLibrary.items()
-        selected = ClaudiaLibrary.selectedIDs
-    }
-
-    private func card(_ item: ClaudiaLibrary.Item) -> some View {
-        let isPicked = selected.contains(item.id)
-        return VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if item.isImage, let image = NSImage(contentsOf: item.url) {
-                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        Image(systemName: item.kind == "research" ? "magnifyingglass" : "doc.text").font(.system(size: 28)).foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-                .frame(height: 120).frame(maxWidth: .infinity).clipped()
-                .background(Color.secondary.opacity(0.1))
-                Button(action: {
-                    var ids = ClaudiaLibrary.selectedIDs
-                    if ids.contains(item.id) { ids.remove(item.id) } else { ids.insert(item.id) }
-                    ClaudiaLibrary.selectedIDs = ids
-                    selected = ids
-                }) {
-                    Label(isPicked ? "In code" : "Use in code", systemImage: isPicked ? "checkmark" : "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(Capsule().fill(isPicked ? Color.accentColor : Color.black.opacity(0.55)))
-                        .foregroundColor(.white)
-                }
-                .buttonStyle(.plain)
-                .padding(8)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.kind.uppercased()).font(.system(size: 10, weight: .bold)).foregroundColor(.accentColor)
-                Text(item.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
-                Text(item.date.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 11)).foregroundColor(.secondary)
-            }
-            .padding(12)
+        .animation(.easeOut(duration: 0.18), value: selected)
+        .confirmationDialog("Move to Trash?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { item in
+            Button("Move to Trash", role: .destructive) { trash(item) }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { item in
+            Text("\u{201C}\(item.title)\u{201D} moves to the Trash. You can put it back from there.")
         }
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(isPicked ? Color.accentColor : Color.secondary.opacity(0.15), lineWidth: isPicked ? 2 : 1))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture(count: 2) { NSWorkspace.shared.open(item.url) }
+        .task {
+            // Live refresh: scan off the main thread every 2 s, only touch state when the folder contents changed.
+            while !Task.isCancelled {
+                let fresh = await Task.detached(priority: .utility) { ClaudiaLibrary.items() }.value
+                if fresh.map({ "\($0.id)\($0.date.timeIntervalSince1970)" }) != items.map({ "\($0.id)\($0.date.timeIntervalSince1970)" }) { items = fresh }
+                let ids = ClaudiaLibrary.selectedIDs
+                if ids != selected { selected = ids }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func togglePick(_ item: ClaudiaLibrary.Item) {
+        var ids = ClaudiaLibrary.selectedIDs
+        if ids.contains(item.id) { ids.remove(item.id) } else { ids.insert(item.id) }
+        ClaudiaLibrary.selectedIDs = ids
+        selected = ids
+    }
+
+    private func trash(_ item: ClaudiaLibrary.Item) {
+        pendingDelete = nil
+        do {
+            try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+            var ids = ClaudiaLibrary.selectedIDs
+            if ids.remove(item.id) != nil { ClaudiaLibrary.selectedIDs = ids; selected = ids }
+            withAnimation(.easeOut(duration: 0.2)) { items.removeAll { $0.id == item.id } }
+        } catch {
+            NSSound.beep()
+        }
     }
 }
 
@@ -361,36 +398,7 @@ private struct T3Tab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 PageHeader(title: "T3 Code", subtitle: "Theo inside T3 Code: the extension for every agent, or T3 Code with Theo built in.")
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("T3 Code on this Mac").font(.system(size: 13, weight: .semibold))
-                    if apps.isEmpty { Text("No T3 Code app found in Applications.").font(.system(size: 12)).foregroundColor(.secondary) }
-                    ForEach(apps, id: \.self) { app in
-                        HStack(spacing: 10) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable().frame(width: 26, height: 26)
-                            Text(app.deletingPathExtension().lastPathComponent).font(.system(size: 13))
-                            Spacer()
-                            Button("Open") { NSWorkspace.shared.open(app) }
-                        }
-                    }
-                    if !apps.contains(where: { $0.lastPathComponent == "T3 Code Cursor Assistant.app" }) {
-                        Divider()
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "sparkles.rectangle.stack").font(.system(size: 20)).foregroundStyle(homeGradient)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("T3 Code Cursor Assistant").font(.system(size: 13, weight: .semibold))
-                                Text("T3 Code with Theo built in: a Theo page with your notes, Ask Theo, and a notes button next to the paperclip in every thread. It runs beside T3 Code Nightly.")
-                                    .font(.system(size: 11.5)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer()
-                            Button("Download") { NSWorkspace.shared.open(TheoHomeWindowController.t3BuiltInDownloadURL) }
-                        }
-                    }
-                }
-                .padding(16)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.06)))
-                T3IntegrationSection()
-                    .padding(16)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.06)))
+                T3ConnectView()
             }
             .padding(32)
         }
@@ -399,27 +407,301 @@ private struct T3Tab: View {
 }
 
 private struct SettingsTab: View {
+    enum Section: String, CaseIterable, Identifiable {
+        case look, brain, voice, screen, permissions, updates, about
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .look: return "Look"
+            case .brain: return "Brain"
+            case .voice: return "Voice"
+            case .screen: return "Screen"
+            case .permissions: return "Permissions"
+            case .updates: return "Updates"
+            case .about: return "About"
+            }
+        }
+        var subtitle: String {
+            switch self {
+            case .look: return "Cursor, theme and pill. Click one and it changes right away."
+            case .brain: return "Which agent Theo thinks with, and the models it uses."
+            case .voice: return "How Theo speaks to you."
+            case .screen: return "Which display Theo uses, and the T3 Code extension."
+            case .permissions: return "What Theo needs to hear, see and point."
+            case .updates: return "Keep Theo current."
+            case .about: return "Dock, setup guide and version."
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .look: return "sparkles"
+            case .brain: return "brain"
+            case .voice: return "waveform"
+            case .screen: return "display"
+            case .permissions: return "checkmark.shield"
+            case .updates: return "arrow.down.circle"
+            case .about: return "info.circle"
+            }
+        }
+    }
+
     @ObservedObject var companionManager: CompanionManager
+    @ObservedObject private var model: SetupModel
+    @ObservedObject private var look = LookSettings.shared
+    @State private var section: Section = .look
     @State private var showsInDock = ClickySettings.showsInDock
 
+    init(companionManager: CompanionManager) {
+        self.companionManager = companionManager
+        _model = ObservedObject(wrappedValue: SetupWindowController.sharedModel(companionManager: companionManager))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            PageHeader(title: "Settings", subtitle: "Brain, voice, permissions, screen, spark, extension and updates.")
-            HStack(spacing: 10) {
-                Button(action: { SetupGuideWindowController.show(companionManager: companionManager, step: .welcome) }) { Label("Run the Setup guide", systemImage: "wand.and.stars") }
-                    .buttonStyle(.borderedProminent)
-                Button(action: { SetupWindowController.show(companionManager: companionManager) {} }) { Label("All settings", systemImage: "slider.horizontal.3") }
-            }
-            .controlSize(.large)
-            Toggle("Show Theo in the Dock", isOn: $showsInDock)
-                .toggleStyle(.switch)
-                .onChange(of: showsInDock) { _, newValue in
-                    ClickySettings.showsInDock = newValue
-                    NSApp.setActivationPolicy(newValue ? .regular : .accessory)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("SETTINGS").font(.system(size: 10.5, weight: .bold)).tracking(0.8).foregroundColor(.secondary)
+                    .padding(.leading, 10).padding(.bottom, 8)
+                ForEach(Section.allCases) { item in
+                    Button(action: { withAnimation(.easeOut(duration: 0.15)) { section = item } }) {
+                        HStack(spacing: 9) {
+                            Image(systemName: item.symbol).font(.system(size: 13)).frame(width: 18)
+                                .foregroundColor(section == item ? Color.accentColor : .secondary)
+                            Text(item.title).font(.system(size: 13, weight: section == item ? .semibold : .regular))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(section == item ? Color.accentColor.opacity(0.14) : Color.clear))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-            Text("Off: Theo lives only in the menu bar.").font(.system(size: 11.5)).foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.top, 40)
+            .frame(width: 168)
+            .frame(maxHeight: .infinity, alignment: .top)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PageHeader(title: section.title, subtitle: section.subtitle)
+                    sectionContent
+                }
+                .padding(28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .onAppear { look.reload() }
+    }
+
+    @ViewBuilder private var sectionContent: some View {
+        switch section {
+        case .look: lookContent
+        case .brain: SetupView(model: model, forcedPage: .brain)
+        case .voice: SetupView(model: model, forcedPage: .voice)
+        case .screen: screenContent
+        case .permissions: SetupView(model: model, forcedPage: .permissions)
+        case .updates: SetupView(model: model, forcedPage: .updates)
+        case .about: aboutContent
+        }
+    }
+
+    // MARK: Look
+
+    private var lookContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            card("Cursor", "The spark that follows you. Pick a style.") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 12)], spacing: 12) {
+                    ForEach(CompanionIconStyle.allCases, id: \.self) { style in
+                        CursorTile(style: style, isSelected: look.sparkStyle == style) { look.sparkStyle = style }
+                    }
+                }
+            }
+            card("Spark behaviour", "Follow the pointer, or sit in a corner of Theo's screen.") {
+                chips([(ClickySettings.SparkMode.cursor, "Follows my pointer", "cursorarrow.motionlines"),
+                       (.docked, "Lives in a corner", "rectangle.bottomthird.inset.filled")], selection: $look.sparkMode)
+            }
+            card("Theme", "Colours for Notes and T3 Code.") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                    ForEach(ClaudiaTheme.allCases, id: \.self) { theme in
+                        ThemeTile(theme: theme, isSelected: look.theme == theme) { look.theme = theme }
+                    }
+                }
+            }
+            card("Pill", "Where Theo's status pill lives.") {
+                chips([(ClickySettings.IslandPlacement.notch, "Notch", "rectangle.topthird.inset.filled"),
+                       (.floating, "Floating", "rectangle.dashed"),
+                       (.corner, "Top-right corner", "rectangle.inset.topright.filled")], selection: $look.placement)
+            }
+            card("Theo's screen", "Browser windows, apps, boards and notes open here.") { screenPicker }
+        }
+    }
+
+    private var screenPicker: some View {
+        HStack {
+            Picker("", selection: $look.screenName) {
+                Text("Wherever my pointer is").tag("")
+                ForEach(look.screenNames, id: \.self) { name in Text(name).tag(name) }
+                if !look.screenName.isEmpty && !look.screenNames.contains(look.screenName) {
+                    Text("\(look.screenName) (not connected)").tag(look.screenName)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 320)
             Spacer()
         }
-        .padding(32)
+    }
+
+    // MARK: Screen
+
+    private var screenContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            card("Theo's screen", "With a screen picked, Theo leaves your main screen alone.") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                    screenTile(name: "", title: "Follow my pointer", symbol: "cursorarrow.rays")
+                    ForEach(look.screenNames, id: \.self) { name in screenTile(name: name, title: name, symbol: "display") }
+                }
+            }
+            card("T3 Code extension", "Theo's skills inside every T3 Code agent.") { T3IntegrationSection() }
+        }
+    }
+
+    private func screenTile(name: String, title: String, symbol: String) -> some View {
+        let selected = look.screenName == name
+        return Button(action: { look.screenName = name }) {
+            VStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 22)).foregroundColor(selected ? Color.accentColor : .secondary)
+                Text(title).font(.system(size: 11.5, weight: selected ? .semibold : .regular)).multilineTextAlignment(.center).lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 78)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: About
+
+    private var aboutContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            card("Theo", "This is Theo \(companionManager.updateController.currentVersionLabel).") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Show Theo in the Dock", isOn: $showsInDock)
+                        .toggleStyle(.switch)
+                        .onChange(of: showsInDock) { _, newValue in
+                            ClickySettings.showsInDock = newValue
+                            NSApp.setActivationPolicy(newValue ? .regular : .accessory)
+                        }
+                    Text("Off: Theo lives only in the menu bar.").font(.system(size: 11.5)).foregroundColor(.secondary)
+                    Button(action: { SetupGuideWindowController.show(companionManager: companionManager, step: .welcome) }) { Label("Run the Setup guide", systemImage: "wand.and.stars") }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                }
+            }
+        }
+    }
+
+    // MARK: Pieces
+
+    private func card<Content: View>(_ title: String, _ subtitle: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .semibold))
+                Text(subtitle).font(.system(size: 11.5)).foregroundColor(.secondary)
+            }
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.secondary.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.secondary.opacity(0.12), lineWidth: 1))
+    }
+
+    /// A row of one-click options (an icon and a label each); the chosen one is filled.
+    private func chips<T: Hashable>(_ options: [(T, String, String)], selection: Binding<T>) -> some View {
+        HStack(spacing: 10) {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                let selected = selection.wrappedValue == option.0
+                Button(action: { selection.wrappedValue = option.0 }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: option.2).font(.system(size: 14))
+                        Text(option.1).font(.system(size: 12.5, weight: selected ? .semibold : .regular))
+                    }
+                    .foregroundColor(selected ? Color.accentColor : .primary)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(selected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08)))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// A big cursor-style tile: the spark on black, its name, and a check when it's the one in use.
+private struct CursorTile: View {
+    let style: CompanionIconStyle
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                CompanionIconPreview(style: style).frame(width: 44, height: 44).padding(10)
+                Text(style.displayName).font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                    .multilineTextAlignment(.center).lineLimit(2).foregroundColor(.white.opacity(0.9))
+            }
+            .frame(maxWidth: .infinity, minHeight: 112)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.82)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(isSelected ? Color.accentColor : Color.white.opacity(isHovering ? 0.25 : 0.06), lineWidth: isSelected ? 2.5 : 1))
+            .overlay(alignment: .topTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 16)).foregroundColor(.accentColor).padding(8)
+                }
+            }
+            .scaleEffect(isHovering ? 1.03 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isHovering)
+            .animation(.easeOut(duration: 0.15), value: isSelected)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// A theme swatch: the theme's background, panel and accent colours with its name.
+private struct ThemeTile: View {
+    let theme: ClaudiaTheme
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let palette = theme.palette
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.map { ClaudiaTheme.color($0.background) } ?? Color.secondary.opacity(0.3))
+                    if let palette {
+                        Circle().fill(ClaudiaTheme.color(palette.accent)).frame(width: 12, height: 12)
+                    } else {
+                        Image(systemName: "circle.lefthalf.filled").font(.system(size: 14)).foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+                Text(theme.displayName).font(.system(size: 11.5, weight: isSelected ? .semibold : .regular)).multilineTextAlignment(.leading).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(isSelected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -217,7 +217,7 @@ public enum ClickySettings {
     public static var isWhiteboardAutoEnabled: Bool { defaults.object(forKey: Keys.whiteboardAuto) as? Bool ?? true }
     /// "paper" | "chalk" | "dark"; anything else reads as "paper".
     public static var whiteboardTheme: String {
-        let theme = defaults.string(forKey: Keys.whiteboardTheme)?.lowercased() ?? "paper"
+        let theme = defaults.string(forKey: Keys.whiteboardTheme)?.lowercased() ?? "dark"
         return ["paper", "chalk", "dark"].contains(theme) ? theme : "paper"
     }
     public static var isWhiteboardFullScreen: Bool {

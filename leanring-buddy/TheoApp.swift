@@ -76,6 +76,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests { return }
         Self.keepConsoleLog()
+        CompanionManager.current = companionManager
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
         // a privacy prompt in Theo's name, so they always start from home instead.

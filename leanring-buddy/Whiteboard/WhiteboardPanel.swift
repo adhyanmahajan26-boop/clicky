@@ -71,11 +71,13 @@ final class WhiteboardPanel: NSPanel {
 struct WhiteboardPanelRootView: View {
     @ObservedObject var boardController: BoardController
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @State private var exportFlash = false
 
     var body: some View {
         let palette = boardController.theme.palette
+        let cornerRadius: CGFloat = 16
         VStack(spacing: 0) {
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .bottom) {
                 palette.background
                 Group {
                     if let scene = boardController.scene, let renderState = boardController.renderState {
@@ -83,13 +85,18 @@ struct WhiteboardPanelRootView: View {
                     } else if !boardController.shellWorkerTitles.isEmpty {
                         WhiteboardShellView(workerTitles: boardController.shellWorkerTitles, palette: palette, reducesMotion: reducesMotion)
                     } else {
-                        Text(AttributedString(boardController.placeholderText))
-                            .font(.system(size: 20, weight: .medium, design: .rounded))
-                            .foregroundColor(palette.mutedInk)
+                        VStack(spacing: 12) {
+                            OrbitingLogo(color: palette.strokeColors[.orange] ?? palette.ink, phase: 0, reducesMotion: reducesMotion)
+                                .frame(width: 54, height: 54)
+                            Text(AttributedString(boardController.placeholderText))
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(palette.mutedInk)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                boardControls(palette: palette)
+                boardToolbar(palette: palette)
+                    .padding(.bottom, boardController.scene == nil ? 16 : WhiteboardScene.subtitleBarHeight + 14)
             }
             if !boardController.relatedLinks.isEmpty {
                 linksStrip(palette: palette)
@@ -97,28 +104,45 @@ struct WhiteboardPanelRootView: View {
             }
         }
         .background(palette.background)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(palette.ink.opacity(0.12), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color.white.opacity(palette.isDark ? 0.10 : 0.0), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(palette.ink.opacity(0.12), lineWidth: 1))
     }
 }
 
 extension WhiteboardPanelRootView {
-    /// × closes; the arrows grow the side board into the big one (then full screen).
-    func boardControls(palette: WhiteboardPalette) -> some View {
-        HStack(spacing: 6) {
-            Button(action: { boardController.expand() }) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
+    /// A floating capsule: step back / next, replay, pause | expand, export, close.
+    func boardToolbar(palette: WhiteboardPalette) -> some View {
+        let hasBoard = boardController.scene != nil
+        let isPaused = boardController.renderState?.isPaused == true
+        return HStack(spacing: 2) {
+            if hasBoard {
+                BoardToolbarButton(symbol: "chevron.left", help: "Previous step (←)", palette: palette) { boardController.back() }
+                BoardToolbarButton(symbol: "chevron.right", help: "Next step (→)", palette: palette) { boardController.next() }
+                BoardToolbarButton(symbol: "arrow.counterclockwise", help: "Replay (R)", palette: palette) { boardController.replay() }
+                BoardToolbarButton(symbol: isPaused ? "play.fill" : "pause.fill", help: isPaused ? "Resume (Space)" : "Pause (Space)", palette: palette) { boardController.togglePause() }
+                BoardToolbarDivider(palette: palette)
+                BoardToolbarButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Expand the board", palette: palette) { boardController.expand() }
+                BoardToolbarButton(symbol: exportFlash ? "checkmark" : "square.and.arrow.up", help: "Export PNG, PDF and board file (E)", palette: palette) {
+                    if boardController.exportBoard() != nil {
+                        exportFlash = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { exportFlash = false }
+                    }
+                }
+                BoardToolbarDivider(palette: palette)
+            } else {
+                BoardToolbarButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Expand the board", palette: palette) { boardController.expand() }
             }
-            .help("Expand the board")
-            .accessibilityLabel("Expand board")
-            Button(action: { boardController.close() }) {
-                Image(systemName: "xmark")
-            }
-            .help("Close the board (Esc)")
-            .accessibilityLabel("Close board")
+            BoardToolbarButton(symbol: "xmark", help: "Close the board (Esc)", palette: palette, isDestructive: true) { boardController.close() }
         }
-        .buttonStyle(BoardControlButtonStyle(palette: palette))
-        .padding(10)
+        .padding(4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(palette.isDark ? Color(white: 0.11, opacity: 0.92) : Color.white.opacity(0.92))
+        )
+        .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
+        .overlay(Capsule(style: .continuous).strokeBorder(palette.ink.opacity(0.14), lineWidth: 1))
+        .shadow(color: Color.black.opacity(palette.isDark ? 0.45 : 0.16), radius: 14, x: 0, y: 6)
     }
 
     /// Search results for the board's topic, each clickable, plus "Deep research" and "Expand".
@@ -161,6 +185,39 @@ extension WhiteboardPanelRootView {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(palette.ink.opacity(0.04))
+        .overlay(alignment: .top) { Rectangle().fill(palette.ink.opacity(0.08)).frame(height: 1) }
+    }
+}
+
+/// One round icon button of the floating toolbar, with a hover highlight.
+private struct BoardToolbarButton: View {
+    let symbol: String
+    let help: String
+    let palette: WhiteboardPalette
+    var isDestructive = false
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(isHovering && isDestructive ? Color(red: 1.0, green: 0.45, blue: 0.42) : palette.ink.opacity(isHovering ? 1 : 0.78))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(palette.ink.opacity(isHovering ? 0.10 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+private struct BoardToolbarDivider: View {
+    let palette: WhiteboardPalette
+    var body: some View {
+        Rectangle().fill(palette.ink.opacity(0.14)).frame(width: 1, height: 16).padding(.horizontal, 4)
     }
 }
 
@@ -173,9 +230,9 @@ struct BoardControlButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: isWide ? 11 : 12, weight: .semibold))
             .foregroundColor(palette.ink)
-            .padding(.horizontal, isWide ? 9 : 7)
+            .padding(.horizontal, isWide ? 10 : 7)
             .padding(.vertical, isWide ? 5 : 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.ink.opacity(configuration.isPressed ? 0.16 : 0.08)))
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.ink.opacity(configuration.isPressed ? 0.16 : 0.08)))
             .contentShape(Rectangle())
     }
 }
@@ -190,7 +247,7 @@ struct WhiteboardShellView: View {
     var body: some View {
         VStack(spacing: 18) {
             Text(AttributedString("Getting the board ready…"))
-                .font(.system(size: 20, weight: .medium, design: .rounded))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(palette.ink)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 360), spacing: 18)], spacing: 18) {
                 ForEach(Array(workerTitles.enumerated()), id: \.offset) { workerIndex, workerTitle in
@@ -198,13 +255,14 @@ struct WhiteboardShellView: View {
                         OrbitingLogo(color: palette.strokeColors[.orange] ?? palette.ink, phase: Double(workerIndex) * 0.7, reducesMotion: reducesMotion)
                             .frame(width: 54, height: 54)
                         Text(AttributedString(workerTitle))
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundColor(palette.mutedInk)
                             .lineLimit(2)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, minHeight: 150)
-                    .background(RoundedRectangle(cornerRadius: 12).stroke(palette.sectionStroke, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(palette.defaultBoxFill))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(palette.ink.opacity(0.10), lineWidth: 1))
                 }
             }
             .padding(.horizontal, 40)

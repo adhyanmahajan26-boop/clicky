@@ -412,6 +412,10 @@ final class ActionExecutor {
 
     /// One tagged pixel scroll over the article (positive = further down the page), pointer moved there first like `scroll`.
     func postPixelScroll(at point: CGPoint, pixels: Int) {
+        if BackgroundInput.isActive {
+            ArticleHighlightController.postScroll(at: point, pixels: pixels)
+            return
+        }
         onSyntheticPointerEvent()
         SyntheticEvents.mouseEvent(.mouseMoved, at: point)?.post(tap: .cghidEventTap)
         ArticleHighlightController.postScroll(at: point, pixels: pixels)
@@ -422,17 +426,27 @@ final class ActionExecutor {
                               ownerTranscript: String, isCancelled: @escaping () -> Bool) async -> (outcome: ActionStepOutcome, pageText: String?) {
         switch step {
         case .openApp:
+            let background = BackgroundInput.isActive
+            let frontmostBefore = BackgroundInput.FrontmostSnapshot.capture()
             if let runningApplication = target.runningApplication, !runningApplication.isTerminated {
+                if background {
+                    // Theo's screen gets the window; the owner's frontmost app and pointer stay as they are.
+                    runningApplication.unhide()
+                    ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
+                    return (.done(detail: "showed it on Theo's screen"), nil)
+                }
                 runningApplication.activate(options: [.activateAllWindows])
                 return (.done(detail: "brought it forward"), nil)
             }
             guard let applicationURL = target.applicationURL else { return (.failed(reason: "couldn't find the app"), nil) }
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
+            configuration.activates = !background
             do {
                 let launched = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
                 // A freshly opened app goes to Claudia's screen (an app already open stays where the owner has it).
                 ClaudiaScreen.moveFrontWindow(of: launched)
+                if background { frontmostBefore.restore(ifStolenBy: [launched.processIdentifier]) }
                 return (.done(detail: nil), nil)
             } catch {
                 return (.failed(reason: "the app didn't open"), nil)
@@ -440,8 +454,10 @@ final class ActionExecutor {
 
         case .openURL, .search:
             guard let url = target.url, let browserApplicationURL = target.browserApplicationURL else { return (.failed(reason: "no browser to open it in"), nil) }
+            let background = BackgroundInput.isActive
+            let frontmostBefore = BackgroundInput.FrontmostSnapshot.capture()
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
+            configuration.activates = !background
             // One Clicky tab at a time: the tabs of earlier searches close before the next one opens.
             BrowserTabTracker.shared.closeEarlierTabs()
             // Claudia's own screen: a Chromium browser gets a new window there, so the owner's windows stay put.
@@ -449,17 +465,22 @@ final class ActionExecutor {
                Self.chromiumBrowserBundleIdentifiers.contains(bundleIdentifier) {
                 let opener = Process()
                 opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                opener.arguments = ["-na", browserApplicationURL.path, "--args", "--new-window", url.absoluteString]
+                opener.arguments = (background ? ["-g"] : []) + ["-na", browserApplicationURL.path, "--args", "--new-window", url.absoluteString]
                 if (try? opener.run()) != nil {
                     opener.waitUntilExit()
                     let browser = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first
                     ClaudiaScreen.moveFrontWindow(of: browser)
+                    if background, let browser { frontmostBefore.restore(ifStolenBy: [browser.processIdentifier]) }
                     BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
                     return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Theo's screen"), nil)
                 }
             }
             do {
                 let browser = try await NSWorkspace.shared.open([url], withApplicationAt: browserApplicationURL, configuration: configuration)
+                if background {
+                    ClaudiaScreen.moveFrontWindow(of: browser)
+                    frontmostBefore.restore(ifStolenBy: [browser.processIdentifier])
+                }
                 BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
                 return (.done(detail: target.facts?.applicationName.map { "in \($0)" }), nil)
             } catch {
@@ -473,6 +494,13 @@ final class ActionExecutor {
             return (await type(text, into: target, focusesFirst: elementID != nil, pressesReturn: pressesReturn, isCancelled: isCancelled), nil)
 
         case .key(let combo):
+            if BackgroundInput.isActive {
+                guard let processIdentifier = BackgroundInput.theoTarget(else: target.processIdentifier) else {
+                    return (.failed(reason: "no app to send the key to"), nil)
+                }
+                BackgroundInput.postKey(processIdentifier: processIdentifier, combo: combo)
+                return (.done(detail: "sent to the app without changing focus"), nil)
+            }
             guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return (.failed(reason: "a modifier key was held down"), nil) }
             await bringTargetForward(target)
             postKey(combo)
@@ -480,7 +508,17 @@ final class ActionExecutor {
 
         case .scroll(_, let direction, let amount):
             guard let frame = target.frameCG, frame.width > 0, frame.height > 0 else { return (.failed(reason: "nothing to scroll"), nil) }
-            scroll(at: CGPoint(x: frame.midX, y: frame.midY), direction: direction, amount: amount)
+            let scrollPoint = CGPoint(x: frame.midX, y: frame.midY)
+            if BackgroundInput.isActive {
+                guard let processIdentifier = target.processIdentifier else { return (.failed(reason: "no app to scroll"), nil) }
+                await VirtualCursor.shared.move(toCG: scrollPoint)
+                let lines = Int32(amount * 3)
+                let method = BackgroundInput.scroll(processIdentifier: processIdentifier, at: scrollPoint,
+                                                    verticalLines: direction == .up ? lines : (direction == .down ? -lines : 0),
+                                                    horizontalLines: direction == .left ? lines : (direction == .right ? -lines : 0))
+                return method.map { (.done(detail: "scrolled (\($0))"), nil) } ?? (.failed(reason: "couldn't scroll"), nil)
+            }
+            scroll(at: scrollPoint, direction: direction, amount: amount)
             return (.done(detail: nil), nil)
 
         case .selectCopy(_, let text):
@@ -508,19 +546,36 @@ final class ActionExecutor {
             return (.done(detail: nil), nil)
 
         case .switchWindow:
+            let background = BackgroundInput.isActive
+            let frontmostBefore = BackgroundInput.FrontmostSnapshot.capture()
             if let windowElement = target.windowElement {
                 AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString)
+                if background {
+                    ClaudiaScreen.move(window: windowElement, of: target.runningApplication)
+                    if let processIdentifier = target.processIdentifier { frontmostBefore.restore(ifStolenBy: [processIdentifier]) }
+                    return (.done(detail: "raised on Theo's screen"), nil)
+                }
                 target.runningApplication?.activate(options: [])
                 return (.done(detail: nil), nil)
             }
             if let runningApplication = target.runningApplication {
+                if background {
+                    runningApplication.unhide()
+                    ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
+                    return (.done(detail: "showed it on Theo's screen"), nil)
+                }
                 runningApplication.activate(options: [.activateAllWindows])
                 return (.done(detail: nil), nil)
             }
             if let applicationURL = target.applicationURL {
                 let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = true
-                _ = try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                configuration.activates = !background
+                let launched = try? await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+                if background, let launched {
+                    ClaudiaScreen.moveFrontWindow(of: launched)
+                    frontmostBefore.restore(ifStolenBy: [launched.processIdentifier])
+                }
                 return (.done(detail: "it wasn't open, so i opened it"), nil)
             }
             return (.failed(reason: "nothing to switch to"), nil)
@@ -546,6 +601,7 @@ final class ActionExecutor {
     // MARK: Click
 
     private func click(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
+        if BackgroundInput.isActive { return await backgroundClick(target) }
         if let element = target.axElement {
             let actionNames = Self.actionNames(of: element)
             if actionNames.contains(kAXPressAction as String) || actionNames.isEmpty {
@@ -569,6 +625,31 @@ final class ActionExecutor {
         return .done(detail: "clicked")
     }
 
+    /// Theo's own cursor flies to the target; the click is AXPress, then a press on whatever supports one at that
+    /// point, then a click posted to the app's process. The real pointer and keyboard focus are never touched.
+    private func backgroundClick(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
+        let frame = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
+        let point = frame.flatMap { $0.width > 0 && $0.height > 0 ? CGPoint(x: $0.midX, y: $0.midY) : nil }
+        if let point {
+            await VirtualCursor.shared.move(toCG: point)
+            await VirtualCursor.shared.click()
+        }
+        if let element = target.axElement {
+            let actionNames = Self.actionNames(of: element)
+            if (actionNames.contains(kAXPressAction as String) || actionNames.isEmpty),
+               AXUIElementPerformAction(element, kAXPressAction as CFString) == .success { return .done(detail: "pressed") }
+        }
+        guard let point else { return .failed(reason: "couldn't find where to click") }
+        if BackgroundInput.pressAt(point, expectedProcessIdentifier: target.processIdentifier) { return .done(detail: "pressed (at its position)") }
+        guard let processIdentifier = target.processIdentifier else { return .failed(reason: "couldn't tell which app to click in") }
+        // Never click through another app's window (or Clicky's own).
+        if let hit = BackgroundInput.element(atCG: point), let hitProcessIdentifier = BackgroundInput.processIdentifier(of: hit), hitProcessIdentifier != processIdentifier {
+            return .failed(reason: "something is covering it")
+        }
+        BackgroundInput.postClick(processIdentifier: processIdentifier, at: point)
+        return .done(detail: "clicked (sent to the app, pointer untouched)")
+    }
+
     static func actionNames(of element: AXUIElement) -> [String] {
         var names: CFArray?
         guard AXUIElementCopyActionNames(element, &names) == .success, let names = names as? [String] else { return [] }
@@ -590,9 +671,26 @@ final class ActionExecutor {
     private func type(_ text: String, into target: ResolvedActionTarget, focusesFirst: Bool, pressesReturn: Bool,
                       isCancelled: @escaping () -> Bool) async -> ActionStepOutcome {
         guard var element = target.axElement else { return .failed(reason: "no text field to type into") }
+        let background = BackgroundInput.isActive
+        let targetProcessIdentifier = target.processIdentifier ?? BackgroundInput.processIdentifier(of: element)
+        if background {
+            // Theo's own cursor goes to the field and shows it is typing; the owner's pointer and focus stay put.
+            if let frame = target.frameCG ?? TypeForMeAccessibility.frameCG(of: element), frame.width > 0 {
+                await VirtualCursor.shared.move(toCG: CGPoint(x: frame.midX, y: frame.midY))
+            }
+            VirtualCursor.shared.setTyping(true)
+        }
+        defer { if background { Task { @MainActor in VirtualCursor.shared.setTyping(false) } } }
         if focusesFirst {
             let didFocus = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
-            if !didFocus, let frame = target.frameCG, frame.width > 0 { postClick(at: CGPoint(x: frame.midX, y: frame.midY)) }
+            if !didFocus, let frame = target.frameCG, frame.width > 0 {
+                let focusPoint = CGPoint(x: frame.midX, y: frame.midY)
+                if !background {
+                    postClick(at: focusPoint)
+                } else if !BackgroundInput.pressAt(focusPoint, expectedProcessIdentifier: targetProcessIdentifier), let targetProcessIdentifier {
+                    BackgroundInput.postClick(processIdentifier: targetProcessIdentifier, at: focusPoint)
+                }
+            }
             try? await Task.sleep(nanoseconds: Self.settleAfterFocus)
             // A web field's focus may land on a child: type where the focus really is, if it's in the same app.
             if let processIdentifier = target.processIdentifier, let focused = TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) {
@@ -629,7 +727,13 @@ final class ActionExecutor {
         if verification == .unchanged {
             method = "keys"
             guard let chunks = UnicodeTypingChunker.chunks(of: text) else { return .failed(reason: "multi-line text couldn't be typed there") }
-            for chunk in chunks {
+            if background {
+                guard let targetProcessIdentifier else { return .failed(reason: "couldn't tell which app to type into") }
+                method = "pid keys"
+                await BackgroundInput.typeUnicode(processIdentifier: targetProcessIdentifier, text: text, isCancelled: isCancelled)
+                if isCancelled() { return .cancelled }
+            }
+            for chunk in chunks where !background {
                 if isCancelled() { return .cancelled }
                 guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return .failed(reason: "a modifier key was held down") }
                 for event in TypeForMeSyntheticEvents.unicodeEvents(for: chunk) { event.post(tap: .cghidEventTap) }
@@ -641,9 +745,14 @@ final class ActionExecutor {
         }
         if pressesReturn {
             if isCancelled() { return .cancelled }
-            await bringTargetForward(target)
             // Only reached when the tier allowed it: the owner asked ("press enter" / "send it") or said yes.
-            postKey(ActionKeyCombo(modifiers: [], key: "return", virtualKeyCode: 36))
+            let returnCombo = ActionKeyCombo(modifiers: [], key: "return", virtualKeyCode: 36)
+            if background, let targetProcessIdentifier {
+                BackgroundInput.postKey(processIdentifier: targetProcessIdentifier, combo: returnCombo)
+            } else if !background {
+                await bringTargetForward(target)
+                postKey(returnCombo)
+            }
         }
         let detail = (verification == .verified ? "typed" : "typed, unverified") + " (\(method))" + (pressesReturn ? " + return" : "")
         return .done(detail: detail)

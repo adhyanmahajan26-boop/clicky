@@ -57,7 +57,7 @@ struct ClickySettingsCatalogTests {
     @Test func choiceDefaultsMatchTheAccessors() {
         // The accessors fall back to these same values when a key is unset.
         #expect(ClickySettingsCatalog.entries.first { $0.key == ClickySettings.Keys.voiceEchoMode }?.kind == .choice(options: ["open", "halfDuplex", "aec"], defaultValue: "open"))
-        #expect(ClickySettingsCatalog.entries.first { $0.key == ClickySettings.Keys.whiteboardTheme }?.kind == .choice(options: ["paper", "chalk", "dark"], defaultValue: "paper"))
+        #expect(ClickySettingsCatalog.entries.first { $0.key == ClickySettings.Keys.whiteboardTheme }?.kind == .choice(options: ["paper", "chalk", "dark"], defaultValue: "dark"))
         #expect(ClickySettingsCatalog.entries.first { $0.key == ClickySettings.Keys.captionMaxLines }?.kind == .integer(defaultValue: 4, range: 1...10, step: 1))
     }
 
