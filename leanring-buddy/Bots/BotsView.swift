@@ -137,7 +137,9 @@ struct BotChatScreen: View {
             Divider().overlay(Color.white.opacity(0.06))
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
+                    // A plain VStack: a lazy one guesses the heights of long replies it hasn't drawn, and
+                    // scrolling to the end then lands in empty space until something redraws.
+                    VStack(alignment: .leading, spacing: 18) {
                         if record.messages.isEmpty && inProgress.isEmpty { emptyState }
                         ForEach(record.messages) { message in
                             if message.author == "user" {
@@ -163,11 +165,11 @@ struct BotChatScreen: View {
                     .padding(.horizontal, 24).padding(.vertical, 22)
                     .frame(maxWidth: .infinity)
                 }
-                .onChange(of: record.messages.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end") } }
-                .onChange(of: inProgress.map(\.1.count).reduce(0, +)) { _, _ in proxy.scrollTo("end") }
+                .onChange(of: record.messages.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: inProgress.map(\.1.count).reduce(0, +)) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
                 .onAppear {
                     settledIDs = Set(record.messages.map(\.id))
-                    proxy.scrollTo("end")
+                    proxy.scrollTo("end", anchor: .bottom)
                 }
             }
             composer

@@ -94,7 +94,7 @@ enum BotRunner {
         try process.run()
 
         var parser = BotStreamParser(isClaude: isClaude)
-        for try await line in output.fileHandleForReading.bytes.lines where parser.consume(line) {
+        for await line in lines(of: output.fileHandleForReading) where parser.consume(line) {
             let text = parser.text
             await onText(text)
         }
@@ -106,6 +106,46 @@ enum BotRunner {
                                         "Details are in ~/Library/Logs/Clicky/bots-\(provider.rawValue).log.")
         }
         return (parser.text, parser.sessionID ?? newSessionID ?? session)
+    }
+}
+
+extension BotRunner {
+    /// The output's lines as they arrive. A bot turn can wait minutes (Theo waiting on Clicky's research),
+    /// so it reads on the file handle's own callbacks rather than `bytes`, whose blocking reads would
+    /// hold up the research helpers' readers in the meantime.
+    static func lines(of handle: FileHandle) -> AsyncStream<String> {
+        AsyncStream { continuation in
+            let pending = PendingLine()
+            handle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else {
+                    handle.readabilityHandler = nil
+                    if let last = pending.finish() { continuation.yield(last) }
+                    continuation.finish()
+                    return
+                }
+                for line in pending.append(chunk) { continuation.yield(line) }
+            }
+        }
+    }
+
+    private final class PendingLine: @unchecked Sendable {
+        private var buffer = Data()
+
+        func append(_ chunk: Data) -> [String] {
+            buffer.append(chunk)
+            var lines: [String] = []
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                lines.append(String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self))
+                buffer.removeSubrange(buffer.startIndex...newline)
+            }
+            return lines
+        }
+
+        func finish() -> String? {
+            defer { buffer.removeAll() }
+            return buffer.isEmpty ? nil : String(decoding: buffer, as: UTF8.self)
+        }
     }
 }
 
