@@ -101,6 +101,20 @@ struct BotsRootView: View {
                         sectionTitle("Bots")
                         ForEach(loose.bots, id: \.self) { item in itemRow(item) }
                     }
+                    if store.bots.count <= 1 && store.groups.isEmpty {
+                        // A fresh setup: point at the way to add the first bot.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Your bots go here. Add one with a name, a look and instructions, then group bots into chats with a head.")
+                                .font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
+                            Button { addingBot = true } label: {
+                                Label("Add your first bot", systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Capsule().fill(DS.Colors.accent.opacity(0.85)))
+                            }
+                            .buttonStyle(.plain).foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 10).padding(.top, 16)
+                    }
                     let hidden = store.layout.hidden.filter(itemExists)
                     if !hidden.isEmpty {
                         Button { withAnimation(.easeOut(duration: 0.15)) { showsHidden.toggle() } } label: {
@@ -234,7 +248,7 @@ struct BotsRootView: View {
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
                 let routineCount = store.routines(for: bot.id).filter { !$0.paused }.count
                 sidebarRow(.bot(bot.id), title: bot.name,
-                           subtitle: (bot.primary ? "CEO · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : ""),
+                           subtitle: (bot.primary ? "Primary · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : ""),
                            star: bot.primary, unread: store.unread[bot.id] ?? 0) {
                     BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
                 }
