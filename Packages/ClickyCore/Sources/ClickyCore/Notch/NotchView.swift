@@ -51,11 +51,15 @@ public struct NotchStyle: Equatable, Sendable {
     public var fillHex: UInt32
     public var accentHex: UInt32
     public var isFloating: Bool
+    /// The cursor's shape and colours, so the notch logo is the same companion as the cursor.
+    public var iconStyle: CompanionIconStyle
 
-    public init(fillHex: UInt32 = 0x000000, accentHex: UInt32 = 0xD97757, isFloating: Bool = false) {
+    public init(fillHex: UInt32 = 0x000000, accentHex: UInt32 = 0xD97757, isFloating: Bool = false,
+                iconStyle: CompanionIconStyle = .claude) {
         self.fillHex = fillHex
         self.accentHex = accentHex
         self.isFloating = isFloating
+        self.iconStyle = iconStyle
     }
 
     public static let `default` = NotchStyle()
@@ -221,7 +225,7 @@ public struct NotchView: View {
     }
 
     private var logo: some View {
-        NotchLogoView(phase: content.phase, orbitingAgentCount: content.orbitingAgentIDs.count, isAnimating: content.isLogoAnimating,
+        NotchLogoView(phase: content.phase, iconStyle: style.iconStyle, orbitingAgentCount: content.orbitingAgentIDs.count, isAnimating: content.isLogoAnimating,
                       fixedAnimationDate: fixedAnimationDate)
             .overlay(alignment: .bottomTrailing) { wakeIndicatorDot }
     }
@@ -401,6 +405,7 @@ public struct NotchView: View {
 /// thinking, pulsing while listening or speaking; helper agents orbit it.
 struct NotchLogoView: View {
     let phase: NotchCompanionPhase
+    let iconStyle: CompanionIconStyle
     let orbitingAgentCount: Int
     let isAnimating: Bool
     let fixedAnimationDate: Date?
@@ -434,16 +439,19 @@ struct NotchLogoView: View {
         }
         let orbitDegrees = (seconds * 80).truncatingRemainder(dividingBy: 360)
         let visibleMiniCount = min(orbitingAgentCount, NotchGeometry.maximumAgentRows)
+        let gradient = iconStyle.gradientHexes.map { Color(cgColor: CompanionIconStyle.color($0)) }
+        let glow = Color(cgColor: CompanionIconStyle.color(iconStyle.glowHex))
         return ZStack {
-            ClaudeSparkShape()
-                .fill(Color.clickyCompanionOrange)
+            CompanionIconShape(style: iconStyle)
+                .fill(LinearGradient(colors: gradient.count > 1 ? gradient : gradient + gradient,
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(width: Self.sparkDiameter, height: Self.sparkDiameter)
                 .rotationEffect(.degrees(spinDegrees))
                 .scaleEffect(pulseScale)
-                .shadow(color: Color.clickyCompanionOrange.opacity(phase == .idle ? 0.35 : 0.8), radius: phase == .idle ? 2 : 4)
+                .shadow(color: glow.opacity(phase == .idle ? 0.35 : 0.8), radius: phase == .idle ? 2 : 4)
             ForEach(0..<visibleMiniCount, id: \.self) { miniIndex in
-                ClaudeSparkShape()
-                    .fill(Color.clickyCompanionOrange)
+                CompanionIconShape(style: iconStyle)
+                    .fill(Color(cgColor: CompanionIconStyle.color(iconStyle.miniHex)))
                     .frame(width: Self.miniDiameter, height: Self.miniDiameter)
                     .offset(x: Self.orbitRadius)
                     .rotationEffect(.degrees(-90 + Double(miniIndex) * 360 / Double(visibleMiniCount)))

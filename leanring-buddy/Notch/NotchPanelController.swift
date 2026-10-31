@@ -51,6 +51,7 @@ final class NotchPanelController: NSObject {
     private unowned let companionManager: CompanionManager
     private let viewModel = NotchViewModel()
     private var panel: NotchPanel?
+    private var styleSettingsObserver: NSObjectProtocol?
     private var hostingView: NotchHostingView?
     private var presentationStateMachine = NotchPresentationStateMachine(clock: { ProcessInfo.processInfo.systemUptime })
     private var selectedAgentID: String?
@@ -222,6 +223,7 @@ final class NotchPanelController: NSObject {
         }
 
         let panel = panel ?? makePanel()
+        observeStyleSettings()
         refreshStyle()
         if showsOverFullScreenApps != !hidesOverFullScreen {
             showsOverFullScreenApps = !hidesOverFullScreen
@@ -326,15 +328,27 @@ final class NotchPanelController: NSObject {
         }
     }
 
-    /// The theme's colours (dark themes fill the pill; light ones keep it black) and the floating look.
+    /// The pill follows the colour theme (a dark theme's background; light themes keep it black,
+    /// which the white text and the hardware notch need) and the cursor (the logo is the cursor's
+    /// companion shape, and its glow colours the busy ring).
     private func refreshStyle() {
-        let theme = ClickySettings.uiTheme
-        let palette = theme.palette
-        let isDarkTheme = palette.map { (($0.background >> 16) & 0xFF) < 0x80 } ?? false
+        let palette = ClickySettings.uiTheme.palette
+        let cursor = ClickySettings.sparkStyle
+        let isFloating = ClickySettings.islandPlacement != .notch
+        let isDarkTheme = palette.map { (($0.background >> 16) & 0xFF) < 0x80 } ?? true
         let fill: UInt32 = isDarkTheme ? (palette?.background ?? 0) : 0x000000
-        let accent: UInt32 = palette?.accent ?? ClickySettings.sparkStyle.glowHex
-        let style = NotchStyle(fillHex: fill, accentHex: accent, isFloating: ClickySettings.islandPlacement != .notch)
+        let style = NotchStyle(fillHex: fill, accentHex: cursor.glowHex,
+                               isFloating: isFloating, iconStyle: cursor)
         if style != viewModel.style { viewModel.style = style }
+    }
+
+    /// Theme, cursor and placement live in UserDefaults; any change restyles the pill at once.
+    private func observeStyleSettings() {
+        guard styleSettingsObserver == nil else { return }
+        styleSettingsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                                                       object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshStyle() }
+        }
     }
 
     /// Dragging a floating pill moves it; the spot is remembered.
