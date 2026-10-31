@@ -107,6 +107,19 @@ final class ClaudiaControlInbox {
                 BotsStore.shared.send(text, to: botID)
             }
             reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "routines":
+            // {action: list|pause|resume|run|delete, id}
+            let store = BotsStore.shared
+            let id = command["id"] as? String ?? ""
+            switch command["action"] as? String ?? "list" {
+            case "pause": store.setPaused(true, routineID: id)
+            case "resume": store.setPaused(false, routineID: id)
+            case "run": store.runRoutineNow(id)
+            case "delete": store.deleteRoutine(id)
+            default: break
+            }
+            let encoded = (try? JSONEncoder().encode(store.routines)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            reply(identifier, ok: true, result: encoded ?? [], error: nil)
         case "groupSave":
             // Adds or updates a bot group: {id, name, head, members, symbol}.
             guard let id = command["id"] as? String, !id.isEmpty, let name = command["name"] as? String else {

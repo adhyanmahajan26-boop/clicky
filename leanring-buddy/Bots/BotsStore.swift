@@ -34,6 +34,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var apps: [String]
     /// "personal" (your own helpers) or "project" (Theo's project team). Older saves have none.
     var category: String?
+    /// The avatar's shape: "orb" (default), "square", "sparkle", "clover", "flower", "heart" or "star".
+    var shape: String?
 
     var isProjectHandler: Bool { (category ?? BotImport.defaultCategory(id)) == "project" }
 
@@ -107,6 +109,16 @@ final class BotsStore: ObservableObject {
     /// Bots with a reply in progress, and the reply text so far ("" while thinking).
     @Published private(set) var replying: [String: String] = [:]
     @Published private(set) var groups: [BotGroup] = []
+    /// Scheduled jobs, like Grok Bot's routines.
+    @Published private(set) var routines: [BotRoutine] = []
+    /// The sidebar: what's pinned, hidden, and in which section.
+    @Published private(set) var layout = BotsLayout()
+    /// New replies per conversation since it was last open.
+    @Published private(set) var unread: [String: Int] = [:]
+    /// The conversation on screen, which collects no unread count.
+    var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
+    private var routineTimer: Timer?
+    private var runningRoutines: Set<String> = []
 
     static let teamID = "team"
 
@@ -126,6 +138,7 @@ final class BotsStore: ObservableObject {
             t3Runs = runs
         }
         for run in t3Runs where run.phase == "running" || run.phase == "waiting" { track(run.id) }
+        loadRoutinesAndLayout()
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -154,6 +167,7 @@ final class BotsStore: ObservableObject {
         guard id != BotGroup.projectID else { return }
         groups.removeAll { $0.id == id }
         writeGroups()
+        forget(item: "group:\(id)")
     }
 
     /// A new bot, added to a group (or to no group).
@@ -187,6 +201,7 @@ final class BotsStore: ObservableObject {
         }
         writeBots()
         writeGroups()
+        forget(item: "bot:\(id)")
     }
 
     func bot(_ id: String) -> NativeBot? { bots.first { $0.id == id } }
@@ -224,7 +239,8 @@ final class BotsStore: ObservableObject {
         conversations[botID] = record
         writeConversation(botID)
         let firstTurn = record.sessions[botID] == nil
-        let prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
+        var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
+        if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
     }
 
@@ -339,7 +355,9 @@ final class BotsStore: ObservableObject {
             var record = self.conversation(conversationID)
             if let newSession { record.sessions[bot.id] = newSession }
             if let answer, !answer.isEmpty {
-                record.messages.append(BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot)))
+                let message = BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot))
+                self.noteUnread(message, in: conversationID)
+                record.messages.append(message)
                 if self.isRoom(conversationID) { record.seen[bot.id] = record.messages.count }
             } else if answer != nil {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)"))
@@ -347,6 +365,10 @@ final class BotsStore: ObservableObject {
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
             if let answer, self.group(forRoom: conversationID)?.headID == bot.id { self.submitIfFinal(answer, room: conversationID) }
+            if let answer, let request = Self.routineRequest(in: answer) {
+                let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
+                self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
+            }
             then(answer)
         }
     }
@@ -494,6 +516,7 @@ final class BotsStore: ObservableObject {
     }
 
     private func post(_ message: BotChatMessage, to conversationID: String) {
+        noteUnread(message, in: conversationID)
         var record = conversation(conversationID)
         record.messages.append(message)
         conversations[conversationID] = record
@@ -740,12 +763,27 @@ enum BotPrompts {
             }
         }
         if bot.provider == "grok" {
-            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
+            parts.append(BotPrompts.routineHowTo)
+        parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
                          "learn a lasting preference or fact. Don't store secrets.")
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
+    static let routineHowTo =
+        "Routines: when Addy asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
+        "cron or schedule tool or skill: Theo runs routines for you. Say what you'll do and when, then add a ```routine " +
+        "block with JSON {\"name\": short name, \"when\": \"daily 08:00\" | \"weekdays 08:30\" | \"weekly mon 09:00\" | " +
+        "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Theo then runs it on " +
+        "time, and Addy can pause, run or delete it."
+
+    /// Words that ask for something on a schedule, so the routine how-to rides along even in an older chat.
+    static func asksForSchedule(_ text: String) -> Bool {
+        text.range(of: #"\b(every|each)\s+(day|morning|evening|night|weekday|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|hour|\d+\s*(min|minutes|hours?))\b|\b(daily|hourly|weekly|routine|schedule)\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// The first message of a bot's chat on engines without a system prompt option.
@@ -792,5 +830,236 @@ enum BotPrompts {
         guard let regex = try? NSRegularExpression(pattern: "^\\s*\\*{0,2}\(name)( here)?[:.]?\\*{0,2}[:.]?\\s*", options: [.caseInsensitive]) else { return text }
         let range = NSRange(text.startIndex..., in: text)
         return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+    }
+}
+
+
+// MARK: - Sidebar layout
+
+/// What the sidebar shows where, like Grok Bot's: pinned items on top, your own sections, hidden bots.
+/// Items are "bot:<id>", "group:<id>" or "clicky".
+struct BotsLayout: Codable, Equatable {
+    var pinned: [String] = ["bot:theo", "clicky", "group:project"]
+    var hidden: [String] = []
+    var sections: [Section] = []
+
+    struct Section: Codable, Identifiable, Equatable {
+        var id: String = UUID().uuidString
+        var name: String
+        var items: [String] = []
+    }
+
+    func section(of item: String) -> Section? { sections.first { $0.items.contains(item) } }
+}
+
+// MARK: - Routines, layout and unread
+
+extension BotsStore {
+    private var routinesFile: URL { folder.appendingPathComponent("routines.json") }
+    private var layoutFile: URL { folder.appendingPathComponent("layout.json") }
+
+    fileprivate func loadRoutinesAndLayout() {
+        if let data = try? Data(contentsOf: routinesFile), let saved = try? Self.decoder.decode([BotRoutine].self, from: data) {
+            routines = saved
+        }
+        if let data = try? Data(contentsOf: layoutFile), let saved = try? Self.decoder.decode(BotsLayout.self, from: data) {
+            layout = saved
+        } else {
+            // First run: a group without a head (the old "Personal" list) becomes a sidebar section.
+            for group in groups where group.headID == nil {
+                layout.sections.append(BotsLayout.Section(name: group.name, items: group.memberIDs.map { "bot:\($0)" }))
+            }
+            groups.removeAll { $0.headID == nil }
+            writeGroups()
+            writeLayout()
+        }
+        // A routine whose time passed while Theo was closed runs once now (a catch-up), then keeps its schedule.
+        let now = Date()
+        for index in routines.indices where routines[index].nextRunAt == nil {
+            routines[index].nextRunAt = routines[index].schedule.next(after: now)
+        }
+        writeRoutines()
+        routineTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.runDueRoutines() }
+        }
+        Task { @MainActor in self.runDueRoutines() }
+    }
+
+    private func writeRoutines() {
+        if let data = try? Self.encoder.encode(routines) { try? data.write(to: routinesFile, options: .atomic) }
+    }
+
+    private func writeLayout() {
+        if let data = try? Self.encoder.encode(layout) { try? data.write(to: layoutFile, options: .atomic) }
+    }
+
+    // MARK: Routines
+
+    func routines(for target: String) -> [BotRoutine] { routines.filter { $0.target == target } }
+
+    func targetName(_ target: String) -> String {
+        if target.hasPrefix("group:") { return group(String(target.dropFirst(6)))?.name ?? "Group" }
+        return bot(target)?.name ?? target
+    }
+
+    func save(_ routine: BotRoutine) {
+        var routine = routine
+        if routine.nextRunAt == nil || !routines.contains(where: { $0.id == routine.id && $0.schedule == routine.schedule }) {
+            routine.nextRunAt = routine.schedule.next(after: Date())
+        }
+        if let index = routines.firstIndex(where: { $0.id == routine.id }) { routines[index] = routine } else { routines.append(routine) }
+        writeRoutines()
+    }
+
+    func setPaused(_ paused: Bool, routineID: String) {
+        guard let index = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        routines[index].paused = paused
+        // Resuming picks up at the next slot, not every slot missed while paused.
+        if !paused { routines[index].nextRunAt = routines[index].schedule.next(after: Date()) }
+        writeRoutines()
+    }
+
+    func deleteRoutine(_ routineID: String) {
+        routines.removeAll { $0.id == routineID }
+        writeRoutines()
+    }
+
+    /// "Run now" (Grok's Test): a real run, out of schedule; the next scheduled run stays.
+    func runRoutineNow(_ routineID: String) {
+        guard let routine = routines.first(where: { $0.id == routineID }) else { return }
+        start(routine, scheduled: false)
+    }
+
+    private func runDueRoutines() {
+        let now = Date()
+        for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
+            if let index = routines.firstIndex(where: { $0.id == routine.id }) {
+                routines[index].nextRunAt = routine.schedule.next(after: now)
+            }
+            start(routine, scheduled: true)
+        }
+        writeRoutines()
+    }
+
+    private func start(_ routine: BotRoutine, scheduled: Bool) {
+        guard !runningRoutines.contains(routine.id) else { return }
+        let text = "⏰ Routine \"\(routine.name)\": \(routine.instruction)"
+        if routine.target.hasPrefix("group:") {
+            let groupID = String(routine.target.dropFirst(6))
+            guard group(groupID) != nil else { return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The group is gone.")) }
+            sendToGroup(text, groupID: groupID)
+            return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "done", summary: "Posted to the group chat."))
+        }
+        guard let bot = bot(routine.target) else {
+            return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The bot is gone."))
+        }
+        guard replying[bot.id] == nil else {
+            // Busy right now: a scheduled run waits a minute instead of being lost.
+            if scheduled, let index = routines.firstIndex(where: { $0.id == routine.id }) {
+                routines[index].nextRunAt = Date().addingTimeInterval(60)
+                writeRoutines()
+            }
+            return
+        }
+        runningRoutines.insert(routine.id)
+        let run = BotRoutine.Run(startedAt: Date(), status: "running")
+        record(routine.id, run)
+        var conversationRecord = conversation(bot.id)
+        conversationRecord.messages.append(BotChatMessage(author: "routine", text: text))
+        conversations[bot.id] = conversationRecord
+        writeConversation(bot.id)
+        let firstTurn = conversationRecord.sessions[bot.id] == nil
+        let prompt = (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
+            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly.)"
+        reply(bot: bot, in: bot.id, prompt: prompt, session: conversationRecord.sessions[bot.id]) { [weak self] answer in
+            guard let self else { return }
+            self.runningRoutines.remove(routine.id)
+            var finished = run
+            finished.finishedAt = Date()
+            finished.status = answer == nil ? "failed" : "done"
+            finished.summary = answer.map { String($0.prefix(140)) }
+            self.record(routine.id, finished)
+        }
+    }
+
+    /// Adds or updates a run in the routine's history (the last 20 are kept).
+    private func record(_ routineID: String, _ run: BotRoutine.Run) {
+        guard let index = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        if let existing = routines[index].runs.firstIndex(where: { $0.id == run.id }) {
+            routines[index].runs[existing] = run
+        } else {
+            routines[index].runs.append(run)
+            if routines[index].runs.count > 20 { routines[index].runs.removeFirst(routines[index].runs.count - 20) }
+        }
+        writeRoutines()
+    }
+
+    fileprivate func addRoutineFromChat(_ request: (name: String, schedule: BotRoutine.Schedule, instruction: String),
+                                        target: String, conversationID: String, author: String) {
+        // The same routine asked twice (a repeated reply) isn't added twice.
+        guard !routines.contains(where: { $0.target == target && $0.instruction == request.instruction && $0.schedule == request.schedule }) else { return }
+        let routine = BotRoutine(name: request.name, target: target, instruction: request.instruction, schedule: request.schedule)
+        save(routine)
+        post(BotChatMessage(author: author, text: "Routine set: **\(request.name)**, \(request.schedule.label.lowercased()). " +
+                            "Pause, run or delete it from this bot's details or the Routines page."), to: conversationID)
+    }
+
+    // MARK: Sidebar
+
+    func isPinned(_ item: String) -> Bool { layout.pinned.contains(item) }
+    func isHidden(_ item: String) -> Bool { layout.hidden.contains(item) }
+
+    func setPinned(_ pinned: Bool, _ item: String) {
+        layout.pinned.removeAll { $0 == item }
+        if pinned { layout.pinned.append(item); layout.hidden.removeAll { $0 == item } }
+        writeLayout()
+    }
+
+    /// Grok's "Hide from sidebar": the bot keeps working and its routines keep running.
+    func setHidden(_ hidden: Bool, _ item: String) {
+        layout.hidden.removeAll { $0 == item }
+        if hidden { layout.hidden.append(item); layout.pinned.removeAll { $0 == item } }
+        writeLayout()
+    }
+
+    /// Moves an item into a section (nil: back to the default lists); a new name makes a new section.
+    func move(_ item: String, toSection sectionID: String?, newSectionName: String? = nil) {
+        for index in layout.sections.indices { layout.sections[index].items.removeAll { $0 == item } }
+        if let newSectionName, !newSectionName.trimmingCharacters(in: .whitespaces).isEmpty {
+            layout.sections.append(BotsLayout.Section(name: newSectionName.trimmingCharacters(in: .whitespaces), items: item.isEmpty ? [] : [item]))
+        } else if let sectionID, let index = layout.sections.firstIndex(where: { $0.id == sectionID }) {
+            layout.sections[index].items.append(item)
+        }
+        writeLayout()
+    }
+
+    func renameSection(_ sectionID: String, to name: String) {
+        guard let index = layout.sections.firstIndex(where: { $0.id == sectionID }), !name.isEmpty else { return }
+        layout.sections[index].name = name
+        writeLayout()
+    }
+
+    /// Removes a section; its items go back to the default lists.
+    func deleteSection(_ sectionID: String) {
+        layout.sections.removeAll { $0.id == sectionID }
+        writeLayout()
+    }
+
+    /// Deleting a bot also takes its routines and its place in the sidebar, as in Grok Bot.
+    func forget(item: String) {
+        layout.pinned.removeAll { $0 == item }
+        layout.hidden.removeAll { $0 == item }
+        for index in layout.sections.indices { layout.sections[index].items.removeAll { $0 == item } }
+        writeLayout()
+        let target = item.hasPrefix("bot:") ? String(item.dropFirst(4)) : item
+        routines.removeAll { $0.target == target }
+        writeRoutines()
+    }
+
+    // MARK: Unread
+
+    fileprivate func noteUnread(_ message: BotChatMessage, in conversationID: String) {
+        guard message.author != "user", conversationID != viewing else { return }
+        unread[conversationID, default: 0] += 1
     }
 }

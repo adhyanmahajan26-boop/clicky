@@ -20,6 +20,7 @@ enum BotsPane: Hashable {
     case bot(String)
     /// Clicky's own chat: Theo's on-screen companion.
     case clicky
+    case routines
     case connectors
 }
 
@@ -48,55 +49,92 @@ struct BotsRootView: View {
 
     @State private var editingGroup: BotGroup?
     @State private var addingBot = false
+    @State private var detailsBot: NativeBot?
+    @State private var namingSectionFor: String?
+    @State private var sectionName = ""
+    @State private var confirmingDelete: String?
+    @State private var showsHidden = false
+
+    private static let blankGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: [])
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Bots").font(.system(size: 15, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Menu {
+                    Button { addingBot = true } label: { Label("New bot", systemImage: "plus.circle") }
+                        .keyboardShortcut("n", modifiers: .command)
+                    Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2.badge.plus") }
+                    Divider()
+                    Button { namingSectionFor = ""; sectionName = "" } label: { Label("New section", systemImage: "folder.badge.plus") }
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.08)))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("New bot (⌘N), group chat or section")
+            }
+            .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 6)
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    sectionTitle("Pinned")
-                    if let theo = store.primary { botRow(theo, subtitleOverride: "CEO · \(theo.modelLabel)") }
-                    sidebarRow(.clicky, title: "Clicky", subtitle: "Screen companion") {
-                        ClickyAvatar(size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    let pinned = store.layout.pinned.filter(itemExists)
+                    if !pinned.isEmpty {
+                        sectionTitle("Pinned")
+                        ForEach(pinned, id: \.self) { item in itemRow(item) }
                     }
-                    HStack {
-                        sectionTitle("Groups")
-                        Spacer()
-                        Button { editingGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: []) } label: {
-                            Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+                    ForEach(store.layout.sections) { section in
+                        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) }
+                        sectionHeader(section)
+                        ForEach(items, id: \.self) { item in itemRow(item) }
+                        if items.isEmpty {
+                            Text("Right-click a bot › Move to section").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
+                                .padding(.horizontal, 12).padding(.vertical, 2)
                         }
-                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help("New group")
-                        .padding(.trailing, 10).padding(.top, 10)
                     }
-                    .padding(.top, 8)
-                    ForEach(store.groups) { group in groupSection(group) }
+                    let loose = looseItems
+                    if !loose.groups.isEmpty {
+                        sectionTitle("Group chats")
+                        ForEach(loose.groups, id: \.self) { item in itemRow(item) }
+                    }
+                    if !loose.bots.isEmpty {
+                        sectionTitle("Bots")
+                        ForEach(loose.bots, id: \.self) { item in itemRow(item) }
+                    }
+                    let hidden = store.layout.hidden.filter(itemExists)
+                    if !hidden.isEmpty {
+                        Button { withAnimation(.easeOut(duration: 0.15)) { showsHidden.toggle() } } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: showsHidden ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .bold))
+                                Text("HIDDEN BOTS · \(hidden.count)").font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
+                            }
+                            .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.top, 12)
+                        }
+                        .buttonStyle(.plain)
+                        if showsHidden { ForEach(hidden, id: \.self) { item in itemRow(item).opacity(0.6) } }
+                    }
                 }
                 .padding(.bottom, 8)
             }
             Divider().overlay(Color.white.opacity(0.06))
-            HStack(spacing: 8) {
-                footerButton("New bot", "plus.circle") { addingBot = true }
-                footerButton("New group", "person.2.badge.plus") {
-                    editingGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: [])
+            VStack(spacing: 2) {
+                sidebarRow(.routines, title: "Routines", subtitle: routinesSubtitle) {
+                    iconTile("clock.arrow.circlepath")
                 }
-            }
-            .padding(.horizontal, 8).padding(.top, 8)
-            if showsConnectors {
-                sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
-                    ZStack {
-                        Circle().fill(Color.white.opacity(0.08))
-                        Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                if showsConnectors {
+                    sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
+                        iconTile("point.3.connected.trianglepath.dotted")
                     }
-                    .frame(width: 34, height: 34)
                 }
             }
-            Spacer().frame(height: 10)
+            .padding(.vertical, 6)
         }
-        .padding(.horizontal, 8)
-        .frame(width: 250)
+        .padding(.horizontal, 6)
+        .frame(width: 256)
         .background(DS.Colors.surface1)
         .sheet(item: $editingGroup) { group in
             GroupEditor(store: store, group: group) { saved in
-                if let saved { selection.pane = saved.id == BotGroup.projectID ? .team : (saved.headID != nil ? .group(saved.id) : selection.pane) }
+                if let saved { selection.pane = saved.id == BotGroup.projectID ? .team : .group(saved.id) }
                 editingGroup = nil
             }
         }
@@ -106,55 +144,165 @@ struct BotsRootView: View {
                 addingBot = false
             }
         }
-    }
-
-    private func footerButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol).font(.system(size: 11.5, weight: .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .sheet(item: $detailsBot) { bot in
+            BotDetailsSheet(store: store, botID: bot.id) { detailsBot = nil }
         }
-        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary)
+        .sheet(item: Binding(get: { namingSectionFor.map { NamingRequest(item: $0) } }, set: { if $0 == nil { namingSectionFor = nil } })) { request in
+            VStack(alignment: .leading, spacing: 14) {
+                Text("New section").font(.system(size: 16, weight: .semibold))
+                TextField("Work, Side projects, Daily…", text: $sectionName).textFieldStyle(.roundedBorder).frame(width: 300)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { namingSectionFor = nil }.keyboardShortcut(.cancelAction)
+                    Button("Create") {
+                        if request.item.isEmpty {
+                            store.move("", toSection: nil, newSectionName: sectionName)
+                        } else {
+                            store.move(request.item, toSection: nil, newSectionName: sectionName)
+                        }
+                        namingSectionFor = nil
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(22)
+        }
+        .alert("Delete \(confirmingDelete.map(itemName) ?? "")?", isPresented: Binding(get: { confirmingDelete != nil }, set: { if !$0 { confirmingDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let item = confirmingDelete { delete(item) }
+                confirmingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { confirmingDelete = nil }
+        } message: {
+            Text("Its chat and its routines go too. To keep it working out of sight, hide it instead.")
+        }
     }
 
-    /// A group: its chat (when it has a head), the head, then the members.
-    @ViewBuilder private func groupSection(_ group: BotGroup) -> some View {
-        let members = store.members(of: group)
-        HStack(spacing: 6) {
-            Image(systemName: group.symbol).font(.system(size: 10)).foregroundColor(DS.Colors.textTertiary)
-            Text(group.name).font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+    private struct NamingRequest: Identifiable { let item: String; var id: String { item } }
+
+    private var routinesSubtitle: String {
+        let active = store.routines.filter { !$0.paused }.count
+        return store.routines.isEmpty ? "Scheduled jobs" : "\(active) active · \(store.routines.count - active) paused"
+    }
+
+    private func iconTile(_ symbol: String) -> some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.08))
+            Image(systemName: symbol).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+        }
+        .frame(width: 34, height: 34)
+    }
+
+    // MARK: Items
+
+    private func itemExists(_ item: String) -> Bool {
+        if item == "clicky" { return true }
+        if item.hasPrefix("bot:") { return store.bot(String(item.dropFirst(4))) != nil }
+        if item.hasPrefix("group:") { return store.group(String(item.dropFirst(6)))?.headID != nil }
+        return false
+    }
+
+    private func itemName(_ item: String) -> String {
+        if item == "clicky" { return "Clicky" }
+        if item.hasPrefix("bot:") { return store.bot(String(item.dropFirst(4)))?.name ?? "this bot" }
+        return store.group(String(item.dropFirst(6)))?.name ?? "this group chat"
+    }
+
+    /// Items in no section, not pinned and not hidden.
+    private var looseItems: (groups: [String], bots: [String]) {
+        let placed = Set(store.layout.pinned + store.layout.hidden + store.layout.sections.flatMap(\.items))
+        let groups = store.groups.filter { $0.headID != nil }.map { "group:\($0.id)" }.filter { !placed.contains($0) }
+        let order = BotImport.starters.map(\.id)
+        var bots = store.bots.sorted { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
+            .map { "bot:\($0.id)" }.filter { !placed.contains($0) }
+        if !placed.contains("clicky") { bots.insert("clicky", at: 0) }
+        return (groups, bots)
+    }
+
+    private func pane(for item: String) -> BotsPane {
+        if item == "clicky" { return .clicky }
+        if item.hasPrefix("bot:") { return .bot(String(item.dropFirst(4))) }
+        let id = String(item.dropFirst(6))
+        return id == BotGroup.projectID ? .team : .group(id)
+    }
+
+    @ViewBuilder private func itemRow(_ item: String) -> some View {
+        Group {
+            if item == "clicky" {
+                sidebarRow(.clicky, title: "Clicky", subtitle: "Screen companion") { ClickyAvatar(size: 34) }
+            } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
+                let routineCount = store.routines(for: bot.id).filter { !$0.paused }.count
+                sidebarRow(.bot(bot.id), title: bot.name,
+                           subtitle: (bot.primary ? "CEO · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : ""),
+                           star: bot.primary, unread: store.unread[bot.id] ?? 0) {
+                    BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
+                }
+            } else if let group = store.group(String(item.dropFirst(6))) {
+                let members = store.members(of: group)
+                let busy = members.contains { store.replying[$0.id] != nil }
+                sidebarRow(pane(for: item), title: group.name,
+                           subtitle: busy ? "Working…" : "Led by \(store.head(of: group)?.name ?? "nobody") · \(members.count) bots",
+                           unread: store.unread[group.roomID] ?? 0) {
+                    GroupAvatar(bots: members, size: 34)
+                }
+            }
+        }
+        .contextMenu { itemMenu(item) }
+    }
+
+    @ViewBuilder private func itemMenu(_ item: String) -> some View {
+        Button(store.isPinned(item) ? "Unpin" : "Pin to top") { store.setPinned(!store.isPinned(item), item) }
+        Menu("Move to section") {
+            ForEach(store.layout.sections) { section in
+                Button(section.name) { store.move(item, toSection: section.id) }
+                    .disabled(section.items.contains(item))
+            }
+            if !store.layout.sections.isEmpty { Divider() }
+            Button("New section…") { namingSectionFor = item; sectionName = "" }
+            if store.layout.section(of: item) != nil {
+                Button("Take out of section") { store.move(item, toSection: nil) }
+            }
+        }
+        if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
+            Divider()
+            Button("Details and routines…") { detailsBot = bot }
+        } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
+            Divider()
+            Button("Edit group chat…") { editingGroup = group }
+        }
+        Divider()
+        if store.isHidden(item) {
+            Button("Show in sidebar") { store.setHidden(false, item) }
+        } else if item != "clicky" {
+            Button("Hide from sidebar") { store.setHidden(true, item) }
+        }
+        if canDelete(item) {
+            Button("Delete…", role: .destructive) { confirmingDelete = item }
+        }
+    }
+
+    private func canDelete(_ item: String) -> Bool {
+        if item.hasPrefix("bot:") { return store.bot(String(item.dropFirst(4)))?.primary == false }
+        if item.hasPrefix("group:") { return item != "group:\(BotGroup.projectID)" }
+        return false
+    }
+
+    private func delete(_ item: String) {
+        if selection.pane == pane(for: item) { selection.pane = .team }
+        if item.hasPrefix("bot:") { store.deleteBot(String(item.dropFirst(4))) }
+        if item.hasPrefix("group:") { store.deleteGroup(String(item.dropFirst(6))) }
+    }
+
+    private func sectionHeader(_ section: BotsLayout.Section) -> some View {
+        HStack {
+            Text(section.name.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
             Spacer()
-            Menu {
-                Button("Edit group…") { editingGroup = group }
-                if group.id != BotGroup.projectID {
-                    Button("Delete group", role: .destructive) { store.deleteGroup(group.id) }
-                }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
-        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+        .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
+        .contentShape(Rectangle())
         .contextMenu {
-            Button("Edit group…") { editingGroup = group }
-        }
-        if let head = store.head(of: group) {
-            let pane: BotsPane = group.id == BotGroup.projectID ? .team : .group(group.id)
-            sidebarRow(pane, title: "Group chat",
-                       subtitle: "Led by \(head.name) · \(members.count) bots") {
-                ZStack {
-                    Circle().fill(head.accentColor.opacity(0.2))
-                    Image(systemName: group.symbol).font(.system(size: 13)).foregroundColor(head.accentColor)
-                }
-                .frame(width: 34, height: 34)
-            }
-        }
-        ForEach(members) { bot in
-            botRow(bot, isHead: bot.id == group.headID)
-        }
-        if members.isEmpty {
-            Text("No bots yet. Edit the group to add some.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
-                .padding(.horizontal, 10).padding(.vertical, 4)
+            Button("Delete section (keeps its bots)", role: .destructive) { store.deleteSection(section.id) }
         }
     }
 
@@ -163,44 +311,33 @@ struct BotsRootView: View {
             .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
     }
 
-    private func botRow(_ bot: NativeBot, isHead: Bool = false, subtitleOverride: String? = nil) -> some View {
-        sidebarRow(.bot(bot.id), title: bot.name, subtitle: subtitleOverride ?? bot.modelLabel, badge: isHead ? "Head" : nil) {
-            BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
-        }
-        .contextMenu {
-            if !bot.primary {
-                Button("Remove \(bot.name)", role: .destructive) {
-                    if selection.pane == .bot(bot.id) { selection.pane = .team }
-                    store.deleteBot(bot.id)
-                }
-            }
-        }
-    }
-
-    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, badge: String? = nil,
+    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, star: Bool = false, unread: Int = 0,
                                         @ViewBuilder icon: () -> Icon) -> some View {
         Button { selection.pane = pane } label: {
             HStack(spacing: 10) {
                 icon()
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                        if let badge {
-                            Text(badge).font(.system(size: 9.5, weight: .bold)).foregroundColor(DS.Colors.accentText)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(DS.Colors.accent.opacity(0.18)))
+                    HStack(spacing: 5) {
+                        Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        if star {
+                            // Grok marks the Primary Bot with a star.
+                            Image(systemName: "star.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.warning)
                         }
                     }
                     Text(subtitle).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                if unread > 0 {
+                    Text("\(unread)").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(DS.Colors.accent))
+                }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 10).fill(selection.pane == pane ? Color.white.opacity(0.09) : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
     }
 
     @ViewBuilder private var detail: some View {
@@ -219,6 +356,8 @@ struct BotsRootView: View {
             }
         case .connectors:
             ConnectorsScreen(bots: store.bots)
+        case .routines:
+            RoutinesScreen(store: store)
         }
     }
 }
@@ -236,6 +375,8 @@ struct BotChatScreen: View {
     /// Replies that were there when the chat opened show at once; new ones type in.
     @State private var settledIDs: Set<String> = []
     @State private var showsModelSettings = false
+    @State private var showsDetails = false
+    @State private var editsGroup = false
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
@@ -259,6 +400,8 @@ struct BotChatScreen: View {
                         ForEach(record.messages) { message in
                             if message.author == "user" {
                                 UserBubble(text: message.text)
+                            } else if message.author == "routine" {
+                                RoutineMarker(text: message.text, at: message.at)
                             } else if let author = store.bot(message.author) {
                                 BotLine(bot: author, text: message.text, showsName: bot == nil,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
@@ -293,7 +436,9 @@ struct BotChatScreen: View {
                 }
                 .onChange(of: record.messages.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) } }
                 .onChange(of: inProgress.map(\.1.count).reduce(0, +)) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                .onDisappear { if store.viewing == conversationID { store.viewing = nil } }
                 .onAppear {
+                    store.viewing = conversationID
                     settledIDs = Set(record.messages.map(\.id))
                     proxy.scrollTo("end", anchor: .bottom)
                 }
@@ -307,7 +452,15 @@ struct BotChatScreen: View {
             if let bot {
                 BotAvatar(bot: bot, size: 28, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    // Like Grok: the bot's name opens its details (instructions, apps, routines).
+                    Button { showsDetails = true } label: {
+                        HStack(spacing: 4) {
+                            Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundColor(DS.Colors.textTertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showsDetails) { BotDetailsSheet(store: store, botID: bot.id) { showsDetails = false } }
                     Text("\(["claude": "Claude", "grok": "Grok"][bot.provider] ?? "OpenCode") · \(bot.modelLabel)\(bot.effort.map { " · \($0)" } ?? "")")
                         .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 }
@@ -316,7 +469,16 @@ struct BotChatScreen: View {
                     ForEach(groupBots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(isProjectRoom ? "Project room" : "\(group?.name ?? "Group") chat").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Button { editsGroup = true } label: {
+                        HStack(spacing: 4) {
+                            Text(group?.name ?? "Group chat").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundColor(DS.Colors.textTertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $editsGroup) {
+                        if let group { GroupEditor(store: store, group: group) { _ in editsGroup = false } }
+                    }
                     Text(isProjectRoom ? "Theo (CEO) and the project team turn your idea into a prompt for T3 Code"
                                        : "\(group.flatMap { store.head(of: $0) }?.name ?? "The head") leads; tag anyone with @Name")
                         .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
@@ -535,11 +697,18 @@ struct BotAvatar: View {
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(RadialGradient(colors: [bot.accentColor, bot.bodyColor, bot.bodyColor.opacity(0.7)],
-                                     center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: size * 0.6))
-                .frame(width: size * 0.66, height: size * 0.66)
-                .shadow(color: bot.accentColor.opacity(state == .idle ? 0.25 : 0.7), radius: state == .idle ? 3 : size * 0.18)
+            let fill = RadialGradient(colors: [bot.accentColor, bot.bodyColor, bot.bodyColor.opacity(0.7)],
+                                      center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: size * 0.6)
+            Group {
+                if let symbol = bot.shapeSymbol {
+                    // The shape picked for the bot (square, sparkle, clover, flower, heart, star).
+                    Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(fill)
+                        .frame(width: size * 0.72, height: size * 0.72)
+                } else {
+                    Circle().fill(fill).frame(width: size * 0.66, height: size * 0.66)
+                }
+            }
+            .shadow(color: bot.accentColor.opacity(state == .idle ? 0.25 : 0.7), radius: state == .idle ? 3 : size * 0.18)
             HStack(spacing: size * 0.1) {
                 Capsule().fill(Color.black.opacity(0.75)).frame(width: size * 0.07, height: size * (state == .thinking && phase ? 0.05 : 0.12))
                 Capsule().fill(Color.black.opacity(0.75)).frame(width: size * 0.07, height: size * (state == .thinking && phase ? 0.05 : 0.12))

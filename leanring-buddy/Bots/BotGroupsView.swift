@@ -22,6 +22,8 @@ struct GroupEditor: View {
     private static let symbols = ["person.2.fill", "person.3.fill", "briefcase.fill", "hammer.fill", "paintpalette.fill",
                                   "film.fill", "magnifyingglass", "envelope.fill", "chart.bar.fill", "sparkles"]
     private var isNew: Bool { group.id.isEmpty }
+    /// Like Grok's group chats: two to six bots, the head included.
+    private var sizeFits: Bool { (2...6).contains(group.allIDs.count) && group.headID != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -46,7 +48,7 @@ struct GroupEditor: View {
             VStack(alignment: .leading, spacing: 6) {
                 label("Head")
                 Picker("Head", selection: Binding(get: { group.headID ?? "" }, set: { group.headID = $0.isEmpty ? nil : $0 })) {
-                    Text("No head (just a list)").tag("")
+                    Text("Pick a head").tag("")
                     ForEach(store.bots) { bot in Text(bot.name).tag(bot.id) }
                 }
                 .labelsHidden()
@@ -72,6 +74,8 @@ struct GroupEditor: View {
                     }
                 }
                 .frame(maxHeight: 220)
+                Text(sizeFits ? "\(group.allIDs.count) bots" : "Pick a head and 1 to 5 other bots (2 to 6 in all).")
+                    .font(.system(size: 11)).foregroundColor(sizeFits ? .secondary : .orange)
             }
             HStack {
                 if !isNew && group.id != BotGroup.projectID {
@@ -95,7 +99,7 @@ struct GroupEditor: View {
                     onDone(saved)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(group.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(group.name.trimmingCharacters(in: .whitespaces).isEmpty || !sizeFits)
             }
         }
         .padding(22)
@@ -116,7 +120,9 @@ struct NewBotSheet: View {
     @State private var role = ""
     @State private var instructions = ""
     @State private var provider = "opencode"
-    @State private var groupID = BotGroup.personalID
+    @State private var groupID = ""
+    @State private var look = NativeBot(id: "new", name: "", description: "", instructions: "", hue: 205, accentHue: 235,
+                                        primary: false, provider: "opencode", model: "", effort: nil, apps: [], category: nil, shape: "orb")
 
     private static let models = ["claude": "claude-sonnet-5-5", "opencode": "opencode/deepseek-v4.1-flash-free", "grok": "grok-4.6"]
 
@@ -124,6 +130,7 @@ struct NewBotSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New bot").font(.system(size: 17, weight: .semibold))
             field("Name") { TextField("Travel Planner, SEO Writer…", text: $name).textFieldStyle(.roundedBorder) }
+            field("Look") { BotLookPicker(bot: $look) }
             field("What it does") { TextField("One line, shown under its name", text: $role).textFieldStyle(.roundedBorder) }
             field("Instructions") {
                 TextEditor(text: $instructions)
@@ -139,9 +146,9 @@ struct NewBotSheet: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }
-            field("Group") {
-                Picker("Group", selection: $groupID) {
-                    Text("No group").tag("")
+            field("Group chat") {
+                Picker("Group chat", selection: $groupID) {
+                    Text("None").tag("")
                     ForEach(store.groups) { group in Text(group.name).tag(group.id) }
                 }
                 .labelsHidden()
@@ -153,12 +160,16 @@ struct NewBotSheet: View {
                 Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction)
                 Button("Create bot") {
                     let trimmedName = name.trimmingCharacters(in: .whitespaces)
-                    let bot = store.addBot(
+                    var bot = store.addBot(
                         name: trimmedName,
                         description: role.isEmpty ? "Your \(trimmedName) bot." : role,
                         instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
                         provider: provider, model: Self.models[provider] ?? "claude-sonnet-5-5",
                         groupID: groupID.isEmpty ? nil : groupID)
+                    bot.shape = look.shape
+                    bot.hue = look.hue
+                    bot.accentHue = look.accentHue
+                    store.save(bot)
                     onDone(bot)
                 }
                 .keyboardShortcut(.defaultAction)
