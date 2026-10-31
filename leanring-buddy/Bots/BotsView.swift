@@ -153,8 +153,10 @@ struct BotChatScreen: View {
                                     T3ResultCard(run: run).padding(.leading, 46)
                                 }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
+                                    let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     T3HandoffButton(text: message.text, prominent: true,
-                                                    alreadySent: store.t3Runs.contains { $0.title == BotsT3.projectTitle(in: message.text, prompt: prompt) })
+                                                    alreadySent: store.t3Runs.contains { $0.title == title }
+                                                        || record.messages.contains { $0.text.hasPrefix("Submitted to T3 Code: **\(title)**") })
                                 }
                             }
                         }
@@ -546,7 +548,7 @@ struct ConnectorsScreen: View {
                     HStack(spacing: 6) {
                         Text("Claude").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
                         badge(status(claude, connector.claudeServer), status(claude, connector.claudeServer))
-                        if status(claude, connector.claudeServer) != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true {
+                        if !checking && status(claude, connector.claudeServer) != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true {
                             Button("Connect") { BotConnectors.openClaudeConnectors() }.buttonStyle(.borderless).font(.system(size: 11))
                         }
                     }
@@ -559,7 +561,7 @@ struct ConnectorsScreen: View {
                         } else {
                             badge(status(openCode, connector.openCodeServer), status(openCode, connector.openCodeServer))
                         }
-                        if !BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected && connector.openCodeURL != nil {
+                        if !checking && !BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected && connector.openCodeURL != nil {
                             Button(working == connector.id ? "Signing in…" : "Connect") {
                                 working = connector.id
                                 Task {
@@ -705,7 +707,7 @@ struct BotModelSettings: View {
             row("Engine") {
                 Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
                     bot.provider = provider
-                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/big-pickle"
+                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/deepseek-v4.1-flash-free"
                     bot.effort = nil
                     commit()
                 })) {

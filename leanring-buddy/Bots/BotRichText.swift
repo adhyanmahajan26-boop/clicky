@@ -24,6 +24,7 @@ enum BotBlocks {
         var paragraph: [String] = []
         var code: [String]?
         var language = ""
+        var depth = 0
 
         func flushParagraph() {
             let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,10 +35,12 @@ enum BotBlocks {
         for rawLine in text.components(separatedBy: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if var open = code {
-                if line.hasPrefix("```") {
+                if line == "```" && depth == 0 {
                     blocks.append(.code(open.joined(separator: "\n"), language: language))
                     code = nil
                 } else {
+                    // Fences inside the block (a prompt quoting code) stay part of it.
+                    if line == "```" { depth -= 1 } else if line.hasPrefix("```") { depth += 1 }
                     open.append(rawLine)
                     code = open
                 }
@@ -105,6 +108,12 @@ struct BotCodeCard: View {
     let code: String
     let language: String
     @State private var copied = false
+    @State private var expanded = false
+
+    private var isProse: Bool { language == "prompt" || language == "followup" }
+    private var lines: [Substring] { code.split(separator: "\n", omittingEmptySubsequences: false) }
+    private var isLong: Bool { lines.count > 14 }
+    private var preview: String { lines.prefix(10).joined(separator: "\n") + "\n…" }
 
     private var label: String {
         switch language.lowercased() {
@@ -136,14 +145,28 @@ struct BotCodeCard: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(Color.white.opacity(0.04))
             Divider().overlay(Color.white.opacity(0.06))
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(size: language == "prompt" || language == "followup" ? 13 : 12.5,
-                                  design: language == "prompt" || language == "followup" ? .default : .monospaced))
-                    .foregroundColor(DS.Colors.textPrimary)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: language != "prompt" && language != "followup", vertical: false)
+            if isProse {
+                // A prompt wraps like text, and a long one folds to its opening lines until opened.
+                Text(expanded || !isLong ? code : preview)
+                    .font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary).lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
+                if isLong {
+                    Button(expanded ? "Show less" : "Show the whole prompt (\(lines.count) lines)") {
+                        withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() }
+                    }
+                    .buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundColor(DS.Colors.accentText)
+                    .padding(.horizontal, 12).padding(.bottom, 10)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(code)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundColor(DS.Colors.textPrimary)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(12)
+                }
             }
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.28)))

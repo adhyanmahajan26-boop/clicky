@@ -27,6 +27,15 @@ enum BotRunnerError: LocalizedError {
     }
 }
 
+/// Claude sessions of the Haiku stand-in, by bot and OpenCode session (kept while Theo runs).
+final class FallbackSessions: @unchecked Sendable {
+    static let shared = FallbackSessions()
+    private let lock = NSLock()
+    private var sessions: [String: String] = [:]
+    func get(_ key: String) -> String? { lock.withLock { sessions[key] } }
+    func set(_ key: String, _ value: String) { lock.withLock { sessions[key] = value } }
+}
+
 /// The engine process behind each bot's reply in progress, so a reply can be stopped.
 final class BotProcesses: @unchecked Sendable {
     static let shared = BotProcesses()
@@ -47,7 +56,7 @@ final class BotProcesses: @unchecked Sendable {
 
 enum BotRunner {
     /// The longest one bot turn may take.
-    static let turnLimitSeconds: Double = 300
+    static let turnLimitSeconds: Double = 420
 
     /// Where bots run: the folder that holds their memory files (~/.t3/bots), so reading and keeping
     /// memory never needs a permission nobody is there to give.
@@ -57,12 +66,22 @@ enum BotRunner {
         return folder
     }
 
+    /// Theo's MCP tools a bot may use on its own.
+    static let theoBotTools = ["claudia_research", "claudia_app", "claudia_attachments", "claudia_status"]
+
     /// The Claude tools a bot may use without asking: reading and the web, its memory file, and the
     /// connectors of its own apps.
     static func claudeAllowedTools(for bot: NativeBot) -> [String] {
         let memoryFolder = "~/.t3/bots/\(bot.id)/**"
         var tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
-        tools += BotConnectors.known.filter { bot.apps.contains($0.id) }.compactMap(\.claudeToolPrefix)
+        for connector in BotConnectors.known where bot.apps.contains(connector.id) {
+            if connector.id == "theo" {
+                // Research, notes and the app bridge; never the screen or Theo's voice, with nobody watching.
+                tools += theoBotTools.map { "mcp__plugin_theo_theo__\($0)" }
+            } else if let prefix = connector.claudeToolPrefix {
+                tools.append(prefix)
+            }
+        }
         return tools
     }
 
@@ -84,8 +103,18 @@ enum BotRunner {
             standIn.provider = "claude"
             standIn.model = fallbackModel
             standIn.effort = nil
-            let fullPrompt = BotPrompts.persona(bot: bot, team: team) + "\n\n---\n\n" + prompt
-            let result = try await runOnEngine(bot: standIn, prompt: fullPrompt, session: nil, team: team, onText: onText)
+            standIn.thinking = nil
+            standIn.fast = nil
+            // Claude gets the persona as its system prompt; drop the copy an OpenCode first message carries.
+            var claudePrompt = prompt
+            if let range = prompt.range(of: "\n\n---\n\n"), prompt.hasPrefix(bot.instructions) {
+                claudePrompt = String(prompt[range.upperBound...])
+            }
+            // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
+            let key = "\(bot.id)#\(session ?? "new")"
+            let standInSession = FallbackSessions.shared.get(key)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, onText: onText)
+            if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
             return (result.text + "\n\n_(OpenCode's free models hit their usage limit, so this reply came from Claude Haiku.)_", session)
         }
     }
@@ -216,14 +245,14 @@ extension BotRunner {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// Writes ~/.t3/bots/.grok/config.toml with Theo's MCP server, once.
+    /// Adds Theo's MCP server to Grok's own config (~/.grok/config.toml), once. A project config isn't
+    /// enough: Grok only loads a folder's servers once that folder is trusted, which needs a person.
     static func ensureGrokTheoServer() {
-        let config = workspace.appendingPathComponent(".grok/config.toml")
-        guard !FileManager.default.fileExists(atPath: config.path),
-              let executable = Bundle.main.executableURL?.path else { return }
-        try? FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? "[mcp_servers.theo]\ncommand = \"\(executable)\"\nargs = [\"--mcp\"]\nenabled = true\n"
-            .write(to: config, atomically: true, encoding: .utf8)
+        let config = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/config.toml")
+        let current = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
+        guard !current.contains("[mcp_servers.theo]"), let executable = Bundle.main.executableURL?.path else { return }
+        let entry = "\n[mcp_servers.theo]\ncommand = \"\(executable)\"\nargs = [\"--mcp\"]\nenabled = true\n"
+        try? (current + entry).write(to: config, atomically: true, encoding: .utf8)
     }
 
     /// Grok may read and search the web, nothing else, since nobody is there to approve more.
@@ -238,7 +267,7 @@ extension BotRunner {
         if !bot.apps.isEmpty {
             // Theo's MCP server (apps through claudia_app, research, screen) in the bots folder's Grok config.
             ensureGrokTheoServer()
-            arguments += ["--allow", "mcp__theo__claudia_app", "--allow", "mcp__theo__claudia_research"]
+            arguments += theoBotTools.flatMap { ["--allow", "mcp__theo__\($0)"] }
         }
         if let session { arguments += ["--resume", session] }
         let data: Data = try await Task.detached {
@@ -252,7 +281,12 @@ extension BotRunner {
             process.environment = environment
             let output = Pipe()
             process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
+            let errorLog = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clicky/bots-grok.log")
+            if !FileManager.default.fileExists(atPath: errorLog.path) { FileManager.default.createFile(atPath: errorLog.path, contents: nil) }
+            let errorHandle = try? FileHandle(forWritingTo: errorLog)
+            errorHandle?.seekToEndOfFile()
+            process.standardError = errorHandle ?? FileHandle.nullDevice
+            defer { try? errorHandle?.close() }
             process.standardInput = FileHandle.nullDevice
             try process.run()
             BotProcesses.shared.set(bot.id, process)

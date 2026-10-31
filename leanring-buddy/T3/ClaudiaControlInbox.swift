@@ -94,6 +94,20 @@ final class ClaudiaControlInbox {
         let identifier = "cmd-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
         switch commandName {
+        case "botSay":
+            // A message to a bot's chat ("team" for the Project room), as if typed in Theo.
+            let botID = command["bot"] as? String ?? BotsStore.teamID
+            let text = command["text"] as? String ?? ""
+            guard !text.isEmpty else { reply(identifier, ok: false, result: nil, error: "No text."); return }
+            if botID == BotsStore.teamID { BotsStore.shared.sendToTeam(text) } else { BotsStore.shared.send(text, to: botID) }
+            reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "botsState":
+            let store = BotsStore.shared
+            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder,
+                                           "branch": $0.branch ?? NSNull(), "pullRequest": $0.pullRequest ?? NSNull()] as [String: Any] }
+            reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "runs": runs,
+                                                 "bots": store.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model] }],
+                  error: nil)
         case "status":
             reply(identifier, ok: true, result: [
                 "brain": companionManager.selectedModel,

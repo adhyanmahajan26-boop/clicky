@@ -42,10 +42,20 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var modelLabel: String { Self.label(for: model) }
 
     static func label(for model: String) -> String {
-        let name = model.split(separator: "/").last.map(String.init) ?? model
+        var name = model.split(separator: "/").last.map(String.init) ?? model
+        let free = name.hasSuffix("-free")
+        if free { name = String(name.dropLast("-free".count)) }
         // "claude-sonnet-5-5" reads "Claude Sonnet 5.5".
         let versioned = name.replacingOccurrences(of: #"-(\d+)-(\d+)$"#, with: " $1.$2", options: .regularExpression)
-        return versioned.replacingOccurrences(of: "-", with: " ").capitalized
+        let brands = ["glm": "GLM", "deepseek": "DeepSeek", "gpt": "GPT", "mimo": "MiMo", "opencode": "OpenCode"]
+        let words = versioned.split(separator: "-").flatMap { $0.split(separator: " ") }.map { word -> String in
+            let lower = word.lowercased()
+            if let brand = brands[lower] { return brand }
+            if lower.range(of: #"^\d+b$"#, options: .regularExpression) != nil { return lower.uppercased() }
+            if lower.first == "v", lower.dropFirst().first?.isNumber == true { return "V" + lower.dropFirst() }
+            return word.prefix(1).uppercased() + word.dropFirst()
+        }
+        return words.joined(separator: " ") + (free ? " · free" : "")
     }
 }
 
@@ -102,8 +112,18 @@ final class BotsStore: ObservableObject {
     func conversation(_ id: String) -> BotConversationRecord { conversations[id] ?? BotConversationRecord() }
 
     func save(_ bot: NativeBot) {
+        let old = self.bot(bot.id)
         if let index = bots.firstIndex(where: { $0.id == bot.id }) { bots[index] = bot } else { bots.append(bot) }
         writeBots()
+        if let old, old.provider != bot.provider {
+            // A session belongs to one engine: the new engine starts the conversation fresh (the messages stay).
+            for id in [bot.id, Self.teamID] {
+                var record = conversation(id)
+                guard record.sessions.removeValue(forKey: bot.id) != nil else { continue }
+                conversations[id] = record
+                writeConversation(id)
+            }
+        }
     }
 
     /// Starts a fresh chat with a bot (its engine session starts over too).
@@ -207,6 +227,11 @@ final class BotsStore: ObservableObject {
                 answer = nil
                 if self?.stopped.contains(bot.id) != true {
                     self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)"), to: conversationID)
+                    if conversationID == Self.teamID, var record = self?.conversation(conversationID) {
+                        // Its own error isn't news to the bot next time.
+                        record.seen[bot.id] = record.messages.count
+                        self?.conversations[conversationID] = record
+                    }
                 }
             }
             guard let self else { return }
@@ -251,7 +276,8 @@ final class BotsStore: ObservableObject {
             return
         }
         guard let prompt = BotsT3.promptBlock(in: answer) else { return }
-        let wantsBuild = ["build", "submit", "send", "make", "t3", " pr", "pull request", "fix"].contains { pitch.text.lowercased().contains($0) }
+        let wantsBuild = pitch.text.range(of: #"\b(build|submit|send|make|code|t3|pr|pull request|fix|ship)\b"#,
+                                          options: [.regularExpression, .caseInsensitive]) != nil
         guard wantsBuild else { return }
         submittedPitches.insert(pitch.id)
         submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt),
@@ -577,8 +603,12 @@ enum BotPrompts {
                              ". Mention one with @Name in the team chat to bring them in.")
             }
         }
-        parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
-                     "learn a lasting preference or fact. Don't store secrets.")
+        if bot.provider == "grok" {
+            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
+        } else {
+            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
+                         "learn a lasting preference or fact. Don't store secrets.")
+        }
         return parts.joined(separator: "\n\n")
     }
 
@@ -594,7 +624,9 @@ enum BotPrompts {
         let transcript = newMessages.map { "\(nameOf($0.author)): \($0.text)" }.joined(separator: "\n")
         var parts: [String] = []
         if firstTime {
-            parts.append("You are \(bot.name) in Addy's bots group chat. \(bot.instructions)")
+            // Claude has the persona as its system prompt already; other engines get it here.
+            parts.append("You are \(bot.name) in Addy's bots group chat. " +
+                         (bot.provider == "claude" ? bot.instructions : persona(bot: bot, team: team)))
             parts.append("The others here: " + team.filter { $0.id != bot.id }.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
             parts.append("Reply with only your chat message, in your own voice and role, usually 1-4 sentences, without " +
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +

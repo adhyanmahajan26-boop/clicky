@@ -82,12 +82,24 @@ enum BotsT3 {
     /// A ```followup block: Theo passing a change for an earlier run to its agent.
     static func followupBlock(in text: String) -> String? { fenced("followup", in: text) }
 
+    /// The body of a ```tag block. It ends at a line that is only a fence with no language, so a prompt
+    /// that carries its own ```swift samples isn't cut short at the first of them.
     private static func fenced(_ tag: String, in text: String) -> String? {
         guard let start = text.range(of: "```\(tag)") else { return nil }
-        let rest = text[start.upperBound...]
-        guard let end = rest.range(of: "```") else { return nil }
-        let body = rest[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-        return body.isEmpty ? nil : body
+        var depth = 0
+        var body: [Substring] = []
+        for line in text[start.upperBound...].split(separator: "\n", omittingEmptySubsequences: false).dropFirst() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "```" {
+                if depth == 0 { break }
+                depth -= 1
+            } else if trimmed.hasPrefix("```") {
+                depth += 1
+            }
+            body.append(line)
+        }
+        let joined = body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
     }
 
     /// "Project: Name" on its own line, else the prompt's first words.
