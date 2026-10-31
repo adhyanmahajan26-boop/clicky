@@ -77,6 +77,7 @@ enum BotRunner {
         process.currentDirectoryURL = workspace
         var environment = ProcessInfo.processInfo.environment
         environment["NO_COLOR"] = "1"
+        environment["PWD"] = workspace.path
         process.environment = environment
         let output = Pipe()
         process.standardOutput = output

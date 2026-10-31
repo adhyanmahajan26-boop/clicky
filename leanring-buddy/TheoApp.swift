@@ -60,6 +60,13 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests { return }
+        // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
+        // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
+        // a privacy prompt in Theo's name, so they always start from home instead.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        FileManager.default.changeCurrentDirectoryPath(home)
+        setenv("PWD", home, 1)
+        unsetenv("OLDPWD")
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         print("✨ Theo \(version) starting")
 
