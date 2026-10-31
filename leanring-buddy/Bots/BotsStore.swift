@@ -127,6 +127,7 @@ final class BotsStore: ObservableObject {
     private init() {
         folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Theo/Bots", isDirectory: true)
+        Self.archiveForFreshStart(folder)
         try? FileManager.default.createDirectory(at: folder.appendingPathComponent("chats"), withIntermediateDirectories: true)
         bots = loadBots()
         groups = loadGroups()
@@ -142,6 +143,18 @@ final class BotsStore: ObservableObject {
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
+
+    /// Once, on the first launch of this version: the old bots, chats and groups move to
+    /// Bots-archive-<date> and Theo starts fresh with only Theo and Clicky, for Addy to set up.
+    private static func archiveForFreshStart(_ folder: URL) {
+        let key = "v3.bots.freshStart"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("bots.json").path) else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let archive = folder.deletingLastPathComponent().appendingPathComponent("Bots-archive-\(stamp)")
+        try? FileManager.default.moveItem(at: folder, to: archive)
+    }
 
     func group(_ id: String) -> BotGroup? { groups.first { $0.id == id } }
     /// The group whose chat this conversation is.
@@ -164,7 +177,6 @@ final class BotsStore: ObservableObject {
 
     /// Removes a group; its bots stay. The project group (the Project room) can't be removed.
     func deleteGroup(_ id: String) {
-        guard id != BotGroup.projectID else { return }
         groups.removeAll { $0.id == id }
         writeGroups()
         forget(item: "group:\(id)")
@@ -238,6 +250,12 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[botID] = record
         writeConversation(botID)
+        if bot.primary && text.lowercased().contains("@t3") {
+            // Theo's own chat hands a change straight to the coding agent of its latest run.
+            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines), room: botID)
+            return
+        }
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
@@ -245,7 +263,10 @@ final class BotsStore: ObservableObject {
     }
 
     /// Posts to the Project room.
-    func sendToTeam(_ text: String) { sendToGroup(text, groupID: BotGroup.projectID) }
+    func sendToTeam(_ text: String) {
+        if group(BotGroup.projectID)?.headID != nil { sendToGroup(text, groupID: BotGroup.projectID) }
+        else if let primary { send(text, to: primary.id) }
+    }
 
     /// Posts to a group chat; tagged bots answer, or the head when nobody is tagged.
     func sendToGroup(_ text: String, groupID: String) {
@@ -364,7 +385,9 @@ final class BotsStore: ObservableObject {
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
-            if let answer, self.group(forRoom: conversationID)?.headID == bot.id { self.submitIfFinal(answer, room: conversationID) }
+            if let answer, self.group(forRoom: conversationID)?.headID == bot.id || (bot.primary && conversationID == bot.id) {
+                self.submitIfFinal(answer, room: conversationID)
+            }
             if let answer, let request = Self.routineRequest(in: answer) {
                 let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
                 self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
@@ -543,7 +566,7 @@ final class BotsStore: ObservableObject {
 
     private func loadBots() -> [NativeBot] {
         let saved = (try? Data(contentsOf: botsFile)).flatMap { try? Self.decoder.decode([NativeBot].self, from: $0) }
-        let base = (saved?.isEmpty == false ? saved : nil) ?? BotImport.fromT3() ?? []
+        let base = (saved?.isEmpty == false ? saved : nil) ?? []
         let offeredFile = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: offeredFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
         let upgraded = BotImport.upgrade(base, offered: &offered)
@@ -553,35 +576,13 @@ final class BotsStore: ObservableObject {
         return upgraded
     }
 
-    var personalBots: [NativeBot] { bots.filter { !$0.isProjectHandler } }
-    /// The Project room's bots, Theo first.
-    var projectBots: [NativeBot] { group(BotGroup.projectID).map { members(of: $0) } ?? bots.filter(\.isProjectHandler) }
 
     private var groupsFile: URL { folder.appendingPathComponent("groups.json") }
 
-    /// Saved groups, or (first run) the Project room led by Theo and the Personal bots, from each bot's category.
+    /// Saved group chats; a fresh setup has none until Addy makes them.
     private func loadGroups() -> [BotGroup] {
-        if let data = try? Data(contentsOf: groupsFile), let saved = try? Self.decoder.decode([BotGroup].self, from: data),
-           saved.contains(where: { $0.id == BotGroup.projectID }) {
-            // Bots that are in no group yet (an upgrade added them) join their category's group.
-            var groups = saved
-            let grouped = Set(groups.flatMap(\.allIDs))
-            for bot in bots where !grouped.contains(bot.id) && !bot.primary {
-                let target = bot.isProjectHandler ? BotGroup.projectID : BotGroup.personalID
-                if let index = groups.firstIndex(where: { $0.id == target }) { groups[index].memberIDs.append(bot.id) }
-            }
-            return groups
-        }
-        let head = primary?.id
-        // The starter roles keep their usual order (planner first); bots of your own follow.
-        let order = BotImport.starters.map(\.id)
-        let bots = self.bots.sorted { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
-        return [
-            BotGroup(id: BotGroup.projectID, name: "Project room", symbol: "person.3.fill", headID: head,
-                     memberIDs: bots.filter { $0.isProjectHandler && $0.id != head }.map(\.id)),
-            BotGroup(id: BotGroup.personalID, name: "Personal", symbol: "person.crop.circle", headID: nil,
-                     memberIDs: bots.filter { !$0.isProjectHandler && $0.id != head }.map(\.id)),
-        ]
+        guard let data = try? Data(contentsOf: groupsFile), let saved = try? Self.decoder.decode([BotGroup].self, from: data) else { return [] }
+        return saved.filter { $0.headID == nil || bot($0.headID!) != nil }
     }
 
     private func writeGroups() {
@@ -604,133 +605,48 @@ final class BotsStore: ObservableObject {
     }
 }
 
-/// Bringing over the bots set up in T3 Code (the Cursor Assistant build keeps them in its state folder).
+/// The bot a fresh setup starts with, and fixes for bots saved by older versions.
 enum BotImport {
-    static func fromT3() -> [NativeBot]? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidates = [".t3-claudia/userdata/bots-state.json", ".t3/userdata/bots-state.json"].map { home.appendingPathComponent($0) }
-        for file in candidates {
-            guard let data = try? Data(contentsOf: file),
-                  let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let raw = state["t3code:bots:v1"] as? String,
-                  let list = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]] else { continue }
-            let bots = list.compactMap(bot(from:))
-            if !bots.isEmpty { return bots }
-        }
-        return nil
-    }
-
-    static func bot(from raw: [String: Any]) -> NativeBot? {
-        // Clicky's chat is Theo itself here, not a bot.
-        if raw["companion"] as? Bool == true || raw["tracksAssistant"] as? Bool == true { return nil }
-        guard let id = raw["id"] as? String, let name = raw["name"] as? String else { return nil }
-        let driver = (raw["driver"] as? String) ?? (raw["instanceId"] as? String) ?? ""
-        let provider = driver.lowercased().contains("claude") ? "claude" : "opencode"
-        let starter = starters.first { $0.id == id }
-        let model = (raw["model"] as? String) ?? starter?.model ?? "opencode/beam-free"
-        let options = raw["modelOptions"] as? [[String: Any]] ?? []
-        let effort = options.first { ($0["id"] as? String) == "reasoningEffort" }?["value"] as? String
-        let look = raw["look"] as? [String: Any]
-        let hue = (raw["hue"] as? Double) ?? Double(raw["hue"] as? Int ?? 260)
-        return NativeBot(
-            id: id, name: name,
-            description: raw["description"] as? String ?? "",
-            instructions: raw["instructions"] as? String ?? "",
-            hue: hue,
-            accentHue: (look?["accentHue"] as? Double) ?? Double(look?["accentHue"] as? Int ?? Int(hue + 40)),
-            primary: raw["primary"] as? Bool ?? false,
-            provider: model.hasPrefix("claude") ? "claude" : provider,
-            model: model, effort: effort,
-            apps: raw["apps"] as? [String] ?? starter?.apps ?? [])
-    }
-
     static func defaultCategory(_ id: String) -> String {
         ["gmail-reader", "researcher"].contains(id) ? "personal" : "project"
     }
 
-    static let ceoInstructions =
-        "You are Theo, the CEO of Addy's project team: Project Manager, Design Critic, Code Improver and Reel " +
-        "Editor work under you. When Addy pitches an idea in the Project room: first have Clicky study it on the " +
-        "web with the claudia_research tool (one call with a focused question; Clicky reads three sources), then " +
-        "post a short summary of what it found, with the sources, and hand it to @Project Manager only. The " +
-        "Project Manager plans it and gives the parts to the team. When the team has answered, settle any " +
-        "disagreement yourself and merge it all into one final prompt for T3 Code's coding agent right away, " +
-        "with no second round of questions: a line \"Project: <short name>\" and then the prompt inside a " +
-        "```prompt fenced block. If Addy names an existing project folder, add a line \"Repo: <its path>\" so the " +
-        "work goes on a new branch of it with a pull request. Write the final prompt once. T3 Code then builds it " +
-        "and you post its report here. When Addy later asks for a change to what was built, don't start a new " +
-        "round: put the change for the coding agent in a ```followup fenced block. Keep everything else short."
+    /// Theo, the primary bot: Addy's own helper, the head of any group chat Addy makes him head of, and the
+    /// one who hands builds to T3 Code.
+    static let primaryInstructions =
+        "You are Theo, Addy's primary bot. Help directly with anything Addy asks. When Addy asks to build, code " +
+        "or fix something, plan it briefly, then write one final prompt for T3 Code's coding agent: a line " +
+        "\"Project: <short name>\" and the prompt inside a ```prompt fenced block (add \"Repo: <path>\" when Addy " +
+        "names an existing project folder, so it goes on a new branch with a pull request). T3 Code then builds it " +
+        "and you post its report. For a change to something already built, put it in a ```followup fenced block. " +
+        "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
-    static let projectManagerInstructions =
-        "You are the Project Manager on Theo's team. When Theo hands you an idea and Clicky's research in the " +
-        "Project room, write a short, ordered plan (scope, milestones, what is left out, risks) and give the work " +
-        "to the team in the same message: one specific question for @Design Critic about the experience and one " +
-        "for @Code Improver about the technical approach. Don't tag Theo; he reads the team's answers. Keep it tight."
-
-    /// The bots everyone starts with: Theo on Claude Sonnet, the rest on free OpenCode models.
+    /// A fresh setup starts with Theo alone; Addy adds every other bot.
     static let starters: [NativeBot] = [
-        NativeBot(id: "theo", name: "Theo", description: "CEO of your project team. Leads, delegates and writes the final prompt.",
-                  instructions: ceoInstructions,
+        NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to T3 Code.",
+                  instructions: primaryInstructions,
                   hue: 268, accentHue: 300, primary: true, provider: "claude", model: "claude-sonnet-5-5", effort: nil,
                   apps: ["theo"], category: "project"),
-        NativeBot(id: "project-manager", name: "Project Manager", description: "Turns an idea into a clear, ordered plan with scope and risks.",
-                  instructions: "You are the Project Manager on Theo's team. Break the idea into a short, ordered plan: scope, milestones, " +
-                    "what to build first, risks and open questions. Push back on scope creep. End by tagging @Theo with the plan in a few lines.",
-                  hue: 150, accentHue: 120, primary: false, provider: "opencode", model: "opencode/glm-5.3-flash-free", effort: nil,
-                  apps: ["notion"], category: "project"),
-        NativeBot(id: "design-critic", name: "Design Critic", description: "Critiques the experience and UI before anything gets built.",
-                  instructions: "You are the Design Critic on Theo's team. Critique the user experience and interface honestly: what's " +
-                    "confusing, what's missing, what would make it feel great. Give the three changes that matter most. End by tagging @Theo.",
-                  hue: 320, accentHue: 280, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
-                  apps: ["chrome"], category: "project"),
-        NativeBot(id: "code-improver", name: "Code Improver", description: "Makes the technical approach and the code better.",
-                  instructions: "You are the Code Improver on Theo's team. Tighten the technical approach: stack, structure, data model, " +
-                    "edge cases and tests, and how to keep the code simple. Name concrete improvements. End by tagging @Theo.",
-                  hue: 210, accentHue: 190, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
-                  apps: [], category: "project"),
-        NativeBot(id: "reel-editor", name: "Reel Editor", description: "Turns footage and ideas into finished reels.",
-                  instructions: "You are Reel Editor. Make and edit reels with the HyperFrames skills and the Content Studio tools. Ask before long GPU runs.",
-                  hue: 330, accentHue: 300, primary: false, provider: "opencode", model: "opencode/glm-5.3-flash-free", effort: nil,
-                  apps: ["studio", "hyperframes", "drive"], category: "project"),
-        NativeBot(id: "gmail-reader", name: "Gmail Reader", description: "Reads your inbox, sorts what matters and drafts replies.",
-                  instructions: "You are Gmail Reader. Read the inbox with the Gmail tools, group mail into needs-a-reply, FYI and ignore, and draft replies when asked. Never send, delete or label mail without the user's go-ahead.",
-                  hue: 0, accentHue: 12, primary: false, provider: "opencode", model: "opencode/flint-40b-free", effort: nil,
-                  apps: ["gmail", "calendar", "notion"], category: "personal"),
-        NativeBot(id: "researcher", name: "Researcher", description: "Digs into a question and comes back with sources.",
-                  instructions: "You are Researcher. Investigate the question, read primary sources, and answer with a short brief that cites them.",
-                  hue: 205, accentHue: 180, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
-                  apps: ["chrome", "notion", "theo"], category: "personal"),
     ]
 
-    /// Brings saved bots up to the current team: categories, Theo as CEO, and the
-    /// project roles added once (a role you remove later stays removed).
+    /// Makes sure Theo is there (and primary) and moves an older Code Improver off Big Pickle. Bots Addy
+    /// removed stay removed.
     static func upgrade(_ bots: [NativeBot], offered: inout Set<String>) -> [NativeBot] {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && !bot.instructions.contains("```followup") { bot.instructions = ceoInstructions }
-            if bot.id == "project-manager" && !bot.instructions.contains("give the work") {
-                bot.instructions = projectManagerInstructions
-                bot.provider = "claude"
-                bot.model = "claude-opus-5-5"
-                bot.effort = "high"
-            }
-            if bot.id == "code-improver" && bot.model == "opencode/big-pickle" {
+            if bot.primary && bot.instructions.contains("Project Manager only") { bot.instructions = primaryInstructions }
+            if bot.model == "opencode/big-pickle" {
                 // Big Pickle kept running past the turn limit; a flash model answers in seconds.
                 bot.model = "opencode/deepseek-v4.1-flash-free"
             }
-            if bot.id == "design-critic" && bot.provider != "grok" && !offered.contains("grok-critic") {
-                bot.provider = "grok"
-                bot.model = "grok-4.6"
-                bot.effort = nil
-            }
             return bot
         }
-        offered.insert("grok-critic")
-        for starter in starters where !offered.contains(starter.id) {
-            if !result.contains(where: { $0.id == starter.id }) { result.append(starter) }
-            offered.insert(starter.id)
+        if !result.contains(where: \.primary), let theo = starters.first {
+            result.removeAll { $0.id == theo.id }
+            result.insert(theo, at: 0)
         }
+        offered.insert("fresh-v3")
         return result
     }
 }
@@ -839,7 +755,7 @@ enum BotPrompts {
 /// What the sidebar shows where, like Grok Bot's: pinned items on top, your own sections, hidden bots.
 /// Items are "bot:<id>", "group:<id>" or "clicky".
 struct BotsLayout: Codable, Equatable {
-    var pinned: [String] = ["bot:theo", "clicky", "group:project"]
+    var pinned: [String] = ["bot:theo", "clicky"]
     var hidden: [String] = []
     var sections: [Section] = []
 

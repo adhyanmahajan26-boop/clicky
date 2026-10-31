@@ -78,7 +78,7 @@ struct GroupEditor: View {
                     .font(.system(size: 11)).foregroundColor(sizeFits ? .secondary : .orange)
             }
             HStack {
-                if !isNew && group.id != BotGroup.projectID {
+                if !isNew {
                     Button("Delete group", role: .destructive) {
                         store.deleteGroup(group.id)
                         onDone(nil)
