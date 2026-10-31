@@ -8,6 +8,7 @@
 //  caret in the bot's colour.
 //
 
+import AppKit
 import ClickyCore
 import Combine
 import SwiftUI
@@ -43,20 +44,17 @@ struct BotsRootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Bots").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-                .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)
-            sidebarRow(.team, title: "Team chat", subtitle: "\(store.bots.count) bots") {
+            sectionTitle("Project handlers")
+            sidebarRow(.team, title: "Project room", subtitle: "Theo leads \(store.projectBots.count - 1) bots") {
                 ZStack {
                     Circle().fill(DS.Colors.accent.opacity(0.18))
                     Image(systemName: "person.3.fill").font(.system(size: 13)).foregroundColor(DS.Colors.accentText)
                 }
                 .frame(width: 34, height: 34)
             }
-            ForEach(store.bots) { bot in
-                sidebarRow(.bot(bot.id), title: bot.name, subtitle: bot.modelLabel) {
-                    BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
-                }
-            }
+            ForEach(store.projectBots) { bot in botRow(bot) }
+            sectionTitle("Personal").padding(.top, 8)
+            ForEach(store.personalBots) { bot in botRow(bot) }
             Spacer()
             if showsConnectors {
             sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
@@ -70,8 +68,19 @@ struct BotsRootView: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(width: 230)
+        .frame(width: 240)
         .background(DS.Colors.surface1)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
+            .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
+    }
+
+    private func botRow(_ bot: NativeBot) -> some View {
+        sidebarRow(.bot(bot.id), title: bot.primary ? "\(bot.name) · CEO" : bot.name, subtitle: bot.modelLabel) {
+            BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
+        }
     }
 
     private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, @ViewBuilder icon: () -> Icon) -> some View {
@@ -118,7 +127,7 @@ struct BotChatScreen: View {
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var inProgress: [(NativeBot, String)] {
-        let ids = bot.map { [$0.id] } ?? store.bots.map(\.id)
+        let ids = bot.map { [$0.id] } ?? store.projectBots.map(\.id)
         return ids.compactMap { id in store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } } }
     }
 
@@ -136,6 +145,9 @@ struct BotChatScreen: View {
                             } else if let author = store.bot(message.author) {
                                 BotLine(bot: author, text: message.text, showsName: bot == nil,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
+                                if bot == nil || T3Handoff.promptBlock(in: message.text) != nil {
+                                    T3HandoffButton(text: message.text, prominent: T3Handoff.promptBlock(in: message.text) != nil)
+                                }
                             }
                         }
                         ForEach(inProgress, id: \.0.id) { pending in
@@ -173,9 +185,13 @@ struct BotChatScreen: View {
                 }
             } else {
                 HStack(spacing: -8) {
-                    ForEach(store.bots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
+                    ForEach(store.projectBots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
                 }
-                Text("Team chat").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Project room").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text("Theo (CEO) and the project team turn your idea into a prompt for T3 Code")
+                        .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                }
             }
             Spacer()
             Button("New chat") {
@@ -195,8 +211,8 @@ struct BotChatScreen: View {
                 Text(bot.name).font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text(bot.description).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             } else {
-                Text("Talk to the whole team").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                Text("Theo answers by default. Tag anyone with @Name and they jump in; bots tag each other too.")
+                Text("Pitch an idea to the project team").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text("Theo, your CEO, brings in the Project Manager, Design Critic and Code Improver, then writes one prompt you can send to T3 Code.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             }
         }
@@ -207,7 +223,7 @@ struct BotChatScreen: View {
         VStack(spacing: 8) {
             if bot == nil {
                 HStack(spacing: 6) {
-                    ForEach(store.bots) { member in
+                    ForEach(store.projectBots) { member in
                         Button { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " } label: {
                             HStack(spacing: 4) {
                                 BotAvatar(bot: member, size: 16, state: .idle)
@@ -222,7 +238,7 @@ struct BotChatScreen: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField(bot.map { "Message \($0.name)" } ?? "Message the team", text: $draft, axis: .vertical)
+                TextField(bot.map { "Message \($0.name)" } ?? "Pitch an idea to Theo and the team", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .lineLimit(1...6)
@@ -539,5 +555,64 @@ struct ConnectorsScreen: View {
         claude = BotConnectors.parseClaude(claudeText)
         openCode = BotConnectors.parseOpenCode(openCodeText)
         checking = false
+    }
+}
+
+// MARK: - Hand-off to T3 Code
+
+enum T3Handoff {
+    /// The ```prompt block Theo writes as the team's final prompt, if there is one.
+    static func promptBlock(in text: String) -> String? {
+        guard let start = text.range(of: "```prompt") else { return nil }
+        let rest = text[start.upperBound...]
+        guard let end = rest.range(of: "```") else { return nil }
+        let body = rest[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body
+    }
+
+    /// Opens a new T3 Code thread with the prompt filled in on OpenCode, for you to review and send.
+    static func send(_ text: String) {
+        let prompt = String((promptBlock(in: text) ?? text).prefix(7_900))
+        var components = URLComponents()
+        components.scheme = "t3code"
+        components.host = "new"
+        components.queryItems = [URLQueryItem(name: "prompt", value: prompt),
+                                 URLQueryItem(name: "provider", value: "opencode"),
+                                 URLQueryItem(name: "model", value: "opencode/big-pickle")]
+        guard let url = components.url else { return }
+        let apps = ["/Applications/T3 Code Cursor Assistant.app", "/Applications/T3 Code (Theo).app"]
+            .map(URL.init(fileURLWithPath:))
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        if let app = apps.first {
+            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+struct T3HandoffButton: View {
+    let text: String
+    let prominent: Bool
+    @State private var sent = false
+
+    var body: some View {
+        HStack {
+            Spacer().frame(width: 46)
+            Button {
+                T3Handoff.send(text)
+                sent = true
+            } label: {
+                Label(sent ? "Opened in T3 Code" : (T3Handoff.promptBlock(in: text) != nil ? "Send prompt to T3 Code" : "Send to T3 Code"),
+                      systemImage: sent ? "checkmark" : "arrow.up.forward.app")
+                    .font(.system(size: prominent ? 12 : 11, weight: prominent ? .semibold : .regular))
+                    .padding(.horizontal, prominent ? 12 : 0).padding(.vertical, prominent ? 6 : 0)
+                    .background(Capsule().fill(prominent ? DS.Colors.accent.opacity(0.9) : .clear))
+                    .foregroundColor(prominent ? .white : DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .opacity(prominent || sent ? 1 : 0.8)
     }
 }
