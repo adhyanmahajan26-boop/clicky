@@ -432,9 +432,14 @@ final class ActionExecutor {
                 if background {
                     // Theo's screen gets the window; the owner's frontmost app and pointer stay as they are.
                     runningApplication.unhide()
-                    ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    // The owner's own window of this app stays where they have it; only an app Theo
+                    // brought up itself is moved over to Theo's screen.
+                    let isOwnersApp = runningApplication.processIdentifier == frontmostBefore.application?.processIdentifier
+                    if !isOwnersApp && runningApplication.processIdentifier == BackgroundInput.lastTheoApp {
+                        ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    }
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
-                    return (.done(detail: "showed it on Theo's screen"), nil)
+                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
                 runningApplication.activate(options: [.activateAllWindows])
                 return (.done(detail: "brought it forward"), nil)
@@ -549,8 +554,11 @@ final class ActionExecutor {
             let background = BackgroundInput.isActive
             let frontmostBefore = BackgroundInput.FrontmostSnapshot.capture()
             if let windowElement = target.windowElement {
-                AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString)
+                // On Theo's screen the window only moves there and rises within its app: raising first could
+                // bring its app in front of the owner's for a moment.
+                if !background { AXUIElementPerformAction(windowElement, kAXRaiseAction as CFString) }
                 if background {
+                    AXUIElementSetAttributeValue(windowElement, kAXMainAttribute as CFString, kCFBooleanTrue)
                     ClaudiaScreen.move(window: windowElement, of: target.runningApplication)
                     if let processIdentifier = target.processIdentifier { frontmostBefore.restore(ifStolenBy: [processIdentifier]) }
                     return (.done(detail: "raised on Theo's screen"), nil)
@@ -561,9 +569,14 @@ final class ActionExecutor {
             if let runningApplication = target.runningApplication {
                 if background {
                     runningApplication.unhide()
-                    ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    // The owner's own window of this app stays where they have it; only an app Theo
+                    // brought up itself is moved over to Theo's screen.
+                    let isOwnersApp = runningApplication.processIdentifier == frontmostBefore.application?.processIdentifier
+                    if !isOwnersApp && runningApplication.processIdentifier == BackgroundInput.lastTheoApp {
+                        ClaudiaScreen.moveFrontWindow(of: runningApplication)
+                    }
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
-                    return (.done(detail: "showed it on Theo's screen"), nil)
+                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
                 runningApplication.activate(options: [.activateAllWindows])
                 return (.done(detail: nil), nil)
@@ -749,7 +762,9 @@ final class ActionExecutor {
             let returnCombo = ActionKeyCombo(modifiers: [], key: "return", virtualKeyCode: 36)
             if background, let targetProcessIdentifier {
                 BackgroundInput.postKey(processIdentifier: targetProcessIdentifier, combo: returnCombo)
-            } else if !background {
+            } else if background {
+                return .failed(reason: "typed, but couldn't press Return without taking over your keyboard")
+            } else {
                 await bringTargetForward(target)
                 postKey(returnCombo)
             }

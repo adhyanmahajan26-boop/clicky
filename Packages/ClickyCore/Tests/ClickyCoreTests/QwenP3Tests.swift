@@ -117,7 +117,7 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
 // MARK: - Tuning
 
 @Test func watchdogAndOverrunFormulas() {
-    #expect(QwenTuning.lookahead == 2)
+    #expect(QwenTuning.lookahead == 1)
     // Generous: a slow segment is waited for, never swapped to another voice.
     #expect(QwenTuning.watchdogSeconds(characters: 0) == 20)
     #expect(QwenTuning.watchdogSeconds(characters: 30) == 20)

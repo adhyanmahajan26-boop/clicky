@@ -31,12 +31,13 @@ struct BotInspector: View {
                     identity(bot)
                     InspectorSection("Brain") {
                         BotModelSettings(bot: bot, onChange: { updated in
+                            // Only the brain's fields: the rest of the snapshot may be older than the column.
                             draft?.provider = updated.provider
                             draft?.model = updated.model
                             draft?.effort = updated.effort
                             draft?.thinking = updated.thinking
                             draft?.fast = updated.fast
-                            store.save(updated)
+                            commit()
                         }, compact: true)
                         .id(bot.provider + bot.model)
                     }
@@ -50,7 +51,11 @@ struct BotInspector: View {
                     apps(bot)
                     schedules(bot)
                     if !bot.primary {
-                        Button { store.makePrimary(bot.id) } label: {
+                        Button {
+                            commit()
+                            store.makePrimary(bot.id)
+                            draft = store.bot(botID)
+                        } label: {
                             Label("Make \(bot.name) the primary bot", systemImage: "star")
                                 .font(.system(size: 12, weight: .medium))
                         }
@@ -67,10 +72,23 @@ struct BotInspector: View {
         .background(DS.Colors.surface1)
         .onAppear { draft = store.bot(botID) }
         .onChange(of: botID) { _, id in draft = store.bot(id) }
-        .onDisappear { commit() }
+        // A change made elsewhere (make primary, the sidebar's on/off, the control inbox) shows here,
+        // unless an edit of this column is still waiting to be saved.
+        .onReceive(store.$bots) { bots in
+            guard saveTask == nil, let fresh = bots.first(where: { $0.id == botID }) else { return }
+            if fresh != draft { draft = fresh }
+        }
+        .onDisappear {
+            saveTask?.cancel()
+            saveTask = nil
+            commit()
+        }
         .sheet(isPresented: $addingRoutine) { RoutineEditor(store: store, routine: nil, fixedTarget: botID) { addingRoutine = false } }
         .alert("Delete \(draft?.name ?? "this bot")?", isPresented: $confirmsDelete) {
             Button("Delete", role: .destructive) {
+                saveTask?.cancel()
+                saveTask = nil
+                draft = nil
                 BotsSelection.shared.pane = .bot(store.primary?.id ?? "theo")
                 store.deleteBot(botID)
             }
@@ -84,11 +102,17 @@ struct BotInspector: View {
         saveTask?.cancel()
         saveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            if !Task.isCancelled { commit() }
+            guard !Task.isCancelled else { return }
+            saveTask = nil
+            commit()
         }
     }
 
-    private func commit() { if let draft, draft != store.bot(botID) { store.save(draft) } }
+    /// Saves the column's edits. A bot that was deleted meanwhile stays deleted.
+    private func commit() {
+        guard let draft, let stored = store.bot(botID), draft != stored else { return }
+        store.save(draft)
+    }
 
     // MARK: Parts
 

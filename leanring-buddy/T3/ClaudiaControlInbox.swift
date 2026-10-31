@@ -130,7 +130,7 @@ final class ClaudiaControlInbox {
                                    provider: provider,
                                    model: command["model"] as? String ?? (provider == "claude" ? "claude-sonnet-5-5" : "opencode/deepseek-v4.1-flash-free"),
                                    groupID: command["group"] as? String)
-            if let authority = command["authority"] as? String { bot.authority = authority }
+            if let authority = command["authority"] as? String, ["member", "lead", "ceo"].contains(authority) { bot.authority = authority }
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
             if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
             if let apps = command["apps"] as? [String] { bot.apps = apps }
@@ -142,7 +142,7 @@ final class ClaudiaControlInbox {
             guard let id = command["id"] as? String, var bot = store.bot(id) else { reply(identifier, ok: false, result: nil, error: "No such bot."); return }
             if command["primary"] as? Bool == true { store.makePrimary(id); bot = store.bot(id) ?? bot }
             if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
-            if let authority = command["authority"] as? String { bot.authority = authority }
+            if let authority = command["authority"] as? String, ["member", "lead", "ceo"].contains(authority) { bot.authority = authority }
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
             store.save(bot)
             reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary], error: nil)
@@ -153,7 +153,7 @@ final class ClaudiaControlInbox {
         case "botChat":
             // The last messages of a chat: {id: bot id, "team" or "group-<id>", limit}
             let id = command["id"] as? String ?? BotsStore.teamID
-            let limit = command["limit"] as? Int ?? 10
+            let limit = max(0, min(command["limit"] as? Int ?? 10, 200))
             let messages = BotsStore.shared.conversation(id).messages.suffix(limit).map { ["author": $0.author, "text": $0.text] }
             reply(identifier, ok: true, result: Array(messages), error: nil)
         case "groupSave":

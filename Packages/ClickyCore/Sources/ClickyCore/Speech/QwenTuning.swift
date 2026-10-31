@@ -33,9 +33,9 @@ public enum QwenTuning {
     public static let mlxServeExecutablePath = "/Applications/MLX Core.app/Contents/MacOS/mlx-serve"
 
     /// Segments synthesized ahead of the one playing (probe: L = 1).
-    /// Two segments are synthesized ahead, so the next clip is ready when a short one ends (with one, a
-    /// 2-word opener was followed by seconds of silence while the next sentence was made).
-    public static let lookahead = 2
+    /// One segment is synthesized ahead: the longer opener (24-56 characters) now covers making the next one,
+    /// and a cancelled request still keeps the serial voice server busy, so more ahead slows the next answer.
+    public static let lookahead = 1
     /// Speaking speed used for every time estimate.
     public static let charactersPerSecond: Double = 15
     /// Audio longer than this many times the estimate is cut at its last pause.

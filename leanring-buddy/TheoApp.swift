@@ -61,14 +61,20 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     /// Opened from Finder, Theo's console lines (barge-ins, voice errors, cut segments) went nowhere, so a
     /// cut-off answer left no trace. They go to ~/Library/Logs/Clicky/theo.log, started fresh past 20 MB.
     private static func keepConsoleLog() {
-        guard isatty(STDOUT_FILENO) == 0 else { return }
+        // A closed pipe (a helper process that quit) must not take the app down with SIGPIPE.
+        signal(SIGPIPE, SIG_IGN)
+        // Only when opened from Finder: a terminal, Xcode's console or a pipe keeps its own output.
+        guard isatty(STDOUT_FILENO) == 0, ProcessInfo.processInfo.environment["__XCODE_BUILT_PRODUCTS_DIR_PATHS"] == nil,
+              ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"].map({ $0.hasPrefix("application.") }) ?? true else { return }
         let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clicky/theo.log")
         try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let size = (try? FileManager.default.attributesOfItem(atPath: log.path))?[.size] as? Int, size > 20_000_000 {
             try? FileManager.default.removeItem(at: log)
         }
-        freopen(log.path, "a", stdout)
+        guard freopen(log.path, "a", stdout) != nil else { return }
         freopen(log.path, "a", stderr)
+        // It holds what was said to Theo: readable by the owner only.
+        chmod(log.path, 0o600)
         setvbuf(stdout, nil, _IOLBF, 0)
         print("—— Theo started \(Date()) ——")
     }

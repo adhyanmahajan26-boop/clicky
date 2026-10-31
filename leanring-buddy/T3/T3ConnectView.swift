@@ -75,7 +75,9 @@ enum T3ConnectSelfTest {
         ]
         for request in requests {
             guard let data = try? JSONSerialization.data(withJSONObject: request) else { continue }
-            stdinPipe.fileHandleForWriting.write(data + Data("\n".utf8))
+            // A server that already quit makes a plain write raise (EPIPE) and take the app down.
+            guard process.isRunning else { break }
+            try? stdinPipe.fileHandleForWriting.write(contentsOf: data + Data("\n".utf8))
         }
         let waitResult = gotAll.wait(timeout: .now() + timeout)
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
@@ -254,6 +256,14 @@ final class T3ConnectModel: ObservableObject {
         process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return (-1, "couldn't start \(executable)") }
+        // A hung install (network, a prompt) is stopped after two minutes, so Connect never stays stuck.
+        let deadline = DispatchWorkItem {
+            guard process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: deadline)
+        defer { deadline.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")

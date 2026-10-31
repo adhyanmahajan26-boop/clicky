@@ -132,7 +132,7 @@ enum BackgroundInput {
     /// Returns the method used.
     @discardableResult
     static func scroll(processIdentifier: pid_t, at point: CGPoint, verticalLines: Int32, horizontalLines: Int32 = 0) -> String? {
-        if scrollBar(at: point, verticalLines: verticalLines, horizontalLines: horizontalLines) { return "ax scroll bar" }
+        if scrollBar(at: point, verticalLines: verticalLines, horizontalLines: horizontalLines, expectedProcessIdentifier: processIdentifier) { return "ax scroll bar" }
         guard let event = CGEvent(scrollWheelEvent2Source: CGEventSource(stateID: .hidSystemState), units: .line, wheelCount: 2,
                                   wheel1: verticalLines, wheel2: horizontalLines, wheel3: 0) else { return nil }
         SyntheticEvents.stamp(event)
@@ -160,8 +160,11 @@ enum BackgroundInput {
     }
 
     /// Moves the nearest scroll area's scroll bar. Roughly 6% of the track per three lines.
-    private static func scrollBar(at point: CGPoint, verticalLines: Int32, horizontalLines: Int32) -> Bool {
+    private static func scrollBar(at point: CGPoint, verticalLines: Int32, horizontalLines: Int32,
+                                  expectedProcessIdentifier: pid_t? = nil) -> Bool {
         guard var current = element(atCG: point) else { return false }
+        // Something else covering the point (the owner's window) isn't scrolled.
+        if let expectedProcessIdentifier, let hit = processIdentifier(of: current), hit != expectedProcessIdentifier { return false }
         for _ in 0..<12 {
             if TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: current) == "AXScrollArea" { break }
             guard let next = parent(of: current) else { return false }
@@ -197,8 +200,12 @@ enum BackgroundInput {
             Task { @MainActor in
                 for delay in [0.25, 0.6, 1.2, 2.4] as [Double] {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    guard let current = NSWorkspace.shared.frontmostApplication, current.processIdentifier != previous.processIdentifier,
-                          touchedProcessIdentifiers.contains(current.processIdentifier), !previous.isTerminated else { continue }
+                    guard let current = NSWorkspace.shared.frontmostApplication, !previous.isTerminated else { return }
+                    // The owner moved on to some other app themselves: leave it.
+                    if current.processIdentifier != previous.processIdentifier && !touchedProcessIdentifiers.contains(current.processIdentifier) { return }
+                    // The owner clicked or typed since: whatever is in front now is their choice.
+                    if CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!) < delay { return }
+                    guard current.processIdentifier != previous.processIdentifier else { continue }
                     previous.activate(options: [])
                 }
             }

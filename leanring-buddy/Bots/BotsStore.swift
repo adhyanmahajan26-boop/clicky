@@ -220,6 +220,9 @@ final class BotsStore: ObservableObject {
             groups[index].memberIDs.removeAll { $0 == id }
             if groups[index].headID == id { groups[index].headID = nil }
         }
+        for index in bots.indices { bots[index].canMessage?.removeAll { $0 == id } }
+        BotProcesses.shared.stop(id)
+        conversations[id] = nil
         writeBots()
         writeGroups()
         forget(item: "bot:\(id)")
@@ -1098,12 +1101,14 @@ extension BotsStore {
         if !new.instructions.contains("```prompt") { new.instructions += "\n\n" + BotImport.primaryInstructions }
         save(demoted)
         save(new)
-        if let index = layout.pinned.firstIndex(of: "bot:\(old.id)") {
-            layout.pinned[index] = "bot:\(new.id)"
-            layout.pinned.removeAll { $0 == "bot:\(new.id)" }
-            layout.pinned.insert("bot:\(new.id)", at: min(index, layout.pinned.count))
-        } else if !layout.pinned.contains("bot:\(new.id)") {
-            layout.pinned.insert("bot:\(new.id)", at: 0)
+        // The new primary takes the old one's pinned spot (or the top).
+        let oldIndex = layout.pinned.firstIndex(of: "bot:\(old.id)") ?? 0
+        layout.pinned.removeAll { $0 == "bot:\(new.id)" || $0 == "bot:\(old.id)" }
+        layout.pinned.insert("bot:\(new.id)", at: min(oldIndex, layout.pinned.count))
+        for other in bots where other.primary && other.id != new.id {
+            var demotedToo = other
+            demotedToo.primary = false
+            save(demotedToo)
         }
         writeLayout()
     }
