@@ -42,10 +42,20 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var modelLabel: String { Self.label(for: model) }
 
     static func label(for model: String) -> String {
-        let name = model.split(separator: "/").last.map(String.init) ?? model
+        var name = model.split(separator: "/").last.map(String.init) ?? model
+        let free = name.hasSuffix("-free")
+        if free { name = String(name.dropLast("-free".count)) }
         // "claude-sonnet-5-5" reads "Claude Sonnet 5.5".
         let versioned = name.replacingOccurrences(of: #"-(\d+)-(\d+)$"#, with: " $1.$2", options: .regularExpression)
-        return versioned.replacingOccurrences(of: "-", with: " ").capitalized
+        let brands = ["glm": "GLM", "deepseek": "DeepSeek", "gpt": "GPT", "mimo": "MiMo", "opencode": "OpenCode"]
+        let words = versioned.split(separator: "-").flatMap { $0.split(separator: " ") }.map { word -> String in
+            let lower = word.lowercased()
+            if let brand = brands[lower] { return brand }
+            if lower.range(of: #"^\d+b$"#, options: .regularExpression) != nil { return lower.uppercased() }
+            if lower.first == "v", lower.dropFirst().first?.isNumber == true { return "V" + lower.dropFirst() }
+            return word.prefix(1).uppercased() + word.dropFirst()
+        }
+        return words.joined(separator: " ") + (free ? " · free" : "")
     }
 }
 
@@ -55,6 +65,8 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     var author: String
     var text: String
     var at: Date = Date()
+    /// A T3 Code run this message reports on (its result card shows under it).
+    var runID: String?
 }
 
 /// One saved conversation and the engine sessions that hold its context.
@@ -87,6 +99,10 @@ final class BotsStore: ObservableObject {
         for id in [Self.teamID] + bots.map(\.id) {
             conversations[id] = loadConversation(id)
         }
+        if let data = try? Data(contentsOf: runsFile), let runs = try? Self.decoder.decode([T3Run].self, from: data) {
+            t3Runs = runs
+        }
+        for run in t3Runs where run.phase == "running" || run.phase == "waiting" { track(run.id) }
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -96,8 +112,18 @@ final class BotsStore: ObservableObject {
     func conversation(_ id: String) -> BotConversationRecord { conversations[id] ?? BotConversationRecord() }
 
     func save(_ bot: NativeBot) {
+        let old = self.bot(bot.id)
         if let index = bots.firstIndex(where: { $0.id == bot.id }) { bots[index] = bot } else { bots.append(bot) }
         writeBots()
+        if let old, old.provider != bot.provider {
+            // A session belongs to one engine: the new engine starts the conversation fresh (the messages stay).
+            for id in [bot.id, Self.teamID] {
+                var record = conversation(id)
+                guard record.sessions.removeValue(forKey: bot.id) != nil else { continue }
+                conversations[id] = record
+                writeConversation(id)
+            }
+        }
     }
 
     /// Starts a fresh chat with a bot (its engine session starts over too).
@@ -126,6 +152,12 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[Self.teamID] = record
         writeConversation(Self.teamID)
+        if text.lowercased().contains("@t3") {
+            // Straight to the coding agent of the latest run, the way Theo hands off a change.
+            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines))
+            return
+        }
         let tagged = BotPrompts.mentioned(in: text, bots: projectBots)
         askTeam(tagged.isEmpty ? [primary].compactMap { $0 } : tagged, chain: 0)
     }
@@ -164,8 +196,22 @@ final class BotsStore: ObservableObject {
         }
     }
 
+    /// Bots whose reply you stopped; their turn ends without handing on.
+    private var stopped: Set<String> = []
+
+    /// Stops a bot's reply in progress (and, in the Project room, the hand-offs it would set off).
+    func stop(_ botID: String) {
+        guard replying[botID] != nil else { return }
+        stopped.insert(botID)
+        BotProcesses.shared.stop(botID)
+    }
+
+    /// Stops every reply in the Project room.
+    func stopTeam() { for bot in projectBots where replying[bot.id] != nil { stop(bot.id) } }
+
     private func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?,
                        then: @escaping (String?) -> Void) {
+        stopped.remove(bot.id)
         replying[bot.id] = ""
         Task { [weak self] in
             var answer: String?
@@ -179,10 +225,24 @@ final class BotsStore: ObservableObject {
                 newSession = result.session ?? session
             } catch {
                 answer = nil
-                self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)"), to: conversationID)
+                if self?.stopped.contains(bot.id) != true {
+                    self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)"), to: conversationID)
+                    if conversationID == Self.teamID, var record = self?.conversation(conversationID) {
+                        // Its own error isn't news to the bot next time.
+                        record.seen[bot.id] = record.messages.count
+                        self?.conversations[conversationID] = record
+                    }
+                }
             }
             guard let self else { return }
+            let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil
+            if self.stopped.remove(bot.id) != nil {
+                // Keep what it had said so far, marked as stopped, and hand nothing on.
+                let partial = (answer ?? streamed ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                self.post(BotChatMessage(author: bot.id, text: partial.isEmpty ? "_(Stopped.)_" : partial + "\n\n_(Stopped.)_"), to: conversationID)
+                return
+            }
             var record = self.conversation(conversationID)
             if let newSession { record.sessions[bot.id] = newSession }
             if let answer, !answer.isEmpty {
@@ -201,36 +261,134 @@ final class BotsStore: ObservableObject {
     /// Pitches whose final prompt already went to T3 Code (by the pitch's message id).
     private var submittedPitches: Set<String> = []
     @Published private(set) var submitting = false
+    /// Coding runs Theo started in T3 Code, newest last.
+    @Published private(set) var t3Runs: [T3Run] = []
+    private var trackedRuns: Set<String> = []
 
-    /// When Theo writes the final prompt for a pitch that asked to build it, it goes to T3 Code by itself:
-    /// a new project and a thread on OpenCode. Once per pitch.
+    /// When Theo writes the final prompt for a pitch that asked to build it, it goes to T3 Code by itself.
+    /// Once per pitch. A ```followup block goes to the latest run's agent instead.
     private func submitIfFinal(_ answer: String) {
-        guard let prompt = BotsT3.promptBlock(in: answer),
-              let pitch = conversation(Self.teamID).messages.last(where: { $0.author == "user" }),
+        guard let pitch = conversation(Self.teamID).messages.last(where: { $0.author == "user" }),
               !submittedPitches.contains(pitch.id) else { return }
-        let wantsBuild = ["build", "submit", "send", "make", "t3"].contains { pitch.text.lowercased().contains($0) }
+        if let followup = BotsT3.followupBlock(in: answer), t3Runs.last != nil {
+            submittedPitches.insert(pitch.id)
+            sendToCoder(followup)
+            return
+        }
+        guard let prompt = BotsT3.promptBlock(in: answer) else { return }
+        let wantsBuild = pitch.text.range(of: #"\b(build|submit|send|make|code|t3|pr|pull request|fix|ship)\b"#,
+                                          options: [.regularExpression, .caseInsensitive]) != nil
         guard wantsBuild else { return }
         submittedPitches.insert(pitch.id)
-        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt))
+        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt),
+                   repo: BotsT3.targetRepo(answer: answer, pitch: pitch.text))
     }
 
-    /// Creates the T3 Code project and starts its thread, then reports back in the Project room.
-    func submitToT3(prompt: String, title: String) {
-        guard let theo = primary else { return }
+    /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
+    func submitToT3(prompt: String, title: String, repo: URL? = nil) {
+        guard let theo = primary, !submitting else { return }
         submitting = true
         Task { [weak self] in
-            let note: String
             do {
-                let folder = try await BotsT3.submit(prompt: prompt, title: title)
-                note = "Submitted to T3 Code: **\(title)**, a new project in ~/Projects/\(folder.lastPathComponent). " +
-                    "The coding agent is building it on \(BotsT3.modelName)."
+                let run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo)
+                guard let self else { return }
+                self.submitting = false
+                self.upsert(run)
+                let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
+                    ?? "a new project in ~/Projects/\(URL(fileURLWithPath: run.folder).lastPathComponent)"
+                self.post(BotChatMessage(author: theo.id, text: "Submitted to T3 Code: **\(title)**, \(place). " +
+                    "\(BotsT3.modelName) is coding it at \(BotsT3.effort) effort. I'll post the result here when it's done."), to: Self.teamID)
+                self.track(run.id)
             } catch {
-                note = "Couldn't submit to T3 Code: \(error.localizedDescription)"
+                self?.submitting = false
+                self?.post(BotChatMessage(author: theo.id, text: "Couldn't submit to T3 Code: \(error.localizedDescription)"), to: Self.teamID)
             }
-            guard let self else { return }
-            self.submitting = false
-            self.post(BotChatMessage(author: theo.id, text: note), to: Self.teamID)
         }
+    }
+
+    /// Passes a change to the latest run's coding agent and follows the run again.
+    func sendToCoder(_ text: String) {
+        guard let theo = primary, var run = t3Runs.last else {
+            if let theo = primary {
+                post(BotChatMessage(author: theo.id, text: "There's no T3 Code run yet. Pitch an idea first."), to: Self.teamID)
+            }
+            return
+        }
+        Task { [weak self] in
+            do {
+                let worktree = await BotsT3.state(of: run)?.worktree
+                if let head = await BotsT3.currentHead(of: run, worktree: worktree) { run.baseCommit = head }
+                try await BotsT3.sendFollowup(text, to: run)
+                guard let self else { return }
+                run.phase = "running"
+                run.startedAt = Date()
+                run.finishedAt = nil
+                self.upsert(run)
+                self.post(BotChatMessage(author: theo.id, text: "Passed to the coding agent on **\(run.title)**. I'll report back when it's done."), to: Self.teamID)
+                self.track(run.id)
+            } catch {
+                self?.post(BotChatMessage(author: theo.id, text: "Couldn't reach T3 Code: \(error.localizedDescription)"), to: Self.teamID)
+            }
+        }
+    }
+
+    /// Checks a run every 15 seconds until it ends, then reports it in the Project room.
+    private func track(_ runID: String) {
+        guard !trackedRuns.contains(runID) else { return }
+        trackedRuns.insert(runID)
+        Task { [weak self] in
+            var misses = 0
+            var askedAbout: String?
+            // A run that hasn't started its agent yet reads as idle, so give it a moment first.
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            while let self, var run = self.t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" {
+                guard let state = await BotsT3.state(of: run) else {
+                    misses += 1
+                    if misses >= 40 {
+                        // T3 Code has been unreachable for ten minutes: stop and say so instead of spinning.
+                        run.phase = "failed"
+                        self.upsert(run)
+                        self.postFromTheo("Lost track of **\(run.title)**: T3 Code isn't answering. Open T3 Code to see where it got to.")
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    continue
+                }
+                misses = 0
+                run.activity = state.lastMessage.map { String($0.split(separator: "\n").first ?? "").prefix(140) }.map(String.init)
+                if state.waitingForAnswer, !state.busy || state.status == "waiting" {
+                    run.phase = "waiting"
+                    self.upsert(run)
+                    if askedAbout != state.lastMessage {
+                        askedAbout = state.lastMessage
+                        self.postFromTheo("The coding agent on **\(run.title)** is waiting for an answer:\n\n" +
+                                          "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nReply with @T3 and your answer.")
+                    }
+                } else if !state.busy && (BotsT3.endedStatuses.contains(state.status) || state.status == "idle") {
+                    let report = await BotsT3.report(for: &run, state: state)
+                    run.phase = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status) ? "failed" : "done"
+                    run.finishedAt = Date()
+                    self.upsert(run)
+                    self.postFromTheo(report, runID: run.id)
+                    break
+                } else {
+                    run.phase = "running"
+                    self.upsert(run)
+                }
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+            self?.trackedRuns.remove(runID)
+        }
+    }
+
+    private func postFromTheo(_ text: String, runID: String? = nil) {
+        guard let theo = primary else { return }
+        post(BotChatMessage(author: theo.id, text: text, runID: runID), to: Self.teamID)
+    }
+
+    private func upsert(_ run: T3Run) {
+        if let index = t3Runs.firstIndex(where: { $0.id == run.id }) { t3Runs[index] = run } else { t3Runs.append(run) }
+        if let data = try? Self.encoder.encode(t3Runs) { try? data.write(to: runsFile, options: .atomic) }
     }
 
     private func post(_ message: BotChatMessage, to conversationID: String) {
@@ -243,6 +401,7 @@ final class BotsStore: ObservableObject {
     // MARK: Files
 
     private var botsFile: URL { folder.appendingPathComponent("bots.json") }
+    private var runsFile: URL { folder.appendingPathComponent("t3runs.json") }
     private func chatFile(_ id: String) -> URL { folder.appendingPathComponent("chats/\(id).json") }
 
     private static let encoder: JSONEncoder = {
@@ -340,7 +499,10 @@ enum BotImport {
         "Project Manager plans it and gives the parts to the team. When the team has answered, settle any " +
         "disagreement yourself and merge it all into one final prompt for T3 Code's coding agent right away, " +
         "with no second round of questions: a line \"Project: <short name>\" and then the prompt inside a " +
-        "```prompt fenced block. Write the final prompt once. Keep everything else short."
+        "```prompt fenced block. If Addy names an existing project folder, add a line \"Repo: <its path>\" so the " +
+        "work goes on a new branch of it with a pull request. Write the final prompt once. T3 Code then builds it " +
+        "and you post its report here. When Addy later asks for a change to what was built, don't start a new " +
+        "round: put the change for the coding agent in a ```followup fenced block. Keep everything else short."
 
     static let projectManagerInstructions =
         "You are the Project Manager on Theo's team. When Theo hands you an idea and Clicky's research in the " +
@@ -367,7 +529,7 @@ enum BotImport {
         NativeBot(id: "code-improver", name: "Code Improver", description: "Makes the technical approach and the code better.",
                   instructions: "You are the Code Improver on Theo's team. Tighten the technical approach: stack, structure, data model, " +
                     "edge cases and tests, and how to keep the code simple. Name concrete improvements. End by tagging @Theo.",
-                  hue: 210, accentHue: 190, primary: false, provider: "opencode", model: "opencode/big-pickle", effort: nil,
+                  hue: 210, accentHue: 190, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
                   apps: [], category: "project"),
         NativeBot(id: "reel-editor", name: "Reel Editor", description: "Turns footage and ideas into finished reels.",
                   instructions: "You are Reel Editor. Make and edit reels with the HyperFrames skills and the Content Studio tools. Ask before long GPU runs.",
@@ -389,12 +551,16 @@ enum BotImport {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && !bot.instructions.contains("Project Manager only") { bot.instructions = ceoInstructions }
+            if bot.primary && !bot.instructions.contains("```followup") { bot.instructions = ceoInstructions }
             if bot.id == "project-manager" && !bot.instructions.contains("give the work") {
                 bot.instructions = projectManagerInstructions
                 bot.provider = "claude"
                 bot.model = "claude-opus-5-5"
                 bot.effort = "high"
+            }
+            if bot.id == "code-improver" && bot.model == "opencode/big-pickle" {
+                // Big Pickle kept running past the turn limit; a flash model answers in seconds.
+                bot.model = "opencode/deepseek-v4.1-flash-free"
             }
             if bot.id == "design-critic" && bot.provider != "grok" && !offered.contains("grok-critic") {
                 bot.provider = "grok"
@@ -425,6 +591,12 @@ enum BotPrompts {
             parts.append("Apps you can use: \(apps.map(\.name).joined(separator: ", ")). If one isn't available, " +
                          "say it needs connecting in Theo's Connectors page. Never send messages or emails or make " +
                          "outward changes without the user's go-ahead.")
+            let bridged = apps.filter { BotConnectors.bridged($0) }
+            if bot.provider != "claude" && !bridged.isEmpty {
+                parts.append("On your engine, reach \(bridged.map(\.name).joined(separator: ", ")) with Theo's claudia_app tool " +
+                             "(app: \(bridged.map(\.id).joined(separator: ", "))): describe what to look up or draft and it " +
+                             "returns what it found. Don't say an app needs connecting before you've tried it.")
+            }
         }
         if bot.primary {
             let others = team.filter { $0.id != bot.id }
@@ -433,8 +605,12 @@ enum BotPrompts {
                              ". Mention one with @Name in the team chat to bring them in.")
             }
         }
-        parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
-                     "learn a lasting preference or fact. Don't store secrets.")
+        if bot.provider == "grok" {
+            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
+        } else {
+            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
+                         "learn a lasting preference or fact. Don't store secrets.")
+        }
         return parts.joined(separator: "\n\n")
     }
 
@@ -450,7 +626,9 @@ enum BotPrompts {
         let transcript = newMessages.map { "\(nameOf($0.author)): \($0.text)" }.joined(separator: "\n")
         var parts: [String] = []
         if firstTime {
-            parts.append("You are \(bot.name) in Addy's bots group chat. \(bot.instructions)")
+            // Claude has the persona as its system prompt already; other engines get it here.
+            parts.append("You are \(bot.name) in Addy's bots group chat. " +
+                         (bot.provider == "claude" ? bot.instructions : persona(bot: bot, team: team)))
             parts.append("The others here: " + team.filter { $0.id != bot.id }.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
             parts.append("Reply with only your chat message, in your own voice and role, usually 1-4 sentences, without " +
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +

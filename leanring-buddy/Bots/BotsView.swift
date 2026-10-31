@@ -149,9 +149,20 @@ struct BotChatScreen: View {
                             } else if let author = store.bot(message.author) {
                                 BotLine(bot: author, text: message.text, showsName: bot == nil,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
-                                if bot == nil || BotsT3.promptBlock(in: message.text) != nil {
-                                    T3HandoffButton(text: message.text, prominent: BotsT3.promptBlock(in: message.text) != nil)
+                                if let runID = message.runID, let run = store.t3Runs.first(where: { $0.id == runID }) {
+                                    T3ResultCard(run: run).padding(.leading, 46)
                                 }
+                                if let prompt = BotsT3.promptBlock(in: message.text) {
+                                    let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
+                                    T3HandoffButton(text: message.text, prominent: true,
+                                                    alreadySent: store.t3Runs.contains { $0.title == title }
+                                                        || record.messages.contains { $0.text.hasPrefix("Submitted to T3 Code: **\(title)**") })
+                                }
+                            }
+                        }
+                        if bot == nil {
+                            ForEach(store.t3Runs.filter { $0.phase == "running" || $0.phase == "waiting" }) { run in
+                                T3RunCard(run: run)
                             }
                         }
                         ForEach(inProgress, id: \.0.id) { pending in
@@ -256,13 +267,25 @@ struct BotChatScreen: View {
                     .font(.system(size: 14))
                     .lineLimit(1...6)
                     .onSubmit(send)
-                Button(action: send) {
-                    Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundColor(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.white.opacity(0.12) : DS.Colors.accent))
+                if !inProgress.isEmpty && draft.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button {
+                        if let bot { store.stop(bot.id) } else { store.stopTeam() }
+                    } label: {
+                        Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold)).foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.white.opacity(0.22)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop the reply")
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.white.opacity(0.12) : DS.Colors.accent))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .buttonStyle(.plain)
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 22).fill(DS.Colors.surface))
@@ -335,9 +358,8 @@ struct BotLine: View {
                     (Text(String(text.prefix(shown))) + Text(" ")).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
                         .overlay(alignment: .bottomTrailing) { CometCaret(color: bot.accentColor).offset(x: 10, y: -4) }
                 } else {
-                    Text(BotMarkdown.attributed(text)).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
-                        .textSelection(.enabled)
-                        .lineSpacing(3)
+                    BotRichText(text: text)
+                    if !isLive { BotMessageActions(text: text).padding(.top, 2) }
                 }
             }
             .padding(.top, 6)
@@ -410,6 +432,18 @@ struct BotAvatar: View {
                 )
         }
         .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if size >= 24 {
+                // The bot's role, so bots of similar colour are told apart at a glance.
+                Image(systemName: bot.symbol)
+                    .font(.system(size: size * 0.2, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: size * 0.38, height: size * 0.38)
+                    .background(Circle().fill(bot.bodyColor.opacity(0.95)))
+                    .overlay(Circle().stroke(DS.Colors.background, lineWidth: max(1.5, size * 0.04)))
+                    .offset(x: size * 0.04, y: size * 0.04)
+            }
+        }
         .rotationEffect(.degrees(state == .thinking ? (phase ? 9 : -9) : 0))
         .offset(y: state == .thinking ? (phase ? -size * 0.08 : size * 0.02) : 0)
         .scaleEffect(x: 1, y: state == .typing && phase ? 1.05 : 1, anchor: .bottom)
@@ -472,7 +506,7 @@ struct ConnectorsScreen: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connectors").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode need each connector added to OpenCode.")
+                    Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, for reading and drafts.")
                         .font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
                 }
                 Spacer()
@@ -514,14 +548,20 @@ struct ConnectorsScreen: View {
                     HStack(spacing: 6) {
                         Text("Claude").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
                         badge(status(claude, connector.claudeServer), status(claude, connector.claudeServer))
-                        if status(claude, connector.claudeServer) != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true {
+                        if !checking && status(claude, connector.claudeServer) != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true {
                             Button("Connect") { BotConnectors.openClaudeConnectors() }.buttonStyle(.borderless).font(.system(size: 11))
                         }
                     }
                     HStack(spacing: 6) {
-                        Text("OpenCode").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                        badge(status(openCode, connector.openCodeServer), status(openCode, connector.openCodeServer))
-                        if status(openCode, connector.openCodeServer) != .connected && connector.openCodeURL != nil {
+                        Text("OpenCode & Grok").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
+                        if BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected {
+                            // Reached through Theo's claudia_app tool on the Claude account, read-only.
+                            let viaClaude = status(claude, connector.claudeServer)
+                            badge(viaClaude == .connected ? "Via Claude" : viaClaude.label, viaClaude)
+                        } else {
+                            badge(status(openCode, connector.openCodeServer), status(openCode, connector.openCodeServer))
+                        }
+                        if !checking && !BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected && connector.openCodeURL != nil {
                             Button(working == connector.id ? "Signing in…" : "Connect") {
                                 working = connector.id
                                 Task {
@@ -576,7 +616,9 @@ struct ConnectorsScreen: View {
 struct T3HandoffButton: View {
     let text: String
     let prominent: Bool
-    @State private var sent = false
+    var alreadySent = false
+    @State private var sentHere = false
+    private var sent: Bool { sentHere || alreadySent }
 
     var body: some View {
         HStack {
@@ -584,7 +626,7 @@ struct T3HandoffButton: View {
             Button {
                 let prompt = BotsT3.promptBlock(in: text) ?? text
                 BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt))
-                sent = true
+                sentHere = true
             } label: {
                 Label(sent ? "Submitted to T3 Code" : (BotsT3.promptBlock(in: text) != nil ? "Submit prompt to T3 Code" : "Submit to T3 Code"),
                       systemImage: sent ? "checkmark" : "arrow.up.forward.app")
@@ -596,6 +638,42 @@ struct T3HandoffButton: View {
             .buttonStyle(.plain)
             .disabled(sent)
             Spacer()
+        }
+    }
+}
+
+/// A coding run in T3 Code while it works: what it's on, for how long, and a way to watch it there.
+struct T3RunCard: View {
+    let run: T3Run
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Spacer().frame(width: 34)
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                HStack(alignment: .top, spacing: 10) {
+                    if run.phase == "waiting" {
+                        Image(systemName: "questionmark.bubble").foregroundColor(.orange)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        let minutes = max(0, Int(context.date.timeIntervalSince(run.startedAt) / 60))
+                        Text(run.phase == "waiting" ? "\(run.title): waiting for your answer (@T3)"
+                                                    : "\(BotsT3.modelName) is coding \(run.title) · \(minutes) min")
+                            .font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        if let activity = run.activity, !activity.isEmpty {
+                            Text(activity).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
+                        }
+                        if run.link != nil {
+                            Button("Watch in T3 Code") { BotsT3.openInApp(run) }
+                                .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.accent)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+            }
         }
     }
 }
@@ -629,7 +707,7 @@ struct BotModelSettings: View {
             row("Engine") {
                 Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
                     bot.provider = provider
-                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/big-pickle"
+                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/deepseek-v4.1-flash-free"
                     bot.effort = nil
                     commit()
                 })) {

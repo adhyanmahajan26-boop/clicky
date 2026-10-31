@@ -94,6 +94,20 @@ final class ClaudiaControlInbox {
         let identifier = "cmd-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
         switch commandName {
+        case "botSay":
+            // A message to a bot's chat ("team" for the Project room), as if typed in Theo.
+            let botID = command["bot"] as? String ?? BotsStore.teamID
+            let text = command["text"] as? String ?? ""
+            guard !text.isEmpty else { reply(identifier, ok: false, result: nil, error: "No text."); return }
+            if botID == BotsStore.teamID { BotsStore.shared.sendToTeam(text) } else { BotsStore.shared.send(text, to: botID) }
+            reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "botsState":
+            let store = BotsStore.shared
+            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder,
+                                           "branch": $0.branch ?? NSNull(), "pullRequest": $0.pullRequest ?? NSNull()] as [String: Any] }
+            reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "runs": runs,
+                                                 "bots": store.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model] }],
+                  error: nil)
         case "status":
             reply(identifier, ok: true, result: [
                 "brain": companionManager.selectedModel,
@@ -170,15 +184,23 @@ final class ClaudiaControlInbox {
             }
             let researchController = companionManager.researchController
             researchController.start(request, speaks: command["speak"] as? Bool ?? false)
+            let runNumber = researchController.runNumber
             Task {
                 // Wait for the brief (helpers read in parallel; at most 5 minutes).
                 let deadline = Date().addingTimeInterval(300)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                while Date() < deadline, researchController.isRunning {
+                while Date() < deadline, researchController.isRunning, researchController.runNumber == runNumber {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
+                guard researchController.runNumber == runNumber else {
+                    reply(identifier, ok: false, result: ["state": "cancelled"],
+                          error: "A newer research request replaced this one before it finished.")
+                    return
+                }
                 let status = researchController.lastStatus
-                reply(identifier, ok: (status["state"] as? String) == "done", result: status, error: nil)
+                // Done only counts with a brief: a run that found no sources isn't a success.
+                let hasBrief = !((status["brief"] as? String) ?? "").isEmpty
+                reply(identifier, ok: (status["state"] as? String) == "done" && hasBrief, result: status, error: nil)
             }
 
         case "board":

@@ -53,7 +53,7 @@ final class ReviewPanelController {
         default: targetSize = NSSize(width: 440, height: 220)
         }
         if !panel.isVisible || panel.frame.size != targetSize {
-            let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+            let screenFrame = ClaudiaScreen.forClaudiasWindows?.visibleFrame ?? .zero
             let origin = NSPoint(x: screenFrame.midX - targetSize.width / 2, y: screenFrame.midY - targetSize.height / 2)
             panel.setFrame(NSRect(origin: origin, size: targetSize), display: true)
         }
@@ -81,7 +81,7 @@ final class ReviewPanelController {
         let panel = panel ?? makePanel()
         self.panel = panel
         let targetSize = NSSize(width: 440, height: 250)
-        let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        let screenFrame = ClaudiaScreen.forClaudiasWindows?.visibleFrame ?? .zero
         let origin = NSPoint(x: screenFrame.maxX - targetSize.width - 16, y: screenFrame.maxY - targetSize.height - 16)
         panel.setFrame(NSRect(origin: origin, size: targetSize), display: true)
         panel.title = "Clicky — Working"

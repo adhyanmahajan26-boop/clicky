@@ -16,18 +16,47 @@ import Foundation
 enum BotRunnerError: LocalizedError {
     case notInstalled(String)
     case failed(String)
+    case freeLimit
 
     var errorDescription: String? {
         switch self {
         case .notInstalled(let engine): return "\(engine) isn't installed on this Mac."
         case .failed(let message): return message
+        case .freeLimit: return "OpenCode's free models have hit their usage limit."
         }
+    }
+}
+
+/// Claude sessions of the Haiku stand-in, by bot and OpenCode session (kept while Theo runs).
+final class FallbackSessions: @unchecked Sendable {
+    static let shared = FallbackSessions()
+    private let lock = NSLock()
+    private var sessions: [String: String] = [:]
+    func get(_ key: String) -> String? { lock.withLock { sessions[key] } }
+    func set(_ key: String, _ value: String) { lock.withLock { sessions[key] = value } }
+}
+
+/// The engine process behind each bot's reply in progress, so a reply can be stopped.
+final class BotProcesses: @unchecked Sendable {
+    static let shared = BotProcesses()
+    private let lock = NSLock()
+    private var running: [String: Process] = [:]
+
+    func set(_ botID: String, _ process: Process) { lock.withLock { running[botID] = process } }
+    func remove(_ botID: String, _ process: Process) {
+        lock.withLock { if running[botID] === process { running[botID] = nil } }
+    }
+    /// Stops the bot's reply; false when nothing was running.
+    @discardableResult func stop(_ botID: String) -> Bool {
+        guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning else { return false }
+        process.terminate()
+        return true
     }
 }
 
 enum BotRunner {
     /// The longest one bot turn may take.
-    static let turnLimitSeconds: Double = 300
+    static let turnLimitSeconds: Double = 420
 
     /// Where bots run: the folder that holds their memory files (~/.t3/bots), so reading and keeping
     /// memory never needs a permission nobody is there to give.
@@ -37,18 +66,80 @@ enum BotRunner {
         return folder
     }
 
+    /// Theo's MCP tools a bot may use on its own.
+    static let theoBotTools = ["claudia_research", "claudia_app", "claudia_attachments", "claudia_status"]
+
     /// The Claude tools a bot may use without asking: reading and the web, its memory file, and the
     /// connectors of its own apps.
     static func claudeAllowedTools(for bot: NativeBot) -> [String] {
         let memoryFolder = "~/.t3/bots/\(bot.id)/**"
         var tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
-        tools += BotConnectors.known.filter { bot.apps.contains($0.id) }.compactMap(\.claudeToolPrefix)
+        for connector in BotConnectors.known where bot.apps.contains(connector.id) {
+            if connector.id == "theo" {
+                // Research, notes and the app bridge; never the screen or Theo's voice, with nobody watching.
+                tools += theoBotTools.map { "mcp__plugin_theo_theo__\($0)" }
+            } else if let prefix = connector.claudeToolPrefix {
+                tools.append(prefix)
+            }
+        }
         return tools
+    }
+
+    /// Connector tools a bot never runs on its own, since nobody is there to say yes: sending, replying,
+    /// forwarding, deleting, sharing, spam and cancelling. Drafts and new pages are fine.
+    static let irreversibleTools = ConnectorBridge.writeTools.filter { name in
+        ["send", "reply", "forward", "trash", "delete", "spam", "share", "cancel", "clear"].contains { name.contains($0) }
     }
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        do {
+            return try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+        } catch BotRunnerError.freeLimit {
+            // OpenCode's free models are used up for now: this turn runs on Claude Haiku instead, so the
+            // bot still answers. Its OpenCode session stays for when the free models are back.
+            var standIn = bot
+            standIn.provider = "claude"
+            standIn.model = fallbackModel
+            standIn.effort = nil
+            standIn.thinking = nil
+            standIn.fast = nil
+            // Claude gets the persona as its system prompt; drop the copy an OpenCode first message carries.
+            var claudePrompt = prompt
+            if let range = prompt.range(of: "\n\n---\n\n"), prompt.hasPrefix(bot.instructions) {
+                claudePrompt = String(prompt[range.upperBound...])
+            }
+            // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
+            let key = "\(bot.id)#\(session ?? "new")"
+            let standInSession = FallbackSessions.shared.get(key)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, onText: onText)
+            if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
+            return (result.text + "\n\n_(OpenCode's free models hit their usage limit, so this reply came from Claude Haiku.)_", session)
+        }
+    }
+
+    static let fallbackModel = "claude-haiku-5-5"
+
+    /// OpenCode logs "Free usage limit reached" and keeps retrying without printing anything, so a turn
+    /// would sit there until the time limit. This checks its log for that error since `start`.
+    static func openCodeHitFreeLimit(since start: Date) -> Bool {
+        let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/opencode/log/opencode.log")
+        guard let handle = try? FileHandle(forReadingFrom: log) else { return false }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > 65_536 ? size - 65_536 : 0)
+        let tail = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
+        let since = ISO8601DateFormatter().string(from: start)
+        return tail.split(separator: "\n").contains { line in
+            guard line.contains("Free usage limit reached"), let stamp = line.split(separator: " ").first?
+                .replacingOccurrences(of: "timestamp=", with: "") else { return false }
+            return String(stamp.prefix(19)) >= String(since.prefix(19))
+        }
+    }
+
+    private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+                                    onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
@@ -60,8 +151,10 @@ enum BotRunner {
         if isClaude {
             arguments = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                          "--model", bot.model,
+                         // Only the allowed tools run: the user's own permission mode (auto) mustn't widen it.
+                         "--permission-mode", "dontAsk",
                          "--append-system-prompt", BotPrompts.persona(bot: bot, team: team),
-                         "--allowedTools"] + claudeAllowedTools(for: bot)
+                         "--allowedTools"] + claudeAllowedTools(for: bot) + ["--disallowedTools"] + irreversibleTools
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
             var settings: [String: Bool] = [:]
             if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }
@@ -104,12 +197,27 @@ enum BotRunner {
         errorHandle?.seekToEndOfFile()
         process.standardError = errorHandle ?? FileHandle.nullDevice
         try process.run()
+        BotProcesses.shared.set(bot.id, process)
+        defer { BotProcesses.shared.remove(bot.id, process) }
         // A turn that runs past the limit is stopped, so one stuck bot can't hold up the Project room.
         let watchdog = Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
             if process.isRunning { process.terminate() }
         }
         defer { watchdog.cancel() }
+        let started = Date()
+        let limitCheck = Task.detached {
+            guard !isClaude else { return false }
+            for _ in 0..<12 {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if !process.isRunning { return false }
+                if openCodeHitFreeLimit(since: started) {
+                    process.terminate()
+                    return true
+                }
+            }
+            return false
+        }
 
         var parser = BotStreamParser(isClaude: isClaude)
         for await line in lines(of: output.fileHandleForReading) where parser.consume(line) {
@@ -118,6 +226,8 @@ enum BotRunner {
         }
         process.waitUntilExit()
         try? errorHandle?.close()
+        if parser.text.isEmpty, await limitCheck.value { throw BotRunnerError.freeLimit }
+        limitCheck.cancel()
         if let error = parser.error, parser.text.isEmpty { throw BotRunnerError.failed(error) }
         if parser.text.isEmpty && process.terminationStatus != 0 {
             throw BotRunnerError.failed("\(provider.displayName) stopped (exit \(process.terminationStatus)). " +
@@ -135,6 +245,16 @@ extension BotRunner {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
+    /// Adds Theo's MCP server to Grok's own config (~/.grok/config.toml), once. A project config isn't
+    /// enough: Grok only loads a folder's servers once that folder is trusted, which needs a person.
+    static func ensureGrokTheoServer() {
+        let config = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/config.toml")
+        let current = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
+        guard !current.contains("[mcp_servers.theo]"), let executable = Bundle.main.executableURL?.path else { return }
+        let entry = "\n[mcp_servers.theo]\ncommand = \"\(executable)\"\nargs = [\"--mcp\"]\nenabled = true\n"
+        try? (current + entry).write(to: config, atomically: true, encoding: .utf8)
+    }
+
     /// Grok may read and search the web, nothing else, since nobody is there to approve more.
     static let grokTools = "web_search,web_fetch,read_file,grep,list_dir"
 
@@ -144,6 +264,11 @@ extension BotRunner {
         var arguments = ["-p", fullPrompt, "-m", bot.model, "--output-format", "streaming-messages-json",
                          "--permission-mode", "dontAsk", "--tools", grokTools, "--no-subagents"]
         if let effort = bot.effort, !effort.isEmpty { arguments += ["--reasoning-effort", effort] }
+        if !bot.apps.isEmpty {
+            // Theo's MCP server (apps through claudia_app, research, screen) in the bots folder's Grok config.
+            ensureGrokTheoServer()
+            arguments += theoBotTools.flatMap { ["--allow", "mcp__theo__\($0)"] }
+        }
         if let session { arguments += ["--resume", session] }
         let data: Data = try await Task.detached {
             let process = Process()
@@ -156,9 +281,16 @@ extension BotRunner {
             process.environment = environment
             let output = Pipe()
             process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
+            let errorLog = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clicky/bots-grok.log")
+            if !FileManager.default.fileExists(atPath: errorLog.path) { FileManager.default.createFile(atPath: errorLog.path, contents: nil) }
+            let errorHandle = try? FileHandle(forWritingTo: errorLog)
+            errorHandle?.seekToEndOfFile()
+            process.standardError = errorHandle ?? FileHandle.nullDevice
+            defer { try? errorHandle?.close() }
             process.standardInput = FileHandle.nullDevice
             try process.run()
+            BotProcesses.shared.set(bot.id, process)
+            defer { BotProcesses.shared.remove(bot.id, process) }
             let watchdog = Task.detached {
                 try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
                 if process.isRunning { process.terminate() }

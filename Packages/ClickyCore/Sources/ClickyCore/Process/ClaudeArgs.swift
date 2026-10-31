@@ -86,7 +86,8 @@ public struct ClaudeArgs: Sendable {
             "--verbose",
             "--strict-mcp-config",
             "--no-session-persistence",
-            "--model", ClickyModels.helper,
+            // The helper can be another engine's model when the brain isn't Claude; this probe is Claude's.
+            "--model", ClickyModels.helper.hasPrefix("claude") ? ClickyModels.helper : ClickyModels.haiku,
             "--setting-sources", ""
         ] + (disablesSkills ? ["--disable-slash-commands"] : []) + [
             "--settings", AgentInvocation.jsonString(probeSettings)

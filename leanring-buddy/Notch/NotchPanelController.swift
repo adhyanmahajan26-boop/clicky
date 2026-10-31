@@ -323,6 +323,8 @@ final class NotchPanelController: NSObject {
             var frame = CGRect(x: anchor.x - size.width / 2, y: anchor.y - size.height, width: size.width, height: size.height)
             // Near the bottom it opens upward instead.
             if frame.minY < onScreen.minY + 8 { frame.origin.y = min(anchor.y, onScreen.maxY - size.height) }
+            // An anchor saved on a taller or unplugged display mustn't leave the pill above the top.
+            frame.origin.y = min(frame.origin.y, onScreen.maxY - size.height - 4)
             frame.origin.x = min(max(frame.minX, onScreen.minX + 4), onScreen.maxX - size.width - 4)
             return frame
         }

@@ -59,6 +59,11 @@ enum ClaudiaMCPServer {
         Tool(name: "claudia_stop",
              description: "Stop Theo talking and anything she's doing.",
              properties: [:], required: []),
+        Tool(name: "claudia_app",
+             description: "Use one of the user's signed-in apps through Theo's Claude account: gmail, notion, calendar (Notion Calendar), drive, docs or sheets. Describe what to look up (or, for gmail, a draft to write) in plain words; it reads and returns the answer. Reading and Gmail drafts only: nothing is sent, deleted or changed.",
+             properties: ["app": ["type": "string", "enum": ConnectorBridge.apps.keys.sorted()],
+                          "request": ["type": "string", "description": "What to find, read or draft, in plain words."]],
+             required: ["app", "request"]),
         Tool(name: "claudia_status",
              description: "Theo's brain model, screens, voice and permissions.",
              properties: [:], required: [])
@@ -130,6 +135,9 @@ enum ClaudiaMCPServer {
         case "claudia_stop": command = ["cmd": "stop"]
         case "claudia_attachments": command = ["cmd": "attachments"]
         case "claudia_status": command = ["cmd": "status"]
+        case "claudia_app":
+            let answer = ConnectorBridge.run(app: arguments["app"] as? String ?? "", request: arguments["request"] as? String ?? "")
+            return text(answer.text, isError: !answer.ok)
         default: return text("Unknown tool \(name).", isError: true)
         }
         guard ensureClaudiaRunning() else { return text("Theo isn't running and couldn't be opened.", isError: true) }
@@ -227,5 +235,78 @@ enum ClaudiaMCPServer {
         }
         try? FileManager.default.removeItem(at: requestURL)
         return nil
+    }
+}
+
+/// Lets bots on OpenCode or Grok use the claude.ai connectors (Gmail, Notion, Google) that only Claude Code
+/// can reach: a Haiku run with just that app's reading tools (and Gmail drafts) does the lookup.
+enum ConnectorBridge {
+    static let apps: [String: [String]] = [
+        "gmail": ["search_threads", "get_thread", "get_message", "list_labels", "list_drafts", "get_draft", "create_draft"]
+            .map { "mcp__claude_ai_Gmail__\($0)" },
+        "notion": ["notion-search", "notion-fetch", "notion-query-data-sources", "notion-query-multiple-data-sources",
+                   "notion-get-comments", "notion-get-users", "notion-get-self", "notion-list-recent-pages",
+                   "notion-list-favorite-pages", "notion-list-private-pages", "notion-list-shared-pages",
+                   "notion-query-meeting-notes"].map { "mcp__claude_ai_Notion__\($0)" },
+        "calendar": ["notion-calendar-list-calendars", "notion-calendar-list-events", "notion-calendar-list-contacts",
+                     "notion-calendar-list-calendar-resources"].map { "mcp__claude_ai_Notion__\($0)" },
+        "drive": ["search_files", "list_recent_files", "read_file_content", "get_file_metadata"]
+            .map { "mcp__claude_ai_Google_Drive__\($0)" },
+        "docs": ["mcp__claude_ai_Google_Docs__read_doc", "mcp__claude_ai_Google_Drive__search_files"],
+        "sheets": ["mcp__claude_ai_Google_Sheets__get_spreadsheet", "mcp__claude_ai_Google_Sheets__get_values",
+                   "mcp__claude_ai_Google_Drive__search_files"],
+    ]
+
+    /// Every connector tool that sends, deletes or changes something, denied even if a setting would allow it.
+    static let writeTools: [String] = ["send_message", "reply", "forward", "trash_message", "trash_thread", "delete_draft",
+                                       "delete_label", "create_label", "update_label", "label_message", "label_thread",
+                                       "unlabel_message", "unlabel_thread", "update_message_labels", "mark_message_spam",
+                                       "mark_thread_spam", "update_draft", "apply_sensitive_message_label",
+                                       "apply_sensitive_thread_label"].map { "mcp__claude_ai_Gmail__\($0)" }
+        + ["notion-create-pages", "notion-update-page", "notion-delete-pages", "notion-move-pages", "notion-create-database",
+           "notion-delete-databases", "notion-update-data-source", "notion-create-comment", "notion-delete-comment",
+           "notion-duplicate-page", "notion-calendar-create-events", "notion-calendar-update-events",
+           "notion-calendar-cancel-events"].map { "mcp__claude_ai_Notion__\($0)" }
+        + ["create_file", "update_file", "trash_file", "share_file", "copy_file"].map { "mcp__claude_ai_Google_Drive__\($0)" }
+        + ["mcp__claude_ai_Google_Docs__update_doc"]
+        + ["append_values", "batch_clear_values", "update_values", "update_formulas", "update_spreadsheet", "insert_dimension",
+           "copy_sheet_to_another_spreadsheet"].map { "mcp__claude_ai_Google_Sheets__\($0)" }
+
+    static func run(app: String, request: String) -> (ok: Bool, text: String) {
+        guard let tools = apps[app.lowercased()] else { return (false, "Unknown app \(app). Use one of: \(apps.keys.sorted().joined(separator: ", ")).") }
+        guard !request.isEmpty else { return (false, "Say what to look up.") }
+        guard let claude = BrainCLIRunner.locateExecutable(for: .claude) else { return (false, "Claude Code isn't installed on this Mac.") }
+        let process = Process()
+        process.executableURL = claude
+        // dontAsk refuses every tool that isn't pre-allowed (the user's own "auto" mode would otherwise be able
+        // to approve sending or deleting), no built-in tools, and the write tools denied outright on top.
+        process.arguments = ["-p", "--model", ClickyModels.haiku, "--output-format", "json",
+                             "--permission-mode", "dontAsk", "--tools", "",
+                             "--disallowedTools"] + writeTools + ["--allowedTools"] + tools + [
+            "--append-system-prompt",
+            "You fetch information from the user's \(app) for another assistant. Use only your \(app) tools, answer " +
+            "with the facts found (names, dates, links, short quotes) and nothing else. Never send, delete or change anything.",
+            "--", request]
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        process.currentDirectoryURL = home
+        var environment = ProcessInfo.processInfo.environment
+        environment["PWD"] = home.path
+        environment["NO_COLOR"] = "1"
+        process.environment = environment
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return (false, "Couldn't start Claude Code.") }
+        let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: deadline)
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        deadline.cancel()
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? String else {
+            return (false, "\(app) lookup didn't finish: \(String(decoding: data.suffix(200), as: UTF8.self))")
+        }
+        return (object["is_error"] as? Bool != true, result)
     }
 }
