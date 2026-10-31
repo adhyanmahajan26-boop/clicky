@@ -85,6 +85,11 @@ final class CompanionManager: ObservableObject {
     private var agentsVoiceStateCancellable: AnyCancellable?
     private var listeningBrainRemovalTask: Task<Void, Never>?
 
+    /// Theo's bots live in the home window's Bots tab (with Connectors next to it).
+    func showBotsWindow() {
+        TheoHomeWindowController.show(companionManager: self, tab: .bots)
+    }
+
     /// Opens the Agents window (menu bar, spark click, or [AGENTS:open]).
     /// Only these user requests order it front; agent updates never do.
     func showAgentsDashboard(activatesClicky: Bool = true) {

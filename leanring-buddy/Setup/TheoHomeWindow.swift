@@ -41,10 +41,16 @@ enum TheoHomeWindowController {
             created.setFrameAutosaveName("TheoHome")
             window = created
         }
+        NotificationCenter.default.post(name: .theoHomeSelectTab, object: tab.rawValue)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
     }
+}
+
+extension Notification.Name {
+    /// Switches the open home window to a tab (object: the tab's raw value).
+    static let theoHomeSelectTab = Notification.Name("TheoHomeSelectTab")
 }
 
 private let homeGradient = LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45), Color(red: 0.75, green: 0.27, blue: 0.9)],
@@ -52,13 +58,15 @@ private let homeGradient = LinearGradient(colors: [Color(red: 1, green: 0.62, bl
 
 struct TheoHomeView: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case home, notes, ask, t3, settings
+        case home, notes, ask, bots, connectors, t3, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: return "Home"
             case .notes: return "Notes"
             case .ask: return "Ask Theo"
+            case .bots: return "Bots"
+            case .connectors: return "Connectors"
             case .t3: return "T3 Code"
             case .settings: return "Settings"
             }
@@ -68,6 +76,8 @@ struct TheoHomeView: View {
             case .home: return "house"
             case .notes: return "note.text"
             case .ask: return "bubble.left.and.text.bubble.right"
+            case .bots: return "person.2.wave.2"
+            case .connectors: return "point.3.connected.trianglepath.dotted"
             case .t3: return "puzzlepiece.extension"
             case .settings: return "gearshape"
             }
@@ -76,6 +86,7 @@ struct TheoHomeView: View {
 
     @ObservedObject var companionManager: CompanionManager
     @State private var tab: Tab
+    @ObservedObject private var botsSelection = BotsSelection.shared
 
     init(companionManager: CompanionManager, initialTab: Tab) {
         self.companionManager = companionManager
@@ -123,11 +134,16 @@ struct TheoHomeView: View {
                 case .home: HomeTab(companionManager: companionManager, go: { tab = $0 })
                 case .notes: NotesTab()
                 case .ask: AskTab()
+                case .bots: BotsRootView(store: BotsStore.shared, selection: botsSelection, showsConnectors: false)
+                case .connectors: ConnectorsScreen(bots: BotsStore.shared.bots).preferredColorScheme(.dark)
                 case .t3: T3Tab()
                 case .settings: SettingsTab(companionManager: companionManager)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .theoHomeSelectTab)) { note in
+            if let raw = note.object as? String, let next = Tab(rawValue: raw) { tab = next }
         }
     }
 }

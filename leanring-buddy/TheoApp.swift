@@ -53,6 +53,11 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
+    /// `--tab=bots` (or another home tab) opens the home window on that tab.
+    static var launchTab: TheoHomeView.Tab? {
+        CommandLine.arguments.first { $0.hasPrefix("--tab=") }.flatMap { TheoHomeView.Tab(rawValue: String($0.dropFirst(6))) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests { return }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -81,10 +86,22 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(ClickySettings.showsInDock ? .regular : .accessory)
         if SetupGuideWindowController.isNeededAtLaunch {
             SetupGuideWindowController.show(companionManager: companionManager)
-        } else if ClickySettings.showsInDock {
-            TheoHomeWindowController.show(companionManager: companionManager)
+        } else if ClickySettings.showsInDock || Self.launchTab != nil {
+            TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home)
         }
         if !companionManager.allPermissionsGranted { menuBar?.showPanelOnLaunch() }
+        // `--bot-say=<bot id>:<message>` opens that bot's chat and sends the message (a quick check of
+        // a bot from Terminal).
+        if let say = CommandLine.arguments.first(where: { $0.hasPrefix("--bot-say=") }) {
+            let value = String(say.dropFirst("--bot-say=".count))
+            if let colon = value.firstIndex(of: ":") {
+                let botID = String(value[..<colon])
+                BotsSelection.shared.pane = botID == BotsStore.teamID ? .team : .bot(botID)
+                TheoHomeWindowController.show(companionManager: companionManager, tab: .bots)
+                let text = String(value[value.index(after: colon)...])
+                if botID == BotsStore.teamID { BotsStore.shared.sendToTeam(text) } else { BotsStore.shared.send(text, to: botID) }
+            }
+        }
     }
 
     /// Clicking the Dock icon (or opening Theo again) brings back its window, or the guide if setup isn't done.
