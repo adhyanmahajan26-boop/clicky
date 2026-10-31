@@ -49,7 +49,9 @@ public struct NarrationSegmenter: Sendable {
         /// For the Qwen voice: its first WAV arrives only when it's complete,
         /// and synthesis time grows with length (live, cloning one reference
         /// clip: ~1.1 s at 15 chars, ~1.4 s at 30, ~2.5 s at 63).
-        public static let qwen = Options(firstCutMinChars: 12, firstCutMinSentenceLen: 0, firstCutMaxChars: 32)
+        /// The opener is a clause of 24–56 characters (~2–3.5 s of audio), long enough to cover making
+        /// the next segment instead of one or two words and then a gap.
+        public static let qwen = Options(firstCutMinChars: 24, firstCutMinSentenceLen: 0, firstCutMaxChars: 56)
     }
 
     public let options: Options

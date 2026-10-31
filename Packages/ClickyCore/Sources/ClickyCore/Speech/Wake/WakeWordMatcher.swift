@@ -382,7 +382,9 @@ public enum WakeTurnLimits {
 /// ignored), so a "stop" inside a longer sentence never counts; and the stop word must not be one
 /// Clicky itself just said (its voice reaches the mic).
 public enum WakeStopCommand {
-    static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "enough", "quiet", "shush", "hold", "pause", "cancel"]
+    /// Clear commands only: soft words ("enough", "pause", "quiet") turned up in ordinary speech and
+    /// in Clicky's own voice coming back through the speakers, and cut answers off after a few words.
+    static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "shush", "hold", "cancel"]
     static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "it", "now", "please", "on", "talking",
                                           "be", "jao", "jaao", "karo", "that", "the"]
 

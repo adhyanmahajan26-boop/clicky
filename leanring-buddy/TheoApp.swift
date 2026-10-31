@@ -58,8 +58,24 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         CommandLine.arguments.first { $0.hasPrefix("--tab=") }.flatMap { TheoHomeView.Tab(rawValue: String($0.dropFirst(6))) }
     }
 
+    /// Opened from Finder, Theo's console lines (barge-ins, voice errors, cut segments) went nowhere, so a
+    /// cut-off answer left no trace. They go to ~/Library/Logs/Clicky/theo.log, started fresh past 20 MB.
+    private static func keepConsoleLog() {
+        guard isatty(STDOUT_FILENO) == 0 else { return }
+        let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clicky/theo.log")
+        try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let size = (try? FileManager.default.attributesOfItem(atPath: log.path))?[.size] as? Int, size > 20_000_000 {
+            try? FileManager.default.removeItem(at: log)
+        }
+        freopen(log.path, "a", stdout)
+        freopen(log.path, "a", stderr)
+        setvbuf(stdout, nil, _IOLBF, 0)
+        print("—— Theo started \(Date()) ——")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests { return }
+        Self.keepConsoleLog()
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
         // a privacy prompt in Theo's name, so they always start from home instead.

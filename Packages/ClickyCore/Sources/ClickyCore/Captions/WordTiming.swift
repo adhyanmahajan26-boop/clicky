@@ -151,7 +151,8 @@ public enum WordTiming {
     /// start of the last pause before that limit (else at the limit).
     /// nil when the audio is a normal length.
     public static func overrunCutTime(_ audio: PCMAudio, characters: Int) -> TimeInterval? {
-        let limit = QwenTuning.overrunFactor * QwenTuning.estimatedAudioSeconds(characters: characters)
+        // At least 3 s: a short segment ("hey! ") plus the voice's lead-in silence ran past a 1 s limit.
+        let limit = max(3, QwenTuning.overrunFactor * QwenTuning.estimatedAudioSeconds(characters: characters))
         guard limit > 0, audio.duration > limit else { return nil }
         let lastPauseBeforeLimit = pauses(audio).last { $0.start < limit }
         return lastPauseBeforeLimit?.start ?? limit

@@ -117,7 +117,7 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
 // MARK: - Tuning
 
 @Test func watchdogAndOverrunFormulas() {
-    #expect(QwenTuning.lookahead == 1)
+    #expect(QwenTuning.lookahead == 2)
     // Generous: a slow segment is waited for, never swapped to another voice.
     #expect(QwenTuning.watchdogSeconds(characters: 0) == 20)
     #expect(QwenTuning.watchdogSeconds(characters: 30) == 20)
@@ -262,7 +262,7 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
 @Test func qwenSegmenterCutsTheFirstClauseEarly() {
     let sentence = "Open the pull request, go to Files changed, and check the build."
     let qwenSegments = narrationSegments(sentence, options: .qwen, charByChar: false)
-    #expect(qwenSegments.first == "Open the pull request, ")
+    #expect(qwenSegments.first == "Open the pull request, go to Files changed, ")
     #expect(qwenSegments.joined() == sentence)
     #expect(narrationSegments(sentence, options: .qwen, charByChar: true) == qwenSegments)
     // Default options: today's behaviour (a 64-char first sentence isn't cut).
