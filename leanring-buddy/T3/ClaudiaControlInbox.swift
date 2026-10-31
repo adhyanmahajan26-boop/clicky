@@ -160,6 +160,30 @@ final class ClaudiaControlInbox {
             guard let id = command["id"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs id."); return }
             BotsStore.shared.deleteGroup(id)
             reply(identifier, ok: true, result: ["deleted": id], error: nil)
+        case "harnessState":
+            // The harnesses on this Mac, the defaults and where builds go (refreshes in the background first).
+            let center = HarnessCenter.shared
+            if command["refresh"] as? Bool == true { center.refresh(force: true) }
+            let statuses = HarnessCatalog.all.map { info -> [String: Any] in
+                let status = center.status(for: info.id)
+                return ["id": info.id, "installed": status.installed, "loggedIn": status.loggedIn as Any? ?? NSNull(),
+                        "account": status.account ?? NSNull(), "models": center.models(for: info.id).prefix(8).map(\.id)]
+            }
+            reply(identifier, ok: true, result: ["harnesses": statuses, "defaultHarness": center.defaultHarness,
+                                                 "codingTarget": center.codingTarget, "codingModel": center.codingModel ?? NSNull(),
+                                                 "terminals": TerminalSessions.shared.allIDs], error: nil)
+        case "harnessSet":
+            // {codingTarget, codingModel, codingEffort, defaultHarness}
+            let center = HarnessCenter.shared
+            if let target = command["codingTarget"] as? String { center.codingTarget = target }
+            if let model = command["codingModel"] as? String { center.codingModel = model.isEmpty ? nil : model }
+            if let effort = command["codingEffort"] as? String { center.codingEffort = effort.isEmpty ? nil : effort }
+            if let harness = command["defaultHarness"] as? String { center.defaultHarness = harness }
+            reply(identifier, ok: true, result: ["codingTarget": center.codingTarget, "defaultHarness": center.defaultHarness], error: nil)
+        case "terminalText":
+            // The visible text of a live terminal: {id}
+            let id = command["id"] as? String ?? ""
+            reply(identifier, ok: true, result: TerminalSessions.shared.session(for: id)?.screenText() ?? "", error: nil)
         case "groupSave":
             // Adds or updates a bot group: {id, name, head, members, symbol}.
             guard let id = command["id"] as? String, !id.isEmpty, let name = command["name"] as? String else {

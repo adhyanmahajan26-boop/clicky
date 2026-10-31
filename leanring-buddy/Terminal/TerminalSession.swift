@@ -145,6 +145,8 @@ final class TerminalSessions: ObservableObject {
     @Published private(set) var sessions: [String: TerminalSession] = [:]
 
     func session(for runID: String) -> TerminalSession? { sessions[runID] }
+    /// The ids of the live sessions (for the control inbox and tests).
+    var allIDs: [String] { Array(sessions.keys).sorted() }
 
     /// Starts (and registers) a session. Returns nil when the process could not be launched.
     @discardableResult

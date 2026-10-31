@@ -60,7 +60,7 @@ struct TodayView: View {
                     if notes.isEmpty { empty("Research, articles, whiteboards and screenshots land here.") }
                     ForEach(notes.prefix(4), id: \.id) { note in
                         row(icon: AnyView(symbolTile(note.kind == "whiteboard" ? "scribble.variable" : note.kind == "screenshot" ? "camera.viewfinder" : "doc.text")),
-                            title: note.title, detail: note.kind.capitalized,
+                            title: note.title.hasPrefix("Research ") ? String(note.title.dropFirst(9)) : note.title, detail: note.kind.capitalized,
                             trailing: note.date.formatted(.relative(presentation: .named))) {
                             selection.pane = .notes
                         }

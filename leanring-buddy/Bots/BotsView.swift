@@ -111,16 +111,20 @@ struct BotsRootView: View {
             // Room for the window's traffic lights.
             Color.clear.frame(height: 40)
             VStack(spacing: 1) {
-                Menu {
-                    Button { addingBot = true } label: { Label("New bot", systemImage: "plus") }
-                    Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
-                    Divider()
-                    Button { namingSectionFor = ""; sectionName = "" } label: { Label("New category", systemImage: "folder.badge.plus") }
-                } label: {
-                    navLabel("square.and.pencil", "New bot", shortcut: "⌘N")
-                } primaryAction: { addingBot = true }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                .keyboardShortcut("n", modifiers: .command)
+                HStack(spacing: 0) {
+                    Button { addingBot = true } label: { navLabel("square.and.pencil", "New bot") }
+                        .buttonStyle(SidebarButtonStyle(isSelected: false))
+                        .keyboardShortcut("n", modifiers: .command)
+                    Menu {
+                        Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
+                        Button { namingSectionFor = ""; sectionName = "" } label: { Label("New category", systemImage: "folder.badge.plus") }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
+                            .frame(width: 28, height: 30).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("New group chat or category")
+                }
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).frame(width: 20)
                     TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
@@ -679,7 +683,7 @@ struct BotChatScreen: View {
             } else if let group, let head = store.head(of: group) {
                 BotAvatar(bot: head, size: 84, state: .idle)
                 Text("\(group.name) chat").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                Text("\(head.name) leads this group: they hand your request to \(Self.list(groupBots.dropFirst().map(\.name))), then merge the answers. Ask them to build something and it goes to T3 Code.")
+                Text("\(head.name) leads this group: they hand your request to \(Self.list(groupBots.dropFirst().map(\.name))), then merge the answers. Ask them to build something and it goes to \(HarnessCatalog.label(HarnessPrefs.codingTarget)).")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             }
         }
@@ -1153,24 +1157,28 @@ struct T3HandoffButton: View {
     private var sent: Bool { sentHere || alreadySent }
 
     var body: some View {
-        HStack {
-            Spacer().frame(width: 46)
+        let target = HarnessCatalog.label(HarnessPrefs.codingTarget)
+        HStack(spacing: 10) {
             Button {
                 let prompt = BotsT3.promptBlock(in: text) ?? text
                 BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), room: room)
                 sentHere = true
             } label: {
-                Label(sent ? "Submitted to T3 Code" : (BotsT3.promptBlock(in: text) != nil ? "Submit prompt to T3 Code" : "Submit to T3 Code"),
-                      systemImage: sent ? "checkmark" : "arrow.up.forward.app")
-                    .font(.system(size: prominent ? 12 : 11, weight: prominent ? .semibold : .regular))
-                    .padding(.horizontal, prominent ? 12 : 0).padding(.vertical, prominent ? 6 : 0)
-                    .background(Capsule().fill(prominent ? DS.Colors.accent.opacity(0.9) : .clear))
-                    .foregroundColor(prominent ? .white : DS.Colors.textTertiary)
+                Label(sent ? "Sent to \(target)" : "Send to \(target)", systemImage: sent ? "checkmark" : "arrow.up.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14).frame(height: 32)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(sent ? DS.Colors.surface : DS.Colors.accent))
+                    .foregroundColor(sent ? DS.Colors.textSecondary : .white)
             }
             .buttonStyle(.plain)
             .disabled(sent)
+            if !sent {
+                Button("Change") { TheoSettingsWindowController.show(section: .coding) }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
+            }
             Spacer()
         }
+        .padding(.leading, 38)
     }
 }
 

@@ -542,26 +542,24 @@ struct SettingsTab: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("SETTINGS").font(.system(size: 10.5, weight: .bold)).tracking(0.8).foregroundColor(.secondary)
-                    .padding(.leading, 10).padding(.bottom, 8)
                 ForEach(Section.allCases) { item in
-                    Button(action: { withAnimation(.easeOut(duration: 0.15)) { section = item } }) {
-                        HStack(spacing: 9) {
-                            Image(systemName: item.symbol).font(.system(size: 13)).frame(width: 18)
-                                .foregroundColor(section == item ? Color.accentColor : .secondary)
-                            Text(item.title).font(.system(size: 13, weight: section == item ? .semibold : .regular))
+                    Button(action: { withAnimation(DS.Motion.hover) { section = item } }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: item.symbol).font(.system(size: 14)).frame(width: 20)
+                                .foregroundColor(section == item ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+                            Text(item.title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
                             Spacer()
                         }
-                        .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(section == item ? Color.accentColor.opacity(0.14) : Color.clear))
+                        .padding(.horizontal, 8).frame(height: 30)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SidebarButtonStyle(isSelected: section == item))
                 }
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.top, 40)
-            .frame(width: 168)
+            .padding(.horizontal, 8).padding(.top, 44)
+            .frame(width: 200)
+            .background(DS.Colors.sidebar)
             .frame(maxHeight: .infinity, alignment: .top)
             Divider()
             ScrollView {

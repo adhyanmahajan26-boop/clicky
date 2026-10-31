@@ -15,6 +15,7 @@ struct HarnessRow: View {
     let info: HarnessInfo
     let status: HarnessStatus
     let isSelected: Bool
+    var isChecking = false
     let action: () -> Void
 
     var body: some View {
@@ -36,11 +37,12 @@ struct HarnessRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarButtonStyle(isSelected: isSelected))
-        .disabled(!status.installed)
-        .opacity(status.installed ? 1 : 0.55)
+        .disabled(!status.installed && !isChecking)
+        .opacity(status.installed || isChecking ? 1 : 0.55)
     }
 
     private var subtitle: String {
+        if isChecking { return "Checking…" }
         if !status.installed { return "Not installed" }
         if status.loggedIn == false { return "Not signed in · \(Self.signIn(info.id))" }
         return status.account ?? status.detail ?? "Ready"
@@ -108,7 +110,8 @@ struct CodingSettingsView: View {
             group("Builds go to", "When a bot writes a build prompt, this is where it's coded. T3 Code tracks it in its own app; any other harness runs in a live terminal inside Theo.") {
                 VStack(spacing: 0) {
                     ForEach(HarnessCatalog.codingTargets, id: \.id) { info in
-                        HarnessRow(info: info, status: center.status(for: info.id), isSelected: center.codingTarget == info.id) {
+                        HarnessRow(info: info, status: center.status(for: info.id), isSelected: center.codingTarget == info.id,
+                                   isChecking: center.statuses[info.id] == nil) {
                             center.codingTarget = info.id
                             codingModel = center.codingModel ?? ""
                         }
@@ -125,7 +128,8 @@ struct CodingSettingsView: View {
             group("New bots run on", "The default for bots you create. Each bot can use any harness in its own settings.") {
                 VStack(spacing: 0) {
                     ForEach(HarnessCatalog.botEngines, id: \.id) { info in
-                        HarnessRow(info: info, status: center.status(for: info.id), isSelected: center.defaultHarness == info.id) {
+                        HarnessRow(info: info, status: center.status(for: info.id), isSelected: center.defaultHarness == info.id,
+                                   isChecking: center.statuses[info.id] == nil) {
                             center.defaultHarness = info.id
                             botModel = center.defaultModel(for: info.id) ?? ""
                             botEffort = center.defaultEffort(for: info.id) ?? ""

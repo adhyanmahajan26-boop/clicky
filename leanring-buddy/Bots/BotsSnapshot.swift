@@ -17,15 +17,16 @@ enum BotsSnapshot {
         let folder = URL(fileURLWithPath: (String(flag.dropFirst("--render-bots=".count)) as NSString).expandingTildeInPath, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let store = BotsStore.shared
-        var panes: [(String, BotsPane)] = [("room", .team), ("connectors", .connectors), ("clicky", .clicky), ("routines", .routines)]
+        var panes: [(String, BotsPane)] = [("home", .home), ("notes", .notes), ("connectors", .connectors), ("clicky", .clicky), ("routines", .routines)]
         for group in store.groups where group.id != BotGroup.projectID && group.headID != nil { panes.append(("group-\(group.id)", .group(group.id))) }
         for bot in store.bots.prefix(4) { panes.append(("bot-\(bot.id)", .bot(bot.id))) }
         if let theo = store.primary { panes.append(("theo", .bot(theo.id))) }
         Task {
             // The home window's tabs too, at the same size.
             if let manager = CompanionManager.current {
-                for tab in TheoHomeView.Tab.shown where tab != .bots {
-                    await render(TheoHomeView(companionManager: manager, initialTab: tab), to: folder.appendingPathComponent("home-\(tab.rawValue).png"))
+                for section in [SettingsTab.Section.look, .coding, .keys] {
+                    await render(SettingsTab(companionManager: manager, section: section).background(DS.Colors.background),
+                                 to: folder.appendingPathComponent("settings-\(section.rawValue).png"))
                 }
             }
             for (name, pane) in panes {
