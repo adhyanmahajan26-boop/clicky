@@ -81,7 +81,11 @@ public final class StandbyCLIProcess: @unchecked Sendable {
         let launchedProcess = Process()
         launchedProcess.executableURL = spec.executableURL
         launchedProcess.arguments = spec.arguments
-        launchedProcess.environment = spec.environment
+        // PWD must name the folder the CLI really runs in: Claude Code takes its project folder from
+        // PWD, and an inherited one (Theo's is the home folder) makes it look through that instead.
+        var environment = spec.environment
+        environment["PWD"] = spec.workingDirectoryURL.path
+        launchedProcess.environment = environment
         launchedProcess.currentDirectoryURL = spec.workingDirectoryURL
 
         let standardInputPipe = Pipe()
