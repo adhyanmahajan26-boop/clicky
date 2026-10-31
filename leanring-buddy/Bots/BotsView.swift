@@ -98,6 +98,7 @@ struct BotsRootView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 
     @ViewBuilder private var detail: some View {
@@ -124,6 +125,7 @@ struct BotChatScreen: View {
     @State private var draft = ""
     /// Replies that were there when the chat opened show at once; new ones type in.
     @State private var settledIDs: Set<String> = []
+    @State private var showsModelSettings = false
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var inProgress: [(NativeBot, String)] {
@@ -182,7 +184,7 @@ struct BotChatScreen: View {
                 BotAvatar(bot: bot, size: 28, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text("\(bot.provider == "claude" ? "Claude" : "OpenCode") · \(bot.modelLabel)\(bot.effort.map { " · \($0)" } ?? "")")
+                    Text("\(["claude": "Claude", "grok": "Grok"][bot.provider] ?? "OpenCode") · \(bot.modelLabel)\(bot.effort.map { " · \($0)" } ?? "")")
                         .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 }
             } else {
@@ -196,6 +198,15 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
+            if let bot {
+                Button { showsModelSettings = true } label: {
+                    Label("Model settings", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary).font(.system(size: 12))
+                .popover(isPresented: $showsModelSettings, arrowEdge: .bottom) {
+                    BotModelSettings(bot: bot) { store.save($0) }
+                }
+            }
             Button("New chat") {
                 store.clearConversation(conversationID)
                 settledIDs = []
@@ -587,4 +598,86 @@ struct T3HandoffButton: View {
             Spacer()
         }
     }
+}
+
+/// A bot's engine, model, effort, thinking and fast mode. Changes save as they're made and apply from
+/// the bot's next reply.
+struct BotModelSettings: View {
+    @State var bot: NativeBot
+    let onChange: (NativeBot) -> Void
+    @ObservedObject private var catalog = BrainCatalog.shared
+
+    private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+    private static let openCodeEfforts = ["minimal", "low", "medium", "high", "max"]
+
+    private var isClaude: Bool { bot.provider == "claude" }
+
+    private static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+    private static let grokEfforts = ["low", "medium", "high"]
+
+    private var models: [String] {
+        let listed = bot.provider == "grok" ? Self.grokModels : catalog.models[isClaude ? .claude : .opencode] ?? []
+        return listed.contains(bot.model) ? listed : [bot.model] + listed
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                BotAvatar(bot: bot, size: 26, state: .idle)
+                Text("\(bot.name) · model").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+            }
+            row("Engine") {
+                Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
+                    bot.provider = provider
+                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/big-pickle"
+                    bot.effort = nil
+                    commit()
+                })) {
+                    Text("Claude").tag("claude")
+                    Text("OpenCode").tag("opencode")
+                    Text("Grok").tag("grok")
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 260)
+            }
+            row("Model") {
+                Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
+                    ForEach(models, id: \.self) { model in
+                        Text(NativeBot.label(for: model)).tag(model)
+                    }
+                }
+                .labelsHidden().frame(width: 260)
+            }
+            row("Effort") {
+                Picker("Effort", selection: Binding(get: { bot.effort ?? "" }, set: { bot.effort = $0.isEmpty ? nil : $0; commit() })) {
+                    Text("Default").tag("")
+                    ForEach(isClaude ? Self.claudeEfforts : bot.provider == "grok" ? Self.grokEfforts : Self.openCodeEfforts, id: \.self) { Text($0.capitalized).tag($0) }
+                }
+                .labelsHidden().frame(width: 160)
+            }
+            row("Thinking") {
+                Toggle("Thinking", isOn: Binding(get: { bot.thinking ?? false }, set: { bot.thinking = $0; commit() }))
+                    .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
+            }
+            row("Fast mode") {
+                Toggle("Fast mode", isOn: Binding(get: { bot.fast ?? false }, set: { bot.fast = $0; commit() }))
+                    .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
+            }
+            Text(isClaude ? "Applies from the next reply." : "Thinking and fast mode are for Claude models. \(bot.provider == "grok" ? "Grok takes the effort as its reasoning effort." : "OpenCode takes the effort as the model's variant.")")
+                .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .frame(width: 400)
+        .onAppear { catalog.load() }
+    }
+
+    private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary).frame(width: 80, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func commit() { onChange(bot) }
 }

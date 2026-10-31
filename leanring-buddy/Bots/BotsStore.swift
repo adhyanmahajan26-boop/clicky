@@ -20,12 +20,16 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var hue: Double
     var accentHue: Double
     var primary: Bool
-    /// "claude" or "opencode".
+    /// "claude", "opencode" or "grok".
     var provider: String
     /// The engine's model id: "claude-sonnet-5-5", "opencode/beam-free", …
     var model: String
     /// Reasoning effort ("low", "medium", "high", …), when the model has one.
     var effort: String?
+    /// Claude models: think before answering (nil keeps Claude Code's own setting).
+    var thinking: Bool?
+    /// Claude models: fast mode (nil keeps Claude Code's own setting).
+    var fast: Bool?
     /// App integrations the bot may use; see BotConnectors.known.
     var apps: [String]
     /// "personal" (your own helpers) or "project" (Theo's project team). Older saves have none.
@@ -35,9 +39,13 @@ struct NativeBot: Codable, Identifiable, Equatable {
 
     var memoryPath: String { "~/.t3/bots/\(id)/memory.md" }
 
-    var modelLabel: String {
+    var modelLabel: String { Self.label(for: model) }
+
+    static func label(for model: String) -> String {
         let name = model.split(separator: "/").last.map(String.init) ?? model
-        return name.replacingOccurrences(of: "-", with: " ").capitalized
+        // "claude-sonnet-5-5" reads "Claude Sonnet 5.5".
+        let versioned = name.replacingOccurrences(of: #"-(\d+)-(\d+)$"#, with: " $1.$2", options: .regularExpression)
+        return versioned.replacingOccurrences(of: "-", with: " ").capitalized
     }
 }
 
@@ -136,9 +144,17 @@ final class BotsStore: ObservableObject {
             updated.seen[bot.id] = record.messages.count
             conversations[Self.teamID] = updated
             reply(bot: bot, in: Self.teamID, prompt: prompt, session: record.sessions[bot.id]) { [weak self] answer in
-                guard let self, chain < Self.maxChain, let answer else { return }
-                if bot.primary {
-                    let next = BotPrompts.mentioned(in: answer, bots: self.projectBots).filter { $0.id != bot.id }
+                guard let self, chain < Self.maxChain else { return }
+                guard let answer else {
+                    // A teammate that failed or timed out doesn't stall the room: Theo merges what's there.
+                    if !bot.primary, let theo = self.primary, self.projectBots.allSatisfy({ self.replying[$0.id] == nil }) {
+                        self.askTeam([theo], chain: chain + 1)
+                    }
+                    return
+                }
+                let next = BotPrompts.mentioned(in: answer, bots: self.projectBots).filter { $0.id != bot.id && !$0.primary }
+                if bot.primary || !next.isEmpty {
+                    // Theo hands the research to the Project Manager, and the Project Manager hands out the parts.
                     if !next.isEmpty { self.askTeam(next, chain: chain + 1) }
                 } else if let theo = self.primary, self.projectBots.allSatisfy({ self.replying[$0.id] == nil }) {
                     // The last of the team has answered: Theo reads the whole round once and merges it.
@@ -207,7 +223,7 @@ final class BotsStore: ObservableObject {
             do {
                 let folder = try await BotsT3.submit(prompt: prompt, title: title)
                 note = "Submitted to T3 Code: **\(title)**, a new project in ~/Projects/\(folder.lastPathComponent). " +
-                    "The coding agent is building it on OpenCode (\(BotsT3.model))."
+                    "The coding agent is building it on \(BotsT3.modelName)."
             } catch {
                 note = "Couldn't submit to T3 Code: \(error.localizedDescription)"
             }
@@ -318,13 +334,19 @@ enum BotImport {
 
     static let ceoInstructions =
         "You are Theo, the CEO of Addy's project team: Project Manager, Design Critic, Code Improver and Reel " +
-        "Editor work under you. When Addy pitches an idea in the Project room: first have Clicky research it on " +
-        "the web with the claudia_research tool (one call, a focused question), then post a short summary of what " +
-        "it found, with the sources, and ask @Project Manager for the plan, @Design Critic for the experience and " +
-        "@Code Improver for the technical approach, all built on that research. When they have answered, settle " +
-        "any disagreement yourself and merge it all into one final prompt for T3 Code's coding agent right away, " +
+        "Editor work under you. When Addy pitches an idea in the Project room: first have Clicky study it on the " +
+        "web with the claudia_research tool (one call with a focused question; Clicky reads three sources), then " +
+        "post a short summary of what it found, with the sources, and hand it to @Project Manager only. The " +
+        "Project Manager plans it and gives the parts to the team. When the team has answered, settle any " +
+        "disagreement yourself and merge it all into one final prompt for T3 Code's coding agent right away, " +
         "with no second round of questions: a line \"Project: <short name>\" and then the prompt inside a " +
         "```prompt fenced block. Write the final prompt once. Keep everything else short."
+
+    static let projectManagerInstructions =
+        "You are the Project Manager on Theo's team. When Theo hands you an idea and Clicky's research in the " +
+        "Project room, write a short, ordered plan (scope, milestones, what is left out, risks) and give the work " +
+        "to the team in the same message: one specific question for @Design Critic about the experience and one " +
+        "for @Code Improver about the technical approach. Don't tag Theo; he reads the team's answers. Keep it tight."
 
     /// The bots everyone starts with: Theo on Claude Sonnet, the rest on free OpenCode models.
     static let starters: [NativeBot] = [
@@ -367,9 +389,21 @@ enum BotImport {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && !bot.instructions.contains("no second round") { bot.instructions = ceoInstructions }
+            if bot.primary && !bot.instructions.contains("Project Manager only") { bot.instructions = ceoInstructions }
+            if bot.id == "project-manager" && !bot.instructions.contains("give the work") {
+                bot.instructions = projectManagerInstructions
+                bot.provider = "claude"
+                bot.model = "claude-opus-5-5"
+                bot.effort = "high"
+            }
+            if bot.id == "design-critic" && bot.provider != "grok" && !offered.contains("grok-critic") {
+                bot.provider = "grok"
+                bot.model = "grok-4.6"
+                bot.effort = nil
+            }
             return bot
         }
+        offered.insert("grok-critic")
         for starter in starters where !offered.contains(starter.id) {
             if !result.contains(where: { $0.id == starter.id }) { result.append(starter) }
             offered.insert(starter.id)
@@ -420,7 +454,7 @@ enum BotPrompts {
             parts.append("The others here: " + team.filter { $0.id != bot.id }.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
             parts.append("Reply with only your chat message, in your own voice and role, usually 1-4 sentences, without " +
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +
-                         "room, answer Theo's question once, in your role; Theo collects the round and merges it.")
+                         "room, answer the question you're given once, in your role; Theo collects the round and merges it.")
         }
         parts.append("New in the group chat:\n\(transcript)")
         parts.append("Reply as \(bot.name).")

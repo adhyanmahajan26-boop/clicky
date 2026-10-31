@@ -26,6 +26,9 @@ enum BotRunnerError: LocalizedError {
 }
 
 enum BotRunner {
+    /// The longest one bot turn may take.
+    static let turnLimitSeconds: Double = 300
+
     /// Where bots run: the folder that holds their memory files (~/.t3/bots), so reading and keeping
     /// memory never needs a permission nobody is there to give.
     static var workspace: URL {
@@ -46,6 +49,7 @@ enum BotRunner {
     /// Runs the turn; `onText` gets the reply so far as it streams in.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
         guard let executable = BrainCLIRunner.locateExecutable(for: provider) else {
@@ -58,6 +62,14 @@ enum BotRunner {
                          "--model", bot.model,
                          "--append-system-prompt", BotPrompts.persona(bot: bot, team: team),
                          "--allowedTools"] + claudeAllowedTools(for: bot)
+            if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
+            var settings: [String: Bool] = [:]
+            if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }
+            if let fast = bot.fast { settings["fastMode"] = fast }
+            if !settings.isEmpty, let data = try? JSONSerialization.data(withJSONObject: settings, options: .sortedKeys),
+               let json = String(data: data, encoding: .utf8) {
+                arguments += ["--settings", json]
+            }
             if let session { arguments += ["--resume", session] } else {
                 let id = UUID().uuidString.lowercased()
                 newSessionID = id
@@ -92,6 +104,12 @@ enum BotRunner {
         errorHandle?.seekToEndOfFile()
         process.standardError = errorHandle ?? FileHandle.nullDevice
         try process.run()
+        // A turn that runs past the limit is stopped, so one stuck bot can't hold up the Project room.
+        let watchdog = Task.detached {
+            try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
+            if process.isRunning { process.terminate() }
+        }
+        defer { watchdog.cancel() }
 
         var parser = BotStreamParser(isClaude: isClaude)
         for await line in lines(of: output.fileHandleForReading) where parser.consume(line) {
@@ -110,6 +128,60 @@ enum BotRunner {
 }
 
 extension BotRunner {
+    /// Grok's CLI (grok.com sign-in), headless: one JSON reply per turn, continued with --resume.
+    static var grokExecutable: URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [".grok/bin/grok", ".local/bin/grok"].map { home.appendingPathComponent($0) }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    /// Grok may read and search the web, nothing else, since nobody is there to approve more.
+    static let grokTools = "web_search,web_fetch,read_file,grep,list_dir"
+
+    static func runGrok(bot: NativeBot, prompt: String, session: String?, team: [NativeBot]) async throws -> (text: String, session: String?) {
+        guard let executable = grokExecutable else { throw BotRunnerError.notInstalled("Grok") }
+        let fullPrompt = session == nil ? BotPrompts.persona(bot: bot, team: team) + "\n\n" + prompt : prompt
+        var arguments = ["-p", fullPrompt, "-m", bot.model, "--output-format", "streaming-messages-json",
+                         "--permission-mode", "dontAsk", "--tools", grokTools, "--no-subagents"]
+        if let effort = bot.effort, !effort.isEmpty { arguments += ["--reasoning-effort", effort] }
+        if let session { arguments += ["--resume", session] }
+        let data: Data = try await Task.detached {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = arguments
+            process.currentDirectoryURL = workspace
+            var environment = ProcessInfo.processInfo.environment
+            environment["NO_COLOR"] = "1"
+            environment["PWD"] = workspace.path
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            let watchdog = Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
+                if process.isRunning { process.terminate() }
+            }
+            defer { watchdog.cancel() }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return data
+        }.value
+        // Only the final message is the reply; the notes Grok writes between tool calls are left out.
+        var text: String?
+        var newSession = session
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            guard let event = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+            if let id = event["session_id"] as? String { newSession = id }
+            if event["type"] as? String == "result", event["is_error"] as? Bool != true { text = event["result"] as? String }
+        }
+        guard let text, !text.isEmpty else {
+            throw BotRunnerError.failed("Grok didn't answer: \(String(decoding: data.suffix(200), as: UTF8.self))")
+        }
+        return (text.trimmingCharacters(in: .whitespacesAndNewlines), newSession)
+    }
+
     /// The output's lines as they arrive. A bot turn can wait minutes (Theo waiting on Clicky's research),
     /// so it reads on the file handle's own callbacks rather than `bytes`, whose blocking reads would
     /// hold up the research helpers' readers in the meantime.
