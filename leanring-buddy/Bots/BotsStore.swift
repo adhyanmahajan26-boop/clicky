@@ -137,8 +137,13 @@ final class BotsStore: ObservableObject {
             conversations[Self.teamID] = updated
             reply(bot: bot, in: Self.teamID, prompt: prompt, session: record.sessions[bot.id]) { [weak self] answer in
                 guard let self, chain < Self.maxChain, let answer else { return }
-                let next = BotPrompts.mentioned(in: answer, bots: self.projectBots).filter { $0.id != bot.id }
-                if !next.isEmpty { self.askTeam(next, chain: chain + 1) }
+                if bot.primary {
+                    let next = BotPrompts.mentioned(in: answer, bots: self.projectBots).filter { $0.id != bot.id }
+                    if !next.isEmpty { self.askTeam(next, chain: chain + 1) }
+                } else if let theo = self.primary, self.projectBots.allSatisfy({ self.replying[$0.id] == nil }) {
+                    // The last of the team has answered: Theo reads the whole round once and merges it.
+                    self.askTeam([theo], chain: chain + 1)
+                }
             }
         }
     }
@@ -172,7 +177,43 @@ final class BotsStore: ObservableObject {
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
+            if conversationID == Self.teamID, bot.primary, let answer { self.submitIfFinal(answer) }
             then(answer)
+        }
+    }
+
+    /// Pitches whose final prompt already went to T3 Code (by the pitch's message id).
+    private var submittedPitches: Set<String> = []
+    @Published private(set) var submitting = false
+
+    /// When Theo writes the final prompt for a pitch that asked to build it, it goes to T3 Code by itself:
+    /// a new project and a thread on OpenCode. Once per pitch.
+    private func submitIfFinal(_ answer: String) {
+        guard let prompt = BotsT3.promptBlock(in: answer),
+              let pitch = conversation(Self.teamID).messages.last(where: { $0.author == "user" }),
+              !submittedPitches.contains(pitch.id) else { return }
+        let wantsBuild = ["build", "submit", "send", "make", "t3"].contains { pitch.text.lowercased().contains($0) }
+        guard wantsBuild else { return }
+        submittedPitches.insert(pitch.id)
+        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt))
+    }
+
+    /// Creates the T3 Code project and starts its thread, then reports back in the Project room.
+    func submitToT3(prompt: String, title: String) {
+        guard let theo = primary else { return }
+        submitting = true
+        Task { [weak self] in
+            let note: String
+            do {
+                let folder = try await BotsT3.submit(prompt: prompt, title: title)
+                note = "Submitted to T3 Code: **\(title)**, a new project in ~/Projects/\(folder.lastPathComponent). " +
+                    "The coding agent is building it on OpenCode (\(BotsT3.model))."
+            } catch {
+                note = "Couldn't submit to T3 Code: \(error.localizedDescription)"
+            }
+            guard let self else { return }
+            self.submitting = false
+            self.post(BotChatMessage(author: theo.id, text: note), to: Self.teamID)
         }
     }
 
@@ -277,10 +318,13 @@ enum BotImport {
 
     static let ceoInstructions =
         "You are Theo, the CEO of Addy's project team: Project Manager, Design Critic, Code Improver and Reel " +
-        "Editor work under you. In the Project room, take Addy's idea, ask @Project Manager for the plan, " +
-        "@Design Critic for the experience and @Code Improver for the technical approach, then merge what they " +
-        "say into one final prompt for T3 Code's coding agent, inside a ```prompt fenced block, ready to send. " +
-        "Keep everything else short."
+        "Editor work under you. When Addy pitches an idea in the Project room: first have Clicky research it on " +
+        "the web with the claudia_research tool (one call, a focused question), then post a short summary of what " +
+        "it found, with the sources, and ask @Project Manager for the plan, @Design Critic for the experience and " +
+        "@Code Improver for the technical approach, all built on that research. When they have answered, settle " +
+        "any disagreement yourself and merge it all into one final prompt for T3 Code's coding agent right away, " +
+        "with no second round of questions: a line \"Project: <short name>\" and then the prompt inside a " +
+        "```prompt fenced block. Write the final prompt once. Keep everything else short."
 
     /// The bots everyone starts with: Theo on Claude Sonnet, the rest on free OpenCode models.
     static let starters: [NativeBot] = [
@@ -323,7 +367,7 @@ enum BotImport {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && !bot.instructions.contains("CEO") { bot.instructions = ceoInstructions }
+            if bot.primary && !bot.instructions.contains("no second round") { bot.instructions = ceoInstructions }
             return bot
         }
         for starter in starters where !offered.contains(starter.id) {
@@ -375,7 +419,8 @@ enum BotPrompts {
             parts.append("You are \(bot.name) in Addy's bots group chat. \(bot.instructions)")
             parts.append("The others here: " + team.filter { $0.id != bot.id }.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
             parts.append("Reply with only your chat message, in your own voice and role, usually 1-4 sentences, without " +
-                         "your name at the start. Tag someone with @Name only when you need them.")
+                         "your name at the start. Tag someone with @Name only when you need them. In the Project " +
+                         "room, answer Theo's question once, in your role; Theo collects the round and merges it.")
         }
         parts.append("New in the group chat:\n\(transcript)")
         parts.append("Reply as \(bot.name).")

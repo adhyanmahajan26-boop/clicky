@@ -145,8 +145,8 @@ struct BotChatScreen: View {
                             } else if let author = store.bot(message.author) {
                                 BotLine(bot: author, text: message.text, showsName: bot == nil,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
-                                if bot == nil || T3Handoff.promptBlock(in: message.text) != nil {
-                                    T3HandoffButton(text: message.text, prominent: T3Handoff.promptBlock(in: message.text) != nil)
+                                if bot == nil || BotsT3.promptBlock(in: message.text) != nil {
+                                    T3HandoffButton(text: message.text, prominent: BotsT3.promptBlock(in: message.text) != nil)
                                 }
                             }
                         }
@@ -560,37 +560,6 @@ struct ConnectorsScreen: View {
 
 // MARK: - Hand-off to T3 Code
 
-enum T3Handoff {
-    /// The ```prompt block Theo writes as the team's final prompt, if there is one.
-    static func promptBlock(in text: String) -> String? {
-        guard let start = text.range(of: "```prompt") else { return nil }
-        let rest = text[start.upperBound...]
-        guard let end = rest.range(of: "```") else { return nil }
-        let body = rest[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-        return body.isEmpty ? nil : body
-    }
-
-    /// Opens a new T3 Code thread with the prompt filled in on OpenCode, for you to review and send.
-    static func send(_ text: String) {
-        let prompt = String((promptBlock(in: text) ?? text).prefix(7_900))
-        var components = URLComponents()
-        components.scheme = "t3code"
-        components.host = "new"
-        components.queryItems = [URLQueryItem(name: "prompt", value: prompt),
-                                 URLQueryItem(name: "provider", value: "opencode"),
-                                 URLQueryItem(name: "model", value: "opencode/big-pickle")]
-        guard let url = components.url else { return }
-        let apps = ["/Applications/T3 Code Cursor Assistant.app", "/Applications/T3 Code (Theo).app"]
-            .map(URL.init(fileURLWithPath:))
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        if let app = apps.first {
-            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-        } else {
-            NSWorkspace.shared.open(url)
-        }
-    }
-}
-
 struct T3HandoffButton: View {
     let text: String
     let prominent: Bool
@@ -600,10 +569,11 @@ struct T3HandoffButton: View {
         HStack {
             Spacer().frame(width: 46)
             Button {
-                T3Handoff.send(text)
+                let prompt = BotsT3.promptBlock(in: text) ?? text
+                BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt))
                 sent = true
             } label: {
-                Label(sent ? "Opened in T3 Code" : (T3Handoff.promptBlock(in: text) != nil ? "Send prompt to T3 Code" : "Send to T3 Code"),
+                Label(sent ? "Submitted to T3 Code" : (BotsT3.promptBlock(in: text) != nil ? "Submit prompt to T3 Code" : "Submit to T3 Code"),
                       systemImage: sent ? "checkmark" : "arrow.up.forward.app")
                     .font(.system(size: prominent ? 12 : 11, weight: prominent ? .semibold : .regular))
                     .padding(.horizontal, prominent ? 12 : 0).padding(.vertical, prominent ? 6 : 0)
@@ -611,8 +581,8 @@ struct T3HandoffButton: View {
                     .foregroundColor(prominent ? .white : DS.Colors.textTertiary)
             }
             .buttonStyle(.plain)
+            .disabled(sent)
             Spacer()
         }
-        .opacity(prominent || sent ? 1 : 0.8)
     }
 }

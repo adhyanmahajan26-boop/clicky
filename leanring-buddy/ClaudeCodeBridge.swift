@@ -283,6 +283,8 @@ final class ClaudeCodeBridge {
             var pendingBytes = Data()
 
             func handle(_ lineData: Data) async throws {
+                // Any output (thinking included) shows the CLI is alive; only silence is a stall.
+                stallWatch.noteActivity()
                 if let event = CLIStreamEvent.parse(lineData) {
                     await onStreamEvent?(event)
                     switch event {

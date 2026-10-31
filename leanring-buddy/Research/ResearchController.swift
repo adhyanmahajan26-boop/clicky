@@ -155,10 +155,7 @@ final class ResearchController: CompanionActivitySource {
                         return Report(index: job.index, url: job.url, title: page?.title, text: "unreadable (empty, blocked or a sign-in wall)", succeeded: false)
                     }
                     do {
-                        let turn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
-                            systemPromptFileName: "research-worker-prompt.md",
-                            systemPrompt: ResearchPrompts.workerSystemPrompt,
-                            contentBlocks: [.text(ResearchPrompts.workerPrompt(question: question, url: job.url, title: page.title, text: page.text))])
+                        let turn = try await Self.readPage(question: question, url: job.url, page: page)
                         await MainActor.run {
                             agentsCenter.log(agentID, turn.text)
                             agentsCenter.finish(agentID, status: .done, usage: turn.usageSummary)
@@ -174,6 +171,19 @@ final class ResearchController: CompanionActivitySource {
             var reports: [Report] = []
             for await report in group { reports.append(report) }
             return reports.sorted { $0.index < $1.index }
+        }
+    }
+
+    /// One helper reading one page; a stalled helper gets one more try before the page counts as failed.
+    private static func readPage(question: String, url: URL, page: (title: String?, text: String)) async throws -> ClaudeTurnResult {
+        let contentBlocks: [ClaudeContentBlock] = [.text(ResearchPrompts.workerPrompt(question: question, url: url, title: page.title, text: page.text))]
+        do {
+            return try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+                systemPromptFileName: "research-worker-prompt.md", systemPrompt: ResearchPrompts.workerSystemPrompt, contentBlocks: contentBlocks)
+        } catch ClaudeCodeBridgeError.claudeCodeStalled {
+            try Task.checkCancellation()
+            return try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+                systemPromptFileName: "research-worker-prompt.md", systemPrompt: ResearchPrompts.workerSystemPrompt, contentBlocks: contentBlocks)
         }
     }
 
