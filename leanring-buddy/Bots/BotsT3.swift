@@ -23,9 +23,10 @@ enum BotsT3Error: LocalizedError {
 }
 
 enum BotsT3 {
-    /// The coding model T3 Code builds with.
-    static let provider = "opencode"
-    static let model = "opencode/big-pickle"
+    /// The coding model T3 Code builds with: Opus 5.5 through T3 Code's Claude provider.
+    static let provider = "claudeAgent"
+    static let model = "claude-opus-5-5"
+    static let modelName = "Claude Opus 5.5"
 
     /// The t3 launcher T3 Code writes into its data folder (Cursor Assistant build first).
     static var cli: URL? {
