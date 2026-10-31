@@ -257,6 +257,9 @@ struct TheoPanelView: View {
             tile("Agents", "What's running", "person.3.fill", isOn: false) {
                 close(); companionManager.showAgentsDashboard(activatesClicky: true)
             }
+            tile("Bots", "Chat with your bots", "bubble.left.and.bubble.right.fill", isOn: false) {
+                close(); companionManager.showBotsWindow()
+            }
         }
     }
 
