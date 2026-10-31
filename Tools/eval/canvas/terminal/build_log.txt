@@ -1,0 +1,9 @@
+$ make release
+==> Resolving packages
+==> Compiling LumenCore (42 files)
+==> Compiling LumenCLI (17 files)
+warning: 'fetchAll()' is deprecated: use fetchAll(limit:) instead
+==> Linking lumen
+error: undefined symbol: _OBJC_CLASS_$_LMNKeychain
+==> Build time: 48.3 s
+BUILD FAILED (1 error, 1 warning)

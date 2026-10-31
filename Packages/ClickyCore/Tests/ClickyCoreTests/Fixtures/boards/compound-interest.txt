@@ -1,0 +1,28 @@
+Compound interest means you earn interest on your interest too, so let me walk through a quick example.
+
+<whiteboard>
+{"wb":1,"title":"Compound interest","dir":"LR","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"Compound interest by example","q":"explain compound interest with an example"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"What's coming","items":["The idea and the formula","$1,000 at 10% for 3 years","Compound vs simple interest"],"ordered":true}
+{"el":"math","id":"f","sec":"q1","tex":"A = P\\left(1+r\\right)^t"}
+{"el":"box","id":"b0","sec":"q1","text":"Start: $1,000","shape":"round","color":"blue"}
+{"el":"box","id":"b1","sec":"q1","text":"Year 1: $1,100","shape":"round","color":"green"}
+{"el":"box","id":"b2","sec":"q1","text":"Year 2: $1,210","shape":"round","color":"green"}
+{"el":"box","id":"b3","sec":"q1","text":"Year 3: $1,331","shape":"round","color":"orange"}
+{"el":"arrow","id":"a1","sec":"q1","from":"b0","to":"b1","text":"+10% of 1,000 = 100","style":"solid"}
+{"el":"arrow","id":"a2","sec":"q1","from":"b1","to":"b2","text":"+10% of 1,100 = 110","style":"solid"}
+{"el":"arrow","id":"a3","sec":"q1","from":"b2","to":"b3","text":"+10% of 1,210 = 121","style":"solid"}
+{"el":"math","id":"m","sec":"q1","tex":"1000 \\times (1.10)^3 = 1331"}
+{"el":"table","id":"t","sec":"q1","cols":["Year","Simple","Compound"],"rows":[["1","$1,100","$1,100"],["2","$1,200","$1,210"],["3","$1,300","$1,331"]]}
+{"el":"callout","id":"c","sec":"q1","target":"t","style":"info","text":"The extra $31 is interest earning interest, and the gap keeps growing."}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["Interest is added to the balance, then earns interest itself","A = P(1+r)^t","Simple interest only grows on the original amount","Longer time means a bigger compounding effect"],"ordered":false}
+{"step":1,"show":["ag"],"hl":["ag"],"say":"We'll look at the formula, then follow a thousand dollars for three years, and finally compare it with simple interest.","focus":"agenda"}
+{"step":2,"show":["f"],"hl":["f"],"say":"The formula says your final amount A is the principal P times one plus the rate r, raised to the number of years t.","cue":{"f":"formula"},"point":"f","focus":"q1"}
+{"step":3,"show":["b0"],"hl":["b0"],"say":"Say you start with a thousand dollars at ten percent a year.","cue":{"b0":"thousand"},"point":"b0"}
+{"step":4,"show":["a1","b1"],"hl":["b1"],"say":"After year one you earn a hundred dollars, so you have eleven hundred.","cue":{"a1":"earn","b1":"eleven"},"point":"b1"}
+{"step":5,"show":["a2","b2"],"hl":["b2"],"say":"In year two the ten percent is applied to eleven hundred, so you earn one hundred ten, not one hundred.","cue":{"a2":"year","b2":"ten"},"point":"b2"}
+{"step":6,"show":["a3","b3"],"hl":["b3"],"say":"Year three earns one twenty-one, and you finish with thirteen hundred thirty-one dollars.","cue":{"a3":"three","b3":"finish"},"point":"b3"}
+{"step":7,"show":["m"],"hl":["m"],"say":"The formula gives the same answer in one step: a thousand times one point one, cubed.","cue":{"m":"formula"},"point":"m"}
+{"step":8,"show":["t"],"hl":["t"],"say":"Simple interest would pay a flat hundred each year, which is only thirteen hundred after three years.","cue":{"t":"Simple"},"point":"t"}
+{"step":9,"show":["c"],"hl":["c"],"say":"That extra thirty-one dollars is interest earning interest, and the gap gets much bigger over longer periods.","cue":{"c":"extra"},"point":"c"}
+{"step":10,"show":["rc"],"hl":["rc"],"say":"So remember: interest gets added to the balance and then earns interest itself, and more time makes that effect stronger.","focus":"recap"}
+</whiteboard>

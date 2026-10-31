@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan draft</title>
+<style>
+html, body { margin: 0; background: #ffffff; color: #37352f; font: 15px -apple-system, Helvetica, Arial, sans-serif; }
+.bar { display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 12px; box-sizing: border-box; border-bottom: 1px solid #e5e5e3; }
+.tb { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: default; }
+.tb:hover { background: #efefed; }
+.tb svg { width: 16px; height: 16px; stroke: #37352f; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.sep { width: 1px; height: 18px; margin: 0 6px; background: #e5e5e3; }
+main { padding: 32px 48px; }
+h1 { font-size: 26px; margin: 0 0 12px; }
+p { color: #787774; line-height: 1.5; max-width: 620px; }
+</style>
+</head>
+<body data-page="toolbar">
+<div class="bar" role="toolbar" aria-label="Document">
+  <button class="tb" type="button" aria-label="New" title="New"><svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M8 7v4M6 9h4"/></svg></button>
+  <button class="tb" type="button" aria-label="Open" title="Open"><svg viewBox="0 0 16 16"><path d="M2 4h4l1 1h7v7H2z"/></svg></button>
+  <button class="tb" type="button" aria-label="Save" title="Save"><svg viewBox="0 0 16 16"><path d="M3 2h8l2 2v10H3z"/><path d="M5 2v4h5V2M5 14V9h6v5"/></svg></button>
+  <button class="tb" type="button" aria-label="Print" title="Print"><svg viewBox="0 0 16 16"><path d="M4 6V2h8v4M4 11H2V6h12v5h-2"/><rect x="4" y="9" width="8" height="5"/></svg></button>
+  <span class="sep"></span>
+  <button class="tb" type="button" aria-label="Undo" title="Undo"><svg viewBox="0 0 16 16"><path d="M5 5L2 8l3 3"/><path d="M2 8h8a4 4 0 010 8"/></svg></button>
+  <button class="tb" type="button" aria-label="Redo" title="Redo"><svg viewBox="0 0 16 16"><path d="M11 5l3 3-3 3"/><path d="M14 8H6a4 4 0 000 8"/></svg></button>
+  <span class="sep"></span>
+  <button class="tb" type="button" aria-label="Bold" title="Bold"><svg viewBox="0 0 16 16"><path d="M4 3h5a2.5 2.5 0 010 5H4zM4 8h6a2.5 2.5 0 010 5H4z"/></svg></button>
+  <button class="tb" type="button" aria-label="Italic" title="Italic"><svg viewBox="0 0 16 16"><path d="M6 3h6M4 13h6M9 3L7 13"/></svg></button>
+  <button class="tb" type="button" aria-label="Link" title="Link"><svg viewBox="0 0 16 16"><path d="M7 9l2-2"/><path d="M6 5.5L8 3.5a2.5 2.5 0 013.5 3.5L9.5 9M10 10.5l-2 2A2.5 2.5 0 014.5 9L6.5 7"/></svg></button>
+  <span class="sep"></span>
+  <button class="tb" type="button" aria-label="Export" title="Export"><svg viewBox="0 0 16 16"><path d="M8 10V2M5 5l3-3 3 3"/><path d="M3 9v5h10V9"/></svg></button>
+  <button class="tb" type="button" id="share" aria-label="Share" title="Share"><svg viewBox="0 0 16 16"><circle cx="4" cy="8" r="1.8"/><circle cx="12" cy="4" r="1.8"/><circle cx="12" cy="12" r="1.8"/><path d="M5.6 7.1l4.8-2.2M5.6 8.9l4.8 2.2"/></svg></button>
+  <button class="tb" type="button" aria-label="Comments" title="Comments"><svg viewBox="0 0 16 16"><path d="M2 3h12v8H7l-3 2v-2H2z"/></svg></button>
+  <button class="tb" type="button" aria-label="Settings" title="Settings"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4"/></svg></button>
+</div>
+<main>
+  <h1>Plan draft</h1>
+  <p>Draft notes for the spring plan. Edit freely; changes save automatically.</p>
+</main>
+<script src="common.js"></script>
+<script>
+(function () {
+  "use strict";
+  try {
+    const share = document.getElementById("share");
+    Hard10.publish("toolbar", { share: Hard10.rectOf(share) });
+  } catch (error) {
+    Hard10.fail(error);
+  }
+})();
+</script>
+</body>
+</html>

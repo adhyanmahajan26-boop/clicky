@@ -1,0 +1,24 @@
+{"wb":1,"title":"HTTPS, speed and certificates","dir":"TB","sections":[{"id":"agenda","title":"Agenda"},{"id":"q1","title":"How HTTPS works","q":"how does https work"},{"id":"q2","title":"Why it's slower than HTTP","q":"why is it slower than http"},{"id":"q3","title":"What a certificate is","q":"what's a certificate"},{"id":"recap","title":"Recap"}]}
+{"el":"list","id":"ag","sec":"agenda","title":"Coming up","items":["How the handshake works","Where the extra time goes","What a certificate proves"],"ordered":true}
+{"el":"box","id":"browser","sec":"q1","text":"Browser","shape":"round","color":"blue","icon":"desktopcomputer"}
+{"el":"box","id":"server","sec":"q1","text":"Web server","shape":"round","color":"green","icon":"server.rack"}
+{"el":"arrow","id":"hello","sec":"q1","from":"browser","to":"server","text":"hello + key share"}
+{"el":"arrow","id":"cert","sec":"q1","from":"server","to":"browser","text":"certificate + key share"}
+{"el":"arrow","id":"data","sec":"q1","from":"browser","to":"server","text":"encrypted data","style":"thick","head":"both"}
+{"el":"box","id":"key","sec":"q1","text":"Same session key on both sides","shape":"pill","color":"purple","icon":"key"}
+{"el":"callout","id":"never","sec":"q1","target":"key","style":"tip","text":"The key itself never crosses the wire."}
+{"el":"chart","id":"rtt","sec":"q2","kind":"bar","title":"Round trips before the first byte","data":[["HTTP",1],["HTTPS (TLS 1.2)",3],["HTTPS (TLS 1.3)",2]]}
+{"el":"list","id":"costs","sec":"q2","title":"The extra cost","items":["One more round trip for the handshake","A little CPU for encryption","Resumed sessions skip most of it"]}
+{"el":"flow","id":"chain","sec":"q3","src":"flowchart TB\nR[Root authority] --> I[Intermediate]\nI --> S[example.com certificate]"}
+{"el":"table","id":"fields","sec":"q3","cols":["Field","Meaning"],"rows":[["Subject","example.com"],["Issuer","Intermediate CA"],["Valid until","2027-03-01"],["Public key","the server's key"]]}
+{"el":"list","id":"rc","sec":"recap","title":"Key points","items":["A handshake agrees a secret key","Encryption costs a round trip, little else","A certificate is a signed ID card for a site"]}
+{"step":1,"show":["ag"],"say":"three parts: how the handshake works, where the extra time goes, and what a certificate actually is.","focus":"agenda"}
+{"step":2,"show":["browser","server","hello"],"hl":["hello"],"say":"first the browser says hello and sends its half of a key exchange.","cue":{"server":"hello"},"point":"hello","focus":"q1"}
+{"step":3,"show":["cert"],"hl":["cert"],"say":"the server answers with its certificate and its own half.","cue":{"cert":"certificate"},"point":"cert"}
+{"step":4,"show":["key","never"],"hl":["key"],"say":"both sides combine the halves into the same secret key, without ever sending it.","cue":{"never":"without"},"point":"key"}
+{"step":5,"show":["data"],"hl":["data"],"say":"from then on everything between them is encrypted with that key.","point":"data"}
+{"step":6,"show":["rtt"],"hl":["rtt"],"say":"it's slower mostly because of that handshake: an extra round trip before the first byte, less with newer TLS.","focus":"q2"}
+{"step":7,"show":["costs"],"say":"the encryption itself is cheap on modern chips, and returning visitors can resume the session."}
+{"step":8,"show":["chain"],"hl":["chain"],"say":"a certificate is a signed statement that this key belongs to this site, vouched for by a chain of authorities your device trusts.","focus":"q3"}
+{"step":9,"show":["fields"],"say":"it names the site, who signed it, when it expires and the site's public key."}
+{"step":10,"show":["rc"],"say":"so a quick handshake buys you a private, verified connection for the cost of one round trip.","focus":"recap"}

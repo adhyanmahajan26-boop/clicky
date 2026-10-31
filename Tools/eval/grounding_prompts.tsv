@@ -1,0 +1,41 @@
+prompt	keys	kind	flags
+circle the second Cancel button	cancel_2	ax	
+point at the gear icon	icon_gear	ax	
+highlight the address bar	field_address	ax	
+box rows 3 to 5	row_3..row_5	ax	
+where is the trash icon	icon_trash	ax	
+show me the lock icon	icon_lock	ax	
+arrow to the Export as PDF button	export_pdf	ax	
+circle the empty search field	field_search	ax	
+point at the star icon	icon_star	ax	
+where's the bell icon	icon_bell	ax	
+highlight the Archive button	archive	ax	
+where is the info icon	icon_info	ax	
+circle the Share button	share	ax	
+where is row 9	row_9	ax	
+circle the subscribe button	web_subscribe	web	
+where's the read more link	web_read_more	web	
+point at the sign in button on the page	web_sign_in	web	
+show me the pricing link	web_pricing	web	
+highlight the docs link	web_docs	web	
+where can I subscribe on this page	web_subscribe	web	
+where's the 429 error	canvas_rate_limit	canvas	
+circle the total	canvas_total	canvas	
+point at x = 42	canvas_x42	canvas	
+where does it say deploy failed	canvas_deploy_failed	canvas	
+what does x = 42 refer to	canvas_x42	canvas	
+highlight the total on the chart	canvas_total	canvas	
+point at the green dot	dot_green	dot	
+circle the red dot	dot_red	dot	
+where is the blue dot	dot_blue	dot	
+highlight the yellow dot	dot_yellow	dot	
+show me how to search then open build settings	field_search,build_settings	ax	multi
+first click share then export as pdf	share,export_pdf	ax	multi
+click back then run	back,run	ax	multi
+first the gear, then the trash icon	icon_gear,icon_trash	ax	multi
+tell me the total and the rate limit error	canvas_total,canvas_rate_limit	canvas	multi
+point at the red dot then the subscribe button	dot_red,web_subscribe	mixed	multi
+where is row 17 in the table	row_17	ax	scroll
+box rows 10 to 12 in the table	row_10..row_12	ax	scroll
+point at the Run button	run	cover	cover:run
+circle the Export as PDF button	export_pdf	cover	cover:export_pdf

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shapes</title>
+<style>html, body { margin: 0; overflow: hidden; background: #fbfbfb; }</style>
+<script src="common.js"></script>
+</head>
+<body>
+<script>
+// Filled shapes on a canvas (?variant=default|triangles). Truth: each
+// shape's bounding box.
+(async function () {
+  try {
+    const spec = (await Fixture.manifest("shapes")).variants[Fixture.variant];
+    const { canvas, context, width, height } = Fixture.fullCanvas("#fbfbfb");
+    const rects = Fixture.place(Fixture.rng, width, height, spec.shapes.map((shape) => [shape.size, shape.size]), { margin: 70, gap: 70 });
+    const items = {};
+
+    function polygon(cx, cy, radius, points, rotation) {
+      context.beginPath();
+      for (let index = 0; index < points; index++) {
+        const angle = rotation + (index * 2 * Math.PI) / points;
+        const x = cx + radius * Math.cos(angle);
+        const y = cy + radius * Math.sin(angle);
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      }
+      context.closePath();
+    }
+
+    spec.shapes.forEach((shape, index) => {
+      const [x, y, size] = [rects[index][0], rects[index][1], shape.size];
+      const cx = x + size / 2, cy = y + size / 2, radius = size / 2;
+      context.fillStyle = shape.color;
+      if (shape.shape === "square") {
+        context.fillRect(x, y, size, size);
+      } else if (shape.shape === "circle") {
+        context.beginPath(); context.arc(cx, cy, radius, 0, Math.PI * 2);
+      } else if (shape.shape === "triangle") {
+        context.beginPath(); context.moveTo(cx, y); context.lineTo(x + size, y + size); context.lineTo(x, y + size); context.closePath();
+      } else if (shape.shape === "diamond") {
+        polygon(cx, cy, radius, 4, -Math.PI / 2);
+      } else if (shape.shape === "hexagon") {
+        polygon(cx, cy, radius, 6, 0);
+      } else if (shape.shape === "star") {
+        context.beginPath();
+        for (let point = 0; point < 10; point++) {
+          const angle = -Math.PI / 2 + (point * Math.PI) / 5;
+          const r = point % 2 === 0 ? radius : radius * 0.45;
+          const px = cx + r * Math.cos(angle), py = cy + r * Math.sin(angle);
+          if (point === 0) context.moveTo(px, py); else context.lineTo(px, py);
+        }
+        context.closePath();
+      }
+      if (shape.shape !== "square") context.fill();
+      items[shape.key] = Fixture.toViewport(canvas, [x, y, size, size]);
+    });
+    Fixture.publish("shapes", items);
+  } catch (error) { Fixture.fail(error); }
+})();
+</script>
+</body>
+</html>

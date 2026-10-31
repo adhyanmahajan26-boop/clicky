@@ -5,36 +5,61 @@
 
 ## Overview
 
-macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it via AssemblyAI streaming, and sends the transcript + a screenshot of the user's screen to Claude. Claude responds with text (streamed via SSE) and voice (ElevenLabs TTS). A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
+macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it on-device with Apple Speech, and sends the transcript + a screenshot of the user's screen to Claude through the local Claude Code CLI (the user's Claude subscription). Claude's reply is spoken with the built-in Mac voice. A Claude-orange spark companion follows the cursor, spins while Claude is thinking, shows helper workers as orbiting minis, and can fly to and point at UI elements Claude references on any connected monitor.
 
-All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in the app.
+This is a personal build: no API keys, no proxy server, no analytics, no auto-updater.
 
 ## Architecture
 
 - **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
-- **AI Chat**: Claude (Sonnet 4.6 default, Opus 4.6 optional) via Cloudflare Worker proxy with SSE streaming
-- **Speech-to-Text**: AssemblyAI real-time streaming (`u3-rt-pro` model) via websocket, with OpenAI and Apple Speech as fallbacks
-- **Text-to-Speech**: ElevenLabs (`eleven_flash_v2_5` model) via Cloudflare Worker proxy
+- **AI Chat**: Claude via the Claude Code CLI (`claude -p` in stream-json mode, see `ClaudeCodeBridge.swift`), signed in with the user's subscription. Model is a Claude Code alias (`sonnet` default, `opus` optional)
+- **Speech-to-Text**: Apple Speech (on-device) by default via `VoiceTranscriptionProvider = apple` in Info.plist. AssemblyAI/OpenAI providers remain but need their own backend
+- **Text-to-Speech**: Built-in Mac voice via `AVSpeechSynthesizer` (`SystemVoiceTTSClient.swift`). `ElevenLabsTTSClient.swift` is kept but unused
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
-- **Analytics**: PostHog via `ClickyAnalytics.swift`
+- **Analytics**: None. `ClickyAnalytics.swift` keeps its methods as no-ops so call sites compile
 
-### API Proxy (Cloudflare Worker)
+### Claude Code Bridge
 
-The app never calls external APIs directly. All requests go through a Cloudflare Worker (`worker/src/index.ts`) that holds the real API keys as secrets.
+`ClaudeCodeBridge.swift` replaces the old HTTP client. Per request it launches the `claude` CLI with `-p --input-format stream-json --output-format stream-json --include-partial-messages --tools "" --strict-mcp-config --disable-slash-commands --no-session-persistence`, writes one user message (base64 screenshots + text) to stdin, and parses `stream_event` text deltas plus the final `result` event from stdout. Prior turns are folded into the message text because stream-json input can't carry assistant turns. Never pass `--bare`: it disables OAuth/keychain auth, which breaks subscription sign-in. The CLI must be signed in once with `claude auth login`.
 
-| Route | Upstream | Purpose |
-|-------|----------|---------|
-| `POST /chat` | `api.anthropic.com/v1/messages` | Claude vision + streaming chat |
-| `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | ElevenLabs TTS audio |
-| `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Fetches a short-lived (480s) AssemblyAI websocket token |
+### Hands-Free Sessions
 
-Worker secrets: `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ELEVENLABS_API_KEY`
-Worker vars: `ELEVENLABS_VOICE_ID`
+Double-tapping the push-to-talk shortcut (or the panel button) starts an always-on mic session. `HandsFreeListeningSession` runs its own `AVAudioEngine` with voice processing (echo cancellation) and on-device `SFSpeechRecognizer`, splitting speech into utterances after ~1.1s of silence and restarting the recognition request each time. `HandsFreeVoiceCommand` matches whole utterances against local command phrases (wait/go/capture/slower/faster/done) so they act instantly; everything else goes to Claude. "wait"/"stop" also fire on partial transcripts while the buddy is talking or thinking. Non-command speech heard while the buddy was speaking is dropped as likely echo. Escape (seen via the listen-only event tap) stops speech, cancels the response, and ends the session. Captures are full-resolution PNGs in `~/Pictures/Clicky/Session …/`.
+
+### Wake Word (P7)
+
+"Hey Claudia" / "Hey Clicky" (`v2.wake.enabled`, default on; `v2.wake.phrases`). `WakeWordController` keeps a small `AVAudioEngine` input tap (no voice processing) feeding ClickyCore's `WakeWordRecognitionPipeline`: an energy gate (0.6 s pre-roll) so the recognizer idles in silence, an `SFSpeechRecognizer` that is always on-device (no on-device support → off, never a server fallback), requests restarted every 50 s and after finals. `WakeWordMatcher` accepts the phrase only at the start of an utterance segment (request start or after a ≥ 0.6 s pause), with fuzzy ASR spellings; `WakeWordGate` debounces 2 s and ignores matches while Clicky talks, within 1.5 s after, or when Clicky just said the name (EchoGuard words). After a wake the turn is heard on the same request until `UtteranceEndRule` (the hands-free 1.1 s rule) ends it, then goes through `sendTranscriptToClaudeWithScreenshot`. The listener yields the mic whenever push-to-talk / hands-free claim it on `AudioEngineHub` and pauses while another app runs mic input (CoreAudio process objects, polled every 2 s), the default input is a Bluetooth headset, or the screen is locked / asleep. "stop listening" / "start listening" flip the setting. Debug inbox: `wakeStatus`, `wakeFeed {path}`.
+
+### Full voice control (P8)
+
+- **Wake diagnosis**: `wakeStatus` adds `errorsByCode` (recognizer `domain:code`; 1110 no-speech, 216/301 cancel and 203 retry are benign: not in `recognizerErrors`, no backoff), `nearMisses` (in memory: "hey <second word>" counts for greetings that didn't wake, nothing else kept), the listening `device` (same mic push-to-talk last used, unless Bluetooth; `PushToTalkInputDeviceRecord`), `deviceSampleRate`, `inputFormat`/`conversion` (input always converted to 48 kHz mono float32, `WakeAudioFormat.swift`), gate levels (`noiseFloorDb`, `openThresholdDb`: the gate's floor is the 20th percentile of the last 8 s, threshold floor+8 dB, never below -72), `makeUpGainDb` (quiet mic gain up to +20 dB for the recognizer only), pre-roll 1.0 s, and the locale chooser (`v2.wake.locale` auto | en-IN | en-US; auto moves to the other on-device English locale when ≥ 50% of the last 12 requests failed, at most once per 10 min, between turns).
+- **Follow-up window** (`WakeFollowUp.swift`, `v2.wake.followUpSeconds`, default 10): after a wake turn's answer finishes (nothing thinking / speaking / acting for 0.5 s), the wake pipeline takes any words as a command without the wake word; "that's all" / "thanks that's it" / silence end it, Escape / push-to-talk / hands-free cancel it; EchoGuard drops utterances made mostly of Clicky's own recent words. Notch shows "listening…". Wake turns only (a fast-path confirm or dictation also keeps it open).
+- **Local fast path** (`ClickyCore/Voice/VoiceFastPath.swift` parser + `VoiceFastPathPolicy`; app `Voice/VoiceCommandController.swift`, `Voice/VoiceFastPathExecutor.swift`; `v2.voice.fastPath`): volume / mute, brightness (built-in displays only), media keys (never when Safari is in front or a window shows Netflix unless named), window snap / maximize / minimize / move to screen N (screens numbered left to right), switch / open app, open file or folder (home top level, ~/Projects, /Applications; protected folders only with `v2.code.searchProtectedFolders`), tabs / back / forward / copy / paste / select all, scrolling, Mission Control, show desktop, read selection aloud, dictation ("type what I say" … "stop typing"), screenshot, lock (confirm by spoken yes or the card). Same `ActionTierClassifier` tiers; the spoken command is its own confirm except lock and closing unsaved work. Not found on the Mac → the same turn goes to Claude. Each action is a small `.actionTask` record and a 1–3 word acknowledgement. Debug inbox: `voiceCommand {text, dryRun}`, `voiceStatus`, `wakeFeedBatch {paths, locale?}`, `wakeFeedChain {path, locale?}`.
+
+### Live Marks
+
+Claude can draw circles, arrows, and numbered step badges on the overlay by adding `[MARK:kind:x,y:label:screenN]` tags (kind = `circle`, `arrow`, or a step number) right before the final `[POINT:...]` tag. `LiveScreenMarkTagParser` strips every MARK tag (even malformed ones, so they're never spoken) before the POINT parser runs, caps marks at 6, and `CompanionManager` maps them from screenshot pixels to global coords the same way POINT does. `LiveScreenMarksOverlayView` draws them inside each screen's `BlueCursorView`, staggered in response order. Marks clear on the next question, on Escape, on the hands-free "clear" command, or 20s after speech ends; transient-mode overlays stay up while marks are showing.
+
+### Spark Companion and Helper Workers
+
+The old blue triangle and spinner are replaced by `ClaudeCompanionView`: an orange spark (`ClaudeSparkShape`, drawn in code) that breathes while idle and spins while `voiceState == .processing`. Flight/pointing logic in `BlueCursorView` is unchanged; the spark just sits at `cursorPosition`. Overlay colors (bubbles, waveform, live marks) use `DS.Colors.overlayCompanionOrange`. Idle CPU: the spark is a Core Animation layer tree (`CompanionSparkLayerView`), so breathing/spin/orbit run in the render server; cursor following runs on one shared `Perf/CursorFollowDriver` loop (60 Hz while the pointer moves plus 1 s linger, a 10 Hz poll when still, woken by mouse-moved monitors; cadence logic is ClickyCore `CursorFollowCadence`) that only writes `CursorFollowPosition` when it changed, and only the `CursorFollowReader` leaves observe it. Never add `TimelineView(.animation)` / `repeatForever` to always-present overlay views, and never assign unchanged values to `@Published` state on timers. Debug inbox `perfStatus` reports body evaluations, loop ticks and state writes per second.
+
+What orbits the spark comes from `CompanionActivitySource` objects registered with `CompanionManager.addCompanionActivitySource`; their workers are merged and capped at 4 visible (`CompanionActivityLimits`). Two sources exist: `CompanionWorkerRunner` (real) and `SimulatedCompanionActivitySource` (driven by the DEBUG-only "Companion" row in the panel: Think toggle and 0–4 workers).
+
+Helper workers: the main request may reply with a short heads-up plus `[WORKER:short title:task prompt]` tags. `CompanionWorkerTagParser` strips them (max 8). `CompanionWorkerRunner.runWorkers` runs each as its own `ClaudeCodeBridge` request with model `haiku` (`workerClaudeModel`), at most 4 concurrently with the rest queued, in a task group that is a child of the response task, so Escape / "stop" / a new question cancels every worker (the bridge terminates each CLI process). Results are folded into a second main-brain request (`makeMainBrainPromptWithWorkerResults`) that produces the final spoken answer with MARK/POINT tags. One round of workers per question. The main brain keeps the user's chosen model.
+
+### Computer-use actions (P7)
+
+When the owner asks Clicky to *do* something ("open chrome and google this", "open the second link", "highlight the important facts", "summarize the article on screen"), Claude answers with one `<actions>{"goal":…,"steps":[{"do":"open_app",…}],"done":false}</actions>` block (grammar: `ClickyCore/Actions/ActionDSL.swift`; prompt: `ActionsPromptSection`, gated by `v2.actions.enabled`). `Actions/ActionTaskController.swift` runs it as an observe → act loop: each step is resolved read-only (`ActionExecutor.resolve`), classified by `ActionTierClassifier` (free / 1.5 s countdown / confirm by spoken yes or a real click on the confirm card / refused), then performed AX-first with tagged synthetic events only as fallback. Unless the block says `done`, once the batch ran and the answer finished speaking, the same request is asked again with the step results and a fresh capture (`ActionTaskLoop.continuationMessage`); max 12 steps per task. "stop", Esc, Cancel, any other utterance, and any physical input while steps run (`ActionInputMonitor` + `ActionCancelLogic`) cancel. Return is pressed only when the owner said "press enter"/"send it", and then only after a confirm. Password/payment fields, security prompts, terminals, privacy settings, Clicky's own windows and Safari/Netflix (unless named) are refused. The task is an `.actionTask` AgentRecord (live `actionSteps` in the notch and dashboard). Debug inbox: `actionsStatus`, `actionsCancel`, `actionsRun {steps, dryRun}`.
+
+### Article highlights and notes (P8)
+
+"highlight the important things / make notes / study this article": Claude first sends `{"do":"read_article"}`; `Article/ArticleReader.swift` finds the article window (the frontmost browser, even behind a terminal or Clicky's panels — ClickyCore `ArticleWindowChoice`), walks its AXWebArea in reading order (AXStaticText runs; nav/banner/footer/aside landmarks and controls skipped; only the AXLandmarkMain / AXDocumentArticle subtree when present) and joins the runs (`ArticleTextAssembler`, ≤ `v2.article.maximumCharacters`, default 30k). Too little AX text → scroll + OCR of the viewport page by page (tagged scroll events only, scrolled back; `v2.article.scrollOCRFallback`). The text goes back in the observe turn (`ActionTaskLoop.pendingArticleText`), and Claude answers with one block: `highlight` with 5–8 verbatim sentences + `notes {title, summary, items:[{note, quote}]}`. Sentence targets (`ActionHighlightTarget.isSentence`) are drawn by `Article/ArticleHighlightController.swift`: each sentence is matched on a letters-and-digits skeleton (`ArticleSentenceMatcher`, approximate fallback), mapped to per-run ranges, measured per line (`ArticleTextBounds`: AXBoundsForRange → text markers → run frame; wrapped ranges word by word → `ArticleLineFragments`), else fuzzy-matched across OCR lines of the viewport. Soft yellow strokes (no outline) live in a click-through overlay over the viewport; a 10 Hz timer runs only while highlights / the panel exist and moves them by their anchor run's AXFrame delta (reflow → remeasure); off-screen ones are numbered ticks in the right margin (`ArticleHighlightLayout`). The notes panel is non-activating, docked beside the window on the side with the most free space (`ArticleNotesDock`, never over the article column), follows the window, hides while another app is in front; clicking a note does AXScrollToVisible on its run. "save my notes" / `[NOTES:save]` / Save → `~/Clicky Notes/<title>.md` + PDF via WhiteboardExporter (`ArticleNotesExport`). Debug inbox: `articleRead`, `notesStatus`, `notesSave`.
 
 ### Key Architecture Decisions
 
@@ -53,12 +78,13 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | File | Lines | Purpose |
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1026 | Central state machine. Owns dictation, shortcut monitoring, screen capture, Claude API, ElevenLabs TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
+| `CompanionManager.swift` | ~1590 | Central state machine. Owns dictation, shortcut monitoring, screen capture, the Claude Code bridge, system-voice TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
-| `CompanionPanelView.swift` | ~761 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, model picker (Sonnet/Opus), permissions UI, DM feedback button, and quit button. Dark aesthetic using `DS` design system. |
+| `CompanionPanelView.swift` | ~761 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, model picker (Sonnet/Opus), hands-free button, permissions UI, debug Companion row, and quit button. No onboarding video, music, or replay link (removed with the upstream demo content). Dark aesthetic using `DS` design system. |
 | `OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
 | `CompanionResponseOverlay.swift` | ~217 | SwiftUI view for the response text bubble and waveform displayed next to the cursor in the overlay. |
 | `CompanionScreenCaptureUtility.swift` | ~132 | Multi-monitor screenshot capture using ScreenCaptureKit. Returns labeled image data for each connected display. |
+| `Capture/SnapshotCapture.swift` | ~230 | `[SNAP:screen\|window\|marks[+marks]]` screenshots: ScreenCaptureKit capture, PNG to `~/Desktop/Clicky Screenshots`, clipboard copy. Target grammar and region math are in `ClickyCore/Tags/SnapshotTag.swift`. |
 | `BuddyDictationManager.swift` | ~866 | Push-to-talk voice pipeline. Handles microphone capture via `AVAudioEngine`, provider-aware permission checks, keyboard/button dictation sessions, transcript finalization, shortcut parsing, contextual keyterms, and live audio-level reporting for waveform feedback. |
 | `BuddyTranscriptionProvider.swift` | ~100 | Protocol surface and provider factory for voice transcription backends. Resolves provider based on `VoiceTranscriptionProvider` in Info.plist — AssemblyAI, OpenAI, or Apple Speech. |
 | `AssemblyAIStreamingTranscriptionProvider.swift` | ~478 | Streaming transcription provider. Fetches temp tokens from the Cloudflare Worker, opens an AssemblyAI v3 websocket, streams PCM16 audio, tracks turn-based transcripts, and delivers finalized text on key-up. Shares a single URLSession across all sessions. |
@@ -66,15 +92,28 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | Local fallback transcription provider backed by Apple's Speech framework. |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
-| `ClaudeAPI.swift` | ~291 | Claude vision API client with streaming (SSE) and non-streaming modes. TLS warmup optimization, image MIME detection, conversation history support. |
+| `HandsFreeListeningSession.swift` | ~300 | Always-on mic + on-device speech for hands-free sessions. Echo cancellation, silence-based utterance splitting, off-main-thread audio/speech callbacks. |
+| `HandsFreeVoiceCommand.swift` | ~150 | Local instant-command parser (pause, resume, capture N, slower, faster, clear marks, end session). Pure Foundation, whole-utterance matching. |
+| `HandsFreeSessionIndicator.swift` | ~170 | Click-through pill at the top of the screen showing listening/paused/thinking, last heard words, and capture count. |
+| `HandsFreeSessionCaptureStore.swift` | ~65 | Saves a session's full-resolution captures into its own folder and reveals them in Finder. |
+| `WakeWordController.swift` | ~525 | P7 wake word: the wake mic tap, yielding to push-to-talk / hands-free, auto-pause (mic in use, Bluetooth input, lock, sleep), the gate, counts/latency/CPU for `wakeStatus`, `wakeFeed`. Pure parts in `ClickyCore/Speech/Wake/`. |
+| `WakeWordSystemProbes.swift` | ~170 | CoreAudio "is another process running mic input / is the input Bluetooth", and CPU seconds for Clicky and the on-device speech service. |
+| `WakeWordSettingsRow.swift` | ~60 | The menu-bar panel's wake word switch and status line. |
+| `LiveScreenMark.swift` | ~140 | Live mark model and `[MARK:...]` tag parser (circles, arrows, numbered steps). Pure Foundation. |
+| `LiveScreenMarksOverlayView.swift` | ~215 | Draws live marks in the overlay with staggered draw-in animations. |
+| `ClaudeCompanionView.swift` | ~140 | The companion view: breathing/spinning coordinator spark plus 0–4 orbiting worker minis. The spark shape itself is `ClickyCore/Companion/ClaudeSparkShape.swift` (shared with the notch). |
+| `Notch/NotchPanelController.swift` | ~380 | The Dynamic Island-style pill at the top centre of the screen (`v2.notch.*`): a never-key `NotchPanel` hosting ClickyCore's `NotchView`, fed from voiceState, `captionState`, `AgentsCenter.store` and Code mode. Hover expands it (0.4 s collapse grace); hidden while a full-screen window covers its display. Pure parts (geometry, status text, full-screen decision, hover state machine) are in `ClickyCore/Notch/`. |
+| `CompanionActivitySource.swift` | ~90 | Protocol for what the companion shows (thinking, workers), the 4-worker visible cap, and the simulated debug source. |
+| `CompanionWorkers.swift` | ~230 | `[WORKER:...]` tag parser and `CompanionWorkerRunner`: Haiku workers, 4 concurrent with a queue, cancellation, activity source. |
+| `ClaudeCodeBridge.swift` | ~280 | Runs Claude through the local Claude Code CLI on the user's subscription. Streams text, maps CLI errors, checks sign-in status. |
+| `SystemVoiceTTSClient.swift` | ~60 | Built-in Mac voice TTS (AVSpeechSynthesizer), same surface as ElevenLabsTTSClient. |
 | `OpenAIAPI.swift` | ~142 | OpenAI GPT vision API client. |
 | `ElevenLabsTTSClient.swift` | ~81 | ElevenLabs TTS client. Sends text to the Worker proxy, plays back audio via `AVAudioPlayer`. Exposes `isPlaying` for transient cursor scheduling. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
-| `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
+| `ClickyAnalytics.swift` | ~45 | No-op analytics stubs (tracking removed in the personal build). |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
-| `worker/src/index.ts` | ~142 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). |
 
 ## Build & Run
 
@@ -89,24 +128,6 @@ open leanring-buddy.xcodeproj
 ```
 
 **Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
-
-## Cloudflare Worker
-
-```bash
-cd worker
-npm install
-
-# Add secrets
-npx wrangler secret put ANTHROPIC_API_KEY
-npx wrangler secret put ASSEMBLYAI_API_KEY
-npx wrangler secret put ELEVENLABS_API_KEY
-
-# Deploy
-npx wrangler deploy
-
-# Local dev (create worker/.dev.vars with your keys)
-npx wrangler dev
-```
 
 ## Code Style & Conventions
 

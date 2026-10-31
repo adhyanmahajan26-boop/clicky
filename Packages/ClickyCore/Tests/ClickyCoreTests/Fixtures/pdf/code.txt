@@ -1,0 +1,9 @@
+here's breadth first search in python.
+
+<whiteboard>
+{"wb": 1, "title": "Breadth-first search in Python", "dir": "TB", "sections": [{"id": "q1", "title": "The code", "q": "show bfs in python"}]}
+{"el": "code", "id": "src", "sec": "q1", "lang": "python", "text": "from collections import deque\n\ndef bfs(graph, start, goal):\n    \"\"\"Shortest path by edge count.\"\"\"\n    queue = deque([start])\n    parent = {start: None}\n\n    while queue:\n        node = queue.popleft()\n        if node == goal:\n            break\n        for neighbour in graph.get(node, []):\n            if neighbour not in parent:\n                parent[neighbour] = node\n                queue.append(neighbour)\n\n    if goal not in parent:\n        return None  # unreachable\n\n    path = []\n    node = goal\n    while node is not None:\n        path.append(node)\n        node = parent[node]\n    return path[::-1]\n\ngraph = {\"a\": [\"b\", \"c\"], \"b\": [\"d\"], \"c\": [\"d\", \"e\"], \"d\": [\"f\"], \"e\": [\"f\"]}\nprint(bfs(graph, \"a\", \"f\"))  # ['a', 'b', 'd', 'f']\nprint(bfs(graph, \"f\", \"a\"))  # None\n# 30 lines of breadth-first search", "hl": [8, 9, 12]}
+{"el": "callout", "id": "c", "sec": "q1", "target": "src", "style": "tip", "text": "The parent map doubles as the visited set."}
+{"step": 1, "show": ["src"], "hl": ["src"], "say": "a queue walks the graph level by level.", "focus": "q1"}
+{"step": 2, "show": ["c"], "say": "the parent map is also the visited set.", "focus": "q1"}
+</whiteboard>

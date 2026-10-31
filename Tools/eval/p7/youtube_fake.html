@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fake video home (local)</title>
+<style>
+  body { margin: 0; font: 16px -apple-system, system-ui, sans-serif; background: #fff; color: #111; }
+  header { display: flex; gap: 8px; align-items: center; padding: 14px 18px; border-bottom: 1px solid #ddd; }
+  header strong { color: #c00; margin-right: 12px; }
+  input[type=search] { flex: 1; max-width: 520px; padding: 8px 12px; font-size: 16px; border: 1px solid #bbb; border-radius: 18px; }
+  button { padding: 8px 14px; border-radius: 18px; border: 1px solid #bbb; background: #f2f2f2; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Fake Video</strong>
+  <form id="search-form" action="youtube_results.html" method="get" style="display:flex;flex:1;gap:8px">
+    <input id="search-input" type="search" name="search_query" placeholder="Search" aria-label="Search">
+    <button id="search-button" type="submit">Search</button>
+  </form>
+</header>
+<main style="padding:18px"><p>Local stand-in for a video site. Nothing here is loaded from the network.</p></main>
+<script src="common.js"></script>
+<script>
+try {
+  const box = (sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map((v) => Math.round(v * 100) / 100); };
+  window.P7.publish("youtube_fake", {
+    search_input: box("#search-input"),
+    search_button: box("#search-button")
+  }, { searchAction: "youtube_results.html", searchParam: "search_query" });
+} catch (error) { window.P7.fail(error); }
+</script>
+</body>
+</html>
