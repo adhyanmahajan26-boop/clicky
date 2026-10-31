@@ -212,8 +212,8 @@ struct T3ResultCard: View {
             chip("Show folder", "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.folder)])
             }
-            if run.repo == nil, FileManager.default.fileExists(atPath: run.folder + "/index.html") {
-                chip("Open page", "safari") { NSWorkspace.shared.open(URL(fileURLWithPath: run.folder + "/index.html")) }
+            if run.repo == nil, let page = BotsT3.page(of: run) {
+                chip("Open page", "safari") { NSWorkspace.shared.open(page) }
             }
             Spacer(minLength: 0)
         }

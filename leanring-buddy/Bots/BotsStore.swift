@@ -316,6 +316,8 @@ final class BotsStore: ObservableObject {
         }
         Task { [weak self] in
             do {
+                let worktree = await BotsT3.state(of: run)?.worktree
+                if let head = await BotsT3.currentHead(of: run, worktree: worktree) { run.baseCommit = head }
                 try await BotsT3.sendFollowup(text, to: run)
                 guard let self else { return }
                 run.phase = "running"

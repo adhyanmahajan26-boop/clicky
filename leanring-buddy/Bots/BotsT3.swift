@@ -184,6 +184,12 @@ enum BotsT3 {
     }
 
     /// Sends Addy's change to a run's thread; a busy agent gets it as its next turn.
+    /// The commit a run's work is on now, so the next report shows only the change that follows.
+    static func currentHead(of run: T3Run, worktree: String?) async -> String? {
+        let folder = URL(fileURLWithPath: worktree ?? run.folder, isDirectory: true)
+        return try? await shell(git, ["rev-parse", run.branch ?? "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func sendFollowup(_ text: String, to run: T3Run) async throws {
         guard let cli else { throw BotsT3Error.noCLI }
         try await shell(cli, ["thread", "send", run.id, "-"], stdin: text + deliveryNote)
@@ -295,8 +301,11 @@ enum BotsT3 {
     private static func trimmedSummary(_ text: String) -> String {
         // Screenshots the agent saved to its scratchpad don't exist for the room; keep the words.
         let withoutImages = text.replacingOccurrences(of: #"!\[[^\]]*\]\([^)]*\)\n?"#, with: "", options: .regularExpression)
-        guard withoutImages.count > 1800 else { return withoutImages }
-        return String(withoutImages.prefix(1800)) + "…"
+        guard withoutImages.count > 2400 else { return withoutImages }
+        let head = String(withoutImages.prefix(2400))
+        // End on a whole paragraph where there is one; the full report is in T3 Code.
+        let cut = head.range(of: "\n\n", options: .backwards).map { String(head[..<$0.lowerBound]) } ?? head
+        return cut + "\n\n_(The full report is in T3 Code.)_"
     }
 
     /// Runs the project's own tests when it has a quick way to: an npm test script with its packages
@@ -308,21 +317,65 @@ enum BotsT3 {
            let package = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let scripts = package["scripts"] as? [String: Any], let test = scripts["test"] as? String,
            !test.contains("no test specified"), fm.fileExists(atPath: folder.appendingPathComponent("node_modules").path),
-           let npm = executable(["/opt/homebrew/bin/npm", "/usr/local/bin/npm"]) {
+           let npm = tool("npm") {
             command = (npm, ["test", "--silent"])
+        } else if let tests = nodeTestFiles(in: folder), let node = tool("node") {
+            command = (node, ["--test"] + tests)
         } else if fm.fileExists(atPath: folder.appendingPathComponent("tests").path)
                     || fm.fileExists(atPath: folder.appendingPathComponent("pytest.ini").path),
-                  let python = executable(["/opt/homebrew/bin/python3", "/usr/bin/python3"]) {
+                  let python = tool("python3") {
             command = (python, ["-m", "pytest", "-q"])
         }
         guard let (tool, arguments) = command else { return nil }
         do {
             let output = try await shell(tool, arguments, in: folder, limit: 240)
-            let last = output.split(separator: "\n").last.map(String.init) ?? ""
-            return "passed. \(last.prefix(160))"
+            return "passed. \(testCounts(in: output))"
         } catch {
             return "failed. \(error.localizedDescription.suffix(300))"
         }
+    }
+
+    /// *.test.js / *.test.mjs files in the folder or one level down (relative paths), for `node --test`.
+    static func nodeTestFiles(in folder: URL) -> [String]? {
+        let fm = FileManager.default
+        var found: [String] = []
+        let top = (try? fm.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in top where !name.hasPrefix(".") && name != "node_modules" {
+            if name.hasSuffix(".test.js") || name.hasSuffix(".test.mjs") { found.append(name); continue }
+            var isFolder: ObjCBool = false
+            guard fm.fileExists(atPath: folder.appendingPathComponent(name).path, isDirectory: &isFolder), isFolder.boolValue else { continue }
+            for inner in (try? fm.contentsOfDirectory(atPath: folder.appendingPathComponent(name).path)) ?? []
+            where inner.hasSuffix(".test.js") || inner.hasSuffix(".test.mjs") {
+                found.append("\(name)/\(inner)")
+            }
+        }
+        return found.isEmpty ? nil : found.sorted()
+    }
+
+    /// The page a run built: index.html in its folder or one level down.
+    static func page(of run: T3Run) -> URL? {
+        let folder = URL(fileURLWithPath: run.folder, isDirectory: true)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: folder.appendingPathComponent("index.html").path) { return folder.appendingPathComponent("index.html") }
+        for name in ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).sorted() where !name.hasPrefix(".") && name != "node_modules" {
+            let candidate = folder.appendingPathComponent(name).appendingPathComponent("index.html")
+            if fm.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
+    /// "5 tests, 5 passed, 0 failed" from node's, npm's or pytest's summary lines, else the last line.
+    static func testCounts(in output: String) -> String {
+        let lines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        var counts: [String] = []
+        for key in ["tests", "pass", "fail"] {
+            if let line = lines.last(where: { $0.hasPrefix("ℹ \(key) ") || $0.hasPrefix("# \(key) ") }),
+               let number = line.split(separator: " ").last {
+                counts.append("\(number) \(["tests": "tests", "pass": "passed", "fail": "failed"][key]!)")
+            }
+        }
+        if !counts.isEmpty { return counts.joined(separator: ", ") }
+        return String((lines.last { !$0.isEmpty } ?? "").prefix(160))
     }
 
     /// Pushes the run's branch and opens a draft PR, when the repo lives on GitHub.
@@ -339,6 +392,26 @@ enum BotsT3 {
     // MARK: Processes
 
     private static let git = URL(fileURLWithPath: "/usr/bin/git")
+
+    /// A command-line tool by name: the usual install folders, then the login shell's PATH (node from
+    /// pnpm or nvm lives in the home folder, which a Mac app's PATH doesn't include).
+    static func tool(_ name: String) -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if let found = executable(["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)",
+                                   "\(home)/Library/pnpm/\(name)", "/usr/bin/\(name)"]) { return found }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "command -v \(name)"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let path = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        process.waitUntilExit()
+        return path.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+    }
 
     private static func executable(_ paths: [String]) -> URL? {
         paths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
@@ -372,7 +445,8 @@ enum BotsT3 {
             environment["NO_COLOR"] = "1"
             environment["CI"] = "1"
             let home = FileManager.default.homeDirectoryForCurrentUser.path
-            environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+            environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(home)/.local/bin:\(home)/Library/pnpm:" +
+                "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
             process.environment = environment
             let output = Pipe()
             process.standardOutput = output
