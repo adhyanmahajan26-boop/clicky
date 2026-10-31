@@ -99,14 +99,31 @@ final class ClaudiaControlInbox {
             let botID = command["bot"] as? String ?? BotsStore.teamID
             let text = command["text"] as? String ?? ""
             guard !text.isEmpty else { reply(identifier, ok: false, result: nil, error: "No text."); return }
-            if botID == BotsStore.teamID { BotsStore.shared.sendToTeam(text) } else { BotsStore.shared.send(text, to: botID) }
+            if botID == BotsStore.teamID {
+                BotsStore.shared.sendToTeam(text)
+            } else if botID.hasPrefix("group:") {
+                BotsStore.shared.sendToGroup(text, groupID: String(botID.dropFirst("group:".count)))
+            } else {
+                BotsStore.shared.send(text, to: botID)
+            }
             reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "groupSave":
+            // Adds or updates a bot group: {id, name, head, members, symbol}.
+            guard let id = command["id"] as? String, !id.isEmpty, let name = command["name"] as? String else {
+                reply(identifier, ok: false, result: nil, error: "Needs id and name."); return
+            }
+            let group = BotGroup(id: id, name: name, symbol: command["symbol"] as? String ?? "person.2.fill",
+                                 headID: command["head"] as? String, memberIDs: command["members"] as? [String] ?? [])
+            BotsStore.shared.save(group)
+            reply(identifier, ok: true, result: ["saved": id], error: nil)
         case "botsState":
             let store = BotsStore.shared
             let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder,
                                            "branch": $0.branch ?? NSNull(), "pullRequest": $0.pullRequest ?? NSNull()] as [String: Any] }
             reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "runs": runs,
-                                                 "bots": store.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model] }],
+                                                 "bots": store.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model] },
+                                                 "groups": store.groups.map { ["id": $0.id, "name": $0.name, "head": $0.headID ?? NSNull(),
+                                                                               "members": $0.memberIDs] as [String: Any] }],
                   error: nil)
         case "status":
             reply(identifier, ok: true, result: [

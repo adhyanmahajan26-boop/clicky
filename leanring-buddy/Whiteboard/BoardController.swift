@@ -163,7 +163,11 @@ final class BoardController: NSObject, ObservableObject, SpeechCoordinatorHost, 
         fetchRelatedLinks(for: orderedBoard.title)
         let nextSegmentID = (scripts.last?.segments.last?.id ?? (firstSegmentID - 1)) + 1
         apply(narrator?.start(at: clockNow) ?? [])
-        if scripts.isEmpty || isEditOfOpenBoard {
+        // The whole board shows as soon as it's written; the narration then walks through it step by step
+        // (highlighting each part) instead of drawing it piece by piece, which made a long board take a
+        // minute or more to appear. Off with defaults key v2.board.revealAtOnce = false.
+        let revealsAtOnce = UserDefaults.standard.object(forKey: "v2.board.revealAtOnce") as? Bool ?? true
+        if scripts.isEmpty || isEditOfOpenBoard || revealsAtOnce {
             // A board without steps is shown whole.
             narrator?.revealEverything()
             publishState()

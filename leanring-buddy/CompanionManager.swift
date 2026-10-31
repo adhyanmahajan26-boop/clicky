@@ -1415,8 +1415,10 @@ final class CompanionManager: ObservableObject {
         if let claudiaScreen = ClaudiaScreen.picked, ClickySettings.isActionsEnabled {
             mainPrompt += "\n\nyour own screen: you have a display of your own (\"\(claudiaScreen.localizedName)\"). to search the web or open a site, always use a search or open_url step: they open in your own browser window on that display, so the user's windows stay as they are. never switch to the user's browser and type a search into it, unless they ask you to do something in a specific window of theirs."
         }
-        // Unasked boards open small at the side of the screen.
-        if ClickySettings.isWhiteboardAutoEnabled && modeHint.line == nil && promptFeatures.contains(.whiteboard) {
+        // Unasked boards open small at the side of the screen. The same prompt goes with every turn (the
+        // MODE line in the user's message decides a board), so the brain kept warm for the next question
+        // also fits a board request instead of being thrown away and started cold.
+        if ClickySettings.isWhiteboardAutoEnabled && promptFeatures.contains(.whiteboard) {
             return mainPrompt + "\n\n" + WhiteboardPromptSection.sideBoardText
         }
         return mainPrompt

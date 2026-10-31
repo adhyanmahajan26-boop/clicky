@@ -503,7 +503,7 @@ struct WhiteboardPromptTests {
         let withoutBoard = SystemPromptBuilder.mainSystemPrompt(features: .current)
         #expect(!withoutBoard.contains("<whiteboard>"))
         #expect(withoutBoard.contains("draw on a whiteboard"))
-        #expect(ModeHint.whiteboard.effort == "medium")
+        #expect(ModeHint.whiteboard.effort == nil)
         #expect(ModeHint.detect("draw me a diagram of tcp").isWhiteboard)
     }
 }

@@ -14,8 +14,12 @@ import Combine
 import SwiftUI
 
 enum BotsPane: Hashable {
+    /// The Project room (the project group's chat).
     case team
+    case group(String)
     case bot(String)
+    /// Clicky's own chat: Theo's on-screen companion.
+    case clicky
     case connectors
 }
 
@@ -42,34 +46,116 @@ struct BotsRootView: View {
         .preferredColorScheme(.dark)
     }
 
+    @State private var editingGroup: BotGroup?
+    @State private var addingBot = false
+
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            sectionTitle("Project handlers")
-            sidebarRow(.team, title: "Project room", subtitle: "Theo leads \(store.projectBots.count - 1) bots") {
-                ZStack {
-                    Circle().fill(DS.Colors.accent.opacity(0.18))
-                    Image(systemName: "person.3.fill").font(.system(size: 13)).foregroundColor(DS.Colors.accentText)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    sectionTitle("Pinned")
+                    if let theo = store.primary { botRow(theo, subtitleOverride: "CEO · \(theo.modelLabel)") }
+                    sidebarRow(.clicky, title: "Clicky", subtitle: "Screen companion") {
+                        ClickyAvatar(size: 34)
+                    }
+                    HStack {
+                        sectionTitle("Groups")
+                        Spacer()
+                        Button { editingGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: []) } label: {
+                            Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help("New group")
+                        .padding(.trailing, 10).padding(.top, 10)
+                    }
+                    .padding(.top, 8)
+                    ForEach(store.groups) { group in groupSection(group) }
                 }
-                .frame(width: 34, height: 34)
+                .padding(.bottom, 8)
             }
-            ForEach(store.projectBots) { bot in botRow(bot) }
-            sectionTitle("Personal").padding(.top, 8)
-            ForEach(store.personalBots) { bot in botRow(bot) }
-            Spacer()
+            Divider().overlay(Color.white.opacity(0.06))
+            HStack(spacing: 8) {
+                footerButton("New bot", "plus.circle") { addingBot = true }
+                footerButton("New group", "person.2.badge.plus") {
+                    editingGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: [])
+                }
+            }
+            .padding(.horizontal, 8).padding(.top, 8)
             if showsConnectors {
-            sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
-                ZStack {
-                    Circle().fill(Color.white.opacity(0.08))
-                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
+                    ZStack {
+                        Circle().fill(Color.white.opacity(0.08))
+                        Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                    }
+                    .frame(width: 34, height: 34)
                 }
-                .frame(width: 34, height: 34)
             }
-            .padding(.bottom, 10)
-            }
+            Spacer().frame(height: 10)
         }
         .padding(.horizontal, 8)
-        .frame(width: 240)
+        .frame(width: 250)
         .background(DS.Colors.surface1)
+        .sheet(item: $editingGroup) { group in
+            GroupEditor(store: store, group: group) { saved in
+                if let saved { selection.pane = saved.id == BotGroup.projectID ? .team : (saved.headID != nil ? .group(saved.id) : selection.pane) }
+                editingGroup = nil
+            }
+        }
+        .sheet(isPresented: $addingBot) {
+            NewBotSheet(store: store) { bot in
+                if let bot { selection.pane = .bot(bot.id) }
+                addingBot = false
+            }
+        }
+    }
+
+    private func footerButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.system(size: 11.5, weight: .medium))
+                .frame(maxWidth: .infinity).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        }
+        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary)
+    }
+
+    /// A group: its chat (when it has a head), the head, then the members.
+    @ViewBuilder private func groupSection(_ group: BotGroup) -> some View {
+        let members = store.members(of: group)
+        HStack(spacing: 6) {
+            Image(systemName: group.symbol).font(.system(size: 10)).foregroundColor(DS.Colors.textTertiary)
+            Text(group.name).font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+            Spacer()
+            Menu {
+                Button("Edit group…") { editingGroup = group }
+                if group.id != BotGroup.projectID {
+                    Button("Delete group", role: .destructive) { store.deleteGroup(group.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        }
+        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+        .contextMenu {
+            Button("Edit group…") { editingGroup = group }
+        }
+        if let head = store.head(of: group) {
+            let pane: BotsPane = group.id == BotGroup.projectID ? .team : .group(group.id)
+            sidebarRow(pane, title: "Group chat",
+                       subtitle: "Led by \(head.name) · \(members.count) bots") {
+                ZStack {
+                    Circle().fill(head.accentColor.opacity(0.2))
+                    Image(systemName: group.symbol).font(.system(size: 13)).foregroundColor(head.accentColor)
+                }
+                .frame(width: 34, height: 34)
+            }
+        }
+        ForEach(members) { bot in
+            botRow(bot, isHead: bot.id == group.headID)
+        }
+        if members.isEmpty {
+            Text("No bots yet. Edit the group to add some.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+        }
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -77,18 +163,34 @@ struct BotsRootView: View {
             .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
     }
 
-    private func botRow(_ bot: NativeBot) -> some View {
-        sidebarRow(.bot(bot.id), title: bot.primary ? "\(bot.name) · CEO" : bot.name, subtitle: bot.modelLabel) {
+    private func botRow(_ bot: NativeBot, isHead: Bool = false, subtitleOverride: String? = nil) -> some View {
+        sidebarRow(.bot(bot.id), title: bot.name, subtitle: subtitleOverride ?? bot.modelLabel, badge: isHead ? "Head" : nil) {
             BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
+        }
+        .contextMenu {
+            if !bot.primary {
+                Button("Remove \(bot.name)", role: .destructive) {
+                    if selection.pane == .bot(bot.id) { selection.pane = .team }
+                    store.deleteBot(bot.id)
+                }
+            }
         }
     }
 
-    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, @ViewBuilder icon: () -> Icon) -> some View {
+    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, badge: String? = nil,
+                                        @ViewBuilder icon: () -> Icon) -> some View {
         Button { selection.pane = pane } label: {
             HStack(spacing: 10) {
                 icon()
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                    HStack(spacing: 6) {
+                        Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        if let badge {
+                            Text(badge).font(.system(size: 9.5, weight: .bold)).foregroundColor(DS.Colors.accentText)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(DS.Colors.accent.opacity(0.18)))
+                        }
+                    }
                     Text(subtitle).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -104,7 +206,13 @@ struct BotsRootView: View {
     @ViewBuilder private var detail: some View {
         switch selection.pane {
         case .team:
-            BotChatScreen(store: store, conversationID: BotsStore.teamID, bot: nil)
+            BotChatScreen(store: store, conversationID: BotsStore.teamID, bot: nil, groupID: BotGroup.projectID)
+        case .group(let id):
+            if let group = store.group(id) {
+                BotChatScreen(store: store, conversationID: group.roomID, bot: nil, groupID: id).id(id)
+            }
+        case .clicky:
+            ClickyChatScreen()
         case .bot(let id):
             if let bot = store.bot(id) {
                 BotChatScreen(store: store, conversationID: id, bot: bot).id(id)
@@ -120,16 +228,21 @@ struct BotsRootView: View {
 struct BotChatScreen: View {
     @ObservedObject var store: BotsStore
     let conversationID: String
-    /// Nil for the team chat.
+    /// Nil for a group chat.
     let bot: NativeBot?
+    /// The group whose chat this is (with no bot).
+    var groupID: String? = nil
     @State private var draft = ""
     /// Replies that were there when the chat opened show at once; new ones type in.
     @State private var settledIDs: Set<String> = []
     @State private var showsModelSettings = false
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
+    private var group: BotGroup? { groupID.flatMap { store.group($0) } }
+    private var groupBots: [NativeBot] { group.map { store.members(of: $0) } ?? [] }
+    private var isProjectRoom: Bool { groupID == BotGroup.projectID }
     private var inProgress: [(NativeBot, String)] {
-        let ids = bot.map { [$0.id] } ?? store.projectBots.map(\.id)
+        let ids = bot.map { [$0.id] } ?? groupBots.map(\.id)
         return ids.compactMap { id in store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } } }
     }
 
@@ -154,14 +267,14 @@ struct BotChatScreen: View {
                                 }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
-                                    T3HandoffButton(text: message.text, prominent: true,
+                                    T3HandoffButton(text: message.text, room: conversationID, prominent: true,
                                                     alreadySent: store.t3Runs.contains { $0.title == title }
                                                         || record.messages.contains { $0.text.hasPrefix("Submitted to T3 Code: **\(title)**") })
                                 }
                             }
                         }
                         if bot == nil {
-                            ForEach(store.t3Runs.filter { $0.phase == "running" || $0.phase == "waiting" }) { run in
+                            ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                                 T3RunCard(run: run)
                             }
                         }
@@ -200,11 +313,12 @@ struct BotChatScreen: View {
                 }
             } else {
                 HStack(spacing: -8) {
-                    ForEach(store.projectBots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
+                    ForEach(groupBots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Project room").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text("Theo (CEO) and the project team turn your idea into a prompt for T3 Code")
+                    Text(isProjectRoom ? "Project room" : "\(group?.name ?? "Group") chat").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text(isProjectRoom ? "Theo (CEO) and the project team turn your idea into a prompt for T3 Code"
+                                       : "\(group.flatMap { store.head(of: $0) }?.name ?? "The head") leads; tag anyone with @Name")
                         .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 }
             }
@@ -234,20 +348,31 @@ struct BotChatScreen: View {
                 BotAvatar(bot: bot, size: 84, state: .idle)
                 Text(bot.name).font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text(bot.description).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
-            } else {
+            } else if isProjectRoom {
                 Text("Pitch an idea to the project team").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text("Theo, your CEO, brings in the Project Manager, Design Critic and Code Improver, then writes one prompt you can send to T3 Code.")
+                    .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
+            } else if let group, let head = store.head(of: group) {
+                BotAvatar(bot: head, size: 84, state: .idle)
+                Text("\(group.name) chat").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text("\(head.name) leads this group: they hand your request to \(Self.list(groupBots.dropFirst().map(\.name))), then merge the answers. Ask them to build something and it goes to T3 Code.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity).padding(.top, 80)
     }
 
+    /// "A", "A and B", "A, B and C".
+    static func list(_ names: [String]) -> String {
+        guard names.count > 1 else { return names.first ?? "the others" }
+        return names.dropLast().joined(separator: ", ") + " and " + names.last!
+    }
+
     private var composer: some View {
         VStack(spacing: 8) {
             if bot == nil {
                 HStack(spacing: 6) {
-                    ForEach(store.projectBots) { member in
+                    ForEach(groupBots) { member in
                         Button { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " } label: {
                             HStack(spacing: 4) {
                                 BotAvatar(bot: member, size: 16, state: .idle)
@@ -262,14 +387,15 @@ struct BotChatScreen: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField(bot.map { "Message \($0.name)" } ?? "Pitch an idea to Theo and the team", text: $draft, axis: .vertical)
+                TextField(bot.map { "Message \($0.name)" } ?? (isProjectRoom ? "Pitch an idea to Theo and the team" : "Message the \(group?.name ?? "group")"),
+                          text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .lineLimit(1...6)
                     .onSubmit(send)
                 if !inProgress.isEmpty && draft.trimmingCharacters(in: .whitespaces).isEmpty {
                     Button {
-                        if let bot { store.stop(bot.id) } else { store.stopTeam() }
+                        if let bot { store.stop(bot.id) } else if let groupID { store.stopGroup(groupID) }
                     } label: {
                         Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold)).foregroundColor(.white)
                             .frame(width: 30, height: 30)
@@ -300,7 +426,7 @@ struct BotChatScreen: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
-        if let bot { store.send(text, to: bot.id) } else { store.sendToTeam(text) }
+        if let bot { store.send(text, to: bot.id) } else if let groupID { store.sendToGroup(text, groupID: groupID) }
     }
 }
 
@@ -615,6 +741,7 @@ struct ConnectorsScreen: View {
 
 struct T3HandoffButton: View {
     let text: String
+    var room: String = BotsStore.teamID
     let prominent: Bool
     var alreadySent = false
     @State private var sentHere = false
@@ -625,7 +752,7 @@ struct T3HandoffButton: View {
             Spacer().frame(width: 46)
             Button {
                 let prompt = BotsT3.promptBlock(in: text) ?? text
-                BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt))
+                BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), room: room)
                 sentHere = true
             } label: {
                 Label(sent ? "Submitted to T3 Code" : (BotsT3.promptBlock(in: text) != nil ? "Submit prompt to T3 Code" : "Submit to T3 Code"),

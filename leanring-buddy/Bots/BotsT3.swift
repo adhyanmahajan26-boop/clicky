@@ -45,6 +45,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var startedAt: Date = Date()
     var finishedAt: Date?
     var pullRequest: String?
+    /// The chat it was started from (nil: the Project room).
+    var room: String?
 }
 
 enum BotsT3 {

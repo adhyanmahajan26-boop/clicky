@@ -280,8 +280,8 @@ private struct SeededPlacerRandom: RandomNumberGenerator {
 }
 
 @Test func modeHints() {
-    #expect(ModeHint.detect("draw me a diagram of this") == ModeHint(line: "MODE: whiteboard", effort: "medium"))
-    #expect(ModeHint.detect("can you visualise it on the white board") == ModeHint(line: "MODE: whiteboard", effort: "medium"))
+    #expect(ModeHint.detect("draw me a diagram of this") == ModeHint(line: "MODE: whiteboard", effort: nil))
+    #expect(ModeHint.detect("can you visualise it on the white board") == ModeHint(line: "MODE: whiteboard", effort: nil))
     #expect(ModeHint.detect("explain it, no whiteboard please") == ModeHint(line: "MODE: answer", effort: nil))
     #expect(ModeHint.detect("show me how to search then open build settings") == ModeHint(line: nil, effort: nil))
 }

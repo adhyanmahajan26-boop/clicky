@@ -17,7 +17,8 @@ enum BotsSnapshot {
         let folder = URL(fileURLWithPath: (String(flag.dropFirst("--render-bots=".count)) as NSString).expandingTildeInPath, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let store = BotsStore.shared
-        var panes: [(String, BotsPane)] = [("room", .team), ("connectors", .connectors)]
+        var panes: [(String, BotsPane)] = [("room", .team), ("connectors", .connectors), ("clicky", .clicky)]
+        for group in store.groups where group.id != BotGroup.projectID && group.headID != nil { panes.append(("group-\(group.id)", .group(group.id))) }
         if let theo = store.primary { panes.append(("theo", .bot(theo.id))) }
         Task {
             for (name, pane) in panes {
