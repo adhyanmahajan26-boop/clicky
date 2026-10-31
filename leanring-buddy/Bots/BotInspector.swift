@@ -30,14 +30,14 @@ struct BotInspector: View {
                 VStack(alignment: .leading, spacing: 20) {
                     identity(bot)
                     InspectorSection("Brain") {
-                        BotModelSettings(bot: bot) { updated in
+                        BotModelSettings(bot: bot, onChange: { updated in
                             draft?.provider = updated.provider
                             draft?.model = updated.model
                             draft?.effort = updated.effort
                             draft?.thinking = updated.thinking
                             draft?.fast = updated.fast
                             store.save(updated)
-                        }
+                        }, compact: true)
                         .id(bot.provider + bot.model)
                     }
                     authority(bot)
@@ -59,9 +59,11 @@ struct BotInspector: View {
                     }
                 }
                 .padding(18)
+                .frame(width: 330)
             }
         }
         .frame(width: 330)
+        .clipped()
         .background(DS.Colors.surface1)
         .onAppear { draft = store.bot(botID) }
         .onChange(of: botID) { _, id in draft = store.bot(id) }
@@ -259,8 +261,10 @@ struct ClickyInspector: View {
                 }
             }
             .padding(18)
+            .frame(width: 330)
         }
         .frame(width: 330)
+        .clipped()
         .background(DS.Colors.surface1)
     }
 

@@ -67,11 +67,13 @@ struct TheoHomeView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case home, notes, ask, bots, connectors, t3, settings
         var id: String { rawValue }
+        /// The tabs in the sidebar. Asking Clicky lives in Bots now (Clicky is pinned there).
+        static let shown: [Tab] = [.home, .bots, .notes, .connectors, .t3, .settings]
         var title: String {
             switch self {
             case .home: return "Home"
             case .notes: return "Notes"
-            case .ask: return "Ask Theo"
+            case .ask: return "Ask Clicky"
             case .bots: return "Bots"
             case .connectors: return "Connectors"
             case .t3: return "T3 Code"
@@ -111,11 +113,11 @@ struct TheoHomeView: View {
                     .frame(width: 32, height: 32)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(ClickySettings.assistantName).font(.system(size: 15, weight: .bold))
-                        Text("Cursor assistant for T3 Code").font(.system(size: 10.5)).foregroundColor(.secondary)
+                        Text("Screen companion and bots").font(.system(size: 10.5)).foregroundColor(.secondary)
                     }
                 }
                 .padding(.bottom, 18)
-                ForEach(Tab.allCases) { item in
+                ForEach(Tab.shown) { item in
                     Button(action: { tab = item }) {
                         HStack(spacing: 10) {
                             Image(systemName: item.symbol).frame(width: 18)
@@ -149,6 +151,9 @@ struct TheoHomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        // One look across every tab: the dark design the bots, notes and boards use.
+        .preferredColorScheme(.dark)
+        .background(DS.Colors.background)
         .onReceive(NotificationCenter.default.publisher(for: .theoHomeSelectTab)) { note in
             if let raw = note.object as? String, let next = Tab(rawValue: raw) { tab = next }
         }
@@ -169,47 +174,151 @@ private struct PageHeader: View {
 private struct HomeTab: View {
     @ObservedObject var companionManager: CompanionManager
     let go: (TheoHomeView.Tab) -> Void
+    @ObservedObject private var bots = BotsStore.shared
+    @ObservedObject private var look = LookSettings.shared
+    @State private var notes: [ClaudiaLibrary.Item] = []
 
     var body: some View {
-        let brain = BrainModel(setting: ClickyModels.main)
+        let t3 = ClaudiaT3Integration.status()
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                PageHeader(title: "Hi, I'm \(ClickySettings.assistantName)", subtitle: "Say “hey \(ClickySettings.assistantName)” any time. Here's how things stand.")
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
-                    statusCard("brain", "Brain", brain.provider.displayName, ClickyModels.main.replacingOccurrences(of: "codex:", with: ""), ok: true)
-                    statusCard("waveform", "Voice", ClickySettings.isSilentModeEnabled ? "Silent: captions only" : "Speaks answers", "Listening for “hey \(ClickySettings.assistantName)”", ok: true)
-                    statusCard("lock.shield", "Permissions", companionManager.allPermissionsGranted ? "All allowed" : "Some still needed",
-                               companionManager.allPermissionsGranted ? "Microphone, screen, accessibility" : "Open the Setup guide to allow them", ok: companionManager.allPermissionsGranted)
-                    let status = ClaudiaT3Integration.status()
-                    statusCard("puzzlepiece.extension", "T3 Code extension", status.anyInstalled ? "Installed" : "Not added yet",
-                               status.anyInstalled ? "Type $ in a T3 thread for Theo's skills" : "Add it from the T3 Code tab", ok: status.anyInstalled)
+            VStack(alignment: .leading, spacing: 22) {
+                hero
+                if !companionManager.allPermissionsGranted {
+                    banner("lock.shield", "Theo still needs a permission", "Open the Setup guide to allow the microphone, screen and accessibility.",
+                           button: "Open Setup guide") { SetupGuideWindowController.show(companionManager: companionManager) }
                 }
-                HStack(spacing: 10) {
-                    Button(action: { go(.ask) }) { Label("Ask Theo", systemImage: "bubble.left") }.buttonStyle(.borderedProminent)
-                    Button(action: { go(.notes) }) { Label("My notes", systemImage: "note.text") }
-                    Button(action: { go(.t3) }) { Label("T3 Code", systemImage: "puzzlepiece.extension") }
-                    Button(action: { SetupGuideWindowController.show(companionManager: companionManager) }) { Label("Setup guide", systemImage: "wand.and.stars") }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
+                    card("cursorarrow.rays", "Clicky", "Your screen companion on \(NativeBot.label(for: ClickyModels.main))",
+                         detail: companionManager.isClickyCursorEnabled ? "Awake: say \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Asleep",
+                         ok: companionManager.isClickyCursorEnabled, action: "Chat with Clicky") {
+                        BotsSelection.shared.pane = .clicky
+                        go(.bots)
+                    }
+                    card("person.2.wave.2", "Bots", bots.bots.count <= 1 ? "Only Theo so far" : "\(bots.bots.count) bots · \(bots.groups.count) group chats",
+                         detail: "\(bots.routines.filter { !$0.paused }.count) schedules running", ok: true,
+                         action: bots.bots.count <= 1 ? "Add your first bot" : "Open bots") { go(.bots) }
+                    card("note.text", "Notes", notes.isEmpty ? "No notes yet" : "\(notes.count) notes",
+                         detail: notes.first.map { "Latest: \($0.title)" } ?? "Research, articles, whiteboards and screenshots land here",
+                         ok: true, action: "Open notes") { go(.notes) }
+                    card("puzzlepiece.extension", "T3 Code", t3.anyInstalled ? "Connected" : "Not connected yet",
+                         detail: t3.anyInstalled ? "Type $ in a T3 thread to use Theo" : "One click connects Theo to your T3 Code",
+                         ok: t3.anyInstalled, action: t3.anyInstalled ? "Manage" : "Connect") { go(.t3) }
                 }
-                .controlSize(.large)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Cursor").font(.system(size: 15, weight: .semibold))
+                        Spacer()
+                        Button("More in Settings") { go(.settings) }.buttonStyle(.link).font(.system(size: 12))
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(CompanionIconStyle.allCases, id: \.self) { style in
+                                Button { look.sparkStyle = style } label: {
+                                    VStack(spacing: 6) {
+                                        CompanionIconPreview(style: style).frame(width: 30, height: 30)
+                                        Text(style.displayName).font(.system(size: 10)).lineLimit(1)
+                                    }
+                                    .frame(width: 86, height: 74)
+                                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.6)))
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(look.sparkStyle == style ? DS.Colors.accent : Color.white.opacity(0.06),
+                                                                                       lineWidth: look.sparkStyle == style ? 2 : 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
             }
             .padding(32)
+            .frame(maxWidth: 980)
+            .frame(maxWidth: .infinity)
+        }
+        .background(DS.Colors.background)
+        .task {
+            let loaded = await Task.detached { ClaudiaLibrary.items() }.value
+            notes = loaded
         }
     }
 
-    private func statusCard(_ symbol: String, _ title: String, _ value: String, _ detail: String, ok: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 18)).frame(width: 26)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundColor(.secondary)
-                Text(value).font(.system(size: 15, weight: .semibold))
-                Text(detail).font(.system(size: 11.5)).foregroundColor(.secondary).lineLimit(2)
+    private var hero: some View {
+        HStack(spacing: 18) {
+            ZStack {
+                Circle().fill(homeGradient).frame(width: 64, height: 64)
+                    .shadow(color: Color(red: 0.93, green: 0.27, blue: 0.45).opacity(0.45), radius: 18)
+                Image(systemName: "sparkles").font(.system(size: 26, weight: .semibold)).foregroundColor(.white)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Hi, I'm \(ClickySettings.assistantName)").font(.system(size: 28, weight: .bold))
+                Text("Talk to Clicky about your screen, run a team of bots, and hand builds to T3 Code.")
+                    .font(.system(size: 13.5)).foregroundColor(.secondary)
             }
             Spacer()
-            Circle().fill(ok ? Color.green : Color.orange).frame(width: 8, height: 8)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.07)))
+        .padding(22)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(LinearGradient(colors: [Color(red: 0.93, green: 0.27, blue: 0.45).opacity(0.16), Color(red: 0.75, green: 0.27, blue: 0.9).opacity(0.08), .clear],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.07)))
+    }
+
+    private func card(_ symbol: String, _ title: String, _ value: String, detail: String, ok: Bool, action: String,
+                      perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10).fill(homeGradient.opacity(0.9)).frame(width: 36, height: 36)
+                        Image(systemName: symbol).font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
+                    }
+                    Text(title).font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Circle().fill(ok ? DS.Colors.success : DS.Colors.warning).frame(width: 8, height: 8)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(value).font(.system(size: 14, weight: .medium))
+                    Text(detail).font(.system(size: 11.5)).foregroundColor(.secondary).lineLimit(2)
+                }
+                HStack(spacing: 4) {
+                    Text(action).font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "arrow.right").font(.system(size: 10, weight: .bold))
+                }
+                .foregroundColor(DS.Colors.accentText)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(DS.Colors.surface1))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.07)))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(HoverLiftStyle())
+    }
+
+    private func banner(_ symbol: String, _ title: String, _ detail: String, button: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 18)).foregroundColor(DS.Colors.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail).font(.system(size: 11.5)).foregroundColor(.secondary)
+            }
+            Spacer()
+            Button(button, action: action).buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(DS.Colors.warning.opacity(0.1)))
+    }
+}
+
+/// Cards lift a little under the pointer.
+private struct HoverLiftStyle: ButtonStyle {
+    @State private var hovering = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : hovering ? 1.01 : 1)
+            .shadow(color: .black.opacity(hovering ? 0.35 : 0), radius: 14, y: 6)
+            .animation(.easeOut(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
     }
 }
 

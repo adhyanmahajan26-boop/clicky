@@ -149,7 +149,7 @@ struct NotesLibraryCard: View {
                 .overlay(alignment: .topTrailing) { pickControl.padding(9) }
                 .overlay(alignment: .bottomTrailing) { quickActions.padding(9) }
             VStack(alignment: .leading, spacing: 5) {
-                Text(item.title)
+                Text(displayTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
                     .lineLimit(2).multilineTextAlignment(.leading)
@@ -175,6 +175,30 @@ struct NotesLibraryCard: View {
         .onTapGesture(count: 2) { NSWorkspace.shared.open(item.url) }
     }
 
+    @State private var excerpt: String?
+
+    /// The title without a leading "Research" the badge already says.
+    private var displayTitle: String {
+        let label = NotesKindStyle.label(item.kind)
+        guard item.title.lowercased().hasPrefix(label.lowercased() + " ") else { return item.title }
+        let rest = item.title.dropFirst(label.count + 1)
+        return rest.prefix(1).uppercased() + rest.dropFirst()
+    }
+
+    /// The first words of a text note, without Markdown marks, read off the main thread.
+    static func excerpt(of url: URL) async -> String? {
+        await Task.detached(priority: .utility) {
+            guard ["md", "txt", "markdown"].contains(url.pathExtension.lowercased()),
+                  let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? handle.close() }
+            let head = String(decoding: (try? handle.read(upToCount: 1200)) ?? Data(), as: UTF8.self)
+            let lines = head.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("---") && !$0.hasPrefix("![") }
+                .map { $0.replacingOccurrences(of: #"[*_`>\[\]]"#, with: "", options: .regularExpression) }
+            return lines.prefix(6).joined(separator: " ")
+        }.value
+    }
+
     @ViewBuilder
     private var thumbnail: some View {
         if item.isImage {
@@ -183,12 +207,23 @@ struct NotesLibraryCard: View {
             }
             .overlay(LinearGradient(colors: [Color.black.opacity(0.28), .clear], startPoint: .top, endPoint: .center))
         } else {
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 LinearGradient(colors: [kindColor.opacity(0.22), kindColor.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                Image(systemName: NotesKindStyle.symbol(item.kind))
-                    .font(.system(size: 38, weight: .light))
-                    .foregroundColor(kindColor.opacity(0.9))
+                if let excerpt, !excerpt.isEmpty {
+                    // A text note shows its first lines, like a page peeking out.
+                    Text(excerpt)
+                        .font(.system(size: 10.5)).foregroundColor(DS.Colors.textSecondary).lineSpacing(2)
+                        .lineLimit(6).multilineTextAlignment(.leading)
+                        .padding(.horizontal, 14).padding(.top, 40).padding(.bottom, 10)
+                        .mask(LinearGradient(colors: [.black, .black, .clear], startPoint: .top, endPoint: .bottom))
+                } else {
+                    Image(systemName: NotesKindStyle.symbol(item.kind))
+                        .font(.system(size: 38, weight: .light))
+                        .foregroundColor(kindColor.opacity(0.9))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            .task(id: item.id) { excerpt = await Self.excerpt(of: item.url) }
         }
     }
 

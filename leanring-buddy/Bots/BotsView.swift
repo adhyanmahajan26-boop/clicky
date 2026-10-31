@@ -1121,6 +1121,8 @@ struct T3RunCard: View {
 struct BotModelSettings: View {
     @State var bot: NativeBot
     let onChange: (NativeBot) -> Void
+    /// Inside the settings column: no title, and it fits the column's width.
+    var compact = false
     @ObservedObject private var catalog = BrainCatalog.shared
 
     private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
@@ -1138,9 +1140,11 @@ struct BotModelSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                BotAvatar(bot: bot, size: 26, state: .idle)
-                Text("\(bot.name) · model").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+            if !compact {
+                HStack(spacing: 10) {
+                    BotAvatar(bot: bot, size: 26, state: .idle)
+                    Text("\(bot.name) · model").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                }
             }
             row("Engine") {
                 Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
@@ -1153,7 +1157,7 @@ struct BotModelSettings: View {
                     Text("OpenCode").tag("opencode")
                     Text("Grok").tag("grok")
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 260)
+                .pickerStyle(.segmented).labelsHidden().frame(width: compact ? nil : 260)
             }
             row("Model") {
                 Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
@@ -1161,14 +1165,14 @@ struct BotModelSettings: View {
                         Text(NativeBot.label(for: model)).tag(model)
                     }
                 }
-                .labelsHidden().frame(width: 260)
+                .labelsHidden().frame(width: compact ? nil : 260)
             }
             row("Effort") {
                 Picker("Effort", selection: Binding(get: { bot.effort ?? "" }, set: { bot.effort = $0.isEmpty ? nil : $0; commit() })) {
                     Text("Default").tag("")
                     ForEach(isClaude ? Self.claudeEfforts : bot.provider == "grok" ? Self.grokEfforts : Self.openCodeEfforts, id: \.self) { Text($0.capitalized).tag($0) }
                 }
-                .labelsHidden().frame(width: 160)
+                .labelsHidden().frame(width: compact ? nil : 160)
             }
             row("Thinking") {
                 Toggle("Thinking", isOn: Binding(get: { bot.thinking ?? false }, set: { bot.thinking = $0; commit() }))
@@ -1182,14 +1186,14 @@ struct BotModelSettings: View {
                 .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18)
-        .frame(width: 400)
+        .padding(compact ? 0 : 18)
+        .frame(width: compact ? nil : 400)
         .onAppear { catalog.load() }
     }
 
     private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         HStack {
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary).frame(width: 80, alignment: .leading)
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary).frame(width: compact ? 62 : 80, alignment: .leading)
             content()
             Spacer(minLength: 0)
         }
