@@ -27,7 +27,7 @@ enum BotsPane: Hashable {
 @MainActor
 final class BotsSelection: ObservableObject {
     static let shared = BotsSelection()
-    @Published var pane: BotsPane = .team
+    @Published var pane: BotsPane = .bot("theo")
 }
 
 struct BotsRootView: View {
@@ -284,7 +284,7 @@ struct BotsRootView: View {
 
     private func canDelete(_ item: String) -> Bool {
         if item.hasPrefix("bot:") { return store.bot(String(item.dropFirst(4)))?.primary == false }
-        if item.hasPrefix("group:") { return item != "group:\(BotGroup.projectID)" }
+        if item.hasPrefix("group:") { return true }
         return false
     }
 
@@ -343,7 +343,11 @@ struct BotsRootView: View {
     @ViewBuilder private var detail: some View {
         switch selection.pane {
         case .team:
-            BotChatScreen(store: store, conversationID: BotsStore.teamID, bot: nil, groupID: BotGroup.projectID)
+            if store.group(BotGroup.projectID)?.headID != nil {
+                BotChatScreen(store: store, conversationID: BotsStore.teamID, bot: nil, groupID: BotGroup.projectID)
+            } else if let primary = store.primary {
+                BotChatScreen(store: store, conversationID: primary.id, bot: primary).id(primary.id)
+            }
         case .group(let id):
             if let group = store.group(id) {
                 BotChatScreen(store: store, conversationID: group.roomID, bot: nil, groupID: id).id(id)
@@ -416,7 +420,7 @@ struct BotChatScreen: View {
                                 }
                             }
                         }
-                        if bot == nil {
+                        if bot == nil || bot?.primary == true {
                             ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                                 T3RunCard(run: run)
                             }
