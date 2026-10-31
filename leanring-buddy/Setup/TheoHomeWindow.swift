@@ -25,7 +25,7 @@ enum TheoHomeWindowController {
 
     static func show(companionManager: CompanionManager, tab: TheoHomeView.Tab = .home) {
         if window == nil {
-            let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 700),
+            let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                    backing: .buffered, defer: false)
             created.title = "Theo"
@@ -39,6 +39,11 @@ enum TheoHomeWindowController {
                 created.setFrameOrigin(NSPoint(x: frame.midX - created.frame.width / 2, y: frame.midY - created.frame.height / 2))
             }
             created.setFrameAutosaveName("TheoHome")
+            // A remembered frame from another display loses to the display picked for Theo.
+            if let screen = ClaudiaScreen.picked, created.screen != screen {
+                let frame = screen.visibleFrame
+                created.setFrameOrigin(NSPoint(x: frame.midX - created.frame.width / 2, y: frame.midY - created.frame.height / 2))
+            }
             window = created
         }
         NotificationCenter.default.post(name: .theoHomeSelectTab, object: tab.rawValue)
