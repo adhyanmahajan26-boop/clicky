@@ -340,8 +340,16 @@ final class ArticleHighlightController {
     private func positionNotesPanel(force: Bool) {
         guard let notesPanel else { return }
         guard let article, let windowFrame = currentWindowFrame(of: article.target) else {
-            // No article window: the right edge of the display under the pointer.
+            // No article window: the right edge of Theo's display (else the one under the pointer).
             guard force else { return }
+            if let screen = ClaudiaScreen.picked {
+                let visible = screen.visibleFrame
+                let height = min(visible.height - 2 * ArticleNotesDock.gap, min(720, preferredNotesHeight()))
+                notesPanel.setFrame(NSRect(x: visible.maxX - ArticleNotesDock.preferredWidth - ArticleNotesDock.gap,
+                                           y: visible.minY + ArticleNotesDock.gap,
+                                           width: ArticleNotesDock.preferredWidth, height: height), display: true)
+                return
+            }
             let display = ScreenTopology.current().first { $0.boundsCG.contains(ScreenTopology.cg(fromAppKit: NSEvent.mouseLocation, flipH: ScreenTopology.mainDisplayHeight)) }
                 ?? ScreenTopology.current().first
             guard let visible = display?.visibleCG else { return }

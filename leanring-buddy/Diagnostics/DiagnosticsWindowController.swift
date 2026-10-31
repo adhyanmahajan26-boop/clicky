@@ -85,6 +85,7 @@ enum DiagnosticsWindowController {
             createdWindow.center()
             window = createdWindow
         }
+        if let window, !window.isVisible { ClaudiaScreen.place(window) }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

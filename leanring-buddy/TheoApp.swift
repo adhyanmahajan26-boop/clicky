@@ -97,6 +97,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home)
         }
         if !companionManager.allPermissionsGranted { menuBar?.showPanelOnLaunch() }
+        BotsSnapshot.renderIfAsked()
         // `--bot-say=<bot id>:<message>` opens that bot's chat and sends the message (a quick check of
         // a bot from Terminal).
         if let say = CommandLine.arguments.first(where: { $0.hasPrefix("--bot-say=") }) {

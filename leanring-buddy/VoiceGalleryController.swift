@@ -160,7 +160,10 @@ final class VoiceGalleryController: NSObject, ObservableObject {
         refresh()
         let galleryWindow = window ?? makeWindow()
         window = galleryWindow
-        if !galleryWindow.isVisible { galleryWindow.center() }
+        if !galleryWindow.isVisible {
+            galleryWindow.center()
+            ClaudiaScreen.place(galleryWindow)
+        }
         if activatesClicky {
             NSApp.activate(ignoringOtherApps: true)
             galleryWindow.makeKeyAndOrderFront(nil)

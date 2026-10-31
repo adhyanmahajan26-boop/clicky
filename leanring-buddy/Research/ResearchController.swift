@@ -42,6 +42,8 @@ final class ResearchController: CompanionActivitySource {
     }
 
     var isRunning: Bool { researchTask != nil }
+    /// Bumped by every start, so a caller waiting on one run can tell when another took its place.
+    private(set) var runNumber = 0
 
     /// A research request or "cancel research" in the owner's words; true when handled here.
     func handleSpokenTranscript(_ transcript: String, speaks: Bool) -> Bool {
@@ -70,6 +72,7 @@ final class ResearchController: CompanionActivitySource {
     func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false) {
         guard let companionManager else { return }
         cancel()
+        runNumber += 1
         let topic: String
         switch request.source {
         case .topic(let text): topic = text
@@ -217,7 +220,8 @@ final class ResearchController: CompanionActivitySource {
         lastStatus = ["state": "done", "topic": topic, "brief": brief, "savedPath": savedPath ?? NSNull(),
                       "sources": reports.map { ["index": $0.index, "url": $0.url.absoluteString, "ok": $0.succeeded] }]
         researchTask = nil
-        companionManager.articleController.showNotes(notes, target: ArticleReader.findArticleWindow())
+        // A research brief belongs to no article on screen: it opens on Theo's own display.
+        companionManager.articleController.showNotes(notes, target: nil)
         companionManager.showHandsFreeStatusMessage("Research ready")
         // Spoken only when Clicky isn't mid-turn and Safari (his Netflix) isn't in front.
         let safariInFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"

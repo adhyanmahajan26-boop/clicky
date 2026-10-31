@@ -170,15 +170,23 @@ final class ClaudiaControlInbox {
             }
             let researchController = companionManager.researchController
             researchController.start(request, speaks: command["speak"] as? Bool ?? false)
+            let runNumber = researchController.runNumber
             Task {
                 // Wait for the brief (helpers read in parallel; at most 5 minutes).
                 let deadline = Date().addingTimeInterval(300)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                while Date() < deadline, researchController.isRunning {
+                while Date() < deadline, researchController.isRunning, researchController.runNumber == runNumber {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
+                guard researchController.runNumber == runNumber else {
+                    reply(identifier, ok: false, result: ["state": "cancelled"],
+                          error: "A newer research request replaced this one before it finished.")
+                    return
+                }
                 let status = researchController.lastStatus
-                reply(identifier, ok: (status["state"] as? String) == "done", result: status, error: nil)
+                // Done only counts with a brief: a run that found no sources isn't a success.
+                let hasBrief = !((status["brief"] as? String) ?? "").isEmpty
+                reply(identifier, ok: (status["state"] as? String) == "done" && hasBrief, result: status, error: nil)
             }
 
         case "board":

@@ -89,7 +89,7 @@ final class CodeModeChipController: NSObject {
         let panel = panel ?? makePanel()
         self.panel = panel
         let size = panel.frame.size
-        let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        let screenFrame = ClaudiaScreen.forClaudiasWindows?.visibleFrame ?? .zero
         panel.setFrameOrigin(NSPoint(x: screenFrame.maxX - size.width - 16, y: screenFrame.maxY - size.height - 16))
         panel.orderFrontRegardless()
         chipView?.gate = CodeModeChipGate(windowNumber: panel.windowNumber, shownAt: ProcessInfo.processInfo.systemUptime)

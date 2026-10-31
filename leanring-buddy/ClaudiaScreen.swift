@@ -14,11 +14,39 @@ import ClickyCore
 
 @MainActor
 enum ClaudiaScreen {
-    /// The picked display, if it's connected.
+    /// The picked display, if it's connected. Two monitors of the same model are told apart by macOS as
+    /// "Name (1)" and "Name (2)", and those numbers can swap after a restart or a replug, which put Theo on
+    /// the wrong one. So the picked display's side (left or right of the menu-bar display) is remembered
+    /// too, and among same-model twins the side wins over the number.
     static var picked: NSScreen? {
         let name = ClickySettings.claudiaScreenName
         guard !name.isEmpty else { return nil }
-        return NSScreen.screens.first { $0.localizedName == name }
+        let defaults = UserDefaults.standard
+        let twins = NSScreen.screens.filter { baseName($0.localizedName) == baseName(name) }
+        if twins.count > 1, defaults.string(forKey: sideNameKey) == name, let side = defaults.string(forKey: sideKey) {
+            return side == "right" ? twins.max { $0.frame.midX < $1.frame.midX } : twins.min { $0.frame.midX < $1.frame.midX }
+        }
+        let byName = NSScreen.screens.first { $0.localizedName == name }
+        if let byName, twins.count > 1, let menuBarScreen = NSScreen.screens.first {
+            defaults.set(byName.frame.midX >= menuBarScreen.frame.midX ? "right" : "left", forKey: sideKey)
+            defaults.set(name, forKey: sideNameKey)
+        }
+        return byName
+    }
+
+    private static let sideKey = "v2.screen.claudia.side"
+    private static let sideNameKey = "v2.screen.claudia.sideFor"
+
+    /// "DELL S2725QC (1)" → "DELL S2725QC".
+    private static func baseName(_ name: String) -> String {
+        name.replacingOccurrences(of: #"\s*\(\d+\)$"#, with: "", options: .regularExpression)
+    }
+
+    /// Centres a Theo window on the picked display when it's somewhere else.
+    static func place(_ window: NSWindow) {
+        guard let screen = picked, window.screen != screen else { return }
+        let frame = screen.visibleFrame
+        window.setFrameOrigin(NSPoint(x: frame.midX - window.frame.width / 2, y: frame.midY - window.frame.height / 2))
     }
 
     /// Where Claudia's own windows go: the picked display, else the pointer's.

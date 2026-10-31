@@ -97,7 +97,7 @@ final class AgentsWindowController: NSObject, NSWindowDelegate {
     /// Centred on the visible frame of the display the cursor is on.
     private func centerOnCursorDisplay(_ agentsWindow: NSWindow) {
         let mouseLocation = NSEvent.mouseLocation
-        guard let cursorScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.screens.first else { return }
+        guard let cursorScreen = ClaudiaScreen.picked ?? NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.screens.first else { return }
         let visibleFrame = cursorScreen.visibleFrame
         var windowFrame = agentsWindow.frame
         windowFrame.size.width = min(windowFrame.width, visibleFrame.width)

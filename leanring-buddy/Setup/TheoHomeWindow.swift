@@ -46,6 +46,8 @@ enum TheoHomeWindowController {
             }
             window = created
         }
+        // A display picked after the window was made still wins the next time it opens.
+        if let window, !window.isVisible { ClaudiaScreen.place(window) }
         NotificationCenter.default.post(name: .theoHomeSelectTab, object: tab.rawValue)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

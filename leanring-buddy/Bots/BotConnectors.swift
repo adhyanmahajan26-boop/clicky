@@ -62,6 +62,11 @@ enum BotConnectors {
                      claudeToolPrefix: "mcp__claude-in-chrome", openCodeServer: "claude-in-chrome", openCodeURL: nil),
     ]
 
+    /// Apps bots on OpenCode and Grok reach through Theo's claudia_app tool (ConnectorBridge).
+    static let bridgedApps: Set<String> = ["gmail", "notion", "calendar", "drive", "docs", "sheets"]
+
+    static func bridged(_ connector: BotConnector) -> Bool { bridgedApps.contains(connector.id) }
+
     enum Status: Equatable {
         case connected, needsSignIn, missing, unknown
 

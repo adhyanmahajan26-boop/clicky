@@ -404,7 +404,7 @@ final class ProjectPickCardController {
         let panel = panel ?? makePanel()
         self.panel = panel
         let size = NSSize(width: 380, height: CGFloat(78 + rows.count * 44))
-        let screenFrame = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        let screenFrame = ClaudiaScreen.forClaudiasWindows?.visibleFrame ?? .zero
         panel.setFrame(NSRect(x: screenFrame.maxX - size.width - 16, y: screenFrame.maxY - size.height - 16, width: size.width, height: size.height), display: true)
         panel.orderFrontRegardless()
         shownAt = ProcessInfo.processInfo.systemUptime
