@@ -77,7 +77,12 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// short delay, presses Return.
     func send(text: String, submit: Bool = true) async {
         guard isRunning else { return }
-        sendRaw("\u{1B}[200~" + text + "\u{1B}[201~")
+        // Bracketed paste only when the program asked for it; otherwise newlines are typed as spaces.
+        if view.getTerminal().bracketedPasteMode {
+            sendRaw("\u{1B}[200~" + text + "\u{1B}[201~")
+        } else {
+            sendRaw(text.replacingOccurrences(of: "\n", with: " "))
+        }
         guard submit else { return }
         try? await Task.sleep(nanoseconds: 800_000_000)
         sendRaw("\r")

@@ -207,8 +207,7 @@ enum HarnessCoding {
             stable = (screen == previous && screen.count > 20) ? stable + 1 : 0
             previous = screen
             if stable >= 2 {
-                if answeredTrust < 2, screen.range(of: #"(?i)do you trust|trust (this|the) (folder|directory|workspace)"#, options: .regularExpression) != nil {
-                    terminal.pressEnter()
+                if answeredTrust < 3, answerTrustScreen(screen, terminal: terminal) {
                     answeredTrust += 1
                     stable = 0
                     continue
@@ -216,7 +215,38 @@ enum HarnessCoding {
                 break
             }
         }
+        // Still on a question screen after all that: don't type the prompt into it.
+        let final = terminal.screenText()
+        if Self.isQuestionScreen(final) { return }
         await terminal.send(text: text)
+    }
+
+    /// The folder is one Theo made (or the repo Addy named) for this run, so a "trust this folder?" screen is
+    /// answered yes: the highlighted choice moves to the option saying yes/trust, then Return.
+    @MainActor
+    @discardableResult
+    static func answerTrustScreen(_ screen: String, terminal: TerminalSession) -> Bool {
+        guard screen.range(of: #"(?i)do you trust|trust (this|the) (folder|directory|workspace)|you created or one you trust|allow .* to work in this folder"#,
+                           options: .regularExpression) != nil else { return false }
+        let lines = screen.components(separatedBy: "\n")
+        let options = lines.enumerated().filter { $0.element.range(of: #"^\s*(❯|>|›|\d\.|\s)\s*\S"#, options: .regularExpression) != nil
+            && $0.element.range(of: #"(?i)\b(yes|no|trust|exit|quit|cancel)\b"#, options: .regularExpression) != nil }
+        let cursor = options.first { $0.element.contains("❯") || $0.element.contains("›") || $0.element.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+        let yes = options.first { $0.element.range(of: #"(?i)\byes\b|i trust|trust this"#, options: .regularExpression) != nil }
+        if let cursor, let yes {
+            let steps = options.firstIndex { $0.offset == yes.offset }! - options.firstIndex { $0.offset == cursor.offset }!
+            let key = steps >= 0 ? "\u{1B}[B" : "\u{1B}[A"
+            for _ in 0..<abs(steps) { terminal.sendRaw(key) }
+        }
+        terminal.pressEnter()
+        return true
+    }
+
+    /// A screen waiting on a choice (trust, permission, y/n): nothing should be typed into it.
+    static func isQuestionScreen(_ screen: String) -> Bool {
+        let tail = screen.split(separator: "\n", omittingEmptySubsequences: false).suffix(16).joined(separator: "\n")
+        return tail.range(of: #"(?i)do you want to|\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this|enter to confirm|trust this folder|do you trust|esc to cancel"#,
+                           options: .regularExpression) != nil
     }
 
     // MARK: tmux
@@ -332,7 +362,7 @@ enum HarnessCoding {
     }
 
     /// Seconds the pane must sit still before the run counts as finished.
-    static let idleSeconds: TimeInterval = 20
+    static let idleSeconds: TimeInterval = 40
 
     static func state(of run: T3Run) async -> BotsT3.ThreadState? {
         if run.id.hasPrefix("headless:") { return headlessState(of: run) }
@@ -360,6 +390,10 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         let pane = terminal.screenText()
+        if terminal.isRunning, pane.range(of: #"(?i)trust this folder|do you trust|you created or one you trust"#, options: .regularExpression) != nil {
+            // A trust screen that showed up after the prompt was typed: answer it and keep going.
+            answerTrustScreen(pane, terminal: terminal)
+        }
         guard terminal.isRunning else {
             let summary = transcriptSummary(for: run) ?? paneSummary(pane)
             let ok = terminal.exitCode == 0 || transcriptSummary(for: run) != nil
@@ -373,9 +407,11 @@ enum HarnessCoding {
     /// Working / waiting / finished from what the screen shows, shared by the terminal and tmux paths.
     private static func evaluate(_ run: T3Run, pane: String, unchanged: TimeInterval) -> BotsT3.ThreadState {
         let tail = pane.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).joined(separator: "\n")
-        let working = tail.range(of: #"(?i)esc to interrupt|ctrl\+c to interrupt|working \("#, options: .regularExpression) != nil
-        let asking = tail.range(of: #"(?i)do you want to|\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this"#, options: .regularExpression) != nil
-        let settled = Date().timeIntervalSince(run.startedAt) > 45 && unchanged >= idleSeconds && !working
+        // Busy signs of each harness's TUI: a spinner line, "esc to interrupt", "thinking", "generating".
+        let working = tail.range(of: #"(?i)esc to interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|thinking|generating|running tool|\b\d+s\b ·|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
+                                 options: .regularExpression) != nil
+        let asking = isQuestionScreen(pane)
+        let settled = Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds && !working
         if settled && asking {
             let question = tail.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(6).joined(separator: "\n")
             return BotsT3.ThreadState(status: "waiting", busy: false, waitingForAnswer: true,

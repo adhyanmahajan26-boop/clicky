@@ -134,6 +134,7 @@ final class ClaudiaControlInbox {
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
             if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
             if let apps = command["apps"] as? [String] { bot.apps = apps }
+            if let effort = command["effort"] as? String { bot.effort = effort.isEmpty ? nil : effort }
             store.save(bot)
             reply(identifier, ok: true, result: ["id": bot.id], error: nil)
         case "botUpdate":

@@ -470,7 +470,8 @@ final class BotsStore: ObservableObject {
                 let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
                     ?? "a new project in ~/Projects/\(URL(fileURLWithPath: run.folder).lastPathComponent)"
                 self.post(BotChatMessage(author: theo.id, text: "Submitted to T3 Code: **\(title)**, \(place). " +
-                    "\(BotsT3.modelName) is coding it at \(BotsT3.effort) effort. I'll post the result here when it's done."), to: room)
+                    "\(run.harness.map(HarnessCatalog.label) ?? "T3 Code") is coding it on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
+                    (run.effort.map { " at \($0) effort" } ?? "") + ". I'll post the result here when it's done."), to: room)
                 self.track(run.id)
             } catch {
                 self?.submitting = false

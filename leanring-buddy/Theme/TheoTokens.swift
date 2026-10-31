@@ -27,7 +27,7 @@ enum DS {
         static let borderStrong = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.14, lightAlpha: 0.16)
         static let textPrimary = adaptive(dark: 0xF2F2F4, light: 0x17171A)
         static let textSecondary = adaptive(dark: 0xA1A1AA, light: 0x5C5C66)
-        static let textTertiary = adaptive(dark: 0x6B6B75, light: 0x8E8E98)
+        static let textTertiary = adaptive(dark: 0x83838D, light: 0x72727C)
         static let textDisabled = adaptive(dark: 0x4A4A52, light: 0xB4B4BC)
         static let textOnAccent = Color.white
         /// Ember: the primary button, focus ring, send and the selection dot. Nothing else.

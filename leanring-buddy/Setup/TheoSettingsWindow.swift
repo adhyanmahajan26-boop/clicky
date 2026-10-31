@@ -18,8 +18,13 @@ enum TheoSettingsWindowController {
         let content = SettingsTab(companionManager: manager, section: section)
             .frame(minWidth: 820, minHeight: 600)
             .background(DS.Colors.background)
+            .preferredColorScheme(.dark)
         if let window {
-            window.contentView = FirstMouseHostingView(rootView: content)
+            // Already open: just bring it forward, so a half-typed key isn't lost.
+            _ = content
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
         } else {
             let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

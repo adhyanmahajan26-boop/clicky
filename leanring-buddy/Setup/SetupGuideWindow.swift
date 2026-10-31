@@ -228,7 +228,7 @@ struct SetupGuideView: View {
                 .padding(.vertical, 6)
             }
             Spacer()
-            Button("All settings…") { TheoHomeWindowController.show(companionManager: companionManager, tab: .settings) }
+            Button("All settings…") { TheoSettingsWindowController.show() }
                 .buttonStyle(.link)
                 .font(.system(size: 12))
         }

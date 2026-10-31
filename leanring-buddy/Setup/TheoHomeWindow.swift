@@ -111,7 +111,7 @@ struct TheoHomeView: View {
         case .home: selection.pane = .home
         case .notes: selection.pane = .notes
         case .ask: selection.pane = .clicky
-        case .bots: if case .home = selection.pane { selection.pane = .bot(BotsStore.shared.primary?.id ?? "theo") }
+        case .bots: if case .home = selection.pane, let primary = BotsStore.shared.primary { selection.pane = .bot(primary.id) }
         case .connectors: selection.pane = .connectors
         case .t3: Task { @MainActor in TheoSettingsWindowController.show(section: .coding) }
         case .settings: Task { @MainActor in TheoSettingsWindowController.show() }
@@ -122,7 +122,8 @@ struct TheoHomeView: View {
         BotsRootView(store: BotsStore.shared, selection: botsSelection, showsConnectors: true)
             .frame(minWidth: 860, minHeight: 560)
             .onReceive(NotificationCenter.default.publisher(for: .theoHomeSelectTab)) { note in
-                if let raw = note.object as? String, let next = Tab(rawValue: raw) { Self.route(next) }
+                // Reopening the window (Dock, menu bar) keeps the chat that was open; other tabs go where asked.
+                if let raw = note.object as? String, let next = Tab(rawValue: raw), next != .home { Self.route(next) }
             }
     }
 }

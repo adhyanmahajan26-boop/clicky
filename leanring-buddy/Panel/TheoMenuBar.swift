@@ -411,7 +411,7 @@ struct TheoPanelView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
-            link("All settings") { close(); TheoHomeWindowController.show(companionManager: companionManager, tab: .settings) }
+            link("All settings") { close(); TheoSettingsWindowController.show() }
             link("Setup guide") { close(); SetupGuideWindowController.show(companionManager: companionManager) }
             link("Diagnostics") { close(); DiagnosticsWindowController.show(companionManager: companionManager) }
             Spacer()

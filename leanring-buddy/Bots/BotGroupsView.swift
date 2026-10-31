@@ -284,7 +284,7 @@ struct NewBotSheet: View {
     private func create() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let engine = Self.engines.first { $0.id == provider } ?? Self.engines[0]
-        let model = HarnessPrefs.defaultModel(engine.id) ?? engine.model
+        let model = HarnessCenter.shared.resolvedModel(for: engine.id) ?? engine.model
         var bot = store.addBot(name: trimmedName, description: role.isEmpty ? "Your \(trimmedName) bot." : role,
                                instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
                                provider: engine.id, model: model, groupID: groupID.isEmpty ? nil : groupID)

@@ -26,7 +26,7 @@ struct TheoApp: App {
                 CommandGroup(replacing: .appSettings) {
                     Button("Settings…") {
                         guard let companionManager = TheoAppDelegate.sharedCompanionManager else { return }
-                        TheoHomeWindowController.show(companionManager: companionManager, tab: .settings)
+                        TheoSettingsWindowController.show()
                     }
                     .keyboardShortcut(",", modifiers: .command)
                 }
@@ -83,6 +83,9 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         if Self.isHostingUnitTests { return }
         Self.keepConsoleLog()
         CompanionManager.current = companionManager
+        // The harnesses' PATH comes from a login shell; read it once now, off the main thread.
+        Task.detached(priority: .utility) { _ = HarnessCatalog.loginShellPath }
+        Task { @MainActor in HarnessCenter.shared.refresh() }
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
         // a privacy prompt in Theo's name, so they always start from home instead.

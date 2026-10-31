@@ -90,6 +90,8 @@ struct BotsRootView: View {
                 }
         }
         .background(DS.Colors.background)
+        // Dark only for now: a few pieces still assume a dark backdrop (docs/DESIGN.md has the light palette).
+        .preferredColorScheme(.dark)
         .onChange(of: selection.pane) { _, _ in showsInspector = false }
         .onReceive(NotificationCenter.default.publisher(for: .theoShowBotSettings)) { _ in
             if inspectorTarget != nil { withAnimation(DS.Motion.panel) { showsInspector = true } }
@@ -350,7 +352,7 @@ struct BotsRootView: View {
                 }
             }
             Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
-            if !bot.primary { Button("Make primary ★") { store.makePrimary(bot.id) } }
+            if !bot.primary { Button("Make primary") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
             Divider()
             Button("Edit group chat…") { editingGroup = group }
@@ -373,7 +375,7 @@ struct BotsRootView: View {
     }
 
     private func delete(_ item: String) {
-        if selection.pane == pane(for: item) { selection.pane = .team }
+        if selection.pane == pane(for: item) { selection.pane = .home }
         if item.hasPrefix("bot:") { store.deleteBot(String(item.dropFirst(4))) }
         if item.hasPrefix("group:") { store.deleteGroup(String(item.dropFirst(6))) }
     }
@@ -677,8 +679,8 @@ struct BotChatScreen: View {
                 Text(bot.name).font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text(bot.description).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             } else if isProjectRoom {
-                Text("Pitch an idea to the project team").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                Text("Theo, your CEO, brings in the Project Manager, Design Critic and Code Improver, then writes one prompt you can send to T3 Code.")
+                Text("Group chat").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text("Theo leads this group: the head hands your request to the others and merges their answers.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             } else if let group, let head = store.head(of: group) {
                 BotAvatar(bot: head, size: 84, state: .idle)

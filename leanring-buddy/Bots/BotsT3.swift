@@ -165,10 +165,10 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
         } else {
             let folder = try newProjectFolder(title: title)
-            try "# \(title)\n\nStarted by Theo's Project room. The prompt T3 Code received:\n\n\(prompt)\n"
+            try "# \(title)\n\nStarted by Theo. The prompt T3 Code received:\n\n\(prompt)\n"
                 .write(to: folder.appendingPathComponent("BRIEF.md"), atomically: true, encoding: .utf8)
             try await shell(git, ["init", "-q", "-b", "main"], in: folder)
-            try await commitAll(in: folder, message: "Brief from Theo's Project room")
+            try await commitAll(in: folder, message: "Brief from Theo")
             let base = try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
             try await shell(cli, ["project", "add", folder.path, "--title", title])
             arguments += [folder.path, "-"]
@@ -300,7 +300,7 @@ enum BotsT3 {
             run.pullRequest = pr
         } else if !failed, let branch = run.branch {
             run.pullRequest = await openDraftPR(in: folder, branch: branch, title: run.title,
-                                                body: state.lastMessage ?? "Built by \(engine) from Theo's Project room.", engine: engine, model: usedModel)
+                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if let pr = run.pullRequest {
@@ -401,7 +401,7 @@ enum BotsT3 {
               remote.contains("github.com") else { return nil }
         guard (try? await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)) != nil else { return nil }
         let output = try? await shell(gh, ["pr", "create", "--draft", "--head", branch, "--title", title,
-                                           "--body", "From Theo's Project room, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"],
+                                           "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"],
                                       in: folder, limit: 60)
         return output?.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init)
     }

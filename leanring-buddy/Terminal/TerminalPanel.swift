@@ -35,7 +35,8 @@ struct TerminalPanel: NSViewRepresentable {
     }
 
     func updateNSView(_ host: TerminalHostView, context: Context) {
-        host.adopt(session.view)
+        // Only take the view back when no other host (the pop-out window) has it.
+        if session.view.superview == nil { host.adopt(session.view) }
     }
 
     static func dismantleNSView(_ host: TerminalHostView, coordinator: ()) {

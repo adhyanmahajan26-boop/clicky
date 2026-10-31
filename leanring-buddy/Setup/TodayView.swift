@@ -52,7 +52,9 @@ struct TodayView: View {
                         row(icon: AnyView(symbolTile(run.phase == "done" ? "checkmark" : run.phase == "failed" ? "exclamationmark" : "hammer")),
                             title: run.title, detail: run.activity ?? run.phase.capitalized,
                             trailing: (run.finishedAt ?? run.startedAt).formatted(.relative(presentation: .named))) {
-                            selection.pane = .bot(store.primary?.id ?? "theo")
+                            if let room = run.room, let bot = store.bot(room) { selection.pane = .bot(bot.id) }
+                            else if let room = run.room, let group = store.groups.first(where: { $0.roomID == room }) { selection.pane = .group(group.id) }
+                            else if let primary = store.primary { selection.pane = .bot(primary.id) }
                         }
                     }
                 }

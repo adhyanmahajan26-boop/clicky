@@ -82,7 +82,7 @@ private struct ProviderKeyRow: View {
         if keys.testingIDs.contains(provider.id) {
             Text("Testing…").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
         } else if let result = keys.testResults[provider.id] {
-            Text(result.isOK ? "✓ Works" : result.message)
+            Text(result.isOK ? "Works" : result.message)
                 .font(.system(size: 11))
                 .foregroundColor(result.isOK ? DS.Colors.success : DS.Colors.destructiveText)
                 .lineLimit(1)
