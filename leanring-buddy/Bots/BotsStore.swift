@@ -186,6 +186,10 @@ final class BotsStore: ObservableObject {
 
     /// Removes a group; its bots stay. The project group (the Project room) can't be removed.
     func deleteGroup(_ id: String) {
+        if let group = group(id) {
+            conversations[group.roomID] = nil
+            try? FileManager.default.removeItem(at: chatFile(group.roomID))
+        }
         groups.removeAll { $0.id == id }
         writeGroups()
         forget(item: "group:\(id)")
@@ -198,7 +202,7 @@ final class BotsStore: ObservableObject {
         var id = BotsT3.slug(name)
         var suffix = 2
         while bot(id) != nil { id = "\(BotsT3.slug(name))-\(suffix)"; suffix += 1 }
-        let hue = Double(abs(id.hashValue) % 360)
+        let hue = Double(abs(id.hashValue) % 330)
         let bot = NativeBot(id: id, name: name, description: description, instructions: instructions, hue: hue,
                             accentHue: hue + 30, primary: false, provider: provider, model: model, effort: nil,
                             apps: [], category: groupID == BotGroup.projectID ? "project" : "personal")
@@ -223,6 +227,7 @@ final class BotsStore: ObservableObject {
         for index in bots.indices { bots[index].canMessage?.removeAll { $0 == id } }
         BotProcesses.shared.stop(id)
         conversations[id] = nil
+        try? FileManager.default.removeItem(at: chatFile(id))
         writeBots()
         writeGroups()
         forget(item: "bot:\(id)")
@@ -330,7 +335,9 @@ final class BotsStore: ObservableObject {
                     if !isHead, team.allSatisfy({ self.replying[$0.id] == nil }) { self.askTeam([head], chain: chain + 1, group: group) }
                     return
                 }
-                let next = BotPrompts.mentioned(in: answer, bots: team).filter { $0.id != bot.id && $0.id != head.id }
+                // Only the head (or a lead/CEO) hands out work; members tagging each other would chat on and on.
+                let canDelegate = isHead || ["lead", "ceo"].contains(bot.authorityLevel)
+                let next = canDelegate ? BotPrompts.mentioned(in: answer, bots: team).filter { $0.id != bot.id && $0.id != head.id } : []
                 if isHead || !next.isEmpty {
                     // The head hands the work out, and a planner can hand out the parts.
                     if !next.isEmpty { self.askTeam(next, chain: chain + 1, group: group) }
@@ -697,14 +704,14 @@ enum BotPrompts {
                              ". Mention one with @Name in the team chat to bring them in.")
             }
         }
-        if bot.provider == "grok" {
-            parts.append(BotPrompts.routineHowTo)
+        parts.append(BotPrompts.routineHowTo)
         let reachable = BotsStore.shared.reachable(from: bot)
         if !reachable.isEmpty {
             parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
                          "they answer you in the chat and you then carry on: " + reachable.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
         }
-        parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
+        if bot.provider == "grok" {
+            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
                          "learn a lasting preference or fact. Don't store secrets.")
@@ -1094,10 +1101,12 @@ extension BotsStore {
         guard let old = primary, old.id != botID, var new = bot(botID) else { return }
         var demoted = old
         demoted.primary = false
-        if demoted.authority == nil { demoted.authority = "lead" }
+        if demoted.authority == nil || demoted.authority == "ceo" { demoted.authority = "lead" }
+        // The primary's added duties leave with the role (Theo's own instructions are the duties themselves).
+        demoted.instructions = demoted.instructions.replacingOccurrences(of: "\n\n" + BotImport.primaryInstructions, with: "")
         new.primary = true
         new.enabled = true
-        if new.authority == nil { new.authority = "ceo" }
+        new.authority = "ceo"
         if !new.instructions.contains("```prompt") { new.instructions += "\n\n" + BotImport.primaryInstructions }
         save(demoted)
         save(new)

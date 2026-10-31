@@ -19,6 +19,7 @@ enum BotsSnapshot {
         let store = BotsStore.shared
         var panes: [(String, BotsPane)] = [("room", .team), ("connectors", .connectors), ("clicky", .clicky), ("routines", .routines)]
         for group in store.groups where group.id != BotGroup.projectID && group.headID != nil { panes.append(("group-\(group.id)", .group(group.id))) }
+        for bot in store.bots.prefix(4) { panes.append(("bot-\(bot.id)", .bot(bot.id))) }
         if let theo = store.primary { panes.append(("theo", .bot(theo.id))) }
         Task {
             // The home window's tabs too, at the same size.

@@ -156,6 +156,10 @@ final class ClaudiaControlInbox {
             let limit = max(0, min(command["limit"] as? Int ?? 10, 200))
             let messages = BotsStore.shared.conversation(id).messages.suffix(limit).map { ["author": $0.author, "text": $0.text] }
             reply(identifier, ok: true, result: Array(messages), error: nil)
+        case "groupDelete":
+            guard let id = command["id"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs id."); return }
+            BotsStore.shared.deleteGroup(id)
+            reply(identifier, ok: true, result: ["deleted": id], error: nil)
         case "groupSave":
             // Adds or updates a bot group: {id, name, head, members, symbol}.
             guard let id = command["id"] as? String, !id.isEmpty, let name = command["name"] as? String else {

@@ -89,7 +89,7 @@ enum BotRunner {
     /// forwarding, deleting, sharing, spam and cancelling. Drafts and new pages are fine.
     static let irreversibleTools = ConnectorBridge.writeTools.filter { name in
         ["send", "reply", "forward", "trash", "delete", "spam", "share", "cancel", "clear"].contains { name.contains($0) }
-    }
+    } + ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill"]
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],

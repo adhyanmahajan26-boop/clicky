@@ -119,6 +119,7 @@ struct BotCodeCard: View {
         switch language.lowercased() {
         case "prompt": return "Prompt for T3 Code"
         case "followup": return "Change for the coding agent"
+        case "routine": return "Schedule for Theo to run"
         case "": return "Code"
         default: return language
         }
