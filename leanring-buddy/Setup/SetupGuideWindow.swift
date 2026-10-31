@@ -18,7 +18,7 @@ import SwiftUI
 @MainActor
 final class SetupGuideModel: ObservableObject {
     enum Step: Int, CaseIterable {
-        case welcome, brain, voice, permissions, look, t3Code, done
+        case welcome, brain, harnesses, keys, voice, permissions, look, done
         var title: String {
             switch self {
             case .welcome: return "Welcome"
@@ -26,7 +26,8 @@ final class SetupGuideModel: ObservableObject {
             case .voice: return "Voice"
             case .permissions: return "Permissions"
             case .look: return "Screen and look"
-            case .t3Code: return "T3 Code"
+            case .harnesses: return "Harnesses"
+            case .keys: return "API keys"
             case .done: return "Done"
             }
         }
@@ -37,7 +38,8 @@ final class SetupGuideModel: ObservableObject {
             case .voice: return "waveform"
             case .permissions: return "lock.shield"
             case .look: return "sparkles"
-            case .t3Code: return "puzzlepiece.extension"
+            case .harnesses: return "terminal"
+            case .keys: return "key"
             case .done: return "checkmark.seal"
             }
         }
@@ -98,7 +100,7 @@ final class SetupGuideModel: ObservableObject {
         if step == .voice { ClickySettings.isSilentModeEnabled = !speaksAnswers; setup.saveVoiceChoice() }
         if step == .brain { setup.saveBrainChoice() }
         if let following = Step(rawValue: step.rawValue + 1) { step = following }
-        if step == .t3Code || step == .brain { refreshDetections() }
+        if step == .harnesses || step == .brain { refreshDetections() }
     }
 
     func back() {
@@ -244,7 +246,7 @@ struct SetupGuideView: View {
                 Button("Back") { model.back() }.keyboardShortcut(.cancelAction)
             }
             Spacer()
-            if model.step == .t3Code {
+            if model.step == .keys || model.step == .harnesses {
                 Button("Skip") { model.next() }
             }
             if model.step == .done {
@@ -267,7 +269,20 @@ struct SetupGuideView: View {
         case .voice: VoiceStep(model: model, setup: model.setup)
         case .permissions: PermissionsStep(companionManager: companionManager)
         case .look: LookStep()
-        case .t3Code: T3CodeStep(model: model)
+        case .harnesses:
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Your coding tools").font(.system(size: 22, weight: .semibold))
+                Text("Theo works with the coding harnesses on this Mac. Pick the one your bots use by default and where builds go. T3 Code is the default for builds; any other harness runs in a live terminal inside Theo.")
+                    .font(.system(size: 13)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                ScrollView { CodingSettingsView().padding(.bottom, 8) }
+            }
+        case .keys:
+            VStack(alignment: .leading, spacing: 14) {
+                Text("API keys (optional)").font(.system(size: 22, weight: .semibold))
+                Text("Add a Sarvam key for Indian-language voice, or keys for other providers. They're kept in your Keychain. You can skip this and add them later in Settings.")
+                    .font(.system(size: 13)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                ScrollView { ProviderKeysView().padding(.bottom, 8) }
+            }
         case .done: DoneStep(setup: model.setup)
         }
     }

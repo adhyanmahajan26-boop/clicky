@@ -127,39 +127,46 @@ struct BotDetailsSheet: View {
     }
 }
 
-/// Grok-style avatar choice: a shape and a colour.
+/// A bot's look: its colour (one of the ten swatches) and its mark (initials or a symbol).
 struct BotLookPicker: View {
     @Binding var bot: NativeBot
-    static let shapes = ["orb", "square", "sparkle", "clover", "flower", "heart", "star"]
-    static let hues: [Double] = [0, 25, 45, 140, 175, 205, 240, 268, 300, 330]
+    static let glyphs = ["", "sparkles", "envelope.fill", "magnifyingglass", "doc.text.fill", "chevron.left.forwardslash.chevron.right",
+                         "paintbrush.pointed.fill", "film.fill", "chart.line.uptrend.xyaxis", "calendar", "cart.fill", "graduationcap.fill",
+                         "heart.fill", "bolt.fill", "globe", "music.note"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Colour").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
             HStack(spacing: 8) {
-                ForEach(Self.shapes, id: \.self) { shape in
-                    var preview = bot
-                    let _ = (preview.shape = shape)
-                    Button { bot.shape = shape } label: {
-                        BotAvatar(bot: preview, size: 36, state: .idle)
-                            .padding(3)
-                            .background(RoundedRectangle(cornerRadius: 10).stroke((bot.shape ?? "orb") == shape ? DS.Colors.accent : .clear, lineWidth: 2))
+                ForEach(BotPalette.swatches) { swatch in
+                    Button { bot.shape = swatch.id } label: {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .frame(width: 24, height: 24)
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).inset(by: -3)
+                                .stroke(BotPalette.swatch(for: bot) == swatch ? DS.Colors.textPrimary : .clear, lineWidth: 1.5))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).help(swatch.id.capitalized)
                 }
             }
-            HStack(spacing: 8) {
-                ForEach(Self.hues, id: \.self) { hue in
-                    Button {
-                        bot.hue = hue
-                        bot.accentHue = hue + 30
-                    } label: {
-                        Circle().fill(Color(hue: hue / 360, saturation: 0.62, brightness: 0.82)).frame(width: 22, height: 22)
-                            .overlay(Circle().stroke(Color.white, lineWidth: abs(bot.hue - hue) < 1 ? 2 : 0))
+            Text("Mark").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 8), spacing: 6) {
+                ForEach(Self.glyphs, id: \.self) { glyph in
+                    Button { bot.glyph = glyph.isEmpty ? nil : glyph } label: {
+                        BotAvatar(bot: preview(glyph), size: 28, state: .idle)
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: -2)
+                                .stroke((bot.glyph ?? "") == glyph ? DS.Colors.textPrimary : .clear, lineWidth: 1.5))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).help(glyph.isEmpty ? "Initials" : glyph)
                 }
             }
         }
+    }
+
+    private func preview(_ glyph: String) -> NativeBot {
+        var copy = bot
+        copy.glyph = glyph.isEmpty ? nil : glyph
+        return copy
     }
 }
 
@@ -420,20 +427,36 @@ struct RoutineMarker: View {
     }
 }
 
-/// A group chat's icon: up to three member avatars, overlapped.
+/// A group chat's tile: its first four bots as a 2x2 mosaic inside one rounded square.
 struct GroupAvatar: View {
     let bots: [NativeBot]
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            ForEach(Array(bots.prefix(3).enumerated()), id: \.offset) { index, bot in
-                BotAvatar(bot: bot, size: size * 0.62, state: .idle)
-                    .offset(x: [(-size * 0.17), size * 0.17, 0][index], y: [(-size * 0.12), (-size * 0.12), size * 0.17][index])
-            }
+        let tile = size * 0.4
+        let gap = max(1.5, size * 0.06)
+        let shown = Array(bots.prefix(4))
+        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+            .fill(DS.Colors.surface)
+            .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            .overlay(
+                VStack(spacing: gap) {
+                    HStack(spacing: gap) { cell(shown, 0, tile); cell(shown, 1, tile) }
+                    HStack(spacing: gap) { cell(shown, 2, tile); cell(shown, 3, tile) }
+                }
+            )
+            .frame(width: size, height: size)
+    }
+
+    @ViewBuilder private func cell(_ shown: [NativeBot], _ index: Int, _ tile: CGFloat) -> some View {
+        if index < shown.count {
+            let swatch = BotPalette.swatch(for: shown[index])
+            RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: tile, height: tile)
+        } else {
+            RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous).fill(DS.Colors.hover).frame(width: tile, height: tile)
         }
-        .frame(width: size, height: size)
-        .background(Circle().fill(Color.white.opacity(0.05)))
     }
 }
 

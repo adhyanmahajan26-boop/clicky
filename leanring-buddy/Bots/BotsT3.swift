@@ -47,6 +47,12 @@ struct T3Run: Codable, Identifiable, Equatable {
     var pullRequest: String?
     /// The chat it was started from (nil: the Project room).
     var room: String?
+    /// Set when the run goes through a harness's own CLI instead of T3 Code ("claude", "codex", …).
+    var harness: String?
+    var model: String?
+    var effort: String?
+    /// The run's own git worktree (harness runs on a repo Addy named).
+    var worktree: String?
 }
 
 enum BotsT3 {
@@ -146,6 +152,8 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`), starts the thread and opens it in T3 Code.
     static func submit(prompt: String, title: String, repo: URL?) async throws -> T3Run {
+        let target = HarnessPrefs.codingTarget
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo) }
         guard let cli else { throw BotsT3Error.noCLI }
         var arguments = ["thread", "start"]
         var run: T3Run
@@ -193,12 +201,14 @@ enum BotsT3 {
     }
 
     static func sendFollowup(_ text: String, to run: T3Run) async throws {
+        if HarnessCoding.owns(run) { return try await HarnessCoding.sendFollowup(text, to: run) }
         guard let cli else { throw BotsT3Error.noCLI }
         try await shell(cli, ["thread", "send", run.id, "-"], stdin: text + deliveryNote)
     }
 
     /// Brings the run's project up in the T3 Code app.
     static func openInApp(_ run: T3Run) {
+        if HarnessCoding.owns(run) { HarnessCoding.openInTerminal(run); return }
         guard let cli else { return }
         Task {
             _ = try? await shell(cli, ["app", run.folder])
@@ -213,7 +223,7 @@ enum BotsT3 {
         ClaudiaScreen.moveFrontWindow(of: app)
     }
 
-    private static func newProjectFolder(title: String) throws -> URL {
+    static func newProjectFolder(title: String) throws -> URL {
         let projects = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
         var folder = projects.appendingPathComponent(slug(title), isDirectory: true)
         var suffix = 2
@@ -239,6 +249,7 @@ enum BotsT3 {
     static let endedStatuses: Set<String> = ["completed", "failed", "interrupted", "cancelled", "rolled_back"]
 
     static func state(of run: T3Run) async -> ThreadState? {
+        if HarnessCoding.owns(run) { return await HarnessCoding.state(of: run) }
         guard let cli, let output = try? await shell(cli, ["thread", "show", run.id, "--json", "--messages", "1"]),
               let object = jsonObject(in: output), let thread = object["thread"] as? [String: Any] else { return nil }
         let status = thread["status"] as? String ?? "unknown"
@@ -260,9 +271,12 @@ enum BotsT3 {
         let folder = URL(fileURLWithPath: state.worktree ?? run.folder, isDirectory: true)
         let minutes = max(1, Int((Date().timeIntervalSince(run.startedAt) / 60).rounded()))
         let failed = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status)
+        let engine = run.harness.map { HarnessCatalog.label($0) } ?? "T3 Code"
+        let usedModel = run.model ?? modelName
+        let usedEffort = run.effort ?? effort
         var lines = [failed
-            ? "**\(run.title)** stopped in T3 Code (\(state.status)) after \(minutes) min."
-            : "**\(run.title)** is done in T3 Code: \(modelName), \(effort) effort, \(minutes) min."]
+            ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
+            : "**\(run.title)** is done in \(engine): \(usedModel), \(usedEffort) effort, \(minutes) min."]
         if let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             lines.append(trimmedSummary(summary))
         }
@@ -270,7 +284,7 @@ enum BotsT3 {
         // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a
         // repo Addy named that's only safe in the run's own worktree, never the checkout Addy works in.
         if run.repo == nil || state.worktree != nil {
-            try? await commitAll(in: folder, message: "\(run.title): remaining changes from T3 Code")
+            try? await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
         }
         let head = run.branch ?? "HEAD"
         if let base = run.baseCommit,
@@ -286,7 +300,7 @@ enum BotsT3 {
             run.pullRequest = pr
         } else if !failed, let branch = run.branch {
             run.pullRequest = await openDraftPR(in: folder, branch: branch, title: run.title,
-                                                body: state.lastMessage ?? "Built by T3 Code from Theo's Project room.")
+                                                body: state.lastMessage ?? "Built by \(engine) from Theo's Project room.", engine: engine, model: usedModel)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if let pr = run.pullRequest {
@@ -381,19 +395,20 @@ enum BotsT3 {
     }
 
     /// Pushes the run's branch and opens a draft PR, when the repo lives on GitHub.
-    private static func openDraftPR(in folder: URL, branch: String, title: String, body: String) async -> String? {
+    private static func openDraftPR(in folder: URL, branch: String, title: String, body: String,
+                                    engine: String = "T3 Code", model: String = modelName) async -> String? {
         guard let gh, let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder),
               remote.contains("github.com") else { return nil }
         guard (try? await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)) != nil else { return nil }
         let output = try? await shell(gh, ["pr", "create", "--draft", "--head", branch, "--title", title,
-                                           "--body", "From Theo's Project room, built in T3 Code on \(modelName).\n\n\(trimmedSummary(body))"],
+                                           "--body", "From Theo's Project room, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"],
                                       in: folder, limit: 60)
         return output?.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init)
     }
 
     // MARK: Processes
 
-    private static let git = URL(fileURLWithPath: "/usr/bin/git")
+    static let git = URL(fileURLWithPath: "/usr/bin/git")
 
     /// A command-line tool by name: the usual install folders, then the login shell's PATH (node from
     /// pnpm or nvm lives in the home folder, which a Mac app's PATH doesn't include).
@@ -419,14 +434,14 @@ enum BotsT3 {
         paths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
     }
 
-    private static func commitAll(in folder: URL, message: String) async throws {
+    static func commitAll(in folder: URL, message: String) async throws {
         let status = try await shell(git, ["status", "--porcelain"], in: folder)
         guard !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         try await shell(git, ["add", "-A"], in: folder)
         try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "-m", message], in: folder)
     }
 
-    private static func jsonObject(in output: String) -> [String: Any]? {
+    static func jsonObject(in output: String) -> [String: Any]? {
         guard let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}") else { return nil }
         return try? JSONSerialization.jsonObject(with: Data(output[start...end].utf8)) as? [String: Any]
     }
@@ -434,7 +449,7 @@ enum BotsT3 {
     /// Runs a tool from home (or `folder`) and returns its output; a non-zero exit throws with the
     /// output's tail. Stopped after `limit` seconds.
     @discardableResult
-    private static func shell(_ executable: URL, _ arguments: [String], in folder: URL? = nil,
+    static func shell(_ executable: URL, _ arguments: [String], in folder: URL? = nil,
                               stdin: String? = nil, limit: Double = 90) async throws -> String {
         try await Task.detached {
             let process = Process()

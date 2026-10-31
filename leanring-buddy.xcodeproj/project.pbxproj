@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		4A88ACA301779E89907A04E4 /* ClickyCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8FF5F76D97045ADF106F9F31 /* ClickyCore */; };
+		B1A2C3D4E5F60718293A4B5C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = B1A2C3D4E5F60718293A4B5D /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4A88ACA301779E89907A04E4 /* ClickyCore in Frameworks */,
+				B1A2C3D4E5F60718293A4B5C /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -119,6 +121,7 @@
 			name = "leanring-buddy";
 			packageProductDependencies = (
 				8FF5F76D97045ADF106F9F31 /* ClickyCore */,
+				B1A2C3D4E5F60718293A4B5D /* SwiftTerm */,
 			);
 			productName = "leanring-buddy";
 			productReference = 28F22CBF2F56440300A0FC59 /* Clicky.app */;
@@ -204,6 +207,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				9CFB2B2EC78788EA2792418E /* XCLocalSwiftPackageReference "Packages/ClickyCore" */,
+				B1A2C3D4E5F60718293A4B5E /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 28F22CC02F56440300A0FC59 /* Products */;
@@ -627,10 +631,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		B1A2C3D4E5F60718293A4B5E /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.11.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		8FF5F76D97045ADF106F9F31 /* ClickyCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClickyCore;
+		};
+		B1A2C3D4E5F60718293A4B5D /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B1A2C3D4E5F60718293A4B5E /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

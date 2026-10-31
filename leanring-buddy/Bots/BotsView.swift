@@ -14,6 +14,9 @@ import Combine
 import SwiftUI
 
 enum BotsPane: Hashable {
+    /// Today: what's going on (first page on launch).
+    case home
+    case notes
     /// The Project room (the project group's chat).
     case team
     case group(String)
@@ -27,7 +30,7 @@ enum BotsPane: Hashable {
 @MainActor
 final class BotsSelection: ObservableObject {
     static let shared = BotsSelection()
-    @Published var pane: BotsPane = .bot("theo")
+    @Published var pane: BotsPane = .home
 }
 
 struct BotsRootView: View {
@@ -36,37 +39,61 @@ struct BotsRootView: View {
     /// Inside Theo's home window, Connectors is its own tab instead.
     var showsConnectors = true
 
-    /// The settings column on the right (Grok Bot's details), shown unless you close it.
-    @AppStorage("v3.bots.inspector") private var showsInspector = true
+    /// The bot's settings slide over the chat from the right; they never shrink it (docs/DESIGN.md).
+    @State private var showsInspector = false
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Divider().overlay(Color.white.opacity(0.06))
+            Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DS.Colors.background)
                 .overlay(alignment: .topTrailing) {
-                    if inspectorTarget != nil {
-                        Button { withAnimation(.easeOut(duration: 0.18)) { showsInspector.toggle() } } label: {
-                            Image(systemName: "sidebar.right").font(.system(size: 13))
-                                .foregroundColor(showsInspector ? DS.Colors.accentText : DS.Colors.textSecondary)
-                                .frame(width: 28, height: 28)
+                    if inspectorTarget != nil && !showsInspector {
+                        Button { withAnimation(DS.Motion.panel) { showsInspector = true } } label: {
+                            Image(systemName: "sidebar.right").font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
+                                .frame(width: 30, height: 30).contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain).help(showsInspector ? "Hide settings" : "Show settings")
-                        .padding(.top, 12).padding(.trailing, 10)
+                        .buttonStyle(.plain).help("Settings for this chat")
+                        .padding(.top, 11).padding(.trailing, 12)
                     }
                 }
-            if showsInspector, let target = inspectorTarget {
-                Divider().overlay(Color.white.opacity(0.06))
-                switch target {
-                case .clicky: ClickyInspector().transition(.move(edge: .trailing))
-                case .bot(let id): BotInspector(store: store, botID: id).id(id).transition(.move(edge: .trailing))
-                default: EmptyView()
+                .overlay {
+                    if showsInspector, let target = inspectorTarget {
+                        ZStack(alignment: .trailing) {
+                            Color.black.opacity(0.18).ignoresSafeArea()
+                                .onTapGesture { withAnimation(DS.Motion.panel) { showsInspector = false } }
+                            Group {
+                                switch target {
+                                case .clicky: ClickyInspector()
+                                case .bot(let id): BotInspector(store: store, botID: id).id(id)
+                                default: EmptyView()
+                                }
+                            }
+                            .frame(width: 340)
+                            .background(DS.Colors.surface)
+                            .overlay(alignment: .leading) { Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1) }
+                            .shadow(color: .black.opacity(0.28), radius: 24, x: -2)
+                            .overlay(alignment: .topTrailing) {
+                                Button { withAnimation(DS.Motion.panel) { showsInspector = false } } label: {
+                                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+                                        .frame(width: 26, height: 26).background(Circle().fill(DS.Colors.hover))
+                                }
+                                .buttonStyle(.plain).keyboardShortcut(.cancelAction).padding(12)
+                            }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
                 }
-            }
         }
         .background(DS.Colors.background)
-        .preferredColorScheme(.dark)
+        .onChange(of: selection.pane) { _, _ in showsInspector = false }
+        .onReceive(NotificationCenter.default.publisher(for: .theoShowBotSettings)) { _ in
+            if inspectorTarget != nil { withAnimation(DS.Motion.panel) { showsInspector = true } }
+        }
     }
 
     @State private var editingGroup: BotGroup?
@@ -81,85 +108,98 @@ struct BotsRootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Bots").font(.system(size: 15, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
-                Spacer()
+            // Room for the window's traffic lights.
+            Color.clear.frame(height: 40)
+            VStack(spacing: 1) {
                 Menu {
-                    Button { addingBot = true } label: { Label("New bot", systemImage: "plus.circle") }
-                        .keyboardShortcut("n", modifiers: .command)
-                    Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2.badge.plus") }
+                    Button { addingBot = true } label: { Label("New bot", systemImage: "plus") }
+                    Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
                     Divider()
                     Button { namingSectionFor = ""; sectionName = "" } label: { Label("New category", systemImage: "folder.badge.plus") }
                 } label: {
-                    Image(systemName: "plus").font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.08)))
+                    navLabel("square.and.pencil", "New bot", shortcut: "⌘N")
+                } primaryAction: { addingBot = true }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                .keyboardShortcut("n", modifiers: .command)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).frame(width: 20)
+                    TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(DS.Colors.textTertiary) }.buttonStyle(.plain)
+                    }
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help("New bot (⌘N), group chat or section")
+                .padding(.horizontal, 8).frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 8).fill(searchFocused ? DS.Colors.hover : .clear))
+                .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
+                navRow(.home, "house", "Home")
             }
-            .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 6)
+            .padding(.horizontal, 8)
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    let pinned = store.layout.pinned.filter(itemExists)
-                    if !pinned.isEmpty {
-                        sectionTitle("Pinned").dropTarget { items in items.forEach { store.setPinned(true, $0) } }
+                VStack(alignment: .leading, spacing: 1) {
+                    if !query.isEmpty {
+                        sectionTitle("Results")
+                        ForEach(searchResults, id: \.self) { item in itemRow(item) }
+                        if searchResults.isEmpty {
+                            Text("No bots match").font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.vertical, 6)
+                        }
+                    } else {
+                        let pinned = store.layout.pinned.filter(itemExists)
+                        Color.clear.frame(height: 6).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                         ForEach(pinned, id: \.self) { item in itemRow(item) }
-                    }
-                    ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
-                    let loose = looseItems
-                    if !loose.groups.isEmpty {
-                        sectionTitle("Group chats").dropTarget { items in items.forEach { unfile($0) } }
-                        ForEach(loose.groups, id: \.self) { item in itemRow(item) }
-                    }
-                    if !loose.bots.isEmpty {
-                        sectionTitle("Bots").dropTarget { items in items.forEach { unfile($0) } }
-                        ForEach(loose.bots, id: \.self) { item in itemRow(item) }
-                    }
-                    if store.bots.count <= 1 && store.groups.isEmpty {
-                        // A fresh setup: point at the way to add the first bot.
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Your bots go here. Add one with a name, a look and instructions, then group bots into chats with a head.")
-                                .font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
+                        let loose = looseItems
+                        if !store.rootSections.isEmpty || !loose.bots.isEmpty || store.bots.count > 1 {
+                            sectionTitle("Bots").dropTarget { items in items.forEach { unfile($0) } }
+                            ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
+                            ForEach(loose.bots, id: \.self) { item in itemRow(item) }
+                        }
+                        if !loose.groups.isEmpty {
+                            sectionTitle("Groups").dropTarget { items in items.forEach { unfile($0) } }
+                            ForEach(loose.groups, id: \.self) { item in itemRow(item) }
+                        }
+                        if store.bots.count <= 1 && store.groups.isEmpty {
+                            // A fresh setup: one quiet line pointing at the first bot.
                             Button { addingBot = true } label: {
-                                Label("Add your first bot", systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(DS.Colors.accent.opacity(0.85)))
+                                HStack(spacing: 8) {
+                                    Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 20)
+                                    Text("Add your first bot").font(.system(size: 13))
+                                }
+                                .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 32)
+                                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain).foregroundColor(.white)
+                            .buttonStyle(SidebarButtonStyle(isSelected: false))
+                            .padding(.top, 10)
                         }
-                        .padding(.horizontal, 10).padding(.top, 16)
-                    }
-                    let hidden = store.layout.hidden.filter(itemExists)
-                    if !hidden.isEmpty {
-                        Button { withAnimation(.easeOut(duration: 0.15)) { showsHidden.toggle() } } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: showsHidden ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .bold))
-                                Text("HIDDEN BOTS · \(hidden.count)").font(.system(size: 10.5, weight: .semibold)).tracking(0.6)
+                        let hidden = store.layout.hidden.filter(itemExists)
+                        if !hidden.isEmpty {
+                            Button { withAnimation(DS.Motion.hover) { showsHidden.toggle() } } label: {
+                                HStack(spacing: 4) {
+                                    Text("Hidden").font(.system(size: 11, weight: .semibold))
+                                    Text("\(hidden.count)").font(.system(size: 11))
+                                    Image(systemName: showsHidden ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
+                                }
+                                .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)
                             }
-                            .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.top, 12)
+                            .buttonStyle(.plain)
+                            if showsHidden { ForEach(hidden, id: \.self) { item in itemRow(item).opacity(0.55) } }
                         }
-                        .buttonStyle(.plain)
-                        if showsHidden { ForEach(hidden, id: \.self) { item in itemRow(item).opacity(0.6) } }
                     }
                 }
-                .padding(.bottom, 8)
+                .padding(.horizontal, 8).padding(.bottom, 10)
             }
-            Divider().overlay(Color.white.opacity(0.06))
-            VStack(spacing: 2) {
-                sidebarRow(.routines, title: "Routines", subtitle: routinesSubtitle) {
-                    iconTile("clock.arrow.circlepath")
-                }
-                if showsConnectors {
-                    sidebarRow(.connectors, title: "Connectors", subtitle: "Gmail, Notion and more") {
-                        iconTile("point.3.connected.trianglepath.dotted")
-                    }
-                }
+            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+            VStack(spacing: 1) {
+                navRow(.notes, "note.text", "Notes")
+                navRow(.routines, "clock.arrow.circlepath", "Routines",
+                       trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)")
+                if showsConnectors { navRow(.connectors, "puzzlepiece.extension", "Connectors") }
+                Button { TheoSettingsWindowController.show() } label: { navLabel("gearshape", "Settings", shortcut: "⌘,") }
+                    .buttonStyle(SidebarButtonStyle(isSelected: false))
+                    .keyboardShortcut(",", modifiers: .command)
             }
-            .padding(.vertical, 6)
+            .padding(.horizontal, 8).padding(.vertical, 8)
         }
-        .padding(.horizontal, 6)
-        .frame(width: 256)
-        .background(DS.Colors.surface1)
+        .frame(width: 248)
+        .background(DS.Colors.sidebar)
         .sheet(item: $editingGroup) { group in
             GroupEditor(store: store, group: group) { saved in
                 if let saved { selection.pane = saved.id == BotGroup.projectID ? .team : .group(saved.id) }
@@ -263,21 +303,17 @@ struct BotsRootView: View {
     @ViewBuilder private func itemRow(_ item: String) -> some View {
         Group {
             if item == "clicky" {
-                sidebarRow(.clicky, title: "Clicky", subtitle: "Screen companion") { ClickyAvatar(size: 34) }
+                sidebarRow(.clicky, title: "Clicky") { ClickyAvatar(size: 20) }
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
-                let routineCount = store.routines(for: bot.id).filter { !$0.paused }.count
-                sidebarRow(.bot(bot.id), title: bot.name,
-                           subtitle: bot.isOn ? (bot.primary ? "Primary · " : "") + bot.modelLabel + (routineCount > 0 ? " · ⏰ \(routineCount)" : "") : "Off",
-                           star: bot.primary, unread: store.unread[bot.id] ?? 0) {
-                    BotAvatar(bot: bot, size: 34, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
+                sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, unread: store.unread[bot.id] ?? 0,
+                           busy: store.replying[bot.id] != nil, dimmed: !bot.isOn) {
+                    BotAvatar(bot: bot, size: 20, state: .idle)
                 }
             } else if let group = store.group(String(item.dropFirst(6))) {
                 let members = store.members(of: group)
                 let busy = members.contains { store.replying[$0.id] != nil }
-                sidebarRow(pane(for: item), title: group.name,
-                           subtitle: busy ? "Working…" : "Led by \(store.head(of: group)?.name ?? "nobody") · \(members.count) bots",
-                           unread: store.unread[group.roomID] ?? 0) {
-                    GroupAvatar(bots: members, size: 34)
+                sidebarRow(pane(for: item), title: group.name, unread: store.unread[group.roomID] ?? 0, busy: busy) {
+                    GroupAvatar(bots: members, size: 20)
                 }
             }
         }
@@ -303,7 +339,12 @@ struct BotsRootView: View {
         }
         if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
             Divider()
-            Button("Details and routines…") { detailsBot = bot }
+            Button("Settings…") {
+                selection.pane = .bot(bot.id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NotificationCenter.default.post(name: .theoShowBotSettings, object: nil)
+                }
+            }
             Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
             if !bot.primary { Button("Make primary ★") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
@@ -363,7 +404,7 @@ struct BotsRootView: View {
                     .frame(width: 10)
             }
             .buttonStyle(.plain).foregroundColor(DS.Colors.textTertiary)
-            Text(section.name.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
+            Text(section.name).font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
             Spacer()
             Menu {
                 Button("New sub-category…") { namingSectionFor = "sub:\(section.id)"; sectionName = "" }
@@ -375,7 +416,7 @@ struct BotsRootView: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
-        .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
+        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
         .contentShape(Rectangle())
         .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
     }
@@ -387,37 +428,57 @@ struct BotsRootView: View {
     }
 
     private func sectionTitle(_ title: String) -> some View {
-        Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
-            .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 2)
+        Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.top, 16).padding(.bottom, 4)
+            .contentShape(Rectangle())
     }
 
-    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, subtitle: String, star: Bool = false, unread: Int = 0,
-                                        @ViewBuilder icon: () -> Icon) -> some View {
+    /// One sidebar row (docs/DESIGN.md): 32 pt, a 20 pt tile, the name, and a trailing dot for work or unread.
+    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, star: Bool = false, unread: Int = 0, busy: Bool = false,
+                                        dimmed: Bool = false, @ViewBuilder icon: () -> Icon) -> some View {
         Button { selection.pane = pane } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 icon()
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                        if star {
-                            // Grok marks the Primary Bot with a star.
-                            Image(systemName: "star.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.warning)
-                        }
-                    }
-                    Text(subtitle).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
-                }
+                Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
+                    .foregroundColor(dimmed ? DS.Colors.textTertiary : DS.Colors.textPrimary).lineLimit(1)
+                if star { Image(systemName: "star.fill").font(.system(size: 8)).foregroundColor(DS.Colors.textTertiary) }
                 Spacer(minLength: 0)
-                if unread > 0 {
-                    Text("\(unread)").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(DS.Colors.accent))
+                if busy {
+                    PulseDot(color: DS.Colors.accent)
+                } else if unread > 0 {
+                    Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6)
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 10).fill(selection.pane == pane ? Color.white.opacity(0.09) : .clear))
+            .padding(.horizontal, 8).frame(height: 32)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
+    }
+
+    private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary).frame(width: 20)
+            Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+            Spacer(minLength: 0)
+            if let trailing { Text(trailing).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary) }
+        }
+        .padding(.horizontal, 8).frame(height: 30)
+        .contentShape(Rectangle())
+    }
+
+    private func navRow(_ pane: BotsPane, _ symbol: String, _ title: String, trailing: String? = nil) -> some View {
+        Button { selection.pane = pane } label: { navLabel(symbol, title, trailing: trailing) }
+            .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
+    }
+
+    /// Bots, groups and Clicky whose name matches the search.
+    private var searchResults: [String] {
+        let needle = query.lowercased()
+        var items: [String] = "clicky".contains(needle) ? ["clicky"] : []
+        items += store.bots.filter { $0.name.lowercased().contains(needle) || $0.description.lowercased().contains(needle) }.map { "bot:\($0.id)" }
+        items += store.groups.filter { $0.headID != nil && $0.name.lowercased().contains(needle) }.map { "group:\($0.id)" }
+        return items
     }
 
     /// What the settings column shows: the open bot, or Clicky.
@@ -432,6 +493,10 @@ struct BotsRootView: View {
 
     @ViewBuilder private var detail: some View {
         switch selection.pane {
+        case .home:
+            TodayView(store: store, selection: selection)
+        case .notes:
+            NotesScreen()
         case .team:
             if store.group(BotGroup.projectID)?.headID != nil {
                 BotChatScreen(store: store, conversationID: BotsStore.teamID, bot: nil, groupID: BotGroup.projectID)
@@ -486,23 +551,24 @@ struct BotChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().overlay(Color.white.opacity(0.06))
+            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
                     // A plain VStack: a lazy one guesses the heights of long replies it hasn't drawn, and
                     // scrolling to the end then lands in empty space until something redraws.
                     VStack(alignment: .leading, spacing: 18) {
                         if record.messages.isEmpty && inProgress.isEmpty { emptyState }
-                        ForEach(record.messages) { message in
+                        ForEach(Array(record.messages.enumerated()), id: \.element.id) { index, message in
                             if message.author == "user" {
                                 UserBubble(text: message.text)
                             } else if message.author == "routine" {
                                 RoutineMarker(text: message.text, at: message.at)
                             } else if let author = store.bot(message.author) {
-                                BotLine(bot: author, text: message.text, showsName: bot == nil,
+                                BotLine(bot: author, text: message.text,
+                                        showsName: index == 0 || record.messages[index - 1].author != message.author,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
                                 if let runID = message.runID, let run = store.t3Runs.first(where: { $0.id == runID }) {
-                                    T3ResultCard(run: run).padding(.leading, 46)
+                                    T3ResultCard(run: run).padding(.leading, 44)
                                 }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
@@ -521,13 +587,13 @@ struct BotChatScreen: View {
                             if pending.1.isEmpty {
                                 ThinkingLine(bot: pending.0, showsName: bot == nil)
                             } else {
-                                BotLine(bot: pending.0, text: pending.1, showsName: bot == nil, animatesIn: true, isLive: true)
+                                BotLine(bot: pending.0, text: pending.1, showsName: record.messages.last?.author != pending.0.id, animatesIn: true, isLive: true)
                             }
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
-                    .frame(maxWidth: 760)
-                    .padding(.horizontal, 24).padding(.vertical, 22)
+                    .frame(maxWidth: 720)
+                    .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
                     .frame(maxWidth: .infinity)
                 }
                 .onChange(of: record.messages.count) { _, _ in
@@ -557,55 +623,47 @@ struct BotChatScreen: View {
         }
     }
 
+    /// The chat's toolbar (docs/DESIGN.md): avatar, name (opens settings), model, and new chat.
     private var header: some View {
         HStack(spacing: 10) {
             if let bot {
-                BotAvatar(bot: bot, size: 28, state: store.replying[bot.id].map { $0.isEmpty ? .thinking : .typing } ?? .idle)
-                VStack(alignment: .leading, spacing: 1) {
-                    // Like Grok: the bot's name opens its details (instructions, apps, routines).
-                    Button { showsDetails = true } label: {
-                        HStack(spacing: 4) {
-                            Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundColor(DS.Colors.textTertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .sheet(isPresented: $showsDetails) { BotDetailsSheet(store: store, botID: bot.id) { showsDetails = false } }
-                    Text("\(["claude": "Claude", "grok": "Grok"][bot.provider] ?? "OpenCode") · \(bot.modelLabel)\(bot.effort.map { " · \($0)" } ?? "")")
-                        .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                BotAvatar(bot: bot, size: 24, state: .idle)
+                Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
+                    Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                }
+                .buttonStyle(.plain).help("Settings for \(bot.name)")
+                Text(bot.modelLabel + (bot.effort.map { " · \($0)" } ?? ""))
+                    .font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                    .padding(.horizontal, 8).frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
+                if !bot.isOn {
+                    Text("Off").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
                 }
             } else {
-                HStack(spacing: -8) {
-                    ForEach(groupBots) { member in BotAvatar(bot: member, size: 24, state: .idle) }
+                GroupAvatar(bots: groupBots, size: 24)
+                Button { editsGroup = true } label: {
+                    Text(group?.name ?? "Group chat").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Button { editsGroup = true } label: {
-                        HStack(spacing: 4) {
-                            Text(group?.name ?? "Group chat").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundColor(DS.Colors.textTertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .sheet(isPresented: $editsGroup) {
-                        if let group { GroupEditor(store: store, group: group) { _ in editsGroup = false } }
-                    }
-                    Text(isProjectRoom ? "Theo (CEO) and the project team turn your idea into a prompt for T3 Code"
-                                       : "\(group.flatMap { store.head(of: $0) }?.name ?? "The head") leads; tag anyone with @Name")
-                        .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                .buttonStyle(.plain)
+                .sheet(isPresented: $editsGroup) {
+                    if let group { GroupEditor(store: store, group: group) { _ in editsGroup = false } }
                 }
+                Text("Led by \(group.flatMap { store.head(of: $0) }?.name ?? "nobody") · \(groupBots.count) bots")
+                    .font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
             }
             Spacer()
             Button {
                 store.clearConversation(conversationID)
                 settledIDs = []
             } label: {
-                Label("New chat", systemImage: "square.and.pencil").font(.system(size: 12))
+                Image(systemName: "square.and.pencil").font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
+                    .frame(width: 30, height: 30).contentShape(Rectangle())
             }
-            .buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary)
+            .buttonStyle(.plain).help("New chat")
             .disabled(!inProgress.isEmpty)
         }
-        // Room on the right for the settings-column button.
-        .padding(.leading, 18).padding(.trailing, 46).padding(.vertical, 12)
+        // Room on the right for the settings button.
+        .padding(.leading, 20).padding(.trailing, 48).frame(height: 52)
     }
 
     private var emptyState: some View {
@@ -634,58 +692,77 @@ struct BotChatScreen: View {
         return names.dropLast().joined(separator: ", ") + " and " + names.last!
     }
 
+    @FocusState private var composerFocused: Bool
+
+    /// The composer (docs/DESIGN.md): text on top; under it @-mentions, the model, and send or stop.
     private var composer: some View {
-        VStack(spacing: 8) {
-            if bot == nil {
-                HStack(spacing: 6) {
-                    ForEach(groupBots) { member in
-                        Button { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " } label: {
-                            HStack(spacing: 4) {
-                                BotAvatar(bot: member, size: 16, state: .idle)
-                                Text("@\(member.name)").font(.system(size: 11))
-                            }
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.white.opacity(0.07)))
-                        }
-                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary)
+        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 10) {
+            TextField(bot.map { "Message \($0.name)" } ?? "Message \(group?.name ?? "the group")",
+                      text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .lineLimit(1...8)
+                .focused($composerFocused)
+                .onSubmit(send)
+            HStack(spacing: 6) {
+                Menu {
+                    ForEach(mentionable) { member in
+                        Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
                     }
-                    Spacer()
+                    if bot?.primary == true { Button("@T3 (send a change to the coding agent)") { draft += "@T3 " } }
+                } label: {
+                    Image(systemName: "at").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                        .frame(width: 28, height: 28).contentShape(Rectangle())
                 }
-            }
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField(bot.map { "Message \($0.name)" } ?? (isProjectRoom ? "Pitch an idea to Theo and the team" : "Message the \(group?.name ?? "group")"),
-                          text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .lineLimit(1...6)
-                    .onSubmit(send)
-                if !inProgress.isEmpty && draft.trimmingCharacters(in: .whitespaces).isEmpty {
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .disabled(mentionable.isEmpty && bot?.primary != true)
+                .help("Mention a bot")
+                if let bot {
+                    Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
+                        HStack(spacing: 4) {
+                            Text(bot.modelLabel).font(.system(size: 12, weight: .medium))
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
+                        }
+                        .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
+                    }
+                    .buttonStyle(.plain).help("Change the model")
+                }
+                Spacer()
+                if !inProgress.isEmpty && isEmpty {
                     Button {
                         if let bot { store.stop(bot.id) } else if let groupID { store.stopGroup(groupID) }
                     } label: {
-                        Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold)).foregroundColor(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Circle().fill(Color.white.opacity(0.22)))
+                        Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+                            .frame(width: 28, height: 28).background(Circle().fill(DS.Colors.surface))
+                            .overlay(Circle().strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
                     }
-                    .buttonStyle(.plain)
-                    .help("Stop the reply")
+                    .buttonStyle(.plain).help("Stop")
                 } else {
                     Button(action: send) {
-                        Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundColor(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty ? Color.white.opacity(0.12) : DS.Colors.accent))
+                        Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
+                            .frame(width: 28, height: 28)
+                            .background(Circle().fill(isEmpty ? DS.Colors.textDisabled : DS.Colors.accent))
                     }
-                    .buttonStyle(.plain)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .buttonStyle(.plain).disabled(isEmpty)
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 22).fill(DS.Colors.surface))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.07)))
         }
-        .frame(maxWidth: 760)
-        .padding(.horizontal, 24).padding(.bottom, 18).padding(.top, 6)
+        .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(composerFocused ? DS.Colors.accent.opacity(0.6) : DS.Colors.borderSubtle, lineWidth: composerFocused ? 1.5 : 1))
+        .frame(maxWidth: 720)
+        .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
         .frame(maxWidth: .infinity)
+    }
+
+    /// Who an @ can reach from here: the group's bots, or the bots this one may message.
+    private var mentionable: [NativeBot] {
+        if let bot { return store.reachable(from: bot) }
+        return groupBots
     }
 
     private func send() {
@@ -700,32 +777,40 @@ struct UserBubble: View {
     let text: String
     var body: some View {
         HStack {
-            Spacer(minLength: 80)
+            Spacer(minLength: 120)
             Text(text)
-                .font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
+                .font(.system(size: 15)).foregroundColor(DS.Colors.textPrimary).lineSpacing(4)
                 .textSelection(.enabled)
-                .padding(.horizontal, 15).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.1)))
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4,
+                                                   topTrailingRadius: 16, style: .continuous).fill(DS.Colors.surface))
         }
+        .padding(.top, 8)
     }
 }
 
 struct ThinkingLine: View {
     let bot: NativeBot
     let showsName: Bool
-    @State private var sweep = false
+    @State private var phase = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            BotAvatar(bot: bot, size: 34, state: .thinking)
-            OrbitingDots(color: bot.accentColor)
-            Text("\(bot.name) is thinking")
-                .font(.system(size: 13))
-                .foregroundStyle(
-                    LinearGradient(colors: [DS.Colors.textTertiary, bot.accentColor, DS.Colors.textTertiary],
-                                   startPoint: UnitPoint(x: sweep ? 1 : -1, y: 0.5), endPoint: UnitPoint(x: sweep ? 2 : 0, y: 0.5)))
-                .onAppear { withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { sweep = true } }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                BotAvatar(bot: bot, size: 28, state: .thinking)
+                Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+            }
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle().fill(DS.Colors.textTertiary).frame(width: 5, height: 5)
+                        .opacity(phase ? 1 : 0.3)
+                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(Double(index) * 0.15), value: phase)
+                }
+            }
+            .padding(.leading, 38).frame(height: 20)
         }
+        .padding(.top, 8)
+        .onAppear { phase = true }
     }
 }
 
@@ -745,13 +830,18 @@ struct BotLine: View {
     @State private var rate: Double = 320
     @State private var finished = false
 
+    @State private var hovering = false
+
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            BotAvatar(bot: bot, size: 34, state: typing ? .typing : .idle)
-            VStack(alignment: .leading, spacing: 4) {
-                if showsName {
-                    Text(bot.name).font(.system(size: 11.5, weight: .semibold)).foregroundColor(bot.accentColor)
+        VStack(alignment: .leading, spacing: 6) {
+            if showsName {
+                HStack(spacing: 10) {
+                    BotAvatar(bot: bot, size: 28, state: typing ? .typing : .idle)
+                    Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 }
+                .padding(.top, 8)
+            }
+            Group {
                 if typing {
                     // About 30 redraws a second, and only the paragraph being typed is laid out again:
                     // finished paragraphs are drawn once, with their final formatting.
@@ -760,12 +850,16 @@ struct BotLine: View {
                     }
                 } else {
                     RichBlock(text: text).equatable()
-                    if !isLive { BotMessageActions(text: text).padding(.top, 2) }
+                    if !isLive {
+                        BotMessageActions(text: text).opacity(hovering ? 1 : 0).padding(.top, 2)
+                    }
                 }
             }
-            .padding(.top, 6)
-            Spacer(minLength: 40)
+            .padding(.leading, 38)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onHover { inside in withAnimation(DS.Motion.hover) { hovering = inside } }
         .onAppear {
             total = text.count
             if !animatesIn { finished = true; anchorCount = total }
@@ -800,7 +894,7 @@ struct BotLine: View {
         VStack(alignment: .leading, spacing: 8) {
             if !done.isEmpty { RichBlock(text: done).equatable() }
             HStack(alignment: .lastTextBaseline, spacing: 3) {
-                Text(current).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary).lineSpacing(3)
+                Text(current).font(.system(size: 15)).foregroundColor(DS.Colors.textPrimary).lineSpacing(5)
                 CometCaret(color: bot.accentColor)
             }
         }
@@ -824,77 +918,77 @@ enum BotMarkdown {
 
 enum BotAvatarState { case idle, thinking, typing }
 
-extension NativeBot {
-    var bodyColor: Color { Color(hue: hue / 360, saturation: 0.62, brightness: 0.82) }
-    var accentColor: Color { Color(hue: accentHue.truncatingRemainder(dividingBy: 360) / 360, saturation: 0.7, brightness: 0.95) }
+/// The ten tile colours from docs/DESIGN.md: a soft two-hue gradient each.
+enum BotPalette {
+    struct Swatch: Identifiable, Equatable { let id: String; let from: UInt32; let to: UInt32 }
+    static let swatches: [Swatch] = [
+        Swatch(id: "ember", from: 0xF2784B, to: 0xE0476A), Swatch(id: "amber", from: 0xF5B13D, to: 0xE8782E),
+        Swatch(id: "lime", from: 0x9BD14B, to: 0x3FA65C), Swatch(id: "teal", from: 0x3FC8B4, to: 0x2E8FB8),
+        Swatch(id: "sky", from: 0x4EA8F0, to: 0x4A6FE0), Swatch(id: "indigo", from: 0x6E7BF0, to: 0x8A55E0),
+        Swatch(id: "violet", from: 0xA468EB, to: 0xD152B8), Swatch(id: "rose", from: 0xF06A8F, to: 0xE24A58),
+        Swatch(id: "slate", from: 0x7C8697, to: 0x4D5666), Swatch(id: "graphite", from: 0x3A3A42, to: 0x1E1E24),
+    ]
+    /// The swatch nearest a stored hue (bots keep a hue number), Theo always graphite.
+    static func swatch(for bot: NativeBot) -> Swatch {
+        if bot.id == "theo" && bot.shape == nil { return swatches[9] }
+        if let named = swatches.first(where: { $0.id == bot.shape }) { return named }
+        let hues: [Double] = [8, 32, 100, 172, 210, 238, 290, 345, 215, 0]
+        let target = bot.hue.truncatingRemainder(dividingBy: 360)
+        let index = hues.indices.prefix(8).min { abs(hues[$0] - target) < abs(hues[$1] - target) } ?? 0
+        return swatches[index]
+    }
 }
 
-/// A bot's face: a glowing orb with eyes and an orbit ring. Thinking, it floats and tilts while
-/// the ring spins fast; typing, it nods along.
+extension NativeBot {
+    var bodyColor: Color { Color(hex: BotPalette.swatch(for: self).from) }
+    var accentColor: Color { Color(hex: BotPalette.swatch(for: self).from) }
+    /// The tile's mark: the glyph picked for the bot, else its initials.
+    var monogram: String {
+        let words = name.split(separator: " ").filter { $0.first?.isLetter == true }
+        let letters = words.prefix(2).compactMap(\.first).map(String.init).joined()
+        return letters.isEmpty ? "?" : letters.uppercased()
+    }
+}
+
+/// A bot's tile: a rounded square in its colour with its glyph or initials (docs/DESIGN.md). While it
+/// thinks, a soft ring breathes around it; nothing else moves.
 struct BotAvatar: View {
     let bot: NativeBot
     let size: CGFloat
     let state: BotAvatarState
-    @State private var phase = false
-    @State private var spin = false
+    @State private var breathing = false
 
     var body: some View {
+        let swatch = BotPalette.swatch(for: bot)
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         ZStack {
-            let fill = RadialGradient(colors: [bot.accentColor, bot.bodyColor, bot.bodyColor.opacity(0.7)],
-                                      center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: size * 0.6)
-            Group {
-                if let symbol = bot.shapeSymbol {
-                    // The shape picked for the bot (square, sparkle, clover, flower, heart, star).
-                    Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(fill)
-                        .frame(width: size * 0.72, height: size * 0.72)
-                } else {
-                    Circle().fill(fill).frame(width: size * 0.66, height: size * 0.66)
-                }
+            shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            shape.fill(LinearGradient(colors: [Color.white.opacity(0.10), .clear], startPoint: .top, endPoint: .center))
+            shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            if let glyph = bot.glyph, !glyph.isEmpty {
+                Image(systemName: glyph).font(.system(size: size * 0.44, weight: .semibold)).foregroundColor(.white.opacity(0.96))
+            } else if bot.primary && bot.id == "theo" {
+                Text("T").font(.system(size: size * 0.5, weight: .bold, design: .rounded)).foregroundColor(.white.opacity(0.96))
+            } else {
+                Text(bot.monogram).font(.system(size: size * (bot.monogram.count > 1 ? 0.38 : 0.46), weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.96))
             }
-            .shadow(color: bot.accentColor.opacity(state == .idle ? 0.25 : 0.7), radius: state == .idle ? 3 : size * 0.18)
-            HStack(spacing: size * 0.1) {
-                Capsule().fill(Color.black.opacity(0.75)).frame(width: size * 0.07, height: size * (state == .thinking && phase ? 0.05 : 0.12))
-                Capsule().fill(Color.black.opacity(0.75)).frame(width: size * 0.07, height: size * (state == .thinking && phase ? 0.05 : 0.12))
-            }
-            .offset(x: state == .thinking ? (phase ? size * 0.05 : -size * 0.05) : 0, y: -size * 0.02)
-            Ellipse()
-                .stroke(bot.accentColor.opacity(0.75), lineWidth: max(1, size * 0.035))
-                .frame(width: size * 0.98, height: size * 0.34)
-                .rotationEffect(.degrees(-18))
-                .overlay(
-                    Circle().fill(bot.accentColor).frame(width: size * 0.09, height: size * 0.09)
-                        .offset(x: size * 0.49)
-                        .rotationEffect(.degrees(spin ? 360 : 0))
-                        .scaleEffect(x: 1, y: 0.34)
-                        .rotationEffect(.degrees(-18))
-                )
         }
         .frame(width: size, height: size)
-        .overlay(alignment: .bottomTrailing) {
-            if size >= 24 {
-                // The bot's role, so bots of similar colour are told apart at a glance.
-                Image(systemName: bot.symbol)
-                    .font(.system(size: size * 0.2, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: size * 0.38, height: size * 0.38)
-                    .background(Circle().fill(bot.bodyColor.opacity(0.95)))
-                    .overlay(Circle().stroke(DS.Colors.background, lineWidth: max(1.5, size * 0.04)))
-                    .offset(x: size * 0.04, y: size * 0.04)
+        .overlay {
+            if state != .idle {
+                shape.inset(by: -3).stroke(Color(hex: swatch.from).opacity(breathing ? 0.85 : 0.25), lineWidth: 2)
             }
         }
-        .rotationEffect(.degrees(state == .thinking ? (phase ? 9 : -9) : 0))
-        .offset(y: state == .thinking ? (phase ? -size * 0.08 : size * 0.02) : 0)
-        .scaleEffect(x: 1, y: state == .typing && phase ? 1.05 : 1, anchor: .bottom)
+        .opacity(bot.isOn ? 1 : 0.45)
         .onAppear { restart() }
         .onChange(of: state) { _, _ in restart() }
     }
 
     private func restart() {
-        phase = false
-        spin = false
-        let duration: Double = state == .thinking ? 0.9 : state == .typing ? 0.22 : 3.2
-        withAnimation(.easeInOut(duration: duration).repeatForever(autoreverses: true)) { phase = state != .idle }
-        withAnimation(.linear(duration: state == .idle ? 6 : 1.1).repeatForever(autoreverses: false)) { spin = true }
+        breathing = false
+        guard state != .idle else { return }
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathing = true }
     }
 }
 
@@ -1083,35 +1177,55 @@ struct T3HandoffButton: View {
 /// A coding run in T3 Code while it works: what it's on, for how long, and a way to watch it there.
 struct T3RunCard: View {
     let run: T3Run
+    @State private var showsTerminal = true
+
+    private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Spacer().frame(width: 34)
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
                     if run.phase == "waiting" {
-                        Image(systemName: "questionmark.bubble").foregroundColor(.orange)
+                        Image(systemName: "questionmark.bubble").foregroundColor(DS.Colors.warning)
                     } else {
                         ProgressView().controlSize(.small)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         let minutes = max(0, Int(context.date.timeIntervalSince(run.startedAt) / 60))
-                        Text(run.phase == "waiting" ? "\(run.title): waiting for your answer (@T3)"
-                                                    : "\(BotsT3.modelName) is coding \(run.title) · \(minutes) min")
-                            .font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        Text(run.phase == "waiting" ? "\(run.title) is waiting for your answer"
+                                                    : "Building \(run.title) in \(engine) · \(minutes) min")
+                            .font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                         if let activity = run.activity, !activity.isEmpty {
-                            Text(activity).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
-                        }
-                        if run.link != nil {
-                            Button("Watch in T3 Code") { BotsT3.openInApp(run) }
-                                .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.accent)
+                            Text(activity).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
                         }
                     }
                     Spacer(minLength: 0)
+                    if let session = TerminalSessions.shared.session(for: run.id) {
+                        Button { showsTerminal.toggle() } label: {
+                            Image(systemName: showsTerminal ? "chevron.up" : "terminal").font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help(showsTerminal ? "Hide the terminal" : "Show the terminal")
+                        Button { TerminalWindowController.pop(sessionID: session.id) } label: {
+                            Image(systemName: "arrow.up.forward.square").font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help("Open in its own window")
+                    } else if run.link != nil || run.harness != nil {
+                        Button("Watch") { BotsT3.openInApp(run) }
+                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                    }
                 }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+                if showsTerminal, let session = TerminalSessions.shared.session(for: run.id) {
+                    // The harness's own terminal, live: watch it work and type into it.
+                    TerminalPanel(session: session)
+                        .frame(height: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                }
             }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            .padding(.leading, 38)
         }
     }
 }
@@ -1133,9 +1247,26 @@ struct BotModelSettings: View {
     private static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
     private static let grokEfforts = ["low", "medium", "high"]
 
+    @ObservedObject private var harnesses = HarnessCenter.shared
+
     private var models: [String] {
-        let listed = bot.provider == "grok" ? Self.grokModels : catalog.models[isClaude ? .claude : .opencode] ?? []
-        return listed.contains(bot.model) ? listed : [bot.model] + listed
+        var listed: [String]
+        switch bot.provider {
+        case "grok": listed = Self.grokModels
+        case "claude": listed = catalog.models[.claude] ?? HarnessCatalog.claudeModels.map(\.id)
+        case "opencode": listed = catalog.models[.opencode] ?? harnesses.models(for: "opencode").map(\.id)
+        default: listed = harnesses.models(for: bot.provider).map(\.id)
+        }
+        return listed.contains(bot.model) || bot.model.isEmpty ? listed : [bot.model] + listed
+    }
+
+    private var efforts: [String] {
+        switch bot.provider {
+        case "claude": return Self.claudeEfforts
+        case "grok": return Self.grokEfforts
+        case "opencode": return Self.openCodeEfforts
+        default: return harnesses.efforts(for: bot.provider, model: bot.model)
+        }
     }
 
     var body: some View {
@@ -1149,28 +1280,37 @@ struct BotModelSettings: View {
             row("Engine") {
                 Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
                     bot.provider = provider
-                    bot.model = ["claude": "claude-sonnet-5-5", "grok": "grok-4.6"][provider] ?? "opencode/deepseek-v4.1-flash-free"
-                    bot.effort = nil
+                    bot.model = HarnessPrefs.defaultModel(provider)
+                        ?? ["claude": "claude-sonnet-5-5", "grok": "grok-4.6", "opencode": "opencode/deepseek-v4.1-flash-free"][provider]
+                        ?? harnesses.models(for: provider).first?.id ?? ""
+                    bot.effort = HarnessPrefs.defaultEffort(provider)
                     commit()
                 })) {
-                    Text("Claude").tag("claude")
-                    Text("OpenCode").tag("opencode")
-                    Text("Grok").tag("grok")
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: compact ? nil : 260)
-            }
-            row("Model") {
-                Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
-                    ForEach(models, id: \.self) { model in
-                        Text(NativeBot.label(for: model)).tag(model)
+                    ForEach(HarnessCatalog.botEngines, id: \.id) { info in
+                        let status = harnesses.status(for: info.id)
+                        Text(info.label + (status.installed ? (status.loggedIn == false ? " (not signed in)" : "") : " (not installed)"))
+                            .tag(info.id)
                     }
                 }
                 .labelsHidden().frame(width: compact ? nil : 260)
             }
+            row("Model") {
+                if models.isEmpty {
+                    TextField("Model id", text: Binding(get: { bot.model }, set: { bot.model = $0; commit() }))
+                        .textFieldStyle(.roundedBorder).frame(width: compact ? nil : 260)
+                } else {
+                    Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
+                        ForEach(models, id: \.self) { model in
+                            Text(harnesses.models(for: bot.provider).first { $0.id == model }?.label ?? NativeBot.label(for: model)).tag(model)
+                        }
+                    }
+                    .labelsHidden().frame(width: compact ? nil : 260)
+                }
+            }
             row("Effort") {
                 Picker("Effort", selection: Binding(get: { bot.effort ?? "" }, set: { bot.effort = $0.isEmpty ? nil : $0; commit() })) {
                     Text("Default").tag("")
-                    ForEach(isClaude ? Self.claudeEfforts : bot.provider == "grok" ? Self.grokEfforts : Self.openCodeEfforts, id: \.self) { Text($0.capitalized).tag($0) }
+                    ForEach(efforts, id: \.self) { Text($0.capitalized).tag($0) }
                 }
                 .labelsHidden().frame(width: compact ? nil : 160)
             }
@@ -1182,13 +1322,16 @@ struct BotModelSettings: View {
                 Toggle("Fast mode", isOn: Binding(get: { bot.fast ?? false }, set: { bot.fast = $0; commit() }))
                     .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
             }
-            Text(isClaude ? "Applies from the next reply." : "Thinking and fast mode are for Claude models. \(bot.provider == "grok" ? "Grok takes the effort as its reasoning effort." : "OpenCode takes the effort as the model's variant.")")
+            Text(isClaude ? "Applies from the next reply." : "Thinking and fast mode are for Claude models.")
                 .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(compact ? 0 : 18)
         .frame(width: compact ? nil : 400)
-        .onAppear { catalog.load() }
+        .onAppear {
+            catalog.load()
+            harnesses.refresh()
+        }
     }
 
     private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -1223,4 +1366,32 @@ private struct SidebarDropTarget: ViewModifier {
                 return true
             } isTargeted: { isTargeted = $0 }
     }
+}
+
+/// Sidebar rows: hover and selected fills from the palette, no borders.
+struct SidebarButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? DS.Colors.selected : (hovering || configuration.isPressed) ? DS.Colors.hover : .clear))
+            .onHover { inside in withAnimation(DS.Motion.hover) { hovering = inside } }
+    }
+}
+
+/// A small dot that breathes while a bot works.
+struct PulseDot: View {
+    let color: Color
+    @State private var on = false
+    var body: some View {
+        Circle().fill(color).frame(width: 6, height: 6).opacity(on ? 1 : 0.35)
+            .onAppear { withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { on = true } }
+    }
+}
+
+extension Notification.Name {
+    /// Opens the bot settings slide-over (the bot's name in the chat header sends it).
+    static let theoShowBotSettings = Notification.Name("TheoShowBotSettings")
 }

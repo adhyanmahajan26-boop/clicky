@@ -113,76 +113,192 @@ struct GroupEditor: View {
 
 // MARK: - New bot
 
+/// A starting point for a new bot: you pick one (or Blank) and change anything before creating it.
+struct BotStencil: Identifiable {
+    let id: String
+    let name: String
+    let summary: String
+    let instructions: String
+    let glyph: String
+    let colour: String
+    let apps: [String]
+
+    static let all: [BotStencil] = [
+        BotStencil(id: "blank", name: "Blank", summary: "Start from nothing and write its job yourself.",
+                   instructions: "", glyph: "", colour: "slate", apps: []),
+        BotStencil(id: "researcher", name: "Researcher", summary: "Digs into a question and answers with sources.",
+                   instructions: "Investigate the question, read primary sources, and answer with a short brief that cites them. Say what's uncertain.",
+                   glyph: "magnifyingglass", colour: "sky", apps: ["chrome", "theo"]),
+        BotStencil(id: "inbox", name: "Inbox assistant", summary: "Sorts your mail and drafts replies for you to send.",
+                   instructions: "Read the inbox, group mail into needs-a-reply, FYI and ignore, and draft replies when asked. Never send, delete or label mail.",
+                   glyph: "envelope.fill", colour: "rose", apps: ["gmail", "calendar"]),
+        BotStencil(id: "builder", name: "Builder", summary: "Plans an app or a fix and hands it to your coding harness.",
+                   instructions: "Turn the idea into a short plan, then write one final prompt for the coding agent: a line \"Project: <name>\" and the prompt in a ```prompt block.",
+                   glyph: "chevron.left.forwardslash.chevron.right", colour: "indigo", apps: []),
+        BotStencil(id: "writer", name: "Writer", summary: "Drafts posts, emails and docs in your voice.",
+                   instructions: "Write clear, plain drafts in the owner's voice. Ask for the audience and length when they matter. Keep it short.",
+                   glyph: "doc.text.fill", colour: "amber", apps: ["docs", "notion"]),
+        BotStencil(id: "reviewer", name: "Design reviewer", summary: "Looks at a screen or a plan and says what to change.",
+                   instructions: "Review the design or plan honestly: what's confusing, what's missing, and the three changes that matter most.",
+                   glyph: "paintbrush.pointed.fill", colour: "violet", apps: ["chrome"]),
+        BotStencil(id: "planner", name: "Planner", summary: "Breaks a goal into steps, owners and dates.",
+                   instructions: "Turn a goal into an ordered plan: scope, milestones, what's left out, risks. Push back on scope creep.",
+                   glyph: "list.bullet.clipboard.fill", colour: "lime", apps: ["notion"]),
+        BotStencil(id: "briefing", name: "Daily briefing", summary: "A morning summary of mail, calendar and news.",
+                   instructions: "Each morning, sum up what needs the owner today: mail that needs a reply, the calendar, and three relevant headlines.",
+                   glyph: "sun.max.fill", colour: "ember", apps: ["gmail", "calendar", "chrome"]),
+        BotStencil(id: "reels", name: "Reel editor", summary: "Turns footage and ideas into short videos.",
+                   instructions: "Make and edit reels with the HyperFrames skills and the Content Studio tools. Ask before long GPU runs.",
+                   glyph: "film.fill", colour: "teal", apps: ["studio", "hyperframes"]),
+        BotStencil(id: "tutor", name: "Tutor", summary: "Explains a topic step by step and checks you got it.",
+                   instructions: "Teach step by step with small examples, then ask one short question to check understanding.",
+                   glyph: "graduationcap.fill", colour: "sky", apps: ["theo"]),
+    ]
+}
+
 struct NewBotSheet: View {
     @ObservedObject var store: BotsStore
     let onDone: (NativeBot?) -> Void
+    @State private var stencil: BotStencil?
     @State private var name = ""
     @State private var role = ""
     @State private var instructions = ""
-    @State private var provider = "opencode"
+    @State private var provider = HarnessPrefs.defaultHarness
     @State private var groupID = ""
     @State private var look = NativeBot(id: "new", name: "", description: "", instructions: "", hue: 205, accentHue: 235,
-                                        primary: false, provider: "opencode", model: "", effort: nil, apps: [], category: nil, shape: "orb")
+                                        primary: false, provider: "claude", model: "", effort: nil, apps: [], category: nil, shape: "slate")
 
-    private static let models = ["claude": "claude-sonnet-5-5", "opencode": "opencode/deepseek-v4.1-flash-free", "grok": "grok-4.6"]
+    /// The engines a bot can run on, and the model each starts with (changed later in its settings).
+    static let engines: [(id: String, label: String, model: String)] = [
+        ("claude", "Claude Code", "claude-sonnet-5-5"), ("codex", "Codex", "gpt-5.6-luna"), ("cursor", "Cursor", "auto"),
+        ("opencode", "OpenCode", "opencode/deepseek-v4.1-flash-free"), ("grok", "Grok", "grok-4.6"), ("gemini", "Gemini", "gemini-3-pro"),
+    ]
+    /// The engines installed on this Mac (all of them until the check has run).
+    private var installedEngines: [(id: String, label: String, model: String)] {
+        let center = HarnessCenter.shared
+        let ready = Self.engines.filter { center.status(for: $0.id).installed }
+        return ready.isEmpty ? Array(Self.engines.prefix(5)) : ready
+    }
 
     var body: some View {
+        Group {
+            if stencil == nil { gallery } else { form }
+        }
+        .frame(width: 560)
+        .background(DS.Colors.surface)
+    }
+
+    private var gallery: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("New bot").font(.system(size: 20, weight: .semibold))
+                Text("Pick a starting point. Everything can be changed before and after you create it.")
+                    .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(BotStencil.all) { item in
+                    Button { choose(item) } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            BotAvatar(bot: preview(of: item), size: 32, state: .idle)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                                Text(item.summary).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
+                                    .lineLimit(2).multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12).frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack { Spacer(); Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction) }
+        }
+        .padding(24)
+    }
+
+    private var form: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("New bot").font(.system(size: 17, weight: .semibold))
-            field("Name") { TextField("Travel Planner, SEO Writer…", text: $name).textFieldStyle(.roundedBorder) }
-            field("Look") { BotLookPicker(bot: $look) }
-            field("What it does") { TextField("One line, shown under its name", text: $role).textFieldStyle(.roundedBorder) }
+            HStack(spacing: 12) {
+                LookButton(bot: $look)
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Name", text: $name).textFieldStyle(.plain).font(.system(size: 18, weight: .semibold))
+                    TextField("What it does", text: $role).textFieldStyle(.plain).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                }
+            }
             field("Instructions") {
                 TextEditor(text: $instructions)
-                    .font(.system(size: 12.5))
-                    .frame(height: 110)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    .font(.system(size: 13)).scrollContentBackground(.hidden).padding(8).frame(height: 120)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.surface1))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
-            field("Engine") {
-                Picker("Engine", selection: $provider) {
-                    Text("Claude").tag("claude")
-                    Text("OpenCode (free)").tag("opencode")
-                    Text("Grok").tag("grok")
+            field("Runs on") {
+                Picker("Runs on", selection: $provider) {
+                    ForEach(installedEngines, id: \.id) { engine in Text(engine.label).tag(engine.id) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }
-            field("Group chat") {
-                Picker("Group chat", selection: $groupID) {
-                    Text("None").tag("")
-                    ForEach(store.groups) { group in Text(group.name).tag(group.id) }
+            if !store.groups.isEmpty {
+                field("Group") {
+                    Picker("Group", selection: $groupID) {
+                        Text("None").tag("")
+                        ForEach(store.groups) { group in Text(group.name).tag(group.id) }
+                    }
+                    .labelsHidden()
                 }
-                .labelsHidden()
             }
-            Text("You can change its model, effort and apps afterwards from Model settings in its chat.")
-                .font(.system(size: 11)).foregroundColor(.secondary)
             HStack {
+                Button("Back") { stencil = nil }
                 Spacer()
                 Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction)
-                Button("Create bot") {
-                    let trimmedName = name.trimmingCharacters(in: .whitespaces)
-                    var bot = store.addBot(
-                        name: trimmedName,
-                        description: role.isEmpty ? "Your \(trimmedName) bot." : role,
-                        instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
-                        provider: provider, model: Self.models[provider] ?? "claude-sonnet-5-5",
-                        groupID: groupID.isEmpty ? nil : groupID)
-                    bot.shape = look.shape
-                    bot.hue = look.hue
-                    bot.accentHue = look.accentHue
-                    store.save(bot)
-                    onDone(bot)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Create bot", action: create)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            .padding(.top, 4)
         }
-        .padding(22)
-        .frame(width: 460)
+        .padding(24)
+    }
+
+    private func choose(_ item: BotStencil) {
+        stencil = item
+        name = item.id == "blank" ? "" : item.name
+        role = item.id == "blank" ? "" : item.summary
+        instructions = item.instructions
+        look.shape = item.colour
+        look.glyph = item.glyph.isEmpty ? nil : item.glyph
+        look.name = name
+    }
+
+    private func preview(of item: BotStencil) -> NativeBot {
+        var bot = look
+        bot.name = item.name
+        bot.shape = item.colour
+        bot.glyph = item.glyph.isEmpty ? nil : item.glyph
+        return bot
+    }
+
+    private func create() {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let engine = Self.engines.first { $0.id == provider } ?? Self.engines[0]
+        let model = HarnessPrefs.defaultModel(engine.id) ?? engine.model
+        var bot = store.addBot(name: trimmedName, description: role.isEmpty ? "Your \(trimmedName) bot." : role,
+                               instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
+                               provider: engine.id, model: model, groupID: groupID.isEmpty ? nil : groupID)
+        bot.shape = look.shape
+        bot.glyph = look.glyph
+        bot.apps = stencil?.apps ?? []
+        bot.effort = HarnessPrefs.defaultEffort(engine.id)
+        store.save(bot)
+        onDone(bot)
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundColor(.secondary)
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
             content()
         }
     }
@@ -190,21 +306,20 @@ struct NewBotSheet: View {
 
 // MARK: - Clicky
 
-/// Clicky's face in the bots list: Theo's gradient spark with a cursor.
+/// Clicky's tile: flat ember with the spark-and-cursor mark (docs/DESIGN.md).
 struct ClickyAvatar: View {
     let size: CGFloat
+    var isActive = false
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45),
-                                              Color(red: 0.75, green: 0.27, blue: 0.9)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: size * 0.78, height: size * 0.78)
-                .shadow(color: Color(red: 0.93, green: 0.27, blue: 0.45).opacity(0.45), radius: size * 0.12)
-            Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.36, weight: .semibold)).foregroundColor(.white)
-        }
-        .frame(width: size, height: size)
+        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+            .fill(DS.Colors.accent)
+            .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+            .overlay(Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.46, weight: .semibold)).foregroundColor(.white))
+            .overlay {
+                if isActive { RoundedRectangle(cornerRadius: size * 0.34, style: .continuous).inset(by: -3).stroke(DS.Colors.accent, lineWidth: 1.5) }
+            }
+            .frame(width: size, height: size)
     }
 }
 

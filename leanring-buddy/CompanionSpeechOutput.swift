@@ -29,6 +29,7 @@ final class CompanionSpeechOutput: ObservableObject {
     let audioEngineHub = AudioEngineHub()
     private(set) lazy var qwenServerSupervisor = QwenServerSupervisor(client: qwenLocalVoiceClient)
     private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient, supervisor: qwenServerSupervisor, audioEngineHub: audioEngineHub)
+    private(set) lazy var sarvamEngine = SarvamSpeechEngine()
     private(set) lazy var appleEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
     /// A second Mac-voice engine: the fallback behind Apple-as-primary.
     private(set) lazy var appleFallbackEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
@@ -89,6 +90,11 @@ final class CompanionSpeechOutput: ObservableObject {
         let usesQwen = isQwenPrimary
         var primary: SpeechEngine = usesQwen ? qwenEngine : appleEngine
         var fallback: SpeechEngine = usesQwen ? appleEngine : appleFallbackEngine
+        // v2.voice.engine == "sarvam" with a saved key: Sarvam speaks, the current voice is the fallback.
+        if SarvamVoiceConfig.isActive {
+            fallback = usesQwen ? qwenEngine : appleEngine
+            primary = sarvamEngine
+        }
         // Silent mode: nothing is spoken, but captions, marks and board steps
         // keep the rhythm of a spoken answer (paced at reading speed).
         if ClickySettings.isSilentModeEnabled || Self.isMutedForTests {
@@ -147,16 +153,17 @@ final class CompanionSpeechOutput: ObservableObject {
 
     /// The engine a new answer would use right now, for the debug ping.
     var currentEngineName: String {
-        isQwenPrimary ? "qwen" : "system"
+        SarvamVoiceConfig.isActive ? "sarvam" : (isQwenPrimary ? "qwen" : "system")
     }
 
     var isPlaying: Bool {
-        qwenEngine.isPlaying || appleEngine.isPlaying || appleFallbackEngine.isPlaying
+        sarvamEngine.isPlaying || qwenEngine.isPlaying || appleEngine.isPlaying || appleFallbackEngine.isPlaying
     }
 
     /// Silences every voice at once (push-to-talk key-down, before the barge-in).
     func stopVoicesNow() {
         if isPlaying { lastSpeechEndDate = Date() }
+        sarvamEngine.stopNow()
         qwenEngine.stopNow()
         appleEngine.stopNow()
         appleFallbackEngine.stopNow()
@@ -165,6 +172,7 @@ final class CompanionSpeechOutput: ObservableObject {
     func stopPlayback() {
         if isPlaying { lastSpeechEndDate = Date() }
         activeCoordinator?.bargeIn(.newQuestion)
+        sarvamEngine.stopNow()
         qwenEngine.stopNow()
         appleEngine.stopNow()
         appleFallbackEngine.stopNow()

@@ -17,12 +17,15 @@ enum BotRunnerError: LocalizedError {
     case notInstalled(String)
     case failed(String)
     case freeLimit
+    /// A subscription engine's usage limit (Codex / Cursor); the message says when it resets.
+    case usageLimit(String)
 
     var errorDescription: String? {
         switch self {
         case .notInstalled(let engine): return "\(engine) isn't installed on this Mac."
         case .failed(let message): return message
         case .freeLimit: return "OpenCode's free models have hit their usage limit."
+        case .usageLimit(let message): return message
         }
     }
 }
@@ -140,6 +143,7 @@ enum BotRunner {
 
     private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
@@ -181,6 +185,7 @@ enum BotRunner {
         process.arguments = arguments
         process.currentDirectoryURL = workspace
         var environment = ProcessInfo.processInfo.environment
+        scrubClaudeEnvironment(&environment)
         environment["NO_COLOR"] = "1"
         environment["PWD"] = workspace.path
         process.environment = environment
@@ -276,6 +281,7 @@ extension BotRunner {
             process.arguments = arguments
             process.currentDirectoryURL = workspace
             var environment = ProcessInfo.processInfo.environment
+            scrubClaudeEnvironment(&environment)
             environment["NO_COLOR"] = "1"
             environment["PWD"] = workspace.path
             process.environment = environment

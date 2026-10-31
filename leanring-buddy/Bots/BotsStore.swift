@@ -36,6 +36,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var category: String?
     /// The avatar's shape: "orb" (default), "square", "sparkle", "clover", "flower", "heart" or "star".
     var shape: String?
+    /// The SF Symbol on its tile (nil: its initials).
+    var glyph: String?
     /// Off: the bot doesn't answer, run routines or join group chats (nil = on).
     var enabled: Bool?
     /// "member" (default), "lead" (directs its group chats) or "ceo" (may direct any bot).

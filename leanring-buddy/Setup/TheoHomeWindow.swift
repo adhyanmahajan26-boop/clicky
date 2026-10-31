@@ -100,67 +100,34 @@ struct TheoHomeView: View {
     init(companionManager: CompanionManager, initialTab: Tab) {
         self.companionManager = companionManager
         _tab = State(initialValue: initialTab)
+        Self.route(initialTab)
+    }
+
+    /// One window, one sidebar (docs/DESIGN.md): the old tabs map onto its rows; Settings and T3 Code
+    /// open the Settings window.
+    static func route(_ tab: Tab) {
+        let selection = BotsSelection.shared
+        switch tab {
+        case .home: selection.pane = .home
+        case .notes: selection.pane = .notes
+        case .ask: selection.pane = .clicky
+        case .bots: if case .home = selection.pane { selection.pane = .bot(BotsStore.shared.primary?.id ?? "theo") }
+        case .connectors: selection.pane = .connectors
+        case .t3: Task { @MainActor in TheoSettingsWindowController.show(section: .coding) }
+        case .settings: Task { @MainActor in TheoSettingsWindowController.show() }
+        }
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous).fill(homeGradient)
-                        Image(systemName: "sparkles").font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
-                    }
-                    .frame(width: 32, height: 32)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(ClickySettings.assistantName).font(.system(size: 15, weight: .bold))
-                        Text("Screen companion and bots").font(.system(size: 10.5)).foregroundColor(.secondary)
-                    }
-                }
-                .padding(.bottom, 18)
-                ForEach(Tab.shown) { item in
-                    Button(action: { tab = item }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: item.symbol).frame(width: 18)
-                            Text(item.title).font(.system(size: 13, weight: tab == item ? .semibold : .regular))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(tab == item ? Color.secondary.opacity(0.16) : Color.clear))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
+        BotsRootView(store: BotsStore.shared, selection: botsSelection, showsConnectors: true)
+            .frame(minWidth: 860, minHeight: 560)
+            .onReceive(NotificationCenter.default.publisher(for: .theoHomeSelectTab)) { note in
+                if let raw = note.object as? String, let next = Tab(rawValue: raw) { Self.route(next) }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 46)
-            .frame(width: 220)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background(Color.secondary.opacity(0.06))
-            Divider()
-            Group {
-                switch tab {
-                case .home: HomeTab(companionManager: companionManager, go: { tab = $0 })
-                case .notes: NotesTab()
-                case .ask: AskTab()
-                case .bots: BotsRootView(store: BotsStore.shared, selection: botsSelection, showsConnectors: false)
-                case .connectors: ConnectorsScreen(bots: BotsStore.shared.bots).preferredColorScheme(.dark)
-                case .t3: T3Tab()
-                case .settings: SettingsTab(companionManager: companionManager)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        // One look across every tab: the dark design the bots, notes and boards use.
-        .preferredColorScheme(.dark)
-        .background(DS.Colors.background)
-        .onReceive(NotificationCenter.default.publisher(for: .theoHomeSelectTab)) { note in
-            if let raw = note.object as? String, let next = Tab(rawValue: raw) { tab = next }
-        }
     }
 }
 
-private struct PageHeader: View {
+struct PageHeader: View {
     let title: String
     let subtitle: String
     var body: some View {
@@ -322,7 +289,7 @@ private struct HoverLiftStyle: ButtonStyle {
     }
 }
 
-private struct NotesTab: View {
+struct NotesTab: View {
     @State private var items: [ClaudiaLibrary.Item] = []
     @State private var selected: Set<String> = ClaudiaLibrary.selectedIDs
     @State private var filter = "all"
@@ -515,14 +482,16 @@ private struct T3Tab: View {
     }
 }
 
-private struct SettingsTab: View {
+struct SettingsTab: View {
     enum Section: String, CaseIterable, Identifiable {
-        case look, brain, voice, screen, permissions, updates, about
+        case look, brain, coding, keys, voice, screen, permissions, updates, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .look: return "Look"
             case .brain: return "Brain"
+            case .coding: return "Coding"
+            case .keys: return "API keys"
             case .voice: return "Voice"
             case .screen: return "Screen"
             case .permissions: return "Permissions"
@@ -534,6 +503,8 @@ private struct SettingsTab: View {
             switch self {
             case .look: return "Cursor, theme and pill. Click one and it changes right away."
             case .brain: return "Which agent Theo thinks with, and the models it uses."
+            case .coding: return "Your harnesses, the default subscription and model, and where builds go."
+            case .keys: return "Keys for Sarvam and other model providers, kept in your Keychain."
             case .voice: return "How Theo speaks to you."
             case .screen: return "Which display Theo uses, and the T3 Code extension."
             case .permissions: return "What Theo needs to hear, see and point."
@@ -545,6 +516,8 @@ private struct SettingsTab: View {
             switch self {
             case .look: return "sparkles"
             case .brain: return "brain"
+            case .coding: return "terminal"
+            case .keys: return "key"
             case .voice: return "waveform"
             case .screen: return "display"
             case .permissions: return "checkmark.shield"
@@ -557,11 +530,12 @@ private struct SettingsTab: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var model: SetupModel
     @ObservedObject private var look = LookSettings.shared
-    @State private var section: Section = .look
+    @State private var section: Section
     @State private var showsInDock = ClickySettings.showsInDock
 
-    init(companionManager: CompanionManager) {
+    init(companionManager: CompanionManager, section: Section = .look) {
         self.companionManager = companionManager
+        _section = State(initialValue: section)
         _model = ObservedObject(wrappedValue: SetupWindowController.sharedModel(companionManager: companionManager))
     }
 
@@ -606,6 +580,8 @@ private struct SettingsTab: View {
         switch section {
         case .look: lookContent
         case .brain: SetupView(model: model, forcedPage: .brain)
+        case .coding: CodingSettingsView()
+        case .keys: VStack(alignment: .leading, spacing: 18) { ProviderKeysView(); SarvamVoiceSettings() }
         case .voice: SetupView(model: model, forcedPage: .voice)
         case .screen: screenContent
         case .permissions: SetupView(model: model, forcedPage: .permissions)
