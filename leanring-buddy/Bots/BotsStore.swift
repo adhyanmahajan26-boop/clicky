@@ -28,6 +28,10 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var effort: String?
     /// App integrations the bot may use; see BotConnectors.known.
     var apps: [String]
+    /// "personal" (your own helpers) or "project" (Theo's project team). Older saves have none.
+    var category: String?
+
+    var isProjectHandler: Bool { (category ?? BotImport.defaultCategory(id)) == "project" }
 
     var memoryPath: String { "~/.t3/bots/\(id)/memory.md" }
 
@@ -114,26 +118,26 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[Self.teamID] = record
         writeConversation(Self.teamID)
-        let tagged = BotPrompts.mentioned(in: text, bots: bots)
+        let tagged = BotPrompts.mentioned(in: text, bots: projectBots)
         askTeam(tagged.isEmpty ? [primary].compactMap { $0 } : tagged, chain: 0)
     }
 
     /// How many bot-to-bot hand-offs one message of yours can set off.
-    private static let maxChain = 6
+    private static let maxChain = 8
 
     private func askTeam(_ targets: [NativeBot], chain: Int) {
         for bot in targets where replying[bot.id] == nil {
             let record = conversation(Self.teamID)
             let seen = record.seen[bot.id] ?? 0
             let newMessages = Array(record.messages.dropFirst(seen))
-            let prompt = BotPrompts.teamMessage(bot: bot, team: bots, firstTime: record.sessions[bot.id] == nil,
+            let prompt = BotPrompts.teamMessage(bot: bot, team: projectBots, firstTime: record.sessions[bot.id] == nil,
                                                 newMessages: newMessages)
             var updated = record
             updated.seen[bot.id] = record.messages.count
             conversations[Self.teamID] = updated
             reply(bot: bot, in: Self.teamID, prompt: prompt, session: record.sessions[bot.id]) { [weak self] answer in
                 guard let self, chain < Self.maxChain, let answer else { return }
-                let next = BotPrompts.mentioned(in: answer, bots: self.bots).filter { $0.id != bot.id }
+                let next = BotPrompts.mentioned(in: answer, bots: self.projectBots).filter { $0.id != bot.id }
                 if !next.isEmpty { self.askTeam(next, chain: chain + 1) }
             }
         }
@@ -197,14 +201,19 @@ final class BotsStore: ObservableObject {
     }()
 
     private func loadBots() -> [NativeBot] {
-        if let data = try? Data(contentsOf: botsFile), let saved = try? Self.decoder.decode([NativeBot].self, from: data), !saved.isEmpty {
-            return saved
-        }
-        let imported = BotImport.fromT3() ?? BotImport.starters
-        bots = imported
+        let saved = (try? Data(contentsOf: botsFile)).flatMap { try? Self.decoder.decode([NativeBot].self, from: $0) }
+        let base = (saved?.isEmpty == false ? saved : nil) ?? BotImport.fromT3() ?? []
+        let offeredFile = folder.appendingPathComponent("offered.json")
+        var offered = Set((try? Data(contentsOf: offeredFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
+        let upgraded = BotImport.upgrade(base, offered: &offered)
+        try? JSONEncoder().encode(Array(offered).sorted()).write(to: offeredFile, options: .atomic)
+        bots = upgraded
         writeBots()
-        return imported
+        return upgraded
     }
+
+    var personalBots: [NativeBot] { bots.filter { !$0.isProjectHandler } }
+    var projectBots: [NativeBot] { bots.filter(\.isProjectHandler) }
 
     private func writeBots() {
         guard let data = try? Self.encoder.encode(bots) else { return }
@@ -262,21 +271,67 @@ enum BotImport {
             apps: raw["apps"] as? [String] ?? starter?.apps ?? [])
     }
 
-    /// Theo and its helpers, all on free OpenCode models.
+    static func defaultCategory(_ id: String) -> String {
+        ["gmail-reader", "researcher"].contains(id) ? "personal" : "project"
+    }
+
+    static let ceoInstructions =
+        "You are Theo, the CEO of Addy's project team: Project Manager, Design Critic, Code Improver and Reel " +
+        "Editor work under you. In the Project room, take Addy's idea, ask @Project Manager for the plan, " +
+        "@Design Critic for the experience and @Code Improver for the technical approach, then merge what they " +
+        "say into one final prompt for T3 Code's coding agent, inside a ```prompt fenced block, ready to send. " +
+        "Keep everything else short."
+
+    /// The bots everyone starts with: Theo on Claude Sonnet, the rest on free OpenCode models.
     static let starters: [NativeBot] = [
-        NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Plans, researches and codes, and hands work to the other bots.",
-                  instructions: "You are Theo, the primary bot. Plan the work, research what you need, and write the code.",
-                  hue: 268, accentHue: 300, primary: true, provider: "opencode", model: "opencode/beam-free", effort: nil, apps: ["theo"]),
-        NativeBot(id: "gmail-reader", name: "Gmail Reader", description: "Reads your inbox, sorts what matters and drafts replies.",
-                  instructions: "You are Gmail Reader. Read the inbox with the Gmail tools, group mail into needs-a-reply, FYI and ignore, and draft replies when asked. Never send, delete or label mail without the user's go-ahead.",
-                  hue: 0, accentHue: 12, primary: false, provider: "opencode", model: "opencode/flint-40b-free", effort: nil, apps: ["gmail", "calendar", "notion"]),
+        NativeBot(id: "theo", name: "Theo", description: "CEO of your project team. Leads, delegates and writes the final prompt.",
+                  instructions: ceoInstructions,
+                  hue: 268, accentHue: 300, primary: true, provider: "claude", model: "claude-sonnet-5-5", effort: nil,
+                  apps: ["theo"], category: "project"),
+        NativeBot(id: "project-manager", name: "Project Manager", description: "Turns an idea into a clear, ordered plan with scope and risks.",
+                  instructions: "You are the Project Manager on Theo's team. Break the idea into a short, ordered plan: scope, milestones, " +
+                    "what to build first, risks and open questions. Push back on scope creep. End by tagging @Theo with the plan in a few lines.",
+                  hue: 150, accentHue: 120, primary: false, provider: "opencode", model: "opencode/glm-5.3-flash-free", effort: nil,
+                  apps: ["notion"], category: "project"),
+        NativeBot(id: "design-critic", name: "Design Critic", description: "Critiques the experience and UI before anything gets built.",
+                  instructions: "You are the Design Critic on Theo's team. Critique the user experience and interface honestly: what's " +
+                    "confusing, what's missing, what would make it feel great. Give the three changes that matter most. End by tagging @Theo.",
+                  hue: 320, accentHue: 280, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
+                  apps: ["chrome"], category: "project"),
+        NativeBot(id: "code-improver", name: "Code Improver", description: "Makes the technical approach and the code better.",
+                  instructions: "You are the Code Improver on Theo's team. Tighten the technical approach: stack, structure, data model, " +
+                    "edge cases and tests, and how to keep the code simple. Name concrete improvements. End by tagging @Theo.",
+                  hue: 210, accentHue: 190, primary: false, provider: "opencode", model: "opencode/big-pickle", effort: nil,
+                  apps: [], category: "project"),
         NativeBot(id: "reel-editor", name: "Reel Editor", description: "Turns footage and ideas into finished reels.",
                   instructions: "You are Reel Editor. Make and edit reels with the HyperFrames skills and the Content Studio tools. Ask before long GPU runs.",
-                  hue: 330, accentHue: 300, primary: false, provider: "opencode", model: "opencode/glm-5.3-flash-free", effort: nil, apps: ["studio", "hyperframes", "drive"]),
+                  hue: 330, accentHue: 300, primary: false, provider: "opencode", model: "opencode/glm-5.3-flash-free", effort: nil,
+                  apps: ["studio", "hyperframes", "drive"], category: "project"),
+        NativeBot(id: "gmail-reader", name: "Gmail Reader", description: "Reads your inbox, sorts what matters and drafts replies.",
+                  instructions: "You are Gmail Reader. Read the inbox with the Gmail tools, group mail into needs-a-reply, FYI and ignore, and draft replies when asked. Never send, delete or label mail without the user's go-ahead.",
+                  hue: 0, accentHue: 12, primary: false, provider: "opencode", model: "opencode/flint-40b-free", effort: nil,
+                  apps: ["gmail", "calendar", "notion"], category: "personal"),
         NativeBot(id: "researcher", name: "Researcher", description: "Digs into a question and comes back with sources.",
                   instructions: "You are Researcher. Investigate the question, read primary sources, and answer with a short brief that cites them.",
-                  hue: 205, accentHue: 180, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil, apps: ["chrome", "notion", "theo"]),
+                  hue: 205, accentHue: 180, primary: false, provider: "opencode", model: "opencode/deepseek-v4.1-flash-free", effort: nil,
+                  apps: ["chrome", "notion", "theo"], category: "personal"),
     ]
+
+    /// Brings saved bots up to the current team: categories, Theo as CEO, and the
+    /// project roles added once (a role you remove later stays removed).
+    static func upgrade(_ bots: [NativeBot], offered: inout Set<String>) -> [NativeBot] {
+        var result = bots.map { bot -> NativeBot in
+            var bot = bot
+            if bot.category == nil { bot.category = defaultCategory(bot.id) }
+            if bot.primary && !bot.instructions.contains("CEO") { bot.instructions = ceoInstructions }
+            return bot
+        }
+        for starter in starters where !offered.contains(starter.id) {
+            if !result.contains(where: { $0.id == starter.id }) { result.append(starter) }
+            offered.insert(starter.id)
+        }
+        return result
+    }
 }
 
 /// What each bot is told.
