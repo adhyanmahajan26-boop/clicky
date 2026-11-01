@@ -250,7 +250,7 @@ struct HarnessStatus: Equatable {
     var path: String?
     /// nil: the CLI can't say (OpenCode, or the check failed).
     var loggedIn: Bool?
-    /// "addyyo1227@gmail.com · max plan", "ChatGPT · Pro", …
+    /// "you@example.com · max plan", "ChatGPT · Pro", …
     var account: String?
     var detail: String?
     var version: String?
