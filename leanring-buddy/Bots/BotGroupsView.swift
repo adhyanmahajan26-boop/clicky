@@ -315,7 +315,15 @@ struct ClickyAvatar: View {
         RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             .fill(DS.Colors.accent)
             .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
-            .overlay(Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.46, weight: .semibold)).foregroundColor(.white))
+            .overlay {
+                // The cursor drifts in a small loop and its rays pulse, like Clicky on screen.
+                TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
+                    let t = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                    Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.46, weight: .semibold)).foregroundColor(.white)
+                        .offset(x: cos(t * 1.4) * size * 0.04, y: sin(t * 2.1) * size * 0.04)
+                        .scaleEffect(1 + 0.05 * sin(t * 3))
+                }
+            }
             .overlay {
                 if isActive { RoundedRectangle(cornerRadius: size * 0.34, style: .continuous).inset(by: -3).stroke(DS.Colors.accent, lineWidth: 1.5) }
             }

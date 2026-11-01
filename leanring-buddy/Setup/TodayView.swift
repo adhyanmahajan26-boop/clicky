@@ -23,6 +23,16 @@ struct TodayView: View {
                     Text("Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
+                section("Your team") {
+                    OrgChart(store: store, selection: selection) {
+                        let count = store.layout.sections.count
+                        if let id = store.addSection(named: count == 0 ? "New category" : "New category \(count + 1)") {
+                            selection.pane = .category(id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(18)
+                }
                 section("Clicky") {
                     row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
                         detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
@@ -50,7 +60,8 @@ struct TodayView: View {
                     }
                     ForEach(Array(runs)) { run in
                         row(icon: AnyView(symbolTile(run.phase == "done" ? "checkmark" : run.phase == "failed" ? "exclamationmark" : "hammer")),
-                            title: run.title, detail: run.activity ?? run.phase.capitalized,
+                            title: run.title,
+                            detail: (run.activity ?? run.phase.capitalized).replacingOccurrences(of: "─", with: "").trimmingCharacters(in: .whitespaces),
                             trailing: (run.finishedAt ?? run.startedAt).formatted(.relative(presentation: .named))) {
                             if let room = run.room, let bot = store.bot(room) { selection.pane = .bot(bot.id) }
                             else if let room = run.room, let group = store.groups.first(where: { $0.roomID == room }) { selection.pane = .group(group.id) }
@@ -70,7 +81,7 @@ struct TodayView: View {
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 40)
-            .frame(maxWidth: 720)
+            .frame(maxWidth: 860)
             .frame(maxWidth: .infinity)
         }
         .background(DS.Colors.background)

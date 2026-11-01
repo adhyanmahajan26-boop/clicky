@@ -20,6 +20,8 @@ enum BotsPane: Hashable {
     /// The Project room (the project group's chat).
     case team
     case group(String)
+    /// A category's team page: its members, leader and reports to the CEO.
+    case category(String)
     case bot(String)
     /// Clicky's own chat: Theo's on-screen companion.
     case clicky
@@ -119,7 +121,7 @@ struct BotsRootView: View {
                         .keyboardShortcut("n", modifiers: .command)
                     Menu {
                         Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
-                        Button { namingSectionFor = ""; sectionName = "" } label: { Label("New category", systemImage: "folder.badge.plus") }
+                        Button(action: newCategory) { Label("New category", systemImage: "folder.badge.plus") }
                     } label: {
                         Image(systemName: "ellipsis").font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
                             .frame(width: 28, height: 30).contentShape(Rectangle())
@@ -150,30 +152,25 @@ struct BotsRootView: View {
                         }
                     } else {
                         let pinned = store.layout.pinned.filter(itemExists)
-                        Color.clear.frame(height: 6).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
+                        sectionTitle("Pinned").dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                         ForEach(pinned, id: \.self) { item in itemRow(item) }
                         let loose = looseItems
-                        if !store.rootSections.isEmpty || !loose.bots.isEmpty || store.bots.count > 1 {
-                            sectionTitle("Bots").dropTarget { items in items.forEach { unfile($0) } }
-                            ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
-                            ForEach(loose.bots, id: \.self) { item in itemRow(item) }
+                        sectionTitle("Categories", add: ("New category", newCategory))
+                        ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
+                        if store.rootSections.isEmpty {
+                            emptyHint("Make a category, add bots, pick a leader", action: newCategory)
                         }
-                        if !loose.groups.isEmpty {
-                            sectionTitle("Groups").dropTarget { items in items.forEach { unfile($0) } }
-                            ForEach(loose.groups, id: \.self) { item in itemRow(item) }
+                        sectionTitle("Bots", add: ("New bot", { addingBot = true }))
+                            .dropTarget { items in items.forEach { unfile($0) } }
+                        ForEach(loose.bots, id: \.self) { item in itemRow(item) }
+                        if loose.bots.isEmpty {
+                            emptyHint("Make a bot from a stencil") { addingBot = true }
                         }
-                        if store.bots.count <= 1 && store.groups.isEmpty {
-                            // A fresh setup: one quiet line pointing at the first bot.
-                            Button { addingBot = true } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 20)
-                                    Text("Add your first bot").font(.system(size: 13))
-                                }
-                                .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 32)
-                                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }
-                            .buttonStyle(SidebarButtonStyle(isSelected: false))
-                            .padding(.top, 10)
+                        sectionTitle("Group chats", add: ("New group chat", { editingGroup = Self.blankGroup }))
+                            .dropTarget { items in items.forEach { unfile($0) } }
+                        ForEach(loose.groups, id: \.self) { item in itemRow(item) }
+                        if loose.groups.isEmpty {
+                            emptyHint("Start a group chat with a head bot") { editingGroup = Self.blankGroup }
                         }
                         let hidden = store.layout.hidden.filter(itemExists)
                         if !hidden.isEmpty {
@@ -311,9 +308,10 @@ struct BotsRootView: View {
             if item == "clicky" {
                 sidebarRow(.clicky, title: "Clicky") { ClickyAvatar(size: 20) }
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
-                sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, unread: store.unread[bot.id] ?? 0,
+                sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, leads: store.layout.sections.contains { $0.leaderID == bot.id },
+                           unread: store.unread[bot.id] ?? 0,
                            busy: store.replying[bot.id] != nil, dimmed: !bot.isOn) {
-                    BotAvatar(bot: bot, size: 20, state: .idle)
+                    BotAvatar(bot: bot, size: 22, state: store.replying[bot.id] != nil ? .thinking : .idle)
                 }
             } else if let group = store.group(String(item.dropFirst(6))) {
                 let members = store.members(of: group)
@@ -388,7 +386,7 @@ struct BotsRootView: View {
         return AnyView(VStack(alignment: .leading, spacing: 2) {
             sectionHeader(section, collapsed: collapsed)
             if !collapsed {
-                ForEach(items, id: \.self) { item in itemRow(item) }
+                ForEach(items, id: \.self) { item in itemRow(item).padding(.leading, 14) }
                 ForEach(children) { child in sectionTree(child, depth: depth + 1) }
                 if items.isEmpty && children.isEmpty {
                     Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
@@ -404,27 +402,58 @@ struct BotsRootView: View {
     }
 
     private func sectionHeader(_ section: BotsLayout.Section, collapsed: Bool) -> some View {
-        HStack(spacing: 5) {
+        let leader = section.leaderID.flatMap { store.bot($0) }
+        let members = store.members(of: section)
+        let busy = members.contains { store.replying[$0.id] != nil }
+        return HStack(spacing: 4) {
             Button { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } } label: {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 8.5, weight: .bold))
-                    .frame(width: 10)
+                Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold))
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .frame(width: 12, height: 32).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundColor(DS.Colors.textTertiary)
-            Text(section.name).font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-            Spacer()
-            Menu {
+            Button { selection.pane = .category(section.id) } label: {
+                HStack(spacing: 8) {
+                    CategoryTile(section: section, size: 20)
+                    Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                    if leader != nil {
+                        Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(Color(hex: 0xF5B13D)).help("Led by \(leader!.name)")
+                    }
+                    Spacer(minLength: 0)
+                    if busy { PulseDot(color: DS.Colors.accent) } else {
+                        Text("\(members.count)").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
+                    }
+                }
+                .padding(.horizontal, 6).frame(height: 32).contentShape(Rectangle())
+            }
+            .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == .category(section.id)))
+            .contextMenu {
+                Button("Open team page") { selection.pane = .category(section.id) }
+                Menu("Leader") {
+                    Button("No leader (everyone reports)") { store.setLeader(nil, of: section.id) }
+                    ForEach(members) { bot in Button(bot.name) { store.setLeader(bot.id, of: section.id) } }
+                }
+                Button("Report to the CEO now") { store.reportToCEO(section.id) }.disabled(members.isEmpty)
+                Divider()
                 Button("New sub-category…") { namingSectionFor = "sub:\(section.id)"; sectionName = "" }
                 Button("Rename…") { namingSectionFor = "rename:\(section.id)"; sectionName = section.name }
                 Divider()
-                Button("Delete category (keeps its bots)", role: .destructive) { store.deleteSection(section.id) }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 10)).foregroundColor(DS.Colors.textTertiary)
+                Button("Delete category (keeps its bots)", role: .destructive) {
+                    if selection.pane == .category(section.id) { selection.pane = .home }
+                    store.deleteSection(section.id)
+                }
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
-        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
-        .contentShape(Rectangle())
+        .padding(.top, 2)
         .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
+    }
+
+    /// A new category opens straight on its page, where it's named and filled.
+    private func newCategory() {
+        let count = store.layout.sections.count
+        if let id = store.addSection(named: count == 0 ? "New category" : "New category \(count + 1)") {
+            selection.pane = .category(id)
+        }
     }
 
     /// Takes an item out of its category (and pins) back to the plain lists.
@@ -433,22 +462,48 @@ struct BotsRootView: View {
         store.setPinned(false, item)
     }
 
-    private func sectionTitle(_ title: String) -> some View {
-        Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10).padding(.top, 16).padding(.bottom, 4)
-            .contentShape(Rectangle())
+    private func sectionTitle(_ title: String, add: (help: String, action: () -> Void)? = nil,
+                              more: (help: String, action: () -> Void)? = nil) -> some View {
+        HStack(spacing: 2) {
+            Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
+            Spacer()
+            ForEach(Array([more.map { ("folder.badge.plus", $0) }, add.map { ("plus", $0) }].compactMap { $0 }.enumerated()), id: \.offset) { _, button in
+                Button(action: button.1.action) {
+                    MotionSymbol(name: button.0, size: 11, weight: .semibold)
+                        .frame(width: 22, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help(button.1.help)
+            }
+        }
+        .padding(.leading, 10).padding(.trailing, 4).padding(.top, 18).padding(.bottom, 4)
+        .contentShape(Rectangle())
+    }
+
+    /// A quiet "+ …" row under an empty section, so every feature shows from the first launch.
+    private func emptyHint(_ text: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus").font(.system(size: 11, weight: .medium))
+                    .frame(width: 22, height: 22)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                Text(text).font(.system(size: 12.5))
+            }
+            .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 7).frame(height: 32)
+            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarButtonStyle(isSelected: false))
     }
 
     /// One sidebar row (docs/DESIGN.md): 32 pt, a 20 pt tile, the name, and a trailing dot for work or unread.
-    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, star: Bool = false, unread: Int = 0, busy: Bool = false,
+    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, star: Bool = false, leads: Bool = false, unread: Int = 0, busy: Bool = false,
                                         dimmed: Bool = false, @ViewBuilder icon: () -> Icon) -> some View {
         Button { selection.pane = pane } label: {
             HStack(spacing: 8) {
                 icon()
                 Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
                     .foregroundColor(dimmed ? DS.Colors.textTertiary : DS.Colors.textPrimary).lineLimit(1)
-                if star { Image(systemName: "star.fill").font(.system(size: 8)).foregroundColor(DS.Colors.textTertiary) }
+                if star { Text("CEO").font(.system(size: 8.5, weight: .bold)).foregroundColor(DS.Colors.accent) }
+                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(Color(hex: 0xF5B13D)) }
                 Spacer(minLength: 0)
                 if busy {
                     PulseDot(color: DS.Colors.accent)
@@ -462,9 +517,9 @@ struct BotsRootView: View {
         .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
     }
 
-    private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil) -> some View {
+    private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil, active: Bool = false) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary).frame(width: 20)
+            MotionSymbol(name: symbol, size: 14, color: active ? DS.Colors.accent : DS.Colors.textSecondary, trigger: active).frame(width: 20)
             Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
             Spacer(minLength: 0)
             if let trailing { Text(trailing).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary) }
@@ -474,7 +529,7 @@ struct BotsRootView: View {
     }
 
     private func navRow(_ pane: BotsPane, _ symbol: String, _ title: String, trailing: String? = nil) -> some View {
-        Button { selection.pane = pane } label: { navLabel(symbol, title, trailing: trailing) }
+        Button { selection.pane = pane } label: { navLabel(symbol, title, trailing: trailing, active: selection.pane == pane) }
             .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
     }
 
@@ -509,6 +564,8 @@ struct BotsRootView: View {
             } else if let primary = store.primary {
                 BotChatScreen(store: store, conversationID: primary.id, bot: primary).id(primary.id)
             }
+        case .category(let id):
+            CategoryScreen(store: store, selection: selection, sectionID: id).id(id)
         case .group(let id):
             if let group = store.group(id) {
                 BotChatScreen(store: store, conversationID: group.roomID, bot: nil, groupID: id).id(id)
@@ -633,18 +690,25 @@ struct BotChatScreen: View {
     private var header: some View {
         HStack(spacing: 10) {
             if let bot {
-                BotAvatar(bot: bot, size: 24, state: .idle)
+                BotAvatar(bot: bot, size: 34, state: inProgress.isEmpty ? .idle : .thinking)
                 Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
-                    Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                            if bot.primary {
+                                Text("PRIMARY").font(.system(size: 9, weight: .bold)).tracking(0.5).foregroundColor(DS.Colors.accent)
+                                    .padding(.horizontal, 5).frame(height: 16)
+                                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(DS.Colors.accent.opacity(0.14)))
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            Circle().fill(!bot.isOn ? DS.Colors.textDisabled : inProgress.isEmpty ? DS.Colors.success : DS.Colors.warning)
+                                .frame(width: 6, height: 6)
+                            Text(statusLine(for: bot)).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                        }
+                    }
                 }
                 .buttonStyle(.plain).help("Settings for \(bot.name)")
-                Text(bot.modelLabel + (bot.effort.map { " · \($0)" } ?? ""))
-                    .font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-                    .padding(.horizontal, 8).frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
-                if !bot.isOn {
-                    Text("Off").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
-                }
             } else {
                 GroupAvatar(bots: groupBots, size: 24)
                 Button { editsGroup = true } label: {
@@ -669,7 +733,21 @@ struct BotChatScreen: View {
             .disabled(!inProgress.isEmpty)
         }
         // Room on the right for the settings button.
-        .padding(.leading, 20).padding(.trailing, 48).frame(height: 52)
+        .padding(.leading, 20).padding(.trailing, 48).frame(height: 60)
+        .overlay(alignment: .bottom) { Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1) }
+    }
+
+    /// "Working · Claude Sonnet 5.5 · high · 2 routines" under the bot's name.
+    private func statusLine(for bot: NativeBot) -> String {
+        var parts = [!bot.isOn ? "Off" : inProgress.isEmpty ? "Ready" : "Working"]
+        parts.append(bot.modelLabel)
+        if let effort = bot.effort { parts.append(effort) }
+        for team in store.categories(of: bot.id) {
+            parts.append(team.leaderID == bot.id ? "Leads \(team.name)" : "In \(team.name)")
+        }
+        let routines = store.routines.filter { $0.target == bot.id && !$0.paused }.count
+        if routines > 0 { parts.append("\(routines) routine" + (routines == 1 ? "" : "s")) }
+        return parts.joined(separator: " · ")
     }
 
     private var emptyState: some View {
@@ -716,7 +794,7 @@ struct BotChatScreen: View {
                     ForEach(mentionable) { member in
                         Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
                     }
-                    if bot?.primary == true { Button("@T3 (send a change to the coding agent)") { draft += "@T3 " } }
+                    if bot?.primary == true { Button("@code (send a change to the coding agent)") { draft += "@code " } }
                 } label: {
                     Image(systemName: "at").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                         .frame(width: 28, height: 28).contentShape(Rectangle())
@@ -966,21 +1044,32 @@ struct BotAvatar: View {
 
     var body: some View {
         let swatch = BotPalette.swatch(for: bot)
-        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
         ZStack {
             shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            shape.fill(LinearGradient(colors: [Color.white.opacity(0.10), .clear], startPoint: .top, endPoint: .center))
+            shape.fill(LinearGradient(colors: [Color.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center))
             shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-            if let glyph = bot.glyph, !glyph.isEmpty {
-                Image(systemName: glyph).font(.system(size: size * 0.44, weight: .semibold)).foregroundColor(.white.opacity(0.96))
-            } else if bot.primary && bot.id == "theo" {
-                Text("T").font(.system(size: size * 0.5, weight: .bold, design: .rounded)).foregroundColor(.white.opacity(0.96))
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle)
             } else {
-                Text(bot.monogram).font(.system(size: size * (bot.monogram.count > 1 ? 0.38 : 0.46), weight: .bold, design: .rounded))
-                    .foregroundColor(.white.opacity(0.96))
+                // Alive: it blinks, glances around and bobs; while it works its eyes scan and glow.
+                TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
+                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle && bot.isOn,
+                            time: bot.isOn ? timeline.date.timeIntervalSinceReferenceDate : 0)
+                }
             }
         }
         .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            // The glyph picked for the bot rides on a small badge.
+            if size >= 30, let glyph = bot.glyph, !glyph.isEmpty {
+                Image(systemName: glyph).font(.system(size: size * 0.2, weight: .bold)).foregroundColor(Color(hex: swatch.to))
+                    .frame(width: size * 0.36, height: size * 0.36)
+                    .background(Circle().fill(Color.white))
+                    .overlay(Circle().strokeBorder(DS.Colors.background, lineWidth: 1.5))
+                    .offset(x: size * 0.08, y: size * 0.08)
+            }
+        }
         .overlay {
             if state != .idle {
                 shape.inset(by: -3).stroke(Color(hex: swatch.from).opacity(breathing ? 0.85 : 0.25), lineWidth: 2)
@@ -995,6 +1084,131 @@ struct BotAvatar: View {
         breathing = false
         guard state != .idle else { return }
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathing = true }
+    }
+}
+
+/// A little robot face, the same for a bot every time (picked from its id): eyes, mouth and antenna.
+/// Theo wears an ember visor. While the bot works, its eyes glow brighter.
+struct BotFace: View {
+    let seed: String
+    let isTheo: Bool
+    let size: CGFloat
+    var awake = false
+    /// Seconds on a running clock; nil draws it still.
+    var time: Double? = nil
+
+    private var phase: Double {
+        Double(seed.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0xFFFF }) / 6553.5
+    }
+
+    private var traits: (eyes: Int, mouth: Int, antenna: Int) {
+        var hash: UInt64 = 1469598103934665603
+        for byte in seed.utf8 { hash = (hash ^ UInt64(byte)) &* 1099511628211 }
+        return (Int(hash % 5), Int((hash / 5) % 4), Int((hash / 20) % 3))
+    }
+
+    var body: some View {
+        Canvas { context, canvas in
+            let w = canvas.width
+            let eye = Color.white
+            let dark = Color.black.opacity(0.32)
+            let (eyes, mouth, antenna) = isTheo ? (2, 3, 1) : traits
+            let t = (time ?? 0) + phase
+            let moving = time != nil
+            // A gentle bob of the whole face, a blink every few seconds, and a glance left or right.
+            let bob = moving ? sin(t * 1.8) * w * 0.018 : 0
+            let period = 3.4 + phase.truncatingRemainder(dividingBy: 1.6)
+            let blinkPhase = t.truncatingRemainder(dividingBy: period)
+            let blink = moving && blinkPhase < 0.16 ? max(0.12, abs(blinkPhase - 0.08) / 0.08) : 1
+            let glance: Double = {
+                guard moving else { return 0 }
+                if awake { return sin(t * 3.2) * w * 0.035 }
+                let slot = Int(t / 2.6) % 4
+                return [0, w * 0.03, 0, -w * 0.03][slot]
+            }()
+            context.translateBy(x: 0, y: bob)
+            // Antenna.
+            if size >= 18 && antenna > 0 {
+                var stem = Path()
+                stem.move(to: CGPoint(x: w * 0.5, y: w * 0.17)); stem.addLine(to: CGPoint(x: w * 0.5, y: w * 0.07))
+                context.stroke(stem, with: .color(eye.opacity(0.85)), lineWidth: max(1, w * 0.035))
+                let r = w * (antenna == 1 ? 0.055 : 0.04)
+                let pulse = moving ? (awake ? 0.55 + 0.45 * (sin(t * 6) * 0.5 + 0.5) : 0.75 + 0.25 * sin(t * 1.3)) : 1
+                context.fill(Path(ellipseIn: CGRect(x: w * 0.5 - r, y: w * 0.07 - r, width: r * 2, height: r * 2)),
+                             with: .color((isTheo ? Color(hex: 0xFF8A5B) : eye).opacity(pulse)))
+            }
+            // Face plate.
+            let plate = CGRect(x: w * 0.17, y: w * 0.24, width: w * 0.66, height: w * 0.56)
+            context.fill(Path(roundedRect: plate, cornerRadius: w * 0.16, style: .continuous), with: .color(dark))
+            let eyeColor = isTheo ? Color(hex: 0xFF8A5B) : eye
+            let glow = awake ? 1.0 : 0.92
+            let cy = plate.minY + plate.height * 0.42
+            var eyeLayer = context
+            eyeLayer.translateBy(x: glance, y: cy)
+            eyeLayer.scaleBy(x: 1, y: blink)
+            eyeLayer.translateBy(x: 0, y: -cy)
+            if awake {
+                // The eyes glow while it works.
+                eyeLayer.addFilter(.shadow(color: eyeColor.opacity(0.9), radius: w * 0.06))
+            }
+            switch eyes {
+            case 0: // round eyes
+                for x in [0.38, 0.62] {
+                    let r = w * 0.065
+                    eyeLayer.fill(Path(ellipseIn: CGRect(x: w * x - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(eyeColor.opacity(glow)))
+                }
+            case 1: // tall eyes
+                for x in [0.39, 0.61] {
+                    eyeLayer.fill(Path(roundedRect: CGRect(x: w * x - w * 0.045, y: cy - w * 0.09, width: w * 0.09, height: w * 0.18), cornerRadius: w * 0.045),
+                                 with: .color(eyeColor.opacity(glow)))
+                }
+            case 2: // visor
+                let visor = CGRect(x: plate.minX + w * 0.07, y: cy - w * 0.055, width: plate.width - w * 0.14, height: w * 0.11)
+                eyeLayer.fill(Path(roundedRect: visor, cornerRadius: w * 0.055), with: .color(eyeColor.opacity(glow)))
+                for x in [0.4, 0.6] {
+                    let r = w * 0.03
+                    eyeLayer.fill(Path(ellipseIn: CGRect(x: w * x - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(.white))
+                }
+            case 3: // happy arcs
+                for x in [0.39, 0.61] {
+                    var arc = Path()
+                    arc.addArc(center: CGPoint(x: w * x, y: cy + w * 0.03), radius: w * 0.07, startAngle: .degrees(200), endAngle: .degrees(340), clockwise: false)
+                    eyeLayer.stroke(arc, with: .color(eyeColor.opacity(glow)), style: StrokeStyle(lineWidth: max(1.2, w * 0.05), lineCap: .round))
+                }
+            default: // one big eye
+                let r = w * 0.11
+                eyeLayer.fill(Path(ellipseIn: CGRect(x: w * 0.5 - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(eyeColor.opacity(glow)))
+                let p = w * 0.045
+                eyeLayer.fill(Path(ellipseIn: CGRect(x: w * 0.5 - p, y: cy - p, width: p * 2, height: p * 2)), with: .color(.black.opacity(0.55)))
+            }
+            // Mouth.
+            guard size >= 18 else { return }
+            let my = plate.minY + plate.height * 0.76
+            switch mouth {
+            case _ where awake && moving:
+                // Talking while it works.
+                let open = (sin(t * 11) * 0.5 + 0.5) * w * 0.06 + w * 0.015
+                context.fill(Path(roundedRect: CGRect(x: w * 0.44, y: my - open / 2, width: w * 0.12, height: open), cornerRadius: open / 2),
+                             with: .color(eye.opacity(0.85)))
+            case 0:
+                var line = Path(); line.move(to: CGPoint(x: w * 0.43, y: my)); line.addLine(to: CGPoint(x: w * 0.57, y: my))
+                context.stroke(line, with: .color(eye.opacity(0.8)), style: StrokeStyle(lineWidth: max(1, w * 0.035), lineCap: .round))
+            case 1:
+                var smile = Path()
+                smile.addArc(center: CGPoint(x: w * 0.5, y: my - w * 0.05), radius: w * 0.07, startAngle: .degrees(30), endAngle: .degrees(150), clockwise: false)
+                context.stroke(smile, with: .color(eye.opacity(0.85)), style: StrokeStyle(lineWidth: max(1, w * 0.035), lineCap: .round))
+            case 2:
+                for i in 0..<3 {
+                    let r = w * 0.016
+                    context.fill(Path(ellipseIn: CGRect(x: w * (0.44 + Double(i) * 0.06) - r, y: my - r, width: r * 2, height: r * 2)), with: .color(eye.opacity(0.8)))
+                }
+            default:
+                context.fill(Path(roundedRect: CGRect(x: w * 0.42, y: my - w * 0.02, width: w * 0.16, height: w * 0.04), cornerRadius: w * 0.02),
+                             with: .color(eyeColor.opacity(0.75)))
+            }
+        }
+        .frame(width: size, height: size)
+        .allowsHitTesting(false)
     }
 }
 

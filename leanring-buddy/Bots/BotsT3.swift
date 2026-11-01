@@ -324,7 +324,7 @@ enum BotsT3 {
         } else {
             lines.append("**Folder:** \(run.folder.replacingOccurrences(of: home, with: "~"))")
         }
-        lines.append("Write @T3 with a change and Theo passes it to the coding agent.")
+        lines.append("Write @code with a change and Theo passes it to \(run.harness.map(HarnessCatalog.label) ?? "T3 Code").")
         return lines.joined(separator: "\n\n")
     }
 

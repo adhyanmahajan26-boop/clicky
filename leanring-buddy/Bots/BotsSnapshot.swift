@@ -18,6 +18,7 @@ enum BotsSnapshot {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let store = BotsStore.shared
         var panes: [(String, BotsPane)] = [("home", .home), ("notes", .notes), ("connectors", .connectors), ("clicky", .clicky), ("routines", .routines)]
+        for section in store.layout.sections.prefix(3) { panes.append(("category-\(section.id.prefix(6))", .category(section.id))) }
         for group in store.groups where group.id != BotGroup.projectID && group.headID != nil { panes.append(("group-\(group.id)", .group(group.id))) }
         for bot in store.bots.prefix(4) { panes.append(("bot-\(bot.id)", .bot(bot.id))) }
         if let theo = store.primary { panes.append(("theo", .bot(theo.id))) }

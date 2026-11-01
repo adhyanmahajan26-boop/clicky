@@ -274,9 +274,9 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[botID] = record
         writeConversation(botID)
-        if bot.primary && text.lowercased().contains("@t3") {
+        if bot.primary && (text.lowercased().contains("@t3") || text.lowercased().contains("@code")) {
             // Theo's own chat hands a change straight to the coding agent of its latest run.
-            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive)
+            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines), room: botID)
             return
         }
@@ -302,9 +302,9 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[room] = record
         writeConversation(room)
-        if text.lowercased().contains("@t3") {
+        if (text.lowercased().contains("@t3") || text.lowercased().contains("@code")) {
             // Straight to the coding agent of this room's latest run, the way the head hands off a change.
-            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive)
+            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines), room: room)
             return
         }
@@ -536,7 +536,7 @@ final class BotsStore: ObservableObject {
                     if askedAbout != state.lastMessage {
                         askedAbout = state.lastMessage
                         self.postFromTheo("The coding agent on **\(run.title)** is waiting for an answer:\n\n" +
-                                          "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nReply with @T3 and your answer.", room: run.room)
+                                          "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nReply with @code and your answer.", room: run.room)
                     }
                 } else if !state.busy && (BotsT3.endedStatuses.contains(state.status) || state.status == "idle") {
                     let report = await BotsT3.report(for: &run, state: state)
@@ -708,6 +708,21 @@ enum BotPrompts {
             }
         }
         parts.append(BotPrompts.routineHowTo)
+        for team in BotsStore.shared.categories(of: bot.id) {
+            let store = BotsStore.shared
+            let mates = store.members(of: team).filter { $0.id != bot.id }.map(\.name)
+            let ceo = store.primary?.name ?? "the CEO"
+            var line = "Your team: \(team.name)" + (team.purpose.map { " (\($0))" } ?? "") +
+                (mates.isEmpty ? "" : ", with \(mates.joined(separator: ", "))") + ". "
+            if team.leaderID == bot.id {
+                line += "You lead it: hand work to teammates with @Name and report to \(ceo), the CEO."
+            } else if let leader = team.leaderID.flatMap({ store.bot($0) }) {
+                line += "\(leader.name) leads it; report your work to @\(leader.name)."
+            } else {
+                line += "It has no leader, so report straight to @\(ceo), the CEO, when something is worth knowing."
+            }
+            parts.append(line)
+        }
         let reachable = BotsStore.shared.reachable(from: bot)
         if !reachable.isEmpty {
             parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
@@ -800,6 +815,22 @@ struct BotsLayout: Codable, Equatable {
         /// A sub-category sits inside another section.
         var parentID: String?
         var collapsed: Bool?
+        /// The category's leader: it runs the team and reports to the CEO. With none, every member reports itself.
+        var leaderID: String?
+        /// What this team is for, in a line ("Inbox and calendar", "Ship the website").
+        var purpose: String?
+        /// The tile colour (a BotPalette swatch id) and SF Symbol of the category.
+        var swatch: String?
+        var symbol: String?
+        /// The last reports this team sent the CEO, newest last.
+        var reports: [Report]?
+    }
+
+    struct Report: Codable, Equatable, Identifiable {
+        var id: String = UUID().uuidString
+        var at: Date = Date()
+        var author: String
+        var text: String
     }
 
     func section(of item: String) -> Section? { sections.first { $0.items.contains(item) } }
@@ -852,6 +883,7 @@ extension BotsStore {
 
     func targetName(_ target: String) -> String {
         if target.hasPrefix("group:") { return group(String(target.dropFirst(6)))?.name ?? "Group" }
+        if target.hasPrefix("report:") { return (category(String(target.dropFirst(7)))?.name ?? "Team") + " report" }
         return bot(target)?.name ?? target
     }
 
@@ -897,6 +929,14 @@ extension BotsStore {
     private func start(_ routine: BotRoutine, scheduled: Bool) {
         guard !runningRoutines.contains(routine.id) else { return }
         let text = "⏰ Routine \"\(routine.name)\": \(routine.instruction)"
+        if routine.target.hasPrefix("report:") {
+            let sectionID = String(routine.target.dropFirst(7))
+            guard layout.sections.contains(where: { $0.id == sectionID }) else {
+                return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The category is gone."))
+            }
+            reportToCEO(sectionID)
+            return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "done", summary: "Report sent to the CEO."))
+        }
         if routine.target.hasPrefix("group:") {
             let groupID = String(routine.target.dropFirst(6))
             guard group(groupID) != nil else { return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The group is gone.")) }
@@ -1027,11 +1067,14 @@ extension BotsStore {
     var rootSections: [BotsLayout.Section] { layout.sections.filter { $0.parentID == nil } }
     func subsections(of sectionID: String) -> [BotsLayout.Section] { layout.sections.filter { $0.parentID == sectionID } }
 
-    func addSection(named name: String, parentID: String? = nil) {
+    @discardableResult
+    func addSection(named name: String, parentID: String? = nil) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        layout.sections.append(BotsLayout.Section(name: trimmed, parentID: parentID))
+        guard !trimmed.isEmpty else { return nil }
+        let section = BotsLayout.Section(name: trimmed, parentID: parentID)
+        layout.sections.append(section)
         writeLayout()
+        return section.id
     }
 
     func toggleCollapsed(_ sectionID: String) {
@@ -1047,17 +1090,29 @@ extension BotsStore {
     }
 
     /// Whom a bot may message: a CEO anyone, a lead the bots of the group chats it heads, plus anyone you allowed.
+    /// A category leader also reaches its team and the CEO; a member its leader (or, with no leader, its teammates
+    /// and the CEO).
     func reachable(from bot: NativeBot) -> [NativeBot] {
         let others = bots.filter { $0.id != bot.id && $0.isOn }
+        var allowed = Set(bot.canMessage ?? [])
         switch bot.authorityLevel {
         case "ceo": return others
-        case "lead":
-            let led = Set(groupsLed(by: bot.id).flatMap(\.memberIDs)).union(bot.canMessage ?? [])
-            return others.filter { led.contains($0.id) }
-        default:
-            let allowed = Set(bot.canMessage ?? [])
-            return others.filter { allowed.contains($0.id) }
+        case "lead": allowed.formUnion(groupsLed(by: bot.id).flatMap(\.memberIDs))
+        default: break
         }
+        for team in categories(of: bot.id) {
+            let members = memberIDs(of: team)
+            if team.leaderID == bot.id {
+                allowed.formUnion(members)
+                if let ceo = primary { allowed.insert(ceo.id) }
+            } else if let leader = team.leaderID {
+                allowed.insert(leader)
+            } else {
+                allowed.formUnion(members)
+                if let ceo = primary { allowed.insert(ceo.id) }
+            }
+        }
+        return others.filter { allowed.contains($0.id) }
     }
 
     /// After a bot answers in its own chat: any bot it @mentions (and may reach) answers there, then the
@@ -1123,5 +1178,96 @@ extension BotsStore {
             save(demotedToo)
         }
         writeLayout()
+    }
+}
+
+// MARK: - Teams: categories with a leader who reports to the CEO
+
+extension BotsStore {
+    func category(_ id: String) -> BotsLayout.Section? { layout.sections.first { $0.id == id } }
+
+    /// The bot ids filed in a category (its sub-categories have their own teams).
+    func memberIDs(of section: BotsLayout.Section) -> [String] {
+        section.items.compactMap { $0.hasPrefix("bot:") ? String($0.dropFirst(4)) : nil }.filter { bot($0) != nil }
+    }
+
+    func members(of section: BotsLayout.Section) -> [NativeBot] { memberIDs(of: section).compactMap { bot($0) } }
+
+    func categories(of botID: String) -> [BotsLayout.Section] { layout.sections.filter { $0.items.contains("bot:\(botID)") } }
+
+    func updateCategory(_ id: String, _ change: (inout BotsLayout.Section) -> Void) {
+        guard let index = layout.sections.firstIndex(where: { $0.id == id }) else { return }
+        change(&layout.sections[index])
+        // A leader always sits in its own team.
+        if let leader = layout.sections[index].leaderID, !layout.sections[index].items.contains("bot:\(leader)") {
+            if bot(leader) == nil { layout.sections[index].leaderID = nil } else { layout.sections[index].items.append("bot:\(leader)") }
+        }
+        writeLayout()
+    }
+
+    func setLeader(_ botID: String?, of sectionID: String) { updateCategory(sectionID) { $0.leaderID = botID } }
+
+    /// Adds a bot to a team; a bot can sit in more than one.
+    func addMember(_ botID: String, to sectionID: String) {
+        updateCategory(sectionID) { if !$0.items.contains("bot:\(botID)") { $0.items.append("bot:\(botID)") } }
+    }
+
+    func removeMember(_ botID: String, from sectionID: String) {
+        updateCategory(sectionID) {
+            $0.items.removeAll { $0 == "bot:\(botID)" }
+            if $0.leaderID == botID { $0.leaderID = nil }
+        }
+    }
+
+    /// The "report:<id>" routine that sends this team's report to the CEO on a schedule, if there is one.
+    func reportRoutine(of sectionID: String) -> BotRoutine? { routines.first { $0.target == "report:\(sectionID)" } }
+
+    func setReportSchedule(_ schedule: BotRoutine.Schedule?, for sectionID: String) {
+        if let existing = reportRoutine(of: sectionID) { routines.removeAll { $0.id == existing.id } }
+        if let schedule, let section = category(sectionID) {
+            save(BotRoutine(name: "\(section.name) report", target: "report:\(sectionID)", instruction: "Report to the CEO", schedule: schedule))
+        } else {
+            writeRoutines()
+        }
+    }
+
+    /// What a bot did lately: its last few exchanges and routine runs, for a report.
+    private func recentWork(of bot: NativeBot) -> String {
+        let messages = conversation(bot.id).messages.suffix(8)
+        var lines = messages.map { message -> String in
+            let who = message.author == "user" ? "Addy" : message.author == "routine" ? "Routine" : bot.name
+            return "- \(who): " + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(280))
+        }
+        for routine in routines where routine.target == bot.id {
+            for run in routine.runs.suffix(2) { lines.append("- Routine \"\(routine.name)\" \(run.status): \(run.summary ?? "")") }
+        }
+        return lines.isEmpty ? "- Nothing yet." : lines.joined(separator: "\n")
+    }
+
+    /// The team's leader writes the CEO a short report on what each member did; with no leader, each member
+    /// reports for itself. Reports land in the CEO's chat under the reporter's name, and on the team page.
+    func reportToCEO(_ sectionID: String) {
+        guard let section = category(sectionID), let ceo = primary else { return }
+        let team = members(of: section).filter(\.isOn)
+        guard !team.isEmpty else { return }
+        let reporters = section.leaderID.flatMap { bot($0) }.map { [$0] } ?? team.filter { $0.id != ceo.id }
+        for reporter in reporters where replying[reporter.id] == nil {
+            let covered = reporter.id == section.leaderID ? team : [reporter]
+            let activity = covered.map { "\($0.name) (\($0.description)):\n" + recentWork(of: $0) }.joined(separator: "\n\n")
+            let role = reporter.id == section.leaderID ? "You lead the \(section.name) team" : "You're on the \(section.name) team (it has no leader, so you report yourself)"
+            let prompt = BotPrompts.persona(bot: reporter, team: bots) + "\n\n---\n\n\(role)" +
+                (section.purpose.map { ", whose job is: \($0)" } ?? "") + ". Write \(ceo.name), the CEO, a short report: " +
+                "what got done, what's in progress, anything blocked or needing Addy. Plain sentences or a few bullets, no preamble.\n\n" +
+                "Recent activity:\n\n\(activity)"
+            post(BotChatMessage(author: "routine", text: "📋 \(reporter.name) is reporting to \(ceo.name) for \(section.name)."), to: ceo.id)
+            reply(bot: reporter, in: ceo.id, prompt: prompt, session: nil) { [weak self] answer in
+                guard let self, let answer, !answer.isEmpty else { return }
+                self.updateCategory(sectionID) {
+                    var reports = $0.reports ?? []
+                    reports.append(BotsLayout.Report(author: reporter.id, text: answer))
+                    $0.reports = Array(reports.suffix(10))
+                }
+            }
+        }
     }
 }

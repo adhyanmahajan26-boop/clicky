@@ -209,7 +209,7 @@ struct T3ResultCard: View {
             if let pr = run.pullRequest, let url = URL(string: pr) {
                 chip("Open pull request", "arrow.triangle.pull") { NSWorkspace.shared.open(url) }
             }
-            chip("Open in T3 Code", "arrow.up.forward.app") { BotsT3.openInApp(run) }
+            chip(HarnessCoding.owns(run) ? "Open terminal" : "Open in T3 Code", HarnessCoding.owns(run) ? "terminal" : "arrow.up.forward.app") { BotsT3.openInApp(run) }
             chip("Show folder", "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.folder)])
             }
