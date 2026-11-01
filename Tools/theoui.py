@@ -12,12 +12,15 @@
 import json, os, pathlib, signal, subprocess, sys, time, uuid
 
 REAL_HOME = pathlib.Path(os.path.expanduser("~"))
-ROOT = REAL_HOME / "Library/Application Support/Theo-Test"
+# THEOUI_PROFILE=clicks drives its own instance (--profile test-clicks), so several testers don't collide.
+PROFILE = os.environ.get("THEOUI_PROFILE", "")
+PROFILE_ARG = "test-" + PROFILE if PROFILE else "test"
+ROOT = REAL_HOME / ("Library/Application Support/Theo-Test" + ("-" + PROFILE if PROFILE else ""))
 HOME = ROOT / "home"
 INBOX = HOME / ".clicky/control-inbox"
 OUTBOX = HOME / ".clicky/control-outbox"
 PIDFILE = ROOT / "test-instance.pid"
-DEFAULT_BINARY = "/Applications/Theo.app/Contents/MacOS/Clicky"
+DEFAULT_BINARY = os.environ.get("THEOUI_BINARY", "/Applications/Theo.app/Contents/MacOS/Clicky")
 OUT = pathlib.Path(os.environ.get("THEOUI_OUT", str(ROOT / "shots")))
 
 
@@ -61,8 +64,8 @@ def start(binary, tab=None):
         value = subprocess.run(["defaults", "read", "com.personal.clicky", key], capture_output=True, text=True).stdout.strip()
         if not value:
             raise SystemExit(f"Refusing to start: {key} is not set, so the window would open on the main display.")
-        subprocess.run(["defaults", "write", "com.personal.clicky.test", key, "-string", value], check=True)
-    args = [binary, "--profile", "test"] + ([f"--tab={tab}"] if tab else [])
+        subprocess.run(["defaults", "write", f"com.personal.clicky.{PROFILE_ARG}", key, "-string", value], check=True)
+    args = [binary, "--profile", PROFILE_ARG] + ([f"--tab={tab}"] if tab else [])
     log = open(ROOT / "test-instance.log", "ab")
     proc = subprocess.Popen(args, stdout=log, stderr=log, stdin=subprocess.DEVNULL, cwd=str(REAL_HOME), start_new_session=True)
     PIDFILE.write_text(str(proc.pid))
@@ -100,7 +103,7 @@ def read_screen(number=None):
     # The capture includes the window shadow only with -o off, so pixels map 1:1 to the window at this scale.
     # Theo's monitor is 2x; pixels map to window points at that scale, whatever the shadow does to the image size.
     scale = 2.0
-    ocr = os.environ.get("THEOUI_OCR", str(ROOT / "theoui-ocr"))
+    ocr = os.environ.get("THEOUI_OCR", str(REAL_HOME / "Library/Application Support/Theo-Test/theoui-ocr"))
     lines = subprocess.run([ocr, str(path)], capture_output=True, text=True).stdout.splitlines()
     pieces = [json.loads(line) for line in lines]
     for piece in pieces:

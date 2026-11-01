@@ -230,7 +230,9 @@ enum TheoUIDriver {
     }
 
     /// A click that opens a menu blocks in the menu's own run loop; this picks the item as soon as it opens.
-    static func clickMenu(_ window: NSWindow, at point: CGPoint, choose item: String?, completion: @escaping @MainActor ([String]) -> Void) {
+    /// `rightClick`: a context menu.
+    static func clickMenu(_ topWindow: NSWindow, at topPoint: CGPoint, choose item: String?, rightClick: Bool = false, completion: @escaping @MainActor ([String]) -> Void) {
+        let (window, point) = target(topWindow, at: topPoint)
         var titles: [String] = []
         var observer: NSObjectProtocol?
         observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
@@ -245,7 +247,13 @@ enum TheoUIDriver {
                 }
             }
         }
-        click(window, at: point)
+        if rightClick {
+            if !window.isKeyWindow { window.makeKey() }
+            NSApp.postEvent(mouseEvent(.rightMouseUp, at: point, in: window), atStart: false)
+            NSApp.sendEvent(mouseEvent(.rightMouseDown, at: point, in: window))
+        } else {
+            click(window, at: point)
+        }
         if let observer { NotificationCenter.default.removeObserver(observer) }
         completion(titles)
     }
@@ -433,8 +441,27 @@ enum TheoUIDriver {
         case "uiType":
             let typed = typeText(command["text"] as? String ?? "", in: target!)
             settle { respond(typed, state(), typed ? nil : "Nothing has text focus.") }
-        case "uiMenuChoose":
-            clickMenu(target!, at: point(), choose: command["item"] as? String) { titles in
+        case "uiBots":
+            // The sidebar's actions that a drag or a context menu does, by name:
+            // {action: addCategory|move|pin|hide|leader|report|deleteCategory, item, section, name, on}.
+            let store = BotsStore.shared
+            let item = command["item"] as? String ?? ""
+            let section = command["section"] as? String
+            switch command["action"] as? String ?? "" {
+            case "addCategory": respond(true, ["id": store.addSection(named: command["name"] as? String ?? "Test team") as Any], nil); return true
+            case "move": store.move(item, toSection: section)
+            case "pin": store.setPinned(command["on"] as? Bool ?? true, item)
+            case "hide": store.setHidden(command["on"] as? Bool ?? true, item)
+            case "leader": store.setLeader(command["bot"] as? String, of: section ?? "")
+            case "report": store.reportToCEO(section ?? "")
+            case "deleteCategory": store.deleteSection(section ?? "")
+            default: break
+            }
+            let layout = store.layout
+            respond(true, ["pinned": layout.pinned, "hidden": layout.hidden,
+                           "sections": layout.sections.map { ["id": $0.id, "name": $0.name, "items": $0.items, "leader": $0.leaderID as Any? ?? NSNull()] as [String: Any] }], nil)
+        case "uiMenuChoose", "uiRightClickChoose":
+            clickMenu(target!, at: point(), choose: command["item"] as? String, rightClick: name == "uiRightClickChoose") { titles in
                 settle { respond(true, ["items": titles, "state": state()], nil) }
             }
         default:

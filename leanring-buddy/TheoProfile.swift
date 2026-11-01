@@ -14,15 +14,21 @@ import Foundation
 import ObjectiveC
 
 enum TheoProfile {
-    /// Launched with `--profile test`.
-    static let isTest: Bool = {
+    /// The name after `--profile`: "test", or "test-<anything>" for another separate test instance beside it.
+    static let name: String? = {
         let arguments = CommandLine.arguments
-        guard let flag = arguments.firstIndex(of: "--profile"), arguments.indices.contains(flag + 1) else { return false }
-        return arguments[flag + 1] == "test"
+        guard let flag = arguments.firstIndex(of: "--profile"), arguments.indices.contains(flag + 1) else { return nil }
+        return arguments[flag + 1]
     }()
 
+    /// Launched with `--profile test` (or test-…).
+    static let isTest: Bool = name == "test" || name?.hasPrefix("test-") == true
+
+    /// "Theo-Test", "Theo-Test-clicks", …
+    private static var folderName: String { "Theo-Test" + (name.map { $0.dropFirst("test".count) } ?? "") }
+
     /// Keychain service suffix, so a test key never overwrites a real one.
-    static var keychainSuffix: String { isTest ? ".test" : "" }
+    static var keychainSuffix: String { isTest ? "." + (name ?? "test") : "" }
 
     /// The owner's real home, whatever CFFIXED_USER_HOME says.
     static var realHome: String {
@@ -31,11 +37,11 @@ enum TheoProfile {
     }
 
     static var testHome: URL {
-        URL(fileURLWithPath: realHome).appendingPathComponent("Library/Application Support/Theo-Test/home", isDirectory: true)
+        URL(fileURLWithPath: realHome).appendingPathComponent("Library/Application Support/\(folderName)/home", isDirectory: true)
     }
 
     private static let homeVariable = "CFFIXED_USER_HOME"
-    private static let testDefaultsDomain = "com.personal.clicky.test"
+    private static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
 
     /// What the test home borrows from the real one: where the CLIs live and what they're signed in with.
     private static let sharedHomeItems = [".claude", ".claude.json", ".codex", ".config", ".cursor", ".gemini", ".grok", ".local",
@@ -63,7 +69,7 @@ enum TheoProfile {
 
     /// Tests of Copy and ⌘V use a pasteboard of their own, never the owner's clipboard.
     private static func usePrivatePasteboard() {
-        let board = NSPasteboard(name: NSPasteboard.Name("com.personal.clicky.test.pasteboard"))
+        let board = NSPasteboard(name: NSPasteboard.Name("com.personal.clicky.\(name ?? "test").pasteboard"))
         guard let method = class_getClassMethod(NSPasteboard.self, NSSelectorFromString("generalPasteboard")) else { return }
         let block: @convention(block) (AnyObject) -> NSPasteboard = { _ in board }
         method_setImplementation(method, imp_implementationWithBlock(block))
