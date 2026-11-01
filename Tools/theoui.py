@@ -7,6 +7,7 @@
   theoui.py shot NAME [window-number]     screenshot of one Theo window only -> <out>/NAME.png
   theoui.py text [window-number]          the text on screen with boxes (window points)
   theoui.py clicktext "words" [index]     finds the words on screen and clicks them, like a person would
+  theoui.py paste "text"                  puts text on the test profile's own pasteboard-free route: types it into the focused field
 """
 import json, os, pathlib, signal, subprocess, sys, time, uuid
 
@@ -97,10 +98,8 @@ def read_screen(number=None):
     path = ROOT / "ocr.png"
     subprocess.run(["screencapture", "-x", "-o", "-l", str(number), str(path)], check=True)
     # The capture includes the window shadow only with -o off, so pixels map 1:1 to the window at this scale.
-    windows = send({"cmd": "uiWindows"}).get("result", [])
-    frame = next((w["frame"] for w in windows if w["number"] == number), None)
-    size = subprocess.run(["sips", "-g", "pixelWidth", str(path)], capture_output=True, text=True).stdout.split()[-1]
-    scale = float(size) / frame["w"] if frame else 2.0
+    # Theo's monitor is 2x; pixels map to window points at that scale, whatever the shadow does to the image size.
+    scale = 2.0
     ocr = os.environ.get("THEOUI_OCR", str(ROOT / "theoui-ocr"))
     lines = subprocess.run([ocr, str(path)], capture_output=True, text=True).stdout.splitlines()
     pieces = [json.loads(line) for line in lines]

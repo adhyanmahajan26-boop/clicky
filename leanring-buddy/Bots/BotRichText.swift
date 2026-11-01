@@ -199,36 +199,105 @@ struct BotMessageActions: View {
 }
 
 /// When a T3 Code run ends: where the work is, one click away.
+/// A finished run: what happened, what changed, the tests and the pull request, with the ways in.
 struct T3ResultCard: View {
     let run: T3Run
+    @State private var showsAllFiles = false
+
+    private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
+    private var isStopped: Bool { run.stoppedByOwner == true }
+    private var files: [RunFileChange] { run.changedFiles ?? [] }
+    private var added: Int { files.map(\.added).reduce(0, +) }
+    private var removed: Int { files.map(\.removed).reduce(0, +) }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: run.phase == "failed" ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
-                .foregroundColor(run.phase == "failed" ? DS.Colors.warning : DS.Colors.success)
-            if let pr = run.pullRequest, let url = URL(string: pr) {
-                chip("Open pull request", "arrow.triangle.pull") { NSWorkspace.shared.open(url) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                BrandLogo(id: run.harness ?? "t3", name: engine, size: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(run.title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                    Text(detailLine).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                StatusPill(text: isStopped ? "Stopped" : run.phase == "failed" ? "Failed" : run.pullRequest != nil ? "Draft PR" : "Done",
+                           tone: isStopped ? .neutral : run.phase == "failed" ? .bad : .good)
             }
-            chip(HarnessCoding.owns(run) ? "Open terminal" : "Open in T3 Code", HarnessCoding.owns(run) ? "terminal" : "arrow.up.forward.app") { BotsT3.openInApp(run) }
-            chip("Show folder", "folder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.folder)])
+            if !files.isEmpty { fileList }
+            if let tests = run.tests {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: tests.hasPrefix("passed") ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.system(size: 12)).foregroundColor(tests.hasPrefix("passed") ? DS.Colors.success : DS.Colors.destructiveText)
+                    Text("Tests (Theo's own run): \(tests)").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
-            if run.repo == nil, let page = BotsT3.page(of: run) {
-                chip("Open page", "safari") { NSWorkspace.shared.open(page) }
+            if let problem = run.pullRequestProblem {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundColor(DS.Colors.warning)
+                    Text(problem).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                if let pr = run.pullRequest, let url = URL(string: pr) {
+                    Button { NSWorkspace.shared.open(url) } label: { Label("Open PR", systemImage: "arrow.triangle.pull") }.buttonStyle(.theo(.primary, .small))
+                }
+                Button { BotsT3.openInApp(run) } label: {
+                    Label(run.harness == nil ? "Open in T3" : run.harness == CursorCloud.harnessID ? "Open in Cursor" : "Open terminal", systemImage: run.harness == nil ? "arrow.up.forward.app" : "terminal")
+                }
+                .buttonStyle(.theo(.secondary, .small))
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.worktree ?? run.folder)])
+                } label: { Label("Open folder", systemImage: "folder") }.buttonStyle(.theo(.secondary, .small))
+                if run.repo == nil, let page = BotsT3.page(of: run) {
+                    Button { NSWorkspace.shared.open(page) } label: { Label("Open page", systemImage: "safari") }.buttonStyle(.theo(.secondary, .small))
+                }
+                Spacer(minLength: 0)
+                if run.phase == "failed", !isStopped, let prompt = run.prompt {
+                    Menu {
+                        ForEach(HarnessCenter.shared.readyHarnesses.filter { $0.id != (run.harness ?? "t3") }, id: \.id) { info in
+                            Button(info.label) {
+                                BotsStore.shared.submitToT3(prompt: prompt, title: run.title, repo: run.repo.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                                                            room: run.room ?? BotsStore.teamID, harness: info.id)
+                            }
+                        }
+                    } label: { Label("Try on another harness", systemImage: "arrow.triangle.2.circlepath") }
+                        .menuStyle(.borderlessButton).fixedSize()
+                }
+            }
         }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
     }
 
-    private func chip(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol).font(.system(size: 11.5, weight: .medium))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
-                .overlay(Capsule().stroke(Color.white.opacity(0.08)))
+    private var detailLine: String {
+        var parts = [engine]
+        if let branch = run.branch { parts.append(branch) }
+        if let finished = run.finishedAt {
+            let minutes = max(1, Int((finished.timeIntervalSince(run.startedAt) / 60).rounded()))
+            parts.append("\(minutes) min")
         }
-        .buttonStyle(.plain)
-        .foregroundColor(DS.Colors.textPrimary)
+        return parts.joined(separator: " · ")
+    }
+
+    private var fileList: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text("\(files.count) file\(files.count == 1 ? "" : "s") changed").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                Text("+\(added)").font(TheoType.mono).foregroundColor(DS.Colors.success)
+                Text("\u{2212}\(removed)").font(TheoType.mono).foregroundColor(DS.Colors.destructiveText)
+            }
+            ForEach(showsAllFiles ? files : Array(files.prefix(5))) { file in
+                HStack(spacing: 6) {
+                    Text(file.path).font(.system(size: 11.5, design: .monospaced)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text("+\(file.added)").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.success.opacity(0.85))
+                    Text("\u{2212}\(file.removed)").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.destructiveText.opacity(0.85))
+                }
+            }
+            if files.count > 5 {
+                Button(showsAllFiles ? "Show less" : "Show all \(files.count)") { showsAllFiles.toggle() }.buttonStyle(.theo(.ghost, .small))
+            }
+        }
     }
 }
 

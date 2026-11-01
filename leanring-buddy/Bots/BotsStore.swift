@@ -274,15 +274,16 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[botID] = record
         writeConversation(botID)
-        if bot.primary && (text.lowercased().contains("@t3") || text.lowercased().contains("@code")) {
-            // Theo's own chat hands a change straight to the coding agent of its latest run.
-            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
-                .trimmingCharacters(in: .whitespacesAndNewlines), room: botID)
+        if BotsStore.isCodingCommand(text) {
+            // "@code …" goes straight to a coding agent, in any chat: a change for this chat's latest run,
+            // or a new run when there's none or the message names a folder.
+            runCommand(text, room: botID)
             return
         }
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
+        if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }
@@ -302,10 +303,8 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[room] = record
         writeConversation(room)
-        if (text.lowercased().contains("@t3") || text.lowercased().contains("@code")) {
-            // Straight to the coding agent of this room's latest run, the way the head hands off a change.
-            sendToCoder(text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
-                .trimmingCharacters(in: .whitespacesAndNewlines), room: room)
+        if BotsStore.isCodingCommand(text) {
+            runCommand(text, room: room)
             return
         }
         let tagged = BotPrompts.mentioned(in: text, bots: members(of: group))
@@ -413,7 +412,8 @@ final class BotsStore: ObservableObject {
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
-            if let answer, self.group(forRoom: conversationID)?.headID == bot.id || (bot.primary && conversationID == bot.id) {
+            // Any bot in its own chat can start a run, and a group chat's head in that chat.
+            if let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
             }
             if let answer, let request = Self.routineRequest(in: answer) {
@@ -442,27 +442,72 @@ final class BotsStore: ObservableObject {
             return
         }
         guard let prompt = BotsT3.promptBlock(in: answer) else { return }
-        let wantsBuild = pitch.text.range(of: #"\b(build|submit|send|make|code|t3|pr|pull request|fix|ship)\b"#,
+        let wantsBuild = pitch.text.range(of: #"\b(build|submit|send|make|code|t3|pr|pull request|fix|ship|change|update|add|refactor)\b"#,
                                           options: [.regularExpression, .caseInsensitive]) != nil
         guard wantsBuild else { return }
+        let repo = BotsT3.targetRepo(answer: answer, pitch: pitch.text)
+        // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
+        if repo == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
-        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt),
-                   repo: BotsT3.targetRepo(answer: answer, pitch: pitch.text), room: room)
+        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room)
     }
 
-    /// The bot that speaks for a room: its head, else Theo.
-    private func speaker(for room: String) -> NativeBot? { group(forRoom: room).flatMap { head(of: $0) } ?? primary }
+    /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between.
+    static func isCodingCommand(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespaces)
+        return lower.hasPrefix("/run ") || lower.contains("@code") || lower.contains("@t3")
+    }
+
+    /// Asks to change something that already exists, rather than make something new.
+    static func isAboutExistingCode(_ text: String) -> Bool {
+        text.range(of: #"\b(fix|change|update|refactor|bug|failing|broken|existing|our|my repo|the repo)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Runs an "@code …" message: a follow-up on this chat's latest run, or a new run when it names a folder or there
+    /// is no run yet.
+    private func runCommand(_ text: String, room: String) {
+        let words = text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: #"^\s*/run\s+"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let repo = BotsT3.targetRepo(answer: "", pitch: words)
+        if repo == nil, latestRun(in: room) != nil {
+            sendToCoder(words, room: room)
+        } else {
+            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room)
+        }
+    }
+
+    /// Stops a run in progress. T3 Code has no stop command, so a T3 run is only no longer followed from here.
+    func stopRun(_ runID: String) {
+        guard var run = t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" else { return }
+        run.stoppedByOwner = true
+        upsert(run)
+        HarnessCoding.stop(run)
+        if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
+        Task { [weak self] in
+            let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
+            let report = await BotsT3.report(for: &run, state: state)
+            run.phase = "failed"
+            run.finishedAt = Date()
+            self?.upsert(run)
+            self?.postFromTheo(report, runID: run.id)
+        }
+    }
+
+    /// The bot that speaks for a room: the bot whose chat it is, a group's head, else Theo.
+    private func speaker(for room: String) -> NativeBot? { bot(room) ?? group(forRoom: room).flatMap { head(of: $0) } ?? primary }
 
     /// The newest run started from a room (older runs have no room: the Project room's).
     func latestRun(in room: String) -> T3Run? { t3Runs.last { ($0.room ?? Self.teamID) == room } }
 
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
-    func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID) {
+    func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil) {
         guard let theo = speaker(for: room), !submitting else { return }
         submitting = true
+        let target = harness ?? HarnessPrefs.codingTarget
         Task { [weak self] in
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo)
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target)
                 run.room = room
                 guard let self else { return }
                 self.submitting = false
@@ -475,7 +520,7 @@ final class BotsStore: ObservableObject {
                 self.track(run.id)
             } catch {
                 self?.submitting = false
-                self?.post(BotChatMessage(author: theo.id, text: "Couldn't submit to T3 Code: \(error.localizedDescription)"), to: room)
+                self?.post(BotChatMessage(author: theo.id, text: "Couldn't start the run on \(HarnessCatalog.label(target)): \(error.localizedDescription)"), to: room)
             }
         }
     }
@@ -484,7 +529,7 @@ final class BotsStore: ObservableObject {
     func sendToCoder(_ text: String, room: String = BotsStore.teamID) {
         guard let theo = speaker(for: room), var run = latestRun(in: room) else {
             if let theo = speaker(for: room) {
-                post(BotChatMessage(author: theo.id, text: "There's no T3 Code run from this chat yet. Pitch an idea first."), to: room)
+                post(BotChatMessage(author: theo.id, text: "There's no coding run from this chat yet. Say what to do and where, like \"@code fix the failing test in ~/Projects/foo\"."), to: room)
             }
             return
         }
@@ -498,10 +543,10 @@ final class BotsStore: ObservableObject {
                 run.startedAt = Date()
                 run.finishedAt = nil
                 self.upsert(run)
-                self.post(BotChatMessage(author: theo.id, text: "Passed to the coding agent on **\(run.title)**. I'll report back when it's done."), to: room)
+                self.post(BotChatMessage(author: theo.id, text: "Passed to \(run.harness.map(HarnessCatalog.label) ?? "T3 Code") on **\(run.title)**. I'll report back when it's done."), to: room)
                 self.track(run.id)
             } catch {
-                self?.post(BotChatMessage(author: theo.id, text: "Couldn't reach T3 Code: \(error.localizedDescription)"), to: room)
+                self?.post(BotChatMessage(author: theo.id, text: "Couldn't reach the coding agent: \(error.localizedDescription)"), to: room)
             }
         }
     }
@@ -514,8 +559,9 @@ final class BotsStore: ObservableObject {
             var misses = 0
             var askedAbout: String?
             // A run that hasn't started its agent yet reads as idle, so give it a moment first.
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
             while let self, var run = self.t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" {
+                if run.stoppedByOwner == true { break }
                 guard let state = await BotsT3.state(of: run) else {
                     misses += 1
                     if misses >= 40 {
@@ -543,13 +589,13 @@ final class BotsStore: ObservableObject {
                     run.phase = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status) ? "failed" : "done"
                     run.finishedAt = Date()
                     self.upsert(run)
-                    self.postFromTheo(report, runID: run.id)
+                    if run.stoppedByOwner != true { self.postFromTheo(report, runID: run.id) }
                     break
                 } else {
                     run.phase = "running"
                     self.upsert(run)
                 }
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
             self?.trackedRuns.remove(runID)
         }
@@ -643,11 +689,7 @@ enum BotImport {
     /// Theo, the primary bot: Addy's own helper, the head of any group chat Addy makes him head of, and the
     /// one who hands builds to T3 Code.
     static let primaryInstructions =
-        "You are Theo, Addy's primary bot. Help directly with anything Addy asks. When Addy asks to build, code " +
-        "or fix something, plan it briefly, then write one final prompt for T3 Code's coding agent: a line " +
-        "\"Project: <short name>\" and the prompt inside a ```prompt fenced block (add \"Repo: <path>\" when Addy " +
-        "names an existing project folder, so it goes on a new branch with a pull request). T3 Code then builds it " +
-        "and you post its report. For a change to something already built, put it in a ```followup fenced block. " +
+        "You are Theo, Addy's primary bot. Help directly with anything Addy asks. " +
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
     /// A fresh setup starts with Theo alone; Addy adds every other bot.
@@ -664,7 +706,7 @@ enum BotImport {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && bot.instructions.contains("Project Manager only") { bot.instructions = primaryInstructions }
+            if bot.primary && (bot.instructions.contains("Project Manager only") || bot.instructions.contains("write one final prompt for T3 Code's coding agent")) { bot.instructions = primaryInstructions }
             if bot.model == "opencode/big-pickle" {
                 // Big Pickle kept running past the turn limit; a flash model answers in seconds.
                 bot.model = "opencode/deepseek-v4.1-flash-free"
@@ -708,6 +750,7 @@ enum BotPrompts {
             }
         }
         parts.append(BotPrompts.routineHowTo)
+        parts.append(BotPrompts.codingHowTo)
         for team in BotsStore.shared.categories(of: bot.id) {
             let store = BotsStore.shared
             let mates = store.members(of: team).filter { $0.id != bot.id }.map(\.name)
@@ -747,6 +790,15 @@ enum BotPrompts {
         "block with JSON {\"name\": short name, \"when\": \"daily 08:00\" | \"weekdays 08:30\" | \"weekly mon 09:00\" | " +
         "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Theo then runs it on " +
         "time, and Addy can pause, run or delete it."
+
+    /// How any bot starts a coding run. Bots don't edit code themselves: a harness does it in its own branch.
+    static var codingHowTo: String {
+        "Coding: when the owner asks to build, fix or change code, don't edit files yourself. Plan it in a sentence or two, then write: a line " +
+        "\"Project: <short name>\", a line \"Repo: <path>\" when they named an existing folder, and the full instructions for the coding agent " +
+        "in a ```prompt fenced block. Theo then runs it on \(HarnessCatalog.label(HarnessPrefs.codingTarget)): an existing git repo gets its own branch and " +
+        "worktree, and the result comes back with the changes, tests and a draft pull request. For a change to the run you already started, " +
+        "put it in a ```followup fenced block instead."
+    }
 
     /// Words that ask for something on a schedule, so the routine how-to rides along even in an older chat.
     static func asksForSchedule(_ text: String) -> Bool {

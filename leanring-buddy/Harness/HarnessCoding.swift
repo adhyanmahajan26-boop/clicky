@@ -33,7 +33,8 @@ enum HarnessCoding {
     /// The interactive command for a coding run. Full access inside the project folder, since the user asked
     /// for this run and may not be watching: Claude accepts edits, Codex writes the workspace and asks for
     /// anything beyond it, Cursor/OpenCode auto-approve, Grok and Gemini accept edits.
-    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String) -> [String] {
+    /// `gitFolder`: the repo's own .git, which sits outside a worktree. Codex's sandbox has to be able to write there, or it can't commit.
+    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil) -> [String] {
         var args: [String] = []
         switch harness {
         case "claude":
@@ -44,6 +45,7 @@ enum HarnessCoding {
             if let model { args += ["-m", model] }
             if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
             args += ["-c", "check_for_update_on_startup=false", "--sandbox", "workspace-write", "-a", "never", "-C", folder]
+            if let gitFolder { args += ["--add-dir", gitFolder] }
         case "cursor":
             if let model { args += ["--model", model] }
             args += ["--workspace", folder, "--force", "--trust"]
@@ -140,6 +142,7 @@ enum HarnessCoding {
         var run: T3Run
         let workdir: URL
         var plainFolder = false
+        var gitFolder: String?
         if let repo, !BotsT3.isGitRepo(repo) {
             // A plain folder: the work happens right there, with no branch and nothing added to it.
             plainFolder = true
@@ -156,6 +159,7 @@ enum HarnessCoding {
             try await BotsT3.shell(git, ["worktree", "add", "-b", branch, workdir.path, base], in: repo)
             run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
             run.worktree = workdir.path
+            gitFolder = repo.appendingPathComponent(".git").path
         } else {
             workdir = try BotsT3.newProjectFolder(title: title)
             BotsT3.saveBrief(prompt, title: title, engine: HarnessCatalog.label(harness))
@@ -167,6 +171,7 @@ enum HarnessCoding {
         run.harness = harness
         run.model = model ?? HarnessCatalog.label(harness)
         run.effort = effort ?? "default"
+        run.prompt = prompt
         var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
         if let branch = run.branch, let repo {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
@@ -178,12 +183,12 @@ enum HarnessCoding {
             let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
             let command = (["env"] + unset + [executable.path] +
-                           interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path)).map(quoted).joined(separator: " ")
+                           interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path, gitFolder: gitFolder)).map(quoted).joined(separator: " ")
             try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", workdir.path, "-x", "180", "-y", "50", command])
             run.id = "tmux:\(session)"
             try await deliver(message, to: session, tmux: tmux)
             PaneWatch.reset(session)
-        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title) {
+        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder) {
             run.id = terminal.id
             await deliver(message, to: terminal)
             PaneWatch.reset(terminal.id)
@@ -213,15 +218,42 @@ enum HarnessCoding {
     // MARK: In-app terminal
 
     @MainActor
-    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String) async -> TerminalSession? {
+    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) async -> TerminalSession? {
         let id = "term:\(UUID().uuidString.lowercased())"
-        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path)
+        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder)
         // No self-updates mid-run: OpenCode's update dialog swallowed the prompt.
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
                                              arguments: args, environment: environment, workingDirectory: folder.path)
+    }
+
+    /// A fresh terminal under an existing run's id.
+    @MainActor
+    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String) -> TerminalSession? {
+        var environment = TerminalSession.defaultEnvironment()
+        environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
+        environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
+        return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
+                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path),
+                                             environment: environment, workingDirectory: folder.path)
+    }
+
+    /// Stops a run's agent. The terminal stays readable until it's closed.
+    @MainActor
+    static func stop(_ run: T3Run) {
+        if run.id.hasPrefix("term:") {
+            TerminalSessions.shared.session(for: run.id)?.interrupt()
+            TerminalSessions.shared.session(for: run.id)?.terminate()
+        } else if run.id.hasPrefix("tmux:"), let tmux {
+            let process = Process()
+            process.executableURL = tmux
+            process.arguments = ["kill-session", "-t", String(run.id.dropFirst(5))]
+            try? process.run()
+        } else if run.id.hasPrefix("headless:") {
+            activeLock.withLock { activeProcesses[run.id] }?.terminate()
+        }
     }
 
     /// Waits for the TUI to settle (answering a folder-trust question on the way), then pastes the text and presses Return.
@@ -345,10 +377,24 @@ enum HarnessCoding {
 
     static func sendFollowup(_ text: String, to run: T3Run) async throws {
         if run.id.hasPrefix("term:") {
-            guard let terminal = await TerminalSessions.shared.session(for: run.id), await terminal.isRunning else {
-                throw BotsT3Error.failed("The \(HarnessCatalog.label(run.harness ?? "")) terminal has closed; start a new run.")
+            let followUpMessage = text + BotsT3.deliveryNote
+            if let terminal = await TerminalSessions.shared.session(for: run.id), await terminal.isRunning {
+                await deliver(followUpMessage, to: terminal)
+                PaneWatch.reset(run.id)
+                return
             }
-            await deliver(text + BotsT3.deliveryNote, to: terminal)
+            // The terminal has gone (the agent exited, or Theo restarted): a new one on the same worktree and
+            // branch carries on, so the follow-up lands on the same pull request.
+            guard let harness = run.harness, let executable = HarnessCatalog.executable(for: harness) else {
+                throw BotsT3Error.failed("\(HarnessCatalog.label(run.harness ?? "")) isn't installed any more.")
+            }
+            let folder = URL(fileURLWithPath: run.worktree ?? run.folder, isDirectory: true)
+            let model = HarnessPrefs.defaultModel(harness)
+            let effort = HarnessPrefs.defaultEffort(harness)
+            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title) else {
+                throw BotsT3Error.failed("The \(HarnessCatalog.label(harness)) terminal couldn't start.")
+            }
+            await deliver(followUpMessage, to: terminal)
             PaneWatch.reset(run.id)
             return
         }
@@ -495,7 +541,9 @@ enum HarnessCoding {
         PaneWatch.note(run.id, hash: pane.hashValue, busy: working)
         let asking = isQuestionScreen(pane)
         if !asking { _ = PaneWatch.askingSeconds(run.id, asking: false) }
-        let settled = Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds && !working
+        // A harness's own "Baked for 19s" line says the turn is over, so there's no need to wait for a long quiet spell.
+        let saysFinished = tail.range(of: #"(?i)\b(worked|\w+ed) for \d+\s?(s|m|h|sec|min)"#, options: .regularExpression) != nil
+        let settled = !working && (saysFinished ? unchanged >= 6 : Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds)
         // A question on screen for a while is waiting for Addy, even if a spinner or clock keeps it moving.
         if asking && Date().timeIntervalSince(run.startedAt) > 30 && (settled || PaneWatch.askingSeconds(run.id, asking: true) >= 15) {
             let question = tail.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(6).joined(separator: "\n")
@@ -505,7 +553,9 @@ enum HarnessCoding {
         }
         // A plan's limit or a model it can't use: the agent would sit there (OpenCode retries for hours), so say so now.
         if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression) {
-            let line = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
+            let raw = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
+            // OpenCode's "[retrying in 6h 10m attempt #1" says nothing useful here.
+            let line = raw.replacingOccurrences(of: #"\s*\[retrying.*$"#, with: "", options: .regularExpression)
             return BotsT3.ThreadState(status: "failed", busy: false, waitingForAnswer: false,
                                       lastMessage: "\(HarnessCatalog.label(run.harness ?? "The agent")) can't run this on your plan: \(line)",
                                       worktree: run.worktree, pullRequest: nil)
@@ -651,6 +701,8 @@ enum HarnessCoding {
 
     private static let activeLock = NSLock()
     private nonisolated(unsafe) static var active: Set<String> = []
+    /// Headless runs' processes, so Stop can reach them.
+    private nonisolated(unsafe) static var activeProcesses: [String: Process] = [:]
 
     private static var runsFolder: URL {
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -684,11 +736,13 @@ enum HarnessCoding {
             var status = "failed"
             var text = ""
             if (try? process.run()) != nil {
+                activeLock.withLock { activeProcesses[id] = process }
                 let watchdog = Task.detached {
                     try? await Task.sleep(nanoseconds: 45 * 60 * 1_000_000_000)
                     if process.isRunning { process.terminate() }
                 }
                 process.waitUntilExit()
+                activeLock.withLock { activeProcesses[id] = nil }
                 watchdog.cancel()
                 try? handle?.close()
                 let stdout = (try? String(contentsOf: out, encoding: .utf8)) ?? ""

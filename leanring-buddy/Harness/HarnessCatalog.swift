@@ -439,7 +439,14 @@ enum HarnessPrefs {
     /// Where the coding hand-off goes: t3 (default), claude, codex, cursor, opencode, grok or gemini.
     static var codingTarget: String {
         get { defaults.string(forKey: "theo.coding.target") ?? "t3" }
-        set { defaults.set(newValue, forKey: "theo.coding.target") }
+        set {
+            // A model belongs to one harness: passing it to another makes that harness refuse to start.
+            if newValue != codingTarget {
+                defaults.removeObject(forKey: "theo.coding.model")
+                defaults.removeObject(forKey: "theo.coding.effort")
+            }
+            defaults.set(newValue, forKey: "theo.coding.target")
+        }
     }
     static var codingModel: String? {
         get { defaults.string(forKey: "theo.coding.model").flatMap { $0.isEmpty ? nil : $0 } }

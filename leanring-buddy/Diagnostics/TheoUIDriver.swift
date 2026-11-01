@@ -36,7 +36,7 @@ enum TheoUIDriver {
         if let number = command["window"] as? Int { return NSApp.windows.first { $0.windowNumber == number } }
         if let title = command["windowTitle"] as? String { return theoWindows.first { $0.title == title } }
         // The frontmost titled window (a sheet above it counts).
-        let ordered = NSApp.orderedWindows.filter { $0.isVisible && $0.level == .normal }
+        let ordered = NSApp.orderedWindows.filter { $0.isVisible && $0.level == .normal && $0.sheetParent == nil }
         if let top = ordered.first { return top.attachedSheet ?? top }
         return NSApp.keyWindow ?? theoWindows.first
     }
@@ -200,13 +200,18 @@ enum TheoUIDriver {
         }
     }
 
+    /// Scrolls whatever scroll view is under the point. Positive `deltaY` moves the content up (further down the page).
     static func scroll(_ window: NSWindow, at point: CGPoint, deltaY: Int32) {
-        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: deltaY, wheel2: 0, wheel3: 0) else { return }
-        let onScreen = window.convertPoint(toScreen: toAppKit(point, in: window))
-        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        event.location = CGPoint(x: onScreen.x, y: screenHeight - onScreen.y)
-        guard let scrollEvent = NSEvent(cgEvent: event) else { return }
-        window.sendEvent(scrollEvent)
+        var view = hitView(in: window, at: point)
+        while let current = view, !(current is NSScrollView) { view = current.superview }
+        guard let scrollView = view as? NSScrollView, let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maximumOffset = max(0, document.frame.height - clip.bounds.height)
+        var origin = clip.bounds.origin
+        // Flipped documents grow downwards; the others count from the bottom.
+        origin.y = document.isFlipped ? min(maximumOffset, max(0, origin.y + CGFloat(deltaY))) : min(maximumOffset, max(0, origin.y - CGFloat(deltaY)))
+        clip.setBoundsOrigin(origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// A click that opens a menu blocks in the menu's own run loop; this picks the item as soon as it opens.
@@ -276,11 +281,11 @@ enum TheoUIDriver {
     }
 
     static func state() -> [String: Any] {
-        let window = NSApp.orderedWindows.first { $0.isVisible && $0.level == .normal }
-        let responder = window?.firstResponder
+        let window = NSApp.orderedWindows.first { $0.isVisible && $0.level == .normal && $0.sheetParent == nil }
+        let responder = (window?.attachedSheet ?? window)?.firstResponder
         let isEditing = responder is NSTextView || responder is NSTextField
         return ["pane": String(describing: BotsSelection.shared.pane),
-                "frontWindow": window?.title ?? "", "frontNumber": window?.windowNumber ?? 0,
+                "frontWindow": window?.title ?? "", "frontNumber": window?.attachedSheet?.windowNumber ?? window?.windowNumber ?? 0,
                 "sheet": window?.attachedSheet?.title ?? "", "firstResponder": responder.map { String(describing: Swift.type(of: $0)) } ?? "none",
                 "editing": isEditing, "fieldText": (responder as? NSTextView)?.string.count ?? 0,
                 "frontmostApp": NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", "isActive": NSApp.isActive]
@@ -300,7 +305,7 @@ enum TheoUIDriver {
             return true
         }
         func point() -> CGPoint { CGPoint(x: (command["x"] as? Double) ?? Double(command["x"] as? Int ?? 0), y: (command["y"] as? Double) ?? Double(command["y"] as? Int ?? 0)) }
-        guard name == "uiWindows" || name == "uiState" || window(command) != nil else {
+        guard name == "uiWindows" || name == "uiState" || name == "uiStopRun" || window(command) != nil else {
             respond(false, nil, "No window.")
             return true
         }
@@ -323,15 +328,31 @@ enum TheoUIDriver {
                 }
             }
             respond(true, byClass, nil)
-        case "uiDebugAX":
-            let host = target!.contentView
-            var info: [String: Any] = ["trusted": AXIsProcessTrusted(), "contentChildren": host?.accessibilityChildren()?.count ?? -1,
-                                       "windowChildren": target!.accessibilityChildren()?.count ?? -1,
-                                       "appChildren": NSApp.accessibilityChildren()?.count ?? -1,
-                                       "contentRole": host?.accessibilityRole()?.rawValue ?? "nil",
-                                       "subviews": host?.subviews.map { String(describing: Swift.type(of: $0)) } ?? []]
-            info["childClasses"] = (host?.accessibilityChildren() ?? []).prefix(12).map { String(describing: Swift.type(of: $0)) }
-            respond(true, info, nil)
+        case "uiStopRun":
+            BotsStore.shared.stopRun(command["id"] as? String ?? "")
+            respond(true, nil, nil)
+        case "uiShowPanel":
+            // The menu-bar panel, which has no icon to click in the test profile.
+            NotificationCenter.default.post(name: .theoShowPanel, object: nil)
+            settle { respond(true, windowList(), nil) }
+        case "uiGo":
+            // Straight to a pane, for setting up a screen: {pane: home|notes|connectors|routines|clicky|bot:<id>|group:<id>|category:<id>|settings:<section>}
+            let pane = command["pane"] as? String ?? "home"
+            let selection = BotsSelection.shared
+            switch pane {
+            case "home": selection.pane = .home
+            case "notes": selection.pane = .notes
+            case "connectors": selection.pane = .connectors
+            case "routines": selection.pane = .routines
+            case "clicky": selection.pane = .clicky
+            case let value where value.hasPrefix("bot:"): selection.pane = .bot(String(value.dropFirst(4)))
+            case let value where value.hasPrefix("group:"): selection.pane = .group(String(value.dropFirst(6)))
+            case let value where value.hasPrefix("category:"): selection.pane = .category(String(value.dropFirst(9)))
+            case let value where value.hasPrefix("settings:"):
+                selection.openSettings(SettingsTab.Section(rawValue: String(value.dropFirst(9))) ?? .look)
+            default: break
+            }
+            settle { respond(true, state(), nil) }
         case "uiHitMap": respond(true, hitMap(target!), nil)
         case "uiTree":
             let roles = (command["roles"] as? [String]).map(Set.init)
@@ -357,7 +378,7 @@ enum TheoUIDriver {
             hover(target!, at: point())
             settle { respond(true, state(), nil) }
         case "uiScroll":
-            scroll(target!, at: point(), deltaY: Int32(command["dy"] as? Int ?? -200))
+            scroll(target!, at: point(), deltaY: Int32(command["dy"] as? Int ?? 200))
             settle { respond(true, state(), nil) }
         case "uiKey":
             key(target!, key: command["key"] as? String ?? "", modifiers: command["modifiers"] as? [String] ?? [])

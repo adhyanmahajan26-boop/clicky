@@ -647,7 +647,7 @@ struct BotChatScreen: View {
                                         showsName: index == 0 || record.messages[index - 1].author != message.author,
                                         animatesIn: !settledIDs.contains(message.id), isLive: false)
                                 if let runID = message.runID, let run = store.t3Runs.first(where: { $0.id == runID }) {
-                                    T3ResultCard(run: run).padding(.leading, 44)
+                                    T3ResultCard(run: run).padding(.leading, 38)
                                 }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
@@ -673,6 +673,8 @@ struct BotChatScreen: View {
                     .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
                     .frame(maxWidth: .infinity)
                 }
+                // A reply typing itself out, or a card opening under it, keeps the newest line in view.
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: record.messages.count) { _, _ in
                     if let last = record.messages.last, let streamed = lastLive[last.author], streamed.count > 20,
                        last.text.hasPrefix(String(streamed.prefix(20))) {
@@ -681,6 +683,8 @@ struct BotChatScreen: View {
                         lastLive[last.author] = nil
                     }
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) }
+                    // Once more when a tall card under the new message has been laid out.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { proxy.scrollTo("end", anchor: .bottom) }
                 }
                 .onChange(of: inProgress.map { "\($0.0.id):\($0.1.count / 200)" }) { _, _ in
                     for (bot, text) in inProgress where !text.isEmpty { lastLive[bot.id] = text }
@@ -808,14 +812,13 @@ struct BotChatScreen: View {
                     ForEach(mentionable) { member in
                         Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
                     }
-                    if bot?.primary == true { Button("@code (send a change to the coding agent)") { draft += "@code " } }
+                    Button("@code (straight to the coding agent)") { draft += "@code " }
                 } label: {
                     Image(systemName: "at").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                         .frame(width: 28, height: 28).contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .disabled(mentionable.isEmpty && bot?.primary != true)
-                .help("Mention a bot")
+                .help("Mention a bot, or send work to the coding agent")
                 if let bot {
                     Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
                         HStack(spacing: 4) {
@@ -1295,11 +1298,7 @@ struct ConnectorsScreen: View {
     private func row(_ connector: BotConnector) -> some View {
         let users = bots.filter { $0.apps.contains(connector.id) || (connector.id == "notion" && $0.apps.contains("calendar")) }
         return HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07))
-                AppLogo(connector: connector, size: 22)
-            }
-            .frame(width: 36, height: 36)
+            AppLogo(connector: connector, size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(connector.name).font(.system(size: 13.5, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
                 Text(users.isEmpty ? "No bot uses it yet" : "Used by " + users.map(\.name).joined(separator: ", "))
@@ -1378,107 +1377,141 @@ struct ConnectorsScreen: View {
 
 // MARK: - Hand-off to T3 Code
 
+/// A bot's finished build prompt, ready to go: which harness, which folder, and Start.
 struct T3HandoffButton: View {
     let text: String
     var room: String = BotsStore.teamID
     let prominent: Bool
     var alreadySent = false
+    @ObservedObject private var center = HarnessCenter.shared
+    @ObservedObject private var keys = ProviderKeys.shared
     @State private var sentHere = false
+    @State private var harness = HarnessPrefs.codingTarget
+    @State private var folder: URL?
     private var sent: Bool { sentHere || alreadySent }
 
+    /// The folder from the message itself, when it names one.
+    private var namedFolder: URL? { BotsT3.targetRepo(answer: text, pitch: "") }
+
     var body: some View {
-        let target = HarnessCatalog.label(HarnessPrefs.codingTarget)
-        HStack(spacing: 10) {
-            Button {
-                let prompt = BotsT3.promptBlock(in: text) ?? text
-                BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), room: room)
-                sentHere = true
-            } label: {
-                Label(sent ? "Sent to \(target)" : "Send to \(target)", systemImage: sent ? "checkmark" : "arrow.up.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .padding(.horizontal, 14).frame(height: 32)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(sent ? DS.Colors.surface : DS.Colors.accent))
-                    .foregroundColor(sent ? DS.Colors.textSecondary : .white)
+        let target = folder ?? namedFolder
+        VStack(alignment: .leading, spacing: 8) {
+            if sent {
+                Label("Sent to \(HarnessCatalog.label(harness))", systemImage: "checkmark").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+            } else {
+                HStack(spacing: 8) {
+                    BrandLogo(id: harness, name: HarnessCatalog.label(harness), size: 24)
+                    Picker("Run on", selection: $harness) {
+                        ForEach(HarnessCatalog.codingTargets, id: \.id) { info in
+                            let status = center.status(for: info.id)
+                            Text(info.label + (status.installed ? "" : " (not installed)")).tag(info.id)
+                        }
+                        if keys.hasKey(for: "cursor") { Text("Cursor cloud agent").tag(CursorCloud.harnessID) }
+                    }
+                    .labelsHidden().frame(width: 180)
+                    Button { chooseFolder() } label: {
+                        Label(target?.lastPathComponent ?? "Choose a folder…", systemImage: "folder").lineLimit(1)
+                    }
+                    .buttonStyle(.theo(.secondary, .small))
+                    .help(target?.path ?? "A git repo gets its own branch and a draft PR. A plain folder is edited in place.")
+                    Spacer(minLength: 0)
+                    Button { start(in: target) } label: { Label(target == nil ? "Start as a new project" : "Start run", systemImage: "play.fill") }
+                        .buttonStyle(.theo(.primary, .small))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
-            .buttonStyle(.plain)
-            .disabled(sent)
-            if !sent {
-                Button("Use a project folder…") { chooseFolder() }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
-                Button("Change") { TheoSettingsWindowController.show(section: .coding) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
-            }
-            Spacer()
         }
         .padding(.leading, 38)
+        .onAppear { center.refresh() }
     }
 
-    /// Sends the work into a folder that already exists: a git project gets its own branch, a plain folder is edited in place.
+    private func start(in target: URL?) {
+        let prompt = BotsT3.promptBlock(in: text) ?? text
+        BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), repo: target, room: room, harness: harness)
+        sentHere = true
+    }
+
     private func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = "Use this folder"
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
-        let prompt = BotsT3.promptBlock(in: text) ?? text
-        BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), repo: folder, room: room)
-        sentHere = true
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        folder = chosen
     }
 }
 
-/// A coding run in T3 Code while it works: what it's on, for how long, and a way to watch it there.
+/// A coding run while it works: its harness, status, time so far, the live terminal, Stop and pop out.
 struct T3RunCard: View {
     let run: T3Run
+    @ObservedObject private var terminals = TerminalSessions.shared
     @State private var showsTerminal = true
+    @State private var confirmsStop = false
 
     private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
+    private var session: TerminalSession? { terminals.session(for: run.id) }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    if run.phase == "waiting" {
-                        Image(systemName: "questionmark.bubble").foregroundColor(DS.Colors.warning)
-                    } else {
-                        ProgressView().controlSize(.small)
-                    }
-                    VStack(alignment: .leading, spacing: 3) {
-                        let minutes = max(0, Int(context.date.timeIntervalSince(run.startedAt) / 60))
-                        Text(run.phase == "waiting" ? "\(run.title) is waiting for your answer"
-                                                    : "Building \(run.title) in \(engine) · \(minutes) min")
-                            .font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                        if let activity = run.activity, !activity.isEmpty {
-                            Text(activity).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    if let session = TerminalSessions.shared.session(for: run.id) {
-                        Button { showsTerminal.toggle() } label: {
-                            Image(systemName: showsTerminal ? "chevron.up" : "terminal").font(.system(size: 12))
-                        }
-                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help(showsTerminal ? "Hide the terminal" : "Show the terminal")
-                        Button { TerminalWindowController.pop(sessionID: session.id) } label: {
-                            Image(systemName: "arrow.up.forward.square").font(.system(size: 12))
-                        }
-                        .buttonStyle(.plain).foregroundColor(DS.Colors.textSecondary).help("Open in its own window")
-                    } else if run.link != nil || run.harness != nil {
-                        Button("Watch") { BotsT3.openInApp(run) }
-                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                BrandLogo(id: run.harness ?? "t3", name: engine, size: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(run.title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                    Text(detailLine).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                 }
-                if showsTerminal, let session = TerminalSessions.shared.session(for: run.id) {
-                    // The harness's own terminal, live: watch it work and type into it.
-                    TerminalPanel(session: session)
-                        .frame(height: 300)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                Spacer(minLength: 8)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    StatusPill(text: (run.phase == "waiting" ? "Waiting for you · " : "Working · ") + Self.elapsed(since: run.startedAt, now: context.date),
+                               tone: run.phase == "waiting" ? .warn : .info, busy: run.phase != "waiting")
                 }
+                if session != nil {
+                    Button { showsTerminal.toggle() } label: { Image(systemName: showsTerminal ? "chevron.up" : "terminal").frame(width: 14) }
+                        .buttonStyle(.theo(.ghost, .small)).help(showsTerminal ? "Hide the terminal" : "Show the terminal")
+                    Button { TerminalWindowController.pop(sessionID: run.id) } label: { Image(systemName: "arrow.up.forward.square").frame(width: 14) }
+                        .buttonStyle(.theo(.ghost, .small)).help("Open in its own window")
+                } else if run.link != nil || run.harness != nil {
+                    Button("Watch") { BotsT3.openInApp(run) }.buttonStyle(.theo(.secondary, .small))
+                }
+                Button { confirmsStop = true } label: { Image(systemName: "stop.fill").frame(width: 14) }
+                    .buttonStyle(.theo(.ghost, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
             }
-            .padding(12)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-            .padding(.leading, 38)
+            if let activity = run.activity, !activity.isEmpty, session == nil || !showsTerminal {
+                Text(activity).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
+            }
+            if showsTerminal, let session {
+                // The harness's own terminal, live: watch it work and type into it.
+                TerminalPanel(session: session)
+                    .frame(height: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            }
         }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+        .padding(.leading, 38)
+        .alert("Stop \(run.title)?", isPresented: $confirmsStop) {
+            Button("Stop", role: .destructive) { BotsStore.shared.stopRun(run.id) }
+            Button("Keep going", role: .cancel) {}
+        } message: {
+            Text(run.harness == nil ? "T3 Code keeps its thread: open it there to stop the agent. Theo stops following it here." : "The agent stops now. What it did so far stays on its branch.")
+        }
+    }
+
+    private var detailLine: String {
+        var parts = [engine]
+        if let model = run.model { parts.append(NativeBot.label(for: model)) }
+        if let branch = run.branch { parts.append(branch) } else { parts.append(URL(fileURLWithPath: run.folder).lastPathComponent) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "4:07", "1:02:30".
+    static func elapsed(since start: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        if seconds >= 3600 { return String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) }
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 

@@ -18,7 +18,11 @@ import ClickyCore
 import Foundation
 
 enum ClaudiaT3Integration {
-    static var executablePath: String { Bundle.main.executablePath ?? "/Applications/Claudia.app/Contents/MacOS/Clicky" }
+    /// The program agents start for Theo's tools. The test profile never points them at a test build.
+    static var executablePath: String {
+        if TheoProfile.isTest { return "/Applications/Theo.app/Contents/MacOS/Clicky" }
+        return Bundle.main.executablePath ?? "/Applications/Theo.app/Contents/MacOS/Clicky"
+    }
 
     struct Outcome {
         var lines: [String] = []

@@ -281,7 +281,8 @@ extension BotRunner {
     static func ensureGrokTheoServer() {
         let config = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/config.toml")
         let current = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
-        guard !current.contains("[mcp_servers.theo]"), let executable = Bundle.main.executableURL?.path else { return }
+        guard !current.contains("[mcp_servers.theo]") else { return }
+        let executable = ClaudiaT3Integration.executablePath
         let entry = "\n[mcp_servers.theo]\ncommand = \"\(executable)\"\nargs = [\"--mcp\"]\nenabled = true\n"
         try? (current + entry).write(to: config, atomically: true, encoding: .utf8)
     }

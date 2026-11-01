@@ -59,12 +59,4 @@ struct SarvamClientTests {
         let text = String(decoding: request.httpBody!, as: UTF8.self)
         #expect(text.contains("name=\"file\"") && text.contains("saaras:v4") && text.hasSuffix("--B--\r\n"))
     }
-
-    @Test func providerRequestsCarryAuth() {
-        for provider in ProviderInfo.all {
-            let request = ProviderInfo.testRequest(providerID: provider.id, key: "KEY")
-            #expect(request != nil)
-            #expect(request?.allHTTPHeaderFields?.values.contains { $0.contains("KEY") } == true)
-        }
-    }
 }

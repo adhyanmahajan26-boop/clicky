@@ -249,14 +249,14 @@ struct ClickyInspector: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
                 InspectorSection("Brain") {
-                    Picker("Thinks with", selection: $main) {
-                        ForEach(ClickyModels.options, id: \.identifier) { Text($0.label).tag($0.identifier) }
-                    }
-                    .onChange(of: main) { _, value in ClickyModels.main = value }
-                    Picker("Helpers", selection: $helper) {
-                        ForEach(ClickyModels.options, id: \.identifier) { Text($0.label).tag($0.identifier) }
-                    }
-                    .onChange(of: helper) { _, value in ClickyModels.helper = value }
+                    Text("Thinks with").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    BrainModelPicker(title: "Thinks with", setting: Binding(get: { main }, set: { value in
+                        main = value
+                        if let manager = CompanionManager.current { manager.setSelectedModel(value) } else { ClickyModels.main = value }
+                    }))
+                    Text("Helpers").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    BrainModelPicker(title: "Helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 }))
+                    Button("All of Clicky's settings") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
                 }
                 InspectorSection("Cursor", hint: "One click changes it everywhere.") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 8)], spacing: 8) {
@@ -410,53 +410,19 @@ struct AppsGrid: View {
     }
 }
 
-/// A connector's real logo (its site's icon, fetched once and kept), else its symbol.
+/// A connector's real logo, bundled with the app (Assets.xcassets/Logos). Theo's own tools show Clicky's tile.
 struct AppLogo: View {
     let connector: BotConnector
     let size: CGFloat
-    @State private var image: NSImage?
-
-    static let domains: [String: String] = [
-        "gmail": "mail.google.com", "notion": "notion.so", "calendar": "calendar.notion.so", "drive": "drive.google.com",
-        "docs": "docs.google.com", "sheets": "sheets.google.com", "hostinger": "hostinger.com", "chrome": "google.com/chrome",
-    ]
 
     var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
-            } else if connector.id == "theo" {
-                ClickyAvatar(size: size)
-            } else {
-                Image(systemName: connector.symbol).font(.system(size: size * 0.55)).foregroundColor(DS.Colors.textSecondary)
-            }
+        if connector.id == "theo" {
+            ClickyAvatar(size: size)
+        } else if BrandLogo.hasLogo(connector.id) {
+            BrandLogo(id: connector.id, name: connector.name, size: size)
+        } else {
+            IconTile(symbol: connector.symbol, colors: connector.id == "studio" ? TileColors.violet : TileColors.ember, size: size)
         }
-        .frame(width: size, height: size)
-        .task(id: connector.id) { image = await LogoCache.shared.logo(for: connector.id) }
-    }
-}
-
-/// Site icons for the connectors, from the network once, then from ~/Library/Caches/Theo/logos.
-actor LogoCache {
-    static let shared = LogoCache()
-    private var memory: [String: NSImage] = [:]
-    private var folder: URL {
-        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Theo/logos", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    func logo(for id: String) async -> NSImage? {
-        if let cached = memory[id] { return cached }
-        let file = folder.appendingPathComponent("\(id).png")
-        if let image = NSImage(contentsOf: file) { memory[id] = image; return image }
-        guard let domain = await AppLogo.domains[id],
-              let url = URL(string: "https://www.google.com/s2/favicons?domain=\(domain)&sz=128"),
-              let (data, response) = try? await URLSession.shared.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data), image.size.width >= 32 else { return nil }
-        try? data.write(to: file)
-        memory[id] = image
-        return image
     }
 }
 

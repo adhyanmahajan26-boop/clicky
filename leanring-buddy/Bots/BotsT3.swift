@@ -53,6 +53,23 @@ struct T3Run: Codable, Identifiable, Equatable {
     var effort: String?
     /// The run's own git worktree (harness runs on a repo Addy named).
     var worktree: String?
+    /// What the result card shows, filled in when the run ends.
+    var changedFiles: [RunFileChange]?
+    var tests: String?
+    /// Why there's no pull request, when one was expected.
+    var pullRequestProblem: String?
+    /// Stopped by the owner, so the report doesn't call it a failure.
+    var stoppedByOwner: Bool?
+    /// What it was asked, so a failed run can try again on another harness.
+    var prompt: String?
+}
+
+/// One file a run changed.
+struct RunFileChange: Codable, Equatable, Identifiable {
+    var path: String
+    var added: Int
+    var removed: Int
+    var id: String { path }
 }
 
 enum BotsT3 {
@@ -69,10 +86,7 @@ enum BotsT3 {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    static var gh: URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return executable(["\(home)/.local/bin/gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"])
-    }
+    static var gh: URL? { tool("gh") }
 
     /// Told to the agent with every prompt, so the report has something to read back.
     static let deliveryNote = """
@@ -113,7 +127,18 @@ enum BotsT3 {
     /// "Project: Name" on its own line, else the prompt's first words.
     static func projectTitle(in text: String, prompt: String) -> String {
         if let name = labeledLine("project", in: text) { return String(name.prefix(60)) }
-        return prompt.split(separator: " ").prefix(6).joined(separator: " ")
+        return shortTitle(from: prompt)
+    }
+
+    /// "fix the bug in add.js so the test passes, in ~/foo" reads "Fix the bug in add.js".
+    static func shortTitle(from text: String) -> String {
+        var words = Array(text.split(separator: "\n").first?.split(separator: " ").prefix(6).map(String.init) ?? [])
+        let weak: Set<String> = ["so", "to", "in", "the", "and", "a", "an", "of", "for", "with", "on", "that", "then"]
+        while let last = words.last?.trimmingCharacters(in: .punctuationCharacters).lowercased(), weak.contains(last) { words.removeLast() }
+        // A path says little as a title.
+        words.removeAll { $0.hasPrefix("/") || $0.hasPrefix("~/") }
+        let joined = words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: ",.;: "))
+        return joined.prefix(1).uppercased() + joined.dropFirst()
     }
 
     /// Whether a folder is a git repo (a run gets its own branch) or a plain folder (the work happens in place).
@@ -128,9 +153,11 @@ enum BotsT3 {
     static func targetRepo(answer: String, pitch: String) -> URL? {
         var candidates: [String] = []
         if let line = labeledLine("repo", in: answer) { candidates.append(line) }
-        if let regex = try? NSRegularExpression(pattern: #"~/[\w./-]+"#) {
+        // A path in quotes or backticks (it can have spaces), then a bare ~/… or /Users/… one.
+        for pattern in [#"[`"'](~?/[^`"']+)[`"']"#, #"(?:^|\s)((?:~|/Users|/Volumes|/private|/tmp|/opt)/[\w./-]+)"#] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             let range = NSRange(pitch.startIndex..., in: pitch)
-            candidates += regex.matches(in: pitch, range: range).compactMap { Range($0.range, in: pitch).map { String(pitch[$0]) } }
+            candidates += regex.matches(in: pitch, range: range).compactMap { Range($0.range(at: 1), in: pitch).map { String(pitch[$0]) } }
         }
         for candidate in candidates {
             let path = (candidate.trimmingCharacters(in: CharacterSet(charactersIn: "`.,) ")) as NSString).expandingTildeInPath
@@ -161,9 +188,11 @@ enum BotsT3 {
 
     // MARK: Starting
 
-    /// Creates the project (or a branch of `repo`), starts the thread and opens it in T3 Code.
-    static func submit(prompt: String, title: String, repo: URL?) async throws -> T3Run {
-        let target = HarnessPrefs.codingTarget
+    /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
+    /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil) async throws -> T3Run {
+        let target = harness ?? HarnessPrefs.codingTarget
+        if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
         if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo) }
         guard let cli else { throw BotsT3Error.noCLI }
         var arguments = ["thread", "start"]
@@ -190,11 +219,17 @@ enum BotsT3 {
             arguments += [folder.path, "-"]
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
         }
-        arguments += ["--title", title, "--provider", provider, "--model", model, "--json"]
+        // Settings › Harnesses can pick another model; Claude Opus 5.5 at high effort otherwise.
+        let chosenModel = HarnessPrefs.codingModel ?? model
+        let chosenEffort = HarnessPrefs.codingEffort ?? effort
+        arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
         let message = prompt + (plainFolder ? plainFolderNote : deliveryNote)
+        run.model = chosenModel
+        run.effort = chosenEffort
+        run.prompt = prompt
         let output: String
         do {
-            output = try await shell(cli, arguments + ["--effort", effort], stdin: message)
+            output = try await shell(cli, arguments + ["--effort", chosenEffort], stdin: message)
         } catch BotsT3Error.failed(let text) where text.contains("effort") {
             // A T3 Code build from before --effort: start it on the model's default effort.
             output = try await shell(cli, arguments, stdin: message)
@@ -204,9 +239,16 @@ enum BotsT3 {
         }
         run.id = threadID
         run.link = launched["link"] as? String
-        _ = try? await shell(cli, ["app", run.folder])
-        await moveT3ToTheosScreen()
+        // T3 Code isn't brought forward by itself, since that takes focus from whatever the owner is doing. "Watch" on the card opens it.
         return run
+    }
+
+    /// T3 Code's driver for a model.
+    static func t3Provider(forModel model: String) -> String {
+        if model.hasPrefix("claude") { return provider }
+        if model.hasPrefix("gpt") || model.hasPrefix("o1") || model.hasPrefix("o3") { return "codex" }
+        if model.contains("/") { return "opencode" }
+        return provider
     }
 
     /// Sends Addy's change to a run's thread; a busy agent gets it as its next turn.
@@ -217,6 +259,7 @@ enum BotsT3 {
     }
 
     static func sendFollowup(_ text: String, to run: T3Run) async throws {
+        if run.harness == CursorCloud.harnessID { return try await CursorCloud.sendFollowup(text, to: run) }
         if HarnessCoding.owns(run) { return try await HarnessCoding.sendFollowup(text, to: run) }
         guard let cli else { throw BotsT3Error.noCLI }
         try await shell(cli, ["thread", "send", run.id, "-"], stdin: text + deliveryNote)
@@ -224,6 +267,10 @@ enum BotsT3 {
 
     /// Brings the run's project up in the T3 Code app.
     static func openInApp(_ run: T3Run) {
+        if run.harness == CursorCloud.harnessID {
+            if let link = run.link.flatMap(URL.init(string:)) { NSWorkspace.shared.open(link) }
+            return
+        }
         if HarnessCoding.owns(run) { HarnessCoding.openInTerminal(run); return }
         guard let cli else { return }
         Task {
@@ -280,6 +327,7 @@ enum BotsT3 {
     static let endedStatuses: Set<String> = ["completed", "failed", "interrupted", "cancelled", "rolled_back"]
 
     static func state(of run: T3Run) async -> ThreadState? {
+        if run.harness == CursorCloud.harnessID { return await CursorCloud.state(of: run) }
         if HarnessCoding.owns(run) { return await HarnessCoding.state(of: run) }
         guard let cli, let output = try? await shell(cli, ["thread", "show", run.id, "--json", "--messages", "1"]),
               let object = jsonObject(in: output), let thread = object["thread"] as? [String: Any] else { return nil }
@@ -297,52 +345,61 @@ enum BotsT3 {
             pullRequest: pullRequests.compactMap { $0["url"] as? String }.first)
     }
 
-    /// Everything the room hears when a run ends: the agent's report, the change, a test run, the PR.
+    /// Everything the room hears when a run ends: the agent's report in words, with the facts on the run itself for its
+    /// result card: files changed, Theo's own test run, the commit, the pushed branch and the draft PR.
     static func report(for run: inout T3Run, state: ThreadState) async -> String {
-        let folder = URL(fileURLWithPath: state.worktree ?? run.folder, isDirectory: true)
+        let folder = URL(fileURLWithPath: state.worktree ?? run.worktree ?? run.folder, isDirectory: true)
         let minutes = max(1, Int((Date().timeIntervalSince(run.startedAt) / 60).rounded()))
+        let stopped = run.stoppedByOwner == true
         let failed = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status)
         let engine = run.harness.map { HarnessCatalog.label($0) } ?? "T3 Code"
-        let usedModel = run.model ?? modelName
+        let usedModel = run.model.map(NativeBot.label(for:)) ?? modelName
         let usedEffort = run.effort ?? effort
-        var lines = [failed
+        let modelPart = usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
+        var lines = [stopped
+            ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. The work so far is kept."
+            : failed
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
-            : "**\(run.title)** is done in \(engine): \(usedModel), \(usedEffort) effort, \(minutes) min."]
-        if let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
+        if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             lines.append(trimmedSummary(summary))
         }
 
-        // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a
-        // repo Addy named that's only safe in the run's own worktree, never the checkout Addy works in.
-        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil {
+        // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
+        // named that's only safe in the run's own worktree, never the checkout they work in.
+        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
             try? await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
         }
         let head = run.branch ?? "HEAD"
-        if let base = run.baseCommit,
-           let stat = try? await shell(git, ["diff", "--shortstat", base, head], in: folder),
-           !stat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let files = (try? await shell(git, ["diff", "--name-only", base, head], in: folder))?
-                .split(separator: "\n").prefix(8).map { "`\($0)`" }.joined(separator: ", ") ?? ""
-            lines.append("**Changes:** \(stat.trimmingCharacters(in: .whitespacesAndNewlines)). \(files)")
-        }
-        if !failed, run.repo == nil || state.worktree != nil, let tests = await runTests(in: folder) { lines.append("**Tests (Theo's own run):** \(tests)") }
+        if let base = run.baseCommit { run.changedFiles = await changes(in: folder, from: base, to: head) }
+        if !failed, !stopped, run.repo == nil || state.worktree != nil || run.worktree != nil { run.tests = await runTests(in: folder) }
 
-        if let pr = state.pullRequest {
-            run.pullRequest = pr
-        } else if !failed, let branch = run.branch {
-            run.pullRequest = await openDraftPR(in: folder, branch: branch, title: run.title,
-                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
+        if !stopped {
+            if let pr = state.pullRequest {
+                run.pullRequest = pr
+            } else if !failed, let branch = run.branch {
+                let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest,
+                                            body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
+                run.pullRequest = outcome.url ?? run.pullRequest
+                run.pullRequestProblem = outcome.problem
+            }
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if let pr = run.pullRequest {
-            lines.append("**Pull request:** \(pr)")
-        } else if let branch = run.branch {
-            lines.append("**Branch:** `\(branch)` in \((run.repo ?? run.folder).replacingOccurrences(of: home, with: "~")) (no GitHub remote, so no PR).")
-        } else {
-            lines.append("**Folder:** \(run.folder.replacingOccurrences(of: home, with: "~"))")
-        }
-        lines.append("Write @code with a change and Theo passes it to \(run.harness.map(HarnessCatalog.label) ?? "T3 Code").")
+        if !failed && !stopped { lines.append("Write @code with a change and it goes to \(engine) on the same branch\(run.pullRequest == nil ? "" : " and pull request").") }
         return lines.joined(separator: "\n\n")
+    }
+
+    /// Files changed between two commits, from `git diff --numstat` ("12\t3\tpath"; binary files say "-").
+    static func changes(in folder: URL, from base: String, to head: String) async -> [RunFileChange] {
+        guard let output = try? await shell(git, ["diff", "--numstat", base, head], in: folder) else { return [] }
+        return parseNumstat(output)
+    }
+
+    static func parseNumstat(_ output: String) -> [RunFileChange] {
+        output.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+            guard parts.count == 3 else { return nil }
+            return RunFileChange(path: parts[2], added: Int(parts[0]) ?? 0, removed: Int(parts[1]) ?? 0)
+        }
     }
 
     private static func trimmedSummary(_ text: String) -> String {
@@ -425,16 +482,27 @@ enum BotsT3 {
         return String((lines.last { !$0.isEmpty } ?? "").prefix(160))
     }
 
-    /// Pushes the run's branch and opens a draft PR, when the repo lives on GitHub.
-    private static func openDraftPR(in folder: URL, branch: String, title: String, body: String,
-                                    engine: String = "T3 Code", model: String = modelName) async -> String? {
-        guard let gh, let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder),
-              remote.contains("github.com") else { return nil }
-        guard (try? await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)) != nil else { return nil }
-        let output = try? await shell(gh, ["pr", "create", "--draft", "--head", branch, "--title", title,
-                                           "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"],
-                                      in: folder, limit: 60)
-        return output?.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init)
+    /// Pushes the run's branch and, the first time, opens a draft PR, when the repo lives on GitHub. A follow-up only
+    /// pushes: the same pull request picks it up.
+    private static func publish(in folder: URL, branch: String, title: String, existing: String?, body: String,
+                                engine: String, model: String) async -> (url: String?, problem: String?) {
+        guard let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder), remote.contains("github.com") else {
+            return (nil, "This repo has no GitHub remote, so the work stays on the local branch.")
+        }
+        do {
+            try await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)
+        } catch {
+            return (existing, "Couldn't push: \(error.localizedDescription.suffix(200))")
+        }
+        if let existing { return (existing, nil) }
+        guard let gh else { return (nil, "The branch is pushed, but GitHub's gh command isn't installed, so there's no pull request.") }
+        do {
+            let output = try await shell(gh, ["pr", "create", "--draft", "--head", branch, "--title", title,
+                                              "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"], in: folder, limit: 60)
+            return (output.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init), nil)
+        } catch {
+            return (nil, "The branch is pushed, but the pull request failed: \(error.localizedDescription.suffix(200))")
+        }
     }
 
     // MARK: Processes
@@ -444,7 +512,7 @@ enum BotsT3 {
     /// A command-line tool by name: the usual install folders, then the login shell's PATH (node from
     /// pnpm or nvm lives in the home folder, which a Mac app's PATH doesn't include).
     static func tool(_ name: String) -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = TheoProfile.realHome
         if let found = executable(["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)",
                                    "\(home)/Library/pnpm/\(name)", "/usr/bin/\(name)"]) { return found }
         let process = Process()
@@ -492,7 +560,8 @@ enum BotsT3 {
             environment["PWD"] = cwd.path
             environment["NO_COLOR"] = "1"
             environment["CI"] = "1"
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            environment["GH_PROMPT_DISABLED"] = "1"
+            let home = TheoProfile.realHome
             environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(home)/.local/bin:\(home)/Library/pnpm:" +
                 "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
             process.environment = environment

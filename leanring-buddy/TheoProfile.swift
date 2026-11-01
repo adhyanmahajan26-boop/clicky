@@ -45,6 +45,7 @@ enum TheoProfile {
     /// The first thing the app does. In the test profile it restarts itself with the test home (the path has to
     /// be in place before anything asks where home is), then swaps the defaults and stops focus changes.
     static func prepareAtLaunch() {
+        if CommandLine.arguments.contains("--background") { stopTakingFocusUntilClicked() }
         guard isTest else { return }
         if getenv(homeVariable) == nil {
             makeTestHome()
@@ -78,6 +79,12 @@ enum TheoProfile {
               let method = class_getClassMethod(UserDefaults.self, NSSelectorFromString("standardUserDefaults")) else { return }
         let block: @convention(block) (AnyObject) -> UserDefaults = { _ in domain }
         method_setImplementation(method, imp_implementationWithBlock(block))
+    }
+
+    /// `--background`: the first launch's windows don't take focus. Once the owner clicks in Theo it behaves as usual,
+    /// since a click activates it without asking.
+    private static func stopTakingFocusUntilClicked() {
+        stopTakingFocus()
     }
 
     /// Nothing in the test profile may pull focus from the owner.

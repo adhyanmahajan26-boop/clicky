@@ -51,6 +51,9 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
+    /// Started with `--background` (an update, a reinstall): the window opens behind whatever the owner is doing.
+    static var launchedInBackground: Bool { CommandLine.arguments.contains("--background") }
+
     /// `--tab=bots` (or another home tab) opens the home window on that tab.
     static var launchTab: TheoHomeView.Tab? {
         CommandLine.arguments.first { $0.hasPrefix("--tab=") }.flatMap { TheoHomeView.Tab(rawValue: String($0.dropFirst(6))) }
