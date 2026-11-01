@@ -547,7 +547,7 @@ struct SetupView: View {
             .padding(.horizontal, 10).padding(.top, 40).padding(.bottom, 16)
             .frame(width: 230)
             .frame(maxHeight: .infinity, alignment: .top)
-            .background(Color.secondary.opacity(0.06))
+            .background(DS.Colors.hover)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -613,7 +613,7 @@ struct SetupView: View {
         content()
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 12).fill(DS.Colors.hover))
     }
 
     func modelPicker(_ title: String, selection: Binding<String>) -> some View {
@@ -976,7 +976,7 @@ struct T3IntegrationSection: View {
                 Divider()
                 agentRow("OpenCode", symbol: "chevron.left.forwardslash.chevron.right", installed: status.openCode)
             }
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(DS.Colors.hover))
 
             HStack(spacing: 8) {
                 Button(action: { run(install: true) }) {

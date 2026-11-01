@@ -46,7 +46,7 @@ struct BotInspector: View {
                         TextEditor(text: Binding(get: { draft?.instructions ?? "" }, set: { draft?.instructions = $0; saveSoon() }))
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)
                             .padding(8).frame(minHeight: 130)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+                            .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
                     }
                     apps(bot)
                     schedules(bot)
@@ -138,7 +138,7 @@ struct BotInspector: View {
                     .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+            .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
         }
     }
 
@@ -192,7 +192,7 @@ struct BotInspector: View {
                         .toggleStyle(.switch).labelsHidden().controlSize(.mini)
                 }
                 .padding(.vertical, 6).padding(.horizontal, 10)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.05)))
+                .background(RoundedRectangle(cornerRadius: 9).fill(DS.Colors.hover))
                 .contextMenu { Button("Delete", role: .destructive) { store.deleteRoutine(routine.id) } }
             }
             Button { addingRoutine = true } label: { Label("Add schedule", systemImage: "plus") .font(.system(size: 12, weight: .medium)) }
@@ -247,7 +247,7 @@ struct ClickyInspector: View {
                         .toggleStyle(.switch).labelsHidden().controlSize(.small)
                 }
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+                .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
                 InspectorSection("Brain") {
                     Text("Thinks with").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                     BrainModelPicker(title: "Thinks with", setting: Binding(get: { main }, set: { value in
@@ -268,7 +268,7 @@ struct ClickyInspector: View {
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 58)
                                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.55)))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(style == item ? DS.Colors.accent : Color.white.opacity(0.06), lineWidth: style == item ? 2 : 1))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(style == item ? DS.Colors.accent : DS.Colors.hover, lineWidth: style == item ? 2 : 1))
                             }
                             .buttonStyle(.plain)
                         }
@@ -366,7 +366,7 @@ struct FlowChips: View {
                 Button { onToggle(id, !on) } label: {
                     Text(name).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         .padding(.horizontal, 9).padding(.vertical, 5).frame(maxWidth: .infinity)
-                        .background(Capsule().fill(on ? DS.Colors.accent.opacity(0.85) : Color.white.opacity(0.07)))
+                        .background(Capsule().fill(on ? DS.Colors.accent.opacity(0.85) : DS.Colors.hover))
                         .foregroundColor(on ? .white : DS.Colors.textSecondary)
                 }
                 .buttonStyle(.plain)
@@ -397,8 +397,8 @@ struct AppsGrid: View {
                         }
                     }
                     .frame(maxWidth: .infinity, minHeight: 78)
-                    .background(RoundedRectangle(cornerRadius: 11).fill(on ? DS.Colors.accent.opacity(0.16) : Color.white.opacity(0.04)))
-                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(on ? DS.Colors.accent : Color.white.opacity(0.06), lineWidth: on ? 1.5 : 1))
+                    .background(RoundedRectangle(cornerRadius: 11).fill(on ? DS.Colors.accent.opacity(0.16) : DS.Colors.hover))
+                    .overlay(RoundedRectangle(cornerRadius: 11).stroke(on ? DS.Colors.accent : DS.Colors.hover, lineWidth: on ? 1.5 : 1))
                     .overlay(alignment: .topTrailing) {
                         if on { Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundColor(DS.Colors.accent).padding(5) }
                     }

@@ -144,8 +144,8 @@ struct BotCodeCard: View {
             }
             .foregroundColor(DS.Colors.textSecondary)
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(Color.white.opacity(0.04))
-            Divider().overlay(Color.white.opacity(0.06))
+            .background(DS.Colors.hover)
+            Divider().overlay(DS.Colors.hover)
             if isProse {
                 // A prompt wraps like text, and a long one folds to its opening lines until opened.
                 Text(expanded || !isLong ? code : preview)
@@ -171,7 +171,7 @@ struct BotCodeCard: View {
             }
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.28)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(DS.Colors.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

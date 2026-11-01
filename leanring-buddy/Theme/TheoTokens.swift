@@ -61,6 +61,26 @@ enum DS {
     }
 }
 
+/// Light, dark or follow the Mac. Dark is Theo's own look, so it's the default.
+enum TheoAppearance: String, CaseIterable, Identifiable {
+    case dark, light, system
+    static let settingKey = "theo.appearance"
+    var id: String { rawValue }
+    var title: String { self == .dark ? "Dark" : self == .light ? "Light" : "Match my Mac" }
+    var symbol: String { self == .dark ? "moon.fill" : self == .light ? "sun.max.fill" : "circle.lefthalf.filled" }
+    var colorScheme: ColorScheme? { self == .dark ? .dark : self == .light ? .light : nil }
+    /// For AppKit surfaces such as the terminal's window.
+    static var current: TheoAppearance { TheoAppearance(rawValue: UserDefaults.standard.string(forKey: settingKey) ?? "") ?? .dark }
+}
+
+/// Applies the appearance setting to a window's root view.
+struct TheoAppearanceRoot: ViewModifier {
+    @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(TheoAppearance(rawValue: appearance)?.colorScheme)
+    }
+}
+
 extension NSColor {
     convenience init(hex: UInt32, alpha: CGFloat = 1) {
         self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,

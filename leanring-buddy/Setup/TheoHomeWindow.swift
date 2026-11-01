@@ -168,7 +168,7 @@ struct NotesTab: View {
                             Text("\(items.count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
                                 .foregroundColor(DS.Colors.textSecondary)
                                 .padding(.horizontal, 8).padding(.vertical, 2)
-                                .background(Capsule().fill(Color.white.opacity(0.08)))
+                                .background(Capsule().fill(DS.Colors.hover))
                         }
                         Text("Everything Theo saved. Pick notes to attach them to code tasks.")
                             .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)

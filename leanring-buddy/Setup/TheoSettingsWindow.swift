@@ -165,9 +165,13 @@ struct SettingsPage: View {
 
 struct LookSettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
+    @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            TheoSection(title: "Appearance", hint: nil) {
+                ChoiceChips(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title, $0.symbol) }, selection: $appearance).padding(12)
+            }
             TheoSection(title: "Cursor", hint: "The spark that follows you, everywhere at once.") {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 10)], spacing: 10) {
                     ForEach(CompanionIconStyle.allCases, id: \.self) { style in

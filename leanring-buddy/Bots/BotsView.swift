@@ -107,8 +107,7 @@ struct BotsRootView: View {
                 }
         }
         .background(DS.Colors.background)
-        // Dark only for now: a few pieces still assume a dark backdrop (docs/DESIGN.md has the light palette).
-        .preferredColorScheme(.dark)
+        .modifier(TheoAppearanceRoot())
         .onChange(of: selection.pane) { _, _ in showsInspector = false }
         .onReceive(NotificationCenter.default.publisher(for: .theoShowBotSettings)) { _ in
             if inspectorTarget != nil { withAnimation(DS.Motion.panel) { showsInspector = true } }
@@ -278,7 +277,7 @@ struct BotsRootView: View {
 
     private func iconTile(_ symbol: String) -> some View {
         ZStack {
-            Circle().fill(Color.white.opacity(0.08))
+            Circle().fill(DS.Colors.hover)
             Image(systemName: symbol).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
         }
         .frame(width: 34, height: 34)
@@ -406,7 +405,7 @@ struct BotsRootView: View {
                     Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(DS.Colors.hover, style: StrokeStyle(lineWidth: 1, dash: [4])))
                         .padding(.horizontal, 8)
                         .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
                 }
@@ -617,6 +616,7 @@ struct BotChatScreen: View {
     @State private var showsModelSettings = false
     @State private var showsDetails = false
     @State private var editsGroup = false
+    @State private var attachments: [URL] = []
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
@@ -798,8 +798,26 @@ struct BotChatScreen: View {
 
     /// The composer (docs/DESIGN.md): text on top; under it @-mentions, the model, and send or stop.
     private var composer: some View {
-        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
         return VStack(alignment: .leading, spacing: 10) {
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachments, id: \.self) { file in
+                            HStack(spacing: 5) {
+                                Image(systemName: "doc.fill").font(.system(size: 10)).foregroundColor(DS.Colors.textTertiary)
+                                Text(file.lastPathComponent).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                                Button { attachments.removeAll { $0 == file } } label: {
+                                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundColor(DS.Colors.textTertiary).frame(width: 14, height: 14).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain).help("Remove")
+                            }
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(Capsule().fill(DS.Colors.hover))
+                        }
+                    }
+                }
+            }
             TextField(bot.map { "Message \($0.name)" } ?? "Message \(group?.name ?? "the group")",
                       text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -808,6 +826,11 @@ struct BotChatScreen: View {
                 .focused($composerFocused)
                 .onSubmit(send)
             HStack(spacing: 6) {
+                Button(action: chooseAttachments) {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("Attach files")
                 Menu {
                     ForEach(mentionable) { member in
                         Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
@@ -846,7 +869,7 @@ struct BotChatScreen: View {
                             .frame(width: 28, height: 28)
                             .background(Circle().fill(isEmpty ? DS.Colors.textDisabled : DS.Colors.accent))
                     }
-                    .buttonStyle(.plain).disabled(isEmpty)
+                    .buttonStyle(.plain).disabled(isEmpty).help("Send")
                     .keyboardShortcut(.return, modifiers: .command)
                 }
             }
@@ -858,6 +881,11 @@ struct BotChatScreen: View {
         .frame(maxWidth: 720)
         .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
         .frame(maxWidth: .infinity)
+        .dropDestination(for: URL.self) { files, _ in
+            let local = files.filter(\.isFileURL)
+            attachments += local.filter { !attachments.contains($0) }
+            return !local.isEmpty
+        }
     }
 
     /// Who an @ can reach from here: the group's bots, or the bots this one may message.
@@ -867,10 +895,43 @@ struct BotChatScreen: View {
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty || !attachments.isEmpty else { return }
+        let text = typed + BotAttachments.promptText(for: attachments, on: bot?.provider ?? "claude")
         draft = ""
+        attachments = []
         if let bot { store.send(text, to: bot.id) } else if let groupID { store.sendToGroup(text, groupID: groupID) }
+    }
+
+    private func chooseAttachments() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Attach"
+        guard panel.runModal() == .OK else { return }
+        attachments += panel.urls.filter { !attachments.contains($0) }
+    }
+}
+
+/// Files attached to a message. Engines with file tools get their paths to read. An engine with no tools (a bare API)
+/// gets the text of small text files in the message itself.
+enum BotAttachments {
+    static let inlineLimit = 40_000
+
+    static func promptText(for files: [URL], on provider: String) -> String {
+        guard !files.isEmpty else { return "" }
+        let lines = files.map { "- \($0.path)" }.joined(separator: "\n")
+        guard provider.hasPrefix("api:") else { return "\n\nAttached (read these):\n\(lines)" }
+        var text = ""
+        for file in files {
+            if let body = try? String(contentsOf: file, encoding: .utf8), body.count <= inlineLimit {
+                text += "\n\nAttached file \(file.lastPathComponent):\n```\n\(body)\n```"
+            } else {
+                text += "\n\nAttached file \(file.lastPathComponent) can't be read on this engine (too big, or not text)."
+            }
+        }
+        return text
     }
 }
 
@@ -893,7 +954,6 @@ struct UserBubble: View {
 struct ThinkingLine: View {
     let bot: NativeBot
     let showsName: Bool
-    @State private var phase = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -901,17 +961,9 @@ struct ThinkingLine: View {
                 BotAvatar(bot: bot, size: 28, state: .thinking)
                 Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
             }
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle().fill(DS.Colors.textTertiary).frame(width: 5, height: 5)
-                        .opacity(phase ? 1 : 0.3)
-                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(Double(index) * 0.15), value: phase)
-                }
-            }
-            .padding(.leading, 38).frame(height: 20)
+            TypingDots().padding(.leading, 38)
         }
         .padding(.top, 8)
-        .onAppear { phase = true }
     }
 }
 

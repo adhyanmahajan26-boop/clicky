@@ -39,7 +39,7 @@ struct GroupEditor: View {
                         Button { group.symbol = symbol } label: {
                             Image(systemName: symbol).font(.system(size: 13))
                                 .frame(width: 30, height: 30)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(group.symbol == symbol ? DS.Colors.accent.opacity(0.35) : Color.white.opacity(0.06)))
+                                .background(RoundedRectangle(cornerRadius: 8).fill(group.symbol == symbol ? DS.Colors.accent.opacity(0.35) : DS.Colors.hover))
                         }
                         .buttonStyle(.plain)
                     }
@@ -306,6 +306,23 @@ struct NewBotSheet: View {
 
 // MARK: - Clicky
 
+/// Three dots rising and falling: someone is typing. Holds still with Reduce Motion on.
+struct TypingDots: View {
+    @State private var phase = false
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle().fill(DS.Colors.textTertiary).frame(width: 6, height: 6)
+                    .opacity(phase ? 1 : 0.3)
+                    .offset(y: phase ? -2 : 1)
+                    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.55).repeatForever(autoreverses: true).delay(Double(index) * 0.14), value: phase)
+            }
+        }
+        .frame(height: 20)
+        .onAppear { phase = true }
+    }
+}
+
 /// Clicky's tile: flat ember with the spark-and-cursor mark (docs/DESIGN.md).
 struct ClickyAvatar: View {
     let size: CGFloat
@@ -353,7 +370,7 @@ struct ClickyChatScreen: View {
                     .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
-            Divider().overlay(Color.white.opacity(0.06))
+            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -372,11 +389,11 @@ struct ClickyChatScreen: View {
                         }
                         if let pending {
                             UserBubble(text: pending)
-                            HStack(spacing: 12) {
-                                ClickyAvatar(size: 34)
-                                ProgressView().controlSize(.small)
-                                Text("Clicky is on it").font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
+                            HStack(spacing: 10) {
+                                ClickyAvatar(size: 28, isActive: true)
+                                TypingDots()
                             }
+                            .padding(.top, 8)
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
@@ -387,23 +404,47 @@ struct ClickyChatScreen: View {
                 .onChange(of: turns.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
                 .onChange(of: pending) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
             }
-            HStack(alignment: .bottom, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 TextField("Message Clicky", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain).font(.system(size: 14)).lineLimit(1...6)
+                    .textFieldStyle(.plain).font(.system(size: 15)).lineLimit(1...6)
                     .onSubmit(send)
-                Button(action: send) {
-                    Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundColor(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty || pending != nil ? Color.white.opacity(0.12) : DS.Colors.accent))
+                HStack(spacing: 6) {
+                    Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
+                        HStack(spacing: 4) {
+                            Text(BrainCatalog.shared.label(for: ClickyModels.main)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
+                        }
+                        .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
+                    }
+                    .buttonStyle(.plain).help("Change Clicky's model")
+                    Spacer()
+                    if pending != nil {
+                        Button {
+                            ClaudiaControlInbox.shared?.execute(["cmd": "stop"]) { _, _, _ in }
+                            pending = nil
+                            load()
+                        } label: {
+                            Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+                                .frame(width: 28, height: 28).background(Circle().fill(DS.Colors.surface))
+                                .overlay(Circle().strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain).help("Stop")
+                    } else {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty ? DS.Colors.textDisabled : DS.Colors.accent))
+                        }
+                        .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty).help("Send")
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || pending != nil)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 22).fill(DS.Colors.surface))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.07)))
-            .frame(maxWidth: 760)
-            .padding(.horizontal, 24).padding(.bottom, 18).padding(.top, 6)
+            .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            .frame(maxWidth: 720)
+            .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
             .frame(maxWidth: .infinity)
         }
         .onAppear(perform: load)

@@ -2,8 +2,8 @@
 //  DebugCommandInbox.swift
 //  leanring-buddy
 //
-//  Debug builds only. Lets tools (Tools/clickyctl.sh, the grounding eval)
-//  drive the running app without touching the keyboard or mic: drop
+//  Only when started with `--debug-inbox` (or in a Debug build). Lets tools (Tools/clickyctl.sh, the grounding eval, the
+//  hard tests) drive the running app without touching the keyboard or mic: drop
 //  `<id>.json` into ~/.clicky/debug-inbox and the reply appears as
 //  `<id>.json` in ~/.clicky/debug-outbox. Only a fixed set of commands is
 //  understood (no shell, no arbitrary code):
@@ -73,7 +73,6 @@
 //  renamed, so a reader never sees a half-written file.
 //
 
-#if DEBUG
 
 import AppKit
 import ApplicationServices
@@ -1532,4 +1531,4 @@ enum DebugAXTestCommands {
     }
 }
 
-#endif
+

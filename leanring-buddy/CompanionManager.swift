@@ -1359,7 +1359,6 @@ final class CompanionManager: ObservableObject {
         return turnRecord?.turnDirectoryURL
     }
 
-    #if DEBUG
     /// The debug inbox's `board`: an answer text (or a bare board's JSONL)
     /// played as if Claude had just said it, through the real answer path.
     func playDebugAnswer(_ answerText: String, speaks: Bool = true) async -> URL? {
@@ -1379,7 +1378,6 @@ final class CompanionManager: ObservableObject {
         if let turnRecord { TurnLogger.finishTurn(turnRecord) }
         return turnRecord?.turnDirectoryURL
     }
-    #endif
 
     // MARK: - Companion Prompt
 

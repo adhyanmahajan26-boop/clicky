@@ -83,7 +83,7 @@ struct BotDetailsSheet: View {
                         draft?.fast = updated.fast
                         store.save(updated)
                     }
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
                 }
                 field("Apps") {
                     VStack(alignment: .leading, spacing: 6) {
@@ -189,7 +189,7 @@ struct RoutinesScreen: View {
                 Button { adding = true } label: { Label("New routine", systemImage: "plus") }
             }
             .padding(.horizontal, 24).padding(.vertical, 18)
-            Divider().overlay(Color.white.opacity(0.06))
+            Divider().overlay(DS.Colors.hover)
             ScrollView {
                 if store.routines.isEmpty {
                     VStack(spacing: 10) {
@@ -319,7 +319,7 @@ struct RoutineList: View {
         Button(action: action) {
             Label(title, systemImage: symbol).font(.system(size: 11, weight: .medium))
                 .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .background(Capsule().fill(DS.Colors.hover))
         }
         .buttonStyle(.plain).foregroundColor(DS.Colors.textPrimary)
     }
@@ -422,7 +422,7 @@ struct RoutineMarker: View {
         }
         .foregroundColor(DS.Colors.textTertiary)
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Capsule().fill(Color.white.opacity(0.05)))
+        .background(Capsule().fill(DS.Colors.hover))
         .frame(maxWidth: .infinity)
     }
 }

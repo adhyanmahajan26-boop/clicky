@@ -117,7 +117,7 @@ struct SetupGuideView: View {
             .background(DS.Colors.background)
         }
         .frame(width: 980, height: 680)
-        .preferredColorScheme(.dark)
+        .modifier(TheoAppearanceRoot())
     }
 
     private var sidebar: some View {

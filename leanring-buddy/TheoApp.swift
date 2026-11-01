@@ -42,9 +42,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     private var pill: NotchPanelController?
     private var controlInbox: ClaudiaControlInbox?
     private var uiServer: ClaudiaUIServer?
-    #if DEBUG
     private var debugCommandInbox: DebugCommandInbox?
-    #endif
 
     /// Unit tests host the app; then nothing starts (no overlay, mic, event tap or servers).
     static var isHostingUnitTests: Bool {
@@ -106,10 +104,15 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             pill = NotchPanelController(companionManager: companionManager)
             pill?.start()
         }
+        // The test tools' way in, only when asked for (it can run answers and actions).
+        var startsDebugInbox = CommandLine.arguments.contains("--debug-inbox")
         #if DEBUG
-        debugCommandInbox = DebugCommandInbox(companionManager: companionManager)
-        debugCommandInbox?.start()
+        startsDebugInbox = true
         #endif
+        if startsDebugInbox {
+            debugCommandInbox = DebugCommandInbox(companionManager: companionManager)
+            debugCommandInbox?.start()
+        }
 
         // T3 Code talks to the running Theo through the control inbox (MCP) and the local page server.
         let inbox = ClaudiaControlInbox(companionManager: companionManager)

@@ -274,78 +274,53 @@ final class T3ConnectModel: ObservableObject {
 
 struct T3ConnectView: View {
     @StateObject private var model = T3ConnectModel()
-    private let accent = LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45), Color(red: 0.75, green: 0.27, blue: 0.9)],
-                                        startPoint: .topLeading, endPoint: .bottomTrailing)
     /// The release that carries the T3 Code Cursor Assistant build (T3-Code-Cursor-Assistant-arm64.zip).
     static let builtInReleaseURL = URL(string: "https://github.com/adhyanmahajan26-boop/clicky/releases/latest")!
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            connectCard
-            if model.hasRun { stepsCard }
-            agentsCard
-            downloadCard
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.connected ? "Theo is connected to T3 Code" : "One click adds Theo's tools to your agents")
+                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                    Text(model.connected ? "Restart your T3 thread, then type $ to use Theo." : "Installs them into Claude Code, Codex and OpenCode, then checks they really answer.")
+                        .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button(action: { model.connect() }) {
+                    HStack(spacing: 6) {
+                        if model.isRunning { ProgressView().controlSize(.mini) }
+                        Text(model.isRunning ? "Connecting…" : (model.connected ? "Test again" : "Connect"))
+                    }
+                }
+                .buttonStyle(model.connected ? .theoSecondary : .theoPrimary)
+                .disabled(model.isRunning)
+            }
+            if model.hasRun { steps }
+            agents
         }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Colors.hover))
         .onAppear { model.refreshStatus() }
     }
 
-    private var connectCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: model.connected ? "checkmark.seal.fill" : "link.circle.fill")
-                    .font(.system(size: 30)).foregroundStyle(model.connected ? AnyShapeStyle(Color.green) : AnyShapeStyle(accent))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.connected ? "Theo is connected to T3 Code" : "Connect Theo to T3 Code").font(.system(size: 16, weight: .semibold))
-                    Text("One click installs Theo's tools and skills into Claude Code, Codex and OpenCode, then checks that they really work.")
-                        .font(.system(size: 12)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Button(action: { model.connect() }) {
-                HStack(spacing: 8) {
-                    if model.isRunning { ProgressView().controlSize(.small).tint(.white) } else { Image(systemName: model.connected ? "arrow.clockwise" : "bolt.fill") }
-                    Text(model.isRunning ? "Connecting…" : (model.connected ? "Run the test again" : "Connect Theo to T3 Code"))
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(accent))
-                .opacity(model.isRunning ? 0.7 : 1)
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isRunning)
-            if model.connected {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.right.circle.fill").foregroundColor(.green)
-                    Text("Next: restart your T3 thread, then type $ to use Theo.").font(.system(size: 13, weight: .medium))
-                }
-                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.green.opacity(0.12)))
-            }
-        }
-        .padding(18)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.secondary.opacity(0.08)))
-    }
-
-    private var stepsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(model.steps) { step in
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         stepIcon(step.state)
-                        Text(stepTitle(step)).font(.system(size: 13, weight: .medium))
-                            .foregroundColor(step.state == .pending ? .secondary : .primary)
+                        Text(stepTitle(step)).font(TheoType.caption).foregroundColor(step.state == .pending ? DS.Colors.textTertiary : DS.Colors.textPrimary)
                     }
                     if !step.detail.isEmpty && step.state != .pending {
-                        Text(step.detail).font(.system(size: 11.5, design: .monospaced))
-                            .foregroundColor(step.state == .failed ? .red : .secondary)
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            .padding(.leading, 26)
+                        Text(step.detail).font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(step.state == .failed ? DS.Colors.destructiveText : DS.Colors.textTertiary)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true).lineLimit(8)
+                            .padding(.leading, 24)
                     }
                 }
             }
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.secondary.opacity(0.06)))
     }
 
     private func stepTitle(_ step: T3ConnectModel.Step) -> String {
@@ -353,7 +328,7 @@ struct T3ConnectView: View {
         case ("detect", .running): return "Detecting…"
         case ("install", .running): return "Installing…"
         case ("test", .running): return "Testing…"
-        case ("done", .done): return "Connected ✓"
+        case ("done", .done): return "Connected"
         case ("done", .failed): return "Not connected"
         default: return step.title
         }
@@ -361,47 +336,32 @@ struct T3ConnectView: View {
 
     @ViewBuilder private func stepIcon(_ state: T3ConnectModel.StepState) -> some View {
         switch state {
-        case .pending: Image(systemName: "circle").foregroundColor(.secondary).frame(width: 18)
-        case .running: ProgressView().controlSize(.small).frame(width: 18)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundColor(.green).frame(width: 18)
-        case .failed: Image(systemName: "xmark.octagon.fill").foregroundColor(.red).frame(width: 18)
+        case .pending: Image(systemName: "circle").font(.system(size: 12)).foregroundColor(DS.Colors.textDisabled).frame(width: 16)
+        case .running: ProgressView().controlSize(.mini).frame(width: 16)
+        case .done: Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundColor(DS.Colors.success).frame(width: 16)
+        case .failed: Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundColor(DS.Colors.destructiveText).frame(width: 16)
         }
     }
 
-    private var agentsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Agents").font(.system(size: 13, weight: .semibold))
+    private var agents: some View {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(model.rows) { row in AgentRowView(row: row, isRunning: model.isRunning, fix: { model.connect(only: row.agent) }) }
-            Divider()
-            HStack(spacing: 8) {
-                Image(systemName: "macwindow").foregroundColor(.secondary)
-                if model.t3Apps.isEmpty {
-                    Text("No T3 Code app found in Applications. The extension still works once T3 Code is installed.").font(.system(size: 11.5)).foregroundColor(.secondary)
-                } else {
-                    Text("T3 Code on this Mac:").font(.system(size: 11.5)).foregroundColor(.secondary)
+            if !model.t3Apps.isEmpty {
+                HStack(spacing: 6) {
+                    Text("T3 Code on this Mac").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
                     ForEach(model.t3Apps, id: \.self) { app in
-                        Button(app.deletingPathExtension().lastPathComponent) { NSWorkspace.shared.open(app) }.controlSize(.small)
+                        Button(app.deletingPathExtension().lastPathComponent) { NSWorkspace.shared.open(app) }.buttonStyle(.theo(.secondary, .small))
                     }
                 }
+                .padding(.top, 4)
+            } else {
+                HStack(spacing: 6) {
+                    Text("No T3 Code app in Applications. Theo's tools still work once it's installed.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                    Button("Get the build with Theo inside") { NSWorkspace.shared.open(Self.builtInReleaseURL) }.buttonStyle(.theo(.ghost, .small))
+                }
+                .padding(.top, 4)
             }
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.secondary.opacity(0.06)))
-    }
-
-    private var downloadCard: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "arrow.down.app.fill").font(.system(size: 22)).foregroundStyle(accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Get T3 Code with Theo built in").font(.system(size: 13, weight: .semibold))
-                Text("Optional. A separate T3 Code build with a Theo page, Ask Theo and a notes button in every thread already included. You don't need it for the connection above. Download T3-Code-Cursor-Assistant-arm64.zip from the latest release.")
-                    .font(.system(size: 11.5)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button("Open download page") { NSWorkspace.shared.open(Self.builtInReleaseURL) }
-        }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.secondary.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
     }
 }
 
@@ -412,46 +372,44 @@ private struct AgentRowView: View {
     @State private var expanded = false
 
     private var statusText: String {
-        if !row.onThisMac { return "Not installed on this Mac" }
-        if !row.configPresent { return "Extension not installed" }
+        if !row.onThisMac { return "Not on this Mac" }
+        if !row.configPresent { return "Tools not added" }
         switch row.selfTestPassed {
-        case .some(true): return "Connected: config present, self-test passed"
-        case .some(false): return "Config present, but the self-test failed"
-        case .none: return "Config present, not tested yet"
+        case .some(true): return "Connected"
+        case .some(false): return "Added, but the test failed"
+        case .none: return "Added"
         }
     }
 
-    private var statusColor: Color {
-        if !row.onThisMac { return .secondary }
-        if row.connected { return .green }
-        return row.configPresent && row.selfTestPassed == nil ? .orange : .red
+    private var tone: StatusPill.Tone {
+        if !row.onThisMac { return .neutral }
+        if row.connected { return .good }
+        return row.configPresent && row.selfTestPassed == nil ? .good : .bad
     }
+
+    private var logo: String { row.agent == .claude ? "claude" : row.agent == .codex ? "codex" : "opencode" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Image(systemName: row.connected ? "checkmark.circle.fill" : (row.onThisMac ? "exclamationmark.circle.fill" : "minus.circle"))
-                    .foregroundColor(statusColor).font(.system(size: 16))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(row.agent.title).font(.system(size: 13, weight: .medium))
-                    Text(statusText).font(.system(size: 11.5)).foregroundColor(.secondary)
-                }
+                BrandLogo(id: logo, name: row.agent.title, size: 22)
+                Text(row.agent.title).font(TheoType.body).foregroundColor(DS.Colors.textPrimary)
                 Spacer()
+                StatusPill(text: statusText, tone: tone)
                 if row.onThisMac {
-                    Button(row.connected ? "Reinstall" : "Fix", action: fix).controlSize(.small).disabled(isRunning)
-                }
-                if row.onThisMac {
-                    Button(action: { expanded.toggle() }) {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 11, weight: .semibold))
-                    }.buttonStyle(.plain).foregroundColor(.secondary)
+                    Button(row.connected ? "Reinstall" : "Fix", action: fix).buttonStyle(.theo(.ghost, .small)).disabled(isRunning)
+                    Button { expanded.toggle() } label: {
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 14)
+                    }
+                    .buttonStyle(.theo(.ghost, .small)).help("Details")
                 }
             }
             if expanded {
                 Text(detailText).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                    .foregroundColor(row.errorText.isEmpty ? .secondary : .red)
+                    .foregroundColor(row.errorText.isEmpty ? DS.Colors.textTertiary : DS.Colors.destructiveText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.18)))
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.background))
             }
         }
     }

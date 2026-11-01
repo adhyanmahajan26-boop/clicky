@@ -403,7 +403,7 @@ struct TheoPanelView: View {
                             .frame(width: 20, height: 20)
                             .frame(maxWidth: .infinity, minHeight: 38)
                             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.55)))
-                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? DS.Colors.accent : Color.white.opacity(0.06), lineWidth: selected ? 2 : 1))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? DS.Colors.accent : DS.Colors.hover, lineWidth: selected ? 2 : 1))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).help(style.displayName).pointerCursor()

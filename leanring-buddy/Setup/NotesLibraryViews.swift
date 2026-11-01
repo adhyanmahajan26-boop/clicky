@@ -114,7 +114,7 @@ struct NotesEmptyState: View {
     var body: some View {
         VStack(spacing: 14) {
             ZStack {
-                Circle().fill(Color.white.opacity(0.05)).frame(width: 76, height: 76)
+                Circle().fill(DS.Colors.hover).frame(width: 76, height: 76)
                 Image(systemName: isFiltering ? "magnifyingglass" : "tray")
                     .font(.system(size: 30, weight: .light))
                     .foregroundStyle(NotesAccent.gradient)
