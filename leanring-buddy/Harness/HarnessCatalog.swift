@@ -93,7 +93,9 @@ enum HarnessCatalog {
         let fixed = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.grok/bin", "\(home)/.cursor/bin",
                      "\(home)/.npm-global/bin", "\(home)/.bun/bin", "\(home)/.opencode/bin"]
         var seen = Set<String>()
-        return (fixed + loginShellPath.split(separator: ":").map(String.init)).filter { !$0.isEmpty && seen.insert($0).inserted }
+        // The test profile can stand in a fake CLI, to test signing in without touching a real account.
+        let testing = TheoProfile.isTest ? ["\(home)/fake-bin"] : []
+        return (testing + fixed + loginShellPath.split(separator: ":").map(String.init)).filter { !$0.isEmpty && seen.insert($0).inserted }
     }()
 
     static func locate(binary name: String) -> URL? {

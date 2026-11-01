@@ -37,7 +37,7 @@ enum TheoUIDriver {
         if let title = command["windowTitle"] as? String { return theoWindows.first { $0.title == title } }
         // The frontmost titled window (a sheet above it counts).
         let ordered = NSApp.orderedWindows.filter { $0.isVisible && $0.level == .normal && $0.sheetParent == nil }
-        if let top = ordered.first { return top.attachedSheet ?? top }
+        if let top = ordered.first { return top }
         return NSApp.keyWindow ?? theoWindows.first
     }
 
@@ -176,12 +176,27 @@ enum TheoUIDriver {
         window.sendEvent(mouseEvent(.mouseMoved, at: point, in: window))
     }
 
+    /// What's on top at a point in a window's coordinates: a sheet over the window when the point is on it. A window's
+    /// screenshot includes its sheet, so tests work in the window's coordinates.
+    static func target(_ window: NSWindow, at point: CGPoint) -> (NSWindow, CGPoint) {
+        guard let sheet = window.attachedSheet else { return (window, point) }
+        let onScreen = CGPoint(x: window.frame.minX + point.x, y: window.frame.maxY - point.y)
+        guard sheet.frame.contains(onScreen) else { return (window, point) }
+        return (sheet, CGPoint(x: onScreen.x - sheet.frame.minX, y: sheet.frame.maxY - onScreen.y))
+    }
+
     /// Mouse down and up through the window, the way AppKit delivers a real click.
-    static func click(_ window: NSWindow, at point: CGPoint, count: Int = 1) {
+    static func click(_ topWindow: NSWindow, at topPoint: CGPoint, count: Int = 1) {
+        let (window, point) = target(topWindow, at: topPoint)
+        // A real click activates the app and makes its window key. The test profile stays inactive so the owner keeps
+        // their focus, but the window takes key inside the app, or a text field couldn't take the click.
+        if !window.isKeyWindow { window.makeKey() }
         hover(window, at: point)
         for clickNumber in 1...max(1, count) {
-            window.sendEvent(mouseEvent(.leftMouseDown, at: point, in: window, clickCount: clickNumber))
-            window.sendEvent(mouseEvent(.leftMouseUp, at: point, in: window, clickCount: clickNumber))
+            // The mouse-up waits in the queue, the way a real one does: a control that tracks the mouse (an NSButton)
+            // takes it from there while it handles the mouse-down.
+            NSApp.postEvent(mouseEvent(.leftMouseUp, at: point, in: window, clickCount: clickNumber), atStart: false)
+            NSApp.sendEvent(mouseEvent(.leftMouseDown, at: point, in: window, clickCount: clickNumber))
         }
     }
 
@@ -235,7 +250,8 @@ enum TheoUIDriver {
         completion(titles)
     }
 
-    static func key(_ window: NSWindow, key: String, modifiers: [String]) {
+    static func key(_ topWindow: NSWindow, key: String, modifiers: [String]) {
+        let window = topWindow.attachedSheet ?? topWindow
         var flags: NSEvent.ModifierFlags = []
         if modifiers.contains("cmd") { flags.insert(.command) }
         if modifiers.contains("shift") { flags.insert(.shift) }
@@ -274,7 +290,8 @@ enum TheoUIDriver {
     }
 
     /// Types through the field editor, the same path as the keyboard (input method aside).
-    static func typeText(_ text: String, in window: NSWindow) -> Bool {
+    static func typeText(_ text: String, in topWindow: NSWindow) -> Bool {
+        let window = topWindow.attachedSheet ?? topWindow
         guard let responder = window.firstResponder as? NSTextInputClient else { return false }
         responder.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         return true
@@ -285,9 +302,9 @@ enum TheoUIDriver {
         let responder = (window?.attachedSheet ?? window)?.firstResponder
         let isEditing = responder is NSTextView || responder is NSTextField
         return ["pane": String(describing: BotsSelection.shared.pane),
-                "frontWindow": window?.title ?? "", "frontNumber": window?.attachedSheet?.windowNumber ?? window?.windowNumber ?? 0,
+                "frontWindow": window?.title ?? "", "frontNumber": window?.windowNumber ?? 0,
                 "sheet": window?.attachedSheet?.title ?? "", "firstResponder": responder.map { String(describing: Swift.type(of: $0)) } ?? "none",
-                "editing": isEditing, "fieldText": (responder as? NSTextView)?.string.count ?? 0,
+                "editing": isEditing, "fieldLength": (responder as? NSText)?.string.count ?? 0, "responderClass": responder.map { String(describing: Swift.type(of: $0)) } ?? "",
                 "frontmostApp": NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", "isActive": NSApp.isActive]
     }
 
@@ -305,7 +322,7 @@ enum TheoUIDriver {
             return true
         }
         func point() -> CGPoint { CGPoint(x: (command["x"] as? Double) ?? Double(command["x"] as? Int ?? 0), y: (command["y"] as? Double) ?? Double(command["y"] as? Int ?? 0)) }
-        guard name == "uiWindows" || name == "uiState" || name == "uiStopRun" || window(command) != nil else {
+        guard name == "uiWindows" || name == "uiState" || name == "uiStopRun" || name == "uiPasteboard" || name == "uiMenus" || name == "uiMenuAction" || window(command) != nil else {
             respond(false, nil, "No window.")
             return true
         }
@@ -328,6 +345,36 @@ enum TheoUIDriver {
                 }
             }
             respond(true, byClass, nil)
+        case "uiMenus":
+            // The app's menu bar: what ⌘C, ⌘V and the other shortcuts go through.
+            let menus = (NSApp.mainMenu?.items ?? []).map { item -> [String: Any] in
+                ["title": item.title, "items": (item.submenu?.items ?? []).map { sub in
+                    ["title": sub.title, "key": sub.keyEquivalent, "action": sub.action.map { NSStringFromSelector($0) } ?? ""] as [String: Any]
+                }]
+            }
+            respond(true, ["policy": NSApp.activationPolicy().rawValue, "menus": menus], nil)
+        case "uiMenuAction":
+            // Presses a menu item the way its shortcut would: {menu: "Edit", item: "Paste"}.
+            let menu = NSApp.mainMenu?.items.first { $0.title == command["menu"] as? String }?.submenu
+            guard let menu, let index = menu.items.firstIndex(where: { $0.title == command["item"] as? String }) else {
+                respond(false, nil, "No such menu item.")
+                return true
+            }
+            menu.update()
+            let enabled = menu.items[index].isEnabled
+            menu.performActionForItem(at: index)
+            settle { respond(true, ["enabled": enabled, "state": state()], nil) }
+        case "uiResponderAction":
+            // Sends an action straight to the focused field: {action: "paste:"}. An inactive app has no key window for
+            // the menu bar to reach, so this is how a test proves the field itself takes the paste.
+            let responder = (target!.attachedSheet ?? target!).firstResponder
+            let sent = NSApp.sendAction(NSSelectorFromString(command["action"] as? String ?? ""), to: responder, from: nil)
+            settle { respond(sent, state(), sent ? nil : "Nothing handled it.") }
+        case "uiPasteboard":
+            // The test profile's own pasteboard (see TheoProfile): sets what ⌘V will paste.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command["text"] as? String ?? "", forType: .string)
+            respond(true, ["pasteboard": NSPasteboard.general.name.rawValue], nil)
         case "uiStopRun":
             BotsStore.shared.stopRun(command["id"] as? String ?? "")
             respond(true, nil, nil)

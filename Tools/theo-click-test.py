@@ -29,13 +29,16 @@ def has(words, number=None):
     return any(needle in line for line in text_on_screen(number))
 
 
-def step(name, click=None, expect=None, gone=None, index=0, settle=0.9, xy=None, shot=True):
+SIDEBAR = (0, 60, 248, 800)
+
+
+def step(name, click=None, expect=None, gone=None, index=0, settle=0.9, xy=None, shot=True, within=None):
     """Clicks `click` (words on screen) or `xy`, then checks `expect` shows up and `gone` doesn't."""
     ok, detail = True, ""
     if xy:
         theoui.send({"cmd": "uiClick", "window": front(), "x": xy[0], "y": xy[1]})
     elif click:
-        reply = theoui.click_text(click, index)
+        reply = theoui.click_text(click, index, within=within)
         if not reply.get("ok"):
             ok, detail = False, f"couldn't find '{click}' on screen"
     time.sleep(settle)
@@ -63,24 +66,41 @@ def go(pane):
 
 # Settings: every page is one click away, and "Back to Theo" returns.
 go("home")
-step("open-settings", click="Settings", expect="Back to Theo")
+step("open-settings", click="Settings", expect="Back to Theo", within=SIDEBAR)
 for page, words in [("Clicky", "Thinks with"), ("Harnesses", "Builds go to"), ("Models & API keys", "Anthropic"), ("Voice", "speak with"),
                     ("Screen", "Theo's screen"), ("Permissions", "Microphone"), ("Updates", "This is Theo"), ("About", "Show Theo in the Dock"), ("Look", "Cursor")]:
-    step(f"settings-{page.split()[0].lower()}", click=page, expect=words)
-step("settings-back", click="Back to Theo", gone="Back to Theo")
+    step(f"settings-{page.split()[0].lower()}", click=page, expect=words, within=SIDEBAR)
+step("settings-back", click="Back to Theo", gone="Back to Theo", within=SIDEBAR)
 
 # Sidebar.
 go("home")
-step("sidebar-notes", click="Notes", expect="Everything Theo saved")
-step("sidebar-routines", click="Routines", expect="Routines")
-step("sidebar-connectors", click="Connectors", expect="Gmail", settle=1.2)
-step("sidebar-home", click="Home", expect="Your team")
-step("sidebar-clicky", click="Clicky", expect="Message Clicky")
-step("sidebar-theo", click="Theo", expect="Message Theo", index=1)
+step("sidebar-notes", click="Notes", expect="Everything Theo saved", within=SIDEBAR)
+step("sidebar-routines", click="Routines", expect="Bots doing a job", within=SIDEBAR)
+step("sidebar-connectors", click="Connectors", expect="Gmail", settle=1.2, within=SIDEBAR)
+step("sidebar-home", click="Home", expect="Your team", within=SIDEBAR)
+step("sidebar-clicky", click="Clicky", expect="Message Clicky", within=SIDEBAR)
+step("sidebar-theo", click="Theo", expect="Message Theo", within=SIDEBAR)
 
 # API keys: a row opens, a bad key shows the provider's own error.
 go("settings:keys")
 step("keys-open-row", click="Groq", expect="Get a key", settle=1.0)
+
+# Real typing and ⌘V in the key field, with a bad key: the provider's own error comes back and nothing is saved.
+theoui.send({"cmd": "uiPasteboard", "text": "gsk_this-is-not-a-real-key"})
+theoui.click_text("gsk_", within=(248, 60, 1032, 760))
+time.sleep(0.5)
+# The field takes a paste: ⌘V's action, sent to it. (The menu bar can't reach it while the test profile stays inactive,
+# and it mustn't activate; the Edit menu itself is checked below.)
+state = theoui.send({"cmd": "uiResponderAction", "action": "paste:"})["result"]
+ok = state.get("editing") and state.get("fieldLength", 0) == len("gsk_this-is-not-a-real-key")
+results.append({"step": "keys-field-takes-paste", "ok": bool(ok), "detail": str(state.get("fieldLength")), "shot": theoui.shot("keys-pasted")})
+print("✅" if ok else "❌", "keys-field-takes-paste", state.get("fieldLength"), flush=True)
+menus = theoui.send({"cmd": "uiMenus"})["result"]["menus"]
+edit = next((m for m in menus if m["title"] == "Edit"), {"items": []})
+ok = any(i["title"] == "Paste" and i["key"] == "v" for i in edit["items"])
+results.append({"step": "edit-menu-has-cmd-v", "ok": ok, "detail": "", "shot": ""})
+print("✅" if ok else "❌", "edit-menu-has-cmd-v", flush=True)
+step("keys-test-bad-key", click="Test", expect="rejected", settle=2.5, within=(248, 60, 1032, 760))
 
 # Harnesses show their state.
 go("settings:coding")
@@ -89,7 +109,7 @@ step("harness-state", expect="Signed in")
 
 # New bot sheet.
 go("home")
-step("new-bot-opens", click="New bot", expect="Pick a starting point", settle=1.0)
+step("new-bot-opens", click="New bot", expect="Pick a starting point", settle=1.0, within=SIDEBAR)
 step("new-bot-stencil", click="Researcher", expect="Create bot")
 step("new-bot-cancel", click="Cancel", gone="Create bot")
 

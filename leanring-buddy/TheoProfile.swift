@@ -57,8 +57,17 @@ enum TheoProfile {
             return
         }
         useSeparateDefaults()
+        usePrivatePasteboard()
         stopTakingFocus()
         keepRealHomeForChildProcesses()
+    }
+
+    /// Tests of Copy and ⌘V use a pasteboard of their own, never the owner's clipboard.
+    private static func usePrivatePasteboard() {
+        let board = NSPasteboard(name: NSPasteboard.Name("com.personal.clicky.test.pasteboard"))
+        guard let method = class_getClassMethod(NSPasteboard.self, NSSelectorFromString("generalPasteboard")) else { return }
+        let block: @convention(block) (AnyObject) -> NSPasteboard = { _ in board }
+        method_setImplementation(method, imp_implementationWithBlock(block))
     }
 
     private static func makeTestHome() {

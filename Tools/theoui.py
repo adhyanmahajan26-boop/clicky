@@ -109,8 +109,12 @@ def read_screen(number=None):
     return number, pieces
 
 
-def click_text(words, index=0, number=None):
+def click_text(words, index=0, number=None, within=None):
+    """`within`: (x, y, w, h) in window points, to tell a sidebar row from the same words elsewhere."""
     number, pieces = read_screen(number)
+    if within:
+        x0, y0, w0, h0 = within
+        pieces = [p for p in pieces if x0 <= p["x"] <= x0 + w0 and y0 <= p["y"] <= y0 + h0]
     needle = words.lower()
     exact = [p for p in pieces if p["text"].lower() == needle]
     matches = exact or [p for p in pieces if needle in p["text"].lower()]
