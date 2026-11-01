@@ -57,7 +57,7 @@ final class ReviewPanelController {
             let origin = NSPoint(x: screenFrame.midX - targetSize.width / 2, y: screenFrame.midY - targetSize.height / 2)
             panel.setFrame(NSRect(origin: origin, size: targetSize), display: true)
         }
-        panel.title = isReview ? "Clicky — Review before sending" : "Clicky"
+        panel.title = isReview ? "Clicky: review before sending" : "Clicky"
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         // Every mode change restarts the gate's 0.5 s no-click window.
@@ -84,7 +84,7 @@ final class ReviewPanelController {
         let screenFrame = ClaudiaScreen.forClaudiasWindows?.visibleFrame ?? .zero
         let origin = NSPoint(x: screenFrame.maxX - targetSize.width - 16, y: screenFrame.maxY - targetSize.height - 16)
         panel.setFrame(NSRect(origin: origin, size: targetSize), display: true)
-        panel.title = "Clicky — Working"
+        panel.title = "Clicky: working"
         panel.orderFrontRegardless()
         state.panelShownAt = ProcessInfo.processInfo.systemUptime
     }

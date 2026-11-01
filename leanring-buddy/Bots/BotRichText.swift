@@ -16,6 +16,8 @@ enum BotBlock: Equatable {
     case heading(String, level: Int)
     case bullet(String, marker: String)
     case code(String, language: String)
+    case table(header: [String], rows: [[String]])
+    case quote(String)
 }
 
 enum BotBlocks {
@@ -32,7 +34,9 @@ enum BotBlocks {
             paragraph = []
         }
 
-        for rawLine in text.components(separatedBy: "\n") {
+        let lines = text.components(separatedBy: "\n")
+        var skipUntil = 0
+        for (index, rawLine) in lines.enumerated() where index >= skipUntil {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if var open = code {
                 if line == "```" && depth == 0 {
@@ -50,6 +54,25 @@ enum BotBlocks {
                 flushParagraph()
                 language = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 code = []
+            } else if line.hasPrefix("|"), index + 1 < lines.count, isTableRule(lines[index + 1]) {
+                // A Markdown table: a header row, a |---|---| rule, then rows until the pipes stop.
+                flushParagraph()
+                var rows: [[String]] = []
+                var next = index + 2
+                while next < lines.count, lines[next].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
+                    rows.append(tableCells(lines[next]))
+                    next += 1
+                }
+                skipUntil = next
+                blocks.append(.table(header: tableCells(line), rows: rows))
+            } else if line.hasPrefix(">") {
+                flushParagraph()
+                let words = line.dropFirst().trimmingCharacters(in: .whitespaces)
+                if case .quote(let earlier)? = blocks.last {
+                    blocks[blocks.count - 1] = .quote(earlier + "\n" + words)
+                } else {
+                    blocks.append(.quote(words))
+                }
             } else if line.hasPrefix("#") {
                 flushParagraph()
                 let level = line.prefix { $0 == "#" }.count
@@ -72,34 +95,147 @@ enum BotBlocks {
         flushParagraph()
         return blocks
     }
+
+    private static func isTableRule(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("|") && trimmed.contains("-") && trimmed.allSatisfy { "|-: ".contains($0) }
+    }
+
+    private static func tableCells(_ line: String) -> [String] {
+        var cells = line.trimmingCharacters(in: .whitespaces).components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        if cells.first?.isEmpty == true { cells.removeFirst() }
+        if cells.last?.isEmpty == true { cells.removeLast() }
+        return cells
+    }
+}
+
+/// One chat text style, for a finished reply and one still typing, so nothing re-wraps when typing ends.
+enum ChatText {
+    static let size: CGFloat = 15
+    static let lineSpacing: CGFloat = 6
+    /// A comfortable line length, about 75 characters.
+    static let measure: CGFloat = 640
+    static let font = Font.system(size: size)
 }
 
 struct BotRichText: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(BotBlocks.parse(text).enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .paragraph(let words):
-                    Text(BotMarkdown.attributed(words)).lineSpacing(3)
-                case .heading(let words, let level):
-                    Text(BotMarkdown.attributed(words))
-                        .font(.system(size: level <= 1 ? 17 : level == 2 ? 15.5 : 14.5, weight: .semibold))
-                        .padding(.top, 4)
-                case .bullet(let words, let marker):
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(marker).foregroundColor(DS.Colors.textTertiary).frame(minWidth: 12, alignment: .trailing)
-                        Text(BotMarkdown.attributed(words)).lineSpacing(3)
-                    }
-                case .code(let body, let language):
-                    BotCodeCard(code: body, language: language)
-                }
+        let blocks = BotBlocks.parse(text)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                content(of: block).padding(.top, index == 0 ? 0 : gap(before: block, after: blocks[index - 1]))
             }
         }
-        .font(.system(size: 14))
+        .font(ChatText.font)
         .foregroundColor(DS.Colors.textPrimary)
         .textSelection(.enabled)
+    }
+
+    @ViewBuilder private func content(of block: BotBlock) -> some View {
+        switch block {
+        case .paragraph(let words):
+            Text(BotMarkdown.attributed(words)).lineSpacing(ChatText.lineSpacing)
+        case .heading(let words, let level):
+            Text(BotMarkdown.attributed(words))
+                .font(.system(size: level <= 1 ? 19 : level == 2 ? 17 : 15, weight: .semibold))
+        case .bullet(let words, let marker):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(marker).foregroundColor(DS.Colors.textSecondary).frame(minWidth: 14, alignment: .trailing)
+                Text(BotMarkdown.attributed(words)).lineSpacing(ChatText.lineSpacing)
+            }
+        case .code(let body, let language):
+            if language.lowercased() == "routine", let routine = RoutineChatCard.parse(body) {
+                RoutineChatCard(name: routine.name, when: routine.when)
+            } else {
+                BotCodeCard(code: body, language: language)
+            }
+        case .table(let header, let rows):
+            BotTable(header: header, rows: rows)
+        case .quote(let words):
+            HStack(alignment: .top, spacing: 12) {
+                RoundedRectangle(cornerRadius: 1).fill(DS.Colors.borderStrong).frame(width: 2)
+                Text(BotMarkdown.attributed(words)).lineSpacing(ChatText.lineSpacing).foregroundColor(DS.Colors.textSecondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func gap(before block: BotBlock, after previous: BotBlock) -> CGFloat {
+        switch (previous, block) {
+        case (.bullet, .bullet): return 6
+        case (.heading, _): return 8
+        case (_, .heading): return 20
+        default: return 14
+        }
+    }
+}
+
+/// A Markdown table, in the chat's own type: a quiet header row and hairlines, scrolling sideways if it's wide.
+struct BotTable: View {
+    let header: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
+                        Text(BotMarkdown.attributed(cell)).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+                            .padding(.vertical, 8)
+                    }
+                }
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1).gridCellUnsizedAxes(.horizontal)
+                    GridRow {
+                        ForEach(Array(header.indices), id: \.self) { column in
+                            Text(BotMarkdown.attributed(column < row.count ? row[column] : "")).font(.system(size: 14)).lineSpacing(3)
+                                .frame(maxWidth: 320, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 8)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 4)
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
+    }
+}
+
+/// A schedule a bot just set, instead of the JSON it wrote to set it.
+struct RoutineChatCard: View {
+    let name: String
+    let when: String
+    @ObservedObject private var store = BotsStore.shared
+
+    static func parse(_ body: String) -> (name: String, when: String)? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
+              let name = object["name"] as? String, let when = object["when"] as? String else { return nil }
+        return (name, when)
+    }
+
+    private var routine: BotRoutine? { store.routines.first { $0.name == name } }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.hover))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text(routine?.schedule.label ?? when).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+            }
+            Spacer(minLength: 8)
+            if let routine {
+                Button(routine.paused ? "Resume" : "Pause") { store.setPaused(!routine.paused, routineID: routine.id) }.buttonStyle(.theo(.ghost, .small))
+                Button("Run now") { store.runRoutineNow(routine.id) }.buttonStyle(.theo(.secondary, .small))
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
     }
 }
 
@@ -117,7 +253,7 @@ struct BotCodeCard: View {
 
     private var label: String {
         switch language.lowercased() {
-        case "prompt": return "Prompt for T3 Code"
+        case "prompt": return "Prompt for \(HarnessCatalog.label(HarnessPrefs.codingTarget))"
         case "followup": return "Change for the coding agent"
         case "routine": return "Schedule for Theo to run"
         case "": return "Code"
@@ -160,7 +296,7 @@ struct BotCodeCard: View {
                     .padding(.horizontal, 12).padding(.bottom, 10)
                 }
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView(.horizontal) {
                     Text(code)
                         .font(.system(size: 12.5, design: .monospaced))
                         .foregroundColor(DS.Colors.textPrimary)
@@ -170,7 +306,7 @@ struct BotCodeCard: View {
                 }
             }
         }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.28)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(DS.Colors.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }

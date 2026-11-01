@@ -59,15 +59,15 @@ struct BotInspector: View {
                             Label("Make \(bot.name) the primary bot", systemImage: "star")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        .buttonStyle(.plain).foregroundColor(DS.Colors.warning)
+                        .buttonStyle(.theo(.ghost, .small))
                         danger(bot)
                     }
                 }
                 .padding(18)
-                .frame(width: 330)
+                .frame(width: 340)
             }
         }
-        .frame(width: 330)
+        .frame(width: 340)
         .clipped()
         .background(DS.Colors.surface1)
         .onAppear { draft = store.bot(botID) }
@@ -123,6 +123,8 @@ struct BotInspector: View {
                 VStack(alignment: .leading, spacing: 4) {
                     TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0; saveSoon() }))
                         .textFieldStyle(.plain).font(.system(size: 17, weight: .semibold))
+                        // The close button sits at this height.
+                        .padding(.trailing, 28)
                     TextField("What it does", text: Binding(get: { draft?.description ?? "" }, set: { draft?.description = $0; saveSoon() }), axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(1...3)
                 }
@@ -259,15 +261,15 @@ struct ClickyInspector: View {
                     Button("All of Clicky's settings") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
                 }
                 InspectorSection("Cursor", hint: "One click changes it everywhere.") {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 8)], spacing: 8) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                         ForEach(CompanionIconStyle.allCases, id: \.self) { item in
                             Button { style = item; ClickySettings.sparkStyle = item } label: {
                                 VStack(spacing: 4) {
                                     CompanionIconPreview(style: item).frame(width: 26, height: 26)
-                                    Text(item.displayName).font(.system(size: 9.5)).lineLimit(1)
+                                    Text(item.displayName).font(.system(size: 9.5)).lineLimit(2).multilineTextAlignment(.center)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 58)
-                                .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.55)))
+                                .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.surface))
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(style == item ? DS.Colors.accent : DS.Colors.hover, lineWidth: style == item ? 2 : 1))
                             }
                             .buttonStyle(.plain)
@@ -285,9 +287,9 @@ struct ClickyInspector: View {
                 }
             }
             .padding(18)
-            .frame(width: 330)
+            .frame(width: 340)
         }
-        .frame(width: 330)
+        .frame(width: 340)
         .clipped()
         .background(DS.Colors.surface1)
     }
@@ -360,14 +362,15 @@ struct FlowChips: View {
     let onToggle: (String, Bool) -> Void
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 6)], alignment: .leading, spacing: 6) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 136), spacing: 6)], alignment: .leading, spacing: 6) {
             ForEach(items, id: \.0) { id, name in
                 let on = selected.contains(id)
                 Button { onToggle(id, !on) } label: {
                     Text(name).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         .padding(.horizontal, 9).padding(.vertical, 5).frame(maxWidth: .infinity)
-                        .background(Capsule().fill(on ? DS.Colors.accent.opacity(0.85) : DS.Colors.hover))
-                        .foregroundColor(on ? .white : DS.Colors.textSecondary)
+                        .background(Capsule().fill(on ? DS.Colors.selected : DS.Colors.hover))
+                        .overlay(Capsule().strokeBorder(on ? DS.Colors.borderStrong : .clear, lineWidth: 1))
+                        .foregroundColor(on ? DS.Colors.textPrimary : DS.Colors.textSecondary)
                 }
                 .buttonStyle(.plain)
             }

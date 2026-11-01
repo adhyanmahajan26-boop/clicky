@@ -19,7 +19,7 @@ struct TodayView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(greeting).font(.system(size: 26, weight: .semibold, design: .rounded)).foregroundColor(DS.Colors.textPrimary)
+                    Text(greeting).font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
                     Text("Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
@@ -33,7 +33,7 @@ struct TodayView: View {
                     .frame(maxWidth: .infinity)
                     .padding(18)
                 }
-                section("Clicky") {
+                section("Companion") {
                     row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
                         detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
                         trailing: (CompanionManager.current?.isClickyCursorEnabled ?? true) ? "Awake" : "Asleep") {
@@ -90,7 +90,7 @@ struct TodayView: View {
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
-        return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
+        return (5..<12).contains(hour) ? "Good morning" : (12..<17).contains(hour) ? "Good afternoon" : "Good evening"
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -112,7 +112,7 @@ struct TodayView: View {
                 }
                 Spacer()
                 if let trailing { Text(trailing).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary) }
-                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundColor(DS.Colors.textDisabled)
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
             }
             .padding(.horizontal, 14).frame(height: 52)
             .contentShape(Rectangle())

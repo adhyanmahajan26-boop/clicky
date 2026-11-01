@@ -500,7 +500,7 @@ final class ActionTaskController {
         if let pending = task.pendingConfirmation, let step = pending.steps.first {
             task.loop.record(step, tier: .confirm, tierReason: nil, outcome: .cancelled)
         }
-        finish(status: .cancelled, line: speaksLine ? "stopped — \(reason)." : nil, errorDescription: nil)
+        finish(status: .cancelled, line: speaksLine ? "stopped: \(reason)." : nil, errorDescription: nil)
         if stopsSpeech { companionManager.stopBuddySpeechAndCancelResponse() }
     }
 

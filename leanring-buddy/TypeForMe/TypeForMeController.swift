@@ -183,18 +183,18 @@ final class TypeForMeController {
     private func pollFocusAndExpiry() {
         guard let gate, let target, let cardState, cardState.offersTyping, cardState.isTypeButtonEnabled else { return }
         if gate.isExpired(at: ProcessInfo.processInfo.systemUptime) {
-            invalidateForFocusChange(reason: "Expired after 30 seconds — ask again to type. You can still copy.")
+            invalidateForFocusChange(reason: "Expired after 30 seconds. Ask again to type. You can still copy.")
             return
         }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != target.processIdentifier {
-            invalidateForFocusChange(reason: "Another app came forward — ask again to type. You can still copy.")
+            invalidateForFocusChange(reason: "Another app came forward. Ask again to type. You can still copy.")
             return
         }
         // A different element took focus inside the app (nil can be transient while the card is key).
         if let targetElement = target.focusedElement,
            let currentElement = TypeForMeAccessibility.focusedElement(processIdentifier: target.processIdentifier),
            !CFEqual(currentElement, targetElement) {
-            invalidateForFocusChange(reason: "Focus moved — ask again to type. You can still copy.")
+            invalidateForFocusChange(reason: "Focus moved. Ask again to type. You can still copy.")
         }
     }
 
@@ -221,7 +221,7 @@ final class TypeForMeController {
         case .pressStarted:
             break
         case .rejected(let rejection):
-            if rejection == .expired { invalidateForFocusChange(reason: "Expired — ask again to type. You can still copy.") }
+            if rejection == .expired { invalidateForFocusChange(reason: "Expired. Ask again to type. You can still copy.") }
         }
     }
 

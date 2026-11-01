@@ -112,6 +112,7 @@ struct SetupGuideView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     content
+                        .id(model.step)
                         .frame(maxWidth: 680, alignment: .leading)
                         .padding(.horizontal, 36).padding(.top, 44).padding(.bottom, 24)
                         .frame(maxWidth: .infinity)

@@ -64,7 +64,7 @@ struct TheoButtonStyle: ButtonStyle {
 
     private func background(pressed: Bool) -> Color {
         switch kind {
-        case .primary: return DS.Colors.accent.opacity(pressed ? 0.8 : hovering ? 0.92 : 1)
+        case .primary: return DS.Colors.accentFill.opacity(pressed ? 0.8 : hovering ? 0.92 : 1)
         case .secondary: return pressed ? DS.Colors.selected : hovering ? DS.Colors.surface : DS.Colors.surface1
         case .ghost: return pressed ? DS.Colors.selected : hovering ? DS.Colors.hover : .clear
         case .destructive: return pressed ? DS.Colors.destructiveText.opacity(0.22) : hovering ? DS.Colors.destructiveText.opacity(0.14) : .clear
@@ -146,15 +146,16 @@ struct BrandLogo: View {
             mark.frame(width: size, height: size).accessibilityHidden(true)
         } else {
             RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                .fill(Color.white.opacity(0.07))
-                .overlay(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+                .fill(DS.Colors.logoTile)
+                .overlay(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
                 .overlay(mark.padding(size * 0.2))
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         }
     }
 
-    private static func isTemplate(_ id: String) -> Bool { NSImage(named: "logo-\(id)")?.isTemplate ?? false }
+    /// These marks are dark on their own and would vanish on a dark tile, so they take the text colour.
+    private static func isTemplate(_ id: String) -> Bool { ["deepgram", "fireworks"].contains(id) || (NSImage(named: "logo-\(id)")?.isTemplate ?? false) }
 }
 
 // MARK: - Status
@@ -175,6 +176,15 @@ struct StatusPill: View {
         }
     }
 
+    private var textColor: Color {
+        switch tone {
+        case .good: return DS.Colors.successText
+        case .warn: return DS.Colors.warningText
+        case .neutral: return DS.Colors.textSecondary
+        default: return color
+        }
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             if busy {
@@ -182,7 +192,7 @@ struct StatusPill: View {
             } else {
                 Circle().fill(color).frame(width: 6, height: 6)
             }
-            Text(text).font(.system(size: 11, weight: .medium)).foregroundColor(tone == .neutral ? DS.Colors.textSecondary : color).lineLimit(1)
+            Text(text).font(.system(size: 11, weight: .medium)).foregroundColor(textColor).lineLimit(1)
         }
         .padding(.horizontal, 8).frame(height: 22)
         .background(Capsule().fill(color.opacity(0.12)))

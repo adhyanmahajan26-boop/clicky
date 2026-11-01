@@ -22,7 +22,7 @@ enum DS {
         static let surface3 = surface
         static let sidebar = adaptive(dark: 0x121214, light: 0xF1F0EE)
         static let hover = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.05, lightAlpha: 0.04)
-        static let selected = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.09, lightAlpha: 0.07)
+        static let selected = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.12, lightAlpha: 0.09)
         static let borderSubtle = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.08, lightAlpha: 0.10)
         static let borderStrong = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.14, lightAlpha: 0.16)
         static let textPrimary = adaptive(dark: 0xF2F2F4, light: 0x17171A)
@@ -32,11 +32,20 @@ enum DS {
         static let textOnAccent = Color.white
         /// Ember: the primary button, focus ring, send and the selection dot. Nothing else.
         static let accent = adaptive(dark: 0xE8704F, light: 0xD9532F)
-        static let accentText = accent
+        /// Ember as words and small marks, dark enough to read on a light page.
+        static let accentText = adaptive(dark: 0xE8704F, light: 0xB8431F)
+        /// Ember behind white text.
+        static let accentFill = Color(hex: 0xC8502F)
+        /// The leader's crown and label.
+        static let gold = adaptive(dark: 0xF5B13D, light: 0x9A6400)
+        /// A neutral tile behind a logo.
+        static let logoTile = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.07, lightAlpha: 0.04)
         static let overlayCompanionOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
         static let blue = adaptive(dark: 0x5B8DEF, light: 0x3B6FD4)
         static let blue400 = blue
         static let success = adaptive(dark: 0x3FB87A, light: 0x1F9D63)
+        static let successText = adaptive(dark: 0x3FB87A, light: 0x15794B)
+        static let warningText = adaptive(dark: 0xE5A94B, light: 0x8F5E12)
         static let warning = adaptive(dark: 0xE5A94B, light: 0xB7791F)
         static let destructiveText = adaptive(dark: 0xE5594F, light: 0xD1453B)
 
@@ -56,8 +65,9 @@ enum DS {
     }
 
     enum Motion {
-        static let hover = Animation.snappy(duration: 0.18)
-        static let panel = Animation.spring(response: 0.35, dampingFraction: 0.86)
+        static var isReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+        static var hover: Animation { isReduced ? .linear(duration: 0) : .snappy(duration: 0.18) }
+        static var panel: Animation { isReduced ? .linear(duration: 0) : .spring(response: 0.35, dampingFraction: 0.86) }
     }
 }
 

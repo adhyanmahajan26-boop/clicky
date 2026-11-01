@@ -45,7 +45,7 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
-            case .look: return "Cursor, theme and pill. Click one and it changes right away."
+            case .look: return "Light or dark, the cursor and the pill. Click one and it changes right away."
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."
@@ -53,7 +53,7 @@ enum SettingsTab {
             case .screen: return "The monitor Theo works on, leaving your main screen alone."
             case .permissions: return "What Theo needs to hear, see and point."
             case .updates: return "Keep Theo current."
-            case .about: return "Dock, setup guide and version."
+            case .about: return "The Dock icon and the setup guide."
             }
         }
 
@@ -94,7 +94,6 @@ struct SettingsSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Color.clear.frame(height: 40)
             Button { selection.closeSettings() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textSecondary).frame(width: 22)
@@ -140,7 +139,7 @@ struct SettingsPage: View {
                 content
             }
             .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 32).padding(.top, 44).padding(.bottom, 32)
+            .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
             .frame(maxWidth: .infinity)
         }
         .id(section)
@@ -172,21 +171,20 @@ struct LookSettingsContent: View {
             TheoSection(title: "Appearance", hint: nil) {
                 ChoiceChips(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title, $0.symbol) }, selection: $appearance).padding(12)
             }
-            TheoSection(title: "Cursor", hint: "The spark that follows you, everywhere at once.") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 10)], spacing: 10) {
+            TheoSection(title: "Cursor", hint: "The spark that follows you, and where it lives.") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
                     ForEach(CompanionIconStyle.allCases, id: \.self) { style in
                         CursorTile(style: style, isSelected: look.sparkStyle == style) { look.sparkStyle = style }
                     }
                 }
                 .padding(12)
-            }
-            TheoSection(title: "Spark", hint: nil) {
+                RowDivider()
                 ChoiceChips(options: [(ClickySettings.SparkMode.cursor, "Follows my pointer", "cursorarrow.motionlines"),
                                       (.docked, "Lives in a corner of Theo's screen", "rectangle.bottomthird.inset.filled")], selection: $look.sparkMode)
                     .padding(12)
             }
-            TheoSection(title: "Theme", hint: "Colours for Notes and T3 Code.") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+            TheoSection(title: "Whiteboard and notch colours", hint: "Also used on the T3 Code page. The window itself follows Appearance above.") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                     ForEach(ClaudiaTheme.allCases, id: \.self) { theme in
                         ThemeTile(theme: theme, isSelected: look.theme == theme) { look.theme = theme }
                     }
@@ -283,7 +281,7 @@ struct ThemeTile: View {
                 .frame(width: 30, height: 30)
                 .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
                 Text(theme.displayName).font(.system(size: 12, weight: isSelected ? .semibold : .regular)).foregroundColor(DS.Colors.textPrimary)
-                    .multilineTextAlignment(.leading).lineLimit(2)
+                    .multilineTextAlignment(.leading).lineLimit(1).minimumScaleFactor(0.85)
                 Spacer(minLength: 0)
             }
             .padding(7)
@@ -466,7 +464,7 @@ struct VoiceSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             TheoSection(title: "Clicky and Theo speak with", hint: nil) {
-                voiceRow(id: "qwen", logo: nil, symbol: "waveform.circle.fill", title: "Theo's voice", detail: "Qwen, running on this Mac", available: QwenLocalTTSClient.isAvailable, selected: engine.isEmpty && usesQwen) {
+                voiceRow(id: "qwen", logo: nil, symbol: "waveform.circle.fill", title: "Theo's voice", detail: "Theo's own voice, running on this Mac", available: QwenLocalTTSClient.isAvailable, selected: engine.isEmpty && usesQwen) {
                     engine = ""
                     usesQwen = true
                     manager?.speechOutputClient.selectQwenLocalVoice()

@@ -217,7 +217,7 @@ struct TheoPanelView: View {
         if !speechAllowed { items.append(("Speech", { SFSpeechRecognizer.requestAuthorization { _ in } })) }
         if !companionManager.hasAccessibilityPermission { items.append(("Accessibility", { TheoPermissions.askForAccessibility() })) }
         if !companionManager.hasScreenRecordingPermission { items.append(("Screen recording", { TheoPermissions.askForScreenRecording() })) }
-        if !companionManager.hasScreenContentPermission { items.append(("Screen content", { companionManager.requestScreenContentPermission() })) }
+        if !companionManager.hasScreenContentPermission { items.append(("Screen access", { companionManager.requestScreenContentPermission() })) }
         return items
     }
 
@@ -263,11 +263,8 @@ struct TheoPanelView: View {
                  "chevron.left.forwardslash.chevron.right", isOn: code.isEnabled) {
                 code.setEnabled(!code.isEnabled)
             }
-            tile("Agents", "Running now", "person.3.fill", isOn: false) {
+            tile("Agents", "What's running", "person.3.fill", isOn: false) {
                 close(); companionManager.showAgentsDashboard(activatesClicky: true)
-            }
-            tile("Bots", "Your chats", "bubble.left.and.bubble.right.fill", isOn: false) {
-                close(); companionManager.showBotsWindow()
             }
         }
     }
@@ -278,7 +275,7 @@ struct TheoPanelView: View {
                 ZStack {
                     Circle().fill(isOn ? DS.Colors.accent : Color.white.opacity(0.1))
                     Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundColor(isOn ? .white : DS.Colors.textSecondary)
-                        .symbolEffect(.bounce, value: isOn)
+                        .symbolEffect(.bounce, options: DS.Motion.isReduced ? .nonRepeating.speed(100) : .default, value: isOn)
                 }
                 .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 1) {
@@ -366,11 +363,11 @@ struct TheoPanelView: View {
     private var voicePicker: some View {
         HStack(spacing: 10) {
             Image(systemName: "person.wave.2").frame(width: 20).foregroundColor(DS.Colors.textSecondary)
-            Text("Voice").font(.system(size: 12.5)).foregroundColor(DS.Colors.textPrimary)
+            Text("Speaks with").font(.system(size: 12.5)).foregroundColor(DS.Colors.textPrimary)
             Spacer()
             Menu {
                 Button(action: { speech.selectQwenLocalVoice() }) {
-                    if speech.usesQwenLocalVoice { Label("Theo's voice (Qwen)", systemImage: "checkmark") } else { Text("Theo's voice (Qwen)") }
+                    if speech.usesQwenLocalVoice { Label("Theo's voice", systemImage: "checkmark") } else { Text("Theo's voice") }
                 }
                 Button(action: { speech.selectSystemVoice(identifier: nil) }) {
                     if !speech.usesQwenLocalVoice { Label("Mac voice", systemImage: "checkmark") } else { Text("Mac voice") }
@@ -485,8 +482,8 @@ struct PulsingDot: View {
     let isPulsing: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isPulsing)) { timeline in
-            let phase = isPulsing ? (sin(timeline.date.timeIntervalSinceReferenceDate * 5) + 1) / 2 : 0
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isPulsing || DS.Motion.isReduced)) { timeline in
+            let phase = isPulsing && !DS.Motion.isReduced ? (sin(timeline.date.timeIntervalSinceReferenceDate * 5) + 1) / 2 : 0
             ZStack {
                 Circle().fill(color.opacity(0.35)).frame(width: 6 + 6 * phase, height: 6 + 6 * phase)
                 Circle().fill(color).frame(width: 6, height: 6)

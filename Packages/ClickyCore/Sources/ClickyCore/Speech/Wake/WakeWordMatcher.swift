@@ -72,7 +72,8 @@ public struct WakeWordMatcher: Sendable {
     /// Spellings the recognizer is known to produce for the built-in names
     /// (checked before the fuzzy rule, which also catches most of them).
     static let knownNameSpellings: [String: Set<String>] = [
-        "theo": ["theo", "teo", "thio", "tio", "theyo", "theodore", "dio", "deo", "thiyo", "tayo"],
+        // The on-device recognizer often writes "hey Theo" as one of its better-known neighbours, "hey Siri" above all.
+        "theo": ["theo", "teo", "thio", "tio", "theyo", "theodore", "dio", "deo", "thiyo", "tayo", "leo", "jio", "siri", "thea"],
         "claudia": ["claudia", "cloudia", "clodia", "claudio", "klaudia", "claudya", "claudiya", "clawdia", "klodia", "glaudia", "claudias"],
         "clicky": ["clicky", "clickey", "kliki", "clicki", "klicky", "kliky", "clickie", "clikki", "cliky", "cliquey", "klickie"]
     ]

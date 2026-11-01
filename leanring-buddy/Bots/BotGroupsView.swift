@@ -30,20 +30,7 @@ struct GroupEditor: View {
             Text(isNew ? "New group" : "Edit \(group.name)").font(.system(size: 17, weight: .semibold))
             VStack(alignment: .leading, spacing: 6) {
                 label("Name")
-                TextField("Marketing, Research team, Side project…", text: $group.name).textFieldStyle(.roundedBorder)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                label("Icon")
-                HStack(spacing: 6) {
-                    ForEach(Self.symbols, id: \.self) { symbol in
-                        Button { group.symbol = symbol } label: {
-                            Image(systemName: symbol).font(.system(size: 13))
-                                .frame(width: 30, height: 30)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(group.symbol == symbol ? DS.Colors.accent.opacity(0.35) : DS.Colors.hover))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                TextField("Marketing, Research team, Side project…", text: $group.name).theoField()
             }
             VStack(alignment: .leading, spacing: 6) {
                 label("Head")
@@ -52,7 +39,7 @@ struct GroupEditor: View {
                     ForEach(store.bots) { bot in Text(bot.name).tag(bot.id) }
                 }
                 .labelsHidden()
-                Text("The head leads the group chat: they hand your request to the others and merge their answers. Ask them to build something and it goes to T3 Code.")
+                Text("The head leads the group chat: they hand your request to the others and merge their answers. Ask them to build something and it goes to your coding harness.")
                     .font(.system(size: 11)).foregroundColor(.secondary)
             }
             VStack(alignment: .leading, spacing: 6) {
@@ -66,7 +53,7 @@ struct GroupEditor: View {
                                 HStack(spacing: 8) {
                                     BotAvatar(bot: bot, size: 22, state: .idle)
                                     Text(bot.name)
-                                    Text(bot.modelLabel).font(.system(size: 11)).foregroundColor(.secondary)
+                                    Text(bot.modelLabel).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                                 }
                             }
                             .toggleStyle(.checkbox)
@@ -75,7 +62,7 @@ struct GroupEditor: View {
                 }
                 .frame(maxHeight: 220)
                 Text(sizeFits ? "\(group.allIDs.count) bots" : "Pick a head and 1 to 5 other bots (2 to 6 in all).")
-                    .font(.system(size: 11)).foregroundColor(sizeFits ? .secondary : .orange)
+                    .font(.system(size: 11)).foregroundColor(sizeFits ? DS.Colors.textTertiary : DS.Colors.warningText)
             }
             HStack {
                 if !isNew {
@@ -83,9 +70,10 @@ struct GroupEditor: View {
                         store.deleteGroup(group.id)
                         onDone(nil)
                     }
+                    .buttonStyle(.theoDestructive)
                 }
                 Spacer()
-                Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction).buttonStyle(.theoSecondary)
                 Button(isNew ? "Create group" : "Save") {
                     var saved = group
                     saved.name = saved.name.trimmingCharacters(in: .whitespaces)
@@ -98,7 +86,7 @@ struct GroupEditor: View {
                     store.save(saved)
                     onDone(saved)
                 }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.defaultAction).buttonStyle(.theoPrimary)
                 .disabled(group.name.trimmingCharacters(in: .whitespaces).isEmpty || !sizeFits)
             }
         }
@@ -252,7 +240,7 @@ struct NewBotSheet: View {
                     .buttonStyle(.plain)
                 }
             }
-            HStack { Spacer(); Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction) }
+            HStack { Spacer(); Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction).buttonStyle(.theoSecondary) }
         }
         .padding(24)
     }
@@ -291,8 +279,9 @@ struct NewBotSheet: View {
                             Text("Add a key…").tag("__add_key")
                         }
                     }
-                    .labelsHidden().frame(maxWidth: .infinity)
+                    .labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 field("Model") {
                     let choices = BotModels.list(for: provider, current: model)
                     if choices.isEmpty {
@@ -301,9 +290,10 @@ struct NewBotSheet: View {
                         Picker("Model", selection: $model) {
                             ForEach(choices, id: \.self) { choice in Text(BotModels.label(choice, on: provider)).tag(choice) }
                         }
-                        .labelsHidden().frame(maxWidth: .infinity)
+                        .labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !store.groups.isEmpty {
                 field("Group") {
@@ -315,16 +305,17 @@ struct NewBotSheet: View {
                 }
             }
             HStack {
-                Button("Back") { stencil = nil }
+                Button("Back") { stencil = nil }.buttonStyle(.theoGhost)
                 Spacer()
-                Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction).buttonStyle(.theoSecondary)
                 Button("Create bot", action: create)
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.defaultAction).buttonStyle(.theoPrimary)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.top, 4)
         }
         .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func choose(_ item: BotStencil) {
@@ -395,9 +386,9 @@ struct ClickyAvatar: View {
             .fill(DS.Colors.accent)
             .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
             .overlay {
-                // The cursor drifts in a small loop and its rays pulse, like Clicky on screen.
-                TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
-                    let t = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                // While it's working the cursor drifts in a small loop and its rays pulse, like Clicky on screen.
+                TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !isActive || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { timeline in
+                    let t = isActive && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? timeline.date.timeIntervalSinceReferenceDate : 0
                     Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.46, weight: .semibold)).foregroundColor(.white)
                         .offset(x: cos(t * 1.4) * size * 0.04, y: sin(t * 2.1) * size * 0.04)
                         .scaleEffect(1 + 0.05 * sin(t * 3))
@@ -421,24 +412,26 @@ struct ClickyChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                ClickyAvatar(size: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Clicky").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                ClickyAvatar(size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Clicky").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                     Text("Screen companion · \(NativeBot.label(for: ClickyModels.main)) with \(NativeBot.label(for: ClickyModels.helper)) helpers")
-                        .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                        .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer()
                 Toggle("Speak answers", isOn: $speaks).toggleStyle(.switch).controlSize(.mini)
                     .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
             }
-            .padding(.horizontal, 18).padding(.vertical, 12)
-            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+            // Room on the right for the settings button, as in a bot's header.
+            .padding(.leading, 20).padding(.trailing, 48).frame(height: 60)
+            .overlay(alignment: .bottom) { Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1) }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         if turns.isEmpty && pending == nil {
                             VStack(spacing: 12) {
                                 ClickyAvatar(size: 84)
+                                    .padding(.top, 120)
                                 Text("Clicky").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                                 Text("Ask about what's on your screen, have it point things out, draw a whiteboard, or research a few links.")
                                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
@@ -459,7 +452,7 @@ struct ClickyChatScreen: View {
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
-                    .frame(maxWidth: 760)
+                    .frame(maxWidth: 720)
                     .padding(.horizontal, 24).padding(.vertical, 22)
                     .frame(maxWidth: .infinity)
                 }

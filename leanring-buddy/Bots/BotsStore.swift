@@ -1107,9 +1107,8 @@ extension BotsStore {
         // The same routine asked twice (a repeated reply) isn't added twice.
         guard !routines.contains(where: { $0.target == target && $0.instruction == request.instruction && $0.schedule == request.schedule }) else { return }
         let routine = BotRoutine(name: request.name, target: target, instruction: request.instruction, schedule: request.schedule)
+        // The reply's own card shows it, with Pause and Run now.
         save(routine)
-        post(BotChatMessage(author: author, text: "Routine set: **\(request.name)**, \(request.schedule.label.lowercased()). " +
-                            "Pause, run or delete it from this bot's details or the Routines page."), to: conversationID)
     }
 
     // MARK: Sidebar

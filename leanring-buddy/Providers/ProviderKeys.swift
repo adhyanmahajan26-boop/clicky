@@ -306,6 +306,8 @@ final class ProviderKeys: ObservableObject {
     /// Whether Theo can use this provider now: a saved key, or a local server that answered its last test.
     func isUsable(_ provider: ProviderInfo) -> Bool {
         guard provider.canChat else { return false }
+        // A key its provider just turned down isn't one to offer in the pickers.
+        if testResults[provider.id]?.isOK == false { return false }
         if provider.keyless || provider.group == .custom { return hasKey(for: provider.id) || testResults[provider.id]?.isOK == true || !(modelLists[provider.id] ?? []).isEmpty }
         return hasKey(for: provider.id)
     }
@@ -372,7 +374,8 @@ final class ProviderKeys: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if let failure = ProviderInfo.testFailure(statusCode: status, body: data) {
-                result = TestResult(isOK: false, message: failure)
+                // Some providers quote the key they were sent back in their error.
+                result = TestResult(isOK: false, message: key.map { failure.replacingOccurrences(of: $0, with: "that key") } ?? failure)
             } else {
                 var models = provider.modelsPath != nil && provider.testPath == nil ? ProviderInfo.modelIDs(from: data) : []
                 if models.isEmpty, provider.testPath != nil, provider.canChat, let path = provider.modelsPath, let url = URL(string: provider.baseURL + path) {

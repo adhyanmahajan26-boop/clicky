@@ -35,15 +35,22 @@ EVAL_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(EVAL_DIRECTORY, "..", ".."))
 RUNS_DIRECTORY = os.path.join(REPO_ROOT, "build", "eval", "wake")
 POSITIVE = [
-    "hey claudia what's on my screen",
-    "hey clicky open notes",
+    "hey theo what's on my screen",
+    "hey theo open notes",
+    "hey theo",
+    "hey theo what time is it",
 ]
+# Several voices, so the score isn't about one speaker. Indian, British and American English.
+VOICES = ["Aman", "Daniel (English (UK))", "Flo (English (US))", "Eddy (English (US))"]
 NEGATIVE = [
     "hey claude open",
     "claudia is my friend",
     "we should get lunch tomorrow",
     "the build finished about ten minutes ago",
     "can you pass the salt",
+    "the theory of relativity is hard",
+    "they went home early",
+    "hey there how was your day",
 ]
 PASSIVE_INTERVAL_SECONDS = 30
 PASSIVE_DEFAULT_MINUTES = 30
@@ -72,10 +79,11 @@ def slug(text):
 def build_cases():
     """Every clip to feed: (file name, text, expected). Positives first, then negatives."""
     cases = []
-    for text in POSITIVE:
-        cases.append({"file": slug(text) + ".wav", "text": text, "expected": "positive"})
-    for text in NEGATIVE:
-        cases.append({"file": slug(text) + ".wav", "text": text, "expected": "negative"})
+    for voice in VOICES:
+        for text in POSITIVE:
+            cases.append({"file": slug(voice + " " + text) + ".wav", "text": text, "expected": "positive", "voice": voice})
+        for text in NEGATIVE:
+            cases.append({"file": slug(voice + " " + text) + ".wav", "text": text, "expected": "negative", "voice": voice})
     return cases
 
 
@@ -143,16 +151,18 @@ def passive_plan(minutes):
             "records": "no audio is recorded; only wakeStatus counters and ps CPU are sampled"}
 
 
-def say_command(path, text):
+def say_command(path, text, voice=None):
     """`say -o` writes an AIFF file. There is no output device: nothing is played."""
-    return ["say", "--file-format=WAVE", "--data-format=LEF32@48000", "-o", path, text]  # 48 kHz float, like the live mic
+    # 48 kHz float, like the live mic
+    # With quiet around it, as speech comes in real life: the mic gate learns the noise floor from the first moments.
+    return ["say"] + (["-v", voice] if voice else []) + ["--file-format=WAVE", "--data-format=LEF32@48000", "-o", path, "[[slnc 1800]] " + text + " [[slnc 800]]"]
 
 
 def results_markdown(report):
-    lines = ["# Wake check", "", "| Clip | Expected | Detected | Phrase | Latency (ms) |", "|---|---|---|---|---|"]
+    lines = ["# Wake check", "", "| Clip | Voice | Expected | Detected | Phrase | Latency (ms) |", "|---|---|---|---|---|---|"]
     for item in report["clips"]:
         latency = "" if item.get("latencyMs") is None else "%.0f" % item["latencyMs"]
-        lines.append("| %s | %s | %s | %s | %s |" % (item["text"], item["expected"],
+        lines.append("| %s | %s | %s | %s | %s | %s |" % (item["text"], item.get("voice", ""), item["expected"],
                                                   "yes" if item.get("detected") else "no", item.get("phrase") or "", latency))
     summary = report["summary"]
     lines += ["", "Positives detected %d of %d; false wakes %d of %d negatives; median latency %s ms; %s." % (
@@ -166,7 +176,7 @@ def results_markdown(report):
 
 def make_clip(directory, case):
     path = os.path.join(directory, case["file"])
-    completed = subprocess.run(say_command(path, case["text"]), capture_output=True, text=True, timeout=SAY_TIMEOUT_SECONDS)
+    completed = subprocess.run(say_command(path, case["text"], case.get("voice")), capture_output=True, text=True, timeout=SAY_TIMEOUT_SECONDS)
     if completed.returncode != 0 or not os.path.exists(path):
         raise RuntimeError("say failed for %r: %s" % (case["text"], completed.stderr.strip()[:160]))
     return path
@@ -180,6 +190,10 @@ def feed_mode(run_name, cases):
         return 1
     scratch = tempfile.mkdtemp(prefix="wake-clips-")
     results = []
+    # The live mic pipeline and a feed can't recognize at once (the feed gets "no speech", 1110, every time), so live
+    # listening is off during the run and goes back on at the end.
+    subprocess.run(["defaults", "write", "com.personal.clicky", "v2.wake.enabled", "-bool", "NO"])
+    time.sleep(3)
     try:
         for case in cases:
             path = make_clip(scratch, case)
@@ -189,13 +203,15 @@ def feed_mode(run_name, cases):
             detected, phrase, latency = reply_detection(reply)
             if latency is None and detected:
                 latency = wall_ms
-            results.append({"text": case["text"], "file": case["file"], "expected": case["expected"],
+            heard = (reply.get("result") or {}).get("heard") if isinstance(reply.get("result"), dict) else None
+            results.append({"text": case["text"], "file": case["file"], "expected": case["expected"], "voice": case.get("voice"), "heard": heard,
                             "detected": detected, "phrase": phrase, "latencyMs": latency,
                             "error": None if reply.get("ok") is not False else str(reply.get("error"))[:160]})
-            print("  %-9s %-40s detected=%s latency=%s" % (case["expected"], case["text"], detected,
-                                                         "-" if latency is None else "%.0f ms" % latency), flush=True)
+            print("  %-9s %-34s %-22s detected=%s latency=%s heard=%s" % (case["expected"], case["text"], case.get("voice", ""), detected,
+                                                         "-" if latency is None else "%.0f ms" % latency, heard), flush=True)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+        subprocess.run(["defaults", "write", "com.personal.clicky", "v2.wake.enabled", "-bool", "YES"])
     summary = score_wake(results)
     report = {"clips": results, "summary": summary, "generated": datetime.datetime.now().isoformat(timespec="seconds")}
     with open(os.path.join(run_directory, "results.json"), "w", encoding="utf-8") as handle:

@@ -46,12 +46,12 @@ struct MotionSymbol: View {
         Image(systemName: name).font(.system(size: size, weight: weight)).foregroundColor(color)
             .symbolEffect(.bounce, value: hovering)
             .symbolEffect(.bounce, value: trigger)
-            .onHover { if $0 { hovering.toggle() } }
+            .onHover { if $0 && !DS.Motion.isReduced { hovering.toggle() } }
     }
 }
 
-/// A sidebar icon: a colour tile with a glyph that keeps moving, each in its own way, and moves more when
-/// hovered or open. The clock's hand turns, the gear spins, the pencil writes, the page's lines draw.
+/// A sidebar icon: a colour tile with a glyph that moves, each in its own way, while hovered or open, and rests
+/// otherwise. The clock's hand turns, the gear spins, the pencil writes, the page's lines draw.
 struct NavIcon: View {
     let symbol: String
     var active = false
@@ -73,17 +73,18 @@ struct NavIcon: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate * (hovering || active ? 2.2 : 1)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: reduceMotion || !(hovering || active))) { context in
+            let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate * 1.6
             ZStack {
                 shape.fill(LinearGradient(colors: [Color(hex: colors.0), Color(hex: colors.1)], startPoint: .topLeading, endPoint: .bottomTrailing))
                 shape.fill(LinearGradient(colors: [Color.white.opacity(0.2), .clear], startPoint: .top, endPoint: .center))
                 glyph(t)
             }
             .frame(width: size, height: size)
-            .scaleEffect(hovering ? 1.1 : 1)
+            .scaleEffect(hovering && !reduceMotion ? 1.1 : 1)
         }
-        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: hovering)
+        .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.6), value: hovering)
         .onHover { hovering = $0 }
     }
 
@@ -180,7 +181,7 @@ struct CategoryScreen: View {
                         BotAvatar(bot: bot, size: 22, state: .idle)
                         Text(bot.name).font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary)
                         Spacer()
-                        if current == bot.id { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(Color(hex: 0xF5B13D)) }
+                        if current == bot.id { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(DS.Colors.gold) }
                     }
                     .padding(.horizontal, 8).frame(height: 32).contentShape(Rectangle())
                 }
@@ -266,7 +267,7 @@ struct CategoryScreen: View {
     private func chain(_ section: BotsLayout.Section) -> some View {
         let members = store.members(of: section)
         let leader = section.leaderID.flatMap { store.bot($0) }
-        return HStack(spacing: 0) {
+        return HStack(alignment: .top, spacing: 0) {
             node(title: "Team", detail: members.isEmpty ? "No bots yet" : members.map(\.name).joined(separator: ", ")) {
                 HStack(spacing: -8) {
                     ForEach(members.prefix(5)) { bot in
@@ -276,12 +277,12 @@ struct CategoryScreen: View {
                     if members.isEmpty { emptyCircle }
                 }
             }
-            arrow
+            arrow.padding(.top, 38)
             node(title: "Leader", detail: leader?.name ?? "No leader: everyone reports") {
                 Button { pickingLeader = true } label: {
                     if let leader {
                         BotAvatar(bot: leader, size: 30, state: store.replying[leader.id] != nil ? .thinking : .idle)
-                            .overlay(alignment: .top) { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(Color(hex: 0xF5B13D)).offset(y: -10) }
+                            .overlay(alignment: .top) { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(DS.Colors.gold).offset(y: -10) }
                     } else {
                         emptyCircle.overlay(Image(systemName: "crown").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary))
                     }
@@ -290,7 +291,7 @@ struct CategoryScreen: View {
                 .help("Pick the team's leader")
                 .popover(isPresented: $pickingLeader, arrowEdge: .bottom) { leaderPicker(members, current: section.leaderID) }
             }
-            arrow
+            arrow.padding(.top, 38)
             node(title: "Reports to", detail: (store.primary?.name ?? "CEO") + ", the CEO") {
                 if let ceo = store.primary { BotAvatar(bot: ceo, size: 30, state: .idle) }
             }
@@ -369,7 +370,7 @@ struct CategoryScreen: View {
                         Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                         if isLeader {
                             Label("Leader", systemImage: "crown.fill").labelStyle(.titleAndIcon)
-                                .font(.system(size: 9.5, weight: .bold)).foregroundColor(Color(hex: 0xF5B13D))
+                                .font(.system(size: 9.5, weight: .bold)).foregroundColor(DS.Colors.gold)
                         }
                     }
                     Text(bot.description.isEmpty ? "No description yet" : bot.description)
@@ -383,10 +384,10 @@ struct CategoryScreen: View {
                 Spacer(minLength: 0)
             }
             .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(isLeader ? Color(hex: 0xF5B13D).opacity(0.45) : DS.Colors.borderSubtle))
+                .strokeBorder(isLeader ? DS.Colors.gold.opacity(0.45) : DS.Colors.borderSubtle))
             .contentShape(Rectangle())
         }
         .buttonStyle(LiftButtonStyle())
@@ -431,7 +432,7 @@ struct CategoryScreen: View {
 
     private func node<Icon: View>(title: String, detail: String, @ViewBuilder icon: () -> Icon) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
+            Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary).lineLimit(1).fixedSize()
             icon().frame(height: 34, alignment: .leading)
             Text(detail).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(2).frame(maxWidth: 150, alignment: .leading)
         }
@@ -456,8 +457,11 @@ struct CategoryScreen: View {
 
 /// A dashed arrow whose dashes run toward the CEO, so reporting reads as motion.
 struct FlowArrow: View {
+    @State private var hovering = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+        // Its dashes run while the pointer is on it; at rest it's a plain arrow.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !hovering)) { timeline in
             Canvas { context, size in
                 let phase = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0
                     : -CGFloat(timeline.date.timeIntervalSinceReferenceDate * 18).truncatingRemainder(dividingBy: 10)
@@ -470,6 +474,7 @@ struct FlowArrow: View {
                 context.stroke(head, with: .color(DS.Colors.accent.opacity(0.9)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             }
         }
+        .onHover { hovering = $0 }
     }
 }
 
@@ -520,25 +525,27 @@ struct OrgChart: View {
                 }
                 .buttonStyle(LiftButtonStyle())
             }
-            Rectangle().fill(DS.Colors.borderStrong).frame(width: 1.5, height: 22)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(teams) { team in teamCard(team) }
-                    if !free.isEmpty { freeCard(free) }
-                    Button(action: onNewTeam) {
-                        VStack(spacing: 8) {
-                            MotionSymbol(name: "plus", size: 16, weight: .semibold)
-                            Text("New team").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-                        }
-                        .frame(width: 150, height: 150)
-                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(LiftButtonStyle())
-                }
-                .padding(.vertical, 8).padding(.horizontal, 2)
+            // A bracket from the CEO down to every category under it.
+            VStack(spacing: 0) {
+                Rectangle().fill(DS.Colors.borderStrong).frame(width: 1, height: 12)
+                Rectangle().fill(DS.Colors.borderStrong).frame(height: 1).padding(.horizontal, 100)
             }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+                ForEach(teams) { team in teamCard(team) }
+                if !free.isEmpty { freeCard(free) }
+                Button(action: onNewTeam) {
+                    VStack(spacing: 8) {
+                        MotionSymbol(name: "plus", size: 16, weight: .semibold)
+                        Text("New category").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 150)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(LiftButtonStyle())
+            }
+            .padding(.top, 12)
         }
     }
 
@@ -556,7 +563,7 @@ struct OrgChart: View {
                         BotAvatar(bot: leader, size: 26, state: store.replying[leader.id] != nil ? .thinking : .idle)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(leader.name).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                            Label("Leader", systemImage: "crown.fill").font(.system(size: 9.5, weight: .semibold)).foregroundColor(Color(hex: 0xF5B13D))
+                            Label("Leader", systemImage: "crown.fill").font(.system(size: 9.5, weight: .semibold)).foregroundColor(DS.Colors.gold)
                         }
                     } else {
                         Text("No leader: everyone reports").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
@@ -571,7 +578,7 @@ struct OrgChart: View {
                 Text(team.purpose ?? "\(members.count) bots").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
             }
             .padding(12)
-            .frame(width: 200, height: 150, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 150, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
         }
@@ -580,7 +587,7 @@ struct OrgChart: View {
 
     private func freeCard(_ bots: [NativeBot]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Not in a team").font(.system(size: 13.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+            Text("Not in a category").font(.system(size: 13.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).frame(height: 26, alignment: .leading)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 30), spacing: 8)], alignment: .leading, spacing: 8) {
                 ForEach(bots.prefix(10)) { bot in
                     Button { selection.pane = .bot(bot.id) } label: {
@@ -589,10 +596,10 @@ struct OrgChart: View {
                     .buttonStyle(.plain).help(bot.name)
                 }
             }
-            Text(store.layout.sections.isEmpty ? "Make a category in the sidebar, then drag them onto it." : "Drag them onto a team in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            Text(store.layout.sections.isEmpty ? "Make a category, then drag them onto it in the sidebar." : "Drag them onto a category in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
         }
         .padding(12)
-        .frame(width: 200, height: 150, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 150, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
     }

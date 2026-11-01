@@ -64,7 +64,7 @@ struct BotsRootView: View {
             } else {
                 sidebar
             }
-            Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1)
+            Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1).ignoresSafeArea(.container, edges: .top)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DS.Colors.background)
@@ -75,7 +75,7 @@ struct BotsRootView: View {
                                 .frame(width: 30, height: 30).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).help("Settings for this chat")
-                        .padding(.top, 11).padding(.trailing, 12)
+                        .padding(.top, 15).padding(.trailing, 12)
                     }
                 }
                 .overlay {
@@ -91,7 +91,7 @@ struct BotsRootView: View {
                                 }
                             }
                             .frame(width: 340)
-                            .background(DS.Colors.surface)
+                            .background(DS.Colors.surface1)
                             .overlay(alignment: .leading) { Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1) }
                             .shadow(color: .black.opacity(0.28), radius: 24, x: -2)
                             .overlay(alignment: .topTrailing) {
@@ -126,8 +126,6 @@ struct BotsRootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Room for the window's traffic lights.
-            Color.clear.frame(height: 40)
             VStack(spacing: 1) {
                 HStack(spacing: 0) {
                     Button { addingBot = true } label: { navLabel("square.and.pencil", "New bot") }
@@ -144,13 +142,13 @@ struct BotsRootView: View {
                     .help("New group chat or category")
                 }
                 HStack(spacing: 8) {
-                    NavIcon(symbol: "magnifyingglass")
-                    TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
+                    NavIcon(symbol: "magnifyingglass", size: 20)
+                    TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13, weight: .medium)).focused($searchFocused)
                     if !query.isEmpty {
                         Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(DS.Colors.textTertiary) }.buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 8).frame(height: 36)
+                .padding(.horizontal, 8).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 8).fill(searchFocused ? DS.Colors.hover : .clear))
                 .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
                 navRow(.home, "house", "Home")
@@ -324,7 +322,7 @@ struct BotsRootView: View {
                 sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, leads: store.layout.sections.contains { $0.leaderID == bot.id },
                            unread: store.unread[bot.id] ?? 0,
                            busy: store.replying[bot.id] != nil, dimmed: !bot.isOn) {
-                    BotAvatar(bot: bot, size: 22, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                    BotAvatar(bot: bot, size: 20, state: store.replying[bot.id] != nil ? .thinking : .idle)
                 }
             } else if let group = store.group(String(item.dropFirst(6))) {
                 let members = store.members(of: group)
@@ -351,7 +349,7 @@ struct BotsRootView: View {
             if !store.layout.sections.isEmpty { Divider() }
             Button("New category…") { namingSectionFor = item; sectionName = "" }
             if store.layout.section(of: item) != nil {
-                Button("Take out of section") { store.move(item, toSection: nil) }
+                Button("Take out of category") { store.move(item, toSection: nil) }
             }
         }
         if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
@@ -399,7 +397,7 @@ struct BotsRootView: View {
         return AnyView(VStack(alignment: .leading, spacing: 2) {
             sectionHeader(section, collapsed: collapsed)
             if !collapsed {
-                ForEach(items, id: \.self) { item in itemRow(item).padding(.leading, 14) }
+                ForEach(items, id: \.self) { item in itemRow(item).padding(.leading, 18) }
                 ForEach(children) { child in sectionTree(child, depth: depth + 1) }
                 if items.isEmpty && children.isEmpty {
                     Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
@@ -430,7 +428,7 @@ struct BotsRootView: View {
                     CategoryTile(section: section, size: 20)
                     Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                     if leader != nil {
-                        Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(Color(hex: 0xF5B13D)).help("Led by \(leader!.name)")
+                        Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold).help("Led by \(leader!.name)")
                     }
                     Spacer(minLength: 0)
                     if busy { PulseDot(color: DS.Colors.accent) } else {
@@ -516,7 +514,7 @@ struct BotsRootView: View {
                 Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
                     .foregroundColor(dimmed ? DS.Colors.textTertiary : DS.Colors.textPrimary).lineLimit(1)
                 if star { Text("CEO").font(.system(size: 8.5, weight: .bold)).foregroundColor(DS.Colors.accent) }
-                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(Color(hex: 0xF5B13D)) }
+                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold) }
                 Spacer(minLength: 0)
                 if busy {
                     PulseDot(color: DS.Colors.accent)
@@ -532,12 +530,12 @@ struct BotsRootView: View {
 
     private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil, active: Bool = false) -> some View {
         HStack(spacing: 8) {
-            NavIcon(symbol: symbol, active: active)
+            NavIcon(symbol: symbol, active: active, size: 20)
             Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
             Spacer(minLength: 0)
             if let trailing { Text(trailing).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary) }
         }
-        .padding(.horizontal, 8).frame(height: 36)
+        .padding(.horizontal, 8).frame(height: 32)
         .contentShape(Rectangle())
     }
 
@@ -630,13 +628,17 @@ struct BotChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+            if record.messages.isEmpty && inProgress.isEmpty && !hasLiveRun {
+                // A new chat: the bot in the middle of the pane, not stuck above the composer.
+                Spacer(minLength: 0)
+                emptyState.padding(.horizontal, 24)
+                Spacer(minLength: 0)
+            } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     // A plain VStack: a lazy one guesses the heights of long replies it hasn't drawn, and
                     // scrolling to the end then lands in empty space until something redraws.
                     VStack(alignment: .leading, spacing: 18) {
-                        if record.messages.isEmpty && inProgress.isEmpty { emptyState }
                         ForEach(Array(record.messages.enumerated()), id: \.element.id) { index, message in
                             if message.author == "user" {
                                 UserBubble(text: message.text)
@@ -673,7 +675,7 @@ struct BotChatScreen: View {
                     .frame(maxWidth: .infinity)
                 }
                 // A reply typing itself out, or a card opening under it, keeps the newest line in view.
-                .defaultScrollAnchor(.bottom)
+                .modifier(ChatScrollAnchor())
                 .onChange(of: record.messages.count) { _, _ in
                     if let last = record.messages.last, let streamed = lastLive[last.author], streamed.count > 20,
                        last.text.hasPrefix(String(streamed.prefix(20))) {
@@ -699,8 +701,14 @@ struct BotChatScreen: View {
                     proxy.scrollTo("end", anchor: .bottom)
                 }
             }
+            }
             composer
         }
+        .onAppear { store.viewing = conversationID }
+    }
+
+    private var hasLiveRun: Bool {
+        store.t3Runs.contains { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }
     }
 
     /// The chat's toolbar (docs/DESIGN.md): avatar, name (opens settings), model, and new chat.
@@ -713,7 +721,7 @@ struct BotChatScreen: View {
                         HStack(spacing: 6) {
                             Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                             if bot.primary {
-                                Text("PRIMARY").font(.system(size: 9, weight: .bold)).tracking(0.5).foregroundColor(DS.Colors.accent)
+                                Text("CEO").font(.system(size: 9, weight: .bold)).tracking(0.5).foregroundColor(DS.Colors.accentText)
                                     .padding(.horizontal, 5).frame(height: 16)
                                     .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(DS.Colors.accent.opacity(0.14)))
                             }
@@ -727,16 +735,18 @@ struct BotChatScreen: View {
                 }
                 .buttonStyle(.plain).help("Settings for \(bot.name)")
             } else {
-                GroupAvatar(bots: groupBots, size: 24)
+                GroupAvatar(bots: groupBots, size: 34)
                 Button { editsGroup = true } label: {
-                    Text(group?.name ?? "Group chat").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group?.name ?? "Group chat").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        Text("Led by \(group.flatMap { store.head(of: $0) }?.name ?? "nobody") · \(groupBots.count) bots")
+                            .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    }
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $editsGroup) {
                     if let group { GroupEditor(store: store, group: group) { _ in editsGroup = false } }
                 }
-                Text("Led by \(group.flatMap { store.head(of: $0) }?.name ?? "nobody") · \(groupBots.count) bots")
-                    .font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
             }
             Spacer()
             Button {
@@ -784,7 +794,7 @@ struct BotChatScreen: View {
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             }
         }
-        .frame(maxWidth: .infinity).padding(.top, 80)
+        .frame(maxWidth: 480).frame(maxWidth: .infinity)
     }
 
     /// "A", "A and B", "A, B and C".
@@ -841,27 +851,7 @@ struct BotChatScreen: View {
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .help("Mention a bot, or send work to the coding agent")
-                if let bot {
-                    Menu {
-                        ForEach(BotModels.list(for: bot), id: \.self) { model in
-                            Toggle(BotModels.label(model, on: bot.provider), isOn: Binding(get: { bot.model == model }, set: { _ in
-                                var edited = bot
-                                edited.model = model
-                                store.save(edited)
-                            }))
-                        }
-                        Divider()
-                        Button("Engine and more…") { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(bot.modelLabel).font(.system(size: 12, weight: .medium))
-                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
-                        }
-                        .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
-                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Change the model")
-                }
+                if let bot { ModelChip(store: store, bot: bot) }
                 Spacer()
                 if !inProgress.isEmpty && isEmpty {
                     Button {
@@ -922,6 +912,61 @@ struct BotChatScreen: View {
         panel.prompt = "Attach"
         guard panel.runModal() == .OK else { return }
         attachments += panel.urls.filter { !attachments.contains($0) }
+    }
+}
+
+/// The composer's model: click for this engine's models, one click from the rest of the bot's settings.
+struct ModelChip: View {
+    @ObservedObject var store: BotsStore
+    let bot: NativeBot
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: 4) {
+                Text(bot.modelLabel).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).help("Change the model")
+        .popover(isPresented: $open, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 1) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(BotModels.list(for: bot), id: \.self) { model in
+                            Button {
+                                var edited = bot
+                                edited.model = model
+                                store.save(edited)
+                                open = false
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).frame(width: 12).opacity(bot.model == model ? 1 : 0)
+                                    Text(BotModels.label(model, on: bot.provider)).font(.system(size: 13)).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .foregroundColor(DS.Colors.textPrimary).padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
+                            }
+                            .buttonStyle(SidebarButtonStyle(isSelected: false))
+                        }
+                    }
+                }
+                .frame(maxHeight: 280)
+                RowDivider().padding(.vertical, 4)
+                Button {
+                    open = false
+                    NotificationCenter.default.post(name: .theoShowBotSettings, object: nil)
+                } label: {
+                    Text("Engine, effort and more…").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(SidebarButtonStyle(isSelected: false))
+            }
+            .padding(6).frame(width: 260)
+        }
     }
 }
 
@@ -1020,6 +1065,7 @@ struct BotLine: View {
                     }
                 }
             }
+            .frame(maxWidth: ChatText.measure, alignment: .leading)
             .padding(.leading, 38)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1045,7 +1091,8 @@ struct BotLine: View {
         }
     }
 
-    private var typing: Bool { animatesIn && !finished }
+    /// With Reduce Motion the words just appear as they arrive.
+    private var typing: Bool { animatesIn && !finished && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     /// A timeline's date can be a moment before the anchor, so this never goes below what was already showing.
     private func shownCount(at date: Date) -> Int {
@@ -1057,12 +1104,11 @@ struct BotLine: View {
         let split = shown.range(of: "\n\n", options: .backwards)
         let done = split.map { String(shown[..<$0.lowerBound]) } ?? ""
         let current = split.map { String(shown[$0.upperBound...]) } ?? shown
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
             if !done.isEmpty { RichBlock(text: done).equatable() }
-            HStack(alignment: .lastTextBaseline, spacing: 3) {
-                Text(current).font(.system(size: 15)).foregroundColor(DS.Colors.textPrimary).lineSpacing(5)
-                CometCaret(color: bot.accentColor)
-            }
+            // The same style as the finished text, so nothing jumps when typing ends. The dot sits right after the last word.
+            (Text(BotMarkdown.attributed(current)) + Text(" ●").font(.system(size: 8)).foregroundColor(bot.accentColor))
+                .font(ChatText.font).foregroundColor(DS.Colors.textPrimary).lineSpacing(ChatText.lineSpacing)
         }
     }
 }
@@ -1076,7 +1122,27 @@ struct RichBlock: View, Equatable {
 /// Inline Markdown (bold, italics, code, links) for finished replies.
 enum BotMarkdown {
     static func attributed(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        var result = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        // Inline code reads as a small chip.
+        for run in result.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            result[run.range].font = .system(size: 13.5, design: .monospaced)
+            result[run.range].backgroundColor = DS.Colors.selected
+        }
+        return result
+    }
+}
+
+/// Short chats start at the top and long ones at the newest line (macOS 15's roles; the bottom on 14).
+struct ChatScrollAnchor: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+                .defaultScrollAnchor(.top, for: .alignment)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        } else {
+            content.defaultScrollAnchor(.bottom)
+        }
     }
 }
 
@@ -1131,13 +1197,17 @@ struct BotAvatar: View {
             shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
             shape.fill(LinearGradient(colors: [Color.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center))
             shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle)
-            } else {
-                // Alive: it blinks, glances around and bobs; while it works its eyes scan and glow.
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !bot.isOn {
+                BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle && bot.isOn)
+            } else if state != .idle {
+                // Working: its eyes scan and glow and it talks.
                 TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
-                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle && bot.isOn,
-                            time: bot.isOn ? timeline.date.timeIntervalSinceReferenceDate : 0)
+                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: true, time: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            } else {
+                // Resting: a blink and a glance now and then, drawn only at those moments, so a screen full of bots costs next to nothing.
+                TimelineView(BotRestingSchedule(seed: bot.id)) { timeline in
+                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             }
         }
@@ -1145,8 +1215,8 @@ struct BotAvatar: View {
         .overlay(alignment: .bottomTrailing) {
             // The glyph picked for the bot rides on a small badge.
             if size >= 30, let glyph = bot.glyph, !glyph.isEmpty {
-                Image(systemName: glyph).font(.system(size: size * 0.2, weight: .bold)).foregroundColor(Color(hex: swatch.to))
-                    .frame(width: size * 0.36, height: size * 0.36)
+                Image(systemName: glyph).font(.system(size: size * 0.26, weight: .bold)).foregroundColor(Color(hex: swatch.to))
+                    .frame(width: size * 0.46, height: size * 0.46)
                     .background(Circle().fill(Color.white))
                     .overlay(Circle().strokeBorder(DS.Colors.background, lineWidth: 1.5))
                     .offset(x: size * 0.08, y: size * 0.08)
@@ -1164,8 +1234,34 @@ struct BotAvatar: View {
 
     private func restart() {
         breathing = false
-        guard state != .idle else { return }
+        guard state != .idle, !DS.Motion.isReduced else { breathing = state != .idle; return }
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathing = true }
+    }
+}
+
+/// When a resting face changes: the frames of a blink, and the moment it glances somewhere new.
+struct BotRestingSchedule: TimelineSchedule {
+    let seed: String
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        let phase = BotFace.phase(of: seed)
+        let period = BotFace.blinkPeriod(phase)
+        var next = startDate
+        return AnyIterator {
+            let current = next
+            let t = current.timeIntervalSinceReferenceDate + phase
+            let intoBlink = t.truncatingRemainder(dividingBy: period)
+            let step: TimeInterval
+            if intoBlink < BotFace.blinkSeconds, mode != .lowFrequency {
+                step = 1.0 / 30
+            } else {
+                let toBlink = intoBlink < BotFace.blinkSeconds ? period - intoBlink : period - intoBlink
+                let toGlance = BotFace.glanceSeconds - t.truncatingRemainder(dividingBy: BotFace.glanceSeconds)
+                step = max(1.0 / 30, min(toBlink, toGlance))
+            }
+            next = current.addingTimeInterval(step)
+            return current
+        }
     }
 }
 
@@ -1179,9 +1275,12 @@ struct BotFace: View {
     /// Seconds on a running clock; nil draws it still.
     var time: Double? = nil
 
-    private var phase: Double {
-        Double(seed.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0xFFFF }) / 6553.5
-    }
+    static let blinkSeconds = 0.16
+    static let glanceSeconds = 2.6
+    static func phase(of seed: String) -> Double { Double(seed.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0xFFFF }) / 6553.5 }
+    static func blinkPeriod(_ phase: Double) -> Double { 3.4 + phase.truncatingRemainder(dividingBy: 1.6) }
+
+    private var phase: Double { Self.phase(of: seed) }
 
     private var traits: (eyes: Int, mouth: Int, antenna: Int) {
         var hash: UInt64 = 1469598103934665603
@@ -1197,15 +1296,15 @@ struct BotFace: View {
             let (eyes, mouth, antenna) = isTheo ? (2, 3, 1) : traits
             let t = (time ?? 0) + phase
             let moving = time != nil
-            // A gentle bob of the whole face, a blink every few seconds, and a glance left or right.
-            let bob = moving ? sin(t * 1.8) * w * 0.018 : 0
-            let period = 3.4 + phase.truncatingRemainder(dividingBy: 1.6)
+            // While it works the whole face bobs. At rest there's a blink every few seconds and a glance left or right.
+            let bob = moving && awake ? sin(t * 1.8) * w * 0.018 : 0
+            let period = Self.blinkPeriod(phase)
             let blinkPhase = t.truncatingRemainder(dividingBy: period)
-            let blink = moving && blinkPhase < 0.16 ? max(0.12, abs(blinkPhase - 0.08) / 0.08) : 1
+            let blink = moving && blinkPhase < Self.blinkSeconds ? max(0.12, abs(blinkPhase - 0.08) / 0.08) : 1
             let glance: Double = {
                 guard moving else { return 0 }
                 if awake { return sin(t * 3.2) * w * 0.035 }
-                let slot = Int(t / 2.6) % 4
+                let slot = Int(t / Self.glanceSeconds) % 4
                 return [0, w * 0.03, 0, -w * 0.03][slot]
             }()
             context.translateBy(x: 0, y: bob)
@@ -1215,7 +1314,7 @@ struct BotFace: View {
                 stem.move(to: CGPoint(x: w * 0.5, y: w * 0.17)); stem.addLine(to: CGPoint(x: w * 0.5, y: w * 0.07))
                 context.stroke(stem, with: .color(eye.opacity(0.85)), lineWidth: max(1, w * 0.035))
                 let r = w * (antenna == 1 ? 0.055 : 0.04)
-                let pulse = moving ? (awake ? 0.55 + 0.45 * (sin(t * 6) * 0.5 + 0.5) : 0.75 + 0.25 * sin(t * 1.3)) : 1
+                let pulse = moving && awake ? 0.55 + 0.45 * (sin(t * 6) * 0.5 + 0.5) : 0.9
                 context.fill(Path(ellipseIn: CGRect(x: w * 0.5 - r, y: w * 0.07 - r, width: r * 2, height: r * 2)),
                              with: .color((isTheo ? Color(hex: 0xFF8A5B) : eye).opacity(pulse)))
             }
@@ -1320,7 +1419,10 @@ struct CometCaret: View {
         Circle().fill(color)
             .frame(width: 7, height: 7)
             .opacity(pulse ? 0.35 : 1)
-            .onAppear { withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { pulse = true } }
+            .onAppear {
+                guard !DS.Motion.isReduced else { return }
+                withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { pulse = true }
+            }
     }
 }
 
@@ -1335,78 +1437,90 @@ struct ConnectorsScreen: View {
     @State private var working: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Connectors").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, for reading and drafts.")
-                        .font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Connectors").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
+                        Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only.")
+                            .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 16)
+                    Button(checking ? "Checking…" : "Refresh") { Task { await refresh() } }
+                        .disabled(checking).buttonStyle(.theo(.secondary, .small))
                 }
-                Spacer()
-                Button(checking ? "Checking…" : "Refresh") { Task { await refresh() } }
-                    .disabled(checking).buttonStyle(.borderless).foregroundColor(DS.Colors.textSecondary)
-            }
-            .padding(20)
-            if let note {
-                Text(note).font(.system(size: 12)).foregroundColor(DS.Colors.accentText).padding(.horizontal, 20).padding(.bottom, 8)
-            }
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(BotConnectors.known.filter { $0.id != "calendar" }) { connector in row(connector) }
+                if let note {
+                    Text(note).font(TheoType.caption).foregroundColor(DS.Colors.accentText)
                 }
-                .padding(.horizontal, 20).padding(.bottom, 20)
+                VStack(spacing: 0) {
+                    let connectors = BotConnectors.known.filter { $0.id != "calendar" }
+                    ForEach(Array(connectors.enumerated()), id: \.element.id) { index, connector in
+                        if index > 0 { RowDivider() }
+                        row(connector)
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
+            .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .task { await refresh() }
     }
 
+    /// One line per connector: what it is, who uses it, one status, and the one thing to do about it.
     private func row(_ connector: BotConnector) -> some View {
         let users = bots.filter { $0.apps.contains(connector.id) || (connector.id == "notion" && $0.apps.contains("calendar")) }
+        let onClaude = status(claude, connector.claudeServer)
+        let onOpenCode = status(openCode, connector.openCodeServer)
+        let bridged = BotConnectors.bridged(connector)
+        let othersReach = onOpenCode == .connected || (bridged && onClaude == .connected)
+        let canConnectClaude = !checking && onClaude != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true
+        let canConnectOthers = !checking && !bridged && onOpenCode != .connected && connector.openCodeURL != nil
         return HStack(spacing: 12) {
-            AppLogo(connector: connector, size: 36)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(connector.name).font(.system(size: 13.5, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
-                Text(users.isEmpty ? "No bot uses it yet" : "Used by " + users.map(\.name).joined(separator: ", "))
-                    .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            AppLogo(connector: connector, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(connector.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                Text((users.isEmpty ? "No bot uses it yet" : "Used by " + users.map(\.name).joined(separator: ", ")) + (connector.id == "notion" ? ". Includes Notion Calendar." : ""))
+                    .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 12)
             if connector.isSkill {
-                badge("Skills", .connected)
+                StatusPill(text: "Skills", tone: .neutral)
+            } else if checking && claude.isEmpty {
+                StatusPill(text: "Checking", tone: .neutral, busy: true)
+            } else if onClaude == .connected && othersReach {
+                StatusPill(text: onOpenCode == .connected ? "Connected" : "Connected, others via Claude", tone: .good)
+            } else if onClaude == .connected {
+                StatusPill(text: "Claude only", tone: .good)
+            } else if othersReach {
+                StatusPill(text: "OpenCode and Grok only", tone: .good)
+            } else if onClaude == .needsSignIn {
+                StatusPill(text: "Needs sign-in", tone: .warn)
             } else {
-                VStack(alignment: .trailing, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text("Claude").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                        badge(status(claude, connector.claudeServer), status(claude, connector.claudeServer))
-                        if !checking && status(claude, connector.claudeServer) != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true {
-                            Button("Connect") { BotConnectors.openClaudeConnectors() }.buttonStyle(.borderless).font(.system(size: 11))
+                StatusPill(text: "Not connected", tone: .neutral)
+            }
+            Group {
+                if canConnectClaude {
+                    Button("Connect") { BotConnectors.openClaudeConnectors() }.buttonStyle(.theo(.secondary, .small))
+                } else if canConnectOthers {
+                    Button(working == connector.id ? "Signing in…" : "Connect") {
+                        working = connector.id
+                        Task {
+                            note = await BotConnectors.addToOpenCode(connector)
+                            working = nil
+                            await refresh()
                         }
                     }
-                    HStack(spacing: 6) {
-                        Text("OpenCode & Grok").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                        if BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected {
-                            // Reached through Theo's claudia_app tool on the Claude account, read-only.
-                            let viaClaude = status(claude, connector.claudeServer)
-                            badge(viaClaude == .connected ? "Via Claude" : viaClaude.label, viaClaude)
-                        } else {
-                            badge(status(openCode, connector.openCodeServer), status(openCode, connector.openCodeServer))
-                        }
-                        if !checking && !BotConnectors.bridged(connector) && status(openCode, connector.openCodeServer) != .connected && connector.openCodeURL != nil {
-                            Button(working == connector.id ? "Signing in…" : "Connect") {
-                                working = connector.id
-                                Task {
-                                    note = await BotConnectors.addToOpenCode(connector)
-                                    working = nil
-                                    await refresh()
-                                }
-                            }
-                            .buttonStyle(.borderless).font(.system(size: 11)).disabled(working != nil)
-                        }
-                    }
+                    .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
+                } else {
+                    Color.clear
                 }
             }
+            .frame(width: 84, height: 24, alignment: .trailing)
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(DS.Colors.surface1))
+        .padding(.horizontal, 14).frame(minHeight: 52)
     }
 
     private func status(_ map: [String: BotConnectors.Status], _ name: String?) -> BotConnectors.Status {
@@ -1415,19 +1529,6 @@ struct ConnectorsScreen: View {
         return map[name] ?? .missing
     }
 
-    private func badge(_ status: BotConnectors.Status, _ tone: BotConnectors.Status) -> some View {
-        badge(status.label, tone)
-    }
-
-    private func badge(_ label: String, _ tone: BotConnectors.Status) -> some View {
-        let color: Color = tone == .connected ? .green : tone == .needsSignIn ? .orange : tone == .unknown ? .gray : Color.white.opacity(0.4)
-        return HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-        }
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(Capsule().fill(color.opacity(0.12)))
-    }
 
     private func refresh() async {
         checking = true
@@ -1656,7 +1757,7 @@ struct BotModelSettings: View {
                         Text("Add a key…").tag("__add_key")
                     }
                 }
-                .labelsHidden().frame(width: compact ? nil : 260)
+                .labelsHidden().frame(maxWidth: compact ? .infinity : 260)
             }
             row("Model") {
                 if models.isEmpty {
@@ -1668,7 +1769,7 @@ struct BotModelSettings: View {
                             Text(BotModels.label(model, on: bot.provider)).tag(model)
                         }
                     }
-                    .labelsHidden().frame(width: compact ? nil : 260)
+                    .labelsHidden().frame(maxWidth: compact ? .infinity : 260)
                 }
             }
             row("Effort") {
@@ -1676,13 +1777,15 @@ struct BotModelSettings: View {
                     Text("Default").tag("")
                     ForEach(efforts, id: \.self) { Text($0.capitalized).tag($0) }
                 }
-                .labelsHidden().frame(width: compact ? nil : 160)
+                .labelsHidden().frame(maxWidth: compact ? .infinity : 160)
             }
             row("Thinking") {
+                Spacer(minLength: 0)
                 Toggle("Thinking", isOn: Binding(get: { bot.thinking ?? false }, set: { bot.thinking = $0; commit() }))
                     .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
             }
             row("Fast mode") {
+                Spacer(minLength: 0)
                 Toggle("Fast mode", isOn: Binding(get: { bot.fast ?? false }, set: { bot.fast = $0; commit() }))
                     .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
             }

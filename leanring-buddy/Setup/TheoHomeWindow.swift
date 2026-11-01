@@ -29,6 +29,7 @@ enum TheoHomeWindowController {
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                    backing: .buffered, defer: false)
             created.title = "Theo"
+            created.titleVisibility = .hidden
             created.titlebarAppearsTransparent = true
             created.isReleasedWhenClosed = false
             created.minSize = NSSize(width: 860, height: 560)

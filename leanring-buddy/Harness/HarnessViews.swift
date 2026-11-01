@@ -20,6 +20,23 @@ struct CodingSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Install them, sign in, or use your own key. Theo runs each one in its own terminal.").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    Spacer()
+                    Button { center.refresh(force: true) } label: {
+                        Label(center.isRefreshing ? "Checking…" : "Re-check all", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.theo(.ghost, .small)).disabled(center.isRefreshing)
+                }
+                ForEach(HarnessCatalog.all, id: \.id) { info in
+                    HarnessCard(info: info, openTerminal: { task in
+                        // The test profile's CLIs are the real ones, signed in with the real account: only a fake one may sign in or out.
+                        if TheoProfile.isTest, task.kind != .install, HarnessCatalog.executable(for: task.info.id)?.path.contains("/fake-bin/") != true { return }
+                        terminalTask = task
+                    })
+                }
+            }
             TheoSection(title: "Defaults", hint: "T3 Code tracks a build in its own app. Any other harness runs in a live terminal inside Theo. Every bot can pick its own engine in its settings.") {
                 defaultRow(title: "Builds go to", harnesses: HarnessCatalog.codingTargets, selection: Binding(get: { center.codingTarget }, set: { center.codingTarget = $0 }),
                            model: Binding(get: { center.codingModel ?? "" }, set: { center.codingModel = $0.isEmpty ? nil : $0 }),
@@ -29,19 +46,6 @@ struct CodingSettingsView: View {
                            model: Binding(get: { center.defaultModel(for: center.defaultHarness) ?? "" }, set: { center.setDefaultModel($0.isEmpty ? nil : $0, for: center.defaultHarness) }),
                            effort: Binding(get: { center.defaultEffort(for: center.defaultHarness) ?? "" }, set: { center.setDefaultEffort($0.isEmpty ? nil : $0, for: center.defaultHarness) }))
             }
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Harnesses").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
-                    Spacer()
-                    Button { center.refresh(force: true) } label: {
-                        Label(center.isRefreshing ? "Checking…" : "Re-check all", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.theo(.ghost, .small)).disabled(center.isRefreshing)
-                }
-                ForEach(HarnessCatalog.all, id: \.id) { info in
-                    HarnessCard(info: info, openTerminal: { terminalTask = $0 })
-                }
-            }
         }
         .onAppear { center.refresh() }
         .sheet(item: $terminalTask) { task in
@@ -50,19 +54,33 @@ struct CodingSettingsView: View {
     }
 
     private func defaultRow(title: String, harnesses: [HarnessInfo], selection: Binding<String>, model: Binding<String>, effort: Binding<String>) -> some View {
-        HStack(spacing: 10) {
-            Text(title).font(TheoType.body).foregroundColor(DS.Colors.textPrimary).frame(width: 110, alignment: .leading)
-            Picker(title, selection: selection) {
-                ForEach(harnesses, id: \.id) { info in
-                    let status = center.status(for: info.id)
-                    Text(info.label + (center.statuses[info.id] == nil ? "" : status.installed ? (status.loggedIn == false ? " (not signed in)" : "") : " (not installed)")).tag(info.id)
-                }
+        // One line when there's room, two in a narrow window.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Text(title).font(TheoType.body).foregroundColor(DS.Colors.textPrimary).frame(width: 110, alignment: .leading).fixedSize()
+                targetPicker(title: title, harnesses: harnesses, selection: selection)
+                HarnessModelPicker(harness: selection.wrappedValue, model: model, effort: effort)
+                Spacer(minLength: 0)
             }
-            .labelsHidden().frame(width: 200)
-            HarnessModelPicker(harness: selection.wrappedValue, model: model, effort: effort)
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Text(title).font(TheoType.body).foregroundColor(DS.Colors.textPrimary).frame(width: 110, alignment: .leading).fixedSize()
+                    targetPicker(title: title, harnesses: harnesses, selection: selection)
+                }
+                HarnessModelPicker(harness: selection.wrappedValue, model: model, effort: effort).padding(.leading, 120)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    private func targetPicker(title: String, harnesses: [HarnessInfo], selection: Binding<String>) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(harnesses, id: \.id) { info in
+                let status = center.status(for: info.id)
+                Text(info.label + (center.statuses[info.id] == nil ? "" : status.installed ? (status.loggedIn == false ? " (not signed in)" : "") : " (not installed)")).tag(info.id)
+            }
+        }
+        .labelsHidden().frame(width: 230)
     }
 }
 
@@ -105,6 +123,7 @@ struct HarnessCard: View {
     @ObservedObject private var keys = ProviderKeys.shared
     @State private var confirmsSignOut = false
     @State private var showsConnect = false
+    @State private var showsMore = false
 
     private var status: HarnessStatus { center.status(for: info.id) }
     private var isChecking: Bool { center.statuses[info.id] == nil || center.checking.contains(info.id) }
@@ -116,23 +135,32 @@ struct HarnessCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                BrandLogo(id: info.id, name: info.label, size: 36)
+                BrandLogo(id: info.id, name: info.label, size: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(info.label).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                        if let version = status.version { Text(version).font(TheoType.micro).foregroundColor(DS.Colors.textTertiary) }
+                        Text(info.label).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        if let version = status.version { Text(version).font(TheoType.micro).foregroundColor(DS.Colors.textTertiary).lineLimit(1) }
                     }
                     Text(subtitle).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 pill
+                mainAction
                 Button { center.recheck(info.id) } label: { Image(systemName: "arrow.clockwise").frame(width: 14) }
                     .buttonStyle(.theo(.ghost, .small)).help("Re-check \(info.label)").disabled(isChecking)
+                if hasMore && !alwaysShowsMore {
+                    Button { withAnimation(DS.Motion.hover) { showsMore.toggle() } } label: {
+                        Image(systemName: "chevron.right").frame(width: 14).rotationEffect(.degrees(showsMore ? 90 : 0))
+                    }
+                    .buttonStyle(.theo(.ghost, .small)).help(showsMore ? "Fewer options" : "More options")
+                }
             }
-            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
-            RowDivider()
-            actions.padding(.horizontal, 14).padding(.vertical, 10)
-            if info.id == "t3" && (showsConnect || !status.installed) { t3Details.padding(.horizontal, 14).padding(.bottom, 14) }
+            .padding(.horizontal, 14).frame(minHeight: 56)
+            if hasMore && (showsMore || alwaysShowsMore) {
+                RowDivider()
+                moreActions.padding(.horizontal, 14).padding(.vertical, 8)
+            }
+            if info.id == "t3" && (showsConnect || !status.installed) { t3Details.padding(.horizontal, 14).padding(.bottom, 14).padding(.top, 6) }
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
@@ -169,23 +197,40 @@ struct HarnessCard: View {
         }
     }
 
-    @ViewBuilder private var actions: some View {
+    /// The one thing this harness needs right now, on its own line. A signed-in harness needs nothing.
+    @ViewBuilder private var mainAction: some View {
+        if !status.installed && !isChecking {
+            Button { openTerminal(.install(info)) } label: { Label("Install", systemImage: "arrow.down.circle") }.buttonStyle(.theo(.primary, .small))
+        } else if info.id == "t3" {
+            Button { showsConnect.toggle() } label: { Label(showsConnect ? "Hide" : "Connect Theo", systemImage: "link") }
+                .buttonStyle(.theo(showsConnect ? .ghost : .secondary, .small))
+        } else if status.installed && status.loggedIn != true && info.id != "opencode" {
+            Button { openTerminal(.signIn(info)) } label: { Label("Sign in", systemImage: "person.crop.circle.badge.checkmark") }.buttonStyle(.theo(.primary, .small))
+        }
+    }
+
+    /// Signed out, using a key instead is one of the two ways forward, so it stays in view.
+    private var alwaysShowsMore: Bool { !status.installed || status.loggedIn == false }
+
+    private var hasMore: Bool {
+        guard status.installed else { return setup?.installPage != nil }
+        if info.id == "t3" { return false }
+        return info.id == "opencode" || keyProvider != nil || (isSignedIn && (setup?.signIn != nil || setup?.signOut != nil))
+    }
+
+    /// What's still there when it's needed, out of the way until then.
+    @ViewBuilder private var moreActions: some View {
         HStack(spacing: 8) {
-            if !status.installed && !isChecking {
-                Button { openTerminal(.install(info)) } label: { Label("Install", systemImage: "arrow.down.circle") }.buttonStyle(.theoPrimary)
+            if !status.installed {
                 if let page = setup.flatMap({ URL(string: $0.installPage) }) {
-                    Link(destination: page) { Text("Install page") }.buttonStyle(.theoGhost)
+                    Link(destination: page) { Text("Install page") }.buttonStyle(.theo(.ghost, .small))
                 }
-            } else if info.id == "t3" {
-                Button { showsConnect.toggle() } label: { Label(showsConnect ? "Hide" : "Connect Theo to T3 Code", systemImage: "link") }
-                    .buttonStyle(showsConnect ? .theoSecondary : .theoPrimary)
-            } else if status.installed {
-                if status.loggedIn == true {
-                    Button("Sign in again") { openTerminal(.signIn(info)) }.buttonStyle(.theoSecondary)
-                    if setup?.signOut != nil { Button("Sign out") { confirmsSignOut = true }.buttonStyle(.theoGhost) }
-                } else {
-                    Button { openTerminal(.signIn(info)) } label: { Label(info.id == "opencode" ? "Add a provider" : "Sign in", systemImage: "person.crop.circle.badge.checkmark") }
-                        .buttonStyle(info.id == "opencode" ? .theoSecondary : .theoPrimary)
+            } else {
+                if info.id == "opencode" {
+                    Button("Add a provider") { openTerminal(.signIn(info)) }.buttonStyle(.theo(.secondary, .small))
+                } else if isSignedIn {
+                    Button("Sign in again") { openTerminal(.signIn(info)) }.buttonStyle(.theo(.ghost, .small))
+                    if setup?.signOut != nil { Button("Sign out") { confirmsSignOut = true }.buttonStyle(.theo(.ghost, .small)) }
                 }
             }
             Spacer(minLength: 0)
@@ -329,7 +374,8 @@ final class HarnessTerminalModel: ObservableObject {
         let finished: Bool
         switch kind {
         case .install: finished = status.installed
-        case .signIn: finished = status.loggedIn == true && (!wasSignedIn || phase == .exited(0))
+        // Already signed in, the check can't tell anything changed, so it takes the CLI's own word or its clean exit.
+        case .signIn: finished = status.loggedIn == true && (!wasSignedIn || phase == .exited(0) || saysSignedIn)
         case .signOut: finished = false
         }
         guard finished else { return }
@@ -346,10 +392,19 @@ final class HarnessTerminalModel: ObservableObject {
         HarnessCenter.shared.recheck(task.info.id)
     }
 
-    /// The first web link on screen.
+    private var saysSignedIn: Bool {
+        (session?.unwrappedScreenText() ?? "").range(of: #"(?i)(successfully|now) (logged|signed) in|login successful|logged in (successfully|as)"#, options: .regularExpression) != nil
+    }
+
+    /// The web link on screen to sign in at. Not a CLI's own local server, which it prints first ("http://localhost:1455").
     static func link(in screen: String) -> URL? {
-        guard let range = screen.range(of: #"https?://[^\s"'<>\)\]]+"#, options: .regularExpression) else { return nil }
-        return URL(string: String(screen[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;")))
+        var links: [URL] = []
+        var rest = screen[...]
+        while let range = rest.range(of: #"https?://[^\s"'<>\)\]]+"#, options: .regularExpression) {
+            if let url = URL(string: String(rest[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))) { links.append(url) }
+            rest = rest[range.upperBound...]
+        }
+        return links.first { !["localhost", "127.0.0.1"].contains($0.host ?? "") } ?? links.first
     }
 
     /// A device code like ABCD-1234, when a CLI shows one.

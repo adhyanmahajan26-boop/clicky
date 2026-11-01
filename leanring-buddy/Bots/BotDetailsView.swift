@@ -191,12 +191,12 @@ struct RoutinesScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Routines").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text("Routines").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
                     Text("Bots doing a job on a schedule. Ask any bot in chat (\"every weekday at 8, check my inbox…\") or add one here.")
                         .font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
                 }
                 Spacer()
-                Button { adding = true } label: { Label("New routine", systemImage: "plus") }
+                Button { adding = true } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.theoSecondary)
             }
             .padding(.horizontal, 24).padding(.vertical, 18)
             Divider().overlay(DS.Colors.hover)
@@ -237,7 +237,7 @@ struct RoutineList: View {
                     Text(items.isEmpty ? "No routines yet. Ask the bot in chat (\"every morning at 9, …\") or add one." : "")
                         .font(.system(size: 12)).foregroundColor(.secondary)
                     Spacer()
-                    Button { adding = true } label: { Label("New routine", systemImage: "plus") }
+                    Button { adding = true } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.theo(.secondary, .small))
                 }
             }
             ForEach(items) { routine in card(routine) }

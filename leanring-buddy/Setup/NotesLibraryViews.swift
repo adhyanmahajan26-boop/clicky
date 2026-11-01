@@ -65,12 +65,12 @@ struct NotesFilterChip: View {
             HStack(spacing: 6) {
                 Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
                 Text(title).font(.system(size: 12, weight: .semibold))
-                Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit().opacity(0.6)
+                Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit().opacity(0.6).lineLimit(1).fixedSize()
             }
             .foregroundColor(isActive ? DS.Colors.textPrimary : DS.Colors.textSecondary)
             .padding(.horizontal, 11).padding(.vertical, 6)
-            .background(Capsule().fill(isActive ? Color.white.opacity(0.13) : Color.white.opacity(isHovering ? 0.08 : 0.045)))
-            .overlay(Capsule().strokeBorder(isActive ? Color.white.opacity(0.18) : DS.Colors.borderSubtle, lineWidth: 1))
+            .background(Capsule().fill(isActive ? DS.Colors.selected : isHovering ? DS.Colors.hover : .clear))
+            .overlay(Capsule().strokeBorder(isActive ? DS.Colors.borderStrong : DS.Colors.borderSubtle, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -102,7 +102,7 @@ struct NotesSearchField: View {
         .frame(width: 240)
         .background(RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous).fill(DS.Colors.surface))
         .overlay(RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-            .strokeBorder(isFocused ? Color.white.opacity(0.28) : DS.Colors.borderSubtle, lineWidth: 1))
+            .strokeBorder(isFocused ? DS.Colors.borderStrong : DS.Colors.borderSubtle, lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
@@ -165,11 +165,11 @@ struct NotesLibraryCard: View {
             if isPicked {
                 RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NotesAccent.gradient, lineWidth: 2)
             } else {
-                RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(isHovering ? Color.white.opacity(0.16) : DS.Colors.borderSubtle, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(isHovering ? DS.Colors.borderStrong : DS.Colors.borderSubtle, lineWidth: 1)
             }
         }
         .shadow(color: Color.black.opacity(isHovering ? 0.45 : 0.18), radius: isHovering ? 16 : 5, x: 0, y: isHovering ? 8 : 2)
-        .offset(y: isHovering ? -2 : 0)
+        .offset(y: isHovering && !DS.Motion.isReduced ? -2 : 0)
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in withAnimation(.easeOut(duration: 0.16)) { isHovering = hovering } }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(item.url) }
@@ -195,7 +195,8 @@ struct NotesLibraryCard: View {
             let lines = head.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("---") && !$0.hasPrefix("![") }
                 .map { $0.replacingOccurrences(of: #"[*_`>\[\]]"#, with: "", options: .regularExpression) }
-            return lines.prefix(6).joined(separator: " ")
+            // Lists read as a line of phrases, not "- this - that".
+            return lines.prefix(6).map { $0.replacingOccurrences(of: #"^(-|\d+[.)])\s+"#, with: "", options: .regularExpression) }.joined(separator: " · ")
         }.value
     }
 
@@ -234,8 +235,7 @@ struct NotesLibraryCard: View {
         }
         .foregroundColor(kindColor)
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(Capsule().fill(Color.black.opacity(0.55)))
-        .background(Capsule().fill(.ultraThinMaterial))
+        .background(Capsule().fill(DS.Colors.surface1))
         .overlay(Capsule().strokeBorder(kindColor.opacity(0.35), lineWidth: 1))
     }
 

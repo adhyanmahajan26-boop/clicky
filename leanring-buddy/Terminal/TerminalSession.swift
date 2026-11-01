@@ -130,8 +130,9 @@ final class TerminalSession: ObservableObject, Identifiable {
         if !newTitle.isEmpty { title = newTitle }
     }
 
-    fileprivate func didTerminate(_ code: Int32?) {
-        exitCode = code ?? -1
+    fileprivate func didTerminate(_ status: Int32?) {
+        // SwiftTerm passes the raw wait status: exit 1 arrives as 256.
+        exitCode = status.map { $0 & 0x7F == 0 ? ($0 >> 8) & 0xFF : 128 + ($0 & 0x7F) } ?? -1
         isRunning = false
     }
 
