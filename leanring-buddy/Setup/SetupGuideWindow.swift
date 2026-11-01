@@ -101,6 +101,14 @@ enum SetupGuideWindowController {
 
 // MARK: - Views
 
+/// Theo's own face, for the guide's brand mark.
+private struct TheoMark: View {
+    let size: CGFloat
+    var body: some View {
+        if let theo = BotsStore.shared.primary { BotAvatar(bot: theo, size: size, state: .idle) }
+    }
+}
+
 struct SetupGuideView: View {
     @ObservedObject var model: SetupGuideModel
     @ObservedObject var companionManager: CompanionManager
@@ -129,7 +137,7 @@ struct SetupGuideView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                ClickyAvatar(size: 32)
+                TheoMark(size: 32)
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Theo").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
                     Text("Setup").font(TheoType.micro).foregroundColor(DS.Colors.textTertiary)
@@ -245,7 +253,7 @@ private struct StepHeader: View {
 private struct WelcomeStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ClickyAvatar(size: 72)
+            TheoMark(size: 72)
             Text("Hi, I'm Theo").font(.system(size: 30, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
             Text("Your Mac's team: Clicky on your screen, bots you make yourself, and any coding agent you already use. Setup takes about two minutes.")
                 .font(.system(size: 15)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)

@@ -17,6 +17,9 @@ struct TheoApp: App {
 
     init() {
         TheoProfile.prepareAtLaunch()
+        // AppKit and SwiftUI each add these to the Edit menu; the text fields still have them on right click.
+        UserDefaults.standard.set(true, forKey: "NSDisabledDictationMenuItem")
+        UserDefaults.standard.set(true, forKey: "NSDisabledCharacterPaletteMenuItem")
         if CommandLine.arguments.contains("--mcp") { ClaudiaMCPServer.runForever() }
     }
 
@@ -28,6 +31,9 @@ struct TheoApp: App {
                     Button("Settings…") { TheoSettingsWindowController.show() }
                     .keyboardShortcut(",", modifiers: .command)
                 }
+                // Nothing to show or hide from a View menu: the sidebar has its own place.
+                CommandGroup(replacing: .sidebar) {}
+                CommandGroup(replacing: .toolbar) {}
             }
     }
 }

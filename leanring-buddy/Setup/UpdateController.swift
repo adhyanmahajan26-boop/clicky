@@ -70,7 +70,7 @@ final class UpdateController: ObservableObject {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 if quietly { state = previousState } else {
-                    state = .failed(statusCode == 404 ? "No updates published yet (or the updates repo is private: add its token)." : "The update check answered \(statusCode).")
+                    state = .failed(statusCode == 404 ? "No updates published yet." : "The update check answered \(statusCode).")
                 }
                 return
             }

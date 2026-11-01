@@ -197,6 +197,8 @@ final class BotsStore: ObservableObject {
         groups.removeAll { $0.id == id }
         writeGroups()
         forget(item: "group:\(id)")
+        // Its chat may be what's on screen.
+        if BotsSelection.shared.pane == .group(id) { BotsSelection.shared.pane = .home }
     }
 
     /// A new bot, added to a group (or to no group).
@@ -1125,7 +1127,8 @@ extension BotsStore {
     /// Grok's "Hide from sidebar": the bot keeps working and its routines keep running.
     func setHidden(_ hidden: Bool, _ item: String) {
         layout.hidden.removeAll { $0 == item }
-        if hidden { layout.hidden.append(item); layout.pinned.removeAll { $0 == item } }
+        // A hidden bot stays pinned underneath, so showing it again puts it back where it was.
+        if hidden { layout.hidden.append(item) }
         writeLayout()
     }
 

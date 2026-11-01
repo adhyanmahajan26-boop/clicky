@@ -64,7 +64,7 @@ struct NotesFilterChip: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
-                Text(title).font(.system(size: 12, weight: .semibold))
+                Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
                 Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit().opacity(0.6).lineLimit(1).fixedSize()
             }
             .foregroundColor(isActive ? DS.Colors.textPrimary : DS.Colors.textSecondary)

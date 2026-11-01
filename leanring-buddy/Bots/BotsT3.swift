@@ -609,7 +609,7 @@ enum BotsT3 {
         if existing == nil, let base,
            let count = try? await shell(git, ["rev-list", "--count", base, "--not", "--remotes=origin"], in: folder),
            let unpushed = Int(count.trimmingCharacters(in: .whitespacesAndNewlines)), unpushed > 0 {
-            return (nil, "The branch it started from has \(unpushed) commit\(unpushed == 1 ? "" : "s") that aren't on GitHub yet, and a pull request would publish them too. Push that branch, then write @code push.")
+            return (nil, "The branch it started from has \(unpushed == 1 ? "1 commit that isn't" : "\(unpushed) commits that aren't") on GitHub yet, and a pull request would publish \(unpushed == 1 ? "it" : "them") too. Push that branch, then write @code push.")
         }
         do {
             try await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)

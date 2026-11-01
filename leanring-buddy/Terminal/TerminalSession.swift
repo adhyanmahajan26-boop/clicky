@@ -56,6 +56,24 @@ final class TerminalSession: ObservableObject, Identifiable {
         view.startProcess(executable: command, args: arguments, environment: pairs, execName: nil, currentDirectory: workingDirectory)
         isRunning = view.process?.running ?? false
         if !isRunning, launchError == nil { launchError = "\(command) did not start." }
+        let watch = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.checkStillRunning() } }
+        RunLoop.main.add(watch, forMode: .common)
+        exitWatch = watch
+    }
+
+    /// SwiftTerm stops watching the process once the terminal reaches end of file, or once it's told to stop. Then nobody
+    /// hears that it ended: the session would say it's running forever, a follow-up would go into nothing, and the
+    /// process would stay behind as a zombie.
+    private func checkStillRunning() {
+        guard isRunning else {
+            exitWatch?.invalidate()
+            return
+        }
+        guard let process = view.process, !process.running else { return }
+        var status: Int32 = 0
+        let reaped = waitpid(process.shellPid, &status, WNOHANG)
+        // Zero: it hasn't quite ended yet, so look again.
+        if reaped != 0 { didTerminate(reaped == process.shellPid ? status : nil) }
     }
 
     /// The harness-safe environment (Claude Code's own session variables scrubbed), with colour left on.
@@ -129,6 +147,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     fileprivate func didSetTitle(_ newTitle: String) {
         if !newTitle.isEmpty { title = newTitle }
     }
+
+    private var exitWatch: Timer?
 
     fileprivate func didTerminate(_ status: Int32?) {
         // SwiftTerm passes the raw wait status: exit 1 arrives as 256.

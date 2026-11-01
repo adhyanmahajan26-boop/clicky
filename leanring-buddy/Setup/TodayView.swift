@@ -90,7 +90,7 @@ struct TodayView: View {
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
-        return (5..<12).contains(hour) ? "Good morning" : (12..<17).contains(hour) ? "Good afternoon" : "Good evening"
+        return hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

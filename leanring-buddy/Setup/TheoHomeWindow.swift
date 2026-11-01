@@ -33,7 +33,10 @@ enum TheoHomeWindowController {
             created.titlebarAppearsTransparent = true
             created.isReleasedWhenClosed = false
             created.minSize = NSSize(width: 860, height: 560)
-            created.contentView = FirstMouseHostingView(rootView: TheoHomeView(companionManager: companionManager, initialTab: tab))
+            let host = FirstMouseHostingView(rootView: TheoHomeView(companionManager: companionManager, initialTab: tab))
+            // Only the floor comes from the content. Its natural size would pull the window in to 860 wide the moment layout settled.
+            host.sizingOptions = [.minSize]
+            created.contentView = host
             created.center()
             if let screen = ClaudiaScreen.picked {
                 let frame = screen.visibleFrame
@@ -169,7 +172,7 @@ struct NotesTab: View {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text("Notes").font(.system(size: 26, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+                            Text("Notes").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
                             Text("\(items.count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
                                 .foregroundColor(DS.Colors.textSecondary)
                                 .padding(.horizontal, 8).padding(.vertical, 2)
@@ -192,13 +195,14 @@ struct NotesTab: View {
                     }
                     NotesSearchField(text: $query)
                 }
-                HStack(spacing: 8) {
-                    ForEach(Self.filters, id: \.id) { entry in
-                        NotesFilterChip(title: entry.title, symbol: entry.symbol, count: count(for: entry.id), isActive: filter == entry.id) {
-                            withAnimation(.easeOut(duration: 0.18)) { filter = entry.id }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Self.filters, id: \.id) { entry in
+                            NotesFilterChip(title: entry.title, symbol: entry.symbol, count: count(for: entry.id), isActive: filter == entry.id) {
+                                withAnimation(.easeOut(duration: 0.18)) { filter = entry.id }
+                            }
                         }
                     }
-                    Spacer()
                 }
             }
             ScrollView {

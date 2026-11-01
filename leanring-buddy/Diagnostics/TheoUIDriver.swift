@@ -250,11 +250,13 @@ enum TheoUIDriver {
         var observer: NSObjectProtocol?
         observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
             guard let menu = note.object as? NSMenu, menu.supermenu == nil else { return }
-            titles = menu.items.map(\.title)
+            // SwiftUI's context menu arrives as one untitled item holding the real menu.
+            let shown = menu.items.count == 1 && menu.items[0].title.isEmpty ? (menu.items[0].submenu ?? menu) : menu
+            titles = shown.items.map(\.title)
             RunLoop.main.perform(inModes: [.eventTracking, .common]) {
                 MainActor.assumeIsolated {
-                    if let item, let index = menu.items.firstIndex(where: { $0.title.lowercased() == item.lowercased() }) {
-                        menu.performActionForItem(at: index)
+                    if let item, let index = shown.items.firstIndex(where: { $0.title.lowercased() == item.lowercased() }) {
+                        shown.performActionForItem(at: index)
                     }
                     menu.cancelTracking()
                 }

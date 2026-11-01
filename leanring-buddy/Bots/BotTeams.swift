@@ -227,9 +227,9 @@ struct CategoryScreen: View {
                 .help("Change colour and symbol")
                 .popover(isPresented: $editingLook, arrowEdge: .bottom) { lookPicker(section) }
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Team name", text: $name, onCommit: { store.renameSection(sectionID, to: name) })
-                    .textFieldStyle(.plain).font(.system(size: 26, weight: .semibold, design: .rounded)).foregroundColor(DS.Colors.textPrimary)
-                TextField("What is this team for? (inbox and calendar, ship the website…)", text: $purpose, onCommit: savePurpose)
+                TextField("Category name", text: $name, onCommit: { store.renameSection(sectionID, to: name) })
+                    .textFieldStyle(.plain).font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
+                TextField("What is this category for?", text: $purpose, onCommit: savePurpose)
                     .textFieldStyle(.plain).font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                     .onChange(of: purpose) { _, _ in savePurpose() }
                 HStack(spacing: 8) {
@@ -278,7 +278,7 @@ struct CategoryScreen: View {
                 }
             }
             arrow.padding(.top, 38)
-            node(title: "Leader", detail: leader?.name ?? "No leader: everyone reports") {
+            node(title: "Leader", detail: leader?.name ?? "None: everyone reports") {
                 Button { pickingLeader = true } label: {
                     if let leader {
                         BotAvatar(bot: leader, size: 30, state: store.replying[leader.id] != nil ? .thinking : .idle)
@@ -288,7 +288,7 @@ struct CategoryScreen: View {
                     }
                 }
                 .buttonStyle(LiftButtonStyle())
-                .help("Pick the team's leader")
+                .help("Pick the leader")
                 .popover(isPresented: $pickingLeader, arrowEdge: .bottom) { leaderPicker(members, current: section.leaderID) }
             }
             arrow.padding(.top, 38)
@@ -397,7 +397,7 @@ struct CategoryScreen: View {
             } else {
                 Button("Make leader") { store.setLeader(bot.id, of: sectionID) }
             }
-            Button("Remove from team", role: .destructive) { store.removeMember(bot.id, from: sectionID) }
+            Button("Remove from category", role: .destructive) { store.removeMember(bot.id, from: sectionID) }
         }
     }
 

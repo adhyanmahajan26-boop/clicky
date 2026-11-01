@@ -54,7 +54,7 @@ enum BotConnectors {
                      openCodeURL: "https://mcp.hostinger.com"),
         BotConnector(id: "studio", name: "Content Studio", symbol: "film.stack.fill", claudeServer: "content-studio",
                      claudeToolPrefix: "mcp__content-studio", openCodeServer: "content-studio", openCodeURL: nil),
-        BotConnector(id: "theo", name: "Theo (screen, voice, notes)", symbol: "sparkles", claudeServer: "plugin:theo:theo",
+        BotConnector(id: "theo", name: "Clicky (screen, voice, notes)", symbol: "sparkles", claudeServer: "plugin:theo:theo",
                      claudeToolPrefix: "mcp__plugin_theo_theo", openCodeServer: "theo", openCodeURL: nil),
         BotConnector(id: "hyperframes", name: "HyperFrames", symbol: "wand.and.stars", claudeServer: nil,
                      claudeToolPrefix: nil, openCodeServer: nil, openCodeURL: nil, isSkill: true),

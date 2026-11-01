@@ -515,7 +515,7 @@ struct VoiceSettingsContent: View {
 
     private var macVoiceDetail: String {
         guard let voice = bestMacVoice else { return "The best voice installed" }
-        let quality = voice.quality == .premium ? "premium" : voice.quality == .enhanced ? "enhanced" : "compact"
+        let quality = voice.quality == .premium ? "premium" : voice.quality == .enhanced ? "enhanced" : "basic quality"
         return "\(voice.name), \(quality)"
     }
 

@@ -21,6 +21,7 @@ struct GroupEditor: View {
 
     private static let symbols = ["person.2.fill", "person.3.fill", "briefcase.fill", "hammer.fill", "paintpalette.fill",
                                   "film.fill", "magnifyingglass", "envelope.fill", "chart.bar.fill", "sparkles"]
+    @State private var confirmsDelete = false
     private var isNew: Bool { group.id.isEmpty }
     /// Like Grok's group chats: two to six bots, the head included.
     private var sizeFits: Bool { (2...6).contains(group.allIDs.count) && group.headID != nil }
@@ -66,11 +67,17 @@ struct GroupEditor: View {
             }
             HStack {
                 if !isNew {
-                    Button("Delete group", role: .destructive) {
-                        store.deleteGroup(group.id)
-                        onDone(nil)
-                    }
-                    .buttonStyle(.theoDestructive)
+                    Button("Delete group", role: .destructive) { confirmsDelete = true }
+                        .buttonStyle(.theoDestructive)
+                        .alert("Delete \(group.name)?", isPresented: $confirmsDelete) {
+                            Button("Delete", role: .destructive) {
+                                store.deleteGroup(group.id)
+                                onDone(nil)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Its chat goes too. The bots in it stay.")
+                        }
                 }
                 Spacer()
                 Button("Cancel") { onDone(nil) }.keyboardShortcut(.cancelAction).buttonStyle(.theoSecondary)

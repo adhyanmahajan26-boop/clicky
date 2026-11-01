@@ -860,14 +860,14 @@ def frontmost_pid_script():
 
 
 def read_frontmost_pid():
+    # lsappinfo needs no automation permission, so this can never raise a prompt on the owner's screen.
     try:
-        completed = subprocess.run(["osascript", "-e", frontmost_pid_script()], capture_output=True, text=True, timeout=10)
+        front = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=10).stdout.strip()
+        info = subprocess.run(["lsappinfo", "info", "-only", "pid", front], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    try:
-        return int(completed.stdout.strip()) if completed.returncode == 0 else None
-    except ValueError:
-        return None
+    match = re.search(r"pid\"?=(\d+)", info)
+    return int(match.group(1)) if match else None
 
 
 def activate_pid(pid):
@@ -1010,14 +1010,44 @@ def frontmost_script(pid, activate=True):
     return 'tell application "System Events" to return frontmost of (first process whose unix id is %d)' % pid
 
 
+# --attach-chrome PORT: use a throwaway Chrome you already started on the test display; nothing launches or takes focus.
+ATTACH_PORT = None
+
+
+class AttachedChrome(FE.ChromeHarness):
+    """The same harness on a Chrome that's already running: one tab, reused, left running at the end."""
+
+    def __init__(self, port, origin, size):
+        self.debug_port = port
+        self.process = None
+        self.profile_directory = None
+        targets = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/json/list" % port, timeout=5).read())
+        version = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/json/version" % port, timeout=5).read())
+        page = next(t for t in targets if t.get("type") == "page")
+        self.target_id = page["id"]
+        self.page = FE.DevToolsSocket(page["webSocketDebuggerUrl"])
+        self.browser = FE.DevToolsSocket(version["webSocketDebuggerUrl"])
+        window = self.browser.call("Browser.getWindowForTarget", {"targetId": self.target_id})
+        self.browser.call("Browser.setWindowBounds", {"windowId": window["windowId"], "bounds": {
+            "left": origin[0], "top": origin[1], "width": size[0], "height": size[1]}})
+
+    def stop(self):
+        for connection in (self.page, self.browser):
+            if connection:
+                connection.close()
+
+
 def open_chrome_page(ctx, number, page, origin=None):
     """Owner gate, then a throwaway Chrome app window on the test display (ctx.window_origin unless
     origin is given), loaded with the page. Chrome may take focus when it launches, so the guard is
     told to settle focus afterwards. The window is made frontmost only during an ask (ask, Guard.focus).
     Returns (harness, state, window, truth)."""
     owner_gate(ctx, "setup test %d" % number)
-    ctx.guard.note_touch()
-    harness = FE.ChromeHarness(DEBUG_PORT_BASE + number, origin or ctx.window_origin, ctx.window_size)
+    if ATTACH_PORT:
+        harness = AttachedChrome(ATTACH_PORT, origin or ctx.window_origin, ctx.window_size)
+    else:
+        ctx.guard.note_touch()
+        harness = FE.ChromeHarness(DEBUG_PORT_BASE + number, origin or ctx.window_origin, ctx.window_size)
     try:
         state = harness.load(ctx.server.url("/" + page))
     except Exception:
@@ -1033,8 +1063,8 @@ def open_chrome_page(ctx, number, page, origin=None):
 
 def ask_in_chrome(ctx, harness, number):
     """ask for test number, with the throwaway Chrome frontmost for that ask and the prompt naming
-    the place. Returns (reply, turn)."""
-    return ask(ctx, prompt_for(number, ctx.place), harness.process.pid)
+    the place (attached to a Chrome already on the test display, focus never moves). Returns (reply, turn)."""
+    return ask(ctx, prompt_for(number, ctx.place), None if ATTACH_PORT else harness.process.pid)
 
 
 # ---------------------------------------------------------------------------
@@ -1695,6 +1725,7 @@ def main(argv):
     parser.add_argument("--only", type=parse_only, help="test number(s), e.g. 2 or 1,4")
     parser.add_argument("--run", help="run name (default: timestamp)")
     parser.add_argument("--side-origin", type=parse_origin, help="Chrome window origin X,Y for test 6")
+    parser.add_argument("--attach-chrome", type=int, help="DevTools port of a throwaway Chrome already on the test display: nothing launches, focus never moves")
     args = parser.parse_args(argv)
     selected = args.only or sorted(TESTS)
     if args.dry_run:

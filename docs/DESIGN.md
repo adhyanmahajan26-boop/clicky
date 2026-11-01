@@ -3,10 +3,10 @@
 One sidebar, chat full width, bot settings as a slide-over, one accent.
 
 ## Layout
-- Window 1100x720 (min 860x560), transparent unified title bar.
-- Sidebar 248 (220–300, Cmd+\ collapses): New bot (Cmd+N), Search (Cmd+K); Home; pinned (Clicky, Theo, user pins) with no header; Bots and Groups sections with collapsible user categories (sentence case, 11 pt text-3); footer Notes, Routines, Connectors, Settings (Cmd+,).
+- Window 1280x820 (min 860x560), transparent title bar, title hidden. Sidebar divider runs to the top.
+- Sidebar 248, fixed: New bot (Cmd+N), Search (Cmd+K); Home; Pinned; Categories; Bots and Groups sections with collapsible user categories (sentence case, 11 pt text-3); footer Notes, Routines, Connectors, Settings (Cmd+,).
 - Rows 32 pt, 8 pt radius, 20 pt avatar tile, name 13/medium, no subtitle; trailing 6 pt dot for working (accent) or unread (text-1).
-- Detail toolbar 52 pt: avatar 24, name 15/semibold, model chip menu; right: search, new chat, sidebar.right, ellipsis.
+- Chat header 60 pt, one for bots, groups and Clicky: avatar 34, name 15/semibold, status line 11.5; right: new chat, then settings. The model chip lives in the composer.
 - Bot settings: right slide-over 340 pt over a black 0.18 scrim; never shrinks the chat. Esc closes.
 
 ## Tokens
@@ -23,7 +23,8 @@ Palette: ember #F2784B→#E0476A, amber #F5B13D→#E8782E, lime #9BD14B→#3FA65
 Clicky: flat ember tile with the spark-cursor glyph. Theo: graphite tile, white T. Groups: 2x2 mosaic of member tiles.
 
 ## Chat
-Column max 720. Assistant text full width, no bubble, avatar + name once per run, hover actions (copy, retry). User: right bubble surface-2, radius 16. Composer: surface-1, radius 12, plus / @ / model chip / mic / send (28 pt accent circle; stop while generating). Code blocks surface-2 with a 28 pt header strip.
+Column max 720, text measure 640. Chat text 15 with line spacing 6, paragraph gap 14, list gap 6, 20 above a heading, the same while typing and finished. Tables and quotes render; inline code is a chip; a routine is a card with Pause and Run now. Empty chats centre; short ones start at the top. Assistant text full width, no bubble, avatar + name once per run, hover actions (copy, retry). User: right bubble surface-2, radius 16. Composer: surface-1, radius 12, plus / @ / model chip / mic / send (28 pt accent circle; stop while generating). Code blocks surface-2 with a 28 pt header strip.
 
 ## Motion
+At rest nothing runs. A resting bot blinks and glances on a sparse schedule (a handful of redraws every few seconds); sidebar icons move on hover or when open; arrows run on hover. Working bots animate fully. Reduce Motion stills all of it.
 Hovers .snappy(0.18); panels spring(0.35, 0.86) with 24 pt slide + fade; message arrival fade + 6 pt rise 0.2 s; streaming text appended without per-character animation; respect Reduce Motion.

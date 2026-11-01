@@ -163,7 +163,7 @@ struct BotsRootView: View {
                             Text("No bots match").font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.vertical, 6)
                         }
                     } else {
-                        let pinned = store.layout.pinned.filter(itemExists)
+                        let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) }
                         sectionTitle("Pinned").dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                         ForEach(pinned, id: \.self) { item in itemRow(item) }
                         let loose = looseItems
@@ -369,7 +369,7 @@ struct BotsRootView: View {
         Divider()
         if store.isHidden(item) {
             Button("Show in sidebar") { store.setHidden(false, item) }
-        } else if item != "clicky" {
+        } else if item != "clicky", item != store.primary.map({ "bot:\($0.id)" }) {
             Button("Hide from sidebar") { store.setHidden(true, item) }
         }
         if canDelete(item) {
@@ -580,12 +580,16 @@ struct BotsRootView: View {
         case .group(let id):
             if let group = store.group(id) {
                 BotChatScreen(store: store, conversationID: group.roomID, bot: nil, groupID: id).id(id)
+            } else {
+                TodayView(store: store, selection: selection)
             }
         case .clicky:
             ClickyChatScreen()
         case .bot(let id):
             if let bot = store.bot(id) {
                 BotChatScreen(store: store, conversationID: id, bot: bot).id(id)
+            } else {
+                TodayView(store: store, selection: selection)
             }
         case .connectors:
             ConnectorsScreen(bots: store.bots)
@@ -1491,7 +1495,7 @@ struct ConnectorsScreen: View {
             } else if checking && claude.isEmpty {
                 StatusPill(text: "Checking", tone: .neutral, busy: true)
             } else if onClaude == .connected && othersReach {
-                StatusPill(text: onOpenCode == .connected ? "Connected" : "Connected, others via Claude", tone: .good)
+                StatusPill(text: "Connected", tone: .good)
             } else if onClaude == .connected {
                 StatusPill(text: "Claude only", tone: .good)
             } else if othersReach {

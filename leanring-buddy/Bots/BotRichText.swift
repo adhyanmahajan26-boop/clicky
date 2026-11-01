@@ -80,7 +80,7 @@ enum BotBlocks {
             } else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
                 flushParagraph()
                 blocks.append(.bullet(String(line.dropFirst(2)), marker: "•"))
-            } else if let match = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
+            } else if let match = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression), startsOrContinuesList(line[match], after: blocks.last, pendingParagraph: paragraph) {
                 flushParagraph()
                 let marker = line[match].trimmingCharacters(in: .whitespaces)
                 blocks.append(.bullet(String(line[match.upperBound...]), marker: marker))
@@ -94,6 +94,13 @@ enum BotBlocks {
         if let open = code { blocks.append(.code(open.joined(separator: "\n"), language: language)) }
         flushParagraph()
         return blocks
+    }
+
+    /// "1. First" starts a list and "2. Next" carries one on. A reply that opens "47. That's your number" is a sentence.
+    private static func startsOrContinuesList(_ marker: Substring, after previous: BotBlock?, pendingParagraph: [String]) -> Bool {
+        if marker.hasPrefix("1.") || marker.hasPrefix("1)") { return true }
+        if case .bullet? = previous, pendingParagraph.isEmpty { return true }
+        return false
     }
 
     private static func isTableRule(_ line: String) -> Bool {

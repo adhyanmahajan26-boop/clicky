@@ -263,7 +263,7 @@ struct TheoPanelView: View {
                  "chevron.left.forwardslash.chevron.right", isOn: code.isEnabled) {
                 code.setEnabled(!code.isEnabled)
             }
-            tile("Agents", "What's running", "person.3.fill", isOn: false) {
+            tile("Agents", "Activity", "person.3.fill", isOn: false) {
                 close(); companionManager.showAgentsDashboard(activatesClicky: true)
             }
         }

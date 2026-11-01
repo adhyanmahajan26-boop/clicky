@@ -439,7 +439,7 @@ enum HarnessModels {
 
     static func opencode(executable: URL) -> [HarnessModel] {
         BrainModelCatalog.openCodeModels(listing: HarnessCatalog.output(of: executable, ["models"], timeout: 20, merge: false))
-            .map { HarnessModel(id: $0, label: $0) }
+            .map { HarnessModel(id: $0, label: NativeBot.label(for: $0)) }
     }
 }
 
