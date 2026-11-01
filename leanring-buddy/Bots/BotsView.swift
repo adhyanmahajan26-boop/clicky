@@ -130,13 +130,13 @@ struct BotsRootView: View {
                     .help("New group chat or category")
                 }
                 HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).frame(width: 20)
+                    NavIcon(symbol: "magnifyingglass")
                     TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
                     if !query.isEmpty {
                         Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(DS.Colors.textTertiary) }.buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 8).frame(height: 30)
+                .padding(.horizontal, 8).frame(height: 36)
                 .background(RoundedRectangle(cornerRadius: 8).fill(searchFocused ? DS.Colors.hover : .clear))
                 .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
                 navRow(.home, "house", "Home")
@@ -519,12 +519,12 @@ struct BotsRootView: View {
 
     private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil, active: Bool = false) -> some View {
         HStack(spacing: 8) {
-            MotionSymbol(name: symbol, size: 14, color: active ? DS.Colors.accent : DS.Colors.textSecondary, trigger: active).frame(width: 20)
+            NavIcon(symbol: symbol, active: active)
             Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
             Spacer(minLength: 0)
             if let trailing { Text(trailing).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary) }
         }
-        .padding(.horizontal, 8).frame(height: 30)
+        .padding(.horizontal, 8).frame(height: 36)
         .contentShape(Rectangle())
     }
 

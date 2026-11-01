@@ -50,6 +50,82 @@ struct MotionSymbol: View {
     }
 }
 
+/// A sidebar icon: a colour tile with a glyph that keeps moving, each in its own way, and moves more when
+/// hovered or open. The clock's hand turns, the gear spins, the pencil writes, the page's lines draw.
+struct NavIcon: View {
+    let symbol: String
+    var active = false
+    var size: CGFloat = 24
+    @State private var hovering = false
+
+    private var colors: (UInt32, UInt32) {
+        switch symbol {
+        case "square.and.pencil": return (0xF2784B, 0xE0476A)
+        case "house": return (0x4EA8F0, 0x4A6FE0)
+        case "note.text": return (0xF5B13D, 0xE8782E)
+        case "clock.arrow.circlepath": return (0x3FC8B4, 0x2E8FB8)
+        case "puzzlepiece.extension": return (0xA468EB, 0xD152B8)
+        case "gearshape": return (0x7C8697, 0x4D5666)
+        case "magnifyingglass": return (0x9BD14B, 0x3FA65C)
+        default: return (0x6E7BF0, 0x8A55E0)
+        }
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate * (hovering || active ? 2.2 : 1)
+            ZStack {
+                shape.fill(LinearGradient(colors: [Color(hex: colors.0), Color(hex: colors.1)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                shape.fill(LinearGradient(colors: [Color.white.opacity(0.2), .clear], startPoint: .top, endPoint: .center))
+                glyph(t)
+            }
+            .frame(width: size, height: size)
+            .scaleEffect(hovering ? 1.1 : 1)
+        }
+        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: hovering)
+        .onHover { hovering = $0 }
+    }
+
+    @ViewBuilder private func glyph(_ t: Double) -> some View {
+        let unit = size / 24
+        switch symbol {
+        case "clock.arrow.circlepath":
+            ZStack {
+                Circle().stroke(Color.white, lineWidth: 1.6 * unit).frame(width: 13 * unit, height: 13 * unit)
+                Capsule().fill(Color.white).frame(width: 1.6 * unit, height: 5 * unit).offset(y: -2.2 * unit).rotationEffect(.degrees(t * 90))
+                Capsule().fill(Color.white).frame(width: 1.6 * unit, height: 3.6 * unit).offset(y: -1.5 * unit).rotationEffect(.degrees(t * 8))
+            }
+        case "gearshape":
+            Image(systemName: "gearshape.fill").font(.system(size: 14 * unit, weight: .semibold)).foregroundColor(.white)
+                .rotationEffect(.degrees(t * 28))
+        case "note.text":
+            VStack(alignment: .leading, spacing: 2 * unit) {
+                ForEach(0..<3, id: \.self) { row in
+                    let width = 6 + 6 * (sin(t * 1.6 + Double(row) * 1.1) * 0.5 + 0.5)
+                    Capsule().fill(Color.white).frame(width: width * unit, height: 1.8 * unit)
+                }
+            }
+            .frame(width: 12 * unit, alignment: .leading)
+        case "square.and.pencil":
+            Image(systemName: "pencil").font(.system(size: 14 * unit, weight: .bold)).foregroundColor(.white)
+                .rotationEffect(.degrees(sin(t * 3) * 10))
+                .offset(x: cos(t * 1.5) * 1.6 * unit, y: sin(t * 3) * 1.2 * unit)
+        case "house":
+            Image(systemName: "house.fill").font(.system(size: 13 * unit, weight: .semibold)).foregroundColor(.white)
+                .offset(y: sin(t * 1.8) * 0.9 * unit)
+        case "puzzlepiece.extension":
+            Image(systemName: "puzzlepiece.extension.fill").font(.system(size: 13 * unit, weight: .semibold)).foregroundColor(.white)
+                .rotationEffect(.degrees(sin(t * 1.4) * 12))
+        case "magnifyingglass":
+            Image(systemName: "magnifyingglass").font(.system(size: 13 * unit, weight: .bold)).foregroundColor(.white)
+                .offset(x: cos(t * 1.3) * 1.6 * unit, y: sin(t * 2.6) * 1.2 * unit)
+        default:
+            Image(systemName: symbol).font(.system(size: 13 * unit, weight: .semibold)).foregroundColor(.white)
+        }
+    }
+}
+
 // MARK: - The team page
 
 struct CategoryScreen: View {
