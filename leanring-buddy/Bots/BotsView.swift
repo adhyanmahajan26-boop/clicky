@@ -580,7 +580,7 @@ struct BotChatScreen: View {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
                                                     alreadySent: store.t3Runs.contains { $0.title == title }
-                                                        || record.messages.contains { $0.text.hasPrefix("Submitted to T3 Code: **\(title)**") })
+                                                        || record.messages.contains { $0.text.hasPrefix("Submitted to ") && $0.text.contains(": **\(title)**") })
                                 }
                             }
                         }

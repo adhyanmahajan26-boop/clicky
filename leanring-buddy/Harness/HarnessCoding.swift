@@ -39,11 +39,11 @@ enum HarnessCoding {
         case "claude":
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
-            args += ["--permission-mode", "acceptEdits"]
+            args += ["--permission-mode", "auto"]
         case "codex":
             if let model { args += ["-m", model] }
             if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
-            args += ["-c", "check_for_update_on_startup=false", "--sandbox", "workspace-write", "-a", "on-request", "-C", folder]
+            args += ["-c", "check_for_update_on_startup=false", "--sandbox", "workspace-write", "-a", "never", "-C", folder]
         case "cursor":
             if let model { args += ["--model", model] }
             args += ["--workspace", folder, "--force"]
@@ -53,7 +53,7 @@ enum HarnessCoding {
         case "grok":
             if let model { args += ["-m", model] }
             if let effort { args += ["--reasoning-effort", effort] }
-            args += ["--cwd", folder, "--permission-mode", "acceptEdits"]
+            args += ["--cwd", folder, "--permission-mode", "auto"]
         case "gemini":
             if let model { args += ["-m", model] }
             args += ["--approval-mode", "auto_edit"]
@@ -67,7 +67,7 @@ enum HarnessCoding {
         var args: [String] = []
         switch harness {
         case "claude":
-            args = ["-p", "--output-format", "json", "--permission-mode", "acceptEdits"]
+            args = ["-p", "--output-format", "json", "--permission-mode", "auto"]
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             args += ["--", prompt]
@@ -86,7 +86,7 @@ enum HarnessCoding {
             if let effort { args += ["--variant", effort] }
             args += [prompt]
         case "grok":
-            args = ["-p", prompt, "--output-format", "streaming-messages-json", "--permission-mode", "acceptEdits"]
+            args = ["-p", prompt, "--output-format", "streaming-messages-json", "--permission-mode", "auto"]
             if let model { args += ["-m", model] }
             if let effort { args += ["--reasoning-effort", effort] }
         case "gemini":
@@ -152,10 +152,9 @@ enum HarnessCoding {
             run.worktree = workdir.path
         } else {
             workdir = try BotsT3.newProjectFolder(title: title)
-            try "# \(title)\n\nStarted by Theo's Project room. The prompt \(HarnessCatalog.label(harness)) received:\n\n\(prompt)\n"
-                .write(to: workdir.appendingPathComponent("BRIEF.md"), atomically: true, encoding: .utf8)
+            BotsT3.saveBrief(prompt, title: title, engine: HarnessCatalog.label(harness))
             try await BotsT3.shell(git, ["init", "-q", "-b", "main"], in: workdir)
-            try await BotsT3.commitAll(in: workdir, message: "Brief from Theo's Project room")
+            try await BotsT3.startEmpty(in: workdir)
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: workdir).trimmingCharacters(in: .whitespacesAndNewlines)
             run = T3Run(id: "", title: title, folder: workdir.path, baseCommit: base)
         }
@@ -359,6 +358,17 @@ enum HarnessCoding {
                 return 0
             }
         }
+
+        private static var askingSince: [String: Date] = [:]
+        /// Seconds a question has been on screen (0 and forgotten once it's gone).
+        static func askingSeconds(_ run: String, asking: Bool) -> TimeInterval {
+            lock.withLock {
+                guard asking else { askingSince[run] = nil; return 0 }
+                let since = askingSince[run] ?? Date()
+                askingSince[run] = since
+                return Date().timeIntervalSince(since)
+            }
+        }
     }
 
     /// Seconds the pane must sit still before the run counts as finished.
@@ -408,11 +418,13 @@ enum HarnessCoding {
     private static func evaluate(_ run: T3Run, pane: String, unchanged: TimeInterval) -> BotsT3.ThreadState {
         let tail = pane.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).joined(separator: "\n")
         // Busy signs of each harness's TUI: a spinner line, "esc to interrupt", "thinking", "generating".
-        let working = tail.range(of: #"(?i)esc to interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|thinking|generating|running tool|\b\d+s\b ·|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
+        let working = tail.range(of: #"(?i)esc to interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|generating…|running tool|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
                                  options: .regularExpression) != nil
         let asking = isQuestionScreen(pane)
+        if !asking { _ = PaneWatch.askingSeconds(run.id, asking: false) }
         let settled = Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds && !working
-        if settled && asking {
+        // A question on screen for a while is waiting for Addy, even if a spinner or clock keeps it moving.
+        if asking && Date().timeIntervalSince(run.startedAt) > 30 && (settled || PaneWatch.askingSeconds(run.id, asking: true) >= 15) {
             let question = tail.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(6).joined(separator: "\n")
             return BotsT3.ThreadState(status: "waiting", busy: false, waitingForAnswer: true,
                                       lastMessage: "It is asking:\n\n\(question)\n\n(Open \"Watch\" to answer in the terminal.)",

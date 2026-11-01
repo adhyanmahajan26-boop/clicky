@@ -165,10 +165,9 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
         } else {
             let folder = try newProjectFolder(title: title)
-            try "# \(title)\n\nStarted by Theo. The prompt T3 Code received:\n\n\(prompt)\n"
-                .write(to: folder.appendingPathComponent("BRIEF.md"), atomically: true, encoding: .utf8)
+            saveBrief(prompt, title: title, engine: "T3 Code")
             try await shell(git, ["init", "-q", "-b", "main"], in: folder)
-            try await commitAll(in: folder, message: "Brief from Theo")
+            try await startEmpty(in: folder)
             let base = try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
             try await shell(cli, ["project", "add", folder.path, "--title", title])
             arguments += [folder.path, "-"]
@@ -221,6 +220,21 @@ enum BotsT3 {
         let app = ["com.addy.claudia.t3code", "com.t3tools.t3code"].lazy
             .compactMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }.first
         ClaudiaScreen.moveFrontWindow(of: app)
+    }
+
+    /// The prompt a run was given, kept with Theo (not in the project, where the coding agent took it for a
+    /// teammate's file): ~/Library/Application Support/Theo/briefs/<title>.md.
+    static func saveBrief(_ prompt: String, title: String, engine: String) {
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Theo/briefs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? "# \(title)\n\nThe prompt \(engine) received:\n\n\(prompt)\n"
+            .write(to: folder.appendingPathComponent("\(slug(title)).md"), atomically: true, encoding: .utf8)
+    }
+
+    /// A first, empty commit, so the run's diff has something to start from.
+    static func startEmpty(in folder: URL) async throws {
+        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
     }
 
     static func newProjectFolder(title: String) throws -> URL {
