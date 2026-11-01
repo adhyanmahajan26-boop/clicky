@@ -38,7 +38,7 @@ final class MenuBarPanelManager: NSObject {
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
         super.init()
-        makeStatusItem()
+        if !TheoProfile.isTest { makeStatusItem() }
         dismissObserver = NotificationCenter.default.addObserver(forName: .clickyDismissPanel, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.hide() }
         }
@@ -97,7 +97,14 @@ final class MenuBarPanelManager: NSObject {
 
     /// Right under the spark in the menu bar, kept on screen.
     private func place(_ window: NSWindow) {
-        guard let button = statusItem?.button, let buttonWindow = button.window else { return }
+        guard let button = statusItem?.button, let buttonWindow = button.window else {
+            // The test profile has no menu-bar icon: the panel opens at the top right of Theo's screen.
+            if let screen = ClaudiaScreen.picked {
+                let size = window.contentView?.fittingSize ?? window.frame.size
+                window.setFrame(NSRect(x: screen.visibleFrame.maxX - size.width - 12, y: screen.visibleFrame.maxY - size.height - 12, width: size.width, height: size.height), display: true)
+            }
+            return
+        }
         let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
         let size = window.contentView?.fittingSize ?? window.frame.size
         let screenFrame = buttonWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
@@ -293,7 +300,7 @@ struct TheoPanelView: View {
     /// Which agent Theo thinks with. These are the same sign-ins T3 Code uses, so if a brain works in T3 Code it works here.
     private var brainSwitcher: some View {
         let current = BrainModel(setting: companionManager.selectedModel).provider
-        let symbols: [BrainProvider: String] = [.claude: "asterisk", .codex: "hexagon", .cursor: "cursorarrow.rays", .opencode: "chevron.left.forwardslash.chevron.right"]
+        let logos: [BrainProvider: String] = [.claude: "claude", .codex: "codex", .cursor: "cursor", .opencode: "opencode"]
         let short: [BrainProvider: String] = [.claude: "Claude", .codex: "ChatGPT", .cursor: "Cursor", .opencode: "OpenCode"]
         let state = signIn.states[current] ?? .checking
         return VStack(alignment: .leading, spacing: 10) {
@@ -302,7 +309,7 @@ struct TheoPanelView: View {
                     let providerState = signIn.states[provider] ?? .checking
                     Button(action: { switchBrain(to: provider) }) {
                         VStack(spacing: 4) {
-                            Image(systemName: symbols[provider] ?? "circle").font(.system(size: 14, weight: .semibold))
+                            BrandLogo(id: logos[provider] ?? "", size: 16, plain: true)
                             Text(short[provider] ?? "").font(.system(size: 10, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -320,10 +327,10 @@ struct TheoPanelView: View {
             HStack(spacing: 8) {
                 Text(state.isReady ? "Signed in" : state.label).font(.system(size: 11)).foregroundColor(state.isReady ? DS.Colors.success : DS.Colors.warning).help(state.label)
                 if state == .signedOut {
-                    Button("Sign in") { SetupModel.runInTerminal(current.signInCommand) }
+                    Button("Sign in") { close(); TheoSettingsWindowController.show(section: .coding) }
                         .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
                 } else if state == .notInstalled {
-                    Button("Set up") { close(); SetupGuideWindowController.show(companionManager: companionManager, step: .brain) }
+                    Button("Set up") { close(); SetupGuideWindowController.show(companionManager: companionManager, step: .harnesses) }
                         .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
                 }
                 Spacer()

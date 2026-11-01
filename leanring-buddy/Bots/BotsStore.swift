@@ -728,7 +728,10 @@ enum BotPrompts {
             parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
                          "they answer you in the chat and you then carry on: " + reachable.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
         }
-        if bot.provider == "grok" {
+        if bot.provider.hasPrefix("api:") {
+            // No file tools on this engine: Theo reads the memory file in for it.
+            parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
+        } else if bot.provider == "grok" {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
@@ -753,7 +756,8 @@ enum BotPrompts {
 
     /// The first message of a bot's chat on engines without a system prompt option.
     static func firstMessage(bot: NativeBot, team: [NativeBot], text: String) -> String {
-        bot.provider == "claude" ? text : "\(persona(bot: bot, team: team))\n\n---\n\n\(text)"
+        // Claude Code and the API engines take the persona as a system prompt; the others get it in the first message.
+        bot.provider == "claude" || bot.provider.hasPrefix("api:") ? text : "\(persona(bot: bot, team: team))\n\n---\n\n\(text)"
     }
 
     static func teamMessage(bot: NativeBot, team: [NativeBot], group: BotGroup, firstTime: Bool,
@@ -766,7 +770,7 @@ enum BotPrompts {
         if firstTime {
             // Claude has the persona as its system prompt already; other engines get it here.
             parts.append("You are \(bot.name) in Addy's \"\(group.name)\" group chat. " +
-                         (bot.provider == "claude" ? bot.instructions : persona(bot: bot, team: team)))
+                         (bot.provider == "claude" || bot.provider.hasPrefix("api:") ? bot.instructions : persona(bot: bot, team: team)))
             if group.headID == bot.id && !bot.primary {
                 // Theo's CEO instructions already say this; any other head gets it here.
                 parts.append("You lead this group. Hand the parts of Addy's request to the others with @Name, then, once " +

@@ -23,6 +23,11 @@ final class BrainCatalog: ObservableObject {
 
     func label(for setting: String) -> String {
         let model = BrainModel(setting: setting)
+        if model.provider == .api {
+            let parts = model.modelIdentifier.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return model.modelIdentifier }
+            return "\(parts[1]) · \(ProviderInfo.info(for: parts[0])?.label ?? parts[0])"
+        }
         if model.isClaude, let option = ClickyModels.options.first(where: { $0.identifier == model.modelIdentifier }) { return option.label }
         return model.modelIdentifier
     }
@@ -96,6 +101,7 @@ final class BrainCatalog: ObservableObject {
     func defaultModel(for provider: BrainProvider) -> String? {
         switch provider {
         case .claude: return ClickyModels.sonnet
+        case .api: return nil
         default:
             guard let first = models[provider]?.first else { return nil }
             return BrainModel(provider: provider, modelIdentifier: first).setting

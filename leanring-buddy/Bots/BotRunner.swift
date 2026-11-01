@@ -44,6 +44,10 @@ final class BotProcesses: @unchecked Sendable {
     static let shared = BotProcesses()
     private let lock = NSLock()
     private var running: [String: Process] = [:]
+    /// Replies running over the API have a task instead of a process.
+    private var tasks: [String: Task<(text: String, session: String?), Error>] = [:]
+
+    func setTask(_ botID: String, _ task: Task<(text: String, session: String?), Error>?) { lock.withLock { tasks[botID] = task } }
 
     func set(_ botID: String, _ process: Process) { lock.withLock { running[botID] = process } }
     func remove(_ botID: String, _ process: Process) {
@@ -51,6 +55,10 @@ final class BotProcesses: @unchecked Sendable {
     }
     /// Stops the bot's reply; false when nothing was running.
     @discardableResult func stop(_ botID: String) -> Bool {
+        if let task = lock.withLock({ tasks.removeValue(forKey: botID) }) {
+            task.cancel()
+            return true
+        }
         guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning else { return false }
         process.terminate()
         return true
@@ -143,6 +151,7 @@ enum BotRunner {
 
     private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
         if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
@@ -188,6 +197,7 @@ enum BotRunner {
         scrubClaudeEnvironment(&environment)
         environment["NO_COLOR"] = "1"
         environment["PWD"] = workspace.path
+        environment.merge(HarnessCatalog.apiKeyEnvironment(for: bot.provider)) { _, new in new }
         process.environment = environment
         let output = Pipe()
         process.standardOutput = output
@@ -243,6 +253,22 @@ enum BotRunner {
 }
 
 extension BotRunner {
+    /// A bot on the owner's API key: stoppable like a process, and held to the same time limit.
+    static func runAPI(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+                       onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        let task = Task { try await APIChat.runBot(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
+        BotProcesses.shared.setTask(bot.id, task)
+        let watchdog = Task.detached {
+            try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
+            task.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            BotProcesses.shared.setTask(bot.id, nil)
+        }
+        return try await task.value
+    }
+
     /// Grok's CLI (grok.com sign-in), headless: one JSON reply per turn, continued with --resume.
     static var grokExecutable: URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -284,6 +310,7 @@ extension BotRunner {
             scrubClaudeEnvironment(&environment)
             environment["NO_COLOR"] = "1"
             environment["PWD"] = workspace.path
+            environment.merge(HarnessCatalog.apiKeyEnvironment(for: "grok")) { _, new in new }
             process.environment = environment
             let output = Pipe()
             process.standardOutput = output

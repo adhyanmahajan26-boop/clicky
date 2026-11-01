@@ -30,6 +30,7 @@ final class CompanionSpeechOutput: ObservableObject {
     private(set) lazy var qwenServerSupervisor = QwenServerSupervisor(client: qwenLocalVoiceClient)
     private(set) lazy var qwenEngine = QwenSpeechEngine(client: qwenLocalVoiceClient, supervisor: qwenServerSupervisor, audioEngineHub: audioEngineHub)
     private(set) lazy var sarvamEngine = SarvamSpeechEngine()
+    private(set) lazy var elevenLabsEngine = SarvamSpeechEngine(name: "elevenlabs") { speech in try await ElevenLabsClient.synthesize(speech) }
     private(set) lazy var appleEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
     /// A second Mac-voice engine: the fallback behind Apple-as-primary.
     private(set) lazy var appleFallbackEngine = AppleSpeechEngine(voiceProvider: { [weak self] in self?.systemVoiceClient.voiceInUse }, audioEngineHub: audioEngineHub)
@@ -94,6 +95,9 @@ final class CompanionSpeechOutput: ObservableObject {
         if SarvamVoiceConfig.isActive {
             fallback = usesQwen ? qwenEngine : appleEngine
             primary = sarvamEngine
+        } else if ElevenLabsClient.isActive {
+            fallback = usesQwen ? qwenEngine : appleEngine
+            primary = elevenLabsEngine
         }
         // Silent mode: nothing is spoken, but captions, marks and board steps
         // keep the rhythm of a spoken answer (paced at reading speed).
@@ -153,17 +157,18 @@ final class CompanionSpeechOutput: ObservableObject {
 
     /// The engine a new answer would use right now, for the debug ping.
     var currentEngineName: String {
-        SarvamVoiceConfig.isActive ? "sarvam" : (isQwenPrimary ? "qwen" : "system")
+        SarvamVoiceConfig.isActive ? "sarvam" : ElevenLabsClient.isActive ? "elevenlabs" : (isQwenPrimary ? "qwen" : "system")
     }
 
     var isPlaying: Bool {
-        sarvamEngine.isPlaying || qwenEngine.isPlaying || appleEngine.isPlaying || appleFallbackEngine.isPlaying
+        sarvamEngine.isPlaying || elevenLabsEngine.isPlaying || qwenEngine.isPlaying || appleEngine.isPlaying || appleFallbackEngine.isPlaying
     }
 
     /// Silences every voice at once (push-to-talk key-down, before the barge-in).
     func stopVoicesNow() {
         if isPlaying { lastSpeechEndDate = Date() }
         sarvamEngine.stopNow()
+        elevenLabsEngine.stopNow()
         qwenEngine.stopNow()
         appleEngine.stopNow()
         appleFallbackEngine.stopNow()
@@ -173,6 +178,7 @@ final class CompanionSpeechOutput: ObservableObject {
         if isPlaying { lastSpeechEndDate = Date() }
         activeCoordinator?.bargeIn(.newQuestion)
         sarvamEngine.stopNow()
+        elevenLabsEngine.stopNow()
         qwenEngine.stopNow()
         appleEngine.stopNow()
         appleFallbackEngine.stopNow()

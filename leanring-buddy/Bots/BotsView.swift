@@ -27,12 +27,23 @@ enum BotsPane: Hashable {
     case clicky
     case routines
     case connectors
+    /// A page of Settings, in this window.
+    case settings(SettingsTab.Section)
 }
 
 @MainActor
 final class BotsSelection: ObservableObject {
     static let shared = BotsSelection()
     @Published var pane: BotsPane = .home
+    /// Where "Back to Theo" returns to.
+    private var paneBeforeSettings: BotsPane = .home
+
+    func openSettings(_ section: SettingsTab.Section) {
+        if case .settings = pane {} else { paneBeforeSettings = pane }
+        pane = .settings(section)
+    }
+
+    func closeSettings() { pane = paneBeforeSettings }
 }
 
 struct BotsRootView: View {
@@ -48,7 +59,11 @@ struct BotsRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
+            if case .settings(let section) = selection.pane {
+                SettingsSidebar(selection: selection, current: section)
+            } else {
+                sidebar
+            }
             Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -195,9 +210,8 @@ struct BotsRootView: View {
                 navRow(.routines, "clock.arrow.circlepath", "Routines",
                        trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)")
                 if showsConnectors { navRow(.connectors, "puzzlepiece.extension", "Connectors") }
-                Button { TheoSettingsWindowController.show() } label: { navLabel("gearshape", "Settings", shortcut: "⌘,") }
+                Button { selection.openSettings(.look) } label: { navLabel("gearshape", "Settings", shortcut: "⌘,") }
                     .buttonStyle(SidebarButtonStyle(isSelected: false))
-                    .keyboardShortcut(",", modifiers: .command)
             }
             .padding(.horizontal, 8).padding(.vertical, 8)
         }
@@ -580,6 +594,8 @@ struct BotsRootView: View {
             ConnectorsScreen(bots: store.bots)
         case .routines:
             RoutinesScreen(store: store)
+        case .settings(let section):
+            SettingsPage(section: section)
         }
     }
 }
@@ -641,10 +657,8 @@ struct BotChatScreen: View {
                                 }
                             }
                         }
-                        if bot == nil || bot?.primary == true {
-                            ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
-                                T3RunCard(run: run)
-                            }
+                        ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
+                            T3RunCard(run: run)
                         }
                         ForEach(inProgress, id: \.0.id) { pending in
                             if pending.1.isEmpty {
@@ -1486,9 +1500,14 @@ struct BotModelSettings: View {
     private static let grokEfforts = ["low", "medium", "high"]
 
     @ObservedObject private var harnesses = HarnessCenter.shared
+    @ObservedObject private var keys = ProviderKeys.shared
 
     private var models: [String] {
         var listed: [String]
+        if bot.provider.hasPrefix("api:") {
+            listed = ProviderInfo.info(for: String(bot.provider.dropFirst(4))).map { keys.models(for: $0) } ?? []
+            return listed.contains(bot.model) || bot.model.isEmpty ? listed : [bot.model] + listed
+        }
         switch bot.provider {
         case "grok": listed = Self.grokModels
         case "claude": listed = catalog.models[.claude] ?? HarnessCatalog.claudeModels.map(\.id)
@@ -1499,6 +1518,7 @@ struct BotModelSettings: View {
     }
 
     private var efforts: [String] {
+        if bot.provider.hasPrefix("api:") { return [] }
         switch bot.provider {
         case "claude": return Self.claudeEfforts
         case "grok": return Self.grokEfforts
@@ -1517,17 +1537,38 @@ struct BotModelSettings: View {
             }
             row("Engine") {
                 Picker("Engine", selection: Binding(get: { bot.provider }, set: { provider in
+                    if provider == "__add_key" {
+                        TheoSettingsWindowController.show(section: .keys)
+                        return
+                    }
                     bot.provider = provider
-                    bot.model = HarnessPrefs.defaultModel(provider)
-                        ?? ["claude": "claude-sonnet-5-5", "grok": "grok-4.6", "opencode": "opencode/deepseek-v4.1-flash-free"][provider]
-                        ?? harnesses.models(for: provider).first?.id ?? ""
-                    bot.effort = HarnessPrefs.defaultEffort(provider)
+                    if provider.hasPrefix("api:") {
+                        let info = ProviderInfo.info(for: String(provider.dropFirst(4)))
+                        bot.model = info.flatMap { keys.models(for: $0).first } ?? ""
+                        bot.effort = nil
+                    } else {
+                        bot.model = HarnessPrefs.defaultModel(provider)
+                            ?? ["claude": "claude-sonnet-5-5", "grok": "grok-4.6", "opencode": "opencode/deepseek-v4.1-flash-free"][provider]
+                            ?? harnesses.models(for: provider).first?.id ?? ""
+                        bot.effort = HarnessPrefs.defaultEffort(provider)
+                    }
                     commit()
                 })) {
-                    ForEach(HarnessCatalog.botEngines, id: \.id) { info in
-                        let status = harnesses.status(for: info.id)
-                        Text(info.label + (status.installed ? (status.loggedIn == false ? " (not signed in)" : "") : " (not installed)"))
-                            .tag(info.id)
+                    Section("Subscriptions") {
+                        ForEach(HarnessCatalog.botEngines, id: \.id) { info in
+                            let status = harnesses.status(for: info.id)
+                            Text(info.label + (status.installed ? (status.loggedIn == false ? " (not signed in)" : "") : " (not installed)"))
+                                .tag(info.id)
+                        }
+                    }
+                    Section("API keys") {
+                        ForEach(keys.usableChatProviders) { provider in
+                            Text(provider.label).tag("api:\(provider.id)")
+                        }
+                        if bot.provider.hasPrefix("api:"), !keys.usableChatProviders.contains(where: { "api:\($0.id)" == bot.provider }) {
+                            Text("\(String(bot.provider.dropFirst(4))) (no key)").tag(bot.provider)
+                        }
+                        Text("Add a key…").tag("__add_key")
                     }
                 }
                 .labelsHidden().frame(width: compact ? nil : 260)

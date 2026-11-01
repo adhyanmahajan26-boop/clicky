@@ -40,10 +40,24 @@ enum SarvamVoiceConfig {
     }
 }
 
+/// A voice in the cloud: one audio file per caption segment, played with AVAudioPlayer. Sarvam and ElevenLabs.
 @MainActor
 final class SarvamSpeechEngine: SpeechEngine {
-    let name = "sarvam"
+    let name: String
     var callbacks = SpeechEngineCallbacks()
+    private let synthesize: @Sendable (String) async throws -> Data
+
+    /// Sarvam Bulbul by default.
+    init(name: String = "sarvam", synthesize: (@Sendable (String) async throws -> Data)? = nil) {
+        self.name = name
+        self.synthesize = synthesize ?? { speech in
+            let (language, speaker, model, pace) = await MainActor.run {
+                (SarvamVoiceConfig.language, SarvamVoiceConfig.speaker, SarvamVoiceConfig.model, SarvamVoiceConfig.pace)
+            }
+            guard let client = SarvamClient.fromKeychain() else { throw SarvamError.missingKey }
+            return try await client.synthesize(text: speech, languageSetting: language, speaker: speaker, model: model, pace: pace)
+        }
+    }
 
     private struct Prepared {
         let segment: CaptionSegment
@@ -115,14 +129,8 @@ final class SarvamSpeechEngine: SpeechEngine {
     }
 
     private func makeAudioTask(for speech: String) -> Task<Data, Error> {
-        let language = SarvamVoiceConfig.language
-        let speaker = SarvamVoiceConfig.speaker
-        let model = SarvamVoiceConfig.model
-        let pace = SarvamVoiceConfig.pace
-        return Task {
-            guard let client = SarvamClient.fromKeychain() else { throw SarvamError.missingKey }
-            return try await client.synthesize(text: speech, languageSetting: language, speaker: speaker, model: model, pace: pace)
-        }
+        let synthesize = self.synthesize
+        return Task { try await synthesize(speech) }
     }
 
     private func startNextIfIdle() {
@@ -212,7 +220,7 @@ final class SarvamSpeechEngine: SpeechEngine {
 
     private func fail(_ error: Error, failedSegment: CaptionSegment) {
         // Never log the key; SarvamError descriptions contain only server messages.
-        print("Sarvam voice failed, falling back for the rest of this answer: \(error.localizedDescription)")
+        print("\(name) voice failed, falling back for the rest of this answer: \(error.localizedDescription)")
         let failEpoch = epoch
         let unspoken = [failedSegment] + queue.map(\.segment)
         for prepared in queue { prepared.audioTask?.cancel() }

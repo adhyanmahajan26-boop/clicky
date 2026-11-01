@@ -72,6 +72,7 @@ extension BotRunner {
         process.arguments = arguments
         process.currentDirectoryURL = workspace
         var environment = HarnessCatalog.childEnvironment(extra: extraEnvironment)
+        environment.merge(HarnessCatalog.apiKeyEnvironment(for: logName)) { _, new in new }
         environment["PWD"] = workspace.path
         process.environment = environment
         let output = Pipe()

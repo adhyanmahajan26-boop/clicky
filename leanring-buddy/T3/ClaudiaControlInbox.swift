@@ -93,6 +93,7 @@ final class ClaudiaControlInbox {
         let commandName = command["cmd"] as? String ?? ""
         let identifier = "cmd-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
+        if TheoUIDriver.handle(commandName, command, respond: respond) { return }
         switch commandName {
         case "botSay":
             // A message to a bot's chat ("team" for the Project room), as if typed in Theo.

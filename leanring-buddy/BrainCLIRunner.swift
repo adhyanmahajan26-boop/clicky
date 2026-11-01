@@ -40,6 +40,7 @@ enum BrainCLIRunner {
 
     static func locateExecutable(for provider: BrainProvider) -> URL? {
         if provider == .claude { return ClaudeCodeBridge.locateClaudeCodeExecutable() }
+        if provider == .api { return nil }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let candidates = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.opencode/bin", "\(home)/.cursor/bin"]
             .map { "\($0)/\(provider.executableName)" }
@@ -69,6 +70,10 @@ enum BrainCLIRunner {
                         onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)? = nil,
                         onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)? = nil) async throws -> ClaudeTurnResult {
         let startTime = Date()
+        if model.provider == .api {
+            return try await runAPITurn(model: model, systemPrompt: systemPrompt, contentBlocks: contentBlocks, persistentSessionIdentifier: persistentSessionIdentifier,
+                                        startTime: startTime, onTextChunk: onTextChunk, onStreamEvent: onStreamEvent, onProcessReady: onProcessReady)
+        }
         guard let executableURL = locateExecutable(for: model.provider) else { throw BrainCLIRunnerError.notInstalled(model.provider) }
 
         // Screenshots as files in a private folder, removed after the turn.
@@ -222,6 +227,53 @@ enum BrainCLIRunner {
         } onCancel: {
             if process.isRunning { process.terminate() }
         }
+    }
+}
+
+extension BrainCLIRunner {
+    /// One turn on the owner's API key: same events as a CLI, so the rest of Clicky doesn't change. The screenshots go
+    /// with the user's words, and the model answers with the same tags.
+    fileprivate static func runAPITurn(model: BrainModel, systemPrompt: String, contentBlocks: [ClaudeContentBlock], persistentSessionIdentifier: String?,
+                                       startTime: Date, onTextChunk: @MainActor @Sendable (String) -> Void,
+                                       onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)?,
+                                       onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)?) async throws -> ClaudeTurnResult {
+        let parts = model.modelIdentifier.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let provider = await MainActor.run(body: { ProviderInfo.info(for: parts[0]) }) else {
+            throw APIChatError.rejected("The model \(model.modelIdentifier) isn't set up. Pick another in Settings › Clicky.")
+        }
+        var words: [String] = []
+        var images: [String] = []
+        for block in contentBlocks {
+            switch block {
+            case .text(let text): words.append(text)
+            case .jpegImage(let data), .pngImage(let data): images.append(data.base64EncodedString())
+            }
+        }
+        var messages = persistentSessionIdentifier.map(APIChat.History.load) ?? []
+        messages.append(APIChatMessage(role: "user", text: words.joined(separator: "\n\n"), imagesJPEGBase64: images))
+        await onProcessReady?(ClaudeProcessOrigin(spawnDate: Date(), usedStandbyProcess: false, standbyOutcome: nil, retriedAfterBrokenPipe: false))
+        await onStreamEvent?(.systemInit(model: model.setting))
+        let answerBox = StreamedAnswer()
+        let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt, messages: messages) { soFar in
+            if answerBox.text.isEmpty { onStreamEvent?(.messageStart(id: UUID().uuidString)) }
+            let delta = String(soFar.dropFirst(answerBox.text.count))
+            answerBox.text = soFar
+            if !delta.isEmpty { onStreamEvent?(.textDelta(delta)) }
+            onTextChunk(soFar)
+        }
+        let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw APIChatError.noAnswer(provider.label) }
+        if let persistentSessionIdentifier {
+            messages.append(APIChatMessage(role: "assistant", text: text))
+            APIChat.History.save(messages, session: persistentSessionIdentifier)
+        }
+        await onStreamEvent?(.result(text: text, isError: false, subtype: "success"))
+        return ClaudeTurnResult(text: text, resolvedModelIdentifier: model.setting, usage: [:], usageSummary: nil, duration: Date().timeIntervalSince(startTime))
+    }
+
+    /// The answer so far, for working out each delta inside a main-actor callback.
+    @MainActor private final class StreamedAnswer {
+        var text = ""
     }
 }
 

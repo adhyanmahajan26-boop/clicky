@@ -219,6 +219,7 @@ enum HarnessCoding {
         // No self-updates mid-run: OpenCode's update dialog swallowed the prompt.
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
+        environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
                                              arguments: args, environment: environment, workingDirectory: folder.path)
     }
@@ -673,6 +674,7 @@ enum HarnessCoding {
             process.currentDirectoryURL = folder
             var environment = HarnessCatalog.childEnvironment()
             environment["PWD"] = folder.path
+            environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
             process.environment = environment
             FileManager.default.createFile(atPath: out.path, contents: nil)
             let handle = try? FileHandle(forWritingTo: out)

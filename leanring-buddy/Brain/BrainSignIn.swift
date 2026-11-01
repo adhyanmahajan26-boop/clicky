@@ -32,6 +32,7 @@ final class BrainSignIn: ObservableObject {
 
     static let shared = BrainSignIn()
     @Published private(set) var states: [BrainProvider: State] = Dictionary(uniqueKeysWithValues: BrainProvider.allCases.map { ($0, .checking) })
+        .merging([.api: .signedIn("API key")]) { _, new in new }
     private var lastRefresh: Date?
 
     /// Re-checks every brain (at most every 20 s unless forced).
@@ -47,8 +48,11 @@ final class BrainSignIn: ObservableObject {
     }
 
     nonisolated private static func check(_ provider: BrainProvider) async -> State {
+        if provider == .api { return .signedIn("API key") }
         guard let executable = BrainCLIRunner.locateExecutable(for: provider) else { return .notInstalled }
         switch provider {
+        case .api:
+            return .signedIn("API key")
         case .claude:
             if ClickySettings.brainAuthMode == .apiKey {
                 return ClickySettings.anthropicAPIKeyForCalls != nil ? .signedIn("Anthropic API key") : .signedOut

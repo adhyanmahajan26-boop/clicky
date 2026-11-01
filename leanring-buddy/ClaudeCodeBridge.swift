@@ -398,6 +398,11 @@ final class ClaudeCodeBridge {
     static func checkIsSignedIn() async -> Bool {
         // Another brain: ready when its CLI is installed (it says so itself if it isn't signed in).
         let brainModel = BrainModel(setting: ClickyModels.main)
+        if brainModel.provider == .api {
+            let providerID = brainModel.modelIdentifier.split(separator: "/").first.map(String.init) ?? ""
+            let provider = await MainActor.run { ProviderInfo.info(for: providerID) }
+            return provider?.keyless == true || ProviderKeychain.get(providerID) != nil
+        }
         if !brainModel.isClaude { return BrainCLIRunner.locateExecutable(for: brainModel.provider) != nil }
         guard let claudeCodeExecutableURL = locateClaudeCodeExecutable() else { return false }
         // API-key mode signs every call in with the saved key.

@@ -20,6 +20,11 @@ public enum BrainProvider: String, CaseIterable, Sendable {
     case codex
     case cursor
     case opencode
+    /// The owner's own API key, straight over HTTP: "api:<provider id>/<model>". Not a command-line agent, so it
+    /// isn't in `allCases` (the agent pickers and sign-in checks).
+    case api
+
+    public static var allCases: [BrainProvider] { [.claude, .codex, .cursor, .opencode] }
 
     public var displayName: String {
         switch self {
@@ -27,6 +32,7 @@ public enum BrainProvider: String, CaseIterable, Sendable {
         case .codex: return "ChatGPT (Codex)"
         case .cursor: return "Cursor"
         case .opencode: return "OpenCode"
+        case .api: return "API key"
         }
     }
 
@@ -37,6 +43,7 @@ public enum BrainProvider: String, CaseIterable, Sendable {
         case .codex: return "codex"
         case .cursor: return "cursor-agent"
         case .opencode: return "opencode"
+        case .api: return ""
         }
     }
 
@@ -47,6 +54,7 @@ public enum BrainProvider: String, CaseIterable, Sendable {
         case .codex: return "codex login"
         case .cursor: return "cursor-agent login"
         case .opencode: return "opencode auth login"
+        case .api: return "Settings › Models & API keys"
         }
     }
 }
@@ -81,7 +89,8 @@ public struct BrainModel: Equatable, Sendable {
 
     /// OpenCode's free cloud models send the request (screenshots included) to whoever hosts them.
     public var sendsScreenshotsToThirdParty: Bool {
-        provider == .opencode && !modelIdentifier.hasPrefix("lmstudio/") && !modelIdentifier.hasPrefix("mlxserve/") && !modelIdentifier.hasPrefix("ollama/")
+        if provider == .api { return !modelIdentifier.hasPrefix("ollama/") && !modelIdentifier.hasPrefix("lmstudio/") }
+        return provider == .opencode && !modelIdentifier.hasPrefix("lmstudio/") && !modelIdentifier.hasPrefix("mlxserve/") && !modelIdentifier.hasPrefix("ollama/")
     }
 }
 
@@ -106,7 +115,7 @@ public enum BrainCLI {
     /// Arguments after the executable. The prompt goes on stdin for Codex ("-"), as an argument for the others.
     public static func arguments(for model: BrainModel, imagePaths: [String], workingDirectory: String, prompt: String) -> (arguments: [String], stdinPrompt: String?) {
         switch model.provider {
-        case .claude:
+        case .claude, .api:
             return ([], nil)
         case .codex:
             // Codex's own tools (browser, computer use, shell, apps, plugins) are off: Clicky acts through its
@@ -153,7 +162,7 @@ public enum BrainCLI {
     public static func parseLine(_ line: Data, provider: BrainProvider) -> [OutputEvent] {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any], let type = object["type"] as? String else { return [] }
         switch provider {
-        case .claude:
+        case .claude, .api:
             return []
         case .codex:
             switch type {

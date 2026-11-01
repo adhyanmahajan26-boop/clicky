@@ -16,6 +16,7 @@ struct TheoApp: App {
     @NSApplicationDelegateAdaptor(TheoAppDelegate.self) private var delegate
 
     init() {
+        TheoProfile.prepareAtLaunch()
         if CommandLine.arguments.contains("--mcp") { ClaudiaMCPServer.runForever() }
     }
 
@@ -24,10 +25,7 @@ struct TheoApp: App {
         Settings { EmptyView() }
             .commands {
                 CommandGroup(replacing: .appSettings) {
-                    Button("Settings…") {
-                        guard let companionManager = TheoAppDelegate.sharedCompanionManager else { return }
-                        TheoSettingsWindowController.show()
-                    }
+                    Button("Settings…") { TheoSettingsWindowController.show() }
                     .keyboardShortcut(",", modifiers: .command)
                 }
             }
@@ -81,6 +79,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Self.isHostingUnitTests { return }
+        TheoFirstClick.install()
         Self.keepConsoleLog()
         CompanionManager.current = companionManager
         // The harnesses' PATH comes from a login shell; read it once now, off the main thread.
@@ -98,9 +97,12 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
 
         Self.sharedCompanionManager = companionManager
         menuBar = MenuBarPanelManager(companionManager: companionManager)
-        companionManager.start()
-        pill = NotchPanelController(companionManager: companionManager)
-        pill?.start()
+        // The test profile is only the windows: no mic, key tap, spark overlay or pill alongside the real Theo.
+        if !TheoProfile.isTest {
+            companionManager.start()
+            pill = NotchPanelController(companionManager: companionManager)
+            pill?.start()
+        }
         #if DEBUG
         debugCommandInbox = DebugCommandInbox(companionManager: companionManager)
         debugCommandInbox?.start()
@@ -110,19 +112,20 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         let inbox = ClaudiaControlInbox(companionManager: companionManager)
         inbox.start()
         controlInbox = inbox
-        uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
-        uiServer?.start()
-
-        openAtLogin()
+        if !TheoProfile.isTest {
+            uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
+            uiServer?.start()
+            openAtLogin()
+        }
 
         // A Dock app with its own window, unless that's turned off in Settings.
-        NSApp.setActivationPolicy(ClickySettings.showsInDock ? .regular : .accessory)
+        NSApp.setActivationPolicy(ClickySettings.showsInDock && !TheoProfile.isTest ? .regular : .accessory)
         if SetupGuideWindowController.isNeededAtLaunch {
             SetupGuideWindowController.show(companionManager: companionManager)
-        } else if ClickySettings.showsInDock || Self.launchTab != nil {
+        } else if ClickySettings.showsInDock || Self.launchTab != nil || TheoProfile.isTest {
             TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home)
         }
-        if !companionManager.allPermissionsGranted { menuBar?.showPanelOnLaunch() }
+        if !companionManager.allPermissionsGranted && !TheoProfile.isTest { menuBar?.showPanelOnLaunch() }
         BotsSnapshot.renderIfAsked()
         // `--bot-say=<bot id>:<message>` opens that bot's chat and sends the message (a quick check of
         // a bot from Terminal).

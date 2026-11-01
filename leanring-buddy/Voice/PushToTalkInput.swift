@@ -122,6 +122,8 @@ final class PushToTalkRecorder: ObservableObject {
     private var deliver: ((String) -> Void)?
     private var finishTimer: Task<Void, Never>?
     private var sessionID = UUID()
+    /// The words as audio, when a cloud service does the listening (Settings › Voice).
+    private var tape: PushToTalkAudioTape?
 
     /// Starts recording; `submitDraftText` gets the words after the keys come up.
     func startPushToTalkFromKeyboardShortcut(currentDraftText: String,
@@ -177,8 +179,11 @@ final class PushToTalkRecorder: ObservableObject {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
+        let tape = CloudListening.selected == nil ? nil : PushToTalkAudioTape()
+        self.tape = tape
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            tape?.append(buffer)
             let level = Self.level(of: buffer)
             Task { @MainActor in
                 guard let self else { return }
@@ -234,8 +239,19 @@ final class PushToTalkRecorder: ObservableObject {
         let text = latestText.trimmingCharacters(in: .whitespacesAndNewlines)
         let deliver = self.deliver
         task?.cancel()
+        let tape = self.tape
         reset()
-        if !text.isEmpty { deliver?(text) }
+        guard let tape, !tape.isEmpty, let engine = CloudListening.selected else {
+            if !text.isEmpty { deliver?(text) }
+            return
+        }
+        transcriptionProviderDisplayName = engine
+        Task { @MainActor in
+            // What Apple heard is the fallback, so a failed call never loses the turn.
+            let heard = (try? await CloudListening.transcribe(wav: tape.wav, engine: engine))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let words = heard.isEmpty ? text : heard
+            if !words.isEmpty { deliver?(words) }
+        }
     }
 
     private func stopEngine() {
@@ -252,6 +268,7 @@ final class PushToTalkRecorder: ObservableObject {
         task = nil
         deliver = nil
         finishTimer = nil
+        tape = nil
     }
 
     /// Root-mean-square of the first channel, mapped to 0…1 on a decibel scale.

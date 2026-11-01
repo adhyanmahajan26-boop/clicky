@@ -353,7 +353,8 @@ public enum ClickySettings {
     public static func removeProjectAlias(key aliasKey: String) {
         defaults.set(ProjectAliasBook.removing(key: aliasKey, from: projectAliases), forKey: Keys.codeProjectAliases)
     }
-    public static var isAgentsSparkClickEnabled: Bool { defaults.object(forKey: Keys.agentsSparkClickOpensDashboard) as? Bool ?? true }
+    /// Off unless asked for: the catcher sits above every app wherever the spark rests, so a click meant for the control under the spark opened the Agents window instead.
+    public static var isAgentsSparkClickEnabled: Bool { defaults.object(forKey: Keys.agentsSparkClickOpensDashboard) as? Bool ?? false }
     public static var agentsHistoryLimit: Int { min(500, max(10, defaults.object(forKey: Keys.agentsHistoryLimit) as? Int ?? AgentStore.defaultMaximumFinishedRecords)) }
     public static var isCodeProgressNarrationEnabled: Bool { defaults.object(forKey: Keys.codeNarrateProgress) as? Bool ?? true }
 

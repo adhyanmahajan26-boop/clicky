@@ -62,6 +62,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     static func defaultEnvironment() -> [String: String] {
         var env = HarnessCatalog.childEnvironment()
         env["NO_COLOR"] = nil
+        env["CFFIXED_USER_HOME"] = nil
         return env
     }
 
@@ -108,6 +109,19 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
         while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
         return lines.joined(separator: "\n")
+    }
+
+    /// The whole visible text with wrapped lines joined back together, so a long sign-in link stays one link.
+    func unwrappedScreenText() -> String {
+        guard let terminal = view.terminal else { return "" }
+        var result = ""
+        for row in 0..<terminal.rows {
+            let raw = (terminal.getLine(row: row)?.translateToString(trimRight: true) ?? "").replacingOccurrences(of: "\u{0}", with: " ")
+            result += raw
+            // A line that fills the width carries on in the next one.
+            if raw.count < terminal.cols { result += "\n" }
+        }
+        return result
     }
 
     // MARK: Bridge callbacks

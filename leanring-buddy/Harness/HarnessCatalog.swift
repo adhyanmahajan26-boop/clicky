@@ -61,7 +61,10 @@ enum HarnessCatalog {
     static var botEngines: [HarnessInfo] { all.filter { $0.canRunBots } }
 
     static func info(_ id: String) -> HarnessInfo? { all.first { $0.id == id } }
-    static func label(_ id: String) -> String { info(id)?.label ?? id }
+    static func label(_ id: String) -> String {
+        if id.hasPrefix("api:") { return (ProviderInfo.info(for: String(id.dropFirst(4)))?.label ?? String(id.dropFirst(4))) + " API" }
+        return info(id)?.label ?? id
+    }
 
     // MARK: Finding binaries
 
@@ -83,7 +86,9 @@ enum HarnessCatalog {
         return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
     }()
 
-    static let searchDirectories: [String] = {
+    /// Re-read after an install, so a harness installed just now is found without restarting Theo.
+    static var searchDirectories: [String] { _searchDirectories }
+    private static let _searchDirectories: [String] = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let fixed = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.grok/bin", "\(home)/.cursor/bin",
                      "\(home)/.npm-global/bin", "\(home)/.bun/bin", "\(home)/.opencode/bin"]
@@ -105,6 +110,66 @@ enum HarnessCatalog {
         guard let info = info(id) else { return nil }
         for name in info.binaries { if let found = locate(binary: name) { return found } }
         return nil
+    }
+
+    // MARK: Install, sign in, keys
+
+    /// How to install a harness and sign it in, from each tool's own docs and `--help` (checked 2026-11-01).
+    struct Setup {
+        /// The official one-line installer, shown and run in Theo's terminal.
+        var install: String
+        var installPage: String
+        /// The CLI's own login arguments. Empty: signing in is part of running it (Gemini CLI).
+        var signIn: [String]
+        var signOut: [String]?
+        /// What opens if the owner has to choose something in the terminal.
+        var signInHint: String
+        /// The provider whose saved key this harness can run on.
+        var keyProvider: String?
+        /// Environment variable names that key goes in.
+        var keyVariables: [String]
+    }
+
+    static let setups: [String: Setup] = [
+        "t3": Setup(install: "curl -fsSL https://t3.codes/install.sh | sh", installPage: "https://github.com/pingdotgg/t3code/releases",
+                    signIn: [], signOut: nil, signInHint: "T3 Code uses the sign-ins of the harnesses below.", keyProvider: nil, keyVariables: []),
+        "claude": Setup(install: "curl -fsSL https://claude.ai/install.sh | bash", installPage: "https://code.claude.com/docs/en/setup",
+                        signIn: ["auth", "login"], signOut: ["auth", "logout"], signInHint: "Your browser opens to sign in with your Claude account.",
+                        keyProvider: "anthropic", keyVariables: ["ANTHROPIC_API_KEY"]),
+        "codex": Setup(install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh", installPage: "https://github.com/openai/codex",
+                       signIn: ["login"], signOut: ["logout"], signInHint: "Your browser opens to sign in with ChatGPT.",
+                       keyProvider: "openai", keyVariables: ["OPENAI_API_KEY", "CODEX_API_KEY"]),
+        "cursor": Setup(install: "curl https://cursor.com/install -fsS | bash", installPage: "https://cursor.com/docs/cli/installation",
+                        signIn: ["login"], signOut: ["logout"], signInHint: "Your browser opens to sign in with Cursor.",
+                        keyProvider: "cursor", keyVariables: ["CURSOR_API_KEY"]),
+        "opencode": Setup(install: "curl -fsSL https://opencode.ai/install | bash", installPage: "https://opencode.ai/docs/",
+                          signIn: ["auth", "login"], signOut: ["auth", "logout"], signInHint: "Pick a provider in the terminal. OpenCode's free models need no sign-in.",
+                          keyProvider: nil, keyVariables: []),
+        "grok": Setup(install: "curl -fsSL https://x.ai/cli/install.sh | bash", installPage: "https://docs.x.ai/build/overview",
+                      signIn: ["login"], signOut: ["logout"], signInHint: "Your browser opens to sign in with your xAI account.",
+                      keyProvider: "xai", keyVariables: ["XAI_API_KEY"]),
+        "gemini": Setup(install: "npm install -g @google/gemini-cli", installPage: "https://github.com/google-gemini/gemini-cli",
+                        signIn: [], signOut: nil, signInHint: "Choose \u{201C}Sign in with Google\u{201D} in the terminal. Free and Google AI Pro access moved to Antigravity CLI in June 2026; Gemini CLI now needs Code Assist or an API key.",
+                        keyProvider: "gemini", keyVariables: ["GEMINI_API_KEY"]),
+    ]
+
+    /// Environment variables OpenCode reads for each provider's key.
+    private static let openCodeKeys: [(provider: String, variable: String)] = [
+        ("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY"), ("gemini", "GOOGLE_GENERATIVE_AI_API_KEY"), ("xai", "XAI_API_KEY"),
+        ("groq", "GROQ_API_KEY"), ("openrouter", "OPENROUTER_API_KEY"), ("mistral", "MISTRAL_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY"),
+        ("together", "TOGETHER_AI_API_KEY"), ("fireworks", "FIREWORKS_API_KEY"), ("cerebras", "CEREBRAS_API_KEY"),
+    ]
+
+    /// The saved key(s) as environment variables, when the owner has switched this harness to its API key.
+    static func apiKeyEnvironment(for harness: String) -> [String: String] {
+        guard HarnessPrefs.usesAPIKey(harness) else { return [:] }
+        if harness == "opencode" {
+            var environment: [String: String] = [:]
+            for entry in openCodeKeys { if let key = ProviderKeychain.get(entry.provider) { environment[entry.variable] = key } }
+            return environment
+        }
+        guard let setup = setups[harness], let provider = setup.keyProvider, let key = ProviderKeychain.get(provider) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: setup.keyVariables.map { ($0, key) })
     }
 
     /// The environment for a harness process: Theo's, minus the variables that would make a Claude Code child
@@ -159,6 +224,7 @@ struct HarnessStatus: Equatable {
     /// "addyyo1227@gmail.com · max plan", "ChatGPT · Pro", …
     var account: String?
     var detail: String?
+    var version: String?
     /// Installed and not known to be signed out.
     var ready: Bool { installed && loggedIn != false }
 }
@@ -175,7 +241,15 @@ enum HarnessDetector {
         }
         status.installed = true
         status.path = executable.path
+        if id != "t3" {
+            // "2.1.312 (Claude Code)", "codex-cli 0.165.0", "grok 1.0.70 (f50904e)": the part with the digits.
+            let first = HarnessCatalog.output(of: executable, ["--version"], timeout: 8, merge: false).split(separator: "\n").first.map(String.init) ?? ""
+            status.version = first.split(separator: " ").first { $0.first?.isNumber == true }.map(String.init)
+        }
         switch id {
+        case "t3":
+            status.account = ClaudiaT3Integration.t3Apps.first.map { $0.deletingPathExtension().lastPathComponent }
+            status.loggedIn = true
         case "claude":
             let text = HarnessCatalog.output(of: executable, ["auth", "status"], timeout: 15, merge: false)
             if let object = jsonObject(in: text) {
@@ -232,12 +306,13 @@ enum HarnessDetector {
             if let data = try? Data(contentsOf: auth), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], !object.isEmpty {
                 status.account = object.keys.sorted().joined(separator: ", ")
             }
-            status.detail = "Free models need no sign-in."
+            status.detail = "Free models, no sign-in needed"
         case "gemini":
             let creds = FileManager.default.fileExists(atPath: home.appendingPathComponent(".gemini/oauth_creds.json").path)
             let key = ProcessInfo.processInfo.environment["GEMINI_API_KEY"] != nil
             status.loggedIn = creds || key
             status.account = creds ? "Google account" : (key ? "API key" : nil)
+            if status.loggedIn != true { status.detail = "Sign in with Google, or use an API key" }
         default:
             break
         }
@@ -357,6 +432,10 @@ enum HarnessPrefs {
     }
     static func setDefaultEffort(_ effort: String?, for harness: String) { defaults.set(effort, forKey: "theo.harness.effort.\(harness)") }
 
+    /// Run this harness on the saved API key instead of its subscription sign-in.
+    static func usesAPIKey(_ harness: String) -> Bool { defaults.bool(forKey: "theo.harness.apiKey.\(harness)") }
+    static func setUsesAPIKey(_ on: Bool, for harness: String) { defaults.set(on, forKey: "theo.harness.apiKey.\(harness)") }
+
     /// Where the coding hand-off goes: t3 (default), claude, codex, cursor, opencode, grok or gemini.
     static var codingTarget: String {
         get { defaults.string(forKey: "theo.coding.target") ?? "t3" }
@@ -386,6 +465,8 @@ final class HarnessCenter: ObservableObject {
     /// Efforts per Codex model id, as Codex's cache lists them.
     @Published private(set) var codexEfforts: [String: [String]] = [:]
     @Published private(set) var isRefreshing = false
+    /// Harnesses being re-checked one at a time.
+    @Published private(set) var checking: Set<String> = []
     private var lastRefresh: Date?
 
     private init() {
@@ -423,6 +504,22 @@ final class HarnessCenter: ObservableObject {
     func setDefaultModel(_ model: String?, for harness: String) { objectWillChange.send(); HarnessPrefs.setDefaultModel(model, for: harness) }
     func defaultEffort(for harness: String) -> String? { HarnessPrefs.defaultEffort(harness) }
     func setDefaultEffort(_ effort: String?, for harness: String) { objectWillChange.send(); HarnessPrefs.setDefaultEffort(effort, for: harness) }
+
+    func usesAPIKey(_ harness: String) -> Bool { HarnessPrefs.usesAPIKey(harness) }
+    func setUsesAPIKey(_ on: Bool, for harness: String) { objectWillChange.send(); HarnessPrefs.setUsesAPIKey(on, for: harness) }
+
+    /// Re-checks one harness (after a sign-in or install) without touching the others.
+    func recheck(_ harness: String) {
+        checking.insert(harness)
+        Task.detached(priority: .userInitiated) {
+            _ = HarnessCatalog.searchDirectories
+            let status = HarnessDetector.status(for: harness)
+            await MainActor.run {
+                self.statuses[harness] = status
+                self.checking.remove(harness)
+            }
+        }
+    }
 
     var codingTarget: String {
         get { HarnessPrefs.codingTarget }

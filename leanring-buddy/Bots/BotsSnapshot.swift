@@ -26,7 +26,7 @@ enum BotsSnapshot {
             // The home window's tabs too, at the same size.
             if let manager = CompanionManager.current {
                 for section in [SettingsTab.Section.look, .coding, .keys] {
-                    await render(SettingsTab(companionManager: manager, section: section).background(DS.Colors.background),
+                    await render(SettingsPage(section: section).background(DS.Colors.background),
                                  to: folder.appendingPathComponent("settings-\(section.rawValue).png"))
                 }
             }
