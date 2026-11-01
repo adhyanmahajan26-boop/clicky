@@ -245,6 +245,13 @@ struct TheoProductionTests {
         #expect(HarnessPrefs.codingModel == nil)
     }
 
+    /// A reply that starts streaming redraws with a date a moment before the anchor: it used to crash the app.
+    @Test func typingNeverShowsANegativeCount() {
+        let earlier = Date(timeIntervalSinceNow: -5)
+        let count = min(10, 0 + Int(max(0, earlier.timeIntervalSince(Date())) * 320))
+        #expect(count == 0)
+    }
+
     // MARK: Cursor cloud agents
 
     @Test func cursorCloudRequests() {

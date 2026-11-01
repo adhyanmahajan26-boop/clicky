@@ -20,6 +20,49 @@ def from_iconify(name):
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">{icon["body"]}</svg>'
 
 
+def expand_arc_flags(path):
+    """SVG lets an arc's two flags run into the next number ("a.5.5 0 00-.97 0"), which macOS's SVG reader can't parse."""
+    out, i, n = [], 0, len(path)
+    number = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
+    while i < n:
+        c = path[i]
+        if c in "Aa":
+            out.append(c)
+            i += 1
+            while True:
+                values = []
+                for position in range(7):
+                    while i < n and path[i] in " ,\n\t":
+                        i += 1
+                    if i >= n:
+                        break
+                    if position in (3, 4) and path[i] in "01":
+                        values.append(path[i])
+                        i += 1
+                    else:
+                        match = number.match(path, i)
+                        if not match:
+                            break
+                        values.append(match.group(0))
+                        i = match.end()
+                if len(values) == 7:
+                    out.append(" ".join(values) + " ")
+                else:
+                    out.append(" ".join(values))
+                # Another arc follows when the next token is a number rather than a command.
+                j = i
+                while j < n and path[j] in " ,\n\t":
+                    j += 1
+                if j >= n or path[j].isalpha():
+                    i = j
+                    break
+                i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def clean(svg):
     """No scripts, styles or remote references; sized so the asset compiler keeps it crisp."""
     svg = re.sub(r"<style.*?</style>", "", svg, flags=re.S)
@@ -29,6 +72,7 @@ def clean(svg):
     svg = re.sub(r'(<svg[^>]*?)\sheight="[^"]*"', r"\1", svg, count=1)
     svg = re.sub(r'(<svg[^>]*?)\swidth="[^"]*"', r"\1", svg, count=1)
     svg = svg.replace("<svg ", '<svg width="64" height="64" ', 1)
+    svg = re.sub(r'\sd="([^"]+)"', lambda m: ' d="' + expand_arc_flags(m.group(1)) + '"', svg)
     assert "<script" not in svg and "http://" not in svg.replace("http://www.w3.org", "") and "https://" not in svg
     return svg
 

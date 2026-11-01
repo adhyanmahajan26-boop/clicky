@@ -1035,8 +1035,9 @@ struct BotLine: View {
 
     private var typing: Bool { animatesIn && !finished }
 
+    /// A timeline's date can be a moment before the anchor, so this never goes below what was already showing.
     private func shownCount(at date: Date) -> Int {
-        min(total, anchorCount + Int(date.timeIntervalSince(anchorDate) * rate))
+        min(total, anchorCount + Int(max(0, date.timeIntervalSince(anchorDate)) * rate))
     }
 
     @ViewBuilder private func typedContent(count: Int) -> some View {
