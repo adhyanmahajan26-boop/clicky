@@ -142,7 +142,11 @@ public enum ReadableText {
         for tag in ["script", "style", "noscript", "svg", "nav", "header", "footer", "form", "aside", "iframe", "template"] {
             body = body.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: " ", options: [.regularExpression, .caseInsensitive])
         }
-        if let article = firstMatch(#"<article\b[^>]*>([\s\S]*?)</article>"#, in: body) ?? firstMatch(#"<main\b[^>]*>([\s\S]*?)</main>"#, in: body) {
+        // The longest article, not the first: a list page can open with a small teaser card. A thin one means the
+        // page's words are elsewhere, so the whole body is read instead.
+        let wordsIn = { (html: String) in stripTags(html).split(whereSeparator: \.isWhitespace).count }
+        let article = allMatches(#"<article\b[^>]*>([\s\S]*?)</article>"#, in: body).max { wordsIn($0) < wordsIn($1) } ?? firstMatch(#"<main\b[^>]*>([\s\S]*?)</main>"#, in: body)
+        if let article, wordsIn(article) >= 150 || wordsIn(article) * 3 >= wordsIn(body) {
             body = article
         } else if let bodyContent = firstMatch(#"<body\b[^>]*>([\s\S]*?)</body>"#, in: body) {
             body = bodyContent
@@ -159,7 +163,8 @@ public enum ReadableText {
     /// Paywall / sign-in walls: too little text plus wall words.
     public static func looksWalled(_ text: String) -> Bool {
         let lowered = text.lowercased()
-        let wallWords = ["subscribe to continue", "sign in to continue", "log in to continue", "to continue reading", "create a free account", "enable javascript"]
+        let wallWords = ["subscribe to continue", "sign in to continue", "log in to continue", "to continue reading", "create a free account", "enable javascript",
+                         "powered and protected by", "verify you are human", "checking your browser", "just a moment", "access denied", "are you a robot"]
         return text.count < 600 && wallWords.contains { lowered.contains($0) }
     }
 
@@ -188,6 +193,13 @@ public enum ReadableText {
             result = output
         }
         return result
+    }
+
+    static func allMatches(_ pattern: String, in text: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
+        return expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            Range(match.range(at: 1), in: text).map { String(text[$0]) }
+        }
     }
 
     static func firstMatch(_ pattern: String, in text: String) -> String? {

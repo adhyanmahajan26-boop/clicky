@@ -51,6 +51,22 @@ struct ResearchTests {
         #expect(ReadableText.looksWalled("Subscribe to continue reading this story."))
     }
 
+    @Test func aTeaserCardDoesNotHideThePage() {
+        let long = String(repeating: "The Hyundai Ioniq 5 keeps its range in the cold and charges quickly. ", count: 30)
+        let list = "<html><body><article><h2>Not quite ready for a full EV?</h2></article><article><p>\(long)</p></article></body></html>"
+        #expect(ReadableText.extract(html: list).text.contains("Ioniq 5"))
+        let split = "<html><body><article><h2>Teaser</h2></article><div><p>\(long)</p></div></body></html>"
+        #expect(ReadableText.extract(html: split).text.contains("Ioniq 5"))
+        let short = "<html><body><div>Menu one two three</div><article><p>A short real article of a few words.</p></article></body></html>"
+        #expect(!ReadableText.extract(html: short).text.contains("Menu one"))
+    }
+
+    @Test func botWallsCountAsWalled() {
+        #expect(ReadableText.looksWalled("Powered and protected by\nPrivacy"))
+        #expect(ReadableText.looksWalled("Checking your browser before accessing"))
+        #expect(!ReadableText.looksWalled("Light can't escape a black hole."))
+    }
+
     @Test func duckDuckGoResultsAreUnwrappedAndDeduplicated() {
         let html = """
         <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fscience.nasa.gov%2Fblack%2Dholes&amp;rut=x">NASA</a>
@@ -135,5 +151,35 @@ struct ResearchTriggerHardPhrasesTests {
         let picked = ResearchLinkPicker.heuristicPick([result], count: 1, pageURL: URL(string: "https://www.google.com/search?q=ev"))
         #expect(picked.count == 1)
         #expect(ResearchLinkPicker.visibleCandidates([result], windowFrame: window).count == 1)
+    }
+}
+
+struct BotSettingsIntentTests {
+    @Test func theOwnerAskingForAChange() {
+        #expect(BotSettingsIntent.parse("switch to haiku") == BotSettingsIntent(model: "haiku"))
+        #expect(BotSettingsIntent.parse("Use Opus.") == BotSettingsIntent(model: "opus"))
+        #expect(BotSettingsIntent.parse("change your model to sonnet 5.5") == BotSettingsIntent(model: "sonnet"))
+        #expect(BotSettingsIntent.parse("can you switch to claude haiku please") == BotSettingsIntent(model: "haiku"))
+        #expect(BotSettingsIntent.parse("run on codex") == BotSettingsIntent(engine: "codex"))
+        #expect(BotSettingsIntent.parse("switch to claude code") == BotSettingsIntent(engine: "claude"))
+        #expect(BotSettingsIntent.parse("set your effort to high") == BotSettingsIntent(effort: "high"))
+        #expect(BotSettingsIntent.parse("use high effort") == BotSettingsIntent(effort: "high"))
+        #expect(BotSettingsIntent.parse("turn on thinking") == BotSettingsIntent(thinking: true))
+        #expect(BotSettingsIntent.parse("turn fast mode off") == BotSettingsIntent(fast: false))
+    }
+
+    @Test func theOwnerAskingToSeeThem() {
+        for text in ["settings", "your settings", "show your settings", "open settings", "change your model", "change your engine", "change the schedule",
+                     "what model are you on", "which engine are you using", "what's your schedule", "what are you running on", "edit your schedule"] {
+            #expect(BotSettingsIntent.parse(text) == BotSettingsIntent(), "\(text)")
+        }
+    }
+
+    @Test func ordinaryMessagesStayOrdinary() {
+        for text in ["change the model in my database", "use haiku to write a poem", "fix the settings page", "what is the best model for coding", "write a haiku",
+                     "switch to dark mode", "every weekday at 9 summarise my email", "run the tests", "set the price to 5", "use cursor pagination in the api",
+                     "what do you think of the new schedule for the launch event next week and who should attend it"] {
+            #expect(BotSettingsIntent.parse(text) == nil, "\(text)")
+        }
     }
 }

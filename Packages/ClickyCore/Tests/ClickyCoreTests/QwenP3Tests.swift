@@ -369,3 +369,34 @@ private func narrationSegments(_ text: String, options: NarrationSegmenter.Optio
     #expect(body["ref_audio"] == nil)
     #expect(body["speaker"] == nil && body["instruct"] == nil)
 }
+
+private func testWAV(samples: [Int16], rate: UInt32 = 1000) -> Data {
+    var data = Data("RIFF".utf8)
+    func put32(_ value: UInt32) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+    func put16(_ value: UInt16) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+    put32(UInt32(36 + samples.count * 2))
+    data.append(contentsOf: Data("WAVEfmt ".utf8))
+    put32(16); put16(1); put16(1); put32(rate); put32(rate * 2); put16(2); put16(16)
+    data.append(contentsOf: Data("data".utf8))
+    put32(UInt32(samples.count * 2))
+    samples.forEach { put16(UInt16(bitPattern: $0)) }
+    return data
+}
+
+@Test func leadingSilenceIsTrimmedDownToAShortLeadIn() {
+    let wav = testWAV(samples: Array(repeating: 0, count: 600) + Array(repeating: 9000, count: 100))
+    let trimmed = QwenTuning.trimmingLeadingSilence(wav: wav)
+    // 50 samples of lead-in (0.05 s at 1 kHz) and all of the sound.
+    #expect(trimmed.count == 44 + (50 + 100) * 2)
+    #expect(trimmed[40] == UInt8((50 + 100) * 2 & 0xFF))
+    #expect(Int(trimmed[4]) | Int(trimmed[5]) << 8 == trimmed.count - 8)
+}
+
+@Test func wavsThatCantBeTrimmedComeBackUntouched() {
+    let silent = testWAV(samples: Array(repeating: 0, count: 100))
+    #expect(QwenTuning.trimmingLeadingSilence(wav: silent) == silent)
+    let startsLoud = testWAV(samples: Array(repeating: 9000, count: 100))
+    #expect(QwenTuning.trimmingLeadingSilence(wav: startsLoud) == startsLoud)
+    let notPCM = Data("not a wav file at all, just some bytes that are long enough".utf8)
+    #expect(QwenTuning.trimmingLeadingSilence(wav: notPCM) == notPCM)
+}

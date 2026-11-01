@@ -72,6 +72,15 @@ def open_page(url, settle=6):
     time.sleep(settle)
 
 
+def show_google_results():
+    """Scrolls past Google's AI answer so the results themselves are on screen, as a person looking at them would."""
+    if CDP_PORT:
+        page = cdp_page()
+        page.call("Runtime.evaluate", {"expression": "(() => { const h = document.querySelector('a h3'); if (h) window.scrollTo(0, h.getBoundingClientRect().top + scrollY - 110); })()"})
+        page.close()
+        time.sleep(1.5)
+
+
 def frontmost_name():
     front = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
     info = subprocess.run(["lsappinfo", "info", "-only", "name", front], capture_output=True, text=True).stdout
@@ -133,6 +142,7 @@ def fetch(url):
 
 def case_research_google():
     open_page("https://www.google.com/search?q=best+electric+cars+2026")
+    show_google_results()
     reply = ask("search these 3 links on my screen using haiku agents")
     status = wait_research()
     urls = status.get("urls") or []
@@ -152,6 +162,7 @@ def case_research_google():
 def case_research_named():
     """Names two of the sites that are on screen right now (Google's results change from day to day)."""
     open_page("https://www.google.com/search?q=best+electric+cars+2026")
+    show_google_results()
     ask("research these 3 links on my screen with haiku agents")
     on_screen = [host(u) for u in wait_research().get("urls") or []]
     if len(on_screen) < 3:
@@ -159,6 +170,7 @@ def case_research_named():
     named = [on_screen[0], on_screen[2]]
     spoken = [h.split(".")[0] for h in named]
     open_page("https://www.google.com/search?q=best+electric+cars+2026")
+    show_google_results()
     ask(f"research the {spoken[0]} and {spoken[1]} links with two haiku agents")
     status = wait_research()
     hosts = sorted(host(u) for u in status.get("urls") or [])

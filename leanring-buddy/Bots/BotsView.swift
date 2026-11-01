@@ -655,6 +655,7 @@ struct BotChatScreen: View {
                                 if let runID = message.runID, let run = store.t3Runs.first(where: { $0.id == runID }) {
                                     T3ResultCard(run: run).padding(.leading, 38)
                                 }
+                                if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
@@ -1613,18 +1614,19 @@ struct T3HandoffButton: View {
     }
 }
 
-/// A coding run while it works: its harness, status, time so far, the live terminal, Stop and pop out.
+/// A coding run while it works, for someone who has never read a terminal: where it's got to in plain words, with the
+/// raw terminal one click away. Stop asks first.
 struct T3RunCard: View {
     let run: T3Run
     @ObservedObject private var terminals = TerminalSessions.shared
-    @State private var showsTerminal = true
+    @State private var showsTerminal = false
     @State private var confirmsStop = false
 
     private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
     private var session: TerminalSession? { terminals.session(for: run.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
                 BrandLogo(id: run.harness ?? "t3", name: engine, size: 28)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1636,21 +1638,32 @@ struct T3RunCard: View {
                     StatusPill(text: (run.phase == "waiting" ? "Waiting for you · " : run.phase == "reporting" ? "Finishing up · " : "Working · ") + Self.elapsed(since: run.startedAt, now: context.date),
                                tone: run.phase == "waiting" ? .warn : .info, busy: run.phase != "waiting")
                 }
-                if session != nil {
-                    Button { showsTerminal.toggle() } label: { Image(systemName: showsTerminal ? "chevron.up" : "terminal").frame(width: 14) }
-                        .buttonStyle(.theo(.ghost, .small)).help(showsTerminal ? "Hide the terminal" : "Show the terminal")
-                    Button { TerminalWindowController.pop(sessionID: run.id) } label: { Image(systemName: "arrow.up.forward.square").frame(width: 14) }
-                        .buttonStyle(.theo(.ghost, .small)).help("Open in its own window")
-                } else if run.link != nil || run.harness != nil {
-                    Button("Watch") { BotsT3.openInApp(run) }.buttonStyle(.theo(.secondary, .small))
-                }
                 if run.phase != "reporting" {
-                    Button { confirmsStop = true } label: { Image(systemName: "stop.fill").frame(width: 14) }
-                        .buttonStyle(.theo(.ghost, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
+                    Button { confirmsStop = true } label: { Label("Stop", systemImage: "stop.fill") }
+                        .buttonStyle(.theo(.secondary, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
                 }
             }
-            if let activity = run.activity, !activity.isEmpty, session == nil || !showsTerminal {
-                Text(activity).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(steps) { step in RunStepRow(step: step) }
+            }
+            if run.phase == "waiting" {
+                RunFollowupBox(run: run, placeholder: "Answer it here")
+            }
+            HStack(spacing: 6) {
+                if session != nil {
+                    Button { withAnimation(DS.Motion.hover) { showsTerminal.toggle() } } label: {
+                        Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal")
+                    }
+                    .buttonStyle(.theo(.ghost, .small))
+                    if showsTerminal {
+                        Button { TerminalWindowController.pop(sessionID: run.id) } label: { Image(systemName: "arrow.up.forward.square").frame(width: 14) }
+                            .buttonStyle(.theo(.ghost, .small)).help("Open in its own window")
+                    }
+                } else if run.link != nil || run.harness != nil {
+                    Button { BotsT3.openInApp(run) } label: { Label(run.harness == nil ? "Open in T3 Code" : "Watch", systemImage: "arrow.up.forward.app") }
+                        .buttonStyle(.theo(.ghost, .small))
+                }
+                Spacer(minLength: 0)
             }
             if showsTerminal, let session {
                 // The harness's own terminal, live: watch it work and type into it.
@@ -1672,10 +1685,40 @@ struct T3RunCard: View {
         }
     }
 
+    /// The agent's latest words, without Markdown marks, or what it's doing in general until it has said something.
+    private var plainActivity: String {
+        let words = (run.activity ?? "").replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return words.isEmpty ? "Reading the code and working out what to change." : words
+    }
+
+    private var steps: [RunStep] {
+        let wrappingUp = run.phase == "reporting"
+        let stopping = run.stoppedByOwner == true
+        let place = run.branch.map { "On its own branch, \($0). Your own files stay as they are." } ?? "In its own folder, \(URL(fileURLWithPath: run.folder).lastPathComponent)."
+        func state(_ name: String, after earlier: [String]) -> RunStep.State {
+            guard wrappingUp, let stage = run.stage else { return .todo }
+            if stage == name { return .active }
+            return earlier.contains(stage) ? .todo : .done
+        }
+        var list = [RunStep(id: "start", title: run.branch == nil ? "Set up a folder" : "Set up its own branch", detail: place, state: .done)]
+        if stopping {
+            list.append(RunStep(id: "code", title: "Stopping", detail: "What it did so far is being saved.", state: .active))
+            return list
+        }
+        list.append(RunStep(id: "code", title: run.phase == "waiting" ? "It has a question for you" : "Changing the code",
+                            detail: wrappingUp ? nil : plainActivity,
+                            state: wrappingUp ? .done : run.phase == "waiting" ? .question : .active))
+        list.append(RunStep(id: "tests", title: "Running the tests", detail: nil, state: state("tests", after: [])))
+        if run.branch != nil {
+            list.append(RunStep(id: "push", title: "Saving and pushing", detail: nil, state: state("push", after: ["tests"])))
+            list.append(RunStep(id: "pr", title: "Opening a draft pull request", detail: nil, state: state("pr", after: ["tests", "push"])))
+        }
+        return list
+    }
+
     private var detailLine: String {
         var parts = [engine]
         if let model = run.model { parts.append(NativeBot.label(for: model)) }
-        if let branch = run.branch { parts.append(branch) } else { parts.append(URL(fileURLWithPath: run.folder).lastPathComponent) }
         return parts.joined(separator: " · ")
     }
 
@@ -1684,6 +1727,118 @@ struct T3RunCard: View {
         let seconds = max(0, Int(now.timeIntervalSince(start)))
         if seconds >= 3600 { return String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) }
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+struct RunStep: Identifiable {
+    enum State { case done, active, question, todo }
+    let id: String
+    let title: String
+    let detail: String?
+    let state: State
+}
+
+/// One line of a run's progress: a tick, a spinner or an empty circle, and what it means.
+struct RunStepRow: View {
+    let step: RunStep
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Group {
+                switch step.state {
+                case .done: Image(systemName: "checkmark.circle.fill").foregroundColor(DS.Colors.success)
+                case .active: ProgressView().controlSize(.small).scaleEffect(0.7)
+                case .question: Image(systemName: "questionmark.circle.fill").foregroundColor(DS.Colors.warning)
+                case .todo: Image(systemName: "circle").foregroundColor(DS.Colors.textDisabled)
+                }
+            }
+            .font(.system(size: 14)).frame(width: 16, height: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(step.title).font(.system(size: 13, weight: step.state == .todo ? .regular : .medium))
+                    .foregroundColor(step.state == .todo ? DS.Colors.textTertiary : DS.Colors.textPrimary)
+                if let detail = step.detail {
+                    Text(detail).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// Type a change or an answer on the card itself. It lands on the same branch and pull request.
+struct RunFollowupBox: View {
+    let run: T3Run
+    var placeholder = "Ask for a change"
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain).font(.system(size: 13)).focused($focused)
+                .onSubmit(send)
+                .theoField(focused: focused)
+            Button("Send", action: send).buttonStyle(.theo(.secondary, .small)).disabled(trimmed.isEmpty)
+        }
+    }
+
+    private func send() {
+        guard !trimmed.isEmpty else { return }
+        BotsStore.shared.sendFollowup(trimmed, on: run)
+        text = ""
+    }
+}
+
+/// What a bot answers when asked to change how it runs: its settings, working, right in the chat.
+struct BotSettingsChatCard: View {
+    let botID: String
+    @ObservedObject private var store = BotsStore.shared
+    @State private var addsSchedule = false
+
+    var body: some View {
+        if let bot = store.bot(botID) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    BotAvatar(bot: bot, size: 26, state: .idle)
+                    Text("\(bot.name)'s settings").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                    Spacer(minLength: 8)
+                    Button("All settings") { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) }
+                        .buttonStyle(.theo(.ghost, .small))
+                }
+                // Changes from elsewhere (a message, the column) redraw the pickers.
+                BotModelSettings(bot: bot, onChange: { store.save($0) }, compact: true)
+                    .id("\(bot.provider)|\(bot.model)|\(bot.effort ?? "")|\(bot.thinking ?? false)|\(bot.fast ?? false)")
+                Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+                HStack {
+                    Text("Schedules").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                    Spacer()
+                    Button { addsSchedule = true } label: { Label("Add schedule", systemImage: "plus") }.buttonStyle(.theo(.ghost, .small))
+                }
+                let routines = store.routines(for: bot.id)
+                if routines.isEmpty {
+                    Text("None yet. Say \"every weekday at 9, …\" or add one here.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                }
+                ForEach(routines) { routine in
+                    HStack(spacing: 8) {
+                        Image(systemName: routine.paused ? "pause.circle" : "clock").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(routine.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                            Text(routine.schedule.label).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                        }
+                        Spacer(minLength: 8)
+                        Button(routine.paused ? "Resume" : "Pause") { store.setPaused(!routine.paused, routineID: routine.id) }.buttonStyle(.theo(.ghost, .small))
+                        Button("Run now") { store.runRoutineNow(routine.id) }.buttonStyle(.theo(.secondary, .small))
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: 400, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            .padding(.leading, 38)
+            .sheet(isPresented: $addsSchedule) { RoutineEditor(store: store, routine: nil, fixedTarget: bot.id) { addsSchedule = false } }
+        }
     }
 }
 

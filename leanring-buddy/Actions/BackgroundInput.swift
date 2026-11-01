@@ -187,6 +187,15 @@ enum BackgroundInput {
 
     // MARK: Keeping the owner's focus
 
+    /// Theo's own binary, for a moment: `--bring-forward <pid>` activates that app and quits.
+    static func bringForwardFromHelper(_ processIdentifier: pid_t) {
+        guard let executable = Bundle.main.executableURL else { return }
+        let helper = Process()
+        helper.executableURL = executable
+        helper.arguments = ["--bring-forward", String(processIdentifier)]
+        try? helper.run()
+    }
+
     /// What was in front before Theo opened or touched something, so it can be put back.
     struct FrontmostSnapshot {
         let application: NSRunningApplication?
@@ -197,17 +206,29 @@ enum BackgroundInput {
         func restore(ifStolenBy touchedProcessIdentifiers: [pid_t]) {
             if let opened = touchedProcessIdentifiers.last { BackgroundInput.lastTheoApp = opened }
             guard let previous = application, !previous.isTerminated else { return }
+            // Theo's own window never belongs in front because of an action.
+            let touched = touchedProcessIdentifiers + [getpid()]
+            let startedAt = Date()
             Task { @MainActor in
-                for delay in [0.25, 0.6, 1.2, 2.4] as [Double] {
+                // A browser starting cold can take the front several seconds later.
+                for delay in [0.25, 0.6, 1.2, 2.4, 3.5] as [Double] {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     guard let current = NSWorkspace.shared.frontmostApplication, !previous.isTerminated else { return }
                     // The owner moved on to some other app themselves: leave it.
-                    if current.processIdentifier != previous.processIdentifier && !touchedProcessIdentifiers.contains(current.processIdentifier) { return }
-                    // The owner clicked or typed since: whatever is in front now is their choice.
-                    if CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!) < delay { return }
+                    if current.processIdentifier != previous.processIdentifier && !touched.contains(current.processIdentifier) { return }
+                    // The owner clicked or typed since: whatever is in front now is their choice. Moving the mouse isn't a choice.
+                    if Self.ownerClickedOrTyped(since: startedAt) { return }
                     guard current.processIdentifier != previous.processIdentifier else { continue }
-                    previous.activate(options: [])
+                    // macOS can refuse this from an app that's been in the background a while, but not from a fresh process.
+                    if !previous.activate(options: []) { BackgroundInput.bringForwardFromHelper(previous.processIdentifier) }
                 }
+            }
+        }
+
+        private static func ownerClickedOrTyped(since date: Date) -> Bool {
+            let elapsed = Date().timeIntervalSince(date)
+            return [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown].contains {
+                CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) < elapsed
             }
         }
     }

@@ -21,6 +21,12 @@ struct TheoApp: App {
         UserDefaults.standard.set(true, forKey: "NSDisabledDictationMenuItem")
         UserDefaults.standard.set(true, forKey: "NSDisabledCharacterPaletteMenuItem")
         if CommandLine.arguments.contains("--mcp") { ClaudiaMCPServer.runForever() }
+        // A moment's helper: hands the owner's focus back when the running app is refused (BackgroundInput).
+        if let flag = CommandLine.arguments.firstIndex(of: "--bring-forward"), CommandLine.arguments.count > flag + 1,
+           let processIdentifier = pid_t(CommandLine.arguments[flag + 1]) {
+            NSRunningApplication(processIdentifier: processIdentifier)?.activate(options: [])
+            exit(0)
+        }
     }
 
     var body: some Scene {

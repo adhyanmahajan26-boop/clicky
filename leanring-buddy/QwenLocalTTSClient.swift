@@ -117,7 +117,7 @@ final class QwenLocalTTSClient {
                     let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                     throw QwenLocalTTSError(message: "Qwen voice server answered with status \(statusCode)")
                 }
-                return responseData
+                return QwenTuning.trimmingLeadingSilence(wav: responseData)
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(watchdog * 1_000_000_000))

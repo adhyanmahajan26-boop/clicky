@@ -88,6 +88,35 @@ public enum QwenTuning {
     /// The JSON body for one segment. With a reference clip (base64 WAV) the
     /// Base model clones that one voice for every segment; the `speaker` and
     /// `instruct` fields are never sent (mlx-serve ignores them).
+    /// The server's WAV (16-bit PCM) can open with most of a second of nothing, which the owner hears as a slow answer.
+    /// Keeps a short lead-in before the first sound. Anything that isn't plain PCM comes back untouched.
+    public static func trimmingLeadingSilence(wav: Data, threshold: Int16 = 300, leadInSeconds: Double = 0.05) -> Data {
+        let bytes = [UInt8](wav)
+        guard bytes.count > 44, bytes[0...3] == [0x52, 0x49, 0x46, 0x46], bytes[12...15] == [0x66, 0x6D, 0x74, 0x20],
+              bytes[20] == 1, bytes[34] == 16, bytes[36...39] == [0x64, 0x61, 0x74, 0x61] else { return wav }
+        let channels = Int(bytes[22]) | Int(bytes[23]) << 8
+        let sampleRate = Int(bytes[24]) | Int(bytes[25]) << 8 | Int(bytes[26]) << 16 | Int(bytes[27]) << 24
+        let blockSize = channels * 2
+        guard blockSize > 0, sampleRate > 0 else { return wav }
+        var firstSound = 44
+        while firstSound + 1 < bytes.count {
+            let sample = Int16(bitPattern: UInt16(bytes[firstSound]) | UInt16(bytes[firstSound + 1]) << 8)
+            if abs(Int(sample)) > Int(threshold) { break }
+            firstSound += 2
+        }
+        guard firstSound + 1 < bytes.count else { return wav }
+        let leadIn = Int(Double(sampleRate) * leadInSeconds) * blockSize
+        let keepFrom = 44 + max(0, (firstSound - 44 - leadIn) / blockSize * blockSize)
+        guard keepFrom > 44 else { return wav }
+        var result = Array(bytes[0..<44]) + bytes[keepFrom...]
+        let dataSize = UInt32(result.count - 44), riffSize = UInt32(result.count - 8)
+        for offset in 0..<4 {
+            result[4 + offset] = UInt8(truncatingIfNeeded: riffSize >> (8 * offset))
+            result[40 + offset] = UInt8(truncatingIfNeeded: dataSize >> (8 * offset))
+        }
+        return Data(result)
+    }
+
     public static func requestBody(model: String, speech: String, referenceClipBase64: String?) -> [String: Any] {
         let ttsText = Lexicon.apply(speech)
         var body: [String: Any] = [

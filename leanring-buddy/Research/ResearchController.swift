@@ -108,7 +108,17 @@ final class ResearchController: CompanionActivitySource {
                         self.lastStatus["topic"] = "Links from \(pageName.prefix(50))"
                     }
                     agentsCenter.log(parentAgentID, "picked \(picked.count) of \(screenPage.candidates.count) visible links (\(screenPage.pickMethod))")
-                    for url in await Self.throughRedirects(picked) where !urls.contains(url) && urls.count < count { urls.append(url) }
+                    for url in picked where !urls.contains(url) && urls.count < count { urls.append(url) }
+                    // A picker that came up short: the next links on screen make up the number.
+                    if urls.count < count {
+                        for candidate in ResearchLinkPicker.heuristicPick(screenPage.candidates, count: screenPage.candidates.count, pageURL: screenPage.pageURL)
+                        where !urls.contains(candidate.url) && urls.count < count { urls.append(candidate.url) }
+                    }
+                    // Chrome only shows part of a long results page to the outside: the same search makes up the rest.
+                    if urls.count < count, let pageURL = screenPage.pageURL, ResearchURLPolicy.isSearchEngine(pageURL),
+                       let query = URLComponents(url: pageURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "q" })?.value {
+                        for url in await Self.searchResults(for: query, maximum: count + 2) where !urls.contains(url) && urls.count < count { urls.append(url) }
+                    }
                 }
             case .topic(let text):
                 urls += await Self.searchResults(for: text, maximum: 3)
@@ -259,12 +269,23 @@ final class ResearchController: CompanionActivitySource {
 
     static func visibleLinksOnScreen(allowsLocalHostForTests: Bool) async -> ScreenLinks? {
         guard let target = ArticleReader.findArticleWindow(), let window = target.windowElement else { return nil }
+        await BackgroundWebTree.waitUntilBuilt()
         // Walking a big page takes a while, so it stays off the main thread.
         let unchecked = UncheckedAXElement(element: window)
-        let (candidates, pageURL) = await Task.detached(priority: .userInitiated) {
-            pageLinks(in: unchecked.element, allowsLocalHostForTests: allowsLocalHostForTests)
-        }.value
-        let visible = ResearchLinkPicker.onScreenCandidates(candidates, windowFrame: target.windowFrameCG)
+        func walk() async -> ([ResearchLinkCandidate], URL?) {
+            await Task.detached(priority: .userInitiated) {
+                pageLinks(in: unchecked.element, allowsLocalHostForTests: allowsLocalHostForTests)
+            }.value
+        }
+        var (candidates, pageURL) = await walk()
+        // Chrome fills in a fresh page's tree while it's being read: walk again until it stops growing.
+        for _ in 0..<2 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let again = await walk()
+            guard again.0.count > candidates.count else { break }
+            (candidates, pageURL) = again
+        }
+        let visible = await resolvingRedirects(ResearchLinkPicker.onScreenCandidates(candidates, windowFrame: target.windowFrameCG))
         print("🔎 Research: \(candidates.count) links in the page, \(visible.count) visible")
         guard !visible.isEmpty else { return nil }
         return ScreenLinks(candidates: visible, windowFrame: target.windowFrameCG,
@@ -272,9 +293,10 @@ final class ResearchController: CompanionActivitySource {
     }
 
     /// Every link in the page, in reading order. A search page runs to tens of thousands of elements, most of them
-    /// pictures and words that can't hold a link, so those are skipped and the walk stops at a time limit, not a count.
+    /// pictures and words that can't hold a link, so those are skipped. This runs in the background, so the time limit
+    /// is generous: stopping early would leave out the results under a long AI answer.
     nonisolated private static func pageLinks(in window: AXUIElement, allowsLocalHostForTests: Bool) -> ([ResearchLinkCandidate], URL?) {
-        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        let deadline = ProcessInfo.processInfo.systemUptime + 12
         let leafRoles: Set<String> = ["AXStaticText", "AXImage", "AXButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXTextArea", "AXPopUpButton"]
         var stack: [AXUIElement] = [window]
         var candidates: [ResearchLinkCandidate] = []
@@ -307,21 +329,31 @@ final class ResearchController: CompanionActivitySource {
     }
 
     /// Google now writes every result as google.com/goto?url=<opaque>: only asking it says where one really goes.
-    static func throughRedirects(_ urls: [URL]) async -> [URL] {
-        await withTaskGroup(of: (Int, URL).self) { group in
-            for (index, url) in urls.enumerated() {
+    /// Done before choosing, so the picker sees real sites and the same page can't be chosen twice.
+    static func resolvingRedirects(_ candidates: [ResearchLinkCandidate]) async -> [ResearchLinkCandidate] {
+        let urls = await withTaskGroup(of: (Int, URL).self) { group in
+            for (index, candidate) in candidates.enumerated() {
                 group.addTask {
-                    guard ResearchLinkPicker.isOpaqueRedirect(url) else { return (index, url) }
-                    var request = URLRequest(url: url, timeoutInterval: 10)
+                    guard ResearchLinkPicker.isOpaqueRedirect(candidate.url) else { return (index, candidate.url) }
+                    var request = URLRequest(url: candidate.url, timeoutInterval: 10)
                     request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36", forHTTPHeaderField: "User-Agent")
-                    // The headers are enough: by then the redirects have been followed.
+                    // The headers are enough: by then the redirects have been followed. A site that refuses us still says where it is.
                     let final = (try? await URLSession.shared.bytes(for: request))?.1.url
-                    return (index, final ?? url)
+                    return (index, final ?? candidate.url)
                 }
             }
             var resolved: [(Int, URL)] = []
             for await item in group { resolved.append(item) }
-            return resolved.sorted { $0.0 < $1.0 }.map(\.1).filter { !ResearchURLPolicy.isSearchEngine($0) }
+            return resolved.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        var seen = Set<URL>()
+        return zip(candidates, urls).compactMap { candidate, url in
+            // Google's links can carry a "#:~:text=" highlight: it's the same page.
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.fragment = nil
+            let page = components?.url ?? url
+            guard !ResearchURLPolicy.isSearchEngine(page), seen.insert(page).inserted else { return nil }
+            return ResearchLinkCandidate(url: page, text: candidate.text, frame: candidate.frame)
         }
     }
 

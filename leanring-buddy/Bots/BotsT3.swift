@@ -62,6 +62,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     var tests: String?
     /// Why there's no pull request, when one was expected.
     var pullRequestProblem: String?
+    /// The agent's own report, for "Show the agent's report" on the result card.
+    var fullReport: String?
+    /// How far the wrap-up has got: "tests", "push" or "pr". Only for the live card.
+    var stage: String?
     /// Stopped by the owner, so the report doesn't call it a failure.
     var stoppedByOwner: Bool?
     /// What it was asked, so a failed run can try again on another harness.
@@ -422,7 +426,7 @@ enum BotsT3 {
 
     /// Everything the room hears when a run ends: the agent's report in words, with the facts on the run itself for its
     /// result card: files changed, Theo's own test run, the commit, the pushed branch and the draft PR.
-    static func report(for run: inout T3Run, state: ThreadState) async -> String {
+    static func report(for run: inout T3Run, state: ThreadState, onStage: ((String) -> Void)? = nil) async -> String {
         let folder = URL(fileURLWithPath: state.worktree ?? run.worktree ?? run.folder, isDirectory: true)
         let minutes = max(1, Int((Date().timeIntervalSince(run.startedAt) / 60).rounded()))
         let stopped = run.stoppedByOwner == true
@@ -455,9 +459,15 @@ enum BotsT3 {
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
             : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
         if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-            lines.append(trimmedSummary(summary))
+            // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card.
+            let first = summary.components(separatedBy: "\n\n").first ?? summary
+            lines.append(first.count > 500 ? String(first.prefix(500)) + "…" : first)
+            run.fullReport = trimmedSummary(summary)
         }
-        if !failed, !stopped, run.repo == nil || state.worktree != nil || run.worktree != nil { run.tests = await runTests(in: folder) }
+        if !failed, !stopped, run.repo == nil || state.worktree != nil || run.worktree != nil {
+            onStage?("tests")
+            run.tests = await runTests(in: folder)
+        }
 
         var problems: [String] = []
         if !stopped {
@@ -472,8 +482,9 @@ enum BotsT3 {
                 } else if let secret = changed.first(where: { looksLikeSecret($0.path) }) {
                     problems.append("Theo didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
                 } else {
+                    onStage?("push")
                     let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.baseCommit, baseBranch: run.baseBranch,
-                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
+                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel, onStage: onStage)
                     run.pullRequest = outcome.url ?? run.pullRequest
                     if let problem = outcome.problem { problems.append(problem) }
                 }
@@ -481,7 +492,6 @@ enum BotsT3 {
         }
         if !leftOut.isEmpty { problems.append("Left out of the commit, because they look like secrets: \(leftOut.joined(separator: ", ")).") }
         run.pullRequestProblem = problems.isEmpty ? nil : problems.joined(separator: " ")
-        if !failed && !stopped { lines.append("Write @code with a change and it goes to \(engine) on the same branch\(run.pullRequest == nil ? "" : " and pull request").") }
         return lines.joined(separator: "\n\n")
     }
 
@@ -601,7 +611,7 @@ enum BotsT3 {
     /// Pushes the run's branch and, the first time, opens a draft PR, when the repo lives on GitHub. A follow-up only
     /// pushes: the same pull request picks it up.
     private static func publish(in folder: URL, branch: String, title: String, existing: String?, base: String?, baseBranch: String?, body: String,
-                                engine: String, model: String) async -> (url: String?, problem: String?) {
+                                engine: String, model: String, onStage: ((String) -> Void)? = nil) async -> (url: String?, problem: String?) {
         guard let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder), remote.contains("github.com") else {
             return (nil, "This repo has no GitHub remote, so the work stays on the local branch.")
         }
@@ -617,6 +627,7 @@ enum BotsT3 {
             return (existing, "Couldn't push: \(error.localizedDescription.suffix(200))")
         }
         if let existing { return (existing, nil) }
+        onStage?("pr")
         guard let gh else { return (nil, "The branch is pushed, but GitHub's gh command isn't installed, so there's no pull request.") }
         var arguments = ["pr", "create", "--draft", "--head", branch, "--title", title,
                          "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"]

@@ -442,9 +442,20 @@ enum TheoUIDriver {
         case "uiTree":
             let roles = (command["roles"] as? [String]).map(Set.init)
             respond(true, tree(target!, roles: roles), nil)
+        case "uiPointer":
+            // {on}: a pointer on screen that glides to each click, for recording the test profile. The real one stays put.
+            DemoPointer.isOn = command["on"] as? Bool ?? true
+            if !DemoPointer.isOn { DemoPointer.hide() }
+            respond(true, ["on": DemoPointer.isOn], nil)
+        case "uiGlide":
+            let (window, at) = (target!, point())
+            DemoPointer.glide(in: window, to: at) { respond(true, nil, nil) }
         case "uiClick":
-            click(target!, at: point(), count: command["count"] as? Int ?? 1)
-            settle { respond(true, state(), nil) }
+            let (window, at, count) = (target!, point(), command["count"] as? Int ?? 1)
+            DemoPointer.glide(in: window, to: at) {
+                click(window, at: at, count: count)
+                settle { respond(true, state(), nil) }
+            }
         case "uiClickPost":
             postClick(target!, at: point())
             settle { respond(true, state(), nil) }
@@ -503,5 +514,45 @@ enum TheoUIDriver {
     /// Gives SwiftUI a moment to apply what the event changed.
     private static func settle(_ then: @escaping @MainActor () -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { MainActor.assumeIsolated { then() } }
+    }
+}
+
+/// The pointer in recordings of the test profile, since its clicks don't move the real one.
+@MainActor
+enum DemoPointer {
+    static var isOn = false
+    private static var panel: NSPanel?
+
+    static func hide() {
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    static func glide(in window: NSWindow, to topPoint: CGPoint, then completion: @escaping @MainActor () -> Void) {
+        guard isOn, let image = NSCursor.arrow.image.copy() as? NSImage else {
+            completion()
+            return
+        }
+        let size = NSSize(width: 26, height: 36)
+        let tip = NSPoint(x: window.frame.minX + topPoint.x - 4, y: window.frame.maxY - topPoint.y - size.height + 4)
+        let pointer = panel ?? {
+            let start = NSRect(origin: NSPoint(x: tip.x + 120, y: tip.y - 90), size: size)
+            let new = NSPanel(contentRect: start, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            new.isOpaque = false
+            new.backgroundColor = .clear
+            new.hasShadow = false
+            new.ignoresMouseEvents = true
+            new.level = .popUpMenu
+            image.size = size
+            new.contentView = NSImageView(image: image)
+            new.orderFrontRegardless()
+            panel = new
+            return new
+        }()
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.4
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pointer.animator().setFrameOrigin(tip)
+        }, completionHandler: { Task { @MainActor in completion() } })
     }
 }

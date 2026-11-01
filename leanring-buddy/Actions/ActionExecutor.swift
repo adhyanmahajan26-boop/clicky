@@ -473,9 +473,13 @@ final class ActionExecutor {
                 opener.arguments = (background ? ["-g"] : []) + ["-na", browserApplicationURL.path, "--args", "--new-window", url.absoluteString]
                 if (try? opener.run()) != nil {
                     opener.waitUntilExit()
-                    let browser = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first
+                    // Two copies can be running (another Chrome profile): the new window is in the one in front, else the newest.
+                    let browsers = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+                    let browser = browsers.first(where: \.isActive) ?? browsers.max { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }
                     ClaudiaScreen.moveFrontWindow(of: browser)
-                    if background, let browser { frontmostBefore.restore(ifStolenBy: [browser.processIdentifier]) }
+                    if background, let browser {
+                        frontmostBefore.restore(ifStolenBy: browsers.map(\.processIdentifier).filter { $0 != browser.processIdentifier } + [browser.processIdentifier])
+                    }
                     BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
                     return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Theo's screen"), nil)
                 }

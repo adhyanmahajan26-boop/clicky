@@ -10,6 +10,7 @@
 //
 
 import Combine
+import ClickyCore
 import Foundation
 
 struct NativeBot: Codable, Identifiable, Equatable {
@@ -80,6 +81,8 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     var at: Date = Date()
     /// A T3 Code run this message reports on (its result card shows under it).
     var runID: String?
+    /// "settings": the bot's settings card shows under it.
+    var card: String?
 }
 
 /// A group of bots with a head who leads its group chat: the head hands the work out with @Name and
@@ -288,6 +291,10 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: botID)
             return
         }
+        if let intent = BotSettingsIntent.parse(command ?? text) {
+            answerWithSettings(intent, bot: bot)
+            return
+        }
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
@@ -295,6 +302,51 @@ final class BotsStore: ObservableObject {
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }
+    }
+
+    /// "Switch to haiku", "what model are you on": no reply to read, a card to use. Applies what the message names first.
+    private func answerWithSettings(_ intent: BotSettingsIntent, bot original: NativeBot) {
+        var bot = original
+        var said = "Here's how I'm set up. Change anything right here, and it applies from my next reply."
+        if let engine = intent.engine {
+            let status = HarnessCenter.shared.status(for: engine)
+            let label = HarnessCatalog.label(engine)
+            if !status.installed {
+                said = "\(label) isn't installed on this Mac yet. You can install it from Settings, Harnesses, or pick another engine here."
+            } else if status.loggedIn == false {
+                said = "\(label) isn't signed in yet. You can sign in from Settings, Harnesses, or pick another engine here."
+            } else {
+                bot.provider = engine
+                bot.model = BotModels.startingModel(for: engine)
+                bot.effort = HarnessPrefs.defaultEffort(engine)
+                said = "Done. I'm on **\(label)** now, from my next reply."
+            }
+        } else if let model = intent.model {
+            if let id = BotModels.list(for: bot).first(where: { $0.lowercased().contains(model) }) {
+                bot.model = id
+                said = "Done. I'm on **\(BotModels.label(id, on: bot.provider))** now, from my next reply."
+            } else {
+                said = "\(HarnessCatalog.label(bot.provider)) doesn't have \(model.capitalized). Pick another model or engine here."
+            }
+        } else if let effort = intent.effort {
+            bot.effort = effort
+            said = "Done. My effort is **\(effort)** now, from my next reply."
+        } else if let thinking = intent.thinking {
+            bot.thinking = thinking
+            said = "Done. Thinking is **\(thinking ? "on" : "off")**, from my next reply."
+        } else if let fast = intent.fast {
+            bot.fast = fast
+            said = "Done. Fast mode is **\(fast ? "on" : "off")**, from my next reply."
+        }
+        if bot != original { save(bot) }
+        post(BotChatMessage(author: bot.id, text: said, card: "settings"), to: bot.id)
+    }
+
+    /// A change typed into a run's card: in the chat as the owner's own message, then to the run's agent.
+    func sendFollowup(_ text: String, on run: T3Run) {
+        let room = run.room ?? Self.teamID
+        post(BotChatMessage(author: "user", text: text), to: room)
+        sendToCoder(text, room: room)
     }
 
     /// Posts to the Project room.
@@ -514,7 +566,7 @@ final class BotsStore: ObservableObject {
         if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
         Task { [weak self] in
             let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
-            let report = await BotsT3.report(for: &run, state: state)
+            let report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
             run.phase = "failed"
             run.finishedAt = Date()
             self?.upsert(run)
@@ -544,9 +596,9 @@ final class BotsStore: ObservableObject {
                 self.upsert(run)
                 let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
                     ?? (repo.map { "your folder \($0.lastPathComponent)" } ?? "a new project in ~/Projects/\(URL(fileURLWithPath: run.folder).lastPathComponent)")
-                self.post(BotChatMessage(author: theo.id, text: "Submitted to \(run.harness.map(HarnessCatalog.label) ?? "T3 Code"): **\(title)**, \(place). " +
-                    "It's coding it on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
-                    (run.effort.map { " at \($0) effort" } ?? "") + ". I'll post the result here when it's done."), to: room)
+                self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is with \(run.harness.map(HarnessCatalog.label) ?? "T3 Code"), \(place). " +
+                    "It's coding on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
+                    (run.effort.flatMap { $0 == "default" ? nil : " at \($0) effort" } ?? "") + ". You can follow along here, and I'll post the result when it's done."), to: room)
                 self.track(run.id)
             } catch {
                 self?.submitting = false
@@ -632,13 +684,13 @@ final class BotsStore: ObservableObject {
                     if askedAbout != state.lastMessage {
                         askedAbout = state.lastMessage
                         self.postFromTheo("The coding agent on **\(run.title)** is waiting for an answer:\n\n" +
-                                          "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nReply with @code and your answer.", room: run.room)
+                                          "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nAnswer on its card.", room: run.room)
                     }
                 } else if !state.busy && (BotsT3.endedStatuses.contains(state.status) || state.status == "idle") {
                     // Tests and the push can take minutes: the card says so and Stop goes away meanwhile.
                     run.phase = "reporting"
                     self.upsert(run)
-                    let report = await BotsT3.report(for: &run, state: state)
+                    let report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
                     run.phase = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status) ? "failed" : "done"
                     run.finishedAt = Date()
                     self.upsert(run)
@@ -660,6 +712,12 @@ final class BotsStore: ObservableObject {
         let room = room ?? runID.flatMap { id in t3Runs.first { $0.id == id }?.room } ?? Self.teamID
         guard let speaker = speaker(for: room) else { return }
         post(BotChatMessage(author: speaker.id, text: text, runID: runID), to: room)
+    }
+
+    /// How far along the wrap-up is, for the run's card.
+    private func setStage(_ stage: String, runID: String) {
+        guard let index = t3Runs.firstIndex(where: { $0.id == runID }) else { return }
+        t3Runs[index].stage = stage
     }
 
     private func upsert(_ run: T3Run) {

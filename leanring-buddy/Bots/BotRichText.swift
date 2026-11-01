@@ -346,7 +346,14 @@ struct BotMessageActions: View {
 struct T3ResultCard: View {
     let run: T3Run
     @State private var showsAllFiles = false
+    @State private var showsTerminal = false
+    @State private var showsReport = false
+    @ObservedObject private var terminals = TerminalSessions.shared
+    @ObservedObject private var store = BotsStore.shared
 
+    private var session: TerminalSession? { terminals.session(for: run.id) }
+    private var isLatestInChat: Bool { store.latestRun(in: run.room ?? BotsStore.teamID)?.id == run.id }
+    private var pullRequestNumber: String? { run.pullRequest?.split(separator: "/").last.map { "#\($0)" } }
     private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
     private var isStopped: Bool { run.stoppedByOwner == true }
     private var files: [RunFileChange] { run.changedFiles ?? [] }
@@ -365,6 +372,7 @@ struct T3ResultCard: View {
                 StatusPill(text: isStopped ? "Stopped" : run.phase == "failed" ? "Failed" : run.pullRequest != nil ? "Draft PR" : "Done",
                            tone: isStopped ? .neutral : run.phase == "failed" ? .bad : .good)
             }
+            if !isStopped, run.phase != "failed", run.branch != nil || run.pullRequest != nil { doneSteps }
             if !files.isEmpty { fileList }
             if let tests = run.tests {
                 HStack(alignment: .top, spacing: 6) {
@@ -381,12 +389,17 @@ struct T3ResultCard: View {
             }
             HStack(spacing: 6) {
                 if let pr = run.pullRequest, let url = URL(string: pr) {
-                    Button { NSWorkspace.shared.open(url) } label: { Label("Open PR", systemImage: "arrow.triangle.pull") }.buttonStyle(.theo(.primary, .small))
+                    Button { NSWorkspace.shared.open(url) } label: { Label("Open PR \(pullRequestNumber ?? "")", systemImage: "arrow.triangle.pull") }.buttonStyle(.theo(.primary, .small))
                 }
-                Button { BotsT3.openInApp(run) } label: {
-                    Label(run.harness == nil ? "Open in T3" : run.harness == CursorCloud.harnessID ? "Open in Cursor" : "Open terminal", systemImage: run.harness == nil ? "arrow.up.forward.app" : "terminal")
+                if session != nil {
+                    Button { withAnimation(DS.Motion.hover) { showsTerminal.toggle() } } label: { Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal") }
+                        .buttonStyle(.theo(.secondary, .small))
+                } else {
+                    Button { BotsT3.openInApp(run) } label: {
+                        Label(run.harness == nil ? "Open in T3" : run.harness == CursorCloud.harnessID ? "Open in Cursor" : "Show terminal", systemImage: run.harness == nil ? "arrow.up.forward.app" : "terminal")
+                    }
+                    .buttonStyle(.theo(.secondary, .small))
                 }
-                .buttonStyle(.theo(.secondary, .small))
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.worktree ?? run.folder)])
                 } label: { Label("Open folder", systemImage: "folder") }.buttonStyle(.theo(.secondary, .small))
@@ -407,10 +420,46 @@ struct T3ResultCard: View {
                         .menuStyle(.borderlessButton).fixedSize()
                 }
             }
+            if showsTerminal, let session {
+                TerminalPanel(session: session)
+                    .frame(height: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            }
+            if let report = run.fullReport, report.count > 60 {
+                Button { withAnimation(DS.Motion.hover) { showsReport.toggle() } } label: {
+                    Label(showsReport ? "Hide the agent's report" : "Show the agent's report", systemImage: showsReport ? "chevron.up" : "chevron.down")
+                }
+                .buttonStyle(.theo(.ghost, .small))
+                if showsReport { BotRichText(text: report).font(.system(size: 13)) }
+            }
+            if isLatestInChat, run.phase == "done" || isStopped {
+                RunFollowupBox(run: run, placeholder: isStopped ? "Carry on, or ask for something else" : "Ask for a change")
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+    }
+
+    /// What Theo did after the agent finished, at a glance.
+    private var doneSteps: some View {
+        HStack(spacing: 6) {
+            if let tests = run.tests, tests.hasPrefix("passed") { doneChip("Tests passed") }
+            if run.pullRequest != nil { doneChip("Saved and pushed") }
+            if let number = pullRequestNumber { doneChip("Draft pull request \(number)") }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func doneChip(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+            Text(text).font(.system(size: 11.5, weight: .medium))
+        }
+        .foregroundColor(DS.Colors.successText)
+        .padding(.horizontal, 8).frame(height: 22)
+        .background(Capsule().fill(DS.Colors.success.opacity(0.12)))
     }
 
     private var detailLine: String {
