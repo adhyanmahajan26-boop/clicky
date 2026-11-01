@@ -46,7 +46,7 @@ enum HarnessCoding {
             args += ["-c", "check_for_update_on_startup=false", "--sandbox", "workspace-write", "-a", "never", "-C", folder]
         case "cursor":
             if let model { args += ["--model", model] }
-            args += ["--workspace", folder, "--force"]
+            args += ["--workspace", folder, "--force", "--trust"]
         case "opencode":
             if let model { args += ["-m", model] }
             args += ["--auto", folder]
@@ -134,12 +134,18 @@ enum HarnessCoding {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
-        let model = HarnessPrefs.codingModel ?? HarnessPrefs.defaultModel(harness)
+        let model = HarnessPrefs.codingModel ?? HarnessPrefs.defaultModel(harness) ?? (harness == "codex" ? codexPlanModel() : nil)
         let effort = HarnessPrefs.codingEffort ?? HarnessPrefs.defaultEffort(harness)
         let git = BotsT3.git
         var run: T3Run
         let workdir: URL
-        if let repo {
+        var plainFolder = false
+        if let repo, !BotsT3.isGitRepo(repo) {
+            // A plain folder: the work happens right there, with no branch and nothing added to it.
+            plainFolder = true
+            workdir = repo
+            run = T3Run(id: "", title: title, folder: repo.path)
+        } else if let repo {
             // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -161,7 +167,12 @@ enum HarnessCoding {
         run.harness = harness
         run.model = model ?? HarnessCatalog.label(harness)
         run.effort = effort ?? "default"
-        let message = prompt + BotsT3.deliveryNote
+        var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
+        if let branch = run.branch, let repo {
+            // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
+            message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +
+                "Do all the work and commit here. Don't cd to \(repo.path) or change it, and don't switch branches.\n\n" + message
+        }
 
         if useTmux, let tmux {
             let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
@@ -176,11 +187,27 @@ enum HarnessCoding {
             run.id = terminal.id
             await deliver(message, to: terminal)
             PaneWatch.reset(terminal.id)
+            PaneWatch.delivered(terminal.id)
         } else {
             run.id = "headless:\(UUID().uuidString.lowercased())"
             startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: workdir, prompt: message)
         }
         return run
+    }
+
+    /// Codex's config can name a model the signed-in plan can't use, and the run then dies at once. With no model
+    /// picked in Theo, that one is swapped for the first model the plan lists.
+    static func codexPlanModel() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        guard let data = try? Data(contentsOf: home.appendingPathComponent(".codex/models_cache.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = object["models"] as? [[String: Any]] else { return nil }
+        let listed = models.filter { $0["visibility"] as? String == "list" }.compactMap { $0["slug"] as? String }
+        let config = (try? String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8)) ?? ""
+        let configured = config.split(separator: "\n").first { $0.hasPrefix("model =") || $0.hasPrefix("model=") }
+            .map { $0.split(separator: "=", maxSplits: 1)[1].trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
+        if let configured, listed.contains(configured) { return nil }
+        return listed.first
     }
 
     // MARK: In-app terminal
@@ -189,8 +216,11 @@ enum HarnessCoding {
     private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String) async -> TerminalSession? {
         let id = "term:\(UUID().uuidString.lowercased())"
         let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path)
+        // No self-updates mid-run: OpenCode's update dialog swallowed the prompt.
+        var environment = TerminalSession.defaultEnvironment()
+        environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
-                                             arguments: args, environment: nil, workingDirectory: folder.path)
+                                             arguments: args, environment: environment, workingDirectory: folder.path)
     }
 
     /// Waits for the TUI to settle (answering a folder-trust question on the way), then pastes the text and presses Return.
@@ -211,6 +241,12 @@ enum HarnessCoding {
                     stable = 0
                     continue
                 }
+                // A dialog over the composer (OpenCode's "Update Complete") would swallow the prompt.
+                if screen.range(of: #"(?i)update complete|restart the application"#, options: .regularExpression) != nil {
+                    terminal.sendRaw("\u{1B}")
+                    stable = 0
+                    continue
+                }
                 break
             }
         }
@@ -218,6 +254,19 @@ enum HarnessCoding {
         let final = terminal.screenText()
         if Self.isQuestionScreen(final) { return }
         await terminal.send(text: text)
+        // Some TUIs (Codex) read the Return right after a paste as part of the paste, and the prompt sits unsent.
+        for _ in 0..<3 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard terminal.isRunning, !looksBusy(terminal.screenText()) else { return }
+            terminal.pressEnter()
+        }
+    }
+
+    /// Busy signs of each harness's TUI: a spinner line, "esc to interrupt", "generating".
+    static func looksBusy(_ pane: String) -> Bool {
+        let tail = pane.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).joined(separator: "\n")
+        return tail.range(of: #"(?i)esc.{0,6}interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|generating…|running tool|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
+                          options: .regularExpression) != nil
     }
 
     /// The folder is one Theo made (or the repo Addy named) for this run, so a "trust this folder?" screen is
@@ -227,6 +276,13 @@ enum HarnessCoding {
     static func answerTrustScreen(_ screen: String, terminal: TerminalSession) -> Bool {
         guard screen.range(of: #"(?i)do you trust|trust (this|the) (folder|directory|workspace)|you created or one you trust|allow .* to work in this folder"#,
                            options: .regularExpression) != nil else { return false }
+        // Cursor's screen takes a key: "[a] Trust this workspace".
+        if screen.contains("[a] Trust") {
+            terminal.sendRaw("a")
+            // Once only: its screen is slow to go, and more presses would type into the composer.
+            Thread.sleep(forTimeInterval: 3)
+            return true
+        }
         let lines = screen.components(separatedBy: "\n")
         let options = lines.enumerated().filter { $0.element.range(of: #"^\s*(❯|>|›|\d\.|\s)\s*\S"#, options: .regularExpression) != nil
             && $0.element.range(of: #"(?i)\b(yes|no|trust|exit|quit|cancel)\b"#, options: .regularExpression) != nil }
@@ -348,7 +404,24 @@ enum HarnessCoding {
     private final class PaneWatch: @unchecked Sendable {
         private static let lock = NSLock()
         private static var watches: [String: (hash: Int, since: Date)] = [:]
-        static func reset(_ session: String) { lock.withLock { watches[session] = nil } }
+        static func reset(_ session: String) { lock.withLock { watches[session] = nil; seen[session] = [] } }
+
+        /// Screens seen since the prompt went in, and whether it ever looked busy: a run that shows neither
+        /// never started, however quiet its screen is.
+        private static var seen: [String: Set<Int>] = [:]
+        private static var busy: Set<String> = []
+        private static var tracked: Set<String> = []
+        static func delivered(_ session: String) { lock.withLock { _ = tracked.insert(session) } }
+        static func note(_ session: String, hash: Int, busy isBusy: Bool) {
+            lock.withLock {
+                seen[session, default: []].insert(hash)
+                if isBusy { busy.insert(session) }
+            }
+        }
+        /// Only for runs started this launch; anything older gets the benefit of the doubt.
+        static func neverStarted(_ session: String) -> Bool {
+            lock.withLock { tracked.contains(session) && !busy.contains(session) && (seen[session]?.count ?? 0) < 4 }
+        }
         /// Seconds the pane has been unchanged.
         static func unchangedSeconds(_ session: String, hash: Int) -> TimeInterval {
             lock.withLock {
@@ -417,9 +490,8 @@ enum HarnessCoding {
     /// Working / waiting / finished from what the screen shows, shared by the terminal and tmux paths.
     private static func evaluate(_ run: T3Run, pane: String, unchanged: TimeInterval) -> BotsT3.ThreadState {
         let tail = pane.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).joined(separator: "\n")
-        // Busy signs of each harness's TUI: a spinner line, "esc to interrupt", "thinking", "generating".
-        let working = tail.range(of: #"(?i)esc to interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|generating…|running tool|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
-                                 options: .regularExpression) != nil
+        let working = looksBusy(pane)
+        PaneWatch.note(run.id, hash: pane.hashValue, busy: working)
         let asking = isQuestionScreen(pane)
         if !asking { _ = PaneWatch.askingSeconds(run.id, asking: false) }
         let settled = Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds && !working
@@ -428,6 +500,18 @@ enum HarnessCoding {
             let question = tail.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(6).joined(separator: "\n")
             return BotsT3.ThreadState(status: "waiting", busy: false, waitingForAnswer: true,
                                       lastMessage: "It is asking:\n\n\(question)\n\n(Open \"Watch\" to answer in the terminal.)",
+                                      worktree: run.worktree, pullRequest: nil)
+        }
+        // A plan's limit or a model it can't use: the agent would sit there (OpenCode retries for hours), so say so now.
+        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression) {
+            let line = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
+            return BotsT3.ThreadState(status: "failed", busy: false, waitingForAnswer: false,
+                                      lastMessage: "\(HarnessCatalog.label(run.harness ?? "The agent")) can't run this on your plan: \(line)",
+                                      worktree: run.worktree, pullRequest: nil)
+        }
+        if settled, transcriptSummary(for: run) == nil, PaneWatch.neverStarted(run.id), !workHappened(run, pane: pane) {
+            return BotsT3.ThreadState(status: "waiting", busy: false, waitingForAnswer: true,
+                                      lastMessage: "\(HarnessCatalog.label(run.harness ?? "The agent")) hasn't started on this. Open \"Watch\" to see its screen.",
                                       worktree: run.worktree, pullRequest: nil)
         }
         if settled {
@@ -439,8 +523,39 @@ enum HarnessCoding {
                                   lastMessage: transcriptSummary(for: run), worktree: run.worktree, pullRequest: nil)
     }
 
+    /// Signs a run did its work even if every poll missed it being busy: a finished line, or a new commit or changed file.
+    private static func workHappened(_ run: T3Run, pane: String) -> Bool {
+        if pane.range(of: #"(?i)worked for \d|(crunched|baked|brewed|cooked|churned|sauteed|cogitated) for \d"#, options: .regularExpression) != nil { return true }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = BotsT3.git
+        process.arguments = ["-C", run.worktree ?? run.folder, "status", "--porcelain", "--branch"]
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        let status = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if status.split(separator: "\n").count > 1 { return true }
+        guard let base = run.baseCommit else { return false }
+        let head = Process()
+        let headPipe = Pipe()
+        head.executableURL = BotsT3.git
+        head.arguments = ["-C", run.worktree ?? run.folder, "rev-parse", "HEAD"]
+        head.standardOutput = headPipe
+        head.standardError = Pipe()
+        guard (try? head.run()) != nil else { return false }
+        head.waitUntilExit()
+        let now = String(data: headPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return now != base
+    }
+
     private static func paneSummary(_ pane: String) -> String {
-        let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // The agent's words, without the TUI's frames, status bars and hints.
+        let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$"#
+        let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            line.trimmingCharacters(in: CharacterSet(charactersIn: "│┃╹▀╭╮╰╯─ ")).trimmingCharacters(in: .whitespaces)
+        }
+        .filter { $0.range(of: chrome, options: .regularExpression) == nil }
         return lines.suffix(40).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

@@ -116,7 +116,15 @@ enum BotsT3 {
         return prompt.split(separator: " ").prefix(6).joined(separator: " ")
     }
 
-    /// The git repo the work should go into: a "Repo: <path>" line Theo wrote, else a path in the pitch.
+    /// Whether a folder is a git repo (a run gets its own branch) or a plain folder (the work happens in place).
+    static func isGitRepo(_ folder: URL) -> Bool {
+        FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path)
+    }
+
+    /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
+    static let plainFolderNote = "\n\nThis folder isn't a git repository. Edit the files here and don't run git init or commit."
+
+    /// The folder the work should go into: a "Repo: <path>" line Theo wrote, else a path in the pitch.
     static func targetRepo(answer: String, pitch: String) -> URL? {
         var candidates: [String] = []
         if let line = labeledLine("repo", in: answer) { candidates.append(line) }
@@ -126,7 +134,10 @@ enum BotsT3 {
         }
         for candidate in candidates {
             let path = (candidate.trimmingCharacters(in: CharacterSet(charactersIn: "`.,) ")) as NSString).expandingTildeInPath
-            if FileManager.default.fileExists(atPath: path + "/.git") { return URL(fileURLWithPath: path, isDirectory: true) }
+            var isFolder: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
         }
         return nil
     }
@@ -157,7 +168,13 @@ enum BotsT3 {
         guard let cli else { throw BotsT3Error.noCLI }
         var arguments = ["thread", "start"]
         var run: T3Run
-        if let repo {
+        var plainFolder = false
+        if let repo, !isGitRepo(repo) {
+            plainFolder = true
+            _ = try? await shell(cli, ["project", "add", repo.path])
+            arguments += [repo.path, "-"]
+            run = T3Run(id: "", title: title, folder: repo.path)
+        } else if let repo {
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
             _ = try? await shell(cli, ["project", "add", repo.path])
@@ -174,7 +191,7 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
         }
         arguments += ["--title", title, "--provider", provider, "--model", model, "--json"]
-        let message = prompt + deliveryNote
+        let message = prompt + (plainFolder ? plainFolderNote : deliveryNote)
         let output: String
         do {
             output = try await shell(cli, arguments + ["--effort", effort], stdin: message)
@@ -297,7 +314,7 @@ enum BotsT3 {
 
         // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a
         // repo Addy named that's only safe in the run's own worktree, never the checkout Addy works in.
-        if run.repo == nil || state.worktree != nil {
+        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil {
             try? await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
         }
         let head = run.branch ?? "HEAD"

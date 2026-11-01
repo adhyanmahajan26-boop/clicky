@@ -1389,12 +1389,26 @@ struct T3HandoffButton: View {
             .buttonStyle(.plain)
             .disabled(sent)
             if !sent {
+                Button("Use a project folder…") { chooseFolder() }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
                 Button("Change") { TheoSettingsWindowController.show(section: .coding) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary)
             }
             Spacer()
         }
         .padding(.leading, 38)
+    }
+
+    /// Sends the work into a folder that already exists: a git project gets its own branch, a plain folder is edited in place.
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Use this folder"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let prompt = BotsT3.promptBlock(in: text) ?? text
+        BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), repo: folder, room: room)
+        sentHere = true
     }
 }
 
