@@ -144,7 +144,7 @@ public enum SystemPromptBuilder {
         - #57 — an id from the lists. you may add the centre you see: #57@1203,788 (pixels of that screen's image).
         - #3-#6 — consecutive ids as one box (rows, a group of buttons).
         - "exact text" — text exactly as it appears on screen. "Save"~2 is the second "Save"; "Delete" in #12 searches inside element 12.
-        - x,y or x,y,w,h — raw pixels of the image, only when nothing in the lists fits. add :screen2 at the end for other screens.
+        - x,y or x,y,w,h — raw pixels of the image, only when nothing in the lists fits. pixels belong to one screen's image, so unless that's screen 1, end with which one: [POINT:398,560:Saturn:screen3]. without it the mark lands on screen 1, wherever you were looking.
         - none — when pointing wouldn't help.
         the label is the thing's on-screen name, at most five words. you can add a short note after a |, at most eight words; it shows right beside the mark: [MARK:box:#57:Share|click this first].
         put each tag right after the words it belongs to. use at most nine marks per answer, on the smallest element that fits. if the target is behind another window, say so instead of pointing through it.
@@ -200,7 +200,7 @@ public enum SystemPromptBuilder {
 
         when you point, append a coordinate tag at the very end of your response, AFTER your spoken text. each screenshot comes right after a SCREEN header line that gives its image size in pixels. coordinates are pixels of the image size in that SCREEN header. the origin (0,0) is the top-left corner of the image. x increases rightward, y increases downward.
 
-        format: [POINT:x,y:label] where x,y are integer pixel coordinates in the screenshot's coordinate space, and label is a short 1-3 word description of the element (like "search bar" or "save button"). if the element is on the cursor's screen you can omit the screen number. if the element is on a DIFFERENT screen, append :screenN where N is the screen number from its SCREEN header (e.g. :screen2). this is important — without the screen number, the cursor will point at the wrong place.
+        format: [POINT:x,y:label] where x,y are integer pixel coordinates in the screenshot's coordinate space, and label is a short 1-3 word description of the element (like "search bar" or "save button"). the coordinates belong to one screen's image, so if the element is on any screen but screen 1, add :screenN at the end, like [POINT:400,300:terminal:screen2]. without it the cursor flies to screen 1, even if you were looking at another screen.
 
         if pointing wouldn't help, append [POINT:none].
 
