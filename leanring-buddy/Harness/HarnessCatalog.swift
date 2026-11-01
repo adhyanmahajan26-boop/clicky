@@ -86,8 +86,34 @@ enum HarnessCatalog {
         return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
     }()
 
-    /// Re-read after an install, so a harness installed just now is found without restarting Theo.
-    static var searchDirectories: [String] { _searchDirectories }
+    /// Where to look for a harness: the usual folders and the login shell's PATH, then npm's own global folder, which
+    /// isn't on PATH with pnpm's or nvm's Node (that's where `npm install -g` puts Gemini CLI).
+    static var searchDirectories: [String] {
+        let extra = extraDirectoriesLock.withLock { extraDirectories }
+        return _searchDirectories + extra.filter { !_searchDirectories.contains($0) }
+    }
+    private static let extraDirectoriesLock = NSLock()
+    nonisolated(unsafe) private static var extraDirectories: [String] = []
+
+    /// Asks npm where its global commands go. Runs a command: call off the main thread.
+    static func findNpmGlobalFolder() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "npm config get prefix"]
+        process.environment = childEnvironment()
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 8) { if process.isRunning { process.terminate() } }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let prefix = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard prefix.hasPrefix("/") else { return }
+        extraDirectoriesLock.withLock { if !extraDirectories.contains("\(prefix)/bin") { extraDirectories.append("\(prefix)/bin") } }
+    }
+
     private static let _searchDirectories: [String] = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let fixed = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.grok/bin", "\(home)/.cursor/bin",
@@ -300,8 +326,10 @@ enum HarnessDetector {
             let text = HarnessCatalog.output(of: executable, ["models"], timeout: 15)
             if text.lowercased().contains("logged in") {
                 status.loggedIn = !text.lowercased().contains("not logged in")
-                status.account = text.split(separator: "\n").first { $0.lowercased().contains("logged in") }
-                    .map { $0.replacingOccurrences(of: "You are logged in with ", with: "").trimmingCharacters(in: CharacterSet(charactersIn: ". ")) }
+                if status.loggedIn == true {
+                    status.account = text.split(separator: "\n").first { $0.lowercased().contains("logged in") }
+                        .map { $0.replacingOccurrences(of: "You are logged in with ", with: "").trimmingCharacters(in: CharacterSet(charactersIn: ". ")) }
+                }
             }
         case "opencode":
             let auth = home.appendingPathComponent(".local/share/opencode/auth.json")
@@ -521,7 +549,7 @@ final class HarnessCenter: ObservableObject {
     func recheck(_ harness: String) {
         checking.insert(harness)
         Task.detached(priority: .userInitiated) {
-            _ = HarnessCatalog.searchDirectories
+            HarnessCatalog.findNpmGlobalFolder()
             let status = HarnessDetector.status(for: harness)
             await MainActor.run {
                 self.statuses[harness] = status
@@ -555,6 +583,7 @@ final class HarnessCenter: ObservableObject {
         let cachedCursorAge = HarnessModels.readCache().map { Date().timeIntervalSince($0.fetchedAt) } ?? .infinity
         Task.detached(priority: .utility) {
             _ = HarnessCatalog.searchDirectories // login-shell PATH, once
+            HarnessCatalog.findNpmGlobalFolder()
             let ids = HarnessCatalog.all.map(\.id)
             let found = await withTaskGroup(of: HarnessStatus.self) { group -> [String: HarnessStatus] in
                 for id in ids { group.addTask { HarnessDetector.status(for: id) } }

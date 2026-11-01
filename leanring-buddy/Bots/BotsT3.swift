@@ -229,10 +229,10 @@ enum BotsT3 {
         run.prompt = prompt
         let output: String
         do {
-            output = try await shell(cli, arguments + ["--effort", chosenEffort], stdin: message)
+            output = try await startThread(cli: cli, arguments: arguments + ["--effort", chosenEffort], message: message)
         } catch BotsT3Error.failed(let text) where text.contains("effort") {
             // A T3 Code build from before --effort: start it on the model's default effort.
-            output = try await shell(cli, arguments, stdin: message)
+            output = try await startThread(cli: cli, arguments: arguments, message: message)
         }
         guard let launched = jsonObject(in: output), let threadID = launched["threadId"] as? String else {
             throw BotsT3Error.failed("T3 Code didn't return the new thread: \(output.suffix(200))")
@@ -241,6 +241,41 @@ enum BotsT3 {
         run.link = launched["link"] as? String
         // T3 Code isn't brought forward by itself, since that takes focus from whatever the owner is doing. "Watch" on the card opens it.
         return run
+    }
+
+    /// `t3 thread start`, opening T3 Code first when its server isn't running: hidden and without taking focus, so
+    /// the owner doesn't have to start it by hand and whatever they're doing stays in front.
+    private static func startThread(cli: URL, arguments: [String], message: String) async throws -> String {
+        do {
+            return try await shell(cli, arguments, stdin: message)
+        } catch BotsT3Error.failed(let text) where text.contains("No running T3 Code server") {
+            guard let app = app(forCLI: cli) else { throw BotsT3Error.failed("T3 Code isn't installed. Install it in Settings › Harnesses, or send builds to another harness.") }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            configuration.hides = true
+            // Electron apps bring themselves forward as they start, whatever they're asked: Theo hands focus straight back.
+            let front = await MainActor.run { BackgroundInput.FrontmostSnapshot.capture() }
+            if let started = try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration) {
+                let identifier = started.processIdentifier
+                await MainActor.run { front.restore(ifStolenBy: [identifier]) }
+            }
+            var lastProblem = text
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                do {
+                    return try await shell(cli, arguments, stdin: message)
+                } catch BotsT3Error.failed(let problem) where problem.contains("No running T3 Code server") {
+                    lastProblem = problem
+                }
+            }
+            throw BotsT3Error.failed("T3 Code didn't start in time: \(lastProblem.suffix(160))")
+        }
+    }
+
+    /// The T3 Code app whose data folder a `t3` launcher uses.
+    private static func app(forCLI cli: URL) -> URL? {
+        let names = cli.path.contains(".t3-claudia") ? ["T3 Code Cursor Assistant.app"] : ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code (Alpha).app"]
+        return names.map { URL(fileURLWithPath: "/Applications/\($0)") }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// T3 Code's driver for a model.

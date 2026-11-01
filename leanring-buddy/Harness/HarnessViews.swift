@@ -307,13 +307,15 @@ final class HarnessTerminalModel: ObservableObject {
         if !session.isRunning, phase == .running {
             phase = .exited(session.exitCode ?? -1)
             HarnessCenter.shared.recheck(task.info.id)
-            if task.kind != .signIn { timer?.invalidate() }
+            // Signing out has nothing more to look for. An installer's or a sign-in's exit gets a last look below.
+            if task.kind == .signOut { timer?.invalidate() }
         }
-        guard task.kind == .signIn || task.kind == .install, ticks % 3 == 0, !probing, phase != .succeeded("") else { return }
+        guard task.kind != .signOut, ticks % 3 == 0, !probing else { return }
         probing = true
         let info = task.info
         let kind = task.kind
         Task.detached(priority: .userInitiated) { [weak self] in
+            if kind == .install { HarnessCatalog.findNpmGlobalFolder() }
             let status = HarnessDetector.status(for: info.id)
             await MainActor.run {
                 guard let self else { return }
