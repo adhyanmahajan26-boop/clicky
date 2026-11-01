@@ -43,6 +43,19 @@ public enum ResearchLinkPicker {
         return Array(visible.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }.prefix(maximumCandidates))
     }
 
+    /// What's on screen, topped up with the next links down the page when the screen shows too few:
+    /// a search page's AI overview can fill the whole first screen.
+    public static func onScreenCandidates(_ candidates: [ResearchLinkCandidate], windowFrame: CGRect, wanted: Int = 6) -> [ResearchLinkCandidate] {
+        let visible = visibleCandidates(candidates, windowFrame: windowFrame)
+        guard visible.count < wanted else { return visible }
+        var seen = Set(visible.map { normalizedKey($0.url) })
+        let further = candidates
+            .filter { $0.frame.width >= 8 && $0.frame.height >= 6 && $0.frame.minY >= windowFrame.maxY }
+            .sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
+            .filter { seen.insert(normalizedKey($0.url)).inserted }
+        return visible + further.prefix(wanted * 2)
+    }
+
     /// The prompt for the picking call: the owner's words, the page, and the numbered links.
     public static func pickerPrompt(request: String, count: Int, pageTitle: String?, pageURL: URL?, candidates: [ResearchLinkCandidate], windowFrame: CGRect) -> String {
         var lines: [String] = []
@@ -50,7 +63,7 @@ public enum ResearchLinkPicker {
         lines.append("They want \(count) link\(count == 1 ? "" : "s") from what is visible in their browser window.")
         if let pageTitle, !pageTitle.isEmpty { lines.append("Page title: \(pageTitle)") }
         if let pageURL { lines.append("Page URL: \(pageURL.absoluteString)") }
-        lines.append("Visible links, top to bottom (y = distance from the window's top in points):")
+        lines.append("Links, top to bottom (y = distance from the window's top in points; y over \(Int(windowFrame.height)) is just below what's visible):")
         for (index, candidate) in candidates.enumerated() {
             let text = candidate.text.count > 120 ? String(candidate.text.prefix(119)) + "…" : candidate.text
             let y = Int(candidate.frame.minY - windowFrame.minY)

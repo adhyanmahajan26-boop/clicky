@@ -149,6 +149,8 @@ final class BotsStore: ObservableObject {
         if let data = try? Data(contentsOf: runsFile), let runs = try? Self.decoder.decode([T3Run].self, from: data) {
             t3Runs = runs
         }
+        // A run that was wrapping up when Theo quit goes through its report again; pushing twice is harmless.
+        for index in t3Runs.indices where t3Runs[index].phase == "reporting" { t3Runs[index].phase = "running" }
         for run in t3Runs where run.phase == "running" || run.phase == "waiting" { track(run.id) }
         loadRoutinesAndLayout()
     }
@@ -228,6 +230,7 @@ final class BotsStore: ObservableObject {
         }
         for index in bots.indices { bots[index].canMessage?.removeAll { $0 == id } }
         BotProcesses.shared.stop(id)
+        conversations[id]?.sessions.values.forEach(APIChat.History.forget)
         conversations[id] = nil
         try? FileManager.default.removeItem(at: chatFile(id))
         writeBots()
@@ -256,6 +259,7 @@ final class BotsStore: ObservableObject {
 
     /// Starts a fresh chat with a bot (its engine session starts over too).
     func clearConversation(_ id: String) {
+        conversations[id]?.sessions.values.forEach(APIChat.History.forget)
         conversations[id] = BotConversationRecord()
         writeConversation(id)
     }
@@ -263,7 +267,9 @@ final class BotsStore: ObservableObject {
     // MARK: Talking
 
     /// Sends your message to a bot's own chat and streams its reply in.
-    func send(_ text: String, to botID: String) {
+    /// `command`: what the owner typed, without attachments, which decides whether this is "@code …". A word in an
+    /// attached file doesn't start an agent.
+    func send(_ text: String, command: String? = nil, to botID: String) {
         guard let bot = bot(botID), replying[botID] == nil else { return }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
@@ -274,7 +280,7 @@ final class BotsStore: ObservableObject {
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[botID] = record
         writeConversation(botID)
-        if BotsStore.isCodingCommand(text) {
+        if BotsStore.isCodingCommand(command ?? text) {
             // "@code …" goes straight to a coding agent, in any chat: a change for this chat's latest run,
             // or a new run when there's none or the message names a folder.
             runCommand(text, room: botID)
@@ -296,14 +302,14 @@ final class BotsStore: ObservableObject {
     }
 
     /// Posts to a group chat; tagged bots answer, or the head when nobody is tagged.
-    func sendToGroup(_ text: String, groupID: String) {
+    func sendToGroup(_ text: String, command: String? = nil, groupID: String) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
         var record = conversation(room)
         record.messages.append(BotChatMessage(author: "user", text: text))
         conversations[room] = record
         writeConversation(room)
-        if BotsStore.isCodingCommand(text) {
+        if BotsStore.isCodingCommand(command ?? text) {
             runCommand(text, room: room)
             return
         }
@@ -442,20 +448,33 @@ final class BotsStore: ObservableObject {
             return
         }
         guard let prompt = BotsT3.promptBlock(in: answer) else { return }
-        let wantsBuild = pitch.text.range(of: #"\b(build|submit|send|make|code|t3|pr|pull request|fix|ship|change|update|add|refactor)\b"#,
-                                          options: [.regularExpression, .caseInsensitive]) != nil
-        guard wantsBuild else { return }
+        // Agents run with full access, so only the owner's own words start one by themselves. Anything else gets the card
+        // in the chat, whose Start button asks first.
+        guard BotsStore.ownerAskedToBuild(pitch.text) else { return }
         let repo = BotsT3.targetRepo(answer: answer, pitch: pitch.text)
+        // A folder the owner didn't name could have come from a page the bot read.
+        if let repo, repo.standardizedFileURL != BotsT3.targetRepo(answer: "", pitch: pitch.text)?.standardizedFileURL { return }
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
         if repo == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
         submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room)
     }
 
-    /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between.
+    /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between. As whole words, so @codemirror or
+    /// dev@code.org don't count.
     static func isCodingCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespaces)
-        return lower.hasPrefix("/run ") || lower.contains("@code") || lower.contains("@t3")
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return lower.hasPrefix("/run ") || lower.range(of: codingMention, options: .regularExpression) != nil
+    }
+
+    private static let codingMention = #"(?i)(^|\s)@(code|t3)(?=$|[\s,:;.!?])"#
+
+    /// Asked in so many words to build or change something, as opposed to "make me a prompt" or "update me on this".
+    static func ownerAskedToBuild(_ text: String) -> Bool {
+        if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
+        let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
+        let makeThing = #"(?i)\b(make|create|write|add|change|update)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo)\b"#
+        return text.range(of: direct, options: .regularExpression) != nil || text.range(of: makeThing, options: .regularExpression) != nil
     }
 
     /// Asks to change something that already exists, rather than make something new.
@@ -466,9 +485,15 @@ final class BotsStore: ObservableObject {
     /// Runs an "@code …" message: a follow-up on this chat's latest run, or a new run when it names a folder or there
     /// is no run yet.
     private func runCommand(_ text: String, room: String) {
-        let words = text.replacingOccurrences(of: "@T3", with: "", options: .caseInsensitive).replacingOccurrences(of: "@code", with: "", options: .caseInsensitive)
+        let words = text.replacingOccurrences(of: BotsStore.codingMention, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"^\s*/run\s+"#, with: "", options: [.regularExpression, .caseInsensitive])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else {
+            if let theo = speaker(for: room) {
+                post(BotChatMessage(author: theo.id, text: "Say what to do after @code, like \"@code fix the failing test in ~/Projects/foo\"."), to: room)
+            }
+            return
+        }
         let repo = BotsT3.targetRepo(answer: "", pitch: words)
         if repo == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
@@ -481,6 +506,7 @@ final class BotsStore: ObservableObject {
     func stopRun(_ runID: String) {
         guard var run = t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" else { return }
         run.stoppedByOwner = true
+        run.phase = "reporting"
         upsert(run)
         HarnessCoding.stop(run)
         if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
@@ -502,10 +528,12 @@ final class BotsStore: ObservableObject {
 
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil) {
-        guard let theo = speaker(for: room), !submitting else { return }
-        submitting = true
+        guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         Task { [weak self] in
+            // One at a time: starting takes up to half a minute while the agent's screen settles.
+            while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
+            self?.submitting = true
             do {
                 var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target)
                 run.room = room
@@ -533,12 +561,19 @@ final class BotsStore: ObservableObject {
             }
             return
         }
+        guard run.phase != "reporting" else {
+            post(BotChatMessage(author: theo.id, text: "**\(run.title)** is wrapping up: tests, commit and push. Send that again in a moment."), to: room)
+            return
+        }
         Task { [weak self] in
             do {
                 let worktree = await BotsT3.state(of: run)?.worktree
-                if let head = await BotsT3.currentHead(of: run, worktree: worktree) { run.baseCommit = head }
-                try await BotsT3.sendFollowup(text, to: run)
+                // A plain folder has no base to move: the agent works outside git there.
+                if run.baseCommit != nil, let head = await BotsT3.currentHead(of: run, worktree: worktree) { run.baseCommit = head }
+                let cloudRun = try await BotsT3.sendFollowup(text, to: run)
                 guard let self else { return }
+                run.cloudRunID = cloudRun ?? run.cloudRunID
+                run.stoppedByOwner = nil
                 run.phase = "running"
                 run.startedAt = Date()
                 run.finishedAt = nil
@@ -548,6 +583,15 @@ final class BotsStore: ObservableObject {
             } catch {
                 self?.post(BotChatMessage(author: theo.id, text: "Couldn't reach the coding agent: \(error.localizedDescription)"), to: room)
             }
+        }
+    }
+
+    /// A finished run's agent keeps running in its terminal, ready for a follow-up. Only the newest few stay: a later
+    /// follow-up on an older one starts a new terminal that continues the conversation.
+    private func releaseOldTerminals() {
+        let finished = t3Runs.filter { $0.phase == "done" || $0.phase == "failed" }.sorted { ($0.finishedAt ?? .distantPast) > ($1.finishedAt ?? .distantPast) }
+        for run in finished.dropFirst(3) where run.id.hasPrefix("term:") && TerminalSessions.shared.session(for: run.id) != nil {
+            TerminalSessions.shared.close(run.id)
         }
     }
 
@@ -568,13 +612,17 @@ final class BotsStore: ObservableObject {
                         // T3 Code has been unreachable for ten minutes: stop and say so instead of spinning.
                         run.phase = "failed"
                         self.upsert(run)
-                        self.postFromTheo("Lost track of **\(run.title)**: T3 Code isn't answering. Open T3 Code to see where it got to.", room: run.room)
+                        let engine = run.harness.map(HarnessCatalog.label) ?? "T3 Code"
+                        self.postFromTheo("Lost track of **\(run.title)**: \(engine) isn't answering. Open \(engine) to see where it got to.", room: run.room)
                         break
                     }
                     try? await Task.sleep(nanoseconds: 15_000_000_000)
                     continue
                 }
                 misses = 0
+                // Stop or a follow-up may have landed while that was being asked.
+                guard let current = self.t3Runs.first(where: { $0.id == runID }), current.stoppedByOwner != true else { break }
+                run = current
                 run.activity = state.lastMessage.map { String($0.split(separator: "\n").first ?? "").prefix(140) }.map(String.init)
                 if state.waitingForAnswer, !state.busy || state.status == "waiting" {
                     run.phase = "waiting"
@@ -585,11 +633,15 @@ final class BotsStore: ObservableObject {
                                           "\(state.lastMessage ?? "(open T3 Code to see the question)")\n\nReply with @code and your answer.", room: run.room)
                     }
                 } else if !state.busy && (BotsT3.endedStatuses.contains(state.status) || state.status == "idle") {
+                    // Tests and the push can take minutes: the card says so and Stop goes away meanwhile.
+                    run.phase = "reporting"
+                    self.upsert(run)
                     let report = await BotsT3.report(for: &run, state: state)
                     run.phase = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status) ? "failed" : "done"
                     run.finishedAt = Date()
                     self.upsert(run)
                     if run.stoppedByOwner != true { self.postFromTheo(report, runID: run.id) }
+                    self.releaseOldTerminals()
                     break
                 } else {
                     run.phase = "running"
@@ -706,7 +758,11 @@ enum BotImport {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
-            if bot.primary && (bot.instructions.contains("Project Manager only") || bot.instructions.contains("write one final prompt for T3 Code's coding agent")) { bot.instructions = primaryInstructions }
+            if bot.primary && bot.instructions.contains("Project Manager only") { bot.instructions = primaryInstructions }
+            // Only the old sentence goes: anything the owner added stays.
+            if bot.primary, let old = bot.instructions.range(of: #"[^.\n]*write one final prompt for T3 Code's coding agent[^.\n]*\.?"#, options: .regularExpression) {
+                bot.instructions.replaceSubrange(old, with: "Hand coding work to a harness as described under Coding.")
+            }
             if bot.model == "opencode/big-pickle" {
                 // Big Pickle kept running past the turn limit; a flash model answers in seconds.
                 bot.model = "opencode/deepseek-v4.1-flash-free"

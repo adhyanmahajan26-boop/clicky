@@ -243,20 +243,27 @@ extension BrainCLIRunner {
         }
         var words: [String] = []
         var images: [String] = []
+        var imageTypes: [String] = []
         for block in contentBlocks {
             switch block {
             case .text(let text): words.append(text)
-            case .jpegImage(let data), .pngImage(let data): images.append(data.base64EncodedString())
+            case .jpegImage(let data):
+                images.append(data.base64EncodedString())
+                imageTypes.append("image/jpeg")
+            case .pngImage(let data):
+                images.append(data.base64EncodedString())
+                imageTypes.append("image/png")
             }
         }
         var messages = persistentSessionIdentifier.map(APIChat.History.load) ?? []
-        messages.append(APIChatMessage(role: "user", text: words.joined(separator: "\n\n"), imagesJPEGBase64: images))
+        messages.append(APIChatMessage(role: "user", text: words.joined(separator: "\n\n"), imagesJPEGBase64: images, imageTypes: imageTypes))
         await onProcessReady?(ClaudeProcessOrigin(spawnDate: Date(), usedStandbyProcess: false, standbyOutcome: nil, retriedAfterBrokenPipe: false))
         await onStreamEvent?(.systemInit(model: model.setting))
         let answerBox = StreamedAnswer()
         let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt, messages: messages) { soFar in
             if answerBox.text.isEmpty { onStreamEvent?(.messageStart(id: UUID().uuidString)) }
-            let delta = String(soFar.dropFirst(answerBox.text.count))
+            // By scalars, not characters: a Hindi vowel sign arriving on its own chunk joins the character before it.
+            let delta = String(String.UnicodeScalarView(soFar.unicodeScalars.dropFirst(answerBox.text.unicodeScalars.count)))
             answerBox.text = soFar
             if !delta.isEmpty { onStreamEvent?(.textDelta(delta)) }
             onTextChunk(soFar)

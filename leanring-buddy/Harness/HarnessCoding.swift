@@ -34,8 +34,17 @@ enum HarnessCoding {
     /// for this run and may not be watching: Claude accepts edits, Codex writes the workspace and asks for
     /// anything beyond it, Cursor/OpenCode auto-approve, Grok and Gemini accept edits.
     /// `gitFolder`: the repo's own .git, which sits outside a worktree. Codex's sandbox has to be able to write there, or it can't commit.
-    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil) -> [String] {
+    /// `continues`: picks up the last conversation in that folder, for a follow-up after the terminal has gone.
+    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil, continues: Bool = false) -> [String] {
         var args: [String] = []
+        if continues {
+            switch harness {
+            case "claude", "cursor", "grok": args += ["--continue"]
+            case "codex": args += ["resume", "--last"]
+            case "gemini": args += ["--resume", "latest"]
+            default: break
+            }
+        }
         switch harness {
         case "claude":
             if let model { args += ["--model", model] }
@@ -136,19 +145,23 @@ enum HarnessCoding {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
-        let model = HarnessPrefs.codingModel ?? HarnessPrefs.defaultModel(harness) ?? (harness == "codex" ? codexPlanModel() : nil)
-        let effort = HarnessPrefs.codingEffort ?? HarnessPrefs.defaultEffort(harness)
+        // The coding target's model and effort are for that harness only; another one would refuse to start on them.
+        let isCodingTarget = harness == HarnessPrefs.codingTarget
+        let model = (isCodingTarget ? HarnessPrefs.codingModel : nil) ?? HarnessPrefs.defaultModel(harness) ?? (harness == "codex" ? codexPlanModel() : nil)
+        let effort = (isCodingTarget ? HarnessPrefs.codingEffort : nil) ?? HarnessPrefs.defaultEffort(harness)
         let git = BotsT3.git
         var run: T3Run
         let workdir: URL
         var plainFolder = false
         var gitFolder: String?
-        if let repo, !BotsT3.isGitRepo(repo) {
+        var topLevel: URL?
+        if let repo { topLevel = await BotsT3.gitTopLevel(of: repo) }
+        if let repo, topLevel == nil {
             // A plain folder: the work happens right there, with no branch and nothing added to it.
             plainFolder = true
             workdir = repo
             run = T3Run(id: "", title: title, folder: repo.path)
-        } else if let repo {
+        } else if let repo = topLevel {
             // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -159,6 +172,7 @@ enum HarnessCoding {
             try await BotsT3.shell(git, ["worktree", "add", "-b", branch, workdir.path, base], in: repo)
             run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
             run.worktree = workdir.path
+            run.baseBranch = await BotsT3.currentBranch(in: repo)
             gitFolder = repo.appendingPathComponent(".git").path
         } else {
             workdir = try BotsT3.newProjectFolder(title: title)
@@ -173,13 +187,15 @@ enum HarnessCoding {
         run.effort = effort ?? "default"
         run.prompt = prompt
         var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
-        if let branch = run.branch, let repo {
+        if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
             message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +
-                "Do all the work and commit here. Don't cd to \(repo.path) or change it, and don't switch branches.\n\n" + message
+                "Do all the work and commit here. Don't cd to \(repo.path) or change it, and don't switch branches.\n\n" +
+                BotsT3.subfolderNote(named, in: repo) + message
         }
 
-        if useTmux, let tmux {
+        // A saved key can't go through tmux without showing up in a process's arguments, so that run takes Theo's own terminal.
+        if useTmux, let tmux, HarnessCatalog.apiKeyEnvironment(for: harness).isEmpty {
             let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
             let command = (["env"] + unset + [executable.path] +
@@ -190,7 +206,7 @@ enum HarnessCoding {
             PaneWatch.reset(session)
         } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder) {
             run.id = terminal.id
-            await deliver(message, to: terminal)
+            await deliver(message, to: terminal, isFirstPrompt: true)
             PaneWatch.reset(terminal.id)
             PaneWatch.delivered(terminal.id)
         } else {
@@ -231,12 +247,12 @@ enum HarnessCoding {
 
     /// A fresh terminal under an existing run's id.
     @MainActor
-    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String) -> TerminalSession? {
+    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) -> TerminalSession? {
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
-                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path),
+                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, continues: true),
                                              environment: environment, workingDirectory: folder.path)
     }
 
@@ -257,25 +273,30 @@ enum HarnessCoding {
     }
 
     /// Waits for the TUI to settle (answering a folder-trust question on the way), then pastes the text and presses Return.
+    /// False when a question on the screen meant the text couldn't go in.
     @MainActor
-    private static func deliver(_ text: String, to terminal: TerminalSession) async {
+    @discardableResult
+    private static func deliver(_ text: String, to terminal: TerminalSession, isFirstPrompt: Bool) async -> Bool {
         var previous = ""
         var stable = 0
         var answeredTrust = 0
         for _ in 0..<36 {
             try? await Task.sleep(nanoseconds: 700_000_000)
-            guard terminal.isRunning else { return }
+            guard terminal.isRunning else { return false }
             let screen = terminal.screenText().trimmingCharacters(in: .whitespacesAndNewlines)
             stable = (screen == previous && screen.count > 20) ? stable + 1 : 0
             previous = screen
             if stable >= 2 {
-                if answeredTrust < 3, answerTrustScreen(screen, terminal: terminal) {
+                if isFirstPrompt, answeredTrust < 3, answerTrustScreen(screen, terminal: terminal) {
                     answeredTrust += 1
                     stable = 0
+                    // Cursor's screen is slow to go, and more presses would type into the composer.
+                    if screen.contains("[a] Trust") { try? await Task.sleep(nanoseconds: 3_000_000_000) }
                     continue
                 }
-                // A dialog over the composer (OpenCode's "Update Complete") would swallow the prompt.
-                if screen.range(of: #"(?i)update complete|restart the application"#, options: .regularExpression) != nil {
+                // A dialog over the composer (OpenCode's "Update Complete") would swallow the prompt. Before the first
+                // prompt only: later those words can be in the agent's report, and Esc means something else then.
+                if isFirstPrompt, screen.range(of: #"(?i)update complete"#, options: .regularExpression) != nil {
                     terminal.sendRaw("\u{1B}")
                     stable = 0
                     continue
@@ -285,20 +306,23 @@ enum HarnessCoding {
         }
         // Still on a question screen after all that: don't type the prompt into it.
         let final = terminal.screenText()
-        if Self.isQuestionScreen(final) { return }
+        if Self.isQuestionScreen(final) { return false }
         await terminal.send(text: text)
         // Some TUIs (Codex) read the Return right after a paste as part of the paste, and the prompt sits unsent.
         for _ in 0..<3 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard terminal.isRunning, !looksBusy(terminal.screenText()) else { return }
+            let screen = terminal.screenText()
+            // A permission question that opened meanwhile isn't Theo's to answer.
+            guard terminal.isRunning, !looksBusy(screen), !isQuestionScreen(screen) else { return true }
             terminal.pressEnter()
         }
+        return true
     }
 
     /// Busy signs of each harness's TUI: a spinner line, "esc to interrupt", "generating".
     static func looksBusy(_ pane: String) -> Bool {
         let tail = pane.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).joined(separator: "\n")
-        return tail.range(of: #"(?i)esc.{0,6}interrupt|ctrl\+c to (interrupt|stop|cancel)|working \(|generating…|running tool|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
+        return tail.range(of: #"(?i)esc.{0,6}interrupt|esc to cancel,\s*\d|ctrl\+c to (interrupt|stop|cancel)|working \(|generating…|running tool|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏"#,
                           options: .regularExpression) != nil
     }
 
@@ -307,13 +331,12 @@ enum HarnessCoding {
     @MainActor
     @discardableResult
     static func answerTrustScreen(_ screen: String, terminal: TerminalSession) -> Bool {
-        guard screen.range(of: #"(?i)do you trust|trust (this|the) (folder|directory|workspace)|you created or one you trust|allow .* to work in this folder"#,
+        // The API key screen only shows when the owner asked for this harness to use their key.
+        guard screen.range(of: #"(?i)do you trust|trust (this|the) (folder|directory|workspace)|you created or one you trust|allow .* to work in this folder|detected a custom api key"#,
                            options: .regularExpression) != nil else { return false }
         // Cursor's screen takes a key: "[a] Trust this workspace".
         if screen.contains("[a] Trust") {
             terminal.sendRaw("a")
-            // Once only: its screen is slow to go, and more presses would type into the composer.
-            Thread.sleep(forTimeInterval: 3)
             return true
         }
         let lines = screen.components(separatedBy: "\n")
@@ -333,8 +356,17 @@ enum HarnessCoding {
     /// A screen waiting on a choice (trust, permission, y/n): nothing should be typed into it.
     static func isQuestionScreen(_ screen: String) -> Bool {
         let tail = screen.split(separator: "\n", omittingEmptySubsequences: false).suffix(16).joined(separator: "\n")
-        return tail.range(of: #"(?i)do you want to|\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this|enter to confirm|trust this folder|do you trust|esc to cancel"#,
-                           options: .regularExpression) != nil
+        if tail.range(of: #"(?i)\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this|enter to confirm|trust this folder|do you trust|esc to cancel(?!,\s*\d)"#,
+                      options: .regularExpression) != nil { return true }
+        // "Do you want to…" in an agent's report is only words. A dialog offers the choices under it.
+        return tail.range(of: #"(?i)do you want to"#, options: .regularExpression) != nil
+            && tail.range(of: #"(?im)^\W*(1\.\s*yes|(❯|›|>)\s*(1\.\s*)?yes)\b"#, options: .regularExpression) != nil
+    }
+
+    /// A harness's own line saying a turn ended ("✻ Baked for 19s", "─ Worked for 1m 12s ─"), not prose that happens to say so.
+    static func finishLines(in text: String) -> [String] {
+        text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.range(of: #"(?i)^\W*\w+ed for \d+\s?(h|m|min|s|sec)\b"#, options: .regularExpression) != nil }
     }
 
     // MARK: tmux
@@ -376,11 +408,20 @@ enum HarnessCoding {
     }
 
     static func sendFollowup(_ text: String, to run: T3Run) async throws {
+        // An agent waiting on a question gets just the answer, typed straight in.
+        let answersQuestion = run.phase == "waiting"
+        let label = HarnessCatalog.label(run.harness ?? "")
         if run.id.hasPrefix("term:") {
-            let followUpMessage = text + BotsT3.deliveryNote
+            let followUpMessage = text + BotsT3.followupNote(for: run)
             if let terminal = await TerminalSessions.shared.session(for: run.id), await terminal.isRunning {
-                await deliver(followUpMessage, to: terminal)
-                PaneWatch.reset(run.id)
+                let before = await terminal.screenText()
+                if answersQuestion {
+                    await terminal.send(text: text)
+                } else if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: false)) {
+                    throw BotsT3Error.failed("\(label) is showing a question on its screen, so that couldn't go in. Open it from the run's card to answer, then send it again.")
+                }
+                PaneWatch.reset(run.id, screenBefore: before)
+                PaneWatch.delivered(run.id)
                 return
             }
             // The terminal has gone (the agent exited, or Theo restarted): a new one on the same worktree and
@@ -389,13 +430,18 @@ enum HarnessCoding {
                 throw BotsT3Error.failed("\(HarnessCatalog.label(run.harness ?? "")) isn't installed any more.")
             }
             let folder = URL(fileURLWithPath: run.worktree ?? run.folder, isDirectory: true)
-            let model = HarnessPrefs.defaultModel(harness)
-            let effort = HarnessPrefs.defaultEffort(harness)
-            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title) else {
+            // The run's own model when it had one (with none picked, run.model is only the harness's name).
+            let model = run.model == HarnessCatalog.label(harness) ? (harness == "codex" ? codexPlanModel() : nil) : run.model
+            let effort = run.effort == "default" ? nil : run.effort
+            let gitFolder = run.repo.map { URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent(".git").path }
+            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder) else {
                 throw BotsT3Error.failed("The \(HarnessCatalog.label(harness)) terminal couldn't start.")
             }
-            await deliver(followUpMessage, to: terminal)
+            if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true)) {
+                throw BotsT3Error.failed("\(label) is showing a question on its screen, so that couldn't go in. Open it from the run's card to answer, then send it again.")
+            }
             PaneWatch.reset(run.id)
+            PaneWatch.delivered(run.id)
             return
         }
         guard run.id.hasPrefix("tmux:"), let tmux else {
@@ -405,8 +451,10 @@ enum HarnessCoding {
         guard (try? await BotsT3.shell(tmux, ["has-session", "-t", session])) != nil else {
             throw BotsT3Error.failed("The \(HarnessCatalog.label(run.harness ?? "")) terminal session has closed; start a new run.")
         }
-        try await deliver(text + BotsT3.deliveryNote, to: session, tmux: tmux)
-        PaneWatch.reset(session)
+        let before = await capture(session, tmux: tmux) ?? ""
+        try await deliver(answersQuestion ? text : text + BotsT3.followupNote(for: run), to: session, tmux: tmux)
+        PaneWatch.reset(session, screenBefore: before)
+        PaneWatch.delivered(session)
     }
 
     /// Opens a terminal window attached to the run's tmux session: iTerm or Ghostty when installed, else Terminal.
@@ -451,7 +499,36 @@ enum HarnessCoding {
     private final class PaneWatch: @unchecked Sendable {
         private static let lock = NSLock()
         private static var watches: [String: (hash: Int, since: Date)] = [:]
-        static func reset(_ session: String) { lock.withLock { watches[session] = nil; seen[session] = [] } }
+        /// A new prompt went in. `screenBefore`: what was on screen, so its old "Baked for 19s" doesn't end the new turn.
+        static func reset(_ session: String, screenBefore: String = "") {
+            lock.withLock {
+                watches[session] = nil
+                seen[session] = []
+                busy.remove(session)
+                oldFinishLines[session] = Set(HarnessCoding.finishLines(in: screenBefore))
+                if !screenBefore.isEmpty { followedUp.insert(session) }
+            }
+        }
+        private static var oldFinishLines: [String: Set<String>] = [:]
+        private static var followedUp: Set<String> = []
+        private static var trustAnswers: [String: Int] = [:]
+
+        static func saysFinished(_ session: String, tail: String) -> Bool {
+            lock.withLock {
+                let old = oldFinishLines[session] ?? []
+                return HarnessCoding.finishLines(in: tail).contains { !old.contains($0) }
+            }
+        }
+
+        /// A late trust screen is only answered before the agent has started on its first prompt, and twice at most:
+        /// later on those words could be in anything it's reading, and Return might answer a different question.
+        static func mayAnswerTrustScreen(_ session: String) -> Bool {
+            lock.withLock {
+                guard !busy.contains(session), !followedUp.contains(session), (trustAnswers[session] ?? 0) < 2 else { return false }
+                trustAnswers[session, default: 0] += 1
+                return true
+            }
+        }
 
         /// Screens seen since the prompt went in, and whether it ever looked busy: a run that shows neither
         /// never started, however quiet its screen is.
@@ -501,37 +578,41 @@ enum HarnessCoding {
         let session = String(run.id.dropFirst(5))
         guard (try? await BotsT3.shell(tmux, ["has-session", "-t", session])) != nil else {
             // The CLI exited and took its session with it.
-            let summary = transcriptSummary(for: run)
-            return BotsT3.ThreadState(status: summary == nil ? "failed" : "completed", busy: false, waitingForAnswer: false,
-                                      lastMessage: summary ?? "The \(HarnessCatalog.label(run.harness ?? "")) session ended without a report.",
+            // Nothing says it finished, so it's not reported as done and nothing half-made gets pushed.
+            return BotsT3.ThreadState(status: "interrupted", busy: false, waitingForAnswer: false,
+                                      lastMessage: "The \(HarnessCatalog.label(run.harness ?? "")) session ended before saying it was done. The work so far is in its folder; write @code to carry on.",
                                       worktree: run.worktree, pullRequest: nil)
         }
         guard let pane = await capture(session, tmux: tmux) else { return nil }
         return evaluate(run, pane: pane, unchanged: PaneWatch.unchangedSeconds(session, hash: pane.hashValue))
     }
 
-    @MainActor
-    private static func terminalState(of run: T3Run) -> BotsT3.ThreadState? {
-        guard let terminal = TerminalSessions.shared.session(for: run.id) else {
-            // Theo restarted: the terminal went with it.
-            let summary = transcriptSummary(for: run)
-            return BotsT3.ThreadState(status: summary == nil ? "interrupted" : "completed", busy: false, waitingForAnswer: false,
-                                      lastMessage: summary ?? "Theo restarted while the run was going; the work so far is in the project folder.",
+    /// The screen is read on the main actor; reading the agent's transcript and asking git happen off it.
+    private static func terminalState(of run: T3Run) async -> BotsT3.ThreadState? {
+        let terminal: (pane: String, isRunning: Bool, exitCode: Int32?)? = await MainActor.run {
+            guard let terminal = TerminalSessions.shared.session(for: run.id) else { return nil }
+            let pane = terminal.screenText()
+            // A trust screen that showed up after the prompt was typed: answer it and keep going.
+            if terminal.isRunning, pane.range(of: #"(?i)trust this folder|do you trust|you created or one you trust"#, options: .regularExpression) != nil,
+               PaneWatch.mayAnswerTrustScreen(run.id) {
+                answerTrustScreen(pane, terminal: terminal)
+            }
+            return (pane, terminal.isRunning, terminal.exitCode)
+        }
+        guard let terminal else {
+            // Theo restarted and the terminal went with it. Nothing says the agent finished, so it isn't reported as done
+            // and nothing half-made gets pushed.
+            return BotsT3.ThreadState(status: "interrupted", busy: false, waitingForAnswer: false,
+                                      lastMessage: "Theo restarted while the run was going. The work so far is in its folder; write @code to carry on.",
                                       worktree: run.worktree, pullRequest: nil)
         }
-        let pane = terminal.screenText()
-        if terminal.isRunning, pane.range(of: #"(?i)trust this folder|do you trust|you created or one you trust"#, options: .regularExpression) != nil {
-            // A trust screen that showed up after the prompt was typed: answer it and keep going.
-            answerTrustScreen(pane, terminal: terminal)
-        }
         guard terminal.isRunning else {
-            let summary = transcriptSummary(for: run) ?? paneSummary(pane)
-            let ok = terminal.exitCode == 0 || transcriptSummary(for: run) != nil
-            return BotsT3.ThreadState(status: ok ? "completed" : "failed", busy: false, waitingForAnswer: false,
+            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane)
+            return BotsT3.ThreadState(status: terminal.exitCode == 0 ? "completed" : "failed", busy: false, waitingForAnswer: false,
                                       lastMessage: summary.isEmpty ? "The \(HarnessCatalog.label(run.harness ?? "")) session ended without a report." : summary,
                                       worktree: run.worktree, pullRequest: nil)
         }
-        return evaluate(run, pane: pane, unchanged: PaneWatch.unchangedSeconds(run.id, hash: pane.hashValue))
+        return evaluate(run, pane: terminal.pane, unchanged: PaneWatch.unchangedSeconds(run.id, hash: terminal.pane.hashValue))
     }
 
     /// Working / waiting / finished from what the screen shows, shared by the terminal and tmux paths.
@@ -542,7 +623,7 @@ enum HarnessCoding {
         let asking = isQuestionScreen(pane)
         if !asking { _ = PaneWatch.askingSeconds(run.id, asking: false) }
         // A harness's own "Baked for 19s" line says the turn is over, so there's no need to wait for a long quiet spell.
-        let saysFinished = tail.range(of: #"(?i)\b(worked|\w+ed) for \d+\s?(s|m|h|sec|min)"#, options: .regularExpression) != nil
+        let saysFinished = PaneWatch.saysFinished(run.id, tail: tail)
         let settled = !working && (saysFinished ? unchanged >= 6 : Date().timeIntervalSince(run.startedAt) > 60 && unchanged >= idleSeconds)
         // A question on screen for a while is waiting for Addy, even if a spinner or clock keeps it moving.
         if asking && Date().timeIntervalSince(run.startedAt) > 30 && (settled || PaneWatch.askingSeconds(run.id, asking: true) >= 15) {
@@ -552,7 +633,9 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         // A plan's limit or a model it can't use: the agent would sit there (OpenCode retries for hours), so say so now.
-        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression) {
+        // The agent's own output can carry those words too, so a working agent only counts when it says it's retrying.
+        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression),
+           tail[tail.lineRange(for: blocked)].range(of: "(?i)retrying", options: .regularExpression) != nil || (!working && !saysFinished && unchanged >= 8) {
             let raw = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
             // OpenCode's "[retrying in 6h 10m attempt #1" says nothing useful here.
             let line = raw.replacingOccurrences(of: #"\s*\[retrying.*$"#, with: "", options: .regularExpression)
@@ -633,9 +716,17 @@ enum HarnessCoding {
         return found.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
-    private static func jsonLines(_ url: URL) -> [[String: Any]] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+    /// A transcript's lines. Only the end of a long one: the last words are what's wanted, and this runs every few seconds.
+    private static func jsonLines(_ url: URL, keeping maximumBytes: UInt64 = 2_000_000) -> [[String: Any]] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let first = size > maximumBytes ? size - maximumBytes : 0
+        try? handle.seek(toOffset: first)
+        guard let data = try? handle.readToEnd() else { return [] }
+        var lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+        if first > 0 { lines.removeFirst(min(1, lines.count)) }
+        return lines.compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
     }
 
     private static func textBlocks(_ content: Any?) -> String? {
@@ -671,10 +762,9 @@ enum HarnessCoding {
                 let parts = calendar.dateComponents([.year, .month, .day], from: day)
                 let dir = sessions.appendingPathComponent(String(format: "%04d/%02d/%02d", parts.year!, parts.month!, parts.day!), isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") {
-                    let events = jsonLines(file)
-                    guard let meta = events.first?["payload"] as? [String: Any], let cwd = meta["cwd"] as? String,
+                    guard let meta = jsonLines(file, keeping: 200_000_000).first?["payload"] as? [String: Any], let cwd = meta["cwd"] as? String,
                           cwd == folder || cwd == resolved else { continue }
-                    for event in events.reversed() {
+                    for event in jsonLines(file).reversed() {
                         let payload = event["payload"] as? [String: Any]
                         if event["type"] as? String == "event_msg", payload?["type"] as? String == "task_complete",
                            let last = payload?["last_agent_message"] as? String, !last.isEmpty { return last }
@@ -719,7 +809,8 @@ enum HarnessCoding {
         activeLock.withLock { _ = active.insert(id) }
         let out = runsFolder.appendingPathComponent(id.replacingOccurrences(of: "headless:", with: "") + ".out")
         let reply = out.appendingPathExtension("reply")
-        Task.detached {
+        // It blocks for the whole run, so it stays off the small pool Swift's tasks run on.
+        DispatchQueue.global(qos: .utility).async {
             let process = Process()
             process.executableURL = executable
             process.arguments = headlessArguments(harness: harness, model: model, effort: effort, folder: folder.path, prompt: prompt, outFile: reply.path)
@@ -746,7 +837,7 @@ enum HarnessCoding {
                 watchdog.cancel()
                 try? handle?.close()
                 let stdout = (try? String(contentsOf: out, encoding: .utf8)) ?? ""
-                if let answer = headlessReply(harness: harness, stdout: stdout, outFile: reply.path) {
+                if process.terminationStatus == 0, let answer = headlessReply(harness: harness, stdout: stdout, outFile: reply.path) {
                     status = "completed"
                     text = answer
                 } else {

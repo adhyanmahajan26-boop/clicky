@@ -301,6 +301,7 @@ struct ThemeTile: View {
 struct BrainModelPicker: View {
     let title: String
     @Binding var setting: String
+    var claudeOnly = false
     @ObservedObject private var catalog = BrainCatalog.shared
     @ObservedObject private var keys = ProviderKeys.shared
     private static let addKeyTag = "__add_key"
@@ -309,7 +310,7 @@ struct BrainModelPicker: View {
         Picker(title, selection: Binding(get: { setting }, set: { value in
             if value == Self.addKeyTag { TheoSettingsWindowController.show(section: .keys) } else { setting = value }
         })) {
-            ForEach(BrainProvider.allCases, id: \.self) { provider in
+            ForEach(claudeOnly ? [BrainProvider.claude] : BrainProvider.allCases, id: \.self) { provider in
                 let identifiers = catalog.models[provider] ?? []
                 if !identifiers.isEmpty {
                     Section(provider.displayName) {
@@ -320,16 +321,20 @@ struct BrainModelPicker: View {
                     }
                 }
             }
-            ForEach(keys.usableChatProviders) { provider in
-                Section("\(provider.label) API") {
-                    ForEach(keys.models(for: provider), id: \.self) { model in
-                        Text(model).tag(BrainModel(provider: .api, modelIdentifier: "\(provider.id)/\(model)").setting)
+            if !claudeOnly {
+                ForEach(keys.usableChatProviders) { provider in
+                    Section("\(provider.label) API") {
+                        ForEach(keys.models(for: provider), id: \.self) { model in
+                            Text(model).tag(BrainModel(provider: .api, modelIdentifier: "\(provider.id)/\(model)").setting)
+                        }
                     }
                 }
             }
             if !isListed { Text(catalog.label(for: setting)).tag(setting) }
-            Divider()
-            Text("Add an API key…").tag(Self.addKeyTag)
+            if !claudeOnly {
+                Divider()
+                Text("Add an API key…").tag(Self.addKeyTag)
+            }
         }
         .labelsHidden()
         .onAppear { catalog.load() }
@@ -384,7 +389,8 @@ struct ClickySettingsContent: View {
                 }
                 RowDivider()
                 SettingRow(title: "Code tasks", detail: "When you ask Clicky to change code by voice.") {
-                    BrainModelPicker(title: "Code tasks", setting: Binding(get: { code }, set: { code = $0; ClickyModels.code = $0 })).frame(width: 260)
+                    // Voice code tasks run through Claude Code, so only its models work here.
+                    BrainModelPicker(title: "Code tasks", setting: Binding(get: { code }, set: { code = $0; ClickyModels.code = $0 }), claudeOnly: true).frame(width: 260)
                 }
             }
             TheoSection(title: "Behaviour", hint: nil) {

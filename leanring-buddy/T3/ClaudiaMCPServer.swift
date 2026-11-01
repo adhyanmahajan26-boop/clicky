@@ -215,8 +215,9 @@ enum ClaudiaMCPServer {
 
     private static func sendToClaudia(_ command: [String: Any], timeout: TimeInterval) -> [String: Any]? {
         let identifier = "mcp-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let inbox = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/control-inbox", isDirectory: true)
-        let outbox = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/control-outbox", isDirectory: true)
+        let controlHome = ProcessInfo.processInfo.environment["THEO_CONTROL_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.homeDirectoryForCurrentUser
+        let inbox = controlHome.appendingPathComponent(".clicky/control-inbox", isDirectory: true)
+        let outbox = controlHome.appendingPathComponent(".clicky/control-outbox", isDirectory: true)
         try? FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? FileManager.default.createDirectory(at: outbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         guard JSONSerialization.isValidJSONObject(command), let data = try? JSONSerialization.data(withJSONObject: command) else { return nil }

@@ -120,8 +120,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Say short progress updates (at most every 20 seconds) while the code agent works."),
 
         // Agents dashboard.
-        ClickySettingsEntry(key: ClickySettings.Keys.agentsSparkClickOpensDashboard, kind: .toggle(defaultValue: true),
-                            explanation: "Clicking the companion spark opens the Agents dashboard. The spark holds still while the pointer rests near it so it can be clicked."),
+        ClickySettingsEntry(key: ClickySettings.Keys.agentsSparkClickOpensDashboard, kind: .toggle(defaultValue: false),
+                            explanation: "Clicking the companion spark opens the Agents dashboard. The spark holds still while the pointer rests near it so it can be clicked. Off by default because the click catcher can take clicks meant for what's under the spark."),
         ClickySettingsEntry(key: ClickySettings.Keys.agentsHistoryLimit, kind: .integer(defaultValue: 50, range: 10...500, step: 10),
                             explanation: "Finished agents kept in the dashboard's history (agents-history.json)."),
 

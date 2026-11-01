@@ -37,9 +37,12 @@ enum CursorCloud {
     static func webURL(fromRemote remote: String) -> String? {
         var text = remote.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("git@github.com:") { text = "https://github.com/" + text.dropFirst("git@github.com:".count) }
-        guard text.contains("github.com") else { return nil }
-        if text.hasSuffix(".git") { text.removeLast(4) }
-        return text
+        // Built from the host and path alone: a remote can carry a token ("https://me:token@github.com/…").
+        guard let components = URLComponents(string: text), components.host?.lowercased() == "github.com" else { return nil }
+        var path = components.path
+        if path.hasSuffix(".git") { path.removeLast(4) }
+        guard path.split(separator: "/").count == 2 else { return nil }
+        return "https://github.com" + path
     }
 
     /// The body for a new agent. Pure, so it can be tested.
@@ -50,7 +53,7 @@ enum CursorCloud {
     /// (agent id, run id) out of the run's id "cursor:<agent>/<run>".
     private static func ids(of run: T3Run) -> (agent: String, run: String)? {
         let parts = run.id.dropFirst("cursor:".count).split(separator: "/").map(String.init)
-        return parts.count == 2 ? (parts[0], parts[1]) : nil
+        return parts.count == 2 ? (parts[0], run.cloudRunID ?? parts[1]) : nil
     }
 
     static func start(prompt: String, title: String, repo: URL?) async throws -> T3Run {
@@ -85,9 +88,11 @@ enum CursorCloud {
         }
     }
 
-    static func sendFollowup(_ text: String, to run: T3Run) async throws {
+    /// Starts another run on the same agent and returns its id, which is the one to follow from now on.
+    static func sendFollowup(_ text: String, to run: T3Run) async throws -> String? {
         guard let ids = ids(of: run) else { throw BotsT3Error.failed("That run can't be continued.") }
-        _ = try await send(request("/v1/agents/\(ids.agent)/runs", method: "POST", body: ["prompt": ["text": text]]))
+        let reply = try await send(request("/v1/agents/\(ids.agent)/runs", method: "POST", body: ["prompt": ["text": text]]))
+        return (reply["run"] as? [String: Any])?["id"] as? String ?? reply["id"] as? String
     }
 
     static func stop(_ run: T3Run) async {

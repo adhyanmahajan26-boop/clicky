@@ -188,6 +188,7 @@ final class SharedEnginePlayerChannel {
                                   completionHandler: Self.makeCompletionHandler(onPlayedBack: onPlayedBack))
         if shouldStartOnNextBuffer {
             shouldStartOnNextBuffer = false
+            playerNode.volume = CompanionSpeechOutput.isZeroVolumeForTests ? 0 : 1
             playerNode.play()
         }
         return true

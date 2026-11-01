@@ -45,7 +45,7 @@ enum TheoProfile {
 
     /// What the test home borrows from the real one: where the CLIs live and what they're signed in with.
     private static let sharedHomeItems = [".claude", ".claude.json", ".codex", ".config", ".cursor", ".gemini", ".grok", ".local",
-                                          ".npm-global", ".bun", ".opencode", ".gitconfig", ".ssh", "Projects", "Library/pnpm",
+                                          ".npm-global", ".bun", ".opencode", ".gitconfig", ".ssh", "Library/pnpm",
                                           ".t3/bin", ".t3-claudia/bin"]
 
     /// The first thing the app does. In the test profile it restarts itself with the test home (the path has to
@@ -105,6 +105,16 @@ enum TheoProfile {
         if let method = class_getInstanceMethod(NSApplication.self, NSSelectorFromString("activateIgnoringOtherApps:")) {
             method_setImplementation(method, imp_implementationWithBlock(doNothingWithFlag))
         }
+        // AppKit can still activate on its own (a click on a terminal view or an alert did), so hand focus straight back.
+        func isOwner(_ application: NSRunningApplication?) -> Bool { application?.bundleIdentifier != Bundle.main.bundleIdentifier }
+        var ownersApp = isOwner(NSWorkspace.shared.frontmostApplication) ? NSWorkspace.shared.frontmostApplication : nil
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            let application = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if isOwner(application) { ownersApp = application }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            ownersApp?.activate()
+        }
     }
 
     /// The CLIs Theo starts must see the real home: `security`, which Claude Code uses for its sign-in, would
@@ -119,6 +129,8 @@ enum TheoProfile {
             if let process = task as? Process {
                 var environment = process.environment ?? ProcessInfo.processInfo.environment
                 environment[homeVariable] = nil
+                // A test bot's Theo tools still talk to this test instance, not the owner's Theo.
+                environment["THEO_CONTROL_HOME"] = testHome.path
                 process.environment = environment
             }
             return original(task, selector, error)

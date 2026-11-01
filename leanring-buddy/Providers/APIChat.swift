@@ -29,6 +29,10 @@ struct APIChatMessage: Codable, Equatable {
     var text: String
     /// Images for this message only; earlier screenshots aren't sent again.
     var imagesJPEGBase64: [String] = []
+    /// Their media types, where they aren't all JPEG.
+    var imageTypes: [String]?
+
+    func imageType(at index: Int) -> String { imageTypes.flatMap { index < $0.count ? $0[index] : nil } ?? "image/jpeg" }
 }
 
 enum APIChat {
@@ -65,8 +69,8 @@ enum APIChat {
 
     private static func anthropicMessage(_ message: APIChatMessage) -> [String: Any] {
         guard !message.imagesJPEGBase64.isEmpty else { return ["role": message.role, "content": message.text] }
-        var content: [[String: Any]] = message.imagesJPEGBase64.map {
-            ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": $0]]
+        var content: [[String: Any]] = message.imagesJPEGBase64.enumerated().map { index, image in
+            ["type": "image", "source": ["type": "base64", "media_type": message.imageType(at: index), "data": image]]
         }
         content.append(["type": "text", "text": message.text])
         return ["role": message.role, "content": content]
@@ -75,7 +79,9 @@ enum APIChat {
     private static func openAIMessage(_ message: APIChatMessage) -> [String: Any] {
         guard !message.imagesJPEGBase64.isEmpty else { return ["role": message.role, "content": message.text] }
         var content: [[String: Any]] = [["type": "text", "text": message.text]]
-        content += message.imagesJPEGBase64.map { ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\($0)"]] }
+        content += message.imagesJPEGBase64.enumerated().map { index, image in
+            ["type": "image_url", "image_url": ["url": "data:\(message.imageType(at: index));base64,\(image)"]]
+        }
         return ["role": message.role, "content": content]
     }
 
@@ -85,7 +91,7 @@ enum APIChat {
         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
         if payload == "[DONE]" { return (nil, true, nil) }
         guard let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else { return (nil, false, nil) }
-        if let error = object["error"] as? [String: Any] { return (nil, true, error["message"] as? String ?? "The provider reported an error.") }
+        if let error = errorMessage(in: object) { return (nil, true, error) }
         switch kind {
         case .anthropic:
             switch object["type"] as? String {
@@ -100,6 +106,19 @@ enum APIChat {
             let text = (choice?["delta"] as? [String: Any])?["content"] as? String
             return (text, false, nil)
         }
+    }
+
+    /// A provider's error, whichever way it writes it ({"error": {"message": …}} or {"error": "…"}).
+    private static func errorMessage(in object: [String: Any]) -> String? {
+        if let error = object["error"] as? [String: Any] { return error["message"] as? String ?? "The provider reported an error." }
+        return object["error"] as? String
+    }
+
+    /// Why the model stopped, from one server-sent line: "max_tokens" or "length" means the answer hit the limit.
+    static func stopReason(line: String) -> String? {
+        guard line.hasPrefix("data:"), let object = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(5).trimmingCharacters(in: .whitespaces).utf8)) as? [String: Any] else { return nil }
+        if let reason = (object["delta"] as? [String: Any])?["stop_reason"] as? String { return reason }
+        return (object["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String
     }
 
     /// Runs one turn and returns the whole answer; `onText` gets the answer so far as it grows.
@@ -117,17 +136,38 @@ enum APIChat {
             throw APIChatError.rejected("\(provider.label): " + (ProviderInfo.testFailure(statusCode: status, body: body) ?? "HTTP \(status)"))
         }
         var answer = ""
+        var ended = false
+        var stop: String?
+        var notStreamed = ""
         for try await line in bytes.lines {
             try Task.checkCancellation()
+            if !line.hasPrefix("data:"), !line.hasPrefix("event:"), notStreamed.count < 4000 { notStreamed += line }
             let parsed = parse(line: line, kind: provider.kind)
             if let error = parsed.error { throw APIChatError.rejected("\(provider.label): \(error)") }
+            stop = stopReason(line: line) ?? stop
             if let text = parsed.text, !text.isEmpty {
                 answer += text
                 let soFar = answer
                 await onText(soFar)
             }
-            if parsed.done { break }
+            if parsed.done {
+                ended = true
+                break
+            }
         }
+        // A 200 with a plain JSON error instead of a stream.
+        if answer.isEmpty, let object = try? JSONSerialization.jsonObject(with: Data(notStreamed.utf8)) as? [String: Any], let error = errorMessage(in: object) {
+            throw APIChatError.rejected("\(provider.label): \(error)")
+        }
+        guard !answer.isEmpty else { return answer }
+        // The words so far are still worth having, but the owner should know they stop short.
+        if stop == "max_tokens" || stop == "length" {
+            answer += "\n\n_(That hit the length limit, so it stops there.)_"
+        } else if !ended && stop == nil {
+            answer += "\n\n_(The connection ended early, so this may be cut off.)_"
+        }
+        let finalAnswer = answer
+        await onText(finalAnswer)
         return answer
     }
 

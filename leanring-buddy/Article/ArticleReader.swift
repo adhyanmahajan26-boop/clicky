@@ -64,6 +64,62 @@ nonisolated struct ArticleAXWalk: @unchecked Sendable {
     var didHitDeadline = false
 }
 
+/// Chrome only builds its page tree while AXEnhancedUserInterface is on, and the grounding controller turns that on for
+/// the frontmost app only. A browser on Theo's screen usually isn't frontmost, so a read turns it on for that app for a
+/// while, and it goes off again once nothing has used it (the flag slows the browser and upsets window managers).
+@MainActor
+enum BackgroundWebTree {
+    private static let holdSeconds: TimeInterval = 90
+    /// Chrome builds the tree about 2 s after the flag goes on.
+    private static let buildSeconds: TimeInterval = 2.5
+    private static var heldProcess: pid_t?
+    private static var turnedOnAt: Date?
+    private static var releaseTask: Task<Void, Never>?
+    private static var quitObserver: NSObjectProtocol?
+
+    static func hold(_ processIdentifier: pid_t, bundleIdentifier: String?) {
+        guard let bundleIdentifier, ActionExecutor.chromiumBrowserBundleIdentifiers.contains(bundleIdentifier),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier else { return }
+        if heldProcess != processIdentifier {
+            release()
+            let application = AXUIElementCreateApplication(processIdentifier)
+            // False then true, so Chromium sees a change even when it thinks it's already on.
+            AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+            AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            heldProcess = processIdentifier
+            turnedOnAt = Date()
+        }
+        if quitObserver == nil {
+            quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { release() }
+            }
+        }
+        releaseTask?.cancel()
+        releaseTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(holdSeconds * 1_000_000_000))
+            if !Task.isCancelled { release() }
+        }
+    }
+
+    /// Waits out the tree being built when the flag has only just gone on.
+    static func waitUntilBuilt() async {
+        guard let turnedOnAt else { return }
+        let remaining = buildSeconds - Date().timeIntervalSince(turnedOnAt)
+        if remaining > 0 { try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+    }
+
+    private static func release() {
+        releaseTask?.cancel()
+        releaseTask = nil
+        turnedOnAt = nil
+        guard let processIdentifier = heldProcess else { return }
+        heldProcess = nil
+        // The owner brought it forward meanwhile: it's the grounding controller's now.
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier else { return }
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(processIdentifier), "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+    }
+}
+
 @MainActor
 enum ArticleReader {
     nonisolated static let walkDeadlineSeconds: TimeInterval = 4
@@ -100,6 +156,7 @@ enum ArticleReader {
         let cursorCG = CGPoint(x: mouse.x, y: mainScreenHeight - mouse.y)
         guard let chosen = ArticleWindowChoice.choose(frontmostProcessIdentifier: frontmost == ownProcessIdentifier ? nil : frontmost, windows: candidates,
                                                       cursorCG: cursorCG) else { return nil }
+        BackgroundWebTree.hold(chosen.processIdentifier, bundleIdentifier: chosen.bundleIdentifier)
         let runningApplication = NSRunningApplication(processIdentifier: chosen.processIdentifier)
         return ArticleWindowTarget(processIdentifier: chosen.processIdentifier, bundleIdentifier: chosen.bundleIdentifier,
                                    applicationName: runningApplication?.localizedName,
@@ -128,6 +185,7 @@ enum ArticleReader {
     static func read(target: ArticleWindowTarget, maximumCharacters: Int,
                      scroll: ((CGPoint, Int) -> Void)?, isCancelled: @escaping () -> Bool,
                      onFirstPass: ((ArticleReadResult) -> Void)? = nil) async -> ArticleReadResult {
+        await BackgroundWebTree.waitUntilBuilt()
         let startUptime = ProcessInfo.processInfo.systemUptime
         var walk = ArticleAXWalk()
         if let windowElement = target.windowElement {

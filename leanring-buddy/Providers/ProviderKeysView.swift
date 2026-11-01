@@ -65,6 +65,7 @@ private struct ProviderKeyRow: View {
     @State private var reveals = false
     @State private var baseURL = ""
     @State private var confirmsRemove = false
+    @State private var saveFailed = false
     @FocusState private var fieldFocused: Bool
 
     private var hasKey: Bool { keys.hasKey(for: provider.id) }
@@ -169,6 +170,9 @@ private struct ProviderKeyRow: View {
                     }
                 }
             }
+            if saveFailed {
+                Text("The Keychain didn't save that, so the key is still in the field. Try Save again.").font(TheoType.caption).foregroundColor(DS.Colors.destructiveText)
+            }
             if let result, !result.isOK {
                 Text(result.message).font(TheoType.caption).foregroundColor(DS.Colors.destructiveText).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             } else if let result, result.isOK {
@@ -180,7 +184,11 @@ private struct ProviderKeyRow: View {
     private func save() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        keys.save(trimmed, for: provider.id)
+        guard keys.save(trimmed, for: provider.id) else {
+            saveFailed = true
+            return
+        }
+        saveFailed = false
         draft = ""
         reveals = false
         Task { await keys.test(provider.id) }

@@ -63,10 +63,13 @@ enum SetupGuideWindowController {
 
     /// At launch: never finished, or the chosen brain's command-line tool is missing.
     static var isNeededAtLaunch: Bool {
-        !ClickySettings.isSetupCompleted || BrainCLIRunner.locateExecutable(for: BrainModel(setting: ClickyModels.main).provider) == nil
+        let provider = BrainModel(setting: ClickyModels.main).provider
+        // An API model has no command-line tool to look for.
+        return !ClickySettings.isSetupCompleted || (provider != .api && BrainCLIRunner.locateExecutable(for: provider) == nil)
     }
 
-    static func show(companionManager: CompanionManager, step: SetupGuideModel.Step? = nil) {
+    /// `activates` false opens it without taking focus (a launch in the background).
+    static func show(companionManager: CompanionManager, step: SetupGuideModel.Step? = nil, activates: Bool = true) {
         if model == nil {
             model = SetupGuideModel(companionManager: companionManager, setup: SetupModel(companionManager: companionManager, showPanel: {}))
         }
@@ -86,8 +89,10 @@ enum SetupGuideWindowController {
             }
             window = created
         }
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        if activates {
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKeyAndOrderFront(nil)
+        }
         window?.orderFrontRegardless()
     }
 

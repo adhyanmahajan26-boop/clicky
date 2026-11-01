@@ -132,7 +132,7 @@ struct BotStencil: Identifiable {
         BotStencil(id: "inbox", name: "Inbox assistant", summary: "Sorts your mail and drafts replies for you to send.",
                    instructions: "Read the inbox, group mail into needs-a-reply, FYI and ignore, and draft replies when asked. Never send, delete or label mail.",
                    glyph: "envelope.fill", colour: "rose", apps: ["gmail", "calendar"]),
-        BotStencil(id: "builder", name: "Builder", summary: "Plans an app or a fix and hands it to your coding harness.",
+        BotStencil(id: "builder", name: "Builder", summary: "Plans an app or a fix, then hands it to your harness.",
                    instructions: "Turn the idea into a short plan, then write one final prompt for the coding agent: a line \"Project: <name>\" and the prompt in a ```prompt block.",
                    glyph: "chevron.left.forwardslash.chevron.right", colour: "indigo", apps: []),
         BotStencil(id: "writer", name: "Writer", summary: "Drafts posts, emails and docs in your voice.",
@@ -156,6 +156,41 @@ struct BotStencil: Identifiable {
     ]
 }
 
+/// The models a bot can pick for its engine, and what a new bot starts on.
+@MainActor
+enum BotModels {
+    /// Sonnet rather than the list's first entry: Opus would be an expensive default for a bot that mostly chats.
+    static func startingModel(for engine: String) -> String {
+        if engine.hasPrefix("api:") {
+            return ProviderInfo.info(for: String(engine.dropFirst(4))).flatMap { ProviderKeys.shared.models(for: $0).first } ?? ""
+        }
+        return HarnessPrefs.defaultModel(engine)
+            ?? ["claude": "claude-sonnet-5-5", "grok": "grok-4.6", "opencode": "opencode/deepseek-v4.1-flash-free"][engine]
+            ?? HarnessCenter.shared.models(for: engine).first?.id ?? ""
+    }
+
+    static func list(for bot: NativeBot) -> [String] { list(for: bot.provider, current: bot.model) }
+
+    static func list(for engine: String, current: String) -> [String] {
+        let listed: [String]
+        if engine.hasPrefix("api:") {
+            listed = ProviderInfo.info(for: String(engine.dropFirst(4))).map { ProviderKeys.shared.models(for: $0) } ?? []
+        } else {
+            switch engine {
+            case "grok": listed = BotModelSettings.grokModels
+            case "claude": listed = BrainCatalog.shared.models[.claude] ?? HarnessCatalog.claudeModels.map(\.id)
+            case "opencode": listed = BrainCatalog.shared.models[.opencode] ?? HarnessCenter.shared.models(for: "opencode").map(\.id)
+            default: listed = HarnessCenter.shared.models(for: engine).map(\.id)
+            }
+        }
+        return listed.contains(current) || current.isEmpty ? listed : [current] + listed
+    }
+
+    static func label(_ model: String, on engine: String) -> String {
+        HarnessCenter.shared.models(for: engine).first { $0.id == model }?.label ?? NativeBot.label(for: model)
+    }
+}
+
 struct NewBotSheet: View {
     @ObservedObject var store: BotsStore
     let onDone: (NativeBot?) -> Void
@@ -164,6 +199,8 @@ struct NewBotSheet: View {
     @State private var role = ""
     @State private var instructions = ""
     @State private var provider = HarnessPrefs.defaultHarness
+    @State private var model = BotModels.startingModel(for: HarnessPrefs.defaultHarness)
+    @ObservedObject private var keys = ProviderKeys.shared
     @State private var groupID = ""
     @State private var look = NativeBot(id: "new", name: "", description: "", instructions: "", hue: 205, accentHue: 235,
                                         primary: false, provider: "claude", model: "", effort: nil, apps: [], category: nil, shape: "slate")
@@ -235,11 +272,38 @@ struct NewBotSheet: View {
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.surface1))
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
-            field("Runs on") {
-                Picker("Runs on", selection: $provider) {
-                    ForEach(installedEngines, id: \.id) { engine in Text(engine.label).tag(engine.id) }
+            HStack(alignment: .top, spacing: 12) {
+                field("Runs on") {
+                    Picker("Runs on", selection: Binding(get: { provider }, set: { choice in
+                        if choice == "__add_key" {
+                            onDone(nil)
+                            TheoSettingsWindowController.show(section: .keys)
+                            return
+                        }
+                        provider = choice
+                        model = BotModels.startingModel(for: choice)
+                    })) {
+                        Section("Subscriptions") {
+                            ForEach(installedEngines, id: \.id) { engine in Text(engine.label).tag(engine.id) }
+                        }
+                        Section("API keys") {
+                            ForEach(keys.usableChatProviders) { key in Text(key.label).tag("api:\(key.id)") }
+                            Text("Add a key…").tag("__add_key")
+                        }
+                    }
+                    .labelsHidden().frame(maxWidth: .infinity)
                 }
-                .pickerStyle(.segmented).labelsHidden()
+                field("Model") {
+                    let choices = BotModels.list(for: provider, current: model)
+                    if choices.isEmpty {
+                        TextField("Model id", text: $model).textFieldStyle(.roundedBorder)
+                    } else {
+                        Picker("Model", selection: $model) {
+                            ForEach(choices, id: \.self) { choice in Text(BotModels.label(choice, on: provider)).tag(choice) }
+                        }
+                        .labelsHidden().frame(maxWidth: .infinity)
+                    }
+                }
             }
             if !store.groups.isEmpty {
                 field("Group") {
@@ -283,15 +347,13 @@ struct NewBotSheet: View {
 
     private func create() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        let engine = Self.engines.first { $0.id == provider } ?? Self.engines[0]
-        let model = HarnessCenter.shared.resolvedModel(for: engine.id) ?? engine.model
         var bot = store.addBot(name: trimmedName, description: role.isEmpty ? "Your \(trimmedName) bot." : role,
                                instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
-                               provider: engine.id, model: model, groupID: groupID.isEmpty ? nil : groupID)
+                               provider: provider, model: model, groupID: groupID.isEmpty ? nil : groupID)
         bot.shape = look.shape
         bot.glyph = look.glyph
         bot.apps = stencil?.apps ?? []
-        bot.effort = HarnessPrefs.defaultEffort(engine.id)
+        bot.effort = provider.hasPrefix("api:") ? nil : HarnessPrefs.defaultEffort(provider)
         store.save(bot)
         onDone(bot)
     }

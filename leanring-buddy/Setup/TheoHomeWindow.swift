@@ -107,7 +107,8 @@ struct TheoHomeView: View {
     static func route(_ tab: Tab) {
         let selection = BotsSelection.shared
         switch tab {
-        case .home: selection.pane = .home
+        // Settings was asked for just before this window was made: that's where it should open.
+        case .home: if case .settings = selection.pane {} else { selection.pane = .home }
         case .notes: selection.pane = .notes
         case .ask: selection.pane = .clicky
         case .bots: if case .home = selection.pane, let primary = BotsStore.shared.primary { selection.pane = .bot(primary.id) }

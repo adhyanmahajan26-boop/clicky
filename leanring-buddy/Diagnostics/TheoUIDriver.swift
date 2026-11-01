@@ -233,6 +233,19 @@ enum TheoUIDriver {
     /// `rightClick`: a context menu.
     static func clickMenu(_ topWindow: NSWindow, at topPoint: CGPoint, choose item: String?, rightClick: Bool = false, completion: @escaping @MainActor ([String]) -> Void) {
         let (window, point) = target(topWindow, at: topPoint)
+        // A SwiftUI Picker or Menu is a popup button: reach its menu directly, since an inactive app can't track a popup.
+        if !rightClick, let popup = popUpButton(in: window, at: point) {
+            let titles = popup.itemTitles
+            if let item, let index = titles.firstIndex(where: { $0.lowercased() == item.lowercased() }) {
+                popup.selectItem(at: index)
+                _ = popup.sendAction(popup.action, to: popup.target)
+                if let menuItem = popup.item(at: index), let action = menuItem.action, popup.action == nil {
+                    NSApp.sendAction(action, to: menuItem.target, from: menuItem)
+                }
+            }
+            completion(titles)
+            return
+        }
         var titles: [String] = []
         var observer: NSObjectProtocol?
         observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
@@ -256,6 +269,19 @@ enum TheoUIDriver {
         }
         if let observer { NotificationCenter.default.removeObserver(observer) }
         completion(titles)
+    }
+
+    private static func popUpButton(in window: NSWindow, at point: CGPoint) -> NSPopUpButton? {
+        guard let content = window.contentView else { return nil }
+        let inWindow = CGPoint(x: point.x, y: window.frame.height - point.y)
+        let hit = content.hitTest(content.superview?.convert(inWindow, from: nil) ?? inWindow)
+        var view = hit
+        while let current = view {
+            if let popup = current as? NSPopUpButton { return popup }
+            view = current.superview
+        }
+        // SwiftUI can put the button beside the view that took the hit.
+        return nil
     }
 
     static func key(_ topWindow: NSWindow, key: String, modifiers: [String]) {
@@ -342,8 +368,8 @@ enum TheoUIDriver {
             // Whether a click on a window of a background app would act, or only bring the window forward.
             var byClass: [String: [String: Any]] = [:]
             let step = command["step"] as? Int ?? 20
-            for y in stride(from: 0, to: Int(target!.frame.height), by: step) {
-                for x in stride(from: 0, to: Int(target!.frame.width), by: step) {
+            for y in stride(from: 0, to: Int(target!.frame.height), by: max(1, step)) {
+                for x in stride(from: 0, to: Int(target!.frame.width), by: max(1, step)) {
                     let point = CGPoint(x: x, y: y)
                     guard let hit = hitView(in: target!, at: point) else { continue }
                     let name = String(describing: Swift.type(of: hit))
@@ -376,7 +402,9 @@ enum TheoUIDriver {
             // Sends an action straight to the focused field: {action: "paste:"}. An inactive app has no key window for
             // the menu bar to reach, so this is how a test proves the field itself takes the paste.
             let responder = (target!.attachedSheet ?? target!).firstResponder
-            let sent = NSApp.sendAction(NSSelectorFromString(command["action"] as? String ?? ""), to: responder, from: nil)
+            let selector = NSSelectorFromString(command["action"] as? String ?? "")
+            // Through the responder chain: sending straight to a responder that doesn't have the method would crash.
+            let sent = NSApp.target(forAction: selector, to: responder, from: nil).map { NSApp.sendAction(selector, to: $0, from: nil) } ?? false
             settle { respond(sent, state(), sent ? nil : "Nothing handled it.") }
         case "uiPasteboard":
             // The test profile's own pasteboard (see TheoProfile): sets what ⌘V will paste.

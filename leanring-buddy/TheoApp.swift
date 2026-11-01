@@ -127,11 +127,11 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         // A Dock app with its own window, unless that's turned off in Settings.
         NSApp.setActivationPolicy(ClickySettings.showsInDock && !TheoProfile.isTest ? .regular : .accessory)
         if SetupGuideWindowController.isNeededAtLaunch {
-            SetupGuideWindowController.show(companionManager: companionManager)
+            SetupGuideWindowController.show(companionManager: companionManager, activates: !Self.launchedInBackground)
         } else if ClickySettings.showsInDock || Self.launchTab != nil || TheoProfile.isTest {
             TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home, activates: !Self.launchedInBackground)
         }
-        if !companionManager.allPermissionsGranted && !TheoProfile.isTest { menuBar?.showPanelOnLaunch() }
+        if !companionManager.allPermissionsGranted && !TheoProfile.isTest && !Self.launchedInBackground { menuBar?.showPanelOnLaunch() }
         BotsSnapshot.renderIfAsked()
         // `--bot-say=<bot id>:<message>` opens that bot's chat and sends the message (a quick check of
         // a bot from Terminal).

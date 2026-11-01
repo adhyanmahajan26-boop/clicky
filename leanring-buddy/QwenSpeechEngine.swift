@@ -188,6 +188,7 @@ final class QwenSpeechEngine: SpeechEngine {
             player.enableRate = true
             player.prepareToPlay()
             player.rate = Float(ClickySettings.voiceRate)
+            if CompanionSpeechOutput.isZeroVolumeForTests { player.volume = 0 }
             var stopTime: TimeInterval?
             currentWordTimes = PCMAudio(wavData: audioData).map { decodedAudio in
                 var spokenAudio = decodedAudio

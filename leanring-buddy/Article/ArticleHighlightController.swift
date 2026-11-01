@@ -411,6 +411,22 @@ final class ArticleHighlightController {
         }
     }
 
+    /// Theo's own screen isn't where the owner's focus is, so a browser there counts as in front while nothing covers it.
+    private func isUncoveredOnTheosScreen(_ target: ArticleWindowTarget, frame: CGRect) -> Bool {
+        guard BackgroundInput.isActive, let screen = ClaudiaScreen.picked,
+              CGDisplayBounds(screen.displayID).contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        // Front to back, so everything before the article's own window is above it.
+        for window in windows {
+            if (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowNumber { return true }
+            guard (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let bounds = (window[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { continue }
+            let overlap = bounds.intersection(frame)
+            if !overlap.isNull, overlap.width * overlap.height > frame.width * frame.height * 0.3 { return false }
+        }
+        return false
+    }
+
     /// One tagged pixel scroll at a point (positive = content moves up, i.e. scroll down).
     static func postScroll(at pointCG: CGPoint, pixels: Int) {
         // Theo has its own screen: deliver the scroll to the app under the point; the real pointer doesn't move.
@@ -506,8 +522,10 @@ final class ArticleHighlightController {
         // Behind another app: hide (Clicky in front, e.g. its panel, still counts as the browser's turn).
         let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let isArticleAppInFront = frontmostProcessIdentifier == article.target.processIdentifier || frontmostProcessIdentifier == getpid()
+            || isUncoveredOnTheosScreen(article.target, frame: windowFrame)
         setOnScreen(isArticleAppInFront)
         guard isArticleAppInFront else { return }
+        BackgroundWebTree.hold(article.target.processIdentifier, bundleIdentifier: article.target.bundleIdentifier)
 
         // Navigated away: the highlights belong to the old page.
         if tickCount % 10 == 0, let webArea = article.webAreaElement {

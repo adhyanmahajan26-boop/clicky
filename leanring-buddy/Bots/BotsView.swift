@@ -652,12 +652,11 @@ struct BotChatScreen: View {
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
-                                                    alreadySent: store.t3Runs.contains { $0.title == title }
-                                                        || record.messages.contains { $0.text.hasPrefix("Submitted to ") && $0.text.contains(": **\(title)**") })
+                                                    alreadySent: store.t3Runs.contains { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) })
                                 }
                             }
                         }
-                        ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
+                        ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                             T3RunCard(run: run)
                         }
                         ForEach(inProgress, id: \.0.id) { pending in
@@ -843,7 +842,17 @@ struct BotChatScreen: View {
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .help("Mention a bot, or send work to the coding agent")
                 if let bot {
-                    Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
+                    Menu {
+                        ForEach(BotModels.list(for: bot), id: \.self) { model in
+                            Toggle(BotModels.label(model, on: bot.provider), isOn: Binding(get: { bot.model == model }, set: { _ in
+                                var edited = bot
+                                edited.model = model
+                                store.save(edited)
+                            }))
+                        }
+                        Divider()
+                        Button("Engine and more…") { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) }
+                    } label: {
                         HStack(spacing: 4) {
                             Text(bot.modelLabel).font(.system(size: 12, weight: .medium))
                             Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
@@ -851,7 +860,7 @@ struct BotChatScreen: View {
                         .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
                         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
                     }
-                    .buttonStyle(.plain).help("Change the model")
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Change the model")
                 }
                 Spacer()
                 if !inProgress.isEmpty && isEmpty {
@@ -897,10 +906,12 @@ struct BotChatScreen: View {
     private func send() {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty || !attachments.isEmpty else { return }
-        let text = typed + BotAttachments.promptText(for: attachments, on: bot?.provider ?? "claude")
+        // A group with a bare API in it gets the text of small files, since that bot can't open a path.
+        let engine = bot?.provider ?? (groupBots.contains { $0.provider.hasPrefix("api:") } ? "api:" : "claude")
+        let text = typed + BotAttachments.promptText(for: attachments, on: engine)
         draft = ""
         attachments = []
-        if let bot { store.send(text, to: bot.id) } else if let groupID { store.sendToGroup(text, groupID: groupID) }
+        if let bot { store.send(text, command: typed, to: bot.id) } else if let groupID { store.sendToGroup(text, command: typed, groupID: groupID) }
     }
 
     private func chooseAttachments() {
@@ -925,7 +936,8 @@ enum BotAttachments {
         guard provider.hasPrefix("api:") else { return "\n\nAttached (read these):\n\(lines)" }
         var text = ""
         for file in files {
-            if let body = try? String(contentsOf: file, encoding: .utf8), body.count <= inlineLimit {
+            let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+            if size <= inlineLimit * 4, let body = try? String(contentsOf: file, encoding: .utf8), body.count <= inlineLimit {
                 text += "\n\nAttached file \(file.lastPathComponent):\n```\n\(body)\n```"
             } else {
                 text += "\n\nAttached file \(file.lastPathComponent) can't be read on this engine (too big, or not text)."
@@ -1516,7 +1528,7 @@ struct T3RunCard: View {
                 }
                 Spacer(minLength: 8)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    StatusPill(text: (run.phase == "waiting" ? "Waiting for you · " : "Working · ") + Self.elapsed(since: run.startedAt, now: context.date),
+                    StatusPill(text: (run.phase == "waiting" ? "Waiting for you · " : run.phase == "reporting" ? "Finishing up · " : "Working · ") + Self.elapsed(since: run.startedAt, now: context.date),
                                tone: run.phase == "waiting" ? .warn : .info, busy: run.phase != "waiting")
                 }
                 if session != nil {
@@ -1527,8 +1539,10 @@ struct T3RunCard: View {
                 } else if run.link != nil || run.harness != nil {
                     Button("Watch") { BotsT3.openInApp(run) }.buttonStyle(.theo(.secondary, .small))
                 }
-                Button { confirmsStop = true } label: { Image(systemName: "stop.fill").frame(width: 14) }
-                    .buttonStyle(.theo(.ghost, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
+                if run.phase != "reporting" {
+                    Button { confirmsStop = true } label: { Image(systemName: "stop.fill").frame(width: 14) }
+                        .buttonStyle(.theo(.ghost, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
+                }
             }
             if let activity = run.activity, !activity.isEmpty, session == nil || !showsTerminal {
                 Text(activity).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
@@ -1545,7 +1559,7 @@ struct T3RunCard: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
         .padding(.leading, 38)
-        .alert("Stop \(run.title)?", isPresented: $confirmsStop) {
+        .alert("Stop this run?", isPresented: $confirmsStop) {
             Button("Stop", role: .destructive) { BotsStore.shared.stopRun(run.id) }
             Button("Keep going", role: .cancel) {}
         } message: {
@@ -1582,26 +1596,13 @@ struct BotModelSettings: View {
 
     private var isClaude: Bool { bot.provider == "claude" }
 
-    private static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+    static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
     private static let grokEfforts = ["low", "medium", "high"]
 
     @ObservedObject private var harnesses = HarnessCenter.shared
     @ObservedObject private var keys = ProviderKeys.shared
 
-    private var models: [String] {
-        var listed: [String]
-        if bot.provider.hasPrefix("api:") {
-            listed = ProviderInfo.info(for: String(bot.provider.dropFirst(4))).map { keys.models(for: $0) } ?? []
-            return listed.contains(bot.model) || bot.model.isEmpty ? listed : [bot.model] + listed
-        }
-        switch bot.provider {
-        case "grok": listed = Self.grokModels
-        case "claude": listed = catalog.models[.claude] ?? HarnessCatalog.claudeModels.map(\.id)
-        case "opencode": listed = catalog.models[.opencode] ?? harnesses.models(for: "opencode").map(\.id)
-        default: listed = harnesses.models(for: bot.provider).map(\.id)
-        }
-        return listed.contains(bot.model) || bot.model.isEmpty ? listed : [bot.model] + listed
-    }
+    private var models: [String] { BotModels.list(for: bot) }
 
     private var efforts: [String] {
         if bot.provider.hasPrefix("api:") { return [] }
@@ -1633,9 +1634,7 @@ struct BotModelSettings: View {
                         bot.model = info.flatMap { keys.models(for: $0).first } ?? ""
                         bot.effort = nil
                     } else {
-                        bot.model = HarnessPrefs.defaultModel(provider)
-                            ?? ["claude": "claude-sonnet-5-5", "grok": "grok-4.6", "opencode": "opencode/deepseek-v4.1-flash-free"][provider]
-                            ?? harnesses.models(for: provider).first?.id ?? ""
+                        bot.model = BotModels.startingModel(for: provider)
                         bot.effort = HarnessPrefs.defaultEffort(provider)
                     }
                     commit()
@@ -1666,7 +1665,7 @@ struct BotModelSettings: View {
                 } else {
                     Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
                         ForEach(models, id: \.self) { model in
-                            Text(harnesses.models(for: bot.provider).first { $0.id == model }?.label ?? NativeBot.label(for: model)).tag(model)
+                            Text(BotModels.label(model, on: bot.provider)).tag(model)
                         }
                     }
                     .labelsHidden().frame(width: compact ? nil : 260)

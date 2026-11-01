@@ -225,8 +225,8 @@ struct T3ResultCard: View {
             if !files.isEmpty { fileList }
             if let tests = run.tests {
                 HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: tests.hasPrefix("passed") ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: 12)).foregroundColor(tests.hasPrefix("passed") ? DS.Colors.success : DS.Colors.destructiveText)
+                    Image(systemName: tests.hasPrefix("passed") ? "checkmark.circle.fill" : tests.hasPrefix("failed") ? "xmark.circle.fill" : "questionmark.circle")
+                        .font(.system(size: 12)).foregroundColor(tests.hasPrefix("passed") ? DS.Colors.success : tests.hasPrefix("failed") ? DS.Colors.destructiveText : DS.Colors.textTertiary)
                     Text("Tests (Theo's own run): \(tests)").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -255,7 +255,8 @@ struct T3ResultCard: View {
                     Menu {
                         ForEach(HarnessCenter.shared.readyHarnesses.filter { $0.id != (run.harness ?? "t3") }, id: \.id) { info in
                             Button(info.label) {
-                                BotsStore.shared.submitToT3(prompt: prompt, title: run.title, repo: run.repo.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                                // A plain folder has no repo on the run, but it's still the owner's folder.
+                                BotsStore.shared.submitToT3(prompt: prompt, title: run.title, repo: (run.repo ?? (run.baseCommit == nil ? run.folder : nil)).map { URL(fileURLWithPath: $0, isDirectory: true) },
                                                             room: run.room ?? BotsStore.teamID, harness: info.id)
                             }
                         }

@@ -226,6 +226,11 @@ struct TheoProductionTests {
         #expect(BotsStore.isCodingCommand("/run fix it"))
         #expect(BotsStore.isCodingCommand("hey @T3 do this"))
         #expect(!BotsStore.isCodingCommand("what's the weather"))
+        #expect(!BotsStore.isCodingCommand("why does @codemirror/view fail?"))
+        #expect(!BotsStore.isCodingCommand("email dev@code.org about it"))
+        #expect(!BotsStore.isCodingCommand("set up @t3-oss/env-core"))
+        #expect(BotsStore.isCodingCommand("fix the tests @code"))
+        #expect(BotsStore.isCodingCommand("@code, fix it"))
         #expect(BotsStore.isAboutExistingCode("fix the login bug"))
         #expect(!BotsStore.isAboutExistingCode("build a todo app"))
     }
@@ -278,5 +283,72 @@ struct TheoProductionTests {
         #expect(NSView().acceptsFirstMouse(for: nil))
         #expect(NSScrollView().acceptsFirstMouse(for: nil))
         #expect(NSSwitch().acceptsFirstMouse(for: nil))
+    }
+
+    @Test func onlyTheOwnersOwnWordsStartARun() {
+        #expect(BotsStore.ownerAskedToBuild("fix the parser in ~/Projects/foo"))
+        #expect(BotsStore.ownerAskedToBuild("make me a landing page"))
+        #expect(BotsStore.ownerAskedToBuild("build a todo app"))
+        #expect(!BotsStore.ownerAskedToBuild("make me a prompt for a logo"))
+        #expect(!BotsStore.ownerAskedToBuild("update me on this page's news"))
+        #expect(!BotsStore.ownerAskedToBuild("what should I have for lunch?"))
+    }
+
+    @Test func aDialogIsAQuestionButAReportIsnt() {
+        #expect(HarnessCoding.isQuestionScreen("Do you want to proceed?\n❯ 1. Yes\n  2. No"))
+        #expect(HarnessCoding.isQuestionScreen("Allow this edit? (y/n)"))
+        #expect(!HarnessCoding.isQuestionScreen("All done. Do you want to add more tests?\n✻ Baked for 19s"))
+        #expect(!HarnessCoding.isQuestionScreen("⠙ Thinking (esc to cancel, 3s)"))
+        #expect(HarnessCoding.looksBusy("⠙ Thinking (esc to cancel, 3s)"))
+    }
+
+    @Test func aFinishLineIsTheHarnesssOwn() {
+        #expect(HarnessCoding.finishLines(in: "✻ Baked for 19s · done 11:21 PM").count == 1)
+        #expect(HarnessCoding.finishLines(in: "─ Worked for 1m 12s ─────").count == 1)
+        #expect(HarnessCoding.finishLines(in: "I waited for 30 seconds and tried again").isEmpty)
+    }
+
+    @Test func secretsStayOutOfCommits() {
+        for path in [".env", "app/.env.local", "certs/server.pem", "deploy.key", "id_rsa", "id_ed25519.pub", "config/credentials.json"] {
+            #expect(BotsT3.looksLikeSecret(path), "\(path)")
+        }
+        for path in [".env.example", "keyboard.swift", "README.md", "src/keys.ts"] {
+            #expect(!BotsT3.looksLikeSecret(path), "\(path)")
+        }
+    }
+
+    @Test func aPlainFolderIsToldToStayOutOfGit() {
+        let plain = T3Run(id: "x", title: "t", folder: "/tmp/a")
+        #expect(BotsT3.followupNote(for: plain) == BotsT3.plainFolderNote)
+        var inRepo = plain
+        inRepo.repo = "/tmp/a"
+        inRepo.baseCommit = "abc"
+        #expect(BotsT3.followupNote(for: inRepo) == BotsT3.deliveryNote)
+    }
+
+    @Test func aSubfolderIsNamedToTheAgent() {
+        let repo = URL(fileURLWithPath: "/tmp/repo", isDirectory: true)
+        #expect(BotsT3.subfolderNote(repo.appendingPathComponent("packages/api"), in: repo).contains("packages/api"))
+        #expect(BotsT3.subfolderNote(repo, in: repo).isEmpty)
+    }
+
+    @Test func aRemotesTokenNeverReachesCursor() {
+        #expect(CursorCloud.webURL(fromRemote: "https://me:ghp_secret@github.com/me/repo.git") == "https://github.com/me/repo")
+        #expect(CursorCloud.webURL(fromRemote: "git@github.com:me/repo.git") == "https://github.com/me/repo")
+        #expect(CursorCloud.webURL(fromRemote: "ssh://git@github.com/me/repo.git") == "https://github.com/me/repo")
+        #expect(CursorCloud.webURL(fromRemote: "https://gitlab.com/me/repo.git") == nil)
+    }
+
+    @Test func aStreamSaysWhenItHitTheLimit() {
+        #expect(APIChat.stopReason(line: #"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}"#) == "max_tokens")
+        #expect(APIChat.stopReason(line: #"data: {"choices":[{"finish_reason":"length","delta":{}}]}"#) == "length")
+        #expect(APIChat.stopReason(line: #"data: {"choices":[{"delta":{"content":"hi"}}]}"#) == nil)
+        #expect(APIChat.parse(line: #"data: {"error":"out of quota"}"#, kind: .openAICompatible).error == "out of quota")
+    }
+
+    @Test func imagesKeepTheirTypeOnTheWire() {
+        let message = APIChatMessage(role: "user", text: "look", imagesJPEGBase64: ["AA", "BB"], imageTypes: ["image/jpeg", "image/png"])
+        #expect(message.imageType(at: 1) == "image/png")
+        #expect(APIChatMessage(role: "user", text: "look", imagesJPEGBase64: ["AA"]).imageType(at: 0) == "image/jpeg")
     }
 }

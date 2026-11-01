@@ -137,7 +137,7 @@ struct BotLookPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Colour").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-            HStack(spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(24), spacing: 7), count: 10), alignment: .leading, spacing: 7) {
                 ForEach(BotPalette.swatches) { swatch in
                     Button { bot.shape = swatch.id } label: {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -153,7 +153,7 @@ struct BotLookPicker: View {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 8), spacing: 6) {
                 ForEach(Self.glyphs, id: \.self) { glyph in
                     Button { bot.glyph = glyph.isEmpty ? nil : glyph } label: {
-                        BotAvatar(bot: preview(glyph), size: 28, state: .idle)
+                        markTile(glyph)
                             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: -2)
                                 .stroke((bot.glyph ?? "") == glyph ? DS.Colors.textPrimary : .clear, lineWidth: 1.5))
                     }
@@ -163,10 +163,20 @@ struct BotLookPicker: View {
         }
     }
 
-    private func preview(_ glyph: String) -> NativeBot {
-        var copy = bot
-        copy.glyph = glyph.isEmpty ? nil : glyph
-        return copy
+    /// The mark itself, large: on a small robot face it would only be a tiny badge and they'd all look alike.
+    private func markTile(_ glyph: String) -> some View {
+        let swatch = BotPalette.swatch(for: bot)
+        return RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 28, height: 28)
+            .overlay {
+                if glyph.isEmpty {
+                    Text(String(bot.name.prefix(1)).uppercased().isEmpty ? "A" : String(bot.name.prefix(1)).uppercased())
+                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
+                } else {
+                    Image(systemName: glyph).font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
+                }
+            }
     }
 }
 

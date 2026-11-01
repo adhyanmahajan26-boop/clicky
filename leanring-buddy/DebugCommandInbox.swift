@@ -209,7 +209,9 @@ final class DebugCommandInbox {
 
         case "testMute":
             // {on: true|false}: every voice is silent (captions still pace) while the hard tests run.
-            CompanionSpeechOutput.isMutedForTests = commandObject["on"] as? Bool ?? true
+            let realVoice = commandObject["realVoice"] as? Bool ?? false
+            CompanionSpeechOutput.isZeroVolumeForTests = (commandObject["on"] as? Bool ?? true) && realVoice
+            CompanionSpeechOutput.isMutedForTests = (commandObject["on"] as? Bool ?? true) && !realVoice
             if CompanionSpeechOutput.isMutedForTests { companionManager.speechOutputClient.activeCoordinator?.bargeIn(.newQuestion) }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["muted": CompanionSpeechOutput.isMutedForTests], errorMessage: nil)
 

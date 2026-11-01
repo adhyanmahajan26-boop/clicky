@@ -113,4 +113,15 @@ struct ResearchTriggerHardPhrasesTests {
         #expect(picked.map { $0.url.host! } == ["cardekho.com", "carwale.com", "caranddriver.com"])
         #expect(ResearchLinkPicker.unwrapRedirect(URL(string: "https://www.google.com/url?q=https://carwale.com/ev&sa=U")!).host == "carwale.com")
     }
+
+    @Test func aFirstScreenWithTooFewLinksIsToppedUpFromBelow() {
+        let window = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let link = { (host: String, y: CGFloat) in
+            ResearchLinkCandidate(url: URL(string: "https://\(host)/page")!, text: "A long enough result title", frame: CGRect(x: 100, y: y, width: 400, height: 24))
+        }
+        let shown = ResearchLinkPicker.onScreenCandidates([link("c.com", 1300), link("a.com", 200), link("b.com", 1000), link("b.com", 1100)], windowFrame: window)
+        #expect(shown.map { $0.url.host! } == ["a.com", "b.com", "c.com"])
+        let plenty = (0..<6).map { link("site\($0).com", CGFloat(100 + $0 * 50)) } + [link("below.com", 1000)]
+        #expect(!ResearchLinkPicker.onScreenCandidates(plenty, windowFrame: window).contains { $0.url.host == "below.com" })
+    }
 }

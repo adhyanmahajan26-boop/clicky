@@ -7,7 +7,19 @@
 
 macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it on-device with Apple Speech, and sends the transcript + a screenshot of the user's screen to Claude through the local Claude Code CLI (the user's Claude subscription). Claude's reply is spoken with the built-in Mac voice. A Claude-orange spark companion follows the cursor, spins while Claude is thinking, shows helper workers as orbiting minis, and can fly to and point at UI elements Claude references on any connected monitor.
 
-This is a personal build: no API keys, no proxy server, no analytics, no auto-updater.
+The product is now **Theo**: a Mac app with a main window (bots, teams, routines, connectors, Settings) plus Clicky, the voice and screen companion. It installs as `/Applications/Theo.app` (bundle `com.personal.clicky`, executable `Clicky`).
+
+No proxy server and no analytics. Harnesses (T3 Code, Claude Code, Codex, Cursor, OpenCode, Grok, Gemini) run on the owner's own subscriptions. Keys are optional: any provider in Settings › Models & API keys can drive a bot, Theo, Clicky, a harness or a voice, and stays in the Keychain. Never print or log a key.
+
+## Newer pieces (where to look first)
+
+- `Harness/`: harness catalog and cards (install, sign in inside Theo's terminal, sign out, use my API key), coding runs (`HarnessCoding`), Cursor cloud agents.
+- `Providers/`: provider catalog, Keychain, `APIChat` (SSE for Anthropic and OpenAI-compatible APIs), Sarvam, ElevenLabs, Deepgram and AssemblyAI.
+- `Bots/`: `BotsStore`, `BotsT3` (runs: commit, push, draft PR, follow-ups), `BotsView` (sidebar and chat), run and result cards.
+- `Setup/TheoSettingsWindow.swift`: Settings, which live inside the main window. `Setup/SetupGuideWindow.swift`: first run.
+- `Theme/TheoTokens.swift`, `Theme/TheoComponents.swift`: tokens and shared components; use these rather than new one-off styles. `TheoFirstClick` makes every view accept the first click in a background window.
+- `TheoProfile.swift`, `Diagnostics/TheoUIDriver.swift`, `Tools/theoui.py`: the test profile and click driver. See `docs/TESTING.md`.
+- `docs/DESIGN.md`: the design system. `docs/TEST-MATRIX.md`: what has been proven and how.
 
 ## Architecture
 
@@ -127,7 +139,14 @@ open leanring-buddy.xcodeproj
 # deprecated onChange warning in OverlayWindow.swift. Do NOT attempt to fix these.
 ```
 
-**Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
+`xcodebuild` from the terminal is fine now: the app is signed with a stable Apple Development identity, so TCC permissions survive rebuilds as long as the team and bundle ID don't change.
+
+```bash
+xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configuration Release -derivedDataPath <folder> build
+xcodebuild test -project leanring-buddy.xcodeproj -scheme leanring-buddy -destination 'platform=macOS'
+cd Packages/ClickyCore && swift test
+python3 Tools/theo-click-test.py <out-folder>   # with a test profile running, see docs/TESTING.md
+```
 
 ## Code Style & Conventions
 
@@ -164,7 +183,7 @@ IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
 - Do not add docstrings, comments, or type annotations to code you did not change
 - Do not try to fix the known non-blocking warnings (Swift 6 concurrency, deprecated onChange)
 - Do not rename the project directory or scheme (the "leanring" typo is intentional/legacy)
-- Do not run `xcodebuild` from the terminal — it invalidates TCC permissions
+- Do not test in the owner's real profile: use `--profile test` (docs/TESTING.md)
 
 ## Git Workflow
 

@@ -17,8 +17,12 @@ the owner's own words, and checks what Clicky actually did:
   article           Wikipedia article, "highlight the important parts of this article" -> 3+ highlights
   silent            "silent mode" / "talk again" toggle the setting
 
-Usage: python3 Tools/eval/hard_asks.py [--only research-hn,board]
+Usage: python3 Tools/eval/hard_asks.py [--only research-hn,board] [--cdp PORT]
 Prints one line per case and a summary; exits 1 if any case failed.
+
+--cdp PORT: never takes focus. Pages load through DevTools into a Chrome you already started on Theo's monitor
+(--remote-debugging-port=PORT, its own --user-data-dir), and `point` uses a local page instead of System Settings.
+Each line says what was in front before and after, so a stolen focus shows up as a failure.
 """
 
 import argparse
@@ -44,9 +48,41 @@ def ctl(command, timeout_seconds=240):
         return {"ok": False, "error": completed.stdout[:200]}
 
 
+CDP_PORT = None
+
+
+def cdp_page():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("final_eval", os.path.join(REPO_ROOT, "Tools", "eval", "final_eval.py"))
+    final_eval = importlib.util.module_from_spec(spec)
+    sys.modules["final_eval"] = final_eval
+    spec.loader.exec_module(final_eval)
+    targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/list", timeout=5).read())
+    page = next(t for t in targets if t.get("type") == "page")
+    return final_eval.DevToolsSocket(page["webSocketDebuggerUrl"])
+
+
 def open_page(url, settle=6):
-    subprocess.run(["open", "-a", "Google Chrome", url])
+    if CDP_PORT:
+        page = cdp_page()
+        page.call("Page.navigate", {"url": url})
+        page.close()
+    else:
+        subprocess.run(["open", "-a", "Google Chrome", url])
     time.sleep(settle)
+
+
+def frontmost_name():
+    front = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
+    info = subprocess.run(["lsappinfo", "info", "-only", "name", front], capture_output=True, text=True).stdout
+    match = re.search(r'"(?:LSDisplayName|name)"="([^"]*)"', info) or re.search(r'"([^"]+)"', info)
+    return match.group(1) if match else "?"
+
+
+SETTINGS_PAGE = ("data:text/html,<title>System Settings</title><body style='margin:0;font:15px -apple-system;background:%23222;color:%23eee'>"
+                 "<div style='width:240px;padding:18px'>" + "".join(f"<div style='padding:9px'>{name}</div>" for name in
+                 ["Wi-Fi", "Bluetooth", "Network", "Notifications", "Sound", "Focus", "Screen Time", "General", "Appearance",
+                  "Accessibility", "Control Center", "Siri", "Privacy", "Desktop", "Displays", "Wallpaper", "Battery"]) + "</div>")
 
 
 def ask(text, fresh=True):
@@ -174,7 +210,7 @@ def case_workers():
     reply = ask("compare the battery life, camera and price of the iPhone 17, Pixel 10 and Galaxy S26, one helper per phone")
     turn = turn_json(reply)
     workers = turn.get("workers") or []
-    models = {w.get("model") for w in workers if isinstance(w, dict)}
+    models = {(w.get("usage") or {}).get("model") for w in workers if isinstance(w, dict)}
     ok = len(workers) >= 3
     return ok, f"workers={len(workers)} models={models or '?'}"
 
@@ -230,8 +266,11 @@ def case_no_board_for_simple():
 
 
 def case_point():
-    subprocess.run(["open", "-a", "System Settings"])
-    time.sleep(4)
+    if CDP_PORT:
+        open_page(SETTINGS_PAGE, settle=2)
+    else:
+        subprocess.run(["open", "-a", "System Settings"])
+        time.sleep(4)
     reply = ask("where is the Bluetooth setting? point at it")
     turn = turn_json(reply)
     tags = [t for t in turn.get("tags") or [] if t.get("kind") in ("mark", "point")]
@@ -341,7 +380,10 @@ CASES = {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", default="")
+    parser.add_argument("--cdp", type=int)
     arguments = parser.parse_args()
+    global CDP_PORT
+    CDP_PORT = arguments.cdp
     names = [n.strip() for n in arguments.only.split(",") if n.strip()] or list(CASES)
     if not ctl({"cmd": "ping"}, 10).get("ok"):
         sys.exit("Clicky isn't answering the debug inbox")
@@ -350,12 +392,19 @@ def main():
     results = []
     for name in names:
         started = time.time()
+        front_before = frontmost_name()
         try:
             passed, detail = CASES[name]()
         except Exception as error:  # a broken case is a failed case
             passed, detail = False, f"error: {error}"
+        front_after = frontmost_name()
+        if front_after != front_before:
+            detail += f" [front changed: {front_before} -> {front_after}]"
         results.append((name, passed, detail, time.time() - started))
         # Close the pages this run opened (only these titles), so Chrome doesn't fill up with test tabs.
+        if CDP_PORT:  # its one tab is reused
+            print(f"{'PASS' if passed else 'FAIL'}  {name:16s} {time.time() - started:5.0f}s  {detail}", flush=True)
+            continue
         ctl({"cmd": "closeTabs", "titles": ["best electric cars 2026 - Google", "weather in delhi - Google", "weather in mumbai - Google",
                                             "weather in chennai - Google", "James Webb Space Telescope - Wikipedia",
                                             "Four-stroke engine - Wikipedia"]}, 10)

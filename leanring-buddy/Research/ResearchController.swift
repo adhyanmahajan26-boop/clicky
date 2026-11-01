@@ -287,7 +287,7 @@ final class ResearchController: CompanionActivitySource {
             }
             queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element))
         }
-        let visible = ResearchLinkPicker.visibleCandidates(candidates, windowFrame: target.windowFrameCG)
+        let visible = ResearchLinkPicker.onScreenCandidates(candidates, windowFrame: target.windowFrameCG)
         print("🔎 Research: \(candidates.count) links in the page, \(visible.count) visible")
         guard !visible.isEmpty else { return nil }
         return ScreenLinks(candidates: visible, windowFrame: target.windowFrameCG,

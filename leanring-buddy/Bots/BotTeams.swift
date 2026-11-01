@@ -589,7 +589,7 @@ struct OrgChart: View {
                     .buttonStyle(.plain).help(bot.name)
                 }
             }
-            Text("Drag them onto a team in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            Text(store.layout.sections.isEmpty ? "Make a category in the sidebar, then drag them onto it." : "Drag them onto a team in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
         }
         .padding(12)
         .frame(width: 200, height: 150, alignment: .topLeading)

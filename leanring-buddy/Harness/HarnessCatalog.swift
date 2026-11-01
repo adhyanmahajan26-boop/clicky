@@ -63,6 +63,7 @@ enum HarnessCatalog {
     static func info(_ id: String) -> HarnessInfo? { all.first { $0.id == id } }
     static func label(_ id: String) -> String {
         if id.hasPrefix("api:") { return (ProviderInfo.info(for: String(id.dropFirst(4)))?.label ?? String(id.dropFirst(4))) + " API" }
+        if id == CursorCloud.harnessID { return "Cursor cloud agent" }
         return info(id)?.label ?? id
     }
 
@@ -253,8 +254,8 @@ struct HarnessStatus: Equatable {
     var account: String?
     var detail: String?
     var version: String?
-    /// Installed and not known to be signed out.
-    var ready: Bool { installed && loggedIn != false }
+    /// Installed and not known to be signed out, or running on a saved key.
+    var ready: Bool { installed && (loggedIn != false || HarnessPrefs.usesAPIKey(id)) }
 }
 
 enum HarnessDetector {

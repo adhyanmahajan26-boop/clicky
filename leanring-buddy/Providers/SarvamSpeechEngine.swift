@@ -160,6 +160,7 @@ final class SarvamSpeechEngine: SpeechEngine {
             player.enableRate = true
             player.prepareToPlay()
             player.rate = Float(ClickySettings.voiceRate)
+            if CompanionSpeechOutput.isZeroVolumeForTests { player.volume = 0 }
             currentWordTimes = PCMAudio(wavData: audioData).map {
                 WordTiming.wordTimes(speech: segment.speech, wordRanges: segment.wordRanges, audio: $0)
             }

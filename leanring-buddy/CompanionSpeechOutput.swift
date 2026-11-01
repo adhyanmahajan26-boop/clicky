@@ -81,6 +81,8 @@ final class CompanionSpeechOutput: ObservableObject {
     /// A coordinator for one answer: the selected voice, the Mac voice behind it.
     /// Debug inbox "testMute": the hard tests run silent without changing the owner's voice setting.
     static var isMutedForTests = false
+    /// Debug inbox "testMute" with realVoice: the real voice synthesizes and plays, at zero volume, so timing tests are real and silent.
+    static var isZeroVolumeForTests = false
 
     private let readingPaceEngine = ReadingPaceSpeechEngine()
     /// A second one: the coordinator gives primary and fallback their own callbacks.

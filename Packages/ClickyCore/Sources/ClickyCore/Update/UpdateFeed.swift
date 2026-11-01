@@ -89,10 +89,10 @@ public enum UpdateFeed {
         if ditto \(quoted(newAppPath)) \(quoted(targetAppPath)); then
           xattr -dr com.apple.quarantine \(quoted(targetAppPath)) 2>/dev/null
           rm -rf "$backup"
-          open \(quoted(targetAppPath))
+          open -g \(quoted(targetAppPath)) --args --background
         else
           rm -rf \(quoted(targetAppPath)); mv "$backup" \(quoted(installedAppPath))
-          open \(quoted(installedAppPath))
+          open -g \(quoted(installedAppPath)) --args --background
         fi
         """
     }

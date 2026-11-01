@@ -51,6 +51,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     var harness: String?
     var model: String?
     var effort: String?
+    /// The branch the run was cut from, the pull request's base.
+    var baseBranch: String?
+    /// A cloud agent's latest run, after a follow-up started a new one.
+    var cloudRunID: String?
     /// The run's own git worktree (harness runs on a repo Addy named).
     var worktree: String?
     /// What the result card shows, filled in when the run ends.
@@ -143,9 +147,26 @@ enum BotsT3 {
         return joined.prefix(1).uppercased() + joined.dropFirst()
     }
 
-    /// Whether a folder is a git repo (a run gets its own branch) or a plain folder (the work happens in place).
-    static func isGitRepo(_ folder: URL) -> Bool {
-        FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path)
+    /// The git repo a folder belongs to, itself or a parent (a run gets its own branch). Nil for a plain folder, where
+    /// the work happens in place. A home folder kept in git doesn't count, or every folder in it would get a branch.
+    static func gitTopLevel(of folder: URL) async -> URL? {
+        guard let output = try? await shell(git, ["rev-parse", "--show-toplevel"], in: folder) else { return nil }
+        let path = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty, path != TheoProfile.realHome, path != FileManager.default.homeDirectoryForCurrentUser.path else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// A worktree holds the whole repo, so an agent asked about a subfolder is told which one.
+    static func subfolderNote(_ folder: URL, in repo: URL) -> String {
+        let path = folder.resolvingSymlinksInPath().path
+        let top = repo.resolvingSymlinksInPath().path
+        guard path != top, path.hasPrefix(top + "/") else { return "" }
+        return "The work is in the subfolder \(path.dropFirst(top.count + 1)) of this repository.\n\n"
+    }
+
+    /// What a follow-up ends with: a plain folder stays out of git, everything else commits.
+    static func followupNote(for run: T3Run) -> String {
+        run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
     }
 
     /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
@@ -200,17 +221,22 @@ enum BotsT3 {
         var arguments = ["thread", "start"]
         var run: T3Run
         var plainFolder = false
-        if let repo, !isGitRepo(repo) {
+        var subfolder = ""
+        var topLevel: URL?
+        if let repo { topLevel = await gitTopLevel(of: repo) }
+        if let repo, topLevel == nil {
             plainFolder = true
             _ = try? await shell(cli, ["project", "add", repo.path])
             arguments += [repo.path, "-"]
             run = T3Run(id: "", title: title, folder: repo.path)
-        } else if let repo {
+        } else if let repo, let topLevel {
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
-            _ = try? await shell(cli, ["project", "add", repo.path])
-            arguments += [repo.path, "-", "--worktree", base, "--branch", branch]
-            run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
+            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            _ = try? await shell(cli, ["project", "add", topLevel.path])
+            arguments += [topLevel.path, "-", "--worktree", base, "--branch", branch]
+            run = T3Run(id: "", title: title, folder: topLevel.path, repo: topLevel.path, branch: branch, baseCommit: base)
+            run.baseBranch = await currentBranch(in: topLevel)
+            subfolder = subfolderNote(repo, in: topLevel)
         } else {
             let folder = try newProjectFolder(title: title)
             saveBrief(prompt, title: title, engine: "T3 Code")
@@ -222,10 +248,10 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
         }
         // Settings › Harnesses can pick another model; Claude Opus 5.5 at high effort otherwise.
-        let chosenModel = HarnessPrefs.codingModel ?? model
-        let chosenEffort = HarnessPrefs.codingEffort ?? effort
+        let chosenModel = (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
+        let chosenEffort = (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
-        let message = prompt + (plainFolder ? plainFolderNote : deliveryNote)
+        let message = subfolder + prompt + (plainFolder ? plainFolderNote : deliveryNote)
         run.model = chosenModel
         run.effort = chosenEffort
         run.prompt = prompt
@@ -295,11 +321,23 @@ enum BotsT3 {
         return try? await shell(git, ["rev-parse", run.branch ?? "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func sendFollowup(_ text: String, to run: T3Run) async throws {
+    /// Passes a change to the run's agent. Returns a cloud agent's new run id, when it started one.
+    @discardableResult
+    static func sendFollowup(_ text: String, to run: T3Run) async throws -> String? {
         if run.harness == CursorCloud.harnessID { return try await CursorCloud.sendFollowup(text, to: run) }
-        if HarnessCoding.owns(run) { return try await HarnessCoding.sendFollowup(text, to: run) }
+        if HarnessCoding.owns(run) {
+            try await HarnessCoding.sendFollowup(text, to: run)
+            return nil
+        }
         guard let cli else { throw BotsT3Error.noCLI }
-        try await shell(cli, ["thread", "send", run.id, "-"], stdin: text + deliveryNote)
+        // An agent waiting on a question gets just the answer.
+        try await shell(cli, ["thread", "send", run.id, "-"], stdin: run.phase == "waiting" ? text : text + followupNote(for: run))
+        return nil
+    }
+
+    static func currentBranch(in folder: URL) async -> String? {
+        let branch = (try? await shell(git, ["rev-parse", "--abbrev-ref", "HEAD"], in: folder))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch == "HEAD" ? nil : branch
     }
 
     /// Brings the run's project up in the T3 Code app.
@@ -393,34 +431,56 @@ enum BotsT3 {
         let usedModel = run.model.map(NativeBot.label(for:)) ?? modelName
         let usedEffort = run.effort ?? effort
         let modelPart = usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
-        var lines = [stopped
-            ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. The work so far is kept."
+        // T3 Code has no stop command, so its agent may still be writing: Theo only stops following it.
+        let stoppedFollowingOnly = stopped && run.harness == nil
+
+        // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
+        // named that's only safe in the run's own worktree, never the checkout they work in.
+        var commitProblem: String?
+        var leftOut: [String] = []
+        if !stoppedFollowingOnly, (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
+            do {
+                leftOut = try await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
+            } catch {
+                commitProblem = "Theo couldn't commit the agent's changes: \(error.localizedDescription.suffix(200))"
+            }
+        }
+        let head = run.branch ?? "HEAD"
+        if let base = run.baseCommit { run.changedFiles = await changes(in: folder, from: base, to: head) }
+        var lines = [stoppedFollowingOnly
+            ? "Stopped following **\(run.title)**. T3 Code has no stop command, so its agent may still be working there."
+            : stopped
+            ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. " + ((run.changedFiles ?? []).isEmpty ? "It hadn't changed anything yet." : "The work so far is kept on its branch.")
             : failed
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
             : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
         if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             lines.append(trimmedSummary(summary))
         }
-
-        // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
-        // named that's only safe in the run's own worktree, never the checkout they work in.
-        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
-            try? await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
-        }
-        let head = run.branch ?? "HEAD"
-        if let base = run.baseCommit { run.changedFiles = await changes(in: folder, from: base, to: head) }
         if !failed, !stopped, run.repo == nil || state.worktree != nil || run.worktree != nil { run.tests = await runTests(in: folder) }
 
+        var problems: [String] = []
         if !stopped {
             if let pr = state.pullRequest {
                 run.pullRequest = pr
             } else if !failed, let branch = run.branch {
-                let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest,
-                                            body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
-                run.pullRequest = outcome.url ?? run.pullRequest
-                run.pullRequestProblem = outcome.problem
+                let changed = run.changedFiles ?? []
+                if let commitProblem {
+                    problems.append(commitProblem)
+                } else if changed.isEmpty {
+                    if run.pullRequest == nil { problems.append("The agent didn't change anything, so there's nothing to push.") }
+                } else if let secret = changed.first(where: { looksLikeSecret($0.path) }) {
+                    problems.append("Theo didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
+                } else {
+                    let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.baseCommit, baseBranch: run.baseBranch,
+                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel)
+                    run.pullRequest = outcome.url ?? run.pullRequest
+                    if let problem = outcome.problem { problems.append(problem) }
+                }
             }
         }
+        if !leftOut.isEmpty { problems.append("Left out of the commit, because they look like secrets: \(leftOut.joined(separator: ", ")).") }
+        run.pullRequestProblem = problems.isEmpty ? nil : problems.joined(separator: " ")
         if !failed && !stopped { lines.append("Write @code with a change and it goes to \(engine) on the same branch\(run.pullRequest == nil ? "" : " and pull request").") }
         return lines.joined(separator: "\n\n")
     }
@@ -460,11 +520,9 @@ enum BotsT3 {
            !test.contains("no test specified"), fm.fileExists(atPath: folder.appendingPathComponent("node_modules").path),
            let npm = tool("npm") {
             command = (npm, ["test", "--silent"])
-        } else if let tests = nodeTestFiles(in: folder), let node = tool("node") {
+        } else if let tests = nodeTestFiles(in: folder), !needsPackages(folder), let node = tool("node") {
             command = (node, ["--test"] + tests)
-        } else if fm.fileExists(atPath: folder.appendingPathComponent("tests").path)
-                    || fm.fileExists(atPath: folder.appendingPathComponent("pytest.ini").path),
-                  let python = tool("python3") {
+        } else if hasPythonTests(folder), let python = tool("python3") {
             command = (python, ["-m", "pytest", "-q"])
         }
         guard let (tool, arguments) = command else { return nil }
@@ -472,8 +530,29 @@ enum BotsT3 {
             let output = try await shell(tool, arguments, in: folder, limit: 240)
             return "passed. \(testCounts(in: output))"
         } catch {
-            return "failed. \(error.localizedDescription.suffix(300))"
+            let text = error.localizedDescription
+            // The tests never ran, which says nothing about the work.
+            if text.range(of: #"No module named|Cannot find module|ERR_MODULE_NOT_FOUND|command not found"#, options: .regularExpression) != nil {
+                return "couldn't run them here: \(text.suffix(200))"
+            }
+            return "failed. \(text.suffix(300))"
         }
+    }
+
+    /// A fresh worktree has no node_modules, so a project with packages can't run its tests until someone installs them.
+    private static func needsPackages(_ folder: URL) -> Bool {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: folder.appendingPathComponent("node_modules").path),
+              let data = fm.contents(atPath: folder.appendingPathComponent("package.json").path),
+              let package = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return ["dependencies", "devDependencies"].contains { !((package[$0] as? [String: Any]) ?? [:]).isEmpty }
+    }
+
+    private static func hasPythonTests(_ folder: URL) -> Bool {
+        let fm = FileManager.default
+        if ["pytest.ini", "pyproject.toml", "setup.py", "conftest.py", "tox.ini"].contains(where: { fm.fileExists(atPath: folder.appendingPathComponent($0).path) }) { return true }
+        let tests = (try? fm.contentsOfDirectory(atPath: folder.appendingPathComponent("tests").path)) ?? []
+        return tests.contains { $0.hasSuffix(".py") }
     }
 
     /// *.test.js / *.test.mjs files in the folder or one level down (relative paths), for `node --test`.
@@ -521,10 +600,16 @@ enum BotsT3 {
 
     /// Pushes the run's branch and, the first time, opens a draft PR, when the repo lives on GitHub. A follow-up only
     /// pushes: the same pull request picks it up.
-    private static func publish(in folder: URL, branch: String, title: String, existing: String?, body: String,
+    private static func publish(in folder: URL, branch: String, title: String, existing: String?, base: String?, baseBranch: String?, body: String,
                                 engine: String, model: String) async -> (url: String?, problem: String?) {
         guard let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder), remote.contains("github.com") else {
             return (nil, "This repo has no GitHub remote, so the work stays on the local branch.")
+        }
+        // The branch was cut from wherever the owner was. Commits of theirs that aren't on GitHub yet would go up with it.
+        if existing == nil, let base,
+           let count = try? await shell(git, ["rev-list", "--count", base, "--not", "--remotes=origin"], in: folder),
+           let unpushed = Int(count.trimmingCharacters(in: .whitespacesAndNewlines)), unpushed > 0 {
+            return (nil, "The branch it started from has \(unpushed) commit\(unpushed == 1 ? "" : "s") that aren't on GitHub yet, and a pull request would publish them too. Push that branch, then write @code push.")
         }
         do {
             try await shell(git, ["push", "-u", "origin", branch], in: folder, limit: 120)
@@ -533,9 +618,13 @@ enum BotsT3 {
         }
         if let existing { return (existing, nil) }
         guard let gh else { return (nil, "The branch is pushed, but GitHub's gh command isn't installed, so there's no pull request.") }
+        var arguments = ["pr", "create", "--draft", "--head", branch, "--title", title,
+                         "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"]
+        if let baseBranch, (try? await shell(git, ["ls-remote", "--exit-code", "--heads", "origin", baseBranch], in: folder, limit: 30)) != nil {
+            arguments += ["--base", baseBranch]
+        }
         do {
-            let output = try await shell(gh, ["pr", "create", "--draft", "--head", branch, "--title", title,
-                                              "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"], in: folder, limit: 60)
+            let output = try await shell(gh, arguments, in: folder, limit: 60)
             return (output.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init), nil)
         } catch {
             return (nil, "The branch is pushed, but the pull request failed: \(error.localizedDescription.suffix(200))")
@@ -570,11 +659,27 @@ enum BotsT3 {
         paths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
     }
 
-    static func commitAll(in folder: URL, message: String) async throws {
+    /// Keys and env files an agent left lying around, which shouldn't reach a commit unless someone means it to.
+    static func looksLikeSecret(_ path: String) -> Bool {
+        let name = (path as NSString).lastPathComponent.lowercased()
+        if name == ".env" { return true }
+        if name.hasPrefix(".env."), ![".env.example", ".env.sample", ".env.template"].contains(name) { return true }
+        if ["pem", "key", "p12", "pfx"].contains((name as NSString).pathExtension) { return true }
+        return name.hasPrefix("id_rsa") || name.hasPrefix("id_ed25519") || name == "credentials.json"
+    }
+
+    /// Commits what's there, leaving out what looks like a secret. Returns what it left out.
+    @discardableResult
+    static func commitAll(in folder: URL, message: String) async throws -> [String] {
         let status = try await shell(git, ["status", "--porcelain"], in: folder)
-        guard !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         try await shell(git, ["add", "-A"], in: folder)
+        let staged = try await shell(git, ["diff", "--cached", "--name-only"], in: folder).split(separator: "\n").map(String.init)
+        let secrets = staged.filter(looksLikeSecret)
+        if !secrets.isEmpty { try await shell(git, ["reset", "-q", "--"] + secrets, in: folder) }
+        guard staged.count > secrets.count else { return secrets }
         try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "-m", message], in: folder)
+        return secrets
     }
 
     static func jsonObject(in output: String) -> [String: Any]? {
@@ -587,43 +692,81 @@ enum BotsT3 {
     @discardableResult
     static func shell(_ executable: URL, _ arguments: [String], in folder: URL? = nil,
                               stdin: String? = nil, limit: Double = 90) async throws -> String {
-        try await Task.detached {
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            let cwd = folder ?? FileManager.default.homeDirectoryForCurrentUser
-            process.currentDirectoryURL = cwd
-            var environment = ProcessInfo.processInfo.environment
-            environment["PWD"] = cwd.path
-            environment["NO_COLOR"] = "1"
-            environment["CI"] = "1"
-            environment["GH_PROMPT_DISABLED"] = "1"
-            let home = TheoProfile.realHome
-            environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(home)/.local/bin:\(home)/Library/pnpm:" +
-                "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
-            process.environment = environment
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-            let input = Pipe()
-            process.standardInput = stdin == nil ? FileHandle.nullDevice : input
-            try process.run()
-            let watchdog = Task.detached {
-                try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
-                if process.isRunning { process.terminate() }
+        // Blocks until the tool ends, so it stays off the small pool Swift's tasks run on.
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try runTool(executable, arguments, in: folder, stdin: stdin, limit: limit) })
             }
-            defer { watchdog.cancel() }
-            if let stdin {
-                try? input.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
-                try? input.fileHandleForWriting.close()
+        }
+    }
+
+    private static func runTool(_ executable: URL, _ arguments: [String], in folder: URL?, stdin: String?, limit: Double) throws -> String {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        let cwd = folder ?? FileManager.default.homeDirectoryForCurrentUser
+        process.currentDirectoryURL = cwd
+        var environment = ProcessInfo.processInfo.environment
+        environment["PWD"] = cwd.path
+        environment["NO_COLOR"] = "1"
+        environment["CI"] = "1"
+        environment["GH_PROMPT_DISABLED"] = "1"
+        let home = TheoProfile.realHome
+        environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(home)/.local/bin:\(home)/Library/pnpm:" +
+            "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+        process.environment = environment
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        let input = Pipe()
+        process.standardInput = stdin == nil ? FileHandle.nullDevice : input
+
+        let collected = CollectedOutput()
+        let reachedEnd = DispatchSemaphore(value: 0)
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                reachedEnd.signal()
+            } else {
+                collected.append(chunk)
             }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let text = String(data: data, encoding: .utf8) ?? ""
-            if process.terminationStatus != 0 {
-                throw BotsT3Error.failed("\(executable.lastPathComponent) \(arguments.first ?? "") failed: \(text.suffix(300))")
+        }
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        try process.run()
+        if let stdin {
+            try? input.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            try? input.fileHandleForWriting.close()
+        }
+        var timedOut = false
+        if exited.wait(timeout: .now() + limit) == .timedOut {
+            timedOut = true
+            process.terminate()
+            if exited.wait(timeout: .now() + 3) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
             }
-            return text
-        }.value
+        }
+        // Something it left running (a test's server, ssh's control master) can hold the pipe open forever.
+        _ = reachedEnd.wait(timeout: .now() + 2)
+        output.fileHandleForReading.readabilityHandler = nil
+        try? output.fileHandleForReading.close()
+        let text = collected.text
+        if timedOut {
+            throw BotsT3Error.failed("\(executable.lastPathComponent) \(arguments.first ?? "") took over \(Int(limit)) s and was stopped: \(text.suffix(300))")
+        }
+        if process.terminationStatus != 0 {
+            throw BotsT3Error.failed("\(executable.lastPathComponent) \(arguments.first ?? "") failed: \(text.suffix(300))")
+        }
+        return text
+    }
+
+    /// A tool's output as it arrives, on the pipe's own queue.
+    private final class CollectedOutput: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        func append(_ chunk: Data) { lock.withLock { data.append(chunk) } }
+        var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
     }
 }

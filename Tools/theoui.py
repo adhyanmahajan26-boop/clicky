@@ -7,7 +7,6 @@
   theoui.py shot NAME [window-number]     screenshot of one Theo window only -> <out>/NAME.png
   theoui.py text [window-number]          the text on screen with boxes (window points)
   theoui.py clicktext "words" [index]     finds the words on screen and clicks them, like a person would
-  theoui.py paste "text"                  puts text on the test profile's own pasteboard-free route: types it into the focused field
 """
 import json, os, pathlib, signal, subprocess, sys, time, uuid
 
