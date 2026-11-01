@@ -392,7 +392,10 @@ struct T3ResultCard: View {
                     Button { NSWorkspace.shared.open(url) } label: { Label("Open PR \(pullRequestNumber ?? "")", systemImage: "arrow.triangle.pull") }.buttonStyle(.theo(.primary, .small))
                 }
                 if session != nil {
-                    Button { withAnimation(DS.Motion.hover) { showsTerminal.toggle() } } label: { Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal") }
+                    Button {
+                        withAnimation(DS.Motion.hover) { showsTerminal.toggle() }
+                        NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil)
+                    } label: { Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal") }
                         .buttonStyle(.theo(.secondary, .small))
                 } else {
                     Button { BotsT3.openInApp(run) } label: {
@@ -427,7 +430,10 @@ struct T3ResultCard: View {
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
             if let report = run.fullReport, report.count > 60 {
-                Button { withAnimation(DS.Motion.hover) { showsReport.toggle() } } label: {
+                Button {
+                    withAnimation(DS.Motion.hover) { showsReport.toggle() }
+                    NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil)
+                } label: {
                     Label(showsReport ? "Hide the agent's report" : "Show the agent's report", systemImage: showsReport ? "chevron.up" : "chevron.down")
                 }
                 .buttonStyle(.theo(.ghost, .small))

@@ -689,9 +689,10 @@ struct BotChatScreen: View {
                         lastLive[last.author] = nil
                     }
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) }
-                    // Once more when a tall card under the new message has been laid out.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { proxy.scrollTo("end", anchor: .bottom) }
+                    // Again as a tall card under the new message is laid out and its words finish typing in.
+                    for delay in [0.3, 1.2, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("end", anchor: .bottom) } }
                 }
+                .modifier(ChatRunScroll(proxy: proxy, runKeys: runKeys))
                 .onChange(of: inProgress.map { "\($0.0.id):\($0.1.count / 200)" }) { _, _ in
                     for (bot, text) in inProgress where !text.isEmpty { lastLive[bot.id] = text }
                 }
@@ -710,6 +711,11 @@ struct BotChatScreen: View {
             composer
         }
         .onAppear { store.viewing = conversationID }
+    }
+
+    /// Changes whenever a run in this chat starts or changes phase.
+    private var runKeys: [String] {
+        store.t3Runs.filter { ($0.room ?? BotsStore.teamID) == conversationID }.map { "\($0.id):\($0.phase)" }
     }
 
     private var hasLiveRun: Bool {
@@ -1138,6 +1144,22 @@ enum BotMarkdown {
 }
 
 /// Short chats start at the top and long ones at the newest line (macOS 15's roles; the bottom on 14).
+/// A run card appearing, changing to its result, or opening its terminal stays in view whole.
+struct ChatRunScroll: ViewModifier {
+    let proxy: ScrollViewProxy
+    let runKeys: [String]
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: runKeys) { _, _ in
+                for delay in [0.3, 1.2, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("end", anchor: .bottom) } }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .theoScrollChatToEnd)) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) } }
+            }
+    }
+}
+
 struct ChatScrollAnchor: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15, *) {
@@ -1651,7 +1673,10 @@ struct T3RunCard: View {
             }
             HStack(spacing: 6) {
                 if session != nil {
-                    Button { withAnimation(DS.Motion.hover) { showsTerminal.toggle() } } label: {
+                    Button {
+                        withAnimation(DS.Motion.hover) { showsTerminal.toggle() }
+                        NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil)
+                    } label: {
                         Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal")
                     }
                     .buttonStyle(.theo(.ghost, .small))
@@ -2020,4 +2045,5 @@ struct PulseDot: View {
 extension Notification.Name {
     /// Opens the bot settings slide-over (the bot's name in the chat header sends it).
     static let theoShowBotSettings = Notification.Name("TheoShowBotSettings")
+    static let theoScrollChatToEnd = Notification.Name("theoScrollChatToEnd")
 }
