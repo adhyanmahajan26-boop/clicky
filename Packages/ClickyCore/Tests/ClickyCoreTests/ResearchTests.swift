@@ -124,4 +124,16 @@ struct ResearchTriggerHardPhrasesTests {
         let plenty = (0..<6).map { link("site\($0).com", CGFloat(100 + $0 * 50)) } + [link("below.com", 1000)]
         #expect(!ResearchLinkPicker.onScreenCandidates(plenty, windowFrame: window).contains { $0.url.host == "below.com" })
     }
+
+    @Test func googlesOpaqueLinksCountAsResults() {
+        let opaque = URL(string: "https://www.google.com/goto?url=CAESZQHrOzAVvAND")!
+        #expect(ResearchLinkPicker.isOpaqueRedirect(opaque))
+        #expect(!ResearchLinkPicker.isOpaqueRedirect(URL(string: "https://www.google.com/search?q=ev")!))
+        #expect(!ResearchLinkPicker.isOpaqueRedirect(URL(string: "https://example.com/goto?url=x")!))
+        let window = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let result = ResearchLinkCandidate(url: opaque, text: "Best Electric Vehicles for 2026, Tested", frame: CGRect(x: 100, y: 200, width: 400, height: 24))
+        let picked = ResearchLinkPicker.heuristicPick([result], count: 1, pageURL: URL(string: "https://www.google.com/search?q=ev"))
+        #expect(picked.count == 1)
+        #expect(ResearchLinkPicker.visibleCandidates([result], windowFrame: window).count == 1)
+    }
 }

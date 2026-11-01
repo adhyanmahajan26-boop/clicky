@@ -866,7 +866,7 @@ def read_frontmost_pid():
         info = subprocess.run(["lsappinfo", "info", "-only", "pid", front], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    match = re.search(r"pid\"?=(\d+)", info)
+    match = re.search(r"pid\W*(\d+)", info)
     return int(match.group(1)) if match else None
 
 
@@ -1727,6 +1727,8 @@ def main(argv):
     parser.add_argument("--side-origin", type=parse_origin, help="Chrome window origin X,Y for test 6")
     parser.add_argument("--attach-chrome", type=int, help="DevTools port of a throwaway Chrome already on the test display: nothing launches, focus never moves")
     args = parser.parse_args(argv)
+    global ATTACH_PORT
+    ATTACH_PORT = args.attach_chrome
     selected = args.only or sorted(TESTS)
     if args.dry_run:
         return dry_run(selected, args.side_origin)

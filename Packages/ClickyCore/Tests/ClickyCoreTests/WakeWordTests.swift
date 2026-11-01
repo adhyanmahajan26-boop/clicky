@@ -293,3 +293,15 @@ struct ProcessCPUUsageWindowTests {
     #expect(match?.phrase == "hey claudia")
     #expect(match?.remainderText.lowercased() == "what's on my screen")
 }
+
+@Suite struct WakeWordTheoHeardAsTests {
+    private func wakes(_ text: String) -> Bool {
+        WakeWordMatcher(phrases: ["hey theo"]).firstMatch(in: WakeWordMatcherTests.timedWords(text)) != nil
+    }
+
+    @Test(arguments: ["hey theo", "hey leo what time is it", "hey siri open notes", "hey jio"])
+    func whatTheRecognizerWritesForTheoWakes(_ text: String) { #expect(wakes(text)) }
+
+    @Test(arguments: ["hey there how was your day", "hey see what time it is", "the theory of relativity"])
+    func everydayWordsDont(_ text: String) { #expect(!wakes(text)) }
+}

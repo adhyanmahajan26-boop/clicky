@@ -235,7 +235,7 @@ struct WakeP8MatcherTests {
         #expect(match(text)?.phrase == "hey claudia", "\(text)")
     }
 
-    @Test(arguments: ["hey cloud is down", "hey cloud", "hey claude yeah", "hey claude ya know", "hey clouds are nice",
+    @Test(arguments: ["hey cloud is down", "hey cloud open", "hey cloud", "hey claude yeah", "hey claude ya know", "hey clouds are nice",
                       "hey click on it", "he clicked on it", "a cloud ya", "hey cloud and", "hey clo said"])
     func conservativeSplitsDoNotWake(_ text: String) {
         #expect(match(text) == nil, "\(text)")

@@ -95,7 +95,7 @@ public enum ResearchLinkPicker {
         var picked: [ResearchLinkCandidate] = []
         let contentLooking = candidates.filter { candidate in
             let words = candidate.text.split(separator: " ").count
-            return (words >= 3 || candidate.text.count >= 18) && !ResearchURLPolicy.isSearchEngine(candidate.url)
+            return (words >= 3 || candidate.text.count >= 18) && (!ResearchURLPolicy.isSearchEngine(candidate.url) || isOpaqueRedirect(candidate.url))
         }
         let preferred = contentLooking.filter { $0.url.host?.lowercased() != pageHost }
         for candidate in preferred + contentLooking where picked.count < count {
@@ -103,6 +103,12 @@ public enum ResearchLinkPicker {
             if seenHosts.insert(host).inserted || preferred.isEmpty { picked.append(candidate) }
         }
         return picked
+    }
+
+    /// A search engine's link that hides where it goes (google.com/goto?url=<opaque>). It's a real result: following it says where.
+    public static func isOpaqueRedirect(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(), host.contains("google."), url.path == "/goto" else { return false }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "url" } == true
     }
 
     /// google.com/url?q=… and similar redirect wrappers → the real page.

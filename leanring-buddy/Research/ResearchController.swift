@@ -92,7 +92,7 @@ final class ResearchController: CompanionActivitySource {
             var screenPage: ScreenLinks?
             if needsScreenLinks {
                 for attempt in 0..<8 {
-                    screenPage = Self.visibleLinksOnScreen(allowsLocalHostForTests: allowsLocalHostForTests)
+                    screenPage = await Self.visibleLinksOnScreen(allowsLocalHostForTests: allowsLocalHostForTests)
                     if screenPage != nil || Task.isCancelled { break }
                     print("🔎 Research: no visible links yet (try \(attempt + 1)), looking again")
                     try? await Task.sleep(nanoseconds: 800_000_000)
@@ -108,7 +108,7 @@ final class ResearchController: CompanionActivitySource {
                         self.lastStatus["topic"] = "Links from \(pageName.prefix(50))"
                     }
                     agentsCenter.log(parentAgentID, "picked \(picked.count) of \(screenPage.candidates.count) visible links (\(screenPage.pickMethod))")
-                    for url in picked where !urls.contains(url) && urls.count < count { urls.append(url) }
+                    for url in await Self.throughRedirects(picked) where !urls.contains(url) && urls.count < count { urls.append(url) }
                 }
             case .topic(let text):
                 urls += await Self.searchResults(for: text, maximum: 3)
@@ -257,15 +257,29 @@ final class ResearchController: CompanionActivitySource {
         var pickMethod = "model"
     }
 
-    static func visibleLinksOnScreen(allowsLocalHostForTests: Bool) -> ScreenLinks? {
+    static func visibleLinksOnScreen(allowsLocalHostForTests: Bool) async -> ScreenLinks? {
         guard let target = ArticleReader.findArticleWindow(), let window = target.windowElement else { return nil }
-        var queue: [AXUIElement] = [window]
-        var visited = 0
+        // Walking a big page takes a while, so it stays off the main thread.
+        let unchecked = UncheckedAXElement(element: window)
+        let (candidates, pageURL) = await Task.detached(priority: .userInitiated) {
+            pageLinks(in: unchecked.element, allowsLocalHostForTests: allowsLocalHostForTests)
+        }.value
+        let visible = ResearchLinkPicker.onScreenCandidates(candidates, windowFrame: target.windowFrameCG)
+        print("🔎 Research: \(candidates.count) links in the page, \(visible.count) visible")
+        guard !visible.isEmpty else { return nil }
+        return ScreenLinks(candidates: visible, windowFrame: target.windowFrameCG,
+                           pageTitle: TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: window), pageURL: pageURL)
+    }
+
+    /// Every link in the page, in reading order. A search page runs to tens of thousands of elements, most of them
+    /// pictures and words that can't hold a link, so those are skipped and the walk stops at a time limit, not a count.
+    nonisolated private static func pageLinks(in window: AXUIElement, allowsLocalHostForTests: Bool) -> ([ResearchLinkCandidate], URL?) {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        let leafRoles: Set<String> = ["AXStaticText", "AXImage", "AXButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXTextArea", "AXPopUpButton"]
+        var stack: [AXUIElement] = [window]
         var candidates: [ResearchLinkCandidate] = []
         var pageURL: URL?
-        while !queue.isEmpty, visited < 8000 {
-            let element = queue.removeFirst()
-            visited += 1
+        while let element = stack.popLast(), ProcessInfo.processInfo.systemUptime < deadline, candidates.count < 400 {
             let role = TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element)
             if role == "AXWebArea", pageURL == nil {
                 var value: CFTypeRef?
@@ -279,23 +293,40 @@ final class ResearchController: CompanionActivitySource {
                    let rawURL = value as? URL ?? (value as? NSURL) as URL?,
                    let frame = TypeForMeAccessibility.frameCG(of: element) {
                     let url = ResearchLinkPicker.unwrapRedirect(rawURL)
-                    if ResearchURLPolicy.isAllowed(url, allowsLocalHostForTests: allowsLocalHostForTests), !ResearchURLPolicy.isSearchEngine(url) {
+                    if ResearchURLPolicy.isAllowed(url, allowsLocalHostForTests: allowsLocalHostForTests),
+                       !ResearchURLPolicy.isSearchEngine(url) || ResearchLinkPicker.isOpaqueRedirect(url) {
                         candidates.append(ResearchLinkCandidate(url: url, text: linkText(element), frame: frame))
                     }
                 }
                 continue
             }
-            queue.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element))
+            if let role, leafRoles.contains(role) { continue }
+            stack.append(contentsOf: TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element).reversed())
         }
-        let visible = ResearchLinkPicker.onScreenCandidates(candidates, windowFrame: target.windowFrameCG)
-        print("🔎 Research: \(candidates.count) links in the page, \(visible.count) visible")
-        guard !visible.isEmpty else { return nil }
-        return ScreenLinks(candidates: visible, windowFrame: target.windowFrameCG,
-                           pageTitle: TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: window), pageURL: pageURL)
+        return (candidates, pageURL)
+    }
+
+    /// Google now writes every result as google.com/goto?url=<opaque>: only asking it says where one really goes.
+    static func throughRedirects(_ urls: [URL]) async -> [URL] {
+        await withTaskGroup(of: (Int, URL).self) { group in
+            for (index, url) in urls.enumerated() {
+                group.addTask {
+                    guard ResearchLinkPicker.isOpaqueRedirect(url) else { return (index, url) }
+                    var request = URLRequest(url: url, timeoutInterval: 10)
+                    request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36", forHTTPHeaderField: "User-Agent")
+                    // The headers are enough: by then the redirects have been followed.
+                    let final = (try? await URLSession.shared.bytes(for: request))?.1.url
+                    return (index, final ?? url)
+                }
+            }
+            var resolved: [(Int, URL)] = []
+            for await item in group { resolved.append(item) }
+            return resolved.sorted { $0.0 < $1.0 }.map(\.1).filter { !ResearchURLPolicy.isSearchEngine($0) }
+        }
     }
 
     /// A link's words: its title or description, else the text inside it.
-    private static func linkText(_ element: AXUIElement) -> String {
+    nonisolated private static func linkText(_ element: AXUIElement) -> String {
         for attribute in [kAXTitleAttribute, kAXDescriptionAttribute] {
             if let text = TypeForMeAccessibility.stringAttribute(attribute, of: element)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
                 return text
