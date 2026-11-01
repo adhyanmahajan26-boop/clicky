@@ -195,7 +195,7 @@ struct RoutinesScreen: View {
                     VStack(spacing: 10) {
                         Image(systemName: "clock.arrow.circlepath").font(.system(size: 40)).foregroundColor(DS.Colors.textTertiary)
                         Text("No routines yet").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                        Text("Try telling Gmail Reader: \"every weekday at 8:30, sum up what needs a reply\".")
+                        Text("Try telling a bot: \"every weekday at 8:30, sum up what needs a reply\".")
                             .font(.system(size: 12.5)).foregroundColor(DS.Colors.textSecondary)
                     }
                     .frame(maxWidth: .infinity).padding(.top, 90)

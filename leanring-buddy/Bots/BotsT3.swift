@@ -94,8 +94,10 @@ enum BotsT3 {
 
         ---
         When you're done: commit your work to git with a clear message, run the tests or checks you wrote and \
-        say how they went, and end with a short report for the team: what you built, how to run it, the tests \
-        and their results, and anything left undone.
+        say how they went, and end with a short report: what you did, how to run it, the tests and their results, and \
+        anything left undone. If your sandbox can't commit, just leave the changes in the folder. Don't push or open a \
+        pull request, and don't mention them in your report: Theo commits anything left over, pushes the branch and \
+        opens the draft pull request after you finish.
         """
 
     /// The ```prompt block Theo writes as the team's final prompt, if there is one.

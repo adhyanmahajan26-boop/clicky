@@ -22,7 +22,8 @@ enum TheoHomeWindowController {
     private static var window: NSWindow?
     static let t3BuiltInDownloadURL = URL(string: "https://github.com/adhyanmahajan26-boop/clicky/releases/latest")!
 
-    static func show(companionManager: CompanionManager, tab: TheoHomeView.Tab = .home) {
+    /// `activates` false opens it without taking focus (a launch in the background).
+    static func show(companionManager: CompanionManager, tab: TheoHomeView.Tab = .home, activates: Bool = true) {
         if window == nil {
             let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -48,8 +49,10 @@ enum TheoHomeWindowController {
         // A display picked after the window was made still wins the next time it opens.
         if let window, !window.isVisible { ClaudiaScreen.place(window) }
         NotificationCenter.default.post(name: .theoHomeSelectTab, object: tab.rawValue)
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        if activates {
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKeyAndOrderFront(nil)
+        }
         window?.orderFrontRegardless()
     }
 }

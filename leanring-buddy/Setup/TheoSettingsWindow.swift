@@ -243,11 +243,12 @@ struct CursorTile: View {
             VStack(spacing: 8) {
                 CompanionIconPreview(style: style).frame(width: 40, height: 40).padding(8)
                 Text(style.displayName).font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                    .multilineTextAlignment(.center).lineLimit(2).foregroundColor(DS.Colors.textPrimary)
+                    .multilineTextAlignment(.center).lineLimit(2).foregroundColor(Color.white.opacity(0.9))
             }
             .frame(maxWidth: .infinity, minHeight: 104)
             .padding(6)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.6)))
+            // Always dark: the sparks are drawn for it, in either appearance.
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(hex: 0x111114)))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(isSelected ? DS.Colors.accent : Color.white.opacity(isHovering ? 0.22 : 0.06), lineWidth: isSelected ? 2 : 1))
             .overlay(alignment: .topTrailing) {

@@ -142,6 +142,10 @@ enum APIChat {
             return url
         }
 
+        static func forget(_ session: String) {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent("\(session).json"))
+        }
+
         static func load(_ session: String) -> [APIChatMessage] {
             guard let data = try? Data(contentsOf: folder.appendingPathComponent("\(session).json")) else { return [] }
             return (try? JSONDecoder().decode([APIChatMessage].self, from: data)) ?? []

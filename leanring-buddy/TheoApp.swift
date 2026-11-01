@@ -129,7 +129,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         if SetupGuideWindowController.isNeededAtLaunch {
             SetupGuideWindowController.show(companionManager: companionManager)
         } else if ClickySettings.showsInDock || Self.launchTab != nil || TheoProfile.isTest {
-            TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home)
+            TheoHomeWindowController.show(companionManager: companionManager, tab: Self.launchTab ?? .home, activates: !Self.launchedInBackground)
         }
         if !companionManager.allPermissionsGranted && !TheoProfile.isTest { menuBar?.showPanelOnLaunch() }
         BotsSnapshot.renderIfAsked()

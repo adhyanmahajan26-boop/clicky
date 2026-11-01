@@ -123,13 +123,15 @@ struct TheoProductionTests {
         let messages = [APIChatMessage(role: "user", text: "hello")]
         let anthropic = try #require(ProviderInfo.builtIn.first { $0.id == "anthropic" })
         let request = try #require(APIChat.request(provider: anthropic, key: "K", model: "m", system: "S", messages: messages))
-        let body = try #require(try JSONSerialization.jsonObject(with: try #require(request.httpBody)) as? [String: Any])
+        let bodyData = try #require(request.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
         #expect(body["system"] as? String == "S")
         #expect(request.url?.absoluteString.hasSuffix("/messages") == true)
 
         let groq = try #require(ProviderInfo.builtIn.first { $0.id == "groq" })
         let openAI = try #require(APIChat.request(provider: groq, key: "K", model: "m", system: "S", messages: messages))
-        let openAIBody = try #require(try JSONSerialization.jsonObject(with: try #require(openAI.httpBody)) as? [String: Any])
+        let openAIData = try #require(openAI.httpBody)
+        let openAIBody = try #require(try JSONSerialization.jsonObject(with: openAIData) as? [String: Any])
         #expect((openAIBody["messages"] as? [[String: Any]])?.first?["role"] as? String == "system")
         #expect(openAI.url?.absoluteString == "https://api.groq.com/openai/v1/chat/completions")
     }
@@ -138,13 +140,15 @@ struct TheoProductionTests {
         let image = APIChatMessage(role: "user", text: "what's this", imagesJPEGBase64: ["AAAA"])
         let provider = try #require(ProviderInfo.builtIn.first { $0.id == "openai" })
         let request = try #require(APIChat.request(provider: provider, key: "K", model: "m", system: "", messages: [image]))
-        let text = String(decoding: try #require(request.httpBody), as: UTF8.self)
+        let body = try #require(request.httpBody)
+        let text = String(decoding: body, as: UTF8.self)
         #expect(text.contains("image_url"))
         #expect(text.contains("base64,AAAA"))
     }
 
     @Test func historyDropsScreenshots() {
         let session = "test-\(UUID().uuidString)"
+        defer { APIChat.History.forget(session) }
         APIChat.History.save([APIChatMessage(role: "user", text: "hi", imagesJPEGBase64: ["AAAA"])], session: session)
         let loaded = APIChat.History.load(session)
         #expect(loaded.first?.text == "hi")
@@ -237,8 +241,13 @@ struct TheoProductionTests {
     }
 
     @Test func aModelStaysWithItsHarness() {
-        let before = HarnessPrefs.codingTarget
-        defer { HarnessPrefs.codingTarget = before }
+        // The test host shares the app's preferences, so everything goes back as it was.
+        let before = (HarnessPrefs.codingTarget, HarnessPrefs.codingModel, HarnessPrefs.codingEffort)
+        defer {
+            HarnessPrefs.codingTarget = before.0
+            HarnessPrefs.codingModel = before.1
+            HarnessPrefs.codingEffort = before.2
+        }
         HarnessPrefs.codingTarget = "claude"
         HarnessPrefs.codingModel = "claude-haiku-5-5"
         HarnessPrefs.codingTarget = "codex"
