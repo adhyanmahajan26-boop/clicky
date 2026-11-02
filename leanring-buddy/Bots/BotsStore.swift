@@ -118,6 +118,8 @@ struct BotConversationRecord: Codable {
     var sessions: [String: String] = [:]
     /// Team chat: how many messages each bot has already been shown.
     var seen: [String: Int] = [:]
+    /// When it was last cleared, so a clear on one Mac sticks on the other.
+    var clearedAt: Date?
 }
 
 @MainActor
@@ -143,6 +145,16 @@ final class BotsStore: ObservableObject {
     var onCEOReport: ((String) -> Void)?
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
+    /// Theo Link: when things changed, and while the other Mac's copy is being applied.
+    private var linkBotStamps = LinkMerge.Stamps()
+    private var linkGroupStamps = LinkMerge.Stamps()
+    private var linkLayoutChangedAt: Date?
+    private var isApplyingLink = false
+    private var linkSavedBots: [NativeBot] = []
+    private var linkSavedGroups: [BotGroup] = []
+    private var linkSavedLayout = BotsLayout()
+    /// Messages from the other Mac this Mac's engine session hasn't seen, by chat.
+    private var linkUnheard: [String: [BotChatMessage]] = [:]
     /// The conversation on screen, which collects no unread count.
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
     private var routineTimer: Timer?
@@ -173,6 +185,7 @@ final class BotsStore: ObservableObject {
         provisionClickyTeam()
         loadDelegations()
         backfillTeamWork()
+        loadLinkStamps()
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -297,7 +310,7 @@ final class BotsStore: ObservableObject {
     /// Starts a fresh chat with a bot (its engine session starts over too).
     func clearConversation(_ id: String) {
         conversations[id]?.sessions.values.forEach(APIChat.History.forget)
-        conversations[id] = BotConversationRecord()
+        conversations[id] = BotConversationRecord(clearedAt: Date())
         writeConversation(id)
     }
 
@@ -337,7 +350,7 @@ final class BotsStore: ObservableObject {
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
-        prompt = takeWaitingReports(for: bot) + prompt
+        prompt = takeWaitingReports(for: bot) + linkCatchUp(botID) + prompt
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }
@@ -849,10 +862,12 @@ final class BotsStore: ObservableObject {
     }
 
     private func writeGroups() {
+        noteLinkChanges()
         if let data = try? Self.encoder.encode(groups) { try? data.write(to: groupsFile, options: .atomic) }
     }
 
     private func writeBots() {
+        noteLinkChanges()
         guard let data = try? Self.encoder.encode(bots) else { return }
         try? data.write(to: botsFile, options: .atomic)
     }
@@ -1163,6 +1178,7 @@ extension BotsStore {
     }
 
     func writeLayout() {
+        noteLinkChanges()
         if let data = try? Self.encoder.encode(layout) { try? data.write(to: layoutFile, options: .atomic) }
     }
 
@@ -1675,5 +1691,182 @@ extension BotsStore {
         guard !waiting.isEmpty else { return "" }
         let lines = waiting.map { $0.author == "routine" ? $0.text : "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
         return "(What came in since you last spoke, reports from your teams and any voice call with Addy:\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
+    }
+}
+
+// MARK: - Theo Link
+
+/// What goes over the link for one chat. Engine sessions stay with their own Mac.
+struct LinkChatItem: Codable {
+    var messages: [BotChatMessage]
+    var clearedAt: Date?
+}
+
+struct LinkListItem<T: Codable>: Codable {
+    var items: [T]
+    var stamps: LinkMerge.Stamps
+}
+
+struct LinkLayoutItem: Codable {
+    var layout: BotsLayout
+    var changedAt: Date?
+}
+
+extension BotsStore {
+    private var linkStampsFile: URL { folder.appendingPathComponent("link-stamps.json") }
+
+    private struct SavedStamps: Codable {
+        var bots = LinkMerge.Stamps()
+        var groups = LinkMerge.Stamps()
+        var layout: Date?
+    }
+
+    fileprivate func loadLinkStamps() {
+        let saved = (try? Data(contentsOf: linkStampsFile)).flatMap { try? LinkCoding.decoder.decode(SavedStamps.self, from: $0) } ?? SavedStamps()
+        linkBotStamps = saved.bots
+        linkGroupStamps = saved.groups
+        linkLayoutChangedAt = saved.layout
+        linkSavedBots = bots
+        linkSavedGroups = groups
+        linkSavedLayout = layout
+    }
+
+    /// Runs on every save: what the owner changed here wins over older changes on the other Mac.
+    fileprivate func noteLinkChanges() {
+        guard !isApplyingLink else { return }
+        LinkMerge.noteChanges(from: linkSavedBots, to: bots, id: \.id, stamps: &linkBotStamps)
+        LinkMerge.noteChanges(from: linkSavedGroups, to: groups, id: \.id, stamps: &linkGroupStamps)
+        if LinkCoding.digest(linkSavedLayout) != LinkCoding.digest(layout) { linkLayoutChangedAt = Date() }
+        linkSavedBots = bots
+        linkSavedGroups = groups
+        linkSavedLayout = layout
+        writeLinkStamps()
+    }
+
+    private func writeLinkStamps() {
+        let saved = SavedStamps(bots: linkBotStamps, groups: linkGroupStamps, layout: linkLayoutChangedAt)
+        if let data = try? LinkCoding.encoder.encode(saved) { try? data.write(to: linkStampsFile, options: .atomic) }
+    }
+
+    /// The chats both Macs should hold: every bot's and group chat's, and Clicky's.
+    private var linkChatIDs: Set<String> {
+        Set(bots.map(\.id) + groups.filter { $0.headID != nil }.map(\.roomID) + [Self.clickyID])
+    }
+
+    private func linkItem(forChat id: String) -> LinkChatItem {
+        let record = conversation(id)
+        return LinkChatItem(messages: record.messages, clearedAt: record.clearedAt)
+    }
+
+    /// One fingerprint per thing the Macs share. Memory's is worked out by the caller, off the main thread.
+    var linkDigests: [String: String] {
+        var digests = [
+            "bots": LinkCoding.digest(LinkListItem(items: bots, stamps: linkBotStamps)),
+            "groups": LinkCoding.digest(LinkListItem(items: groups, stamps: linkGroupStamps)),
+            "layout": LinkCoding.digest(layout),
+            "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
+        ]
+        for id in linkChatIDs {
+            let item = linkItem(forChat: id)
+            digests["chat/" + id] = LinkCoding.digest(item.messages.map(\.id).sorted() + [item.clearedAt?.description ?? ""])
+        }
+        return digests
+    }
+
+    func wantsLinkItem(_ key: String) -> Bool {
+        guard key.hasPrefix("chat/") else { return true }
+        return linkChatIDs.contains(String(key.dropFirst("chat/".count)))
+    }
+
+    func linkPayload(_ key: String) -> Data? {
+        let encoder = LinkCoding.encoder
+        switch key {
+        case "bots": return try? encoder.encode(LinkListItem(items: bots, stamps: linkBotStamps))
+        case "groups": return try? encoder.encode(LinkListItem(items: groups, stamps: linkGroupStamps))
+        case "layout": return try? encoder.encode(LinkLayoutItem(layout: layout, changedAt: linkLayoutChangedAt))
+        case "delegations": return try? encoder.encode(delegations)
+        case "memory": return try? encoder.encode(memoryStore.everything())
+        default:
+            guard key.hasPrefix("chat/") else { return nil }
+            return try? encoder.encode(linkItem(forChat: String(key.dropFirst("chat/".count))))
+        }
+    }
+
+    func applyLinkPayload(_ key: String, _ data: Data) {
+        let decoder = LinkCoding.decoder
+        isApplyingLink = true
+        defer { isApplyingLink = false }
+        switch key {
+        case "bots":
+            guard let theirs = try? decoder.decode(LinkListItem<NativeBot>.self, from: data) else { return }
+            let merged = LinkMerge.byID(local: bots, localStamps: linkBotStamps, remote: theirs.items, remoteStamps: theirs.stamps, id: \.id)
+            linkBotStamps = merged.stamps
+            bots = merged.items
+            linkSavedBots = bots
+            for bot in bots where conversations[bot.id] == nil { conversations[bot.id] = BotConversationRecord() }
+            writeBots()
+            writeLinkStamps()
+        case "groups":
+            guard let theirs = try? decoder.decode(LinkListItem<BotGroup>.self, from: data) else { return }
+            let merged = LinkMerge.byID(local: groups, localStamps: linkGroupStamps, remote: theirs.items, remoteStamps: theirs.stamps, id: \.id)
+            linkGroupStamps = merged.stamps
+            groups = merged.items
+            linkSavedGroups = groups
+            for group in groups where group.headID != nil && conversations[group.roomID] == nil { conversations[group.roomID] = BotConversationRecord() }
+            writeGroups()
+            writeLinkStamps()
+        case "layout":
+            guard let theirs = try? decoder.decode(LinkLayoutItem.self, from: data) else { return }
+            let mineAt = linkLayoutChangedAt ?? .distantPast
+            let theirsAt = theirs.changedAt ?? .distantPast
+            let mineCount = layout.sections.reduce(0) { $0 + $1.items.count }
+            let theirCount = theirs.layout.sections.reduce(0) { $0 + $1.items.count }
+            // Never arranged on either Mac: the fuller sidebar wins, with a stable tie-break so both choose the same.
+            let takesTheirs = theirsAt != mineAt ? theirsAt > mineAt
+                : theirCount != mineCount ? theirCount > mineCount
+                : LinkCoding.digest(theirs.layout) < LinkCoding.digest(layout)
+            guard takesTheirs else { return }
+            layout = theirs.layout
+            linkLayoutChangedAt = theirs.changedAt
+            linkSavedLayout = layout
+            writeLayout()
+            writeLinkStamps()
+        case "delegations":
+            guard let theirs = try? decoder.decode([ClickyDelegation].self, from: data) else { return }
+            delegations = Array(LinkMerge.union(local: delegations, remote: theirs, id: \.id, at: \.startedAt) { first, second in
+                (first.finishedAt ?? .distantPast) >= (second.finishedAt ?? .distantPast) ? first : second
+            }.suffix(200))
+            if let saved = try? LinkCoding.encoder.encode(delegations) { try? saved.write(to: folder.appendingPathComponent("delegations.json"), options: .atomic) }
+        case "memory":
+            guard let theirs = try? decoder.decode([ClickyMemoryEntry].self, from: data) else { return }
+            memoryStore.merge(theirs)
+        default:
+            let id = String(key.dropFirst("chat/".count))
+            guard key.hasPrefix("chat/"), linkChatIDs.contains(id), let theirs = try? decoder.decode(LinkChatItem.self, from: data) else { return }
+            var record = conversation(id)
+            let known = Set(record.messages.map(\.id))
+            let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
+            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.at, clearedAt: clearedAt)
+            let arrived = merged.filter { !known.contains($0.id) }
+            record.messages = merged
+            record.clearedAt = clearedAt
+            conversations[id] = record
+            writeConversation(id)
+            for message in arrived where !message.text.isEmpty {
+                noteUnread(message, in: id)
+                linkUnheard[id, default: []].append(message)
+            }
+            if let count = linkUnheard[id]?.count, count > 20 { linkUnheard[id]?.removeFirst(count - 20) }
+        }
+    }
+
+    /// What happened in this chat on the other Mac, for the bot's next turn here: its engine session only knows this Mac.
+    fileprivate func linkCatchUp(_ id: String) -> String {
+        guard let heard = linkUnheard.removeValue(forKey: id), !heard.isEmpty else { return "" }
+        let lines = heard.map { message -> String in
+            let who = message.author == "user" ? "Addy" : (bot(message.author)?.name ?? message.author)
+            return "\(who): \(message.text.prefix(600))"
+        }.joined(separator: "\n")
+        return "(This chat also went on from Addy's other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
     }
 }

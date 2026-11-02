@@ -230,3 +230,57 @@ struct ClickyTeamTests {
         if case .find = ClickyMemoryTask.classify("collect all the data from Clicky's bots") {} else { Issue.record("should be a find") }
     }
 }
+
+@Suite struct TheoLinkTests {
+    private struct Thing: Codable, Equatable { var id: String; var note: String }
+
+    @Test func codesSurviveBeingRetyped() {
+        let code = LinkPairing.newCode()
+        #expect(LinkPairing.normalized(code.lowercased().replacingOccurrences(of: "-", with: " ")) == code)
+        #expect(LinkPairing.normalized("short") == nil)
+        #expect(LinkPairing.key(forCode: code) == LinkPairing.key(forCode: code))
+    }
+
+    @Test func framesCanArriveInAnyPieces() {
+        var reader = LinkFrameReader()
+        let stream = LinkFrameReader.frame(Data("first".utf8)) + LinkFrameReader.frame(Data("second".utf8))
+        var messages: [Data] = []
+        for byte in stream { messages += reader.feed(Data([byte])) ?? [] }
+        #expect(messages == [Data("first".utf8), Data("second".utf8)])
+    }
+
+    @Test func bothSidesOfAMergeEndUpTheSame() {
+        var mine = LinkMerge.Stamps(), theirs = LinkMerge.Stamps()
+        let t0 = Date(timeIntervalSince1970: 1000), t1 = Date(timeIntervalSince1970: 2000)
+        let a = [Thing(id: "shared", note: "old"), Thing(id: "only-a", note: "a"), Thing(id: "removed", note: "x")]
+        let b = [Thing(id: "shared", note: "new"), Thing(id: "only-b", note: "b"), Thing(id: "removed", note: "x")]
+        mine.changed["shared"] = t0
+        theirs.changed["shared"] = t1
+        theirs.gone["removed"] = t1
+        let onA = LinkMerge.byID(local: a, localStamps: mine, remote: b, remoteStamps: theirs, id: \.id)
+        let onB = LinkMerge.byID(local: b, localStamps: theirs, remote: a, remoteStamps: mine, id: \.id)
+        #expect(Set(onA.items.map(\.id)) == ["shared", "only-a", "only-b"])
+        #expect(onA.items.first { $0.id == "shared" }?.note == "new")
+        #expect(Set(onB.items.map(\.id)) == Set(onA.items.map(\.id)))
+        #expect(onA.stamps == onB.stamps)
+    }
+
+    @Test func aClearedChatStaysCleared() {
+        let old = Thing(id: "1", note: "old"), kept = Thing(id: "2", note: "kept")
+        let dates = ["1": Date(timeIntervalSince1970: 100), "2": Date(timeIntervalSince1970: 300)]
+        let merged = LinkMerge.union(local: [kept], remote: [old, kept], id: \.id, at: { dates[$0.id]! }, clearedAt: Date(timeIntervalSince1970: 200))
+        #expect(merged == [kept])
+    }
+
+    @Test func memoryMergesWithoutDuplicates() {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let here = ClickyMemoryStore(directory: folder)
+        let there = ClickyMemoryStore(directory: folder.appendingPathComponent("other"))
+        here.append("Priya's birthday is in March", kind: .said)
+        there.append("Researcher finished the Webb brief", kind: .teamWork)
+        here.merge(there.everything())
+        here.merge(there.everything())
+        #expect(here.entries().count == 1)
+        #expect(here.teamWork().count == 1)
+    }
+}

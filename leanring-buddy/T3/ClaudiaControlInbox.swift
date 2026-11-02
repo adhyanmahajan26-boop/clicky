@@ -95,6 +95,8 @@ final class ClaudiaControlInbox {
         func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
         if TheoUIDriver.handle(commandName, command, respond: respond) { return }
         switch commandName {
+        case "linkStatus":
+            reply(identifier, ok: true, result: TheoLink.shared.statusReport, error: nil)
         case "botSay":
             // A message to a bot's chat ("team" for the Project room), as if typed in Theo.
             let botID = command["bot"] as? String ?? BotsStore.teamID

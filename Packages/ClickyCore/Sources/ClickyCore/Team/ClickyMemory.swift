@@ -106,6 +106,20 @@ public struct ClickyMemoryStore: Sendable {
         }
     }
 
+    /// Writes a whole log at once.
+    func replace(_ entries: [ClickyMemoryEntry], inSaidLog: Bool) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var data = Data()
+        for entry in entries {
+            guard let line = try? encoder.encode(entry) else { continue }
+            data.append(line)
+            data.append(0x0A)
+        }
+        try? data.write(to: inSaidLog ? entriesFile : summariesFile, options: .atomic)
+    }
+
     private func read(_ file: URL) -> [ClickyMemoryEntry] {
         guard let data = try? Data(contentsOf: file) else { return [] }
         let decoder = JSONDecoder()

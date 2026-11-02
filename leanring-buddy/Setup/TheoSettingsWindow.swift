@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case look, clicky, coding, keys, voice, dictation, screen, permissions, updates, about
+        case look, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         var title: String {
@@ -38,6 +38,7 @@ enum SettingsTab {
             case .voice: return "Voice"
             case .dictation: return "Dictation"
             case .screen: return "Screen"
+            case .link: return "Your other Mac"
             case .permissions: return "Permissions"
             case .updates: return "Updates"
             case .about: return "About"
@@ -53,6 +54,7 @@ enum SettingsTab {
             case .voice: return "How Clicky and Theo speak, how they hear you, and calls."
             case .dictation: return "Hold a shortcut in any app, talk, and it's typed."
             case .screen: return "The monitor Theo works on, leaving your main screen alone."
+            case .link: return "Both Macs run as one Theo: the same bots, group chats, chats and memory."
             case .permissions: return "What Theo needs to hear, see and point."
             case .updates: return "Keep Theo current."
             case .about: return "The Dock icon and the setup guide."
@@ -68,6 +70,7 @@ enum SettingsTab {
             case .voice: return "waveform"
             case .dictation: return "mic.fill"
             case .screen: return "display"
+            case .link: return "link"
             case .permissions: return "lock.shield.fill"
             case .updates: return "arrow.down.circle.fill"
             case .about: return "info.circle.fill"
@@ -83,6 +86,7 @@ enum SettingsTab {
             case .voice: return TileColors.rose
             case .dictation: return TileColors.violet
             case .screen: return TileColors.sky
+            case .link: return TileColors.teal
             case .permissions: return TileColors.teal
             case .updates: return TileColors.lime
             case .about: return TileColors.slate
@@ -158,6 +162,7 @@ struct SettingsPage: View {
         case .voice: VoiceSettingsContent()
         case .dictation: DictationSettingsContent()
         case .screen: ScreenSettingsContent()
+        case .link: LinkSettingsContent()
         case .permissions: PermissionsSettingsContent()
         case .updates: UpdatesSettingsContent()
         case .about: AboutSettingsContent()

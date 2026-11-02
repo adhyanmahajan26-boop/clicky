@@ -6,6 +6,12 @@
 	<true/>
 	<key>VoiceTranscriptionProvider</key>
 	<string>apple</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_theolink._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Theo uses your local network to stay in step with Theo on your other Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clicky uses your microphone so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>

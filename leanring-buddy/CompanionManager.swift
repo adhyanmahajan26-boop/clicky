@@ -459,6 +459,7 @@ final class CompanionManager: ObservableObject {
         addCompanionActivitySource(simulatedCompanionActivitySource)
         addCompanionActivitySource(researchController)
         updateController.startAutomaticChecks()
+        TheoLink.shared.start()
         // Agents dashboard: the brain record follows voiceState; code tasks report in; the spark opens it.
         codeModeController.agentsCenter = agentsCenter
         projectBridge.start()
