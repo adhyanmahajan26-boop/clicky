@@ -46,6 +46,7 @@ final class TheoLink: ObservableObject {
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
     private var waitingOrders: [String: (String) -> Void] = [:]
+    private var isSyncQueued = false
     private var waitingRequests: [(action: String, fields: [String: String])] = []
     private var connectionState = "none"
     private var isConnectionReady = false
@@ -428,6 +429,17 @@ final class TheoLink: ObservableObject {
             guard let action = envelope.key, let payload = envelope.payload,
                   let fields = try? LinkCoding.decoder.decode([String: String].self, from: payload) else { return }
             BotsStore.shared.handleLinkRequest(action, fields)
+        }
+    }
+
+    /// Something just changed: the other Mac hears within a second rather than at the next round.
+    func syncSoon() {
+        guard isHelloDone, !isSyncQueued else { return }
+        isSyncQueued = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.isSyncQueued = false
+            self?.sendDigest()
         }
     }
 

@@ -342,21 +342,19 @@ final class BotsStore: ObservableObject {
     /// Sends your message to a bot's own chat and streams its reply in.
     /// `command`: what the owner typed, without attachments, which decides whether this is "@code …". A word in an
     /// attached file doesn't start an agent.
-    func send(_ text: String, command: String? = nil, to botID: String) {
+    func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
+        if messageID == nil, forwardToWorkMac("botSay", room: botID, target: botID, text: text, command: command) { return }
         guard let bot = bot(botID), replying[botID] == nil else { return }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
             post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
             return
         }
-        // Its engine isn't signed in on this Mac but the Mac with the work screen can run it: the answer comes back through the chat.
-        if !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected, HarnessCatalog.info(bot.provider) != nil {
-            let status = HarnessCenter.shared.status(for: bot.provider)
-            if !status.installed || status.loggedIn == false, TheoLink.shared.request("botSay", ["bot": botID, "text": text]) { return }
-        }
         var record = conversation(botID)
-        record.messages.append(BotChatMessage(author: "user", text: text))
+        if !record.messages.contains(where: { $0.id == messageID }) {
+            record.messages.append(BotChatMessage(id: messageID ?? UUID().uuidString, author: "user", text: text))
+        }
         conversations[botID] = record
         writeConversation(botID)
         if BotsStore.isCodingCommand(command ?? text) {
@@ -458,12 +456,25 @@ final class BotsStore: ObservableObject {
         else if let primary { send(text, to: primary.id) }
     }
 
+    /// On the other Mac, bots run on the Mac with the work screen, so there's one of each with one memory and one set of
+    /// sign-ins. The message shows here right away and the answer comes back through the chat. With that Mac away they run here.
+    private func forwardToWorkMac(_ action: String, room: String, target: String, text: String, command: String?) -> Bool {
+        guard TheoLink.shared.isPaired, !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected else { return false }
+        let message = BotChatMessage(author: "user", text: text)
+        guard TheoLink.shared.request(action, ["target": target, "text": text, "command": command ?? "", "id": message.id]) else { return false }
+        post(message, to: room)
+        return true
+    }
+
     /// Posts to a group chat; tagged bots answer, or the head when nobody is tagged.
-    func sendToGroup(_ text: String, command: String? = nil, groupID: String) {
+    func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
+        if messageID == nil, forwardToWorkMac("groupSay", room: room, target: groupID, text: text, command: command) { return }
         var record = conversation(room)
-        record.messages.append(BotChatMessage(author: "user", text: text))
+        if !record.messages.contains(where: { $0.id == messageID }) {
+            record.messages.append(BotChatMessage(id: messageID ?? UUID().uuidString, author: "user", text: text))
+        }
         conversations[room] = record
         writeConversation(room)
         if BotsStore.isCodingCommand(command ?? text) {
@@ -1170,6 +1181,7 @@ final class BotsStore: ObservableObject {
     func writeConversation(_ id: String) {
         guard let data = try? Self.encoder.encode(conversation(id)) else { return }
         try? data.write(to: chatFile(id), options: .atomic)
+        TheoLink.shared.syncSoon()
     }
 }
 
@@ -2228,8 +2240,18 @@ extension BotsStore {
                 }
             }
             CompanionManager.current?.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: options)
-        case "botSay":
-            if let bot = fields["bot"], let text = fields["text"] { send(text, to: bot) }
+        case "botSay", "groupSay":
+            guard let target = fields["target"], let text = fields["text"], let id = fields["id"] else { return }
+            let command = fields["command"].flatMap { $0.isEmpty ? nil : $0 }
+            Task { [weak self] in
+                // Sent while it was still answering something else: it waits its turn.
+                while action == "botSay", self?.replying[target] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+                if action == "botSay" {
+                    self?.send(text, command: command, to: target, messageID: id)
+                } else {
+                    self?.sendToGroup(text, command: command, groupID: target, messageID: id)
+                }
+            }
         case "clickyAnswer":
             guard let text = fields["text"] else { return }
             post(BotChatMessage(author: Self.clickyID, text: text), to: Self.clickyID)
