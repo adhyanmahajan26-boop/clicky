@@ -494,6 +494,7 @@ enum TheoUIDriver {
             case "pin": store.setPinned(command["on"] as? Bool ?? true, item)
             case "hide": store.setHidden(command["on"] as? Bool ?? true, item)
             case "leader": store.setLeader(command["bot"] as? String, of: section ?? "")
+            case "hasManager": store.setHasManager(command["on"] as? Bool ?? true, of: section ?? "")
             case "report": store.reportToCEO(section ?? "")
             case "deleteCategory": store.deleteSection(section ?? "")
             default: break

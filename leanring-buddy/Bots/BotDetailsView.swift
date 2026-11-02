@@ -127,56 +127,46 @@ struct BotDetailsSheet: View {
     }
 }
 
-/// A bot's look: its colour (one of the ten swatches) and its mark (initials or a symbol).
+/// A bot's look: the gallery of characters. Theo also has its own mark to go back to.
 struct BotLookPicker: View {
     @Binding var bot: NativeBot
-    static let glyphs = ["", "sparkles", "envelope.fill", "magnifyingglass", "doc.text.fill", "chevron.left.forwardslash.chevron.right",
-                         "paintbrush.pointed.fill", "film.fill", "chart.line.uptrend.xyaxis", "calendar", "cart.fill", "graduationcap.fill",
-                         "heart.fill", "bolt.fill", "globe", "music.note"]
+    var tile: CGFloat = 44
+    var columns = 8
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Colour").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(24), spacing: 7), count: 10), alignment: .leading, spacing: 7) {
-                ForEach(BotPalette.swatches) { swatch in
-                    Button { bot.shape = swatch.id } label: {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                            .frame(width: 24, height: 24)
-                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).inset(by: -3)
-                                .stroke(BotPalette.swatch(for: bot) == swatch ? DS.Colors.textPrimary : .clear, lineWidth: 1.5))
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(tile + 12), spacing: 6), count: columns), alignment: .leading, spacing: 8) {
+            if bot.id == "theo" { theoTile }
+            ForEach(BotCharacter.allCases) { character in
+                let picked = BotCharacter.of(bot) == character && !(bot.id == "theo" && bot.avatar == nil)
+                Button { bot.avatar = character.rawValue } label: {
+                    VStack(spacing: 3) {
+                        BotCharacterView(character: character, size: tile)
+                        Text(character.title).font(.system(size: 10, weight: picked ? .semibold : .regular))
+                            .foregroundColor(picked ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
                     }
-                    .buttonStyle(.plain).help(swatch.id.capitalized)
+                    .padding(.vertical, 5).frame(width: tile + 12)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(picked ? DS.Colors.selected : .clear))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(picked ? DS.Colors.accent : .clear, lineWidth: 1.5))
+                    .contentShape(Rectangle())
                 }
-            }
-            Text("Mark").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 8), spacing: 6) {
-                ForEach(Self.glyphs, id: \.self) { glyph in
-                    Button { bot.glyph = glyph.isEmpty ? nil : glyph } label: {
-                        markTile(glyph)
-                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).inset(by: -2)
-                                .stroke((bot.glyph ?? "") == glyph ? DS.Colors.textPrimary : .clear, lineWidth: 1.5))
-                    }
-                    .buttonStyle(.plain).help(glyph.isEmpty ? "Initials" : glyph)
-                }
+                .buttonStyle(.plain).help(character.title)
             }
         }
     }
 
-    /// The mark itself, large: on a small robot face it would only be a tiny badge and they'd all look alike.
-    private func markTile(_ glyph: String) -> some View {
-        let swatch = BotPalette.swatch(for: bot)
-        return RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .frame(width: 28, height: 28)
-            .overlay {
-                if glyph.isEmpty {
-                    Text(String(bot.name.prefix(1)).uppercased().isEmpty ? "A" : String(bot.name.prefix(1)).uppercased())
-                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
-                } else {
-                    Image(systemName: glyph).font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
-                }
+    private var theoTile: some View {
+        Button { bot.avatar = nil } label: {
+            VStack(spacing: 3) {
+                BotAvatar(bot: { var own = bot; own.avatar = nil; return own }(), size: tile, state: .idle)
+                Text("Theo").font(.system(size: 10, weight: bot.avatar == nil ? .semibold : .regular))
+                    .foregroundColor(bot.avatar == nil ? DS.Colors.textPrimary : DS.Colors.textTertiary)
             }
+            .padding(.vertical, 5).frame(width: tile + 12)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bot.avatar == nil ? DS.Colors.selected : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(bot.avatar == nil ? DS.Colors.accent : .clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).help("Theo's own mark")
     }
 }
 
@@ -460,10 +450,15 @@ struct GroupAvatar: View {
 
     @ViewBuilder private func cell(_ shown: [NativeBot], _ index: Int, _ tile: CGFloat) -> some View {
         if index < shown.count {
-            let swatch = BotPalette.swatch(for: shown[index])
-            RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous)
-                .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: tile, height: tile)
+            let bot = shown[index]
+            if bot.id == "theo" && bot.avatar == nil {
+                let swatch = BotPalette.swatch(for: bot)
+                RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: tile, height: tile)
+            } else {
+                BotCharacterView(character: .of(bot), size: tile)
+            }
         } else {
             RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous).fill(DS.Colors.hover).frame(width: tile, height: tile)
         }

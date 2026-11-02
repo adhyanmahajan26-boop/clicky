@@ -118,6 +118,22 @@ struct BotStencil: Identifiable {
     let colour: String
     let apps: [String]
 
+    /// The character each stencil starts with, so the gallery doesn't show twins.
+    var character: BotCharacter {
+        switch id {
+        case "researcher": return .owl
+        case "inbox": return .cloud
+        case "builder": return .tank
+        case "writer": return .drop
+        case "reviewer": return .cat
+        case "planner": return .cube
+        case "briefing": return .sprout
+        case "reels", "reel": return .tube
+        case "tutor": return .gem
+        default: return .pebble
+        }
+    }
+
     static let all: [BotStencil] = [
         BotStencil(id: "blank", name: "Blank", summary: "Start from nothing and write its job yourself.",
                    instructions: "", glyph: "", colour: "slate", apps: []),
@@ -261,6 +277,9 @@ struct NewBotSheet: View {
                     TextField("What it does", text: $role).textFieldStyle(.plain).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
                 }
             }
+            field("Look") {
+                BotLookPicker(bot: $look, tile: 40, columns: 8)
+            }
             field("Instructions") {
                 TextEditor(text: $instructions)
                     .font(.system(size: 13)).scrollContentBackground(.hidden).padding(8).frame(height: 120)
@@ -330,16 +349,14 @@ struct NewBotSheet: View {
         name = item.id == "blank" ? "" : item.name
         role = item.id == "blank" ? "" : item.summary
         instructions = item.instructions
-        look.shape = item.colour
-        look.glyph = item.glyph.isEmpty ? nil : item.glyph
+        look.avatar = BotCharacter.firstFree(preferring: item.character, among: store.bots).rawValue
         look.name = name
     }
 
     private func preview(of item: BotStencil) -> NativeBot {
         var bot = look
         bot.name = item.name
-        bot.shape = item.colour
-        bot.glyph = item.glyph.isEmpty ? nil : item.glyph
+        bot.avatar = item.character.rawValue
         return bot
     }
 
@@ -348,8 +365,7 @@ struct NewBotSheet: View {
         var bot = store.addBot(name: trimmedName, description: role.isEmpty ? "Your \(trimmedName) bot." : role,
                                instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
                                provider: provider, model: model, groupID: groupID.isEmpty ? nil : groupID)
-        bot.shape = look.shape
-        bot.glyph = look.glyph
+        bot.avatar = look.avatar
         bot.apps = stencil?.apps ?? []
         bot.effort = provider.hasPrefix("api:") ? nil : HarnessPrefs.defaultEffort(provider)
         store.save(bot)

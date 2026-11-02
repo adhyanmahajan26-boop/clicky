@@ -314,20 +314,20 @@ struct BotsRootView: View {
         return id == BotGroup.projectID ? .team : .group(id)
     }
 
-    @ViewBuilder private func itemRow(_ item: String) -> some View {
+    @ViewBuilder private func itemRow(_ item: String, inTeam: Bool = false) -> some View {
         Group {
             if item == "clicky" {
-                sidebarRow(.clicky, title: "Clicky") { ClickyAvatar(size: 20) }
+                sidebarRow(.clicky, title: "Clicky", inTeam: inTeam) { ClickyAvatar(size: 20) }
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
                 sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, leads: store.layout.sections.contains { $0.leaderID == bot.id },
                            unread: store.unread[bot.id] ?? 0,
-                           busy: store.replying[bot.id] != nil, dimmed: !bot.isOn) {
-                    BotAvatar(bot: bot, size: 20, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                           busy: store.replying[bot.id] != nil, dimmed: !bot.isOn, inTeam: inTeam) {
+                    BotAvatar(bot: bot, size: inTeam ? 22 : 24, state: store.replying[bot.id] != nil ? .thinking : .idle)
                 }
             } else if let group = store.group(String(item.dropFirst(6))) {
                 let members = store.members(of: group)
                 let busy = members.contains { store.replying[$0.id] != nil }
-                sidebarRow(pane(for: item), title: group.name, unread: store.unread[group.roomID] ?? 0, busy: busy) {
+                sidebarRow(pane(for: item), title: group.name, unread: store.unread[group.roomID] ?? 0, busy: busy, inTeam: inTeam) {
                     GroupAvatar(bots: members, size: 20)
                 }
             }
@@ -389,62 +389,82 @@ struct BotsRootView: View {
         if item.hasPrefix("group:") { store.deleteGroup(String(item.dropFirst(6))) }
     }
 
-    /// A category with its bots and its sub-categories, indented; drop bots on its name to file them.
+    /// A category with its bots and its sub-categories: a team header, then its members indented under a guide line
+    /// in the team's colour. Drop bots on the header to file them.
     private func sectionTree(_ section: BotsLayout.Section, depth: Int) -> AnyView {
         let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) }
         let children = store.subsections(of: section.id)
         let collapsed = section.collapsed ?? false
+        let line = Color(hex: CategoryTile.swatch(for: section).from).opacity(0.38)
+        let rows = items.count + children.count
         return AnyView(VStack(alignment: .leading, spacing: 2) {
-            sectionHeader(section, collapsed: collapsed)
+            sectionHeader(section, collapsed: collapsed, depth: depth)
             if !collapsed {
-                ForEach(items, id: \.self) { item in itemRow(item).padding(.leading, 18) }
-                ForEach(children) { child in sectionTree(child, depth: depth + 1) }
-                if items.isEmpty && children.isEmpty {
-                    Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                        .padding(.horizontal, 12).padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(DS.Colors.hover, style: StrokeStyle(lineWidth: 1, dash: [4])))
-                        .padding(.horizontal, 8)
-                        .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                        itemRow(item, inTeam: true)
+                            .background(alignment: .leading) { TeamGuideLine(isLast: index == rows - 1).stroke(line, lineWidth: 1).frame(width: 13) }
+                            .padding(.leading, 0)
+                    }
+                    ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
+                        sectionTree(child, depth: depth + 1)
+                            .background(alignment: .leading) { TeamGuideLine(isLast: items.count + index == rows - 1, tickAt: 22).stroke(line, lineWidth: 1).frame(width: 13) }
+                    }
+                    if items.isEmpty && children.isEmpty {
+                        Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
+                            .padding(.horizontal, 12).padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).strokeBorder(DS.Colors.hover, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                            .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
+                    }
                 }
+                .padding(.leading, 18)
             }
         }
-        .padding(.leading, depth == 0 ? 0 : 12))
+        .padding(.top, depth == 0 ? 3 : 0).padding(.bottom, depth == 0 ? 5 : 0))
     }
 
-    private func sectionHeader(_ section: BotsLayout.Section, collapsed: Bool) -> some View {
-        let leader = section.leaderID.flatMap { store.bot($0) }
+    /// The team header: a coloured tile with a group glyph, the name in semibold, who runs it, how many, and a chevron.
+    /// It sits on a wash of the team's colour, so it never reads as just another bot.
+    private func sectionHeader(_ section: BotsLayout.Section, collapsed: Bool, depth: Int) -> some View {
+        let manager = section.leaderID.flatMap { store.bot($0) }
         let members = store.members(of: section)
         let busy = members.contains { store.replying[$0.id] != nil }
-        return HStack(spacing: 4) {
-            Button { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } } label: {
-                Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold))
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .frame(width: 12, height: 32).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).foregroundColor(DS.Colors.textTertiary)
+        let swatch = CategoryTile.swatch(for: section)
+        let open = selection.pane == .category(section.id)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return HStack(spacing: 0) {
             Button { selection.pane = .category(section.id) } label: {
-                HStack(spacing: 8) {
-                    CategoryTile(section: section, size: 20)
-                    Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                    if leader != nil {
-                        Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold).help("Led by \(leader!.name)")
+                HStack(spacing: 9) {
+                    CategoryTile(section: section, size: depth == 0 ? 28 : 24)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        HStack(spacing: 3) {
+                            if let manager {
+                                Image(systemName: "crown.fill").font(.system(size: 8)).foregroundColor(DS.Colors.gold)
+                                Text(manager.name).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                            } else {
+                                Text("No manager").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                            }
+                        }
                     }
-                    Spacer(minLength: 0)
-                    if busy { PulseDot(color: DS.Colors.accent) } else {
-                        Text("\(members.count)").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
-                    }
+                    Spacer(minLength: 2)
+                    if busy { PulseDot(color: DS.Colors.accent) }
+                    Text("\(members.count)").font(.system(size: 10.5, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+                        .padding(.horizontal, 6).frame(height: 18)
+                        .background(Capsule().fill(Color(hex: swatch.from).opacity(0.18)))
+                        .help("\(members.count) in this team")
                 }
-                .padding(.horizontal, 6).frame(height: 32).contentShape(Rectangle())
+                .padding(.leading, 6).frame(height: 42).contentShape(Rectangle())
             }
-            .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == .category(section.id)))
+            .buttonStyle(.plain)
             .contextMenu {
                 Button("Open team page") { selection.pane = .category(section.id) }
-                Menu("Leader") {
-                    Button("No leader (everyone reports)") { store.setLeader(nil, of: section.id) }
+                Menu("Manager") {
+                    Button("No manager (everyone reports to \(store.primary?.name ?? "the CEO"))") { store.setLeader(nil, of: section.id) }
                     ForEach(members) { bot in Button(bot.name) { store.setLeader(bot.id, of: section.id) } }
                 }
-                Button("Report to the CEO now") { store.reportToCEO(section.id) }.disabled(members.isEmpty)
+                Button("Report to \(store.primary?.name ?? "the CEO") now") { store.reportToCEO(section.id) }.disabled(members.isEmpty)
                 Divider()
                 Button("New sub-category…") { namingSectionFor = "sub:\(section.id)"; sectionName = "" }
                 Button("Rename…") { namingSectionFor = "rename:\(section.id)"; sectionName = section.name }
@@ -454,8 +474,17 @@ struct BotsRootView: View {
                     store.deleteSection(section.id)
                 }
             }
+            Button { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } } label: {
+                Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .bold))
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .frame(width: 26, height: 42).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help(collapsed ? "Show the team" : "Fold the team")
         }
-        .padding(.top, 2)
+        .background(shape.fill(Color(hex: swatch.from).opacity(open ? 0.24 : 0.11)))
+        .overlay(shape.strokeBorder(Color(hex: swatch.from).opacity(open ? 0.55 : 0.2), lineWidth: 1))
+        .contentShape(shape)
         .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
     }
 
@@ -505,16 +534,17 @@ struct BotsRootView: View {
         .buttonStyle(SidebarButtonStyle(isSelected: false))
     }
 
-    /// One sidebar row (docs/DESIGN.md): 32 pt, a 20 pt tile, the name, and a trailing dot for work or unread.
+    /// One sidebar row (docs/DESIGN.md): 32 pt, its avatar, the name, and a trailing dot for work or unread. Inside a team
+    /// it's a little smaller and quieter, under the team's header.
     private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, star: Bool = false, leads: Bool = false, unread: Int = 0, busy: Bool = false,
-                                        dimmed: Bool = false, @ViewBuilder icon: () -> Icon) -> some View {
+                                        dimmed: Bool = false, inTeam: Bool = false, @ViewBuilder icon: () -> Icon) -> some View {
         Button { selection.pane = pane } label: {
             HStack(spacing: 8) {
                 icon()
-                Text(title).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
-                    .foregroundColor(dimmed ? DS.Colors.textTertiary : DS.Colors.textPrimary).lineLimit(1)
+                Text(title).font(.system(size: inTeam ? 12.5 : 13, weight: unread > 0 ? .semibold : inTeam ? .regular : .medium))
+                    .foregroundColor(dimmed ? DS.Colors.textTertiary : inTeam && selection.pane != pane ? DS.Colors.textSecondary : DS.Colors.textPrimary).lineLimit(1)
                 if star { Text("CEO").font(.system(size: 8.5, weight: .bold)).foregroundColor(DS.Colors.accent) }
-                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold) }
+                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold).help("Manager") }
                 Spacer(minLength: 0)
                 if busy {
                     PulseDot(color: DS.Colors.accent)
@@ -522,7 +552,7 @@ struct BotsRootView: View {
                     Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6)
                 }
             }
-            .padding(.horizontal, 8).frame(height: 32)
+            .padding(.horizontal, 8).frame(height: inTeam ? 30 : 32)
             .contentShape(Rectangle())
         }
         .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
@@ -781,7 +811,7 @@ struct BotChatScreen: View {
         parts.append(bot.modelLabel)
         if let effort = bot.effort { parts.append(effort) }
         for team in store.categories(of: bot.id) {
-            parts.append(team.leaderID == bot.id ? "Leads \(team.name)" : "In \(team.name)")
+            parts.append(team.leaderID == bot.id ? "Manages \(team.name)" : "In \(team.name)")
         }
         let routines = store.routines.filter { $0.target == bot.id && !$0.paused }.count
         if routines > 0 { parts.append("\(routines) routine" + (routines == 1 ? "" : "s")) }
@@ -1187,14 +1217,11 @@ enum BotPalette {
         Swatch(id: "violet", from: 0xA468EB, to: 0xD152B8), Swatch(id: "rose", from: 0xF06A8F, to: 0xE24A58),
         Swatch(id: "slate", from: 0x7C8697, to: 0x4D5666), Swatch(id: "graphite", from: 0x3A3A42, to: 0x1E1E24),
     ]
-    /// The swatch nearest a stored hue (bots keep a hue number), Theo always graphite.
+    /// A bot's colours: its character's, with Theo's own mark always graphite.
     static func swatch(for bot: NativeBot) -> Swatch {
-        if bot.id == "theo" && bot.shape == nil { return swatches[9] }
-        if let named = swatches.first(where: { $0.id == bot.shape }) { return named }
-        let hues: [Double] = [8, 32, 100, 172, 210, 238, 290, 345, 215, 0]
-        let target = bot.hue.truncatingRemainder(dividingBy: 360)
-        let index = hues.indices.prefix(8).min { abs(hues[$0] - target) < abs(hues[$1] - target) } ?? 0
-        return swatches[index]
+        if bot.id == "theo" && bot.avatar == nil { return swatches[9] }
+        let character = BotCharacter.of(bot)
+        return Swatch(id: character.rawValue, from: character.colors.0, to: character.colors.1)
     }
 }
 
@@ -1209,46 +1236,39 @@ extension NativeBot {
     }
 }
 
-/// A bot's tile: a rounded square in its colour with its glyph or initials (docs/DESIGN.md). While it
-/// thinks, a soft ring breathes around it; nothing else moves.
+/// A bot's avatar: its character (BotCharacters.swift), or Theo's own visor tile. At rest it blinks and glances now and
+/// then; while it works it moves and a soft ring breathes around it.
 struct BotAvatar: View {
     let bot: NativeBot
     let size: CGFloat
     let state: BotAvatarState
     @State private var breathing = false
 
+    private var ownMark: Bool { bot.id == "theo" && bot.avatar == nil }
+
     var body: some View {
         let swatch = BotPalette.swatch(for: bot)
         let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
         ZStack {
-            shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            shape.fill(LinearGradient(colors: [Color.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center))
-            shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            if ownMark {
+                shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                shape.fill(LinearGradient(colors: [Color.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center))
+                shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            }
             if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !bot.isOn {
-                BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: state != .idle && bot.isOn)
+                face(time: nil)
             } else if state != .idle {
-                // Working: its eyes scan and glow and it talks.
                 TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
-                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, awake: true, time: timeline.date.timeIntervalSinceReferenceDate)
+                    face(time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             } else {
                 // Resting: a blink and a glance now and then, drawn only at those moments, so a screen full of bots costs next to nothing.
                 TimelineView(BotRestingSchedule(seed: bot.id)) { timeline in
-                    BotFace(seed: bot.id, isTheo: bot.id == "theo", size: size, time: timeline.date.timeIntervalSinceReferenceDate)
+                    face(time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             }
         }
         .frame(width: size, height: size)
-        .overlay(alignment: .bottomTrailing) {
-            // The glyph picked for the bot rides on a small badge.
-            if size >= 30, let glyph = bot.glyph, !glyph.isEmpty {
-                Image(systemName: glyph).font(.system(size: size * 0.26, weight: .bold)).foregroundColor(Color(hex: swatch.to))
-                    .frame(width: size * 0.46, height: size * 0.46)
-                    .background(Circle().fill(Color.white))
-                    .overlay(Circle().strokeBorder(DS.Colors.background, lineWidth: 1.5))
-                    .offset(x: size * 0.08, y: size * 0.08)
-            }
-        }
         .overlay {
             if state != .idle {
                 shape.inset(by: -3).stroke(Color(hex: swatch.from).opacity(breathing ? 0.85 : 0.25), lineWidth: 2)
@@ -1259,10 +1279,35 @@ struct BotAvatar: View {
         .onChange(of: state) { _, _ in restart() }
     }
 
+    @ViewBuilder private func face(time: Double?) -> some View {
+        if ownMark {
+            BotFace(seed: bot.id, isTheo: true, size: size, awake: state != .idle && bot.isOn, time: time)
+        } else {
+            BotCharacterView(character: .of(bot), size: size, working: state != .idle && bot.isOn, time: time, phase: BotFace.phase(of: bot.id))
+        }
+    }
+
     private func restart() {
         breathing = false
         guard state != .idle, !DS.Motion.isReduced else { breathing = state != .idle; return }
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathing = true }
+    }
+}
+
+/// A thin line in the sidebar from a team's tile down to its members: a stem and a tick to each row.
+struct TeamGuideLine: Shape {
+    var isLast: Bool
+    /// How far down the row the tick lands; nil is the row's middle.
+    var tickAt: CGFloat? = nil
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let y = tickAt ?? rect.midY
+        path.move(to: CGPoint(x: 1, y: rect.minY))
+        path.addLine(to: CGPoint(x: 1, y: isLast ? y : rect.maxY))
+        path.move(to: CGPoint(x: 1, y: y))
+        path.addLine(to: CGPoint(x: rect.maxX, y: y))
+        return path
     }
 }
 
@@ -1292,8 +1337,7 @@ struct BotRestingSchedule: TimelineSchedule {
     }
 }
 
-/// A little robot face, the same for a bot every time (picked from its id): eyes, mouth and antenna.
-/// Theo wears an ember visor. While the bot works, its eyes glow brighter.
+/// Theo's own mark: a little robot face with an ember visor. While it works, its eyes glow brighter.
 struct BotFace: View {
     let seed: String
     let isTheo: Bool

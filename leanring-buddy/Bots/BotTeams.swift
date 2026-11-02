@@ -2,11 +2,12 @@
 //  BotTeams.swift
 //  leanring-buddy
 //
-//  Categories as teams. You make a category, add bots to it and may pick a
-//  leader: the leader hands work to its team and reports to the CEO (the
-//  primary bot); with no leader, every member reports for itself. The team
-//  page shows the members, the leader, the team's job and its reports, and
-//  sends a report now or on a schedule. Home shows the whole org chart.
+//  Categories as teams. You make a category, add bots to it and choose whether
+//  it has a manager: members send the manager their reports and DMs, and the
+//  manager rolls them up for the CEO (the primary bot). With no manager, every
+//  member reports to the CEO directly. The team page shows the members, the
+//  manager, the team's job and its reports, and sends a report now or on a
+//  schedule. Home shows the whole org chart.
 //
 
 import SwiftUI
@@ -28,7 +29,7 @@ struct CategoryTile: View {
         shape.fill(LinearGradient(colors: [Color(hex: swatch.from).opacity(0.9), Color(hex: swatch.to).opacity(0.9)],
                                   startPoint: .topLeading, endPoint: .bottomTrailing))
             .overlay(shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
-            .overlay(Image(systemName: section.symbol ?? "folder.fill").font(.system(size: size * 0.44, weight: .semibold)).foregroundColor(.white))
+            .overlay(Image(systemName: section.symbol ?? "person.3.fill").font(.system(size: section.symbol == nil ? size * 0.36 : size * 0.44, weight: .semibold)).foregroundColor(.white))
             .frame(width: size, height: size)
     }
 }
@@ -139,7 +140,7 @@ struct CategoryScreen: View {
     @State private var editingLook = false
     @State private var pickingLeader = false
 
-    private static let symbols = ["folder.fill", "briefcase.fill", "envelope.fill", "hammer.fill", "chart.line.uptrend.xyaxis", "paintbrush.fill",
+    private static let symbols = ["person.3.fill", "person.2.fill", "folder.fill", "briefcase.fill", "envelope.fill", "hammer.fill", "chart.line.uptrend.xyaxis", "paintbrush.fill",
                                   "megaphone.fill", "book.fill", "house.fill", "sparkles", "dollarsign.circle.fill", "graduationcap.fill"]
 
     private func lookPicker(_ section: BotsLayout.Section) -> some View {
@@ -163,7 +164,7 @@ struct CategoryScreen: View {
                     Button { store.updateCategory(sectionID) { $0.symbol = symbol } } label: {
                         Image(systemName: symbol).font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary)
                             .frame(width: 30, height: 30)
-                            .background(RoundedRectangle(cornerRadius: 7).fill((section.symbol ?? "folder.fill") == symbol ? DS.Colors.selected : DS.Colors.hover))
+                            .background(RoundedRectangle(cornerRadius: 7).fill((section.symbol ?? "person.3.fill") == symbol ? DS.Colors.selected : DS.Colors.hover))
                     }
                     .buttonStyle(.plain)
                 }
@@ -174,7 +175,7 @@ struct CategoryScreen: View {
 
     private func leaderPicker(_ members: [NativeBot], current: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Team leader").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary).padding(.bottom, 4)
+            Text("Team manager").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary).padding(.bottom, 4)
             ForEach(members) { bot in
                 Button { store.setLeader(bot.id, of: sectionID); pickingLeader = false } label: {
                     HStack(spacing: 8) {
@@ -190,7 +191,7 @@ struct CategoryScreen: View {
             if members.isEmpty { Text("Add bots to the team first.").font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary) }
             Divider().padding(.vertical, 4)
             Button { store.setLeader(nil, of: sectionID); pickingLeader = false } label: {
-                Text("No leader: everyone reports to the CEO").font(.system(size: 12.5)).foregroundColor(DS.Colors.textSecondary)
+                Text("No manager: everyone reports to \(store.primary?.name ?? "the CEO")").font(.system(size: 12.5)).foregroundColor(DS.Colors.textSecondary)
                     .padding(.horizontal, 8).frame(height: 30).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }
             .buttonStyle(SidebarButtonStyle(isSelected: current == nil))
@@ -263,49 +264,69 @@ struct CategoryScreen: View {
         store.updateCategory(sectionID) { $0.purpose = trimmed.isEmpty ? nil : trimmed }
     }
 
-    /// Members → leader → CEO, drawn as a chain, with the leader and the schedule picked right there.
+    /// Who reports to whom, drawn as a chain: members → manager → CEO, or members → CEO. The manager and the schedule
+    /// are picked right there.
     private func chain(_ section: BotsLayout.Section) -> some View {
         let members = store.members(of: section)
-        let leader = section.leaderID.flatMap { store.bot($0) }
-        return HStack(alignment: .top, spacing: 0) {
-            node(title: "Team", detail: members.isEmpty ? "No bots yet" : members.map(\.name).joined(separator: ", ")) {
-                HStack(spacing: -8) {
-                    ForEach(members.prefix(5)) { bot in
-                        BotAvatar(bot: bot, size: 30, state: store.replying[bot.id] != nil ? .thinking : .idle)
-                            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(DS.Colors.surface, lineWidth: 2))
+        let manager = section.leaderID.flatMap { store.bot($0) }
+        let ceoName = store.primary?.name ?? "the CEO"
+        let plain = members.filter { $0.id != manager?.id }
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "crown.fill").font(.system(size: 12)).foregroundColor(section.hasManager ? DS.Colors.gold : DS.Colors.textTertiary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Has a manager").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text(section.hasManager
+                         ? "Members send their reports and DMs to \(manager?.name ?? "the manager"), who rolls them up and reports to \(ceoName)."
+                         : "Every member reports to \(ceoName) directly.")
+                        .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(2)
+                }
+                Spacer()
+                Toggle("Has a manager", isOn: Binding(get: { section.hasManager }, set: { store.setHasManager($0, of: sectionID) }))
+                    .toggleStyle(.switch).labelsHidden()
+            }
+            Divider()
+            HStack(alignment: .top, spacing: 0) {
+                node(title: section.hasManager ? "Members" : "Team", detail: plain.isEmpty ? "No bots yet" : plain.map(\.name).joined(separator: ", ")) {
+                    HStack(spacing: -8) {
+                        ForEach(plain.prefix(5)) { bot in
+                            BotAvatar(bot: bot, size: 30, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                        }
+                        if plain.isEmpty { emptyCircle }
                     }
-                    if members.isEmpty { emptyCircle }
                 }
-            }
-            arrow.padding(.top, 38)
-            node(title: "Leader", detail: leader?.name ?? "None: everyone reports") {
-                Button { pickingLeader = true } label: {
-                    if let leader {
-                        BotAvatar(bot: leader, size: 30, state: store.replying[leader.id] != nil ? .thinking : .idle)
-                            .overlay(alignment: .top) { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(DS.Colors.gold).offset(y: -10) }
-                    } else {
-                        emptyCircle.overlay(Image(systemName: "crown").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary))
+                arrow.padding(.top, 38)
+                if section.hasManager {
+                    node(title: "Manager", detail: manager?.name ?? "Pick one") {
+                        Button { pickingLeader = true } label: {
+                            if let manager {
+                                BotAvatar(bot: manager, size: 30, state: store.replying[manager.id] != nil ? .thinking : .idle)
+                                    .overlay(alignment: .top) { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(DS.Colors.gold).offset(y: -10) }
+                            } else {
+                                emptyCircle.overlay(Image(systemName: "crown").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary))
+                            }
+                        }
+                        .buttonStyle(LiftButtonStyle())
+                        .help("Pick the manager")
+                        .popover(isPresented: $pickingLeader, arrowEdge: .bottom) { leaderPicker(members, current: section.leaderID) }
                     }
+                    arrow.padding(.top, 38)
                 }
-                .buttonStyle(LiftButtonStyle())
-                .help("Pick the leader")
-                .popover(isPresented: $pickingLeader, arrowEdge: .bottom) { leaderPicker(members, current: section.leaderID) }
-            }
-            arrow.padding(.top, 38)
-            node(title: "Reports to", detail: (store.primary?.name ?? "CEO") + ", the CEO") {
-                if let ceo = store.primary { BotAvatar(bot: ceo, size: 30, state: .idle) }
-            }
-            Spacer(minLength: 12)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Report on a schedule").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
-                Picker("", selection: Binding(get: { scheduleChoice }, set: { setSchedule($0) })) {
-                    Text("Only when I ask").tag("off")
-                    Text("Every day at 6 pm").tag("daily")
-                    Text("Weekdays at 6 pm").tag("weekdays")
-                    Text("Fridays at 5 pm").tag("weekly")
-                    Text("Every 2 hours").tag("every")
+                node(title: "Reports to", detail: ceoName + ", the CEO") {
+                    if let ceo = store.primary { BotAvatar(bot: ceo, size: 30, state: .idle) }
                 }
-                .labelsHidden().frame(width: 170)
+                Spacer(minLength: 12)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Report on a schedule").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
+                    Picker("", selection: Binding(get: { scheduleChoice }, set: { setSchedule($0) })) {
+                        Text("Only when I ask").tag("off")
+                        Text("Every day at 6 pm").tag("daily")
+                        Text("Weekdays at 6 pm").tag("weekdays")
+                        Text("Fridays at 5 pm").tag("weekly")
+                        Text("Every 2 hours").tag("every")
+                    }
+                    .labelsHidden().frame(width: 170)
+                }
             }
         }
         .padding(16)
@@ -369,7 +390,7 @@ struct CategoryScreen: View {
                     HStack(spacing: 6) {
                         Text(bot.name).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                         if isLeader {
-                            Label("Leader", systemImage: "crown.fill").labelStyle(.titleAndIcon)
+                            Label("Manager", systemImage: "crown.fill").labelStyle(.titleAndIcon)
                                 .font(.system(size: 9.5, weight: .bold)).foregroundColor(DS.Colors.gold)
                         }
                     }
@@ -393,9 +414,9 @@ struct CategoryScreen: View {
         .buttonStyle(LiftButtonStyle())
         .contextMenu {
             if isLeader {
-                Button("Remove as leader") { store.setLeader(nil, of: sectionID) }
+                Button("Remove as manager") { store.setLeader(nil, of: sectionID) }
             } else {
-                Button("Make leader") { store.setLeader(bot.id, of: sectionID) }
+                Button("Make manager") { store.setLeader(bot.id, of: sectionID) }
             }
             Button("Remove from category", role: .destructive) { store.removeMember(bot.id, from: sectionID) }
         }
@@ -407,8 +428,8 @@ struct CategoryScreen: View {
             let reports = (section.reports ?? []).reversed()
             if reports.isEmpty {
                 Text(section.leaderID == nil
-                     ? "No reports yet. With no leader, each bot reports for itself."
-                     : "No reports yet. The leader sums up the team's work for the CEO.")
+                     ? "No reports yet. With no manager, each bot reports for itself."
+                     : "No reports yet. Members report to the manager, who rolls them up for the CEO.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
             }
             ForEach(Array(reports)) { report in
@@ -501,7 +522,7 @@ struct LiftButtonStyle: ButtonStyle {
 
 // MARK: - The org chart on Home
 
-/// The CEO on top, each team below with its leader and members, then bots in no team. Everything opens on click.
+/// The CEO on top, each team below with its manager and members, then bots in no team. Everything opens on click.
 struct OrgChart: View {
     @ObservedObject var store: BotsStore
     @ObservedObject var selection: BotsSelection
@@ -538,7 +559,7 @@ struct OrgChart: View {
                         MotionSymbol(name: "plus", size: 16, weight: .semibold)
                         Text("New category").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                     }
-                    .frame(maxWidth: .infinity).frame(height: 150)
+                    .frame(maxWidth: .infinity).frame(height: 218)
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                     .contentShape(Rectangle())
@@ -549,38 +570,49 @@ struct OrgChart: View {
         }
     }
 
+    /// One team under the CEO: its header, then who reports to whom (members → manager, or members straight up).
     private func teamCard(_ team: BotsLayout.Section) -> some View {
         let members = store.members(of: team)
-        let leader = team.leaderID.flatMap { store.bot($0) }
+        let manager = team.leaderID.flatMap { store.bot($0) }
+        let plain = members.filter { $0.id != manager?.id }
+        let ceo = store.primary?.name ?? "the CEO"
         return Button { selection.pane = .category(team.id) } label: {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     CategoryTile(section: team, size: 26)
                     Text(team.name).font(.system(size: 13.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text("\(members.count)").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
                 }
-                HStack(spacing: 6) {
-                    if let leader {
-                        BotAvatar(bot: leader, size: 26, state: store.replying[leader.id] != nil ? .thinking : .idle)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(leader.name).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                            Label("Leader", systemImage: "crown.fill").font(.system(size: 9.5, weight: .semibold)).foregroundColor(DS.Colors.gold)
+                if let manager {
+                    VStack(spacing: 3) {
+                        BotAvatar(bot: manager, size: 34, state: store.replying[manager.id] != nil ? .thinking : .idle)
+                            .overlay(alignment: .top) { Image(systemName: "crown.fill").font(.system(size: 10)).foregroundColor(DS.Colors.gold).offset(y: -9) }
+                        Text(manager.name).font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        Text("Manager").font(.system(size: 9.5)).foregroundColor(DS.Colors.gold)
+                    }
+                    if !plain.isEmpty { OrgBranches(count: min(plain.count, 5)).stroke(DS.Colors.borderStrong, lineWidth: 1).frame(height: 12).padding(.horizontal, 6) }
+                } else {
+                    Text("No manager").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).frame(height: 18)
+                    if !plain.isEmpty { OrgBranches(count: min(plain.count, 5)).stroke(DS.Colors.borderStrong, lineWidth: 1).frame(height: 12).padding(.horizontal, 6) }
+                }
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(plain.prefix(5)) { bot in
+                        VStack(spacing: 3) {
+                            BotAvatar(bot: bot, size: 26, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                            Text(bot.name).font(.system(size: 10.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                         }
-                    } else {
-                        Text("No leader: everyone reports").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                HStack(spacing: -6) {
-                    ForEach(members.filter { $0.id != leader?.id }.prefix(5)) { bot in
-                        BotAvatar(bot: bot, size: 22, state: store.replying[bot.id] != nil ? .thinking : .idle)
-                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(DS.Colors.surface, lineWidth: 1.5))
-                    }
-                }
-                Text(team.purpose ?? "\(members.count) bots").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                Spacer(minLength: 0)
+                Text(manager == nil ? "Everyone reports to \(ceo)" : "Members → \(manager!.name) → \(ceo)")
+                    .font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
             }
             .padding(12)
-            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 150, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 218, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(hex: CategoryTile.swatch(for: team).from).opacity(0.28)))
         }
         .buttonStyle(LiftButtonStyle())
     }
@@ -599,8 +631,31 @@ struct OrgChart: View {
             Text(store.layout.sections.isEmpty ? "Make a category, then drag them onto it in the sidebar." : "Drag them onto a category in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 150, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 218, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
+    }
+}
+
+/// Lines from a manager (or the top of a team) down to its members, one to each evenly spaced column.
+struct OrgBranches: Shape {
+    let count: Int
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard count > 0 else { return path }
+        let column = rect.width / CGFloat(count)
+        let centres = (0..<count).map { rect.minX + column * (CGFloat($0) + 0.5) }
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.midY))
+        if let first = centres.first, let last = centres.last, count > 1 {
+            path.move(to: CGPoint(x: first, y: rect.midY))
+            path.addLine(to: CGPoint(x: last, y: rect.midY))
+        }
+        for centre in centres {
+            path.move(to: CGPoint(x: centre, y: rect.midY))
+            path.addLine(to: CGPoint(x: centre, y: rect.maxY))
+        }
+        return path
     }
 }

@@ -337,7 +337,7 @@ struct InspectorSection<Content: View>: View {
     }
 }
 
-/// The avatar, which opens the shape and colour picker.
+/// The avatar, which opens the gallery of characters.
 struct LookButton: View {
     @Binding var bot: NativeBot
     @State private var open = false
@@ -351,7 +351,13 @@ struct LookButton: View {
                 }
         }
         .buttonStyle(.plain).help("Change its look")
-        .popover(isPresented: $open) { BotLookPicker(bot: $bot).padding(14) }
+        .popover(isPresented: $open) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pick a look").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                BotLookPicker(bot: $bot, tile: 46, columns: 4)
+            }
+            .padding(14)
+        }
     }
 }
 

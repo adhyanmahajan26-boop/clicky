@@ -39,6 +39,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var shape: String?
     /// The SF Symbol on its tile (nil: its initials).
     var glyph: String?
+    /// Which character it wears (a BotCharacter id). Theo keeps its own mark while this is nil.
+    var avatar: String?
     /// Off: the bot doesn't answer, run routines or join group chats (nil = on).
     var enabled: Bool?
     /// "member" (default), "lead" (directs its group chats) or "ceo" (may direct any bot).
@@ -212,9 +214,10 @@ final class BotsStore: ObservableObject {
         var suffix = 2
         while bot(id) != nil { id = "\(BotsT3.slug(name))-\(suffix)"; suffix += 1 }
         let hue = Double(abs(id.hashValue) % 330)
-        let bot = NativeBot(id: id, name: name, description: description, instructions: instructions, hue: hue,
+        var bot = NativeBot(id: id, name: name, description: description, instructions: instructions, hue: hue,
                             accentHue: hue + 30, primary: false, provider: provider, model: model, effort: nil,
                             apps: [], category: groupID == BotGroup.projectID ? "project" : "personal")
+        bot.avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(id), among: bots).rawValue
         bots.append(bot)
         writeBots()
         conversations[id] = BotConversationRecord()
@@ -299,6 +302,7 @@ final class BotsStore: ObservableObject {
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
+        prompt = takeWaitingReports(for: bot) + prompt
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }
@@ -426,7 +430,8 @@ final class BotsStore: ObservableObject {
         for bot in members(of: group) where replying[bot.id] != nil { stop(bot.id) }
     }
 
-    private func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?,
+    /// `handsOnWhenStopped`: a stopped turn still calls `then`, for a roll-up that is waiting on it.
+    private func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false,
                        then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
         replying[bot.id] = ""
@@ -458,6 +463,7 @@ final class BotsStore: ObservableObject {
                 // Keep what it had said so far, marked as stopped, and hand nothing on.
                 let partial = (answer ?? streamed ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 self.post(BotChatMessage(author: bot.id, text: partial.isEmpty ? "_(Stopped.)_" : partial + "\n\n_(Stopped.)_"), to: conversationID)
+                if handsOnWhenStopped { then(nil) }
                 return
             }
             var record = self.conversation(conversationID)
@@ -756,7 +762,11 @@ final class BotsStore: ObservableObject {
         let base = (saved?.isEmpty == false ? saved : nil) ?? []
         let offeredFile = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: offeredFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
-        let upgraded = BotImport.upgrade(base, offered: &offered)
+        var upgraded = BotImport.upgrade(base, offered: &offered)
+        // Every bot from before the characters gets its own, no twins. Theo keeps its mark.
+        for index in upgraded.indices where upgraded[index].avatar == nil && upgraded[index].id != "theo" {
+            upgraded[index].avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(upgraded[index].id), among: upgraded).rawValue
+        }
         try? JSONEncoder().encode(Array(offered).sorted()).write(to: offeredFile, options: .atomic)
         bots = upgraded
         writeBots()
@@ -844,6 +854,38 @@ enum BotPrompts {
         "Reply like a chat message: talk directly to the user, keep it short unless they ask for depth, " +
         "and don't start with your name or a heading."
 
+    /// Who a bot reports to, in its instructions. The CEO also gets the whole picture of its teams.
+    @MainActor
+    static func reportingLines(for bot: NativeBot, store: BotsStore) -> [String] {
+        let ceo = store.primary?.name ?? "the CEO"
+        var lines = store.categories(of: bot.id).map { team -> String in
+            let mates = store.members(of: team).filter { $0.id != bot.id }.map(\.name)
+            var line = "Your team: \(team.name)" + (team.purpose.map { " (\($0))" } ?? "") +
+                (mates.isEmpty ? "" : ", with \(mates.joined(separator: ", "))") + ". "
+            if team.leaderID == bot.id {
+                line += "You are its manager: they send you their reports and messages. Hand work to them with @Name, roll their reports up, and report to @\(ceo), the CEO."
+            } else if let manager = team.leaderID.flatMap({ store.bot($0) }) {
+                line += "\(manager.name) is your manager: send your reports and messages to @\(manager.name), not to \(ceo). \(manager.name) passes on what matters."
+            } else {
+                line += "It has no manager, so you report straight to @\(ceo), the CEO, when something is worth knowing."
+            }
+            return line
+        }
+        if bot.primary {
+            let teams = store.rootSections.filter { !store.members(of: $0).isEmpty }.map { team -> String in
+                let members = store.members(of: team).filter { $0.id != bot.id }.map(\.name).joined(separator: ", ")
+                if let manager = team.leaderID.flatMap({ store.bot($0) }) {
+                    return "\(team.name): \(manager.name) manages \(members) and reports to you"
+                }
+                return "\(team.name): no manager, \(members) report to you directly"
+            }
+            if !teams.isEmpty {
+                lines.append("Your teams: " + teams.joined(separator: "; ") + ". To reach a managed team, go through its manager.")
+            }
+        }
+        return lines
+    }
+
     static func persona(bot: NativeBot, team: [NativeBot]) -> String {
         var parts = [bot.instructions, chatStyle]
         let apps = BotConnectors.known.filter { bot.apps.contains($0.id) }
@@ -867,21 +909,7 @@ enum BotPrompts {
         }
         parts.append(BotPrompts.routineHowTo)
         parts.append(BotPrompts.codingHowTo)
-        for team in BotsStore.shared.categories(of: bot.id) {
-            let store = BotsStore.shared
-            let mates = store.members(of: team).filter { $0.id != bot.id }.map(\.name)
-            let ceo = store.primary?.name ?? "the CEO"
-            var line = "Your team: \(team.name)" + (team.purpose.map { " (\($0))" } ?? "") +
-                (mates.isEmpty ? "" : ", with \(mates.joined(separator: ", "))") + ". "
-            if team.leaderID == bot.id {
-                line += "You lead it: hand work to teammates with @Name and report to \(ceo), the CEO."
-            } else if let leader = team.leaderID.flatMap({ store.bot($0) }) {
-                line += "\(leader.name) leads it; report your work to @\(leader.name)."
-            } else {
-                line += "It has no leader, so report straight to @\(ceo), the CEO, when something is worth knowing."
-            }
-            parts.append(line)
-        }
+        parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
         let reachable = BotsStore.shared.reachable(from: bot)
         if !reachable.isEmpty {
             parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
@@ -987,8 +1015,11 @@ struct BotsLayout: Codable, Equatable {
         /// A sub-category sits inside another section.
         var parentID: String?
         var collapsed: Bool?
-        /// The category's leader: it runs the team and reports to the CEO. With none, every member reports itself.
+        /// The category's manager: members send it their reports and DMs, it rolls them up for the CEO. With none,
+        /// every member reports to the CEO directly. (Saved as leaderID since categories first had leaders.)
         var leaderID: String?
+        /// "Has a manager" was switched on before a bot was picked for the job.
+        var wantsManager: Bool?
         /// What this team is for, in a line ("Inbox and calendar", "Ship the website").
         var purpose: String?
         /// The tile colour (a BotPalette swatch id) and SF Symbol of the category.
@@ -996,6 +1027,8 @@ struct BotsLayout: Codable, Equatable {
         var symbol: String?
         /// The last reports this team sent the CEO, newest last.
         var reports: [Report]?
+
+        var hasManager: Bool { leaderID != nil || wantsManager == true }
     }
 
     struct Report: Codable, Equatable, Identifiable {
@@ -1262,8 +1295,8 @@ extension BotsStore {
     }
 
     /// Whom a bot may message: a CEO anyone, a lead the bots of the group chats it heads, plus anyone you allowed.
-    /// A category leader also reaches its team and the CEO; a member its leader (or, with no leader, its teammates
-    /// and the CEO).
+    /// A category's manager also reaches its team and the CEO; a member its manager (or, with no manager, its
+    /// teammates and the CEO).
     func reachable(from bot: NativeBot) -> [NativeBot] {
         let others = bots.filter { $0.id != bot.id && $0.isOn }
         var allowed = Set(bot.canMessage ?? [])
@@ -1291,7 +1324,12 @@ extension BotsStore {
     /// first bot reads the answers and carries on. A few hops at most.
     func relayMentions(from bot: NativeBot, answer: String, in conversationID: String, hop: Int) {
         guard hop < 3 else { return }
-        let targets = BotPrompts.mentioned(in: answer, bots: reachable(from: bot)).filter { replying[$0.id] == nil }
+        var named = BotPrompts.mentioned(in: answer, bots: reachable(from: bot))
+        // A member of a managed team who names anyone else reaches its manager instead.
+        if named.isEmpty, let manager = manager(of: bot), !BotPrompts.mentioned(in: answer, bots: bots.filter { $0.id != bot.id }).isEmpty {
+            named = [manager]
+        }
+        let targets = named.filter { replying[$0.id] == nil }
         guard !targets.isEmpty else { return }
         var answers: [String] = []
         var remaining = targets.count
@@ -1353,7 +1391,7 @@ extension BotsStore {
     }
 }
 
-// MARK: - Teams: categories with a leader who reports to the CEO
+// MARK: - Teams: categories with a manager who reports to the CEO
 
 extension BotsStore {
     func category(_ id: String) -> BotsLayout.Section? { layout.sections.first { $0.id == id } }
@@ -1377,7 +1415,28 @@ extension BotsStore {
         writeLayout()
     }
 
-    func setLeader(_ botID: String?, of sectionID: String) { updateCategory(sectionID) { $0.leaderID = botID } }
+    func setLeader(_ botID: String?, of sectionID: String) {
+        updateCategory(sectionID) {
+            $0.leaderID = botID
+            $0.wantsManager = botID == nil ? nil : true
+        }
+    }
+
+    /// The "Has a manager" switch. On, the first non-CEO member takes the job until another is picked; off, everyone
+    /// reports to the CEO directly.
+    func setHasManager(_ on: Bool, of sectionID: String) {
+        updateCategory(sectionID) { section in
+            guard on else {
+                section.leaderID = nil
+                section.wantsManager = nil
+                return
+            }
+            section.wantsManager = true
+            if section.leaderID == nil {
+                section.leaderID = section.items.compactMap { $0.hasPrefix("bot:") ? self.bot(String($0.dropFirst(4))) : nil }.first { !$0.primary }?.id
+            }
+        }
+    }
 
     /// Adds a bot to a team; a bot can sit in more than one.
     func addMember(_ botID: String, to sectionID: String) {
@@ -1416,30 +1475,109 @@ extension BotsStore {
         return lines.isEmpty ? "- Nothing yet." : lines.joined(separator: "\n")
     }
 
-    /// The team's leader writes the CEO a short report on what each member did; with no leader, each member
-    /// reports for itself. Reports land in the CEO's chat under the reporter's name, and on the team page.
+    /// The manager of the team this bot is a plain member of, if it has one.
+    func manager(of bot: NativeBot) -> NativeBot? {
+        for team in categories(of: bot.id) {
+            if let id = team.leaderID, id != bot.id, let manager = self.bot(id), manager.isOn { return manager }
+        }
+        return nil
+    }
+
+    /// Everyone reports. With a manager: each member sends its report to the manager's chat, then the manager rolls
+    /// them up and reports to the CEO. Without one: each member reports to the CEO's chat directly. The CEO reads
+    /// what came in at the start of its next turn (`takeWaitingReports`).
     func reportToCEO(_ sectionID: String) {
         guard let section = category(sectionID), let ceo = primary else { return }
         let team = members(of: section).filter(\.isOn)
         guard !team.isEmpty else { return }
-        let reporters = section.leaderID.flatMap { bot($0) }.map { [$0] } ?? team.filter { $0.id != ceo.id }
-        for reporter in reporters where replying[reporter.id] == nil {
-            let covered = reporter.id == section.leaderID ? team : [reporter]
-            let activity = covered.map { "\($0.name) (\($0.description)):\n" + recentWork(of: $0) }.joined(separator: "\n\n")
-            let role = reporter.id == section.leaderID ? "You lead the \(section.name) team" : "You're on the \(section.name) team (it has no leader, so you report yourself)"
-            let prompt = BotPrompts.persona(bot: reporter, team: bots) + "\n\n---\n\n\(role)" +
-                (section.purpose.map { ", whose job is: \($0)" } ?? "") + ". Write \(ceo.name), the CEO, a short report: " +
-                "what got done, what's in progress, anything blocked or needing Addy. Plain sentences or a few bullets, no preamble.\n\n" +
-                "Recent activity:\n\n\(activity)"
+        if let manager = section.leaderID.flatMap({ bot($0) }), manager.isOn, manager.id != ceo.id {
+            reportThroughManager(section, manager: manager, ceo: ceo, team: team)
+            return
+        }
+        for reporter in team where reporter.id != ceo.id && replying[reporter.id] == nil {
+            let prompt = reportPrompt(reporter, to: ceo, role: "You're on the \(section.name) team (it has no manager, so you report yourself)", section: section,
+                                      activity: "\(reporter.name) (\(reporter.description)):\n" + recentWork(of: reporter))
             post(BotChatMessage(author: "routine", text: "📋 \(reporter.name) is reporting to \(ceo.name) for \(section.name)."), to: ceo.id)
             reply(bot: reporter, in: ceo.id, prompt: prompt, session: nil) { [weak self] answer in
                 guard let self, let answer, !answer.isEmpty else { return }
-                self.updateCategory(sectionID) {
-                    var reports = $0.reports ?? []
-                    reports.append(BotsLayout.Report(author: reporter.id, text: answer))
-                    $0.reports = Array(reports.suffix(10))
-                }
+                self.recordReport(answer, by: reporter, in: sectionID)
             }
         }
+    }
+
+    private func reportPrompt(_ reporter: NativeBot, to reader: NativeBot, role: String, section: BotsLayout.Section, activity: String) -> String {
+        BotPrompts.persona(bot: reporter, team: bots) + "\n\n---\n\n\(role)" +
+            (section.purpose.map { ", whose job is: \($0)" } ?? "") + ". Write \(reader.name) a short report: " +
+            "what got done, what's in progress, anything blocked or needing Addy. Plain sentences or a few bullets, no preamble.\n\n" +
+            "Recent activity:\n\n\(activity)"
+    }
+
+    private func recordReport(_ text: String, by reporter: NativeBot, in sectionID: String) {
+        updateCategory(sectionID) {
+            var reports = $0.reports ?? []
+            reports.append(BotsLayout.Report(author: reporter.id, text: text))
+            $0.reports = Array(reports.suffix(10))
+        }
+    }
+
+    private func reportThroughManager(_ section: BotsLayout.Section, manager: NativeBot, ceo: NativeBot, team: [NativeBot]) {
+        let reporters = team.filter { $0.id != manager.id && $0.id != ceo.id && replying[$0.id] == nil }
+        if !reporters.isEmpty {
+            post(BotChatMessage(author: "routine", text: "📋 \(section.name) is reporting: " + reporters.map(\.name).joined(separator: ", ") + " to \(manager.name)."), to: manager.id)
+        }
+        var received: [(name: String, text: String)] = []
+        var waiting = reporters.count
+        let rollUp = { [weak self] in
+            self?.rollUp(section.id, manager: manager, ceo: ceo, received: received, team: team)
+        }
+        if reporters.isEmpty { rollUp(); return }
+        for reporter in reporters {
+            let prompt = reportPrompt(reporter, to: manager, role: "You're on the \(section.name) team and \(manager.name) is your manager, so your report goes to \(manager.name)", section: section,
+                                      activity: recentWork(of: reporter))
+            reply(bot: reporter, in: manager.id, prompt: prompt, session: nil, handsOnWhenStopped: true) { answer in
+                if let answer, !answer.isEmpty { received.append((reporter.name, answer)) }
+                waiting -= 1
+                if waiting == 0 { rollUp() }
+            }
+        }
+    }
+
+    /// The manager reads what came in and reports to the CEO, once it isn't busy with something else.
+    private func rollUp(_ sectionID: String, manager: NativeBot, ceo: NativeBot, received: [(name: String, text: String)], team: [NativeBot], attempt: Int = 0) {
+        guard let section = category(sectionID) else { return }
+        guard replying[manager.id] == nil else {
+            guard attempt < 90 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.rollUp(sectionID, manager: manager, ceo: ceo, received: received, team: team, attempt: attempt + 1)
+            }
+            return
+        }
+        let reports = received.map { "\($0.name) reports:\n\($0.text)" }.joined(separator: "\n\n")
+        let silent = team.filter { bot in bot.id != manager.id && bot.id != ceo.id && !received.contains { $0.name == bot.name } }
+        let activity = (reports.isEmpty ? "No reports came in." : reports) +
+            (silent.isEmpty ? "" : "\n\nNo report from: " + silent.map(\.name).joined(separator: ", ") + ".") +
+            "\n\nYour own recent work:\n" + recentWork(of: manager)
+        let prompt = reportPrompt(manager, to: ceo, role: "You manage the \(section.name) team. Roll your team's reports up into one for \(ceo.name), the CEO", section: section, activity: activity)
+        post(BotChatMessage(author: "routine", text: "📋 \(manager.name) is reporting to \(ceo.name) for \(section.name)."), to: ceo.id)
+        reply(bot: manager, in: ceo.id, prompt: prompt, session: nil) { [weak self] answer in
+            guard let self, let answer, !answer.isEmpty else { return }
+            self.recordReport(answer, by: manager, in: sectionID)
+        }
+    }
+
+    /// Reports that landed in the primary bot's chat since it last spoke, for the top of its next turn; other bots
+    /// get nothing. Marked as read here, so each is read once.
+    fileprivate func takeWaitingReports(for bot: NativeBot) -> String {
+        guard bot.primary else { return "" }
+        var record = conversation(bot.id)
+        let seen = record.seen[bot.id] ?? 0
+        let waiting = record.messages.dropFirst(min(seen, record.messages.count)).filter { message in
+            message.author != "user" && message.author != "routine" && message.author != bot.id
+        }.suffix(6)
+        record.seen[bot.id] = record.messages.count
+        conversations[bot.id] = record
+        guard !waiting.isEmpty else { return "" }
+        let lines = waiting.map { "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
+        return "(Reports your teams sent you since you last spoke:\n\n\(lines)\n\nUse them if they matter; don't recite them.)\n\n"
     }
 }

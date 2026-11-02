@@ -146,6 +146,7 @@ final class ClaudiaControlInbox {
             if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
             if let authority = command["authority"] as? String, ["member", "lead", "ceo"].contains(authority) { bot.authority = authority }
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
+            if let model = command["model"] as? String, !model.isEmpty { bot.model = model; bot.effort = nil }
             store.save(bot)
             reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary], error: nil)
         case "botDelete":
