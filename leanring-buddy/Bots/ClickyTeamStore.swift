@@ -12,6 +12,7 @@
 //  hears it, and what Clicky says lands in the CEO's chat.
 //
 
+import AppKit
 import ClickyCore
 import Foundation
 
