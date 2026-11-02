@@ -475,11 +475,15 @@ final class BotsStore: ObservableObject {
         return (harness, nil, effort, "\(HarnessCatalog.label(target)) doesn't have a model called \(hint), so it's on its usual one.")
     }
 
-    /// The last things the owner said in a chat, for what they asked of a run.
+    /// What the owner said in a chat in the last while, newest first, for what they asked of a run.
     func recentOwnerWords(in room: String) -> String? {
-        let said = conversation(room).messages.filter { $0.author == "user" }.suffix(3).map(\.text)
+        let since = Date().addingTimeInterval(-20 * 60)
+        let said = conversation(room).messages.filter { $0.author == "user" && $0.at >= since }.suffix(3).reversed().map(\.text)
         return said.isEmpty ? nil : said.joined(separator: "\n")
     }
+
+    /// A team is talking something through: its own final prompt starts the run, so nothing else starts one meanwhile.
+    var isTeamDiscussing: Bool { !groupBriefs.isEmpty }
 
     /// Theo posts to a group chat. The head's final answer comes to `then`.
     func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, ownerWords: String?, then: @escaping (String) -> Void) {
@@ -711,7 +715,7 @@ final class BotsStore: ObservableObject {
             sendToCoder(followup, room: room)
             return
         }
-        guard let prompt = BotsT3.promptBlock(in: answer) else { return }
+        guard let prompt = BotsT3.promptBlock(in: answer), !isTeamDiscussing else { return }
         // Agents run with full access, so only the owner's own words start one by themselves. Anything else gets the card
         // in the chat, whose Start button asks first.
         guard BotsStore.ownerAskedToBuild(pitch.text) else { return }
@@ -808,13 +812,14 @@ final class BotsStore: ObservableObject {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
-        if !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected {
+        if TheoLink.shared.isPaired, !TheoLink.shared.isWorkMac {
             let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? ""]
-            if TheoLink.shared.request("run", fields) {
-                post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your other Mac"). You can watch it here."), to: room)
-                started?(true, nil)
-                return
-            }
+            // It never runs here instead: if the Studio's away it goes as soon as it's back.
+            let sentNow = TheoLink.shared.requestWhenConnected("run", fields)
+            post(BotChatMessage(author: theo.id, text: sentNow ? "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your Mac Studio"). You can watch it here."
+                                : "**\(title)** is waiting for your Mac Studio, which isn't connected right now. It starts as soon as it's back."), to: room)
+            started?(true, nil)
+            return
         }
         Task { [weak self] in
             // One at a time: starting takes up to half a minute while the agent's screen settles.

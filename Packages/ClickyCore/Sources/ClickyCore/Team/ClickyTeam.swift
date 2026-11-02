@@ -225,12 +225,16 @@ public enum CodingHarnessWords {
 
     /// The harness in "send it to Codex", "run this on Claude Code", "use Cursor for it". Nil when none was named.
     public static func named(in text: String) -> String? {
+        // The first one named: callers put the newest words first.
         let words = CodingIntent.normalized(text)
+        var first: (position: String.Index, id: String)?
         for name in names {
             let pattern = "(?i)\\b(?:to|on|in|into|with|using|use|via|through)\\s+(?:the\\s+)?\(name.pattern)\\b|\\b\(name.pattern)\\s+(?:in|on)\\b"
-            if words.range(of: pattern, options: .regularExpression) != nil { return name.id }
+            if let range = words.range(of: pattern, options: .regularExpression), first == nil || range.lowerBound < first!.position {
+                first = (range.lowerBound, name.id)
+            }
         }
-        return nil
+        return first?.id
     }
 
     /// A harness by the name someone gives it, for [TELL: codex: …]. Nil for anything else.

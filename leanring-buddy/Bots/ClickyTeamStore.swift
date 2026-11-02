@@ -526,6 +526,14 @@ extension BotsStore {
 
     /// Theo sends something to code on the harness named. Agents run with full access, so only the owner's own words do this.
     private func startRunOrdered(_ prompt: String, harness: String, ownerWords: String?, ceo: NativeBot, onReport: ((String) -> Void)?) {
+        // The run's order and a group's can land together: give the group's a moment to arrive first.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.carryOutRunOrder(prompt, harness: harness, ownerWords: ownerWords, ceo: ceo, onReport: onReport)
+        }
+    }
+
+    private func carryOutRunOrder(_ prompt: String, harness: String, ownerWords: String?, ceo: NativeBot, onReport: ((String) -> Void)?) {
         let live = t3Runs.last { ($0.phase == "running" || $0.phase == "waiting") && ($0.harness ?? "t3") == harness }
         if CodingIntent.asksToCancelRun(prompt) || prompt.lowercased().hasPrefix("cancel") || prompt.lowercased().hasPrefix("stop") {
             if let live {
@@ -540,6 +548,10 @@ extension BotsStore {
         if let live, ownerWords != nil, let room = live.room {
             sendToCoder(prompt, room: room)
             onReport?("That's passed to \(live.title), which is still running.")
+            return
+        }
+        if isTeamDiscussing {
+            onReport?("The team's still discussing it. The run starts by itself once they've written the final prompt.")
             return
         }
         guard let ownerWords, BotsStore.ownerAskedToBuild(ownerWords) else {

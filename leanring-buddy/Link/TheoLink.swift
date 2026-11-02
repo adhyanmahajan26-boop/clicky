@@ -44,6 +44,7 @@ final class TheoLink: ObservableObject {
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
     private var waitingOrders: [String: (String) -> Void] = [:]
+    private var waitingRequests: [(action: String, fields: [String: String])] = []
     private var connectionState = "none"
     private var isConnectionReady = false
     private var failedDials = 0
@@ -351,6 +352,8 @@ final class TheoLink: ObservableObject {
             digestTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.sendDigest() }
             }
+            for waiting in waitingRequests { _ = request(waiting.action, waiting.fields) }
+            waitingRequests.removeAll()
             if (envelope.build ?? 0) > localBuild {
                 // The other Mac is ahead: offer the update here too, so they don't drift.
                 Task { await CompanionManager.current?.updateController.check(quietly: true) }
@@ -387,6 +390,13 @@ final class TheoLink: ObservableObject {
         guard isConnected, let payload = try? LinkCoding.encoder.encode(fields) else { return false }
         send(LinkEnvelope(kind: .request, key: action, payload: payload))
         return true
+    }
+
+    /// Like `request`, but if the other Mac's away it goes as soon as it's back. True when it went now.
+    func requestWhenConnected(_ action: String, _ fields: [String: String]) -> Bool {
+        if request(action, fields) { return true }
+        waitingRequests.append((action, fields))
+        return false
     }
 
     private func sendDigest() {

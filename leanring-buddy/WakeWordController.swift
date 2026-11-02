@@ -320,7 +320,8 @@ final class WakeWordController: ObservableObject {
             print("⚠️ Wake word: the mic has no usable format")
             return false
         }
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat, block: Self.makeAudioTapBlock(pipeline: pipeline))
+        // No format given: the node's own at this moment. A device or rate that changed just now would otherwise be a crash.
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil, block: Self.makeAudioTapBlock(pipeline: pipeline))
         engine.prepare()
         do {
             try engine.start()
@@ -341,9 +342,12 @@ final class WakeWordController: ObservableObject {
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                // New device or format: start over on a fresh engine.
+                // New device or format: start over on a fresh engine, once the change has settled.
                 self?.stopMicrophone(reportAbandonedTurn: true)
-                self?.reevaluate()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    self?.reevaluate()
+                }
             }
         }
         print("👂 Wake word: mic open (\(Int(inputFormat.sampleRate)) Hz, \(pipeline.localeIdentifier), on-device)")

@@ -333,3 +333,9 @@ struct ClickyTeamTests {
         #expect(found == [holes])
     }
 }
+
+@Suite struct NewestWordsWinTests {
+    @Test func theNewestHarnessNamedIsTheOne() {
+        #expect(CodingHarnessWords.named(in: "build it in t3 code\nsend the old one to codex") == "t3")
+    }
+}
