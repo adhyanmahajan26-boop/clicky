@@ -139,6 +139,10 @@ final class BotsStore: ObservableObject {
     @Published var delegations: [ClickyDelegation] = []
     /// Helpers from the brain's own [WORKER] lines running under Clicky's Researcher right now.
     var teamHelpersRunning = 0
+    /// A call that's listening: Clicky's team reporting to the CEO after the call's order was already answered.
+    var onCEOReport: ((String) -> Void)?
+    /// Theo is waiting on the head of these group chats, by room.
+    private var groupWaiters: [String: (String) -> Void] = [:]
     /// The conversation on screen, which collects no unread count.
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
     private var routineTimer: Timer?
@@ -168,6 +172,7 @@ final class BotsStore: ObservableObject {
         loadRoutinesAndLayout()
         provisionClickyTeam()
         loadDelegations()
+        backfillTeamWork()
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -405,6 +410,21 @@ final class BotsStore: ObservableObject {
         askTeam(tagged.isEmpty ? [head] : tagged, chain: 0, group: group)
     }
 
+    /// Theo posts to a group chat. The head's final answer comes to `then`.
+    func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, then: @escaping (String) -> Void) {
+        guard let group = group(groupID), let head = head(of: group) else { return }
+        post(BotChatMessage(author: ceo.id, text: text), to: group.roomID)
+        groupWaiters[group.roomID] = then
+        Task { [weak self] in
+            while self?.replying[head.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+            self?.askTeam([head], chain: 0, group: group)
+        }
+    }
+
+    private func groupAnswered(_ room: String, answer: String) {
+        groupWaiters.removeValue(forKey: room)?(answer)
+    }
+
     /// How many bot-to-bot hand-offs one message of yours can set off.
     private static let maxChain = 8
 
@@ -428,6 +448,7 @@ final class BotsStore: ObservableObject {
                 guard let answer else {
                     // A member that failed or timed out doesn't stall the room: the head merges what's there.
                     if !isHead, team.allSatisfy({ self.replying[$0.id] == nil }) { self.askTeam([head], chain: chain + 1, group: group) }
+                    if isHead { self.groupAnswered(room, answer: "\(head.name) stopped before answering.") }
                     return
                 }
                 // Only the head (or a lead/CEO) hands out work; members tagging each other would chat on and on.
@@ -436,6 +457,7 @@ final class BotsStore: ObservableObject {
                 if isHead || !next.isEmpty {
                     // The head hands the work out, and a planner can hand out the parts.
                     if !next.isEmpty { self.askTeam(next, chain: chain + 1, group: group) }
+                    else { self.groupAnswered(room, answer: answer) }
                 } else if team.allSatisfy({ self.replying[$0.id] == nil }) {
                     // The last member has answered: the head reads the whole round once and merges it.
                     self.askTeam([head], chain: chain + 1, group: group)
@@ -516,7 +538,7 @@ final class BotsStore: ObservableObject {
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
-            for order in orders { self.orderClicky(order, ownerWords: nil) }
+            for order in orders { self.carryOutOrder(order, ownerWords: nil) }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
             if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
@@ -951,6 +973,10 @@ enum BotPrompts {
                              ". Mention one with @Name in the team chat to bring them in.")
             }
             parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name)))
+            let roster = BotsStore.shared.rosterForCEO
+            if !roster.isEmpty { parts.append(roster) }
+            let work = BotsStore.shared.memoryStore.teamWorkContext()
+            if !work.isEmpty { parts.append(work) }
         }
         if bot.owner == nil {
             parts.append(BotPrompts.routineHowTo)

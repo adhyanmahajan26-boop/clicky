@@ -41,6 +41,8 @@ struct ClickyDelegation: Codable, Identifiable, Equatable {
     var reportsToCEO: Bool?
     /// Done once its coding run is.
     var waitsForRun: Bool?
+    /// Where its notes were saved, for a research job.
+    var savedPath: String?
 
     var isLive: Bool { phase == .queued || phase == .working }
     var isOrder: Bool { duty == "order" }
@@ -157,11 +159,14 @@ extension BotsStore {
         delegations[index].result = result
         let job = delegations[index]
         writeDelegations()
+        if succeeded { keepInMemory(job) }
         if let room = job.room {
             post(BotChatMessage(author: job.workerID ?? Self.clickyID, text: result, card: "delegation:\(id)"), to: room)
         }
         if job.reportsToCEO == true, let ceo = primary {
-            post(BotChatMessage(author: Self.clickyID, text: "\(job.workerName) finished \"\(job.task.prefix(80))\":\n\n\(result)"), to: ceo.id)
+            let report = "\(job.workerName) finished \"\(job.task.prefix(80))\":\n\n\(result)"
+            post(BotChatMessage(author: Self.clickyID, text: report), to: ceo.id)
+            onCEOReport?(report)
         }
     }
 
@@ -322,6 +327,25 @@ extension BotsStore {
 
     // MARK: Memory
 
+    /// The team's finished work goes in the log, so Memory can find it and Clicky and Theo know it came back.
+    private func keepInMemory(_ job: ClickyDelegation) {
+        guard !job.isOrder, job.duty != ClickyDuty.memory.rawValue, let result = job.result, !result.isEmpty else { return }
+        memoryStore.append(ClickyMemoryStore.teamWorkText(worker: job.workerName, task: job.task, result: result, savedPath: job.savedPath),
+                           kind: .teamWork, at: job.finishedAt ?? Date())
+    }
+
+    /// Once: work finished before the log kept it goes in now.
+    func backfillTeamWork() {
+        let file = folder.appendingPathComponent("offered.json")
+        var offered = Set((try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
+        guard !offered.contains(Self.teamWorkBackfillKey) else { return }
+        for job in delegations where job.phase == .done { keepInMemory(job) }
+        offered.insert(Self.teamWorkBackfillKey)
+        try? JSONEncoder().encode(Array(offered).sorted()).write(to: file, options: .atomic)
+    }
+
+    nonisolated private static let teamWorkBackfillKey = "clicky-team-work-v1"
+
     /// What the owner just said to Clicky goes in the log. Every so often Memory summarises what's new, with no card.
     func noteOwnerSaid(_ text: String) {
         let memory = memoryStore
@@ -358,8 +382,9 @@ extension BotsStore {
         post(BotChatMessage(author: worker, text: line), to: worker)
     }
 
-    func researchEnded(_ id: String?, text: String, succeeded: Bool) {
+    func researchEnded(_ id: String?, text: String, succeeded: Bool, savedPath: String? = nil) {
         guard let id, let job = delegation(id), job.isLive else { return }
+        if let index = delegations.firstIndex(where: { $0.id == id }) { delegations[index].savedPath = savedPath }
         if let worker = job.workerID {
             setReplying(nil, worker)
             post(BotChatMessage(author: worker, text: text), to: worker)
@@ -424,6 +449,82 @@ extension BotsStore {
             options.theoOrder = ClickyTheoOrder(ownerWords: ownerWords)
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
         }
+    }
+
+    /// An order from Theo's reply: for Clicky, or for another bot or group chat by name.
+    func carryOutOrder(_ order: String, ownerWords: String?, onReport: ((String) -> Void)? = nil) {
+        guard let (name, message) = ClickyOrder.tellTarget(in: order) else {
+            orderClicky(order, ownerWords: ownerWords, onReport: onReport)
+            return
+        }
+        tell(name, message: message, ownerWords: ownerWords, onReport: onReport)
+    }
+
+    /// Theo gives work to someone by name. Their answer lands in Theo's chat and comes to `onReport`.
+    func tell(_ name: String, message: String, ownerWords: String?, onReport: ((String) -> Void)? = nil) {
+        guard let ceo = primary else { return }
+        let wanted = BotsStore.searchName(name)
+        if wanted == BotsStore.searchName("clicky") {
+            orderClicky(message, ownerWords: ownerWords, onReport: onReport)
+            return
+        }
+        let everyone = bots.filter { $0.id != ceo.id }
+        let chats = groups.filter { $0.headID != nil }
+        let group = chats.first { BotsStore.searchName($0.name) == wanted }
+        let bot = everyone.first { BotsStore.searchName($0.name) == wanted }
+        let words = Self.withTeamWork(message, memory: memoryStore)
+        let report: (String, String) -> Void = { [weak self] who, answer in
+            self?.post(BotChatMessage(author: ceo.id, text: "**\(who):** \(answer)"), to: ceo.id)
+            onReport?("\(who) answered: \(answer)")
+        }
+        if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
+            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id) { answer in report(chat.name, answer) }
+        } else if let target = bot ?? everyone.first(where: { BotsStore.searchName($0.name).contains(wanted) }), target.isOn {
+            post(BotChatMessage(author: ceo.id, text: words), to: target.id)
+            Task { [weak self] in
+                while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+                guard let self else { return }
+                let session = self.conversation(target.id).sessions[target.id]
+                let asked = ClickyTeamPrompts.task(words, from: ceo.name)
+                let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: asked) : asked
+                self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { answer in
+                    report(target.name, answer?.isEmpty == false ? answer! : "stopped before answering.")
+                }
+            }
+        } else {
+            let names = (chats.map(\.name) + everyone.filter(\.isOn).map(\.name)).joined(separator: ", ")
+            report(name, "There's nobody by that name that's on. Who's here: \(names).")
+        }
+    }
+
+    /// Letters and digits only, so "IT guys" is found however it's written or heard.
+    nonisolated static func searchName(_ name: String) -> String {
+        name.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// When work is passed on, what Clicky's team found goes with it.
+    nonisolated private static func withTeamWork(_ message: String, memory: ClickyMemoryStore) -> String {
+        guard message.range(of: #"(?i)\b(clicky|research|researcher|data|collected|brief|bundle|notes?|findings?|photos?)\b"#, options: .regularExpression) != nil else { return message }
+        let work = memory.teamWork().suffix(4).map(\.text).joined(separator: "\n\n")
+        return work.isEmpty ? message : "\(message)\n\nWhat Clicky's team has on file:\n\n\(work)"
+    }
+
+    /// Who Theo can reach, and what they've said lately. Theo sees this every turn.
+    var rosterForCEO: String {
+        guard let ceo = primary else { return "" }
+        func latest(_ room: String) -> String {
+            let said = conversation(room).messages.suffix(2).filter { !$0.text.isEmpty }.map { String($0.text.replacingOccurrences(of: "\n", with: " ").prefix(140)) }
+            return said.isEmpty ? "" : " Latest: " + said.joined(separator: " / ")
+        }
+        let chats = groups.filter { $0.headID != nil }.map { group -> String in
+            let others = members(of: group).filter { $0.id != group.headID }.map(\.name).joined(separator: ", ")
+            return "- \(group.name) (group chat, led by \(head(of: group)?.name ?? "nobody"), with \(others)).\(latest(group.roomID))"
+        }
+        let people = bots.filter { $0.id != ceo.id && $0.owner == nil }.map { bot in
+            "- \(bot.name)\(bot.description.isEmpty ? "" : " (\(bot.description))")\(bot.isOn ? "" : " [off]").\(latest(bot.id))"
+        }
+        guard !chats.isEmpty || !people.isEmpty else { return "" }
+        return "Everyone you can reach with [TELL: name: what to do], as of now:\n" + (chats + people).joined(separator: "\n")
     }
 
     /// A message for Clicky from outside its own chat.

@@ -2,15 +2,15 @@
 //  ClickyMemory.swift
 //  ClickyCore
 //
-//  What Memory keeps: what the owner said to Clicky in one file, what was asked to be remembered and Memory's summaries
-//  in another. Two small JSON-lines files in the app's own folder, so it stays local and survives the Memory bot being
+//  What Memory keeps: what the owner said to Clicky in one file; what was asked to be remembered, Memory's summaries and
+//  the finished work of Clicky's team in another. Two small JSON-lines files in the app's own folder, so it stays local and survives the Memory bot being
 //  removed. Anything that looks like a secret is taken out before it's written.
 //
 
 import Foundation
 
 public struct ClickyMemoryEntry: Codable, Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable { case said, remembered, summary }
+    public enum Kind: String, Codable, Sendable { case said, remembered, summary, teamWork }
     public var at: Date
     public var kind: Kind
     public var text: String
@@ -37,7 +37,7 @@ public enum ClickyMemoryTask: Equatable, Sendable {
     public static func classify(_ task: String) -> ClickyMemoryTask {
         let trimmed = task.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
-        if lower.range(of: #"^(do you remember|remember (what|when|where|who|how|if)\b|what did|when did|did i\b|find\b|search\b|look up\b)"#, options: .regularExpression) != nil { return .find(trimmed) }
+        if lower.range(of: #"^(do you remember|remember (what|when|where|who|how|if)\b|what did|when did|did i\b|find\b|search\b|look up\b|list\b|collect\b|gather\b|pull\b|fetch\b|get\b|give\b|show\b)"#, options: .regularExpression) != nil { return .find(trimmed) }
         if lower.range(of: #"^summari[sz]e\b"#, options: .regularExpression) != nil { return .summarise }
         if let range = lower.range(of: #"^(please )?(remember|save|note|store|keep|don'?t forget)( down)?( this| that)?[:,]?\s*"#, options: .regularExpression) {
             let rest = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.upperBound))...])
@@ -115,8 +115,10 @@ public struct ClickyMemoryStore: Sendable {
 
     /// What was said, oldest first.
     public func entries() -> [ClickyMemoryEntry] { Array(read(entriesFile).suffix(Self.maximumEntries)) }
-    /// What was saved on purpose and the summaries, oldest first.
+    /// What was saved on purpose, the summaries and the team's work, oldest first.
     public func summaries() -> [ClickyMemoryEntry] { read(summariesFile) }
+    /// What Clicky's team finished, oldest first.
+    public func teamWork() -> [ClickyMemoryEntry] { summaries().filter { $0.kind == .teamWork } }
 
     /// Things said since the last summary.
     public func unsummarised() -> [ClickyMemoryEntry] {
@@ -148,11 +150,32 @@ public struct ClickyMemoryStore: Sendable {
 
     public static let nothingToKeep = "Nothing to keep."
 
+    /// One finished job of the team, as it goes in the log.
+    public static func teamWorkText(worker: String, task: String, result: String, savedPath: String? = nil) -> String {
+        let cappedResult = result.count > maximumTeamWorkCharacters ? String(result.prefix(maximumTeamWorkCharacters)) + "…" : result
+        let saved = savedPath.map { "\nSaved at: \($0)" } ?? ""
+        return "\(worker) finished \"\(task.prefix(160))\":\n\(cappedResult)\(saved)"
+    }
+
+    public static let maximumTeamWorkCharacters = 6000
+
+    /// The team's latest finished work, shortened, so Clicky and Theo know it came back.
+    public func teamWorkContext(limit: Int = 4, charactersEach: Int = 500) -> String {
+        let work = teamWork().suffix(limit).map { entry -> String in
+            let text = entry.text.count > charactersEach ? String(entry.text.prefix(charactersEach)) + "…" : entry.text
+            return "- \(ClickyTeamPrompts.day(entry.at)): \(text)"
+        }
+        guard !work.isEmpty else { return "" }
+        return "what your team has finished lately (it's all saved, so ask memory for the rest):\n" + work.joined(separator: "\n")
+    }
+
     /// The last few summaries and saved things, for the top of Clicky's turn. Empty when there's nothing yet.
     public func context(maximumCharacters: Int = 600) -> String {
-        let recent = summaries().filter { $0.text != Self.nothingToKeep }.suffix(6).map(\.text)
-        guard !recent.isEmpty else { return "" }
+        let recent = summaries().filter { $0.text != Self.nothingToKeep && $0.kind != .teamWork }.suffix(6).map(\.text)
+        let work = teamWorkContext()
+        guard !recent.isEmpty else { return work }
         let body = String(recent.joined(separator: "\n").suffix(maximumCharacters))
-        return "the latest from your memory helper (use it only if it matters, don't recite it). it isn't the whole log, so if the user asks what they said before, hand that to memory:\n\(body)"
+        let remembered = "the latest from your memory helper (use it only if it matters, don't recite it). it isn't the whole log, so if the user asks what they said before, hand that to memory:\n\(body)"
+        return work.isEmpty ? remembered : remembered + "\n\n" + work
     }
 }

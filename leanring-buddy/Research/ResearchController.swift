@@ -243,7 +243,7 @@ final class ResearchController: CompanionActivitySource {
                       "sources": reports.map { ["index": $0.index, "url": $0.url.absoluteString, "ok": $0.succeeded] }]
         researchTask = nil
         let sources = reports.filter(\.succeeded).map { "[\($0.index)] \($0.title ?? $0.url.host ?? "source"): \($0.url.absoluteString)" }.joined(separator: "\n")
-        BotsStore.shared.researchEnded(teamJobID, text: brief + (sources.isEmpty ? "" : "\n\n" + sources), succeeded: true)
+        BotsStore.shared.researchEnded(teamJobID, text: brief + (sources.isEmpty ? "" : "\n\n" + sources), succeeded: true, savedPath: savedPath)
         teamJobID = nil
         // A research brief belongs to no article on screen: it opens on Theo's own display.
         companionManager.articleController.showNotes(notes, target: nil)

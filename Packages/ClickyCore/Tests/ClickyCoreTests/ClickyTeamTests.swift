@@ -188,3 +188,45 @@ struct ClickyTeamTests {
         #expect(section.contains("theo"))
     }
 }
+
+@Suite struct TheoTellTests {
+    @Test func tellOrdersComeOutWithNameAndMessage() {
+        let taken = ClickyOrder.extract(from: "Sending it over. [TELL: IT guys: write the prompt from Clicky's data] [CLICKY: point at Save]")
+        #expect(taken.text == "Sending it over.")
+        #expect(taken.orders.count == 2)
+        let target = ClickyOrder.tellTarget(in: taken.orders[0])
+        #expect(target?.name == "IT guys")
+        #expect(target?.message == "write the prompt from Clicky's data")
+        #expect(ClickyOrder.tellTarget(in: taken.orders[1]) == nil)
+    }
+
+    @Test func theVoiceNeverReadsATellOrder() {
+        var stream = ClickyOrderStream()
+        var speech = ""
+        var orders: [String] = []
+        for character in "On it. [TELL: project manager: send the brief] Done." {
+            let out = stream.feed(String(character))
+            speech += out.speech
+            orders += out.orders
+        }
+        let rest = stream.finish()
+        speech += rest.speech
+        orders += rest.orders
+        #expect(speech == "On it.  Done.")
+        #expect(ClickyOrder.tellTarget(in: orders[0])?.name == "project manager")
+    }
+
+    @Test func memoryFindsTheTeamsWorkAndClickyHearsAboutIt() {
+        let memory = ClickyMemoryStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let text = ClickyMemoryStore.teamWorkText(worker: "Researcher", task: "research the James Webb telescope", result: "Webb sees early galaxies.", savedPath: "/notes/webb.md")
+        memory.append(text, kind: .teamWork)
+        #expect(memory.search("James Webb").first?.text.contains("early galaxies") == true)
+        #expect(memory.context().contains("/notes/webb.md"))
+        #expect(memory.unsummarised().isEmpty)
+    }
+
+    @Test func gatheringWorkIsASearchNotSomethingToSave() {
+        if case .find = ClickyMemoryTask.classify("gather everything the team collected") {} else { Issue.record("should be a find") }
+        if case .find = ClickyMemoryTask.classify("collect all the data from Clicky's bots") {} else { Issue.record("should be a find") }
+    }
+}

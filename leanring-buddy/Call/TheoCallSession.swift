@@ -83,9 +83,14 @@ enum CallPrompt {
         parts.append(rules)
         if let theo {
             parts += BotPrompts.reportingLines(for: theo, store: store)
+            let roster = store.rosterForCEO
+            if !roster.isEmpty { parts.append(roster) }
+            let work = store.memoryStore.teamWorkContext()
+            if !work.isEmpty { parts.append(work) }
             let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
-                guard message.author == "user" || message.author == theo.id else { return nil }
-                return (message.author == "user" ? "Addy: " : "Theo: ") + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
+                guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
+                let who = message.author == "user" ? "Addy: " : message.author == theo.id ? "Theo: " : "Clicky: "
+                return who + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
             }
             if !recent.isEmpty { parts.append("The end of your text chat with Addy, before this call:\n" + recent.joined(separator: "\n")) }
         }
@@ -471,19 +476,25 @@ final class TheoCallSession: ObservableObject {
     /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
     private func orderClicky(_ order: String) {
         let addySaid = lines.last { $0.who == .addy && !$0.isLive }?.text
-        store.orderClicky(order, ownerWords: addySaid) { [weak self] report in
-            guard let self, self.state != .ended else { return }
-            self.clickyReports.append(report)
-            Task { @MainActor [weak self] in
-                for _ in 0..<90 {
-                    guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
-                    if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking {
-                        self.speechEndedAt = nil
-                        self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst()))
-                        return
-                    }
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // Clicky's helpers finish after Clicky's first answer: their reports come here too.
+        store.onCEOReport = { [weak self] report in self?.reportArrived(report) }
+        store.carryOutOrder(order, ownerWords: addySaid) { [weak self] report in
+            self?.reportArrived(report)
+        }
+    }
+
+    private func reportArrived(_ report: String) {
+        guard state != .ended else { return }
+        clickyReports.append(report)
+        Task { @MainActor [weak self] in
+            for _ in 0..<90 {
+                guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
+                if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking {
+                    self.speechEndedAt = nil
+                    self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst()))
+                    return
                 }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }
