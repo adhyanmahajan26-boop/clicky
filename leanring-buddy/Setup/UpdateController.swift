@@ -64,13 +64,16 @@ final class UpdateController: ObservableObject {
         var request = URLRequest(url: ClickySettings.updateFeedURL)
         request.timeoutInterval = 20
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        if let token = ClickySecrets.read(.updateToken) { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let token = await accessToken()
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 if quietly { state = previousState } else {
-                    state = .failed(statusCode == 404 ? "No updates published yet." : "The update check answered \(statusCode).")
+                    state = .failed(statusCode != 404 ? "The update check answered \(statusCode)."
+                                    : token == nil ? "This Mac isn't signed in to GitHub, so it can't see your private updates. Run gh auth login in Terminal, or paste a token below."
+                                    : "No updates published yet.")
                 }
                 return
             }
@@ -102,6 +105,25 @@ final class UpdateController: ObservableObject {
 
     // MARK: - Steps
 
+    /// The updates repo is private: a saved token, or this Mac's own GitHub sign-in, so there's nothing to paste.
+    private func accessToken() async -> String? {
+        if let token = ClickySecrets.read(.updateToken) { return token }
+        guard let gh = BotsT3.gh else { return nil }
+        return await Task.detached { () -> String? in
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = gh
+            process.arguments = ["auth", "token", "--hostname", "github.com"]
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return process.terminationStatus == 0 && !token.isEmpty ? token : nil
+        }.value
+    }
+
     struct UpdateError: LocalizedError {
         let message: String
         var errorDescription: String? { message }
@@ -109,7 +131,7 @@ final class UpdateController: ObservableObject {
 
     private func download(_ release: UpdateRelease) async throws -> URL {
         var request: URLRequest
-        if let token = ClickySecrets.read(.updateToken), let apiAssetURL = release.apiAssetURL {
+        if let token = await accessToken(), let apiAssetURL = release.apiAssetURL {
             request = URLRequest(url: apiAssetURL)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")

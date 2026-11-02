@@ -95,6 +95,16 @@ final class ClaudiaControlInbox {
         func reply(_ unused: String, ok: Bool, result: Any?, error: String?) { respond(ok, result, error) }
         if TheoUIDriver.handle(commandName, command, respond: respond) { return }
         switch commandName {
+        case "updateCheck":
+            let updates = companionManager.updateController
+            Task { @MainActor in
+                await updates.check()
+                reply(identifier, ok: true, result: ["state": "\(updates.state)", "build": updates.currentBuild], error: nil)
+            }
+        case "updateInstall":
+            let updates = companionManager.updateController
+            updates.installAvailableUpdate()
+            reply(identifier, ok: true, result: ["state": "\(updates.state)"], error: nil)
         case "clickyMac":
             let changed = TheoLink.shared.setClickyMac(word: (command["word"] as? String ?? "").lowercased())
             reply(identifier, ok: changed, result: TheoLink.shared.statusReport, error: changed ? nil : "no Mac by that name")
