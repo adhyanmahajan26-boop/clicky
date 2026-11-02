@@ -153,7 +153,7 @@ final class ResearchController: CompanionActivitySource {
             var brief = await Self.synthesize(question: request.question, reports: reports, model: briefModel)
             guard !Task.isCancelled else { return }
             if request.question.range(of: #"(?i)\b(photos?|images?|pictures?|pics?)\b"#, options: .regularExpression) != nil {
-                let photos = await Self.photoLinks(from: urls)
+                let photos = await Self.photoLinks(from: urls, topic: topic)
                 brief += photos.isEmpty ? "\n\nI couldn't find any usable photos on those pages." : "\n\n**Photos from these pages:**\n" + photos.map { "- \($0)" }.joined(separator: "\n")
             }
             self.present(topic: self.lastStatus["topic"] as? String ?? topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
@@ -162,9 +162,26 @@ final class ResearchController: CompanionActivitySource {
 
     // MARK: - Helpers
 
+    /// Full-size, freely licensed pictures on the subject, from Wikimedia Commons.
+    private static func commonsPhotos(for topic: String) async -> [String] {
+        let words = topic.lowercased().replacingOccurrences(of: #"\b(research|how|for me|and|get|good|photos?|images?|pictures?|of them|of|the|form|forms|about)\b"#, with: " ", options: .regularExpression)
+            .split(separator: " ").joined(separator: " ")
+        var components = URLComponents(string: "https://commons.wikimedia.org/w/api.php")
+        components?.queryItems = [("action", "query"), ("format", "json"), ("generator", "search"), ("gsrnamespace", "6"), ("gsrlimit", "8"),
+                                  ("gsrsearch", "\(words) filetype:bitmap"), ("prop", "imageinfo"), ("iiprop", "url")].map { URLQueryItem(name: $0.0, value: $0.1) }
+        guard !words.isEmpty, let url = components?.url else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        request.setValue("Theo/1.0 (macOS assistant)", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pages = (object["query"] as? [String: Any])?["pages"] as? [String: [String: Any]] else { return [] }
+        return pages.values.compactMap { (($0["imageinfo"] as? [[String: Any]])?.first?["url"]) as? String }.prefix(4).map { $0 }
+    }
+
     /// Each page's own lead image and its first few pictures.
-    private static func photoLinks(from urls: [URL]) async -> [String] {
-        var found: [String] = []
+    private static func photoLinks(from urls: [URL], topic: String) async -> [String] {
+        var found: [String] = await commonsPhotos(for: topic)
         for url in urls.prefix(ResearchTrigger.maximumLinks) {
             var request = URLRequest(url: url)
             request.timeoutInterval = 10
@@ -176,7 +193,7 @@ final class ResearchController: CompanionActivitySource {
                 guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
                 for match in regex.matches(in: html, range: NSRange(html.startIndex..., in: html)) where fromThisPage < 3 {
                     guard let range = Range(match.range(at: 1), in: html), let link = URL(string: String(html[range]), relativeTo: url)?.absoluteString,
-                          link.hasPrefix("http"), !link.lowercased().contains("logo"), !link.lowercased().contains("icon"), !found.contains(link) else { continue }
+                          link.hasPrefix("http"), !["logo", "icon", "ai-image", "avatar", "-150x", "-300x"].contains(where: link.lowercased().contains), !found.contains(link) else { continue }
                     found.append(link)
                     fromThisPage += 1
                 }

@@ -354,8 +354,16 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: botID)
             return
         }
-        // "Cancel that run": stopped right away, whatever else the message goes on to say.
-        if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
+        // "Cancel that run": stopped right away, whatever else the message goes on to say. The bot's told, so it doesn't go looking.
+        var cancelNote: String?
+        if CodingIntent.asksToCancelRun(command ?? text) {
+            if let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) {
+                stopRun(live.id)
+                cancelNote = "Theo has already stopped \"\(live.title)\" as Addy asked, and it's really stopped. Just confirm it."
+            } else {
+                cancelNote = "Addy asked to cancel a run, but no coding run is going on right now, so there's nothing to stop. Say so plainly."
+            }
+        }
         // "Clicky, research X" to the CEO: straight to Clicky, who reports back here.
         if bot.primary, let order = ClickyOrder.parse(command ?? text) {
             orderClicky(order, ownerWords: text)
@@ -370,7 +378,8 @@ final class BotsStore: ObservableObject {
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
-        if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
+        if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
+        if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         screenTurns[botID] = 0
@@ -657,7 +666,7 @@ final class BotsStore: ObservableObject {
             }
             // A turn the owner set off can ask for the work screen; one set off by a page or another bot's job can't.
             var screenOrders: [String] = []
-            if bot.owner == nil, fromOwner, let said = answer {
+            if bot.owner == nil, !bot.primary, fromOwner, let said = answer {
                 let taken = BotScreenOrder.extract(from: said)
                 answer = taken.text
                 screenOrders = taken.orders
@@ -776,7 +785,7 @@ final class BotsStore: ObservableObject {
         }
     }
 
-    /// Stops a run in progress. T3 Code has no stop command, so a T3 run is only no longer followed from here.
+    /// Stops a run in progress, in T3 Code or on a harness, and reports what it left.
     func stopRun(_ runID: String) {
         guard var run = t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" else { return }
         if run.isRemote {
@@ -787,9 +796,9 @@ final class BotsStore: ObservableObject {
         run.phase = "reporting"
         upsert(run)
         HarnessCoding.stop(run)
-        if run.harness == nil { Task { await BotsT3.stopThread(run) } }
         if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
         Task { [weak self] in
+            if run.harness == nil { await BotsT3.stopThread(run) }
             let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
             let report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
             run.phase = "failed"
@@ -1258,7 +1267,7 @@ enum BotPrompts {
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +
                          "room, answer the question you're given once, in your role; Theo collects the round and merges it.")
         }
-        if bot.owner == nil { parts.append(screenHowTo) }
+        if bot.owner == nil, !bot.primary { parts.append(screenHowTo) }
         parts.append("New in the group chat:\n\(transcript)")
         parts.append("Reply as \(bot.name).")
         return parts.joined(separator: "\n\n")
@@ -2111,15 +2120,24 @@ extension BotsStore {
             if let id = fields["id"], let report = fields["report"] { TheoLink.shared.orderReported(id, report: report) }
         case "screen":
             guard let task = fields["task"], let room = fields["room"], let bot = fields["bot"].flatMap({ self.bot($0) }) else { return }
-            workOnScreen(task, bot: bot, room: room)
+            // The bot carries on from the Mac it's talking on, where its session is.
+            workOnScreen(task, bot: bot, room: room) { report in
+                _ = TheoLink.shared.request("screenReport", ["bot": bot.id, "room": room, "report": report])
+            }
+        case "screenReport":
+            guard let room = fields["room"], let report = fields["report"], let bot = fields["bot"].flatMap({ self.bot($0) }) else { return }
+            continueAfterScreen(bot: bot, room: room, report: report)
         default:
             break
         }
     }
 
     /// What happened in this chat on the other Mac, for the bot's next turn here: its engine session only knows this Mac.
+    /// Each Mac has its own session, so after a restart here this still has the chat's latest to go on.
     fileprivate func linkCatchUp(_ id: String) -> String {
-        guard let heard = linkUnheard.removeValue(forKey: id), !heard.isEmpty else { return "" }
+        let unheard = linkUnheard.removeValue(forKey: id) ?? []
+        let heard = !unheard.isEmpty ? unheard : (TheoLink.shared.isPaired ? Array(conversation(id).messages.dropLast().filter { !$0.text.isEmpty }.suffix(6)) : [])
+        guard !heard.isEmpty else { return "" }
         let lines = heard.map { message -> String in
             let who = message.author == "user" ? "Addy" : (bot(message.author)?.name ?? message.author)
             return "\(who): \(message.text.prefix(600))"

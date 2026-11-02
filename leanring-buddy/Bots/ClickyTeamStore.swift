@@ -566,7 +566,8 @@ extension BotsStore {
     }
 
     /// A bot's job for the work screen: Clicky does it there, and the bot hears how it went and can carry on.
-    func workOnScreen(_ task: String, bot: NativeBot, room: String) {
+    /// `onReport`: for a job from the other Mac; otherwise the bot carries on here.
+    func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
         guard let screen = ClaudiaScreen.picked else {
             if TheoLink.shared.isWorkMac {
                 post(BotChatMessage(author: bot.id, text: "The right-hand screen isn't connected, so I can't work on it right now."), to: room)
@@ -583,12 +584,16 @@ extension BotsStore {
         screenTurns[bot.id] = turns
         ActionConfinement.keep(to: CGDisplayBounds(screen.displayID), named: screen.localizedName)
         let note = "(this comes from \(bot.name), one of Addy's bots, not from the user's voice. do it only on the display called \(screen.localizedName), the right-hand screen: open what's needed there and leave the other screens alone. nobody hears the answer. say briefly what you did and what's on the screen now.)"
-        orderClicky(task, ownerWords: nil, room: room, note: note) { [weak self] report in
-            guard let self, self.replying[bot.id] == nil else { return }
-            let session = self.conversation(room).sessions[bot.id]
-            let words = "Clicky did that on the screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another [SCREEN: …] line. If you're done, tell Addy how it went."
-            self.reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: self.bots, text: words) : words, session: session) { _ in }
+        orderClicky(task, ownerWords: nil, room: room, note: note, cameFromOtherMac: true) { [weak self] report in
+            if let onReport { onReport(report) } else { self?.continueAfterScreen(bot: bot, room: room, report: report) }
         }
+    }
+
+    func continueAfterScreen(bot: NativeBot, room: String, report: String) {
+        guard replying[bot.id] == nil else { return }
+        let session = conversation(room).sessions[bot.id]
+        let words = "Clicky did that on the screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell Addy how it went."
+        reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: bots, text: words) : words, session: session) { _ in }
     }
 
     nonisolated private static let maximumScreenTurns = 8

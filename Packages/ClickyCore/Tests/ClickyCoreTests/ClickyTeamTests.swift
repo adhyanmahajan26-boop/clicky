@@ -339,3 +339,11 @@ struct ClickyTeamTests {
         #expect(CodingHarnessWords.named(in: "build it in t3 code\nsend the old one to codex") == "t3")
     }
 }
+
+@Suite struct TalkingAboutTagsTests {
+    @Test func aTagMentionedInASentenceIsNotAnOrder() {
+        #expect(ClickyOrder.extract(from: "I won't chase it with more [CLICKY: …] lines.").orders.isEmpty)
+        #expect(BotScreenOrder.extract(from: "use another [SCREEN: …] line").orders.isEmpty)
+        #expect(ClickyOrder.extract(from: "[CLICKY: point at Save]").orders == ["point at Save"])
+    }
+}

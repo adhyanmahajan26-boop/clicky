@@ -106,6 +106,8 @@ public enum ClickyOrder {
         let orders = tag.matches(in: text, range: range).compactMap { match -> String? in
             guard let kindRange = Range(match.range(at: 1), in: text), let bodyRange = Range(match.range(at: 2), in: text) else { return nil }
             let body = String(text[bodyRange])
+            // "[CLICKY: …]" in a sentence is someone talking about the tag, not an order.
+            guard OrderWords.isRealOrder(body) else { return nil }
             guard text[kindRange].uppercased() == "TELL" else { return body }
             guard let colon = body.firstIndex(of: ":") else { return nil }
             let name = body[..<colon].trimmingCharacters(in: .whitespaces)
@@ -190,6 +192,15 @@ public struct ClickyOrderStream: Sendable {
 
 // MARK: - Bots on the work screen
 
+enum OrderWords {
+    private static let placeholders = ["what to do", "what to do in plain words", "what to do, in plain words", "its exact name: what to do", "name: what to do", "task"]
+
+    static func isRealOrder(_ body: String) -> Bool {
+        let words = body.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return words.contains { $0.isLetter || $0.isNumber } && !placeholders.contains(words)
+    }
+}
+
 /// A bot asks for something on the work screen with a [SCREEN: what to do] line.
 public enum BotScreenOrder {
     private static let tag = try! NSRegularExpression(pattern: #"(?i)\[\s*SCREEN\s*:\s*([^\]\n]{2,600}?)\s*\]"#)
@@ -199,7 +210,7 @@ public enum BotScreenOrder {
         let range = NSRange(text.startIndex..., in: text)
         let orders = tag.matches(in: text, range: range).compactMap { match in
             Range(match.range(at: 1), in: text).map { String(text[$0]) }
-        }
+        }.filter(OrderWords.isRealOrder)
         let left = tag.stringByReplacingMatches(in: text, range: range, withTemplate: "")
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)

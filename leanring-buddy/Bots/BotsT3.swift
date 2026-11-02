@@ -450,14 +450,11 @@ enum BotsT3 {
         let usedModel = run.model.map(NativeBot.label(for:)) ?? modelName
         let usedEffort = run.effort ?? effort
         let modelPart = usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
-        // T3 Code has no stop command, so its agent may still be writing: Theo only stops following it.
-        let stoppedFollowingOnly = stopped && run.harness == nil
-
         // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
         // named that's only safe in the run's own worktree, never the checkout they work in.
         var commitProblem: String?
         var leftOut: [String] = []
-        if !stoppedFollowingOnly, (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
+        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
             do {
                 leftOut = try await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
             } catch {
@@ -466,9 +463,7 @@ enum BotsT3 {
         }
         let head = run.branch ?? "HEAD"
         if let base = run.baseCommit { run.changedFiles = await changes(in: folder, from: base, to: head) }
-        var lines = [stoppedFollowingOnly
-            ? "Stopped following **\(run.title)**. T3 Code has no stop command, so its agent may still be working there."
-            : stopped
+        var lines = [stopped
             ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. " + ((run.changedFiles ?? []).isEmpty ? "It hadn't changed anything yet." : "The work so far is kept on its branch.")
             : failed
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
