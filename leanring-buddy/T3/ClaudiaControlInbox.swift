@@ -207,9 +207,24 @@ final class ClaudiaControlInbox {
             if let enabled = command["enabled"] as? Bool { bot.enabled = enabled }
             if let authority = command["authority"] as? String, ["member", "lead", "ceo"].contains(authority) { bot.authority = authority }
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }
+            if let provider = command["provider"] as? String, !provider.isEmpty { bot.provider = provider }
             if let model = command["model"] as? String, !model.isEmpty { bot.model = model; bot.effort = nil }
+            if let apps = command["apps"] as? [String] { bot.apps = apps }
+            if let instructions = command["instructions"] as? String, !instructions.isEmpty { bot.instructions = instructions }
             store.save(bot)
             reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary], error: nil)
+        case "routineAdd":
+            // {name, target: bot id, when: "daily 08:00", do}
+            let store = BotsStore.shared
+            guard let name = command["name"] as? String, let target = command["target"] as? String, let instruction = command["do"] as? String,
+                  let when = command["when"] as? String, let schedule = BotRoutine.Schedule.parse(when) else {
+                reply(identifier, ok: false, result: nil, error: "Needs name, target, when and do."); return
+            }
+            if store.routines.contains(where: { $0.name == name && $0.target == target }) {
+                reply(identifier, ok: true, result: ["skipped": name], error: nil); return
+            }
+            store.save(BotRoutine(name: name, target: target, instruction: instruction, schedule: schedule))
+            reply(identifier, ok: true, result: ["added": name, "next": store.routines.last?.nextRunAt?.description ?? ""], error: nil)
         case "botDelete":
             guard let id = command["id"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs id."); return }
             BotsStore.shared.deleteBot(id)

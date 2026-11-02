@@ -1591,7 +1591,9 @@ extension BotsStore {
         writeConversation(bot.id)
         let firstTurn = conversationRecord.sessions[bot.id] == nil
         let prompt = (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
-            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly.)"
+            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly.)" +
+            (bot.owner == nil && !bot.primary ? "\n\n(\(directMessageNote(for: bot)))" : "")
+        directMessagesSent = 0
         reply(bot: bot, in: bot.id, prompt: prompt, session: conversationRecord.sessions[bot.id]) { [weak self] answer in
             guard let self else { return }
             self.runningRoutines.remove(routine.id)
