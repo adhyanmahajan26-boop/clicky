@@ -26,6 +26,7 @@ final class TheoLink: ObservableObject {
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
     private static let usesThisScreenKey = "v3.clicky.usesThisScreen"
+    private static let alwaysOnWorkMacKey = "v3.clicky.alwaysOnWorkMac"
     nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 
     @Published private(set) var isPaired = false
@@ -75,21 +76,29 @@ final class TheoLink: ObservableObject {
 
     // MARK: Where Clicky works
 
-    /// The owner opened this Mac's screen to Clicky. Off by default on the Mac without the work screen.
+    /// Theo's orders to Clicky can use this Mac's screen too. Off by default on the Mac without the work screen.
     @Published var clickyUsesThisScreen = UserDefaults.standard.bool(forKey: TheoLink.usesThisScreenKey) {
+        didSet { UserDefaults.standard.set(clickyUsesThisScreen, forKey: Self.usesThisScreenKey) }
+    }
+
+    /// The owner would rather everything they ask Clicky here happened on the work Mac.
+    @Published var clickyAlwaysOnWorkMac = UserDefaults.standard.bool(forKey: TheoLink.alwaysOnWorkMacKey) {
         didSet {
-            UserDefaults.standard.set(clickyUsesThisScreen, forKey: Self.usesThisScreenKey)
+            UserDefaults.standard.set(clickyAlwaysOnWorkMac, forKey: Self.alwaysOnWorkMacKey)
             CompanionManager.current?.clickyPlaceChanged()
         }
     }
 
-    /// With linked Macs, Clicky works on the one with the work screen, and here only when the owner opens this one to it.
-    var clickyRunsHere: Bool { !isPaired || isWorkMac || clickyUsesThisScreen }
+    /// What the owner asks Clicky on this Mac, by voice or in its chat, happens on this Mac's screen: it's the one they're at.
+    var clickyRunsHere: Bool { !isPaired || isWorkMac || !clickyAlwaysOnWorkMac }
+
+    /// Theo's orders go to the work Mac's screen, wherever Theo was asked.
+    var theoOrdersRunHere: Bool { !isPaired || isWorkMac || clickyUsesThisScreen }
 
     /// This Mac has a work screen picked, even with that monitor off for now.
     var isWorkMac: Bool { !ClickySettings.claudiaScreenName.isEmpty }
 
-    private static let clickyElsewhere = "Clicky only works on your Mac Studio, and it isn't connected right now. To use Clicky here, turn it on in Settings, Your other Mac."
+    private static let clickyElsewhere = "That goes to Clicky on your Mac Studio, which isn't connected right now."
 
     /// Something said to Clicky here goes to the Mac it works on. It's never done here instead.
     func sendClickyToOtherMac(_ text: String, speaks: Bool) {
@@ -484,10 +493,12 @@ struct LinkSettingsContent: View {
             }
             if !link.isWorkMac {
                 VStack(alignment: .leading, spacing: 6) {
-                    Toggle("Let Clicky work on this Mac's screen", isOn: $link.clickyUsesThisScreen)
-                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
-                    Text("Off, anything you ask Clicky here, by voice, in its chat or through Theo, happens on your Mac Studio's screen, and Clicky doesn't look at this one.")
+                    Text("What you ask Clicky here, by voice or in its chat, happens on this screen. What Theo asks of it happens on your Mac Studio's.")
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
+                    Toggle("Send everything I ask Clicky here to my Mac Studio", isOn: $link.clickyAlwaysOnWorkMac)
+                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                    Toggle("Let Theo use Clicky on this screen too", isOn: $link.clickyUsesThisScreen)
+                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 }
             }
             Text("Bots, group chats, chats, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")

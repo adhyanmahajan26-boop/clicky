@@ -372,3 +372,12 @@ struct ClickyTeamTests {
         #expect(ProjectWords.labeled("New folder", in: "**New folder:** star-map") == "star-map")
     }
 }
+
+@Suite struct HandedOverWhenDoneTests {
+    @Test func researchThatGoesToTheoWhenDone() {
+        let words = "research these three links and make notes and hand it to Theo"
+        #expect(ResearchTrigger.wantsItHandedOver(words))
+        #expect(ResearchTrigger.parse(words) != nil)
+        #expect(!ResearchTrigger.wantsItHandedOver("research these three links"))
+    }
+}

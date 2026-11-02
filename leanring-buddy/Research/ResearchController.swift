@@ -58,7 +58,7 @@ final class ResearchController: CompanionActivitySource {
             return true
         }
         guard let request = ResearchTrigger.parse(transcript) else { return false }
-        start(request, speaks: speaks)
+        start(request, speaks: speaks, reportsToCEO: ResearchTrigger.wantsItHandedOver(transcript))
         return true
     }
 

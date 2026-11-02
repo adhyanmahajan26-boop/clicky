@@ -44,6 +44,11 @@ public enum ResearchTrigger {
             || text.range(of: #"\bresearch\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo|project manager|it guys)\b"#, options: .regularExpression) != nil
     }
 
+    /// "Research these links and hand it to Theo": research that goes to Theo when it's done.
+    public static func wantsItHandedOver(_ transcript: String) -> Bool {
+        CodingIntent.normalized(transcript).lowercased().range(of: #"\b(hand|give|send|pass|share|forward)\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo)\b"#, options: .regularExpression) != nil
+    }
+
     /// The owner's words only. Nil when it isn't a research request.
     public static func parse(_ transcript: String) -> ResearchRequest? {
         guard !isHandover(transcript) else { return nil }
