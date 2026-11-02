@@ -41,6 +41,11 @@ final class TheoLink: ObservableObject {
     private var digestTimer: Timer?
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
+    private var connectionState = "none"
+    private var isConnectionReady = false
+    private var failedDials = 0
+    /// A connection that hasn't opened in this long is given up on, so a stuck one can't block the next try.
+    private static let dialTimeoutSeconds: UInt64 = 15
 
     private let queue = DispatchQueue(label: "theo.link")
     private static var secretFile: URL {
@@ -60,7 +65,7 @@ final class TheoLink: ObservableObject {
     var statusReport: [String: Any] {
         ["paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
-         "found": foundPeers.count, "listening": listener?.state == .ready]
+         "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials]
     }
 
     // MARK: Pairing
@@ -187,7 +192,8 @@ final class TheoLink: ObservableObject {
             return
         }
         for endpoint in foundPeers {
-            guard case .service(let name, _, _, _) = endpoint, name != localName, localName < name else { continue }
+            // After a couple of failures the other way round gets a go too: one Mac's network can be the stuck one.
+            guard case .service(let name, _, _, _) = endpoint, name != localName, localName < name || failedDials >= 2 else { continue }
             dial(endpoint, code: code)
             return
         }
@@ -198,10 +204,11 @@ final class TheoLink: ObservableObject {
     }
 
     private func accept(_ incoming: NWConnection) {
-        guard connection == nil else {
+        guard connection == nil || !isConnectionReady else {
             incoming.cancel()
             return
         }
+        connection?.cancel()
         use(incoming)
     }
 
@@ -209,16 +216,33 @@ final class TheoLink: ObservableObject {
         connection = newConnection
         reader = LinkFrameReader()
         isHelloDone = false
+        isConnectionReady = false
+        connectionState = "starting"
+        Task { [weak self, weak newConnection] in
+            try? await Task.sleep(nanoseconds: Self.dialTimeoutSeconds * 1_000_000_000)
+            guard let self, let newConnection, self.connection === newConnection, !self.isConnectionReady else { return }
+            self.failedDials += 1
+            self.connectionEnded()
+        }
         newConnection.stateUpdateHandler = { [weak self, weak newConnection] state in
             Task { @MainActor in
                 guard let self, let newConnection, self.connection === newConnection else { return }
+                self.connectionState = "\(state)"
                 switch state {
                 case .ready:
                     self.problem = nil
+                    self.isConnectionReady = true
+                    self.failedDials = 0
                     self.send(LinkEnvelope(kind: .hello, name: self.localName, build: self.localBuild))
                     self.receive(on: newConnection)
-                case .failed, .cancelled:
+                case .failed(let error):
+                    self.problem = "Couldn't connect: \(error.localizedDescription)"
+                    self.failedDials += 1
                     self.connectionEnded()
+                case .cancelled:
+                    self.connectionEnded()
+                case .waiting(let error):
+                    self.problem = "Waiting to connect: \(error.localizedDescription)"
                 default:
                     break
                 }
@@ -230,6 +254,7 @@ final class TheoLink: ObservableObject {
     private func connectionEnded() {
         connection?.cancel()
         connection = nil
+        isConnectionReady = false
         peerName = nil
         peerBuild = nil
         digestTimer?.invalidate()
