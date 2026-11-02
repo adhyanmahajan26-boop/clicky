@@ -500,10 +500,16 @@ final class BotsStore: ObservableObject {
     func projectChoice(ownerWords: String?, answer: String?) -> (repo: URL?, newFolder: String?) {
         let owner = ownerWords ?? ""
         let known = knownProjects
-        if let path = BotsT3.targetRepo(answer: "", pitch: owner, mustExist: TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired) { return (path, nil) }
-        if let name = ProjectWords.newFolderName(in: owner) { return (nil, name) }
         func project(_ name: String) -> URL { BotsT3.projectsFolder.appendingPathComponent(name, isDirectory: true) }
-        if let name = ProjectWords.namedProject(in: owner, among: known) { return (project(name), nil) }
+        // Their newest words first: a folder made a moment ago doesn't outrank the project they've just named.
+        for said in owner.components(separatedBy: "\n") {
+            if let path = BotsT3.targetRepo(answer: "", pitch: said, mustExist: TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired) { return (path, nil) }
+            if let name = ProjectWords.namedProject(in: said, among: known) { return (project(name), nil) }
+            if let name = ProjectWords.newFolderName(in: said) {
+                // Already made: "build it in there", not another one beside it.
+                return known.contains(BotsT3.slug(name)) ? (project(BotsT3.slug(name)), nil) : (nil, name)
+            }
+        }
         // The owner spoke of a folder or project but in words only a bot could match, like a Hindi spelling.
         guard let answer, CodingIntent.normalized(owner).range(of: #"(?i)\b(folder|project|repo)\b"#, options: .regularExpression) != nil else { return (nil, nil) }
         if let line = ProjectWords.labeled("Repo", in: answer) {
