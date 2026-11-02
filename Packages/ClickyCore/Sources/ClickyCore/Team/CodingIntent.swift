@@ -15,7 +15,7 @@ public enum CodingIntent {
         ("ओपस", "opus"), ("सॉनेट", "sonnet"), ("हाइकू", "haiku"), ("हाई", "high"), ("मीडियम", "medium"),
         ("वेबसाइट", "website"), ("ऐप", "app"), ("गेम", "game"), ("प्रोजेक्ट", "project"), ("थ्रेड", "thread"), ("कैंसल", "cancel"), ("प्रॉम्प्ट", "prompt"),
         ("बनाएगा", "build"), ("बनाएंगे", "build"), ("बनाओ", "build"), ("बना दे", "build"), ("बनानी", "build"), ("बनाना", "build"),
-        ("बन जाए", "build"), ("चाहिए", "want"), ("भेज", "send"), ("रोक", "stop"), ("बंद कर", "stop"), ("कोड", "code"), ("आइडिया", "idea"), ("प्लान", "plan"),
+        ("बन जाए", "build"), ("फोल्डर", "folder"), ("नया", "new"), ("नई", "new"), ("चाहिए", "want"), ("भेज", "send"), ("रोक", "stop"), ("बंद कर", "stop"), ("कोड", "code"), ("आइडिया", "idea"), ("प्लान", "plan"),
         ("में", " in "), ("पे", " on "), ("पर", " on "),
     ]
 
@@ -71,5 +71,55 @@ public enum CodingIntent {
             return score >= 2 ? (index, score, text) : nil
         }
         return scored.sorted { $0.score != $1.score ? $0.score > $1.score : $0.index > $1.index }.prefix(limit).map(\.text)
+    }
+}
+
+/// Which folder the owner's words are about: a new one they named, or a project they already have.
+public enum ProjectWords {
+    private static let notNames: Set<String> = ["for", "and", "in", "to", "on", "with", "the", "a", "an", "it", "this", "that", "please", "then", "or", "folder", "project"]
+
+    /// "New folder called moon-site", "make a new project named Moon Site". Nil without a name.
+    public static func newFolderName(in text: String) -> String? {
+        let words = CodingIntent.normalized(text)
+        let tail = #"[\"'`]?([\w][\w .-]{0,40}?)[\"'`]?(?=\s+(?:and|then|in|on|with|for)\b|\s*[.,!?\n]|\s*$)"#
+        for pattern in [#"(?i)\bnew\s+(?:folder|project)\s+(?:called|named|name|as)\s+"# + tail, #"(?i)\b(?:folder|project)\s+(?:called|named)\s+"# + tail, #"(?i)\bnew\s+(?:folder|project)\s+"# + tail] {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: words, range: NSRange(words.startIndex..., in: words)),
+                  let range = Range(match.range(at: 1), in: words) else { continue }
+            let name = words[range].trimmingCharacters(in: .whitespaces)
+            if !notNames.contains(name.lowercased()) { return name }
+        }
+        return nil
+    }
+
+    /// Only a folder asked for, with nothing to build in it yet.
+    public static func asksOnlyForFolder(_ text: String) -> Bool {
+        guard let name = newFolderName(in: text) else { return false }
+        return CodingIntent.normalized(text).replacingOccurrences(of: name, with: "").range(of: #"(?i)\b(website|site|app|page|game|tool|script|dashboard|build|code|fix|write|add)\b"#, options: .regularExpression) == nil
+    }
+
+    /// The project these words talk about, out of the ones there are: "changes in the planets quiz", "moon-phases-page project".
+    public static func namedProject(in text: String, among names: [String]) -> String? {
+        let words = CodingIntent.normalized(text)
+        for name in names.sorted(by: { $0.count > $1.count }) {
+            let parts = name.split(whereSeparator: { "-_ ".contains($0) }).map { NSRegularExpression.escapedPattern(for: String($0)) }
+            guard !parts.isEmpty else { continue }
+            let flexible = parts.joined(separator: "[-_ ]?")
+            let pattern = "(?i)\\b(?:in|on|to|into|inside|at|for|of)\\s+(?:the\\s+|my\\s+|that\\s+)?\(flexible)\\b|\\b\(flexible)\\s+(?:project|folder|repo|in|on)\\b"
+            if words.range(of: pattern, options: .regularExpression) != nil { return name }
+        }
+        return nil
+    }
+
+    public static func asksToWork(_ text: String) -> Bool {
+        CodingIntent.normalized(text).range(of: #"(?i)\b(change|changes|fix|update|edit|add|improve|continue|work|modify|redo|build|make)\b|बदल|ठीक"#, options: .regularExpression) != nil
+    }
+
+    /// What a bot wrote, inline or on its own line: "Repo: ~/Projects/foo", "New folder: foo".
+    public static func labeled(_ label: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "(?im)\\*{0,2}\\b\(label):\\*{0,2}\\s*[`\"']?([~/\\w][\\w ./-]*?)[`\"']?\\s*(?:$|[,;\\]]|\\.\\s)"),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
     }
 }

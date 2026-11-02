@@ -141,7 +141,7 @@ enum HarnessCoding {
 
     // MARK: Starting
 
-    static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil) async throws -> T3Run {
+    static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil) async throws -> T3Run {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
@@ -161,6 +161,11 @@ enum HarnessCoding {
             plainFolder = true
             workdir = repo
             run = T3Run(id: "", title: title, folder: repo.path)
+        } else if let topLevel, !(await BotsT3.hasRemote(topLevel)) {
+            // A project of the owner's that lives only here: changes go right in it, on its own history.
+            workdir = topLevel
+            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo = topLevel {
             // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
@@ -175,7 +180,7 @@ enum HarnessCoding {
             run.baseBranch = await BotsT3.currentBranch(in: repo)
             gitFolder = repo.appendingPathComponent(".git").path
         } else {
-            workdir = try BotsT3.newProjectFolder(title: title)
+            workdir = try BotsT3.newProjectFolder(title: newFolder ?? title)
             BotsT3.saveBrief(prompt, title: title, engine: HarnessCatalog.label(harness))
             try await BotsT3.shell(git, ["init", "-q", "-b", "main"], in: workdir)
             try await BotsT3.startEmpty(in: workdir)

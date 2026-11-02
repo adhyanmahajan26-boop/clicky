@@ -347,3 +347,28 @@ struct ClickyTeamTests {
         #expect(ClickyOrder.extract(from: "[CLICKY: point at Save]").orders == ["point at Save"])
     }
 }
+
+@Suite struct ProjectWordsTests {
+    private let projects = ["moon-phases-page", "planets-quiz", "clicky", "black-hole-page"]
+
+    @Test func newFolders() {
+        #expect(ProjectWords.newFolderName(in: "make a new folder called moon-site") == "moon-site")
+        #expect(ProjectWords.newFolderName(in: "create a new project named Star Map and build a page") == "Star Map")
+        #expect(ProjectWords.newFolderName(in: "नया फोल्डर moon-site") == "moon-site")
+        #expect(ProjectWords.newFolderName(in: "make a new folder") == nil)
+        #expect(ProjectWords.asksOnlyForFolder("make a new folder called moon-site"))
+        #expect(!ProjectWords.asksOnlyForFolder("new folder called moon-site and build a page in it"))
+    }
+
+    @Test func existingProjects() {
+        #expect(ProjectWords.namedProject(in: "make these changes in the planets quiz", among: projects) == "planets-quiz")
+        #expect(ProjectWords.namedProject(in: "moon-phases-page project में title बदल", among: projects) == "moon-phases-page")
+        #expect(ProjectWords.namedProject(in: "what is a planets quiz", among: projects) == nil)
+        #expect(ProjectWords.asksToWork("make these changes"))
+    }
+
+    @Test func whatABotWrote() {
+        #expect(ProjectWords.labeled("Repo", in: "Plan.\nRepo: ~/Projects/planets-quiz\n```prompt") == "~/Projects/planets-quiz")
+        #expect(ProjectWords.labeled("New folder", in: "**New folder:** star-map") == "star-map")
+    }
+}

@@ -88,6 +88,7 @@ enum CallPrompt {
             let work = store.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
             parts.append(store.runsStatus)
+            parts.append(store.projectsNote + " On this call, put those words inside the [TELL: …] line. To just make a new empty folder, say it's for your chat afterward.")
             let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
                 guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
                 let who = message.author == "user" ? "Addy: " : message.author == theo.id ? "Theo: " : "Clicky: "

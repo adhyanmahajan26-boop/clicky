@@ -186,7 +186,7 @@ enum BotsT3 {
     static let plainFolderNote = "\n\nThis folder isn't a git repository. Edit the files here and don't run git init or commit."
 
     /// The folder the work should go into: a "Repo: <path>" line Theo wrote, else a path in the pitch.
-    static func targetRepo(answer: String, pitch: String) -> URL? {
+    static func targetRepo(answer: String, pitch: String, mustExist: Bool = true) -> URL? {
         var candidates: [String] = []
         if let line = labeledLine("repo", in: answer) { candidates.append(line) }
         // A path in quotes or backticks (it can have spaces), then a bare ~/… or /Users/… one.
@@ -198,7 +198,7 @@ enum BotsT3 {
         for candidate in candidates {
             let path = (candidate.trimmingCharacters(in: CharacterSet(charactersIn: "`.,) ")) as NSString).expandingTildeInPath
             var isFolder: ObjCBool = false
-            if FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue {
+            if !mustExist || (FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && isFolder.boolValue) {
                 return URL(fileURLWithPath: path, isDirectory: true)
             }
         }
@@ -226,10 +226,10 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
-        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice) }
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder) }
         guard let cli else { throw BotsT3Error.noCLI }
         var arguments = ["thread", "start"]
         var run: T3Run
@@ -242,6 +242,12 @@ enum BotsT3 {
             _ = try? await shell(cli, ["project", "add", repo.path])
             arguments += [repo.path, "-"]
             run = T3Run(id: "", title: title, folder: repo.path)
+        } else if let topLevel, !(await hasRemote(topLevel)) {
+            // A project of the owner's that lives only here: changes go right in it, on its own history.
+            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            _ = try? await shell(cli, ["project", "add", topLevel.path])
+            arguments += [topLevel.path, "-"]
+            run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo, let topLevel {
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -251,7 +257,7 @@ enum BotsT3 {
             run.baseBranch = await currentBranch(in: topLevel)
             subfolder = subfolderNote(repo, in: topLevel)
         } else {
-            let folder = try newProjectFolder(title: title)
+            let folder = try newProjectFolder(title: newFolder ?? title)
             saveBrief(prompt, title: title, engine: "T3 Code")
             try await shell(git, ["init", "-q", "-b", "main"], in: folder)
             try await startEmpty(in: folder)
@@ -393,6 +399,22 @@ enum BotsT3 {
     /// A first, empty commit, so the run's diff has something to start from.
     static func startEmpty(in folder: URL) async throws {
         try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
+    }
+
+    /// Whether a repo pushes anywhere.
+    static func hasRemote(_ folder: URL) async -> Bool {
+        let remotes = (try? await shell(git, ["remote"], in: folder)) ?? ""
+        return !remotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static var projectsFolder: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
+    }
+
+    /// The owner's project folders.
+    static func projectNames() -> [String] {
+        let found = (try? FileManager.default.contentsOfDirectory(at: projectsFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        return found.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }.map(\.lastPathComponent).sorted()
     }
 
     static func newProjectFolder(title: String) throws -> URL {

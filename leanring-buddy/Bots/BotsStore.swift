@@ -154,6 +154,8 @@ final class BotsStore: ObservableObject {
         var reportsTo: ((String) -> Void)?
     }
     private var groupBriefs: [String: GroupRunBrief] = [:]
+    /// The folder list from the Mac where coding runs.
+    var peerProjects: [String] = []
     /// Team work already passed on, so the same brief doesn't go with every message.
     var passedOnWork: Set<String> = []
     /// Research waiting for the one in progress to end, so one job doesn't kill another.
@@ -354,6 +356,11 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: botID)
             return
         }
+        // "Make a new folder called X" and nothing more: done, with no bot in between.
+        if ProjectWords.asksOnlyForFolder(command ?? text), let name = ProjectWords.newFolderName(in: command ?? text) {
+            makeProjectFolder(name, room: botID)
+            return
+        }
         // "Cancel that run": stopped right away, whatever else the message goes on to say. The bot's told, so it doesn't go looking.
         var cancelNote: String?
         if CodingIntent.asksToCancelRun(command ?? text) {
@@ -381,6 +388,7 @@ final class BotsStore: ObservableObject {
         if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
+        if bot.owner == nil { prompt = "(\(projectsNote))\n\n" + prompt }
         if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
@@ -451,6 +459,10 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: room)
             return
         }
+        if ProjectWords.asksOnlyForFolder(command ?? text), let name = ProjectWords.newFolderName(in: command ?? text) {
+            makeProjectFolder(name, room: room)
+            return
+        }
         if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
         let tagged = BotPrompts.mentioned(in: text, bots: members(of: group))
         if tagged.isEmpty, CodingIntent.wantsDiscussion(command ?? text), groupBriefs[room] == nil {
@@ -482,6 +494,59 @@ final class BotsStore: ObservableObject {
         }
         if let listed { return (harness, listed.id, effort, nil) }
         return (harness, nil, effort, "\(HarnessCatalog.label(target)) doesn't have a model called \(hint), so it's on its usual one.")
+    }
+
+    /// Which folder a run goes in, from the owner's words first and then what a bot wrote when they asked about a project.
+    func projectChoice(ownerWords: String?, answer: String?) -> (repo: URL?, newFolder: String?) {
+        let owner = ownerWords ?? ""
+        let known = knownProjects
+        if let path = BotsT3.targetRepo(answer: "", pitch: owner, mustExist: TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired) { return (path, nil) }
+        if let name = ProjectWords.newFolderName(in: owner) { return (nil, name) }
+        func project(_ name: String) -> URL { BotsT3.projectsFolder.appendingPathComponent(name, isDirectory: true) }
+        if let name = ProjectWords.namedProject(in: owner, among: known) { return (project(name), nil) }
+        // The owner spoke of a folder or project but in words only a bot could match, like a Hindi spelling.
+        guard let answer, CodingIntent.normalized(owner).range(of: #"(?i)\b(folder|project|repo)\b"#, options: .regularExpression) != nil else { return (nil, nil) }
+        if let line = ProjectWords.labeled("Repo", in: answer) {
+            let name = URL(fileURLWithPath: (line as NSString).expandingTildeInPath).lastPathComponent
+            if known.contains(name) { return (project(name), nil) }
+        }
+        if let name = ProjectWords.labeled("New folder", in: answer) { return (nil, name) }
+        return (nil, nil)
+    }
+
+    /// The owner's project folders: this Mac's, or what the work Mac last said.
+    var knownProjects: [String] { TheoLink.shared.isPaired && !TheoLink.shared.isWorkMac ? peerProjects : BotsT3.projectNames() }
+
+    /// For a bot's turn: which folders there are and how to choose one.
+    var projectsNote: String {
+        let names = knownProjects.prefix(40).joined(separator: ", ")
+        return "Addy's project folders in ~/Projects: \(names). If they name one, however it's spelled, write \"Repo: ~/Projects/<that exact name>\" next to the prompt, and the run works in it. If they ask for a new folder with a name, write \"New folder: <name>\". Otherwise a new folder is made from the project's name."
+    }
+
+    /// Makes a folder the owner asked for, as a project of its own, on the Mac where coding runs.
+    func makeProjectFolder(_ name: String, room: String) {
+        guard TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired else {
+            if !TheoLink.shared.requestWhenConnected("mkdir", ["name": name, "room": room]), let speaker = speaker(for: room) {
+                post(BotChatMessage(author: speaker.id, text: "I'll make the \(name) folder as soon as your Mac Studio is back."), to: room)
+            }
+            return
+        }
+        Task { [weak self] in
+            guard let self, let speaker = self.speaker(for: room) else { return }
+            let exact = BotsT3.projectsFolder.appendingPathComponent(BotsT3.slug(name), isDirectory: true)
+            if FileManager.default.fileExists(atPath: exact.path) {
+                self.post(BotChatMessage(author: speaker.id, text: "You already have that folder: `~/Projects/\(exact.lastPathComponent)`. Tell me what to change in it."), to: room)
+                return
+            }
+            do {
+                let folder = try BotsT3.newProjectFolder(title: name)
+                try await BotsT3.shell(BotsT3.git, ["init", "-q", "-b", "main"], in: folder)
+                try await BotsT3.startEmpty(in: folder)
+                self.post(BotChatMessage(author: speaker.id, text: "Made `~/Projects/\(folder.lastPathComponent)`. Tell me what to build in it."), to: room)
+            } catch {
+                self.post(BotChatMessage(author: speaker.id, text: "Couldn't make that folder: \(error.localizedDescription)"), to: room)
+            }
+        }
     }
 
     /// What the owner said in a chat in the last while, newest first, for what they asked of a run.
@@ -548,8 +613,8 @@ final class BotsStore: ObservableObject {
         guard let ceo = primary else { return }
         let prompt = hasFailed ? nil : BotsT3.promptBlock(in: answer)
         let owner = brief.ownerWords ?? ""
-        let repo = BotsT3.targetRepo(answer: "", pitch: owner)
-        let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (repo != nil || !BotsStore.isAboutExistingCode(owner))
+        let folder = projectChoice(ownerWords: owner, answer: answer)
+        let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner))
         if let reportsTo = brief.reportsTo {
             reportsTo(answer)
         } else {
@@ -557,7 +622,7 @@ final class BotsStore: ObservableObject {
         }
         guard mayStart, let prompt else { return }
         let title = BotsT3.projectTitle(in: answer, prompt: prompt)
-        submitToT3(prompt: prompt, title: title, repo: repo, room: ceo.id, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: group.roomID) { [weak self] started, problem in
+        submitToT3(prompt: prompt, title: title, repo: folder.repo, room: ceo.id, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: group.roomID, newFolder: folder.newFolder) { [weak self] started, problem in
             let line = started ? "Started **\(title)**. You can follow it in \(ceo.name)'s chat." : "**\(title)** didn't start: \(problem ?? "no reason given")."
             self?.post(BotChatMessage(author: head.id, text: line), to: group.roomID)
             self?.onCEOReport?(started ? "\(title) has started coding." : line)
@@ -582,7 +647,7 @@ final class BotsStore: ObservableObject {
             var prompt = BotPrompts.teamMessage(bot: bot, team: team, group: group, firstTime: record.sessions[bot.id] == nil,
                                                 newMessages: newMessages)
             if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
-            if let note { prompt += "\n\n(\(note))" }
+            if let note { prompt += "\n\n(\(note)) (\(projectsNote))" }
             var updated = record
             updated.seen[bot.id] = record.messages.count
             conversations[room] = updated
@@ -728,16 +793,15 @@ final class BotsStore: ObservableObject {
         // Agents run with full access, so only the owner's own words start one by themselves. Anything else gets the card
         // in the chat, whose Start button asks first.
         guard BotsStore.ownerAskedToBuild(pitch.text) else { return }
-        let repo = BotsT3.targetRepo(answer: answer, pitch: pitch.text)
-        // A folder the owner didn't name could have come from a page the bot read.
-        if let repo, repo.standardizedFileURL != BotsT3.targetRepo(answer: "", pitch: pitch.text)?.standardizedFileURL { return }
+        // Only a folder the owner spoke of: one a page the bot read mentions doesn't count.
+        let folder = projectChoice(ownerWords: recentOwnerWords(in: room) ?? pitch.text, answer: answer)
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
-        if repo == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
+        if folder.repo == nil && folder.newFolder == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
         let choices = codingChoices(from: recentOwnerWords(in: room) ?? pitch.text)
         if let problem = choices.problem { post(BotChatMessage(author: speaker(for: room)?.id ?? "theo", text: problem), to: room) }
-        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room,
-                   harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort)
+        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: folder.repo, room: room,
+                   harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
     }
 
     /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between. As whole words, so @codemirror or
@@ -752,6 +816,7 @@ final class BotsStore: ObservableObject {
     /// Asked in so many words to build or change something, as opposed to "make me a prompt" or "update me on this".
     static func ownerAskedToBuild(_ text: String) -> Bool {
         if CodingHarnessWords.asksToSendToCode(text) { return true }
+        if ProjectWords.asksToWork(text), ProjectWords.namedProject(in: text, among: BotsStore.shared.knownProjects) != nil { return true }
         let text = CodingIntent.normalized(text)
         if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
         let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
@@ -776,12 +841,12 @@ final class BotsStore: ObservableObject {
             }
             return
         }
-        let repo = BotsT3.targetRepo(answer: "", pitch: words)
-        if repo == nil, latestRun(in: room) != nil {
+        let folder = projectChoice(ownerWords: words, answer: nil)
+        if folder.repo == nil, folder.newFolder == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
         } else {
             let choices = codingChoices(from: words)
-            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort)
+            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: folder.repo, room: room, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
         }
     }
 
@@ -817,12 +882,12 @@ final class BotsStore: ObservableObject {
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
     /// `started`: told once whether the run got going, for a job waiting on it.
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
-                    modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, started: ((Bool, String?) -> Void)? = nil) {
+                    modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, newFolder: String? = nil, started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
         if TheoLink.shared.isPaired, !TheoLink.shared.isWorkMac {
-            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? ""]
+            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? "", "newFolder": newFolder ?? ""]
             // It never runs here instead: if the Studio's away it goes as soon as it's back.
             let sentNow = TheoLink.shared.requestWhenConnected("run", fields)
             post(BotChatMessage(author: theo.id, text: sentNow ? "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your Mac Studio"). You can watch it here."
@@ -831,11 +896,16 @@ final class BotsStore: ObservableObject {
             return
         }
         Task { [weak self] in
+            if let repo, !FileManager.default.fileExists(atPath: repo.path) {
+                self?.post(BotChatMessage(author: theo.id, text: "There's no folder at `\(repo.path)` on this Mac, so **\(title)** didn't start. Tell me which folder you meant."), to: room)
+                started?(false, "There's no folder at \(repo.path).")
+                return
+            }
             // One at a time: starting takes up to half a minute while the agent's screen settles.
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.submitting = true
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice)
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder)
                 run.room = room
                 run.alsoRoom = alsoRoom
                 guard let self else { return }
@@ -1965,6 +2035,7 @@ extension BotsStore {
             "layout": LinkCoding.digest(layout),
             "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
             "runs": LinkCoding.digest(linkRuns),
+            "projects": LinkCoding.digest(knownProjects),
         ]
         for id in linkChatIDs {
             let item = linkItem(forChat: id)
@@ -1986,6 +2057,7 @@ extension BotsStore {
         case "layout": return try? encoder.encode(LinkLayoutItem(layout: layout, changedAt: linkLayoutChangedAt))
         case "delegations": return try? encoder.encode(delegations)
         case "runs": return try? encoder.encode(linkRuns)
+        case "projects": return try? encoder.encode(knownProjects)
         case "memory": return try? encoder.encode(memoryStore.everything())
         default:
             guard key.hasPrefix("chat/") else { return nil }
@@ -2038,6 +2110,8 @@ extension BotsStore {
                 (first.finishedAt ?? .distantPast) >= (second.finishedAt ?? .distantPast) ? first : second
             }.suffix(200))
             if let saved = try? LinkCoding.encoder.encode(delegations) { try? saved.write(to: folder.appendingPathComponent("delegations.json"), options: .atomic) }
+        case "projects":
+            if !TheoLink.shared.isWorkMac, let theirs = try? decoder.decode([String].self, from: data) { peerProjects = theirs }
         case "runs":
             guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }
             // Each Mac is the only one writing its own runs.
@@ -2086,7 +2160,9 @@ extension BotsStore {
             guard let prompt = fields["prompt"], let title = fields["title"], let room = fields["room"] else { return }
             let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             func field(_ key: String) -> String? { fields[key].flatMap { $0.isEmpty ? nil : $0 } }
-            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"))
+            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"), newFolder: field("newFolder"))
+        case "mkdir":
+            if let name = fields["name"], let room = fields["room"] { makeProjectFolder(name, room: room) }
         case "followup":
             guard let room = fields["room"], let text = fields["text"] else { return }
             sendToCoder(text, room: room)

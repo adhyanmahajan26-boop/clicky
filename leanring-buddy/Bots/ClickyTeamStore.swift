@@ -559,8 +559,9 @@ extension BotsStore {
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
-        submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: BotsT3.targetRepo(answer: "", pitch: ownerWords), room: ceo.id, harness: harness,
-                   modelChoice: choices.model, effortChoice: choices.effort) { started, problem in
+        let folder = projectChoice(ownerWords: ownerWords, answer: prompt)
+        submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: folder.repo, room: ceo.id, harness: harness,
+                   modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder) { started, problem in
             onReport?(started ? "It's started on \(HarnessCatalog.label(harness)), and it shows on its card in your chat." : problem ?? "The run didn't start.")
         }
     }
@@ -657,7 +658,7 @@ extension BotsStore {
     func ceoTurnNote(for bot: NativeBot) -> String {
         guard bot.primary, !rosterForCEO.isEmpty else { return "" }
         let work = memoryStore.teamWorkContext()
-        return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n" +
+        return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n\(projectsNote)\n" +
             "To give one of them work, put a line [TELL: its exact name: what to do] in your reply; their answer comes back here. Don't ask Addy how to reach them." +
             (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
     }
