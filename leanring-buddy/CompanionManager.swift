@@ -1511,8 +1511,17 @@ final class CompanionManager: ObservableObject {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         var turnOptions = requestedTurnOptions ?? TurnOptions()
-        // What's asked here happens here, unless the owner sends it all to the work Mac.
-        if !turnOptions.cameFromOtherMac, turnOptions.theoOrder == nil, !TheoLink.shared.clickyRunsHere {
+        // "Clicky, work on the Air": the switch, wherever it's said.
+        if !turnOptions.cameFromOtherMac, turnOptions.theoOrder == nil, let word = ClickyMachineWords.choice(in: transcript), TheoLink.shared.setClickyMac(word: word) {
+            let line = "Okay, I'll work on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
+            showHandsFreeStatusMessage(line)
+            if turnOptions.speaksResponse { speakCodeModeLine(line) }
+            voiceState = .idle
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
+        // Clicky works on the Mac the switch says, wherever it's asked.
+        if !turnOptions.cameFromOtherMac, !TheoLink.shared.clickyRunsHere {
             TheoLink.shared.sendClickyToOtherMac(transcript, speaks: turnOptions.speaksResponse)
             voiceState = .idle
             turnOptions.onTurnFinished?(nil, nil)

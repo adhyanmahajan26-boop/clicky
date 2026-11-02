@@ -381,3 +381,13 @@ struct ClickyTeamTests {
         #expect(!ResearchTrigger.wantsItHandedOver("research these three links"))
     }
 }
+
+@Suite struct ClickyMachineWordsTests {
+    @Test func theSwitchOutLoud() {
+        #expect(ClickyMachineWords.choice(in: "Clicky, work on the Air") == "air")
+        #expect(ClickyMachineWords.choice(in: "switch to the Mac Studio for now") == "studio")
+        #expect(ClickyMachineWords.choice(in: "use the MacBook") == nil)
+        #expect(ClickyMachineWords.choice(in: "work on the studio project") == nil)
+        #expect(ClickyMachineWords.choice(in: "what is the air quality") == nil)
+    }
+}

@@ -438,8 +438,14 @@ extension BotsStore {
     /// `room` and `note`: a bot's screen job, whose card goes in that bot's chat.
     func orderClicky(_ order: String, ownerWords: String?, room: String? = nil, note: String? = nil, cameFromOtherMac: Bool = false, onReport: ((String) -> Void)? = nil) {
         guard let ceo = primary else { return }
-        // Theo's orders happen on the work Mac's screen, wherever Theo was asked.
-        if !cameFromOtherMac, !TheoLink.shared.theoOrdersRunHere {
+        if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order), TheoLink.shared.setClickyMac(word: word) {
+            let line = "Clicky's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
+            post(BotChatMessage(author: Self.clickyID, text: line), to: ceo.id)
+            onReport?(line)
+            return
+        }
+        // Clicky works on the Mac the switch says, wherever it's asked.
+        if !cameFromOtherMac, !TheoLink.shared.clickyRunsHere {
             TheoLink.shared.sendOrderToOtherMac(order, ownerWords: ownerWords, onReport: onReport)
             return
         }

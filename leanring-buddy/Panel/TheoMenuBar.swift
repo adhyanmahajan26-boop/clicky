@@ -154,6 +154,7 @@ struct TheoPanelView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if !companionManager.allPermissionsGranted || !speechAllowed { permissionsBanner }
+            ClickyMacSwitch()
             tiles
             cursorRow
             brainSwitcher

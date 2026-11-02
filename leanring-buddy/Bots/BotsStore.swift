@@ -2042,6 +2042,7 @@ extension BotsStore {
             "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
             "runs": LinkCoding.digest(linkRuns),
             "projects": LinkCoding.digest(knownProjects),
+            "clickyMac": LinkCoding.digest(TheoLink.shared.clickyMacItem),
         ]
         for id in linkChatIDs {
             let item = linkItem(forChat: id)
@@ -2064,6 +2065,7 @@ extension BotsStore {
         case "delegations": return try? encoder.encode(delegations)
         case "runs": return try? encoder.encode(linkRuns)
         case "projects": return try? encoder.encode(knownProjects)
+        case "clickyMac": return try? encoder.encode(TheoLink.shared.clickyMacItem)
         case "memory": return try? encoder.encode(memoryStore.everything())
         default:
             guard key.hasPrefix("chat/") else { return nil }
@@ -2116,6 +2118,8 @@ extension BotsStore {
                 (first.finishedAt ?? .distantPast) >= (second.finishedAt ?? .distantPast) ? first : second
             }.suffix(200))
             if let saved = try? LinkCoding.encoder.encode(delegations) { try? saved.write(to: folder.appendingPathComponent("delegations.json"), options: .atomic) }
+        case "clickyMac":
+            if let theirs = try? decoder.decode(ClickyMacItem.self, from: data) { TheoLink.shared.applyClickyMac(theirs) }
         case "projects":
             if !TheoLink.shared.isWorkMac, let theirs = try? decoder.decode([String].self, from: data) { peerProjects = theirs }
         case "runs":

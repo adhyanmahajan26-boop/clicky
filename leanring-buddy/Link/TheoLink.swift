@@ -25,8 +25,9 @@ final class TheoLink: ObservableObject {
     private static let serviceType = "_theolink._tcp"
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
-    private static let usesThisScreenKey = "v3.clicky.usesThisScreen"
-    private static let alwaysOnWorkMacKey = "v3.clicky.alwaysOnWorkMac"
+    private static let clickyMacKey = "v3.clicky.mac"
+    private static let clickyMacAtKey = "v3.clicky.macChangedAt"
+    private static let knownPeerKey = "v3.link.knownPeer"
     nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 
     @Published private(set) var isPaired = false
@@ -69,51 +70,83 @@ final class TheoLink: ObservableObject {
     }
 
     var statusReport: [String: Any] {
-        ["clickyHere": clickyRunsHere, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
+        ["clickyHere": clickyRunsHere, "clickyMac": clickyMacNow, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
          "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials]
     }
 
     // MARK: Where Clicky works
 
-    /// Theo's orders to Clicky can use this Mac's screen too. Off by default on the Mac without the work screen.
-    @Published var clickyUsesThisScreen = UserDefaults.standard.bool(forKey: TheoLink.usesThisScreenKey) {
-        didSet { UserDefaults.standard.set(clickyUsesThisScreen, forKey: Self.usesThisScreenKey) }
+    /// The Mac Clicky works on for now, by name. Both Macs share it, and either can change it. Nil: the one with the work screen.
+    @Published private(set) var clickyMac = UserDefaults.standard.string(forKey: TheoLink.clickyMacKey)
+    private var clickyMacChangedAt = UserDefaults.standard.object(forKey: TheoLink.clickyMacAtKey) as? Date
+    /// The other Mac's name, kept so the switch can offer it while it's away.
+    @Published private(set) var knownPeerName = UserDefaults.standard.string(forKey: TheoLink.knownPeerKey)
+
+    /// Everything asked of Clicky, by voice, in its chat or through Theo, happens on the chosen Mac.
+    var clickyRunsHere: Bool { !isPaired || (clickyMac.map { $0 == Self.localName } ?? isWorkMac) }
+
+    var clickyMacChoices: [String] { [Self.localName] + (knownPeerName.map { [$0] } ?? []) }
+
+    /// The name on the switch: "Adhyan’s MacBook Air" → "MacBook Air".
+    static func shortName(_ name: String) -> String {
+        name.range(of: #"^.*['’]s\s+"#, options: .regularExpression).map { String(name[$0.upperBound...]) } ?? name
     }
 
-    /// The owner would rather everything they ask Clicky here happened on the work Mac.
-    @Published var clickyAlwaysOnWorkMac = UserDefaults.standard.bool(forKey: TheoLink.alwaysOnWorkMacKey) {
-        didSet {
-            UserDefaults.standard.set(clickyAlwaysOnWorkMac, forKey: Self.alwaysOnWorkMacKey)
-            CompanionManager.current?.clickyPlaceChanged()
-        }
+    /// What the switch shows now.
+    var clickyMacNow: String {
+        clickyMac ?? (isWorkMac ? Self.localName : knownPeerName ?? Self.localName)
     }
 
-    /// What the owner asks Clicky on this Mac, by voice or in its chat, happens on this Mac's screen: it's the one they're at.
-    var clickyRunsHere: Bool { !isPaired || isWorkMac || !clickyAlwaysOnWorkMac }
+    func setClickyMac(_ name: String) {
+        saveClickyMac(name, at: Date())
+        sendDigest()
+    }
 
-    /// Theo's orders go to the work Mac's screen, wherever Theo was asked.
-    var theoOrdersRunHere: Bool { !isPaired || isWorkMac || clickyUsesThisScreen }
+    /// "air" or "studio", said out loud. False when neither Mac goes by that.
+    @discardableResult
+    func setClickyMac(word: String) -> Bool {
+        guard let name = clickyMacChoices.first(where: { $0.lowercased().contains(word) }) else { return false }
+        setClickyMac(name)
+        return true
+    }
+
+    private func saveClickyMac(_ name: String?, at date: Date?) {
+        clickyMac = name
+        clickyMacChangedAt = date
+        UserDefaults.standard.set(name, forKey: Self.clickyMacKey)
+        UserDefaults.standard.set(date, forKey: Self.clickyMacAtKey)
+        CompanionManager.current?.clickyPlaceChanged()
+    }
+
+    var clickyMacItem: ClickyMacItem { ClickyMacItem(name: clickyMac, at: clickyMacChangedAt) }
+
+    func applyClickyMac(_ item: ClickyMacItem) {
+        guard let at = item.at, at > (clickyMacChangedAt ?? .distantPast) else { return }
+        saveClickyMac(item.name, at: at)
+    }
 
     /// This Mac has a work screen picked, even with that monitor off for now.
     var isWorkMac: Bool { !ClickySettings.claudiaScreenName.isEmpty }
 
-    private static let clickyElsewhere = "That goes to Clicky on your Mac Studio, which isn't connected right now."
+    private var clickyElsewhere: String {
+        "Clicky's set to work on \(Self.shortName(clickyMacNow)), which isn't connected right now. You can switch it in the menu bar."
+    }
 
     /// Something said to Clicky here goes to the Mac it works on. It's never done here instead.
     func sendClickyToOtherMac(_ text: String, speaks: Bool) {
         let sent = request("clicky", ["text": text, "speaks": speaks ? "yes" : "no"])
-        CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Clicky's on it, on \(peerName ?? "your Mac Studio")" : "Your Mac Studio isn't connected")
+        CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Clicky's on it, on \(Self.shortName(clickyMacNow))" : "\(Self.shortName(clickyMacNow)) isn't connected")
         if sent { BotsStore.shared.post(BotChatMessage(author: "user", text: text), to: BotsStore.clickyID) }
-        if !sent { BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: Self.clickyElsewhere), to: BotsStore.clickyID) }
+        if !sent { BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: clickyElsewhere), to: BotsStore.clickyID) }
     }
 
     func sendOrderToOtherMac(_ order: String, ownerWords: String?, onReport: ((String) -> Void)?) {
         let id = UUID().uuidString
         guard request("order", ["order": order, "ownerWords": ownerWords ?? "", "id": id]) else {
-            onReport?(Self.clickyElsewhere)
+            onReport?(clickyElsewhere)
             if onReport == nil, let ceo = BotsStore.shared.primary {
-                BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: Self.clickyElsewhere), to: ceo.id)
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: clickyElsewhere), to: ceo.id)
             }
             return
         }
@@ -354,6 +387,10 @@ final class TheoLink: ObservableObject {
         switch envelope.kind {
         case .hello:
             peerName = envelope.name
+            if let name = envelope.name, name != knownPeerName {
+                knownPeerName = name
+                UserDefaults.standard.set(name, forKey: Self.knownPeerKey)
+            }
             peerBuild = envelope.build
             isHelloDone = true
             sendDigest()
@@ -426,6 +463,31 @@ final class TheoLink: ObservableObject {
     }
 }
 
+struct ClickyMacItem: Codable {
+    var name: String?
+    var at: Date?
+}
+
+/// The switch for which Mac Clicky works on.
+struct ClickyMacSwitch: View {
+    @ObservedObject private var link = TheoLink.shared
+
+    var body: some View {
+        if link.clickyMacChoices.count > 1 {
+            HStack(spacing: 8) {
+                Text("Clicky works on").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                Spacer(minLength: 0)
+                Picker("", selection: Binding(get: { link.clickyMacNow }, set: { link.setClickyMac($0) })) {
+                    ForEach(link.clickyMacChoices, id: \.self) { name in Text(TheoLink.shortName(name)).tag(name) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
+    }
+}
+
 struct LinkEnvelope: Codable {
     enum Kind: String, Codable { case hello, digest, want, item, request }
     var kind: Kind
@@ -491,14 +553,11 @@ struct LinkSettingsContent: View {
                     Button("Save") { link.host = address }
                 }
             }
-            if !link.isWorkMac {
+            if link.isPaired {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("What you ask Clicky here, by voice or in its chat, happens on this screen. What Theo asks of it happens on your Mac Studio's.")
+                    ClickyMacSwitch()
+                    Text("Anything you ask Clicky, by voice, in its chat or through Theo, happens on that Mac's screen, and it answers where you asked. Change it here, in the menu bar, or say \"Clicky, work on the Air\".")
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
-                    Toggle("Send everything I ask Clicky here to my Mac Studio", isOn: $link.clickyAlwaysOnWorkMac)
-                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
-                    Toggle("Let Theo use Clicky on this screen too", isOn: $link.clickyUsesThisScreen)
-                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 }
             }
             Text("Bots, group chats, chats, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
