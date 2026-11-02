@@ -350,7 +350,7 @@ final class BotsStore: ObservableObject {
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
-        prompt = takeWaitingReports(for: bot) + linkCatchUp(botID) + prompt
+        prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }

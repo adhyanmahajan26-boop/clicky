@@ -527,6 +527,16 @@ extension BotsStore {
         return "Everyone you can reach with [TELL: name: what to do], as of now:\n" + (chats + people).joined(separator: "\n")
     }
 
+    /// Goes with every message to Theo: a resumed engine session keeps following the lists from when it began, so a bot or
+    /// group chat made since then wouldn't exist for it otherwise.
+    func ceoTurnNote(for bot: NativeBot) -> String {
+        guard bot.primary, !rosterForCEO.isEmpty else { return "" }
+        let work = memoryStore.teamWorkContext()
+        return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n" +
+            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply; their answer comes back here. Don't ask Addy how to reach them." +
+            (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
+    }
+
     /// A message for Clicky from outside its own chat.
     func askClicky(_ text: String) {
         ClaudiaControlInbox.shared?.execute(["cmd": "ask", "text": text, "speak": false, "owner": true]) { _, _, _ in }

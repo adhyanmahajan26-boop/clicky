@@ -254,6 +254,7 @@ final class TheoLink: ObservableObject {
     private func connectionEnded() {
         connection?.cancel()
         connection = nil
+        connectionState = "none"
         isConnectionReady = false
         peerName = nil
         peerBuild = nil
