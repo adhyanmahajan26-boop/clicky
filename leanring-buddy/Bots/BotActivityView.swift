@@ -37,13 +37,17 @@ extension BotsStore {
             for message in record.messages where message.at >= since {
                 var text = message.text
                 var from = activityName(message.author)
+                var to = message.author == room ? "Addy" : activityName(room)
                 var failed = false
                 if let jobID = Self.delegationID(of: message), let job = delegation(jobID) {
-                    if text.isEmpty { text = "Asked \(job.workerName): \(job.task)" ; from = activityName(room) }
+                    if text.isEmpty {
+                        text = job.task
+                        from = activityName(room)
+                        to = job.workerName
+                    }
                     failed = message.text.isEmpty ? false : job.phase == .failed
                 }
                 guard !text.isEmpty else { continue }
-                let to = message.author == room ? "Addy" : activityName(room)
                 let isProblem = failed || (message.author != "user" && text.range(of: Self.problemWords, options: .regularExpression) != nil)
                 items.append(ActivityItem(id: room + message.id, at: message.at, from: from, to: to, text: text, isProblem: isProblem, room: room))
             }
