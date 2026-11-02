@@ -790,6 +790,18 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
+            if bot?.primary == true {
+                Button { TheoCallController.start() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                        Text("Call").font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundColor(.white).padding(.horizontal, 12).frame(height: 30)
+                    .background(Capsule().fill(Color(hex: 0x2FA36B)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain).help("Start a voice call with \(bot?.name ?? "Theo")")
+            }
             Button {
                 store.clearConversation(conversationID)
                 settledIDs = []

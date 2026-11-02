@@ -138,3 +138,52 @@ enum TypeForMeAccessibility {
         AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
 }
+
+/// Text into another app through the clipboard, leaving the clipboard as it found it.
+@MainActor
+enum PasteInsertion {
+    /// Saves the clipboard, writes the text (marked transient), presses the app's plain ⌘V Paste item (else posts a
+    /// tagged ⌘V), and restores the clipboard shortly after if nothing else wrote to it meanwhile.
+    static func paste(_ text: String, processIdentifier: pid_t, restoreDelay: TimeInterval = PasteboardRestorePolicy.restoreDelay) -> Bool {
+        let pasteboard = NSPasteboard.general
+        let savedItems = copyItems(of: pasteboard)
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setData(Data(), forType: NSPasteboard.PasteboardType(PasteboardRestorePolicy.transientTypeIdentifier))
+        pasteboard.writeObjects([item])
+        let changeCountAfterOurWrite = pasteboard.changeCount
+
+        let menu = TypeForMeAccessibility.menuItems(processIdentifier: processIdentifier)
+        var didTrigger = false
+        if let pasteItem = PasteMenuFinder.plainPasteItem(in: menu.descriptors), let pasteElement = menu.elementsByPath[pasteItem.path] {
+            didTrigger = TypeForMeAccessibility.press(pasteElement)
+        }
+        if !didTrigger, TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) {
+            let commandVEvents = TypeForMeSyntheticEvents.commandVEvents()
+            for event in commandVEvents { event.post(tap: .cghidEventTap) }
+            didTrigger = commandVEvents.count == 2
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
+            guard PasteboardRestorePolicy.shouldRestore(changeCountAfterOurWrite: changeCountAfterOurWrite, currentChangeCount: pasteboard.changeCount) else {
+                print("⌨️ Clipboard changed since the paste; not restoring it")
+                return
+            }
+            pasteboard.clearContents()
+            if !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+        }
+        return didTrigger
+    }
+
+    /// Deep copies of every item and type on the pasteboard.
+    private static func copyItems(of pasteboard: NSPasteboard) -> [NSPasteboardItem] {
+        (pasteboard.pasteboardItems ?? []).map { originalItem in
+            let copiedItem = NSPasteboardItem()
+            for type in originalItem.types {
+                if let data = originalItem.data(forType: type) { copiedItem.setData(data, forType: type) }
+            }
+            return copiedItem
+        }
+    }
+}

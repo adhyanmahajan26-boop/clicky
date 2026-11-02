@@ -19,7 +19,20 @@ struct TodayView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(greeting).font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
+                    HStack(alignment: .center) {
+                        Text(greeting).font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
+                        Spacer()
+                        Button { TheoCallController.start() } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                                Text("Call \(store.primary?.name ?? "Theo")").font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundColor(.white).padding(.horizontal, 14).frame(height: 34)
+                            .background(Capsule().fill(Color(hex: 0x2FA36B)))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain).help("Start a voice call")
+                    }
                     Text("Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }

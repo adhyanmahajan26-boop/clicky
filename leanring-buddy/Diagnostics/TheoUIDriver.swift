@@ -22,6 +22,7 @@
 //
 
 import AppKit
+import ClickyCore
 import SwiftUI
 
 @MainActor
@@ -358,6 +359,7 @@ enum TheoUIDriver {
             return true
         }
         func point() -> CGPoint { CGPoint(x: (command["x"] as? Double) ?? Double(command["x"] as? Int ?? 0), y: (command["y"] as? Double) ?? Double(command["y"] as? Int ?? 0)) }
+        if handleVoiceCommand(name, command, respond: respond) { return true }
         guard name == "uiWindows" || name == "uiState" || name == "uiStopRun" || name == "uiPasteboard" || name == "uiMenus" || name == "uiMenuAction" || window(command) != nil else {
             respond(false, nil, "No window.")
             return true
@@ -555,5 +557,140 @@ enum DemoPointer {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             pointer.animator().setFrameOrigin(tip)
         }, completionHandler: { Task { @MainActor in completion() } })
+    }
+}
+
+// MARK: - Voice tests (test profile only: no mic, no real keys)
+
+extension TheoUIDriver {
+    /// uiDictationFeed {path, app?, window?, realTime?}: a sound file through dictation, typed into that app's window in the
+    /// background. uiDictationStatus. uiDictationField {app, window}: what the field now says. uiDictationKeys {flags}: what the
+    /// chord detector makes of these modifiers. uiDictationPill {state}: shows the pill for a screenshot. uiSet {key, value}.
+    static func handleVoiceCommand(_ name: String, _ command: [String: Any], respond: @escaping @MainActor (Bool, Any?, String?) -> Void) -> Bool {
+        switch name {
+        case "uiSet":
+            guard let key = command["key"] as? String else { respond(false, nil, "Needs key."); return true }
+            UserDefaults.standard.set(command["value"], forKey: key)
+            respond(true, ["key": key], nil)
+        case "uiTestKey":
+            // A throwaway key for the local stand-in server, in the test profile's own Keychain service.
+            guard let provider = command["provider"] as? String else { respond(false, nil, "Needs provider."); return true }
+            if let value = command["value"] as? String { ProviderKeychain.set(value, for: provider) } else { ProviderKeychain.delete(provider) }
+            respond(true, ["hasKey": ProviderKeychain.get(provider) != nil], nil)
+        case "uiSpeak":
+            // Clicky's voice on a line, at zero volume; then uiSpeakStop says how long it took to go quiet.
+            guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
+            CompanionSpeechOutput.isZeroVolumeForTests = true
+            Task { @MainActor in
+                try? await manager.speechOutputClient.speakText(command["text"] as? String ?? "Hello.")
+                respond(true, ["engine": manager.speechOutputClient.currentEngineName], nil)
+            }
+        case "uiSpeakState":
+            guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
+            respond(true, ["playing": manager.speechOutputClient.isPlaying, "engine": manager.speechOutputClient.currentEngineName], nil)
+        case "uiSpeakStop":
+            guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
+            let wasPlaying = manager.speechOutputClient.isPlaying
+            let start = Date()
+            manager.speechOutputClient.stopVoicesNow()
+            respond(true, ["wasPlaying": wasPlaying, "playing": manager.speechOutputClient.isPlaying, "stopSeconds": Date().timeIntervalSince(start)], nil)
+        case "uiCallStart":
+            TheoCallController.start(activates: false)
+            settle { respond(true, ["window": TheoCallController.windowNumber as Any? ?? NSNull()], nil) }
+        case "uiCallStatus":
+            respond(true, TheoCallController.session?.report() ?? [:], nil)
+        case "uiCallMute":
+            TheoCallController.session?.setMuted(command["on"] as? Bool ?? true)
+            respond(true, [:], nil)
+        case "uiCallEnd":
+            TheoCallController.end()
+            respond(true, [:], nil)
+        case "uiCallFeed":
+            guard let session = TheoCallController.session, let path = command["path"] as? String else { respond(false, nil, "Needs a call and a path."); return true }
+            let silence = command["silence"] as? Double ?? 1.5
+            Task { @MainActor in
+                let fed = await session.feed(fileURL: URL(fileURLWithPath: path), trailingSilence: silence)
+                respond(fed, session.report(), fed ? nil : "Can't read that file")
+            }
+        case "uiDictationStatus":
+            guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
+            respond(true, manager.dictationController.statusReport(), nil)
+        case "uiDictationKeys":
+            let flags = (command["flags"] as? [String] ?? []).reduce(into: ChordModifiers()) { result, flag in
+                switch flag {
+                case "control": result.insert(.control)
+                case "option": result.insert(.option)
+                case "shift": result.insert(.shift)
+                case "command": result.insert(.command)
+                case "fn": result.insert(.function)
+                default: break
+                }
+            }
+            var detector = DictationChordDetector(required: DictationSettings.shortcut.modifiers)
+            respond(true, ["transition": detector.flagsChanged(flags).map { String(describing: $0) } as Any? ?? NSNull()], nil)
+        case "uiDictationField":
+            guard let field = dictationField(command) else { respond(false, nil, "No such field."); return true }
+            if command["toTheoScreen"] as? Bool == true, let screen = ClaudiaScreen.picked, let window = dictationWindow(command) {
+                // Top-left origin, measured from the primary screen, for Accessibility.
+                let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+                var position = CGPoint(x: screen.visibleFrame.minX + 80, y: primaryHeight - screen.visibleFrame.maxY + 80)
+                if let value = AXValueCreate(.cgPoint, &position) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) }
+            }
+            respond(true, ["value": TypeForMeAccessibility.value(of: field.element) ?? "", "windowNumber": dictationWindowNumber(command) as Any? ?? NSNull()], nil)
+        case "uiDictationPill":
+            guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
+            manager.dictationController.showForTest(state: command["state"] as? String ?? "listening")
+            settle { respond(true, ["window": manager.dictationController.pill.windowNumber as Any? ?? NSNull()], nil) }
+        case "uiDictationFeed":
+            guard let manager = CompanionManager.current, let path = command["path"] as? String else { respond(false, nil, "Needs path."); return true }
+            var target = DictationInserter.Target.frontmost
+            if command["app"] != nil {
+                guard let field = dictationField(command) else { respond(false, nil, "No such field."); return true }
+                target = .element(field.element, field.pid)
+            } else {
+                respond(false, nil, "A test needs a target app: it must not type into whatever the owner has open.")
+                return true
+            }
+            let realTime = command["realTime"] as? Bool ?? true
+            Task { @MainActor in
+                let report = await manager.dictationController.feed(fileURL: URL(fileURLWithPath: path), target: target, realTime: realTime)
+                respond(report.ok, report.result, report.error)
+            }
+        default:
+            return false
+        }
+        return true
+    }
+
+    private static func dictationWindow(_ command: [String: Any]) -> AXUIElement? {
+        guard let appName = command["app"] as? String,
+              let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }) else { return nil }
+        let application = TypeForMeAccessibility.applicationElement(processIdentifier: app.processIdentifier)
+        let windows = TypeForMeAccessibility.elementArrayAttribute(kAXWindowsAttribute, of: application)
+        let title = command["window"] as? String
+        return windows.first { title == nil || TypeForMeAccessibility.stringAttribute(kAXTitleAttribute, of: $0)?.contains(title!) == true }
+    }
+
+    /// The test window's number, for a screenshot of it alone.
+    private static func dictationWindowNumber(_ command: [String: Any]) -> Int? {
+        guard let appName = command["app"] as? String, let title = command["window"] as? String,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        return list.first { ($0[kCGWindowOwnerName as String] as? String) == appName && ($0[kCGWindowName as String] as? String)?.contains(title) == true }?[kCGWindowNumber as String] as? Int
+    }
+
+    /// The text area in a named window of a named running app, read through Accessibility.
+    private static func dictationField(_ command: [String: Any]) -> (element: AXUIElement, pid: pid_t)? {
+        guard let appName = command["app"] as? String,
+              let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == appName }),
+              let window = dictationWindow(command) else { return nil }
+        func search(_ element: AXUIElement, depth: Int) -> AXUIElement? {
+            if TypeForMeAccessibility.stringAttribute(kAXRoleAttribute, of: element) == kAXTextAreaRole { return element }
+            guard depth < 6 else { return nil }
+            for child in TypeForMeAccessibility.elementArrayAttribute(kAXChildrenAttribute, of: element) {
+                if let found = search(child, depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        return search(window, depth: 0).map { ($0, app.processIdentifier) }
     }
 }

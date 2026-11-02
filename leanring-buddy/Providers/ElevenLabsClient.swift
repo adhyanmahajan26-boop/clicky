@@ -43,9 +43,10 @@ enum ElevenLabsClient {
         return request
     }
 
-    static func synthesize(_ text: String) async throws -> Data {
+    /// `voice` nil uses the picked one.
+    static func synthesize(_ text: String, voice pickedVoice: String? = nil) async throws -> Data {
         guard let key = ProviderKeychain.get("elevenlabs") else { throw ClientError.noKey }
-        guard let voice = UserDefaults.standard.string(forKey: voiceKey), !voice.isEmpty else { throw ClientError.noVoice }
+        guard let voice = pickedVoice ?? UserDefaults.standard.string(forKey: voiceKey), !voice.isEmpty else { throw ClientError.noVoice }
         let model = UserDefaults.standard.string(forKey: modelKey) ?? defaultModel
         guard let request = speechRequest(key: key, voice: voice, model: model, text: text) else { throw ClientError.noVoice }
         let (data, response) = try await URLSession.shared.data(for: request)

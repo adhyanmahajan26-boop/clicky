@@ -15,7 +15,12 @@ No proxy server and no analytics. Harnesses (T3 Code, Claude Code, Codex, Cursor
 
 - `Harness/`: harness catalog and cards (install, sign in inside Theo's terminal, sign out, use my API key), coding runs (`HarnessCoding`), Cursor cloud agents.
 - `Providers/`: provider catalog, Keychain, `APIChat` (SSE for Anthropic and OpenAI-compatible APIs), Sarvam, ElevenLabs, Deepgram and AssemblyAI.
-- `Bots/`: `BotsStore`, `BotsT3` (runs: commit, push, draft PR, follow-ups), `BotsView` (sidebar and chat), run and result cards.
+- `Bots/`: `BotsStore`, `BotsT3` (runs: commit, push, draft PR, follow-ups), `BotsView` (sidebar and chat), run and result cards. `BotCharacters` is the 16 avatars (`NativeBot.avatar`); Theo and Clicky keep their own marks.
+- Teams: a category has a manager or not (`Section.leaderID`, `wantsManager`). With one, `reportToCEO` sends each member's report to the manager's chat, then the manager rolls up into the CEO's chat; the CEO reads what came in at the start of its next turn (`takeWaitingReports`). `BotPrompts.reportingLines` tells each bot who it reports to.
+- `Dictation/`: system-wide dictation, hold Control + Fn (`DictationController`, chord logic and clean-up rules in ClickyCore `Voice/Dictation.swift`). Sarvam REST when its key is saved, Apple always listening along, Haiku clean-up through one warm process, Accessibility insert then Paste.
+- `Call/`: voice calls with Theo. `TheoCallSession` runs mic → `VoiceActivityGate` → ears (`SarvamCallEars` realtime, then standard socket; `AppleCallEars`) → `ClaudeConversation` (one `claude -p` kept open, multi-turn, interruptible) → `CallSpeechChunker` → voice (`SarvamCallVoice` socket; `AppleCallVoice`). `CallAudio` shares the hands-free echo-cancelling engine.
+- `Providers/SarvamStreaming.swift`: Sarvam's sockets; `SarvamWire` builds and reads every message, no network. `Tools/mock-sarvam.py` is a local stand-in for tests with no key.
+- `Setup/ClickyVoicePicker.swift`: Clicky's voice, in Settings › Clicky and Settings › Voice.
 - `Setup/TheoSettingsWindow.swift`: Settings, which live inside the main window. `Setup/SetupGuideWindow.swift`: first run.
 - `Theme/TheoTokens.swift`, `Theme/TheoComponents.swift`: tokens and shared components; use these rather than new one-off styles. `TheoFirstClick` makes every view accept the first click in a background window.
 - `TheoProfile.swift`, `Diagnostics/TheoUIDriver.swift`, `Tools/theoui.py`: the test profile and click driver. See `docs/TESTING.md`.

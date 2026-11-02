@@ -183,7 +183,7 @@ final class WakeWordController: ObservableObject {
             isDefaultInputBluetooth: isDefaultInputBluetooth,
             isScreenLocked: isScreenLocked,
             isSystemAsleep: isSystemAsleep || isDisplayAsleep,
-            isPushToTalkCapturing: microphoneUsers.contains(.pushToTalk),
+            isPushToTalkCapturing: !microphoneUsers.isDisjoint(with: [.pushToTalk, .dictation, .call]),
             isHandsFreeCapturing: microphoneUsers.contains(.handsFree) || audioEngineHub.isVoiceProcessingActive,
             didAudioEngineFail: didAudioEngineFail,
             isCapturingTurn: isCapturingTurn

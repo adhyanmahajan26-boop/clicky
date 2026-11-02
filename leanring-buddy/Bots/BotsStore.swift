@@ -1565,6 +1565,16 @@ extension BotsStore {
         }
     }
 
+    /// A finished voice call goes into the primary bot's chat, whole, so the chat knows what was said.
+    func recordCall(_ lines: [(isOwner: Bool, text: String)], startedAt: Date) {
+        guard let ceo = primary, !lines.isEmpty else { return }
+        let minutes = max(1, Int(Date().timeIntervalSince(startedAt) / 60 + 0.5))
+        let transcript = lines.map { "**\($0.isOwner ? "Addy" : ceo.name):** \($0.text)" }.joined(separator: "\n\n")
+        post(BotChatMessage(author: "routine", text: "\(Self.callMark) Call with \(ceo.name), \(minutes) min\n\n\(transcript)"), to: ceo.id)
+    }
+
+    fileprivate static let callMark = "📞"
+
     /// Reports that landed in the primary bot's chat since it last spoke, for the top of its next turn; other bots
     /// get nothing. Marked as read here, so each is read once.
     fileprivate func takeWaitingReports(for bot: NativeBot) -> String {
@@ -1572,12 +1582,12 @@ extension BotsStore {
         var record = conversation(bot.id)
         let seen = record.seen[bot.id] ?? 0
         let waiting = record.messages.dropFirst(min(seen, record.messages.count)).filter { message in
-            message.author != "user" && message.author != "routine" && message.author != bot.id
+            message.author != "user" && message.author != bot.id && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
         }.suffix(6)
         record.seen[bot.id] = record.messages.count
         conversations[bot.id] = record
         guard !waiting.isEmpty else { return "" }
-        let lines = waiting.map { "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
-        return "(Reports your teams sent you since you last spoke:\n\n\(lines)\n\nUse them if they matter; don't recite them.)\n\n"
+        let lines = waiting.map { $0.author == "routine" ? $0.text : "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
+        return "(What came in since you last spoke, reports from your teams and any voice call with Addy:\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
     }
 }

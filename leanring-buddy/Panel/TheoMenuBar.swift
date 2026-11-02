@@ -206,6 +206,7 @@ struct TheoPanelView: View {
             }
             Spacer()
             roundButton("macwindow", "Open Theo") { close(); TheoHomeWindowController.show(companionManager: companionManager) }
+            roundButton("phone.fill", "Call Theo") { close(); TheoCallController.start() }
         }
     }
 

@@ -32,6 +32,8 @@ import Foundation
 enum ExclusiveMicrophoneUser: String {
     case pushToTalk
     case handsFree
+    case dictation
+    case call
 }
 
 @MainActor

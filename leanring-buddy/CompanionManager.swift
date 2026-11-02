@@ -221,6 +221,12 @@ final class CompanionManager: ObservableObject {
     let speechOutputClient = CompanionSpeechOutput()
     /// P7: "hey theo" / "hey clicky", heard on-device (see WakeWordController).
     private(set) lazy var wakeWordController = WakeWordController(speechOutput: speechOutputClient, audioEngineHub: speechOutputClient.audioEngineHub)
+    /// System-wide dictation: hold the chord in any app, talk, let go.
+    private(set) lazy var dictationController: DictationController = {
+        let controller = DictationController(hub: speechOutputClient.audioEngineHub, speech: speechOutputClient)
+        controller.isBlocked = { [weak self] in TheoCallController.isActive || self?.pushToTalkRecorder.isDictationInProgress == true || self?.isHandsFreeSessionActive == true }
+        return controller
+    }()
     private var wakeWordVoiceStateCancellable: AnyCancellable?
 
     /// P5 Code mode: `<codetask>` blocks, the review panel and click-gated sends.
@@ -533,6 +539,8 @@ final class CompanionManager: ObservableObject {
         [wakeWordVoiceStateCancellable, escapeKeyCancellable, agentsVoiceStateCancellable,
          shortcutTransitionCancellable, voiceStateCancellable, audioPowerCancellable].forEach { $0?.cancel() }
         pushToTalkKeys.stop()
+        dictationController.keys.stop()
+        TheoCallController.end()
         pushToTalkRecorder.cancelCurrentDictation()
         sparkOverlay.hideOverlay()
         transientHideTask?.cancel()
@@ -558,6 +566,7 @@ final class CompanionManager: ObservableObject {
         if hasAccessibilityPermission != accessibility { hasAccessibilityPermission = accessibility }
         // The keyboard listener needs Accessibility.
         accessibility ? pushToTalkKeys.start() : pushToTalkKeys.stop()
+        dictationController.refresh(accessibilityGranted: accessibility)
 
         let screenRecording = TheoPermissions.isScreenRecordingGranted
         if hasScreenRecordingPermission != screenRecording { hasScreenRecordingPermission = screenRecording }
@@ -677,8 +686,8 @@ final class CompanionManager: ObservableObject {
     /// Keys down: stop whatever Theo is saying, get the screens and the brain ready, start recording.
     private func pushToTalkPressed() {
         lastShortcutPressDate = Date()
-        // Hands-free already has the mic open; a double tap ends it instead.
-        guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress else { return }
+        // Hands-free already has the mic open; a double tap ends it instead. A call has it too.
+        guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress, !TheoCallController.isActive else { return }
 
         // The wake listener gives up the mic until key-up.
         speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)

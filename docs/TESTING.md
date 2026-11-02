@@ -25,7 +25,13 @@ Commands for `cmd`:
 - `uiShowPanel` (the menu-bar panel), `uiStopRun {id}`.
 - App commands: `botCreate`, `botUpdate`, `botDelete`, `botSay {bot, text}`, `botChat {id, limit}`, `botsState`, `groupSave`, `groupDelete`, `routines {action, id}`, `harnessState {refresh}`, `harnessSet {codingTarget, codingModel, codingEffort, defaultHarness}`, `terminalText {id}`.
 
+- Voice: `uiDictationFeed {path, app, window}` (a sound file through dictation into a background window), `uiDictationField`, `uiDictationStatus`, `uiDictationPill {state}`, `uiDictationKeys {flags}`; `uiCallStart`, `uiCallFeed {path, silence}`, `uiCallStatus`, `uiCallMute`, `uiCallEnd`; `uiSpeak`, `uiSpeakStop`; `uiSet {key, value}`, `uiTestKey {provider, value}`.
+
 `Tools/theo-click-test.py <out>` is the regression pass over the main screens.
+
+To use Accessibility and Speech, start the profile through LaunchServices (`open -g -n Clicky.app --args --profile test-x`), not from a shell, so the app answers for its own permissions. Never ask for a permission in a test.
+
+With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. Set `uiSet test.sarvam.base = http://127.0.0.1:8765` and `uiTestKey {provider: "sarvam", value: "anything"}`. For a live test with the owner's saved key: `uiSet test.sarvam.useOwnerKey = true` (the key is read where it is, never copied or shown).
 
 ## Rules
 - Never record the screen. Screenshots of Theo's window only (`theoui.py shot`). Never screenshot the whole display.

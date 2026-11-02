@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case look, clicky, coding, keys, voice, screen, permissions, updates, about
+        case look, clicky, coding, keys, voice, dictation, screen, permissions, updates, about
         var id: String { rawValue }
 
         var title: String {
@@ -36,6 +36,7 @@ enum SettingsTab {
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
             case .voice: return "Voice"
+            case .dictation: return "Dictation"
             case .screen: return "Screen"
             case .permissions: return "Permissions"
             case .updates: return "Updates"
@@ -49,7 +50,8 @@ enum SettingsTab {
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."
-            case .voice: return "How Clicky and Theo speak, and how they hear you."
+            case .voice: return "How Clicky and Theo speak, how they hear you, and calls."
+            case .dictation: return "Hold a shortcut in any app, talk, and it's typed."
             case .screen: return "The monitor Theo works on, leaving your main screen alone."
             case .permissions: return "What Theo needs to hear, see and point."
             case .updates: return "Keep Theo current."
@@ -64,6 +66,7 @@ enum SettingsTab {
             case .coding: return "terminal.fill"
             case .keys: return "key.fill"
             case .voice: return "waveform"
+            case .dictation: return "mic.fill"
             case .screen: return "display"
             case .permissions: return "lock.shield.fill"
             case .updates: return "arrow.down.circle.fill"
@@ -78,6 +81,7 @@ enum SettingsTab {
             case .coding: return TileColors.graphite
             case .keys: return TileColors.amber
             case .voice: return TileColors.rose
+            case .dictation: return TileColors.violet
             case .screen: return TileColors.sky
             case .permissions: return TileColors.teal
             case .updates: return TileColors.lime
@@ -152,6 +156,7 @@ struct SettingsPage: View {
         case .coding: CodingSettingsView()
         case .keys: ProviderKeysView()
         case .voice: VoiceSettingsContent()
+        case .dictation: DictationSettingsContent()
         case .screen: ScreenSettingsContent()
         case .permissions: PermissionsSettingsContent()
         case .updates: UpdatesSettingsContent()
@@ -417,10 +422,11 @@ struct ClickySettingsContent: View {
                     })).toggleStyle(.switch).labelsHidden()
                 }
             }
+            ClickyVoicePicker()
             TheoSection(title: "Also", hint: nil) {
                 linkRow("Cursor style", detail: look.sparkStyle.displayName, section: .look)
                 RowDivider()
-                linkRow("Voice", detail: "How it speaks and hears", section: .voice)
+                linkRow("Listening", detail: "How it hears you", section: .voice)
                 RowDivider()
                 linkRow("Theo's screen", detail: look.screenName.isEmpty ? "Follows your pointer" : look.screenName, section: .screen)
             }
@@ -454,53 +460,14 @@ struct ClickySettingsContent: View {
 // MARK: - Voice
 
 struct VoiceSettingsContent: View {
-    @AppStorage(SarvamVoiceSettings_Keys.engine) private var engine = ""
     @AppStorage(CloudListening.settingKey) private var listening = ""
+    @AppStorage(CallSettings.languageKey) private var callLanguage = CallSettings.Language.auto.rawValue
+    @AppStorage(CallSettings.modelKey) private var callModel = "claude-sonnet-5-5"
     @ObservedObject private var keys = ProviderKeys.shared
-    @State private var usesQwen = CompanionManager.current?.speechOutputClient.usesQwenLocalVoice ?? false
-    @State private var bestMacVoice = SystemVoiceTTSClient.automaticallyChosenVoice()
-    private var manager: CompanionManager? { CompanionManager.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Clicky and Theo speak with", hint: nil) {
-                voiceRow(id: "qwen", logo: nil, symbol: "waveform.circle.fill", title: "Theo's voice", detail: "Theo's own voice, running on this Mac", available: QwenLocalTTSClient.isAvailable, selected: engine.isEmpty && usesQwen) {
-                    engine = ""
-                    usesQwen = true
-                    manager?.speechOutputClient.selectQwenLocalVoice()
-                }
-                RowDivider(inset: 54)
-                voiceRow(id: "mac", logo: nil, symbol: "apple.logo", title: "Mac voice", detail: macVoiceDetail, available: true, selected: engine.isEmpty && !usesQwen) {
-                    engine = ""
-                    usesQwen = false
-                    manager?.speechOutputClient.selectSystemVoice(identifier: nil)
-                }
-                RowDivider(inset: 54)
-                voiceRow(id: "sarvam", logo: "sarvam", symbol: nil, title: "Sarvam Bulbul", detail: "Indian English, Hindi and Hinglish", available: keys.hasKey(for: "sarvam"), selected: engine == "sarvam") { engine = "sarvam" }
-                RowDivider(inset: 54)
-                voiceRow(id: "elevenlabs", logo: "elevenlabs", symbol: nil, title: "ElevenLabs", detail: "Natural voices, in many languages", available: keys.hasKey(for: "elevenlabs"), selected: engine == "elevenlabs") { engine = "elevenlabs" }
-            }
-            if bestMacVoice?.quality != .premium && engine.isEmpty && !usesQwen {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(DS.Colors.warning)
-                    Text("Mac's compact voices sound robotic. A free Premium voice sounds far better: download one in System Settings › Accessibility › Spoken Content.")
-                        .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    Button("Open") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.universalaccess?SpokenContent") { NSWorkspace.shared.open(url) }
-                    }
-                    .buttonStyle(.theoSecondary)
-                }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Colors.warning.opacity(0.1)))
-            }
-            HStack(spacing: 8) {
-                Button { manager?.speechOutputClient.previewVoice() } label: { Label("Hear it", systemImage: "play.fill") }.buttonStyle(.theoPrimary).disabled(TheoProfile.isTest)
-                Button("All voices…") { manager?.voiceGalleryController.showWindow(activatesClicky: true) }.buttonStyle(.theoSecondary)
-                Spacer()
-            }
-            if engine == "sarvam" { SarvamVoiceSettings() }
-            if engine == "elevenlabs" { ElevenLabsVoiceSettings() }
+            ClickyVoicePicker()
             TheoSection(title: "Hears you with", hint: "Push-to-talk goes through this when it's set. The wake word always stays on this Mac.") {
                 listenRow(id: "", logo: nil, title: "On this Mac", detail: "Apple's speech recognition, private and instant", available: true)
                 RowDivider(inset: 54)
@@ -510,17 +477,27 @@ struct VoiceSettingsContent: View {
                 RowDivider(inset: 54)
                 listenRow(id: "sarvam", logo: "sarvam", title: "Sarvam Saaras", detail: "Best for Indian languages and code-mixing", available: keys.hasKey(for: "sarvam"))
             }
+            TheoSection(title: "Calls with Theo", hint: keys.hasKey(for: "sarvam") ? "Calls listen and speak with Sarvam, in Hindi, English or Hinglish." : "Calls use Apple's listening and the Mac voice until a Sarvam key is saved. Hindi and Hinglish sound far better with Sarvam.") {
+                SettingRow(title: "Language", detail: "Auto answers in whatever you just spoke.") {
+                    Picker("Language", selection: $callLanguage) {
+                        ForEach(CallSettings.Language.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().frame(width: 180)
+                }
+                RowDivider()
+                SettingRow(title: "Thinks with") {
+                    Picker("Thinks with", selection: $callModel) {
+                        Text("Claude Sonnet 5.5").tag("claude-sonnet-5-5")
+                        Text("Claude Haiku 5.5 (fastest)").tag("claude-haiku-5-5")
+                    }
+                    .labelsHidden().frame(width: 220)
+                }
+                RowDivider()
+                SettingRow(title: "Talk to Theo now") {
+                    Button { TheoCallController.start() } label: { Label("Call Theo", systemImage: "phone.fill") }.buttonStyle(.theoPrimary)
+                }
+            }
         }
-    }
-
-    private var macVoiceDetail: String {
-        guard let voice = bestMacVoice else { return "The best voice installed" }
-        let quality = voice.quality == .premium ? "premium" : voice.quality == .enhanced ? "enhanced" : "basic quality"
-        return "\(voice.name), \(quality)"
-    }
-
-    private func voiceRow(id: String, logo: String?, symbol: String?, title: String, detail: String, available: Bool, selected: Bool, action: @escaping () -> Void) -> some View {
-        selectRow(logo: logo, symbol: symbol, title: title, detail: detail, available: available, selected: selected, action: action)
     }
 
     private func listenRow(id: String, logo: String?, title: String, detail: String, available: Bool) -> some View {
@@ -552,77 +529,6 @@ struct VoiceSettingsContent: View {
             .padding(.horizontal, 12).frame(height: 50).contentShape(Rectangle())
         }
         .buttonStyle(SidebarButtonStyle(isSelected: false))
-    }
-}
-
-struct SarvamVoiceSettings: View {
-    @AppStorage(SarvamVoiceSettings_Keys.model) private var model = "bulbul:v4-flash"
-    @AppStorage(SarvamVoiceSettings_Keys.speaker) private var speaker = "shubh"
-    @AppStorage(SarvamVoiceSettings_Keys.language) private var language = "hi-IN"
-    @AppStorage(SarvamVoiceSettings_Keys.pace) private var pace = 1.0
-
-    private var speakerOptions: [String] { model.hasPrefix("bulbul:v4") ? SarvamClient.v4SpeakerCatalog.flatMap(\.speakers) : SarvamClient.v3Speakers }
-
-    var body: some View {
-        TheoSection(title: "Sarvam voice", hint: nil) {
-            SettingRow(title: "Model") {
-                Picker("Model", selection: $model) {
-                    Text("Bulbul v4 flash").tag("bulbul:v4-flash")
-                    Text("Bulbul v3").tag("bulbul:v3")
-                }.labelsHidden().frame(width: 200)
-            }
-            RowDivider()
-            SettingRow(title: "Language") {
-                Picker("Language", selection: $language) {
-                    Text("Hindi").tag("hi-IN")
-                    Text("Indian English").tag("en-IN")
-                    Text("Hinglish").tag("hinglish")
-                }.labelsHidden().frame(width: 200)
-            }
-            RowDivider()
-            SettingRow(title: "Speaker") {
-                Picker("Speaker", selection: $speaker) {
-                    if !speakerOptions.contains(speaker) { Text(speaker).tag(speaker) }
-                    ForEach(speakerOptions, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: 200)
-            }
-            RowDivider()
-            SettingRow(title: "Pace", detail: String(format: "%.2fx", pace)) {
-                Slider(value: $pace, in: 0.5...2.0, step: 0.05).frame(width: 200)
-            }
-        }
-    }
-}
-
-struct ElevenLabsVoiceSettings: View {
-    @AppStorage(ElevenLabsClient.voiceKey) private var voice = ""
-    @AppStorage(ElevenLabsClient.modelKey) private var model = ElevenLabsClient.defaultModel
-    @State private var voices: [ElevenLabsClient.Voice] = []
-    @State private var problem: String?
-
-    var body: some View {
-        TheoSection(title: "ElevenLabs voice", hint: problem) {
-            SettingRow(title: "Voice") {
-                Picker("Voice", selection: $voice) {
-                    if voices.isEmpty { Text(voice.isEmpty ? "Loading…" : voice).tag(voice) }
-                    ForEach(voices) { Text($0.name).tag($0.id) }
-                }.labelsHidden().frame(width: 240)
-            }
-            RowDivider()
-            SettingRow(title: "Model") {
-                Picker("Model", selection: $model) {
-                    Text("Multilingual v2").tag("eleven_multilingual_v2")
-                    Text("Flash v2.5 (fastest)").tag("eleven_flash_v2_5")
-                    Text("Turbo v2.5").tag("eleven_turbo_v2_5")
-                }.labelsHidden().frame(width: 240)
-            }
-        }
-        .task {
-            do {
-                voices = try await ElevenLabsClient.listVoices()
-                if voice.isEmpty, let first = voices.first { voice = first.id }
-            } catch { problem = error.localizedDescription }
-        }
     }
 }
 

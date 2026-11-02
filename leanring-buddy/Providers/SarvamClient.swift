@@ -44,7 +44,20 @@ enum SarvamError: Error, LocalizedError, Equatable {
 }
 
 struct SarvamClient {
-    static let baseURL = URL(string: "https://api.sarvam.ai")!
+    /// The test profile can point at a local stand-in server (Tools/mock-sarvam.py). Real runs always go to Sarvam.
+    static var baseURL: URL {
+        if TheoProfile.isTest, let local = UserDefaults.standard.string(forKey: "test.sarvam.base"), let url = URL(string: local) { return url }
+        return URL(string: "https://api.sarvam.ai")!
+    }
+
+    /// Sockets and REST share an address at Sarvam; the stand-in server keeps REST one port up.
+    static var restBaseURL: URL {
+        if TheoProfile.isTest, let local = UserDefaults.standard.string(forKey: "test.sarvam.base"), var parts = URLComponents(string: local), let port = parts.port {
+            parts.port = port + 1
+            return parts.url ?? baseURL
+        }
+        return baseURL
+    }
     static let maxTTSCharacters = 2500
     static let restSTTMaxSeconds = 30
 
@@ -85,21 +98,14 @@ struct SarvamClient {
         return knownV4Speakers.contains(candidate) ? candidate : "shubh_enhi_ads"
     }
 
-    static let knownV4Speakers: Set<String> = Set(v4SpeakerCatalog.flatMap { $0.speakers })
-
-    /// A curated subset of the 222 Bulbul v4-flash personas, from the Voices guide.
-    static let v4SpeakerCatalog: [(group: String, speakers: [String])] = [
-        ("English-Hindi (Hinglish)", ["shubh_enhi_ads", "shubh_enhi_companion", "shubh_enhi_banking", "ishita_enhi_companion", "ishita_enhi_customer", "simran_enhi_companion", "simran_enhi_customer", "sanchita_enhi_companion", "shalini_enhi_companion", "sunny_enhi_customer"]),
-        ("English (en-IN)", ["shubh_en_narration", "shubh_en_audiobook", "simran_en_conversation", "simran_en_narration", "ishita_en_social", "neha_en_customer", "ritu_en_edtech", "dev_en_conversational", "roopa_en_conversational", "varun_en_ads", "sophia_en_conversational", "amelia_en_conversational"]),
-        ("Hindi (hi-IN)", ["shubh_hi_customer", "shubh_hi_ecomm", "simran_hi_conversation", "simran_hi_assistant", "ritu_hi_conversation", "ritu_hi_customer", "sanchita_hi_assistant", "aditya_hi_conversational", "rahul_hi_conversational", "kavya_hi_conversational", "amit_hi_conversational", "roopa_hi_conversational", "tanya_hi_narration", "anand_hi_news"])
-    ]
+    static let knownV4Speakers: Set<String> = Set(v4VoiceGroups.flatMap(\.speakers))
 
     static let v3Speakers = ["shubh", "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun", "manan", "sumit", "roopa", "kabir", "aayan", "ashutosh", "advait", "anand", "tanya", "tarun", "sunny", "mani", "gokul", "vijay", "shruti", "suhani", "mohit", "kavitha", "rehan", "soham", "rupali"]
 
     static func clampPace(_ pace: Double) -> Double { min(2.0, max(0.5, pace)) }
 
     static func authedRequest(_ path: String, apiKey: String, contentType: String? = "application/json") -> URLRequest {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path), timeoutInterval: 30)
+        var request = URLRequest(url: restBaseURL.appendingPathComponent(path), timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "api-subscription-key")
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
@@ -145,7 +151,7 @@ struct SarvamClient {
 
     /// Multipart body for POST /speech-to-text.
     static func makeSTTRequest(apiKey: String, audio: Data, fileName: String = "audio.wav", mimeType: String = "audio/wav",
-                               model: String = "saaras:v4", mode: STTMode = .transcribe, languageCode: String = "unknown",
+                               model: String = "saaras:v4", mode: STTMode? = .transcribe, languageCode: String = "unknown", keyterms: [String] = [],
                                boundary: String = "TheoBoundary-\(UUID().uuidString)") -> URLRequest {
         var request = authedRequest("speech-to-text", apiKey: apiKey, contentType: "multipart/form-data; boundary=\(boundary)")
         var body = Data()
@@ -156,9 +162,14 @@ struct SarvamClient {
         body.append(audio)
         body.append(Data("\r\n".utf8))
         field("model", model)
-        // `mode` is documented for saaras:v3 only; v4 ignores/rejects it, so only send it there.
-        if model == "saaras:v3" { field("mode", mode.rawValue) }
+        // The model page says v3 and v4 take `mode`, the REST field says v3 only; `transcribe` calls fall back without it on a 400.
+        if let mode { field("mode", mode.rawValue) }
         field("language_code", languageCode)
+        // saaras:v4 only: words to expect, up to 50 of up to 64 characters.
+        if model == "saaras:v4", !keyterms.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: Array(keyterms.map { String($0.prefix(64)) }.prefix(50))), let json = String(data: data, encoding: .utf8) {
+            field("keyterms", json)
+        }
         body.append(Data("--\(boundary)--\r\n".utf8))
         request.httpBody = body
         request.timeoutInterval = 60
@@ -258,9 +269,15 @@ struct SarvamClient {
 
     /// Audio should be under 30 s on the REST endpoint.
     func transcribe(audio: Data, fileName: String = "audio.wav", mimeType: String = "audio/wav",
-                    model: String = "saaras:v4", mode: STTMode = .transcribe, languageCode: String = "unknown") async throws -> (transcript: String, languageCode: String?) {
-        let request = Self.makeSTTRequest(apiKey: apiKey, audio: audio, fileName: fileName, mimeType: mimeType, model: model, mode: mode, languageCode: languageCode)
-        return try Self.parseSTTResponse(try await send(request))
+                    model: String = "saaras:v4", mode: STTMode = .transcribe, languageCode: String = "unknown", keyterms: [String] = []) async throws -> (transcript: String, languageCode: String?) {
+        let request = Self.makeSTTRequest(apiKey: apiKey, audio: audio, fileName: fileName, mimeType: mimeType, model: model, mode: mode, languageCode: languageCode, keyterms: keyterms)
+        do {
+            return try Self.parseSTTResponse(try await send(request))
+        } catch SarvamError.invalidRequest(let message) where message.lowercased().contains("mode") {
+            // The docs disagree on whether this model takes `mode`: once more without it.
+            let plain = Self.makeSTTRequest(apiKey: apiKey, audio: audio, fileName: fileName, mimeType: mimeType, model: model, mode: nil, languageCode: languageCode, keyterms: keyterms)
+            return try Self.parseSTTResponse(try await send(plain))
+        }
     }
 
     func translate(_ input: String, from source: String = "auto", to target: String, model: String = "mayura:v1", mode: String = "formal") async throws -> String {

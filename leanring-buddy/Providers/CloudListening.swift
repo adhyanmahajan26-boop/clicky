@@ -124,5 +124,6 @@ final class PushToTalkAudioTape: @unchecked Sendable {
     }
 
     var wav: Data { lock.withLock { CloudListening.wavFile(pcm16: samples, sampleRate: Self.sampleRate) } }
+    var pcm16: Data { lock.withLock { samples } }
     var isEmpty: Bool { lock.withLock { samples.isEmpty } }
 }

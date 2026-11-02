@@ -288,7 +288,7 @@ struct CategoryScreen: View {
             Divider()
             HStack(alignment: .top, spacing: 0) {
                 node(title: section.hasManager ? "Members" : "Team", detail: plain.isEmpty ? "No bots yet" : plain.map(\.name).joined(separator: ", ")) {
-                    HStack(spacing: -8) {
+                    HStack(spacing: 3) {
                         ForEach(plain.prefix(5)) { bot in
                             BotAvatar(bot: bot, size: 30, state: store.replying[bot.id] != nil ? .thinking : .idle)
                         }

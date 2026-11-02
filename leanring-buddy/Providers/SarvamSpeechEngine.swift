@@ -11,7 +11,7 @@
 //
 //  Selected by UserDefaults "v2.voice.engine" == "sarvam" with a saved key
 //  (see SarvamVoiceSettings.isActive). Settings: v2.voice.sarvam.speaker
-//  (default "shubh"), .language ("hi-IN" | "en-IN" | "hinglish"), .model
+//  (default "shubh_enhi_companion"), .language ("hinglish" | "en-IN" | "hi-IN" | …), .model
 //  (default "bulbul:v4-flash"), .pace (default 1.0).
 //
 
@@ -31,8 +31,8 @@ enum SarvamVoiceSettings_Keys {
 enum SarvamVoiceConfig {
     static var isSelected: Bool { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.engine) == "sarvam" }
     static var isActive: Bool { isSelected && ProviderKeychain.get("sarvam") != nil }
-    static var speaker: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.speaker) ?? "shubh" }
-    static var language: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.language) ?? "hi-IN" }
+    static var speaker: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.speaker) ?? "shubh_enhi_companion" }
+    static var language: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.language) ?? "hinglish" }
     static var model: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.model) ?? "bulbul:v4-flash" }
     static var pace: Double {
         let stored = UserDefaults.standard.object(forKey: SarvamVoiceSettings_Keys.pace) as? Double ?? 1.0

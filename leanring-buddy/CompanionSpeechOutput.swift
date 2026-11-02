@@ -73,9 +73,10 @@ final class CompanionSpeechOutput: ObservableObject {
         usesQwenLocalVoice && !qwenServerSupervisor.isUnavailable
     }
 
-    /// Qwen's first WAV only arrives whole, so its first segment is cut early.
+    /// Qwen, Sarvam and ElevenLabs each hand back a whole file per segment, so the first segment is cut early and the
+    /// voice starts on a clause while the rest is still being made.
     var narrationSegmenterOptions: NarrationSegmenter.Options {
-        isQwenPrimary ? .qwen : NarrationSegmenter.Options()
+        isQwenPrimary || SarvamVoiceConfig.isActive || ElevenLabsClient.isActive ? .qwen : NarrationSegmenter.Options()
     }
 
     /// A coordinator for one answer: the selected voice, the Mac voice behind it.

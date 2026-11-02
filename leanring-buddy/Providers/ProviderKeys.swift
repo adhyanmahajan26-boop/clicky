@@ -15,9 +15,11 @@ enum ProviderKeychain {
     static let service = "com.theo.providers" + TheoProfile.keychainSuffix
 
     static func get(_ account: String) -> String? {
+        // A live Sarvam test reads the owner's key where it lies: nothing is copied or shown.
+        let usesOwnersKey = TheoProfile.isTest && account == "sarvam" && UserDefaults.standard.bool(forKey: "test.sarvam.useOwnerKey")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: usesOwnersKey ? "com.theo.providers" : service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne

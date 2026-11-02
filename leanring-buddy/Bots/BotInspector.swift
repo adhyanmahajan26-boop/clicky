@@ -276,6 +276,9 @@ struct ClickyInspector: View {
                         }
                     }
                 }
+                InspectorSection("Voice") {
+                    Button("Choose Clicky's voice") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
+                }
                 InspectorSection("Behaviour") {
                     toggle("Listens for \"hey \(ClickySettings.assistantName)\"", $listens) { value in
                         if let manager = CompanionManager.current { manager.wakeWordController.setEnabled(value) } else { ClickySettings.isWakeWordEnabled = value }
