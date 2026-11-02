@@ -154,6 +154,8 @@ final class BotsStore: ObservableObject {
         var reportsTo: ((String) -> Void)?
     }
     private var groupBriefs: [String: GroupRunBrief] = [:]
+    /// Who a bot is answering, or has just heard back from, in a private exchange.
+    var directPartner: [String: String] = [:]
     /// Private messages between bots since the owner last spoke, so they can't go on forever.
     var directMessagesSent = 0
     /// The folder list from the Mac where coding runs.
@@ -347,6 +349,11 @@ final class BotsStore: ObservableObject {
             post(BotChatMessage(author: "user", text: text), to: botID)
             post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
             return
+        }
+        // Its engine isn't signed in on this Mac but the Mac with the work screen can run it: the answer comes back through the chat.
+        if !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected, HarnessCatalog.info(bot.provider) != nil {
+            let status = HarnessCenter.shared.status(for: bot.provider)
+            if !status.installed || status.loggedIn == false, TheoLink.shared.request("botSay", ["bot": botID, "text": text]) { return }
         }
         var record = conversation(botID)
         record.messages.append(BotChatMessage(author: "user", text: text))
@@ -752,6 +759,11 @@ final class BotsStore: ObservableObject {
                 let taken = ClickyOrder.extract(from: said)
                 answer = taken.text
                 directMessages = taken.orders.compactMap { ClickyOrder.tellTarget(in: $0) }
+                // Their answer goes back by itself, and whoever got it just reports: no messaging each other in circles.
+                if let partner = directPartner[bot.id].flatMap({ self.bot($0) }) {
+                    directMessages.removeAll { BotsStore.searchName($0.name) == BotsStore.searchName(partner.name) }
+                }
+                directPartner[bot.id] = nil
             }
             // A turn the owner set off can ask for the work screen; one set off by a page or another bot's job can't.
             var screenOrders: [String] = []
@@ -2216,6 +2228,8 @@ extension BotsStore {
                 }
             }
             CompanionManager.current?.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: options)
+        case "botSay":
+            if let bot = fields["bot"], let text = fields["text"] { send(text, to: bot) }
         case "clickyAnswer":
             guard let text = fields["text"] else { return }
             post(BotChatMessage(author: Self.clickyID, text: text), to: Self.clickyID)

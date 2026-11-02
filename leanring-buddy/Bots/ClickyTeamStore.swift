@@ -615,12 +615,13 @@ extension BotsStore {
 
     /// One bot messages another in private. The other answers in its own chat, and the first carries on where it was asked.
     func sendDirectMessage(from sender: NativeBot, to name: String, message: String, room: String, ownerWords: String?) {
-        func carryOn(_ note: String) {
+        func carryOn(_ note: String, partner: String? = nil) {
             Task { [weak self] in
                 while self?.replying[sender.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
                 guard let self else { return }
                 let session = self.conversation(room).sessions[sender.id]
-                let words = note + "\n\nCarry on and tell Addy where things stand."
+                self.directPartner[sender.id] = partner
+                let words = note + "\n\nCarry on and tell Addy where things stand. You don't need to thank or confirm with them."
                 self.reply(bot: sender, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: sender, team: self.bots, text: words) : words, session: session) { _ in }
             }
         }
@@ -641,13 +642,14 @@ extension BotsStore {
             while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard let self else { return }
             let session = self.conversation(target.id).sessions[target.id]
-            var words = "Private message from \(sender.name): \(message)\n\nAnswer \(sender.name) directly."
-            if !target.primary { words = "(\(self.directMessageNote(for: target)))\n\n(\(self.projectsNote))\n\n" + words }
+            var words = "Private message from \(sender.name): \(message)\n\nJust write your answer: it goes back to \(sender.name) by itself, so don't message them, and the exchange ends there."
+            if !target.primary { words = "(\(self.projectsNote))\n\n" + words }
+            self.directPartner[target.id] = sender.id
             let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: words) : words
             self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
                 guard let self else { return }
                 guard let answer, !answer.isEmpty else {
-                    carryOn("\(target.name) didn't answer.")
+                    carryOn("\(target.name) didn't answer.", partner: target.id)
                     return
                 }
                 // A coder's final prompt for work the owner asked for starts the run, in the chat the owner asked in.
@@ -660,7 +662,7 @@ extension BotsStore {
                     }
                 }
                 let spoken = answer.components(separatedBy: "```prompt").first ?? answer
-                carryOn("\(target.name) answered you privately: \(spoken)")
+                carryOn("\(target.name) answered you privately: \(spoken)", partner: target.id)
             }
         }
     }
