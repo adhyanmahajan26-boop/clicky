@@ -25,6 +25,7 @@ final class TheoLink: ObservableObject {
     private static let serviceType = "_theolink._tcp"
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
+    nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 
     @Published private(set) var isPaired = false
     @Published private(set) var peerName: String?
@@ -51,7 +52,8 @@ final class TheoLink: ObservableObject {
     private static var secretFile: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/link-secret")
     }
-    private var localName: String { Host.current().localizedName ?? ProcessInfo.processInfo.hostName }
+    private var localName: String { Self.localName }
+    var isConnected: Bool { peerName != nil }
     private var localBuild: Int { Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0 }
 
     var host: String {
@@ -325,7 +327,18 @@ final class TheoLink: ObservableObject {
             guard let key = envelope.key, let payload = envelope.payload else { return }
             BotsStore.shared.applyLinkPayload(key, payload)
             lastSync = Date()
+        case .request:
+            guard let action = envelope.key, let payload = envelope.payload,
+                  let fields = try? LinkCoding.decoder.decode([String: String].self, from: payload) else { return }
+            BotsStore.shared.handleLinkRequest(action, fields)
         }
+    }
+
+    /// Asks the other Mac to do something. False when it isn't connected.
+    func request(_ action: String, _ fields: [String: String]) -> Bool {
+        guard isConnected, let payload = try? LinkCoding.encoder.encode(fields) else { return false }
+        send(LinkEnvelope(kind: .request, key: action, payload: payload))
+        return true
     }
 
     private func sendDigest() {
@@ -347,7 +360,7 @@ final class TheoLink: ObservableObject {
 }
 
 struct LinkEnvelope: Codable {
-    enum Kind: String, Codable { case hello, digest, want, item }
+    enum Kind: String, Codable { case hello, digest, want, item, request }
     var kind: Kind
     var name: String?
     var build: Int?
@@ -417,4 +430,39 @@ struct LinkSettingsContent: View {
     }
 
     private var localBuild: Int { Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0 }
+}
+
+// MARK: - Runs on the other Mac
+
+/// Where a run is going on, and the button that shows its terminal.
+struct RemoteRunBadge: View {
+    let run: T3Run
+    @Binding var showsTerminal: Bool
+
+    var body: some View {
+        Label("On \(run.origin ?? "your other Mac")", systemImage: "laptopcomputer.and.arrow.down")
+            .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+        if run.paneTail != nil {
+            Button { showsTerminal.toggle() } label: { Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal") }
+                .buttonStyle(.theo(.ghost, .small))
+        }
+    }
+}
+
+/// The run's terminal as the other Mac last saw it, a few seconds behind.
+struct RemoteRunTerminal: View {
+    let run: T3Run
+
+    var body: some View {
+        ScrollView {
+            Text(run.paneTail ?? "")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(DS.Colors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(8)
+        }
+        .frame(height: 300)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.surface1))
+    }
 }

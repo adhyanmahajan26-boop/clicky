@@ -27,6 +27,9 @@ enum BotsT3Error: LocalizedError {
 
 /// One coding run Theo started in T3 Code, saved so tracking survives a restart of Theo.
 struct T3Run: Codable, Identifiable, Equatable {
+    /// It runs on the other Mac: this one only shows it and passes on what's asked of it.
+    var isRemote: Bool { origin != nil && origin != TheoLink.localName }
+
     /// T3 Code's thread id.
     var id: String
     var title: String
@@ -57,6 +60,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     var cloudRunID: String?
     /// The run's own git worktree (harness runs on a repo Addy named).
     var worktree: String?
+    /// The Mac it runs on; only that Mac follows it. Nil for runs from before the Macs were linked.
+    var origin: String?
+    /// The end of its terminal, for watching from the other Mac.
+    var paneTail: String?
     /// What the result card shows, filled in when the run ends.
     var changedFiles: [RunFileChange]?
     var tests: String?

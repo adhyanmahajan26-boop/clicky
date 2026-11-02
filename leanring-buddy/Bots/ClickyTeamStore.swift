@@ -421,9 +421,10 @@ extension BotsStore {
     /// The CEO tells Clicky to do something, from its chat or a call. It runs as a Clicky turn: Clicky looks at the screen
     /// and points, acts or hands it to its team. What it says lands in the CEO's chat, and comes to `onReport`.
     /// `ownerWords`: the owner's own words behind the order, when they said it.
-    func orderClicky(_ order: String, ownerWords: String?, onReport: ((String) -> Void)? = nil) {
+    /// `room` and `note`: a bot's screen job, whose card goes in that bot's chat.
+    func orderClicky(_ order: String, ownerWords: String?, room: String? = nil, note: String? = nil, onReport: ((String) -> Void)? = nil) {
         guard let ceo = primary else { return }
-        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: ceo.id)
+        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? ceo.id)
         add(job)
         guard let manager = CompanionManager.current else {
             finish(job.id, result: "Clicky isn't running.", succeeded: false)
@@ -445,7 +446,7 @@ extension BotsStore {
             })
             options.isOwnersWords = false
             // Extra text keeps it away from everything that only the owner's own words may do (a yes on a confirm card, sends).
-            options.extraUserText = ClickyTeamPrompts.orderNote(ceoName: ceo.name)
+            options.extraUserText = note ?? ClickyTeamPrompts.orderNote(ceoName: ceo.name)
             options.theoOrder = ClickyTheoOrder(ownerWords: ownerWords)
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
         }
@@ -463,6 +464,10 @@ extension BotsStore {
     /// Theo gives work to someone by name. Their answer lands in Theo's chat and comes to `onReport`.
     func tell(_ name: String, message: String, ownerWords: String?, onReport: ((String) -> Void)? = nil) {
         guard let ceo = primary else { return }
+        if let harness = CodingHarnessWords.id(forName: name) {
+            startRunOrdered(message, harness: harness, ownerWords: ownerWords, ceo: ceo, onReport: onReport)
+            return
+        }
         let wanted = BotsStore.searchName(name)
         if wanted == BotsStore.searchName("clicky") {
             orderClicky(message, ownerWords: ownerWords, onReport: onReport)
@@ -496,6 +501,43 @@ extension BotsStore {
             report(name, "There's nobody by that name that's on. Who's here: \(names).")
         }
     }
+
+    /// Theo sends something to code on the harness named. Agents run with full access, so only the owner's own words do this.
+    private func startRunOrdered(_ prompt: String, harness: String, ownerWords: String?, ceo: NativeBot, onReport: ((String) -> Void)?) {
+        guard let ownerWords, BotsStore.ownerAskedToBuild(ownerWords) else {
+            onReport?("That needs Addy's own go-ahead: they have to say to send it to code.")
+            return
+        }
+        submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: BotsT3.targetRepo(answer: "", pitch: ownerWords), room: ceo.id, harness: harness) { started, problem in
+            onReport?(started ? "It's started on \(HarnessCatalog.label(harness)), and it shows on its card in your chat." : problem ?? "The run didn't start.")
+        }
+    }
+
+    /// A bot's job for the work screen: Clicky does it there, and the bot hears how it went and can carry on.
+    func workOnScreen(_ task: String, bot: NativeBot, room: String) {
+        guard let screen = ClaudiaScreen.picked else {
+            if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
+                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's screen right now: your other Mac isn't connected."), to: room)
+            }
+            return
+        }
+        let turns = (screenTurns[bot.id] ?? 0) + 1
+        guard turns <= Self.maximumScreenTurns else {
+            post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) steps on the screen, so I'll stop here. Tell me to keep going if you want more."), to: room)
+            return
+        }
+        screenTurns[bot.id] = turns
+        ActionConfinement.keep(to: CGDisplayBounds(screen.displayID), named: screen.localizedName)
+        let note = "(this comes from \(bot.name), one of Addy's bots, not from the user's voice. do it only on the display called \(screen.localizedName), the right-hand screen: open what's needed there and leave the other screens alone. nobody hears the answer. say briefly what you did and what's on the screen now.)"
+        orderClicky(task, ownerWords: nil, room: room, note: note) { [weak self] report in
+            guard let self, self.replying[bot.id] == nil else { return }
+            let session = self.conversation(room).sessions[bot.id]
+            let words = "Clicky did that on the screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another [SCREEN: …] line. If you're done, tell Addy how it went."
+            self.reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: self.bots, text: words) : words, session: session) { _ in }
+        }
+    }
+
+    nonisolated private static let maximumScreenTurns = 8
 
     /// Letters and digits only, so "IT guys" is found however it's written or heard.
     nonisolated static func searchName(_ name: String) -> String {

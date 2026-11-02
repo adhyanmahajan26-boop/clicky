@@ -23,6 +23,29 @@ import Carbon.HIToolbox
 import ClickyCore
 
 /// What a step acts on, as resolved just before its tier is decided.
+/// While a bot's job runs on the work screen, nothing on the owner's other screens gets touched.
+@MainActor
+enum ActionConfinement {
+    private static var bounds: CGRect?
+    private static var name = ""
+    private static var until = Date.distantPast
+    /// A job's steps can go on after its first turn, so it lasts this long unless the owner speaks first.
+    private static let seconds: TimeInterval = 300
+
+    static func keep(to newBounds: CGRect, named newName: String) {
+        bounds = newBounds
+        name = newName
+        until = Date().addingTimeInterval(seconds)
+    }
+
+    static func clear() { bounds = nil }
+
+    static func refusal(for frame: CGRect?) -> String? {
+        guard let bounds, Date() < until, let frame else { return nil }
+        return bounds.contains(CGPoint(x: frame.midX, y: frame.midY)) ? nil : "that's on another screen, and this job only works on \(name)"
+    }
+}
+
 struct ResolvedActionTarget {
     var facts: ActionTargetFacts?
     var axElement: AXUIElement?
@@ -352,6 +375,7 @@ final class ActionExecutor {
     /// Runs a step whose tier allowed it. `session`: the answer on screen (highlights draw through it).
     func perform(_ step: ActionStep, target: ResolvedActionTarget, groundedTurn: GroundedTurn, session: AnswerSession?,
                  ownerTranscript: String, isCancelled: @escaping () -> Bool) async -> ActionPerformResult {
+        if let refusal = ActionConfinement.refusal(for: target.frameCG) { return ActionPerformResult(.refused(reason: refusal)) }
         switch step {
         case .highlight(let targets, let notes):
             return ActionPerformResult(await highlight(targets: targets, notes: notes, target: target, session: session))

@@ -284,3 +284,24 @@ struct ClickyTeamTests {
         #expect(here.teamWork().count == 1)
     }
 }
+
+@Suite struct BotsAtWorkTests {
+    @Test func screenOrdersComeOutOfAReply() {
+        let taken = BotScreenOrder.extract(from: "Opening it. [SCREEN: open the Notion page in Chrome]")
+        #expect(taken.text == "Opening it.")
+        #expect(taken.orders == ["open the Notion page in Chrome"])
+        #expect(BotScreenOrder.withoutTags(streaming: "Opening it. [SCREEN: open the") == "Opening it. ")
+    }
+
+    @Test func harnessesByTheOwnersWords() {
+        #expect(CodingHarnessWords.named(in: "send it to codex") == "codex")
+        #expect(CodingHarnessWords.named(in: "run this on Claude Code please") == "claude")
+        #expect(CodingHarnessWords.named(in: "use open code for it") == "opencode")
+        #expect(CodingHarnessWords.named(in: "what does codex do?") == nil)
+        #expect(CodingHarnessWords.id(forName: "Codex") == "codex")
+        #expect(CodingHarnessWords.id(forName: "IT guys") == nil)
+        #expect(CodingHarnessWords.asksToSendToCode("send it to the code"))
+        #expect(CodingHarnessWords.asksToSendToCode("hand this to Cursor"))
+        #expect(!CodingHarnessWords.asksToSendToCode("what is the code for this door"))
+    }
+}

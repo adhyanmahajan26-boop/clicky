@@ -1770,12 +1770,15 @@ struct T3RunCard: View {
                         Button { TerminalWindowController.pop(sessionID: run.id) } label: { Image(systemName: "arrow.up.forward.square").frame(width: 14) }
                             .buttonStyle(.theo(.ghost, .small)).help("Open in its own window")
                     }
+                } else if run.isRemote {
+                    RemoteRunBadge(run: run, showsTerminal: $showsTerminal)
                 } else if run.link != nil || run.harness != nil {
                     Button { BotsT3.openInApp(run) } label: { Label(run.harness == nil ? "Open in T3 Code" : "Watch", systemImage: "arrow.up.forward.app") }
                         .buttonStyle(.theo(.ghost, .small))
                 }
                 Spacer(minLength: 0)
             }
+            if showsTerminal, run.isRemote { RemoteRunTerminal(run: run) }
             if showsTerminal, let session {
                 // The harness's own terminal, live: watch it work and type into it.
                 TerminalPanel(session: session)

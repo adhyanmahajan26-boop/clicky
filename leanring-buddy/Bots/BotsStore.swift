@@ -143,6 +143,8 @@ final class BotsStore: ObservableObject {
     var teamHelpersRunning = 0
     /// A call that's listening: Clicky's team reporting to the CEO after the call's order was already answered.
     var onCEOReport: ((String) -> Void)?
+    /// How many screen jobs in a row a bot has asked for since the owner last spoke to it.
+    var screenTurns: [String: Int] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
     /// Theo Link: when things changed, and while the other Mac's copy is being applied.
@@ -180,7 +182,7 @@ final class BotsStore: ObservableObject {
         }
         // A run that was wrapping up when Theo quit goes through its report again; pushing twice is harmless.
         for index in t3Runs.indices where t3Runs[index].phase == "reporting" { t3Runs[index].phase = "running" }
-        for run in t3Runs where run.phase == "running" || run.phase == "waiting" { track(run.id) }
+        for run in t3Runs where !run.isRemote && (run.phase == "running" || run.phase == "waiting") { track(run.id) }
         loadRoutinesAndLayout()
         provisionClickyTeam()
         loadDelegations()
@@ -351,6 +353,9 @@ final class BotsStore: ObservableObject {
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
+        if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
+        if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
+        screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
             if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
         }
@@ -507,7 +512,8 @@ final class BotsStore: ObservableObject {
             do {
                 let team = self?.bots ?? []
                 let result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team) { text in
-                    self?.replying[bot.id] = bot.primary ? ClickyOrder.withoutTags(streaming: text) : text
+                    let shown = bot.primary ? ClickyOrder.withoutTags(streaming: text) : text
+                    self?.replying[bot.id] = BotScreenOrder.withoutTags(streaming: shown)
                 }
                 answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 newSession = result.session ?? session
@@ -530,6 +536,13 @@ final class BotsStore: ObservableObject {
                 answer = taken.text
                 orders = taken.orders
             }
+            // A turn the owner set off can ask for the work screen; one set off by a page or another bot's job can't.
+            var screenOrders: [String] = []
+            if bot.owner == nil, fromOwner, let said = answer {
+                let taken = BotScreenOrder.extract(from: said)
+                answer = taken.text
+                screenOrders = taken.orders
+            }
             let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil
             if self.stopped.remove(bot.id) != nil {
@@ -546,12 +559,14 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.seen[bot.id] = record.messages.count }
-            } else if answer != nil && orders.isEmpty {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)"))
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
-            for order in orders { self.carryOutOrder(order, ownerWords: nil) }
+            let ownerSaid = fromOwner ? self.conversation(conversationID).messages.last { $0.author == "user" }?.text : nil
+            for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
+            for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
             if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
@@ -591,7 +606,8 @@ final class BotsStore: ObservableObject {
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
         if repo == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
-        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room)
+        submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room,
+                   harness: CodingHarnessWords.named(in: pitch.text))
     }
 
     /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between. As whole words, so @codemirror or
@@ -605,6 +621,7 @@ final class BotsStore: ObservableObject {
 
     /// Asked in so many words to build or change something, as opposed to "make me a prompt" or "update me on this".
     static func ownerAskedToBuild(_ text: String) -> Bool {
+        if CodingHarnessWords.asksToSendToCode(text) { return true }
         if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
         let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
         let makeThing = #"(?i)\b(make|create|write|add|change|update)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo)\b"#
@@ -632,13 +649,17 @@ final class BotsStore: ObservableObject {
         if repo == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
         } else {
-            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room)
+            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room, harness: CodingHarnessWords.named(in: words))
         }
     }
 
     /// Stops a run in progress. T3 Code has no stop command, so a T3 run is only no longer followed from here.
     func stopRun(_ runID: String) {
         guard var run = t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" else { return }
+        if run.isRemote {
+            _ = TheoLink.shared.request("stopRun", ["id": runID])
+            return
+        }
         run.stoppedByOwner = true
         run.phase = "reporting"
         upsert(run)
@@ -666,6 +687,15 @@ final class BotsStore: ObservableObject {
                     started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
+        // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
+        if ClaudiaScreen.picked == nil, TheoLink.shared.isConnected {
+            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? ""]
+            if TheoLink.shared.request("run", fields) {
+                post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your other Mac"). You can watch it here."), to: room)
+                started?(true, nil)
+                return
+            }
+        }
         Task { [weak self] in
             // One at a time: starting takes up to half a minute while the agent's screen settles.
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
@@ -693,6 +723,12 @@ final class BotsStore: ObservableObject {
 
     /// Passes a change to the latest run's coding agent and follows the run again.
     func sendToCoder(_ text: String, room: String = BotsStore.teamID) {
+        if latestRun(in: room)?.isRemote == true {
+            if !TheoLink.shared.request("followup", ["room": room, "text": text]), let theo = speaker(for: room) {
+                post(BotChatMessage(author: theo.id, text: "Your other Mac isn't connected, so that didn't reach the coding agent."), to: room)
+            }
+            return
+        }
         guard let theo = speaker(for: room), var run = latestRun(in: room) else {
             if let theo = speaker(for: room) {
                 post(BotChatMessage(author: theo.id, text: "There's no coding run from this chat yet. Say what to do and where, like \"@code fix the failing test in ~/Projects/foo\"."), to: room)
@@ -761,6 +797,7 @@ final class BotsStore: ObservableObject {
                 // Stop or a follow-up may have landed while that was being asked.
                 guard let current = self.t3Runs.first(where: { $0.id == runID }), current.stoppedByOwner != true else { break }
                 run = current
+                run.paneTail = Self.paneTail(runID)
                 run.activity = state.lastMessage.map { String($0.split(separator: "\n").first ?? "").prefix(140) }.map(String.init)
                 if state.waitingForAnswer, !state.busy || state.status == "waiting" {
                     run.phase = "waiting"
@@ -805,7 +842,13 @@ final class BotsStore: ObservableObject {
         t3Runs[index].stage = stage
     }
 
+    private static func paneTail(_ runID: String) -> String? {
+        TerminalSessions.shared.session(for: runID).map { String($0.screenText().suffix(6000)) }
+    }
+
     private func upsert(_ run: T3Run) {
+        var run = run
+        if run.origin == nil { run.origin = TheoLink.localName }
         if let index = t3Runs.firstIndex(where: { $0.id == run.id }) { t3Runs[index] = run } else { t3Runs.append(run) }
         if let data = try? Self.encoder.encode(t3Runs) { try? data.write(to: runsFile, options: .atomic) }
     }
@@ -1017,6 +1060,12 @@ enum BotPrompts {
         return parts.joined(separator: "\n\n")
     }
 
+    /// Bots work on the far right screen of Addy's Mac Studio, through Clicky.
+    static let screenHowTo =
+        "You can work on Addy's Mac Studio's right screen, which is set aside for you. For anything on it (opening an app or " +
+        "site, clicking, reading what's there) put a line [SCREEN: what to do, in plain words] in your reply. Clicky does it there and " +
+        "tells you what happened. Writing or changing code doesn't go through this: use a ```prompt block."
+
     /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
     static let routineHowTo =
         "Routines: when Addy asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
@@ -1069,6 +1118,7 @@ enum BotPrompts {
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +
                          "room, answer the question you're given once, in your role; Theo collects the round and merges it.")
         }
+        if bot.owner == nil { parts.append(screenHowTo) }
         parts.append("New in the group chat:\n\(transcript)")
         parts.append("Reply as \(bot.name).")
         return parts.joined(separator: "\n\n")
@@ -1765,6 +1815,7 @@ extension BotsStore {
             "groups": LinkCoding.digest(LinkListItem(items: groups, stamps: linkGroupStamps)),
             "layout": LinkCoding.digest(layout),
             "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
+            "runs": LinkCoding.digest(linkRuns),
         ]
         for id in linkChatIDs {
             let item = linkItem(forChat: id)
@@ -1785,6 +1836,7 @@ extension BotsStore {
         case "groups": return try? encoder.encode(LinkListItem(items: groups, stamps: linkGroupStamps))
         case "layout": return try? encoder.encode(LinkLayoutItem(layout: layout, changedAt: linkLayoutChangedAt))
         case "delegations": return try? encoder.encode(delegations)
+        case "runs": return try? encoder.encode(linkRuns)
         case "memory": return try? encoder.encode(memoryStore.everything())
         default:
             guard key.hasPrefix("chat/") else { return nil }
@@ -1837,6 +1889,14 @@ extension BotsStore {
                 (first.finishedAt ?? .distantPast) >= (second.finishedAt ?? .distantPast) ? first : second
             }.suffix(200))
             if let saved = try? LinkCoding.encoder.encode(delegations) { try? saved.write(to: folder.appendingPathComponent("delegations.json"), options: .atomic) }
+        case "runs":
+            guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }
+            // Each Mac is the only one writing its own runs.
+            for run in theirs where run.isRemote {
+                if let index = t3Runs.firstIndex(where: { $0.id == run.id }) { t3Runs[index] = run } else { t3Runs.append(run) }
+            }
+            t3Runs.sort { $0.startedAt != $1.startedAt ? $0.startedAt < $1.startedAt : $0.id < $1.id }
+            if let saved = try? Self.encoder.encode(t3Runs) { try? saved.write(to: runsFile, options: .atomic) }
         case "memory":
             guard let theirs = try? decoder.decode([ClickyMemoryEntry].self, from: data) else { return }
             memoryStore.merge(theirs)
@@ -1857,6 +1917,36 @@ extension BotsStore {
                 linkUnheard[id, default: []].append(message)
             }
             if let count = linkUnheard[id]?.count, count > 20 { linkUnheard[id]?.removeFirst(count - 20) }
+        }
+    }
+
+    /// The runs both Macs show, the same way round on both. Older ones stay on their own Mac.
+    private var linkRuns: [T3Run] {
+        let stamped = t3Runs.map { run -> T3Run in
+            var run = run
+            if run.origin == nil { run.origin = TheoLink.localName }
+            return run
+        }
+        return Array(stamped.sorted { $0.startedAt != $1.startedAt ? $0.startedAt < $1.startedAt : $0.id < $1.id }.suffix(30))
+    }
+
+    /// The other Mac asks this one to do something it can't do itself.
+    func handleLinkRequest(_ action: String, _ fields: [String: String]) {
+        switch action {
+        case "run":
+            guard let prompt = fields["prompt"], let title = fields["title"], let room = fields["room"] else { return }
+            let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: fields["harness"].flatMap { $0.isEmpty ? nil : $0 })
+        case "followup":
+            guard let room = fields["room"], let text = fields["text"] else { return }
+            sendToCoder(text, room: room)
+        case "stopRun":
+            if let id = fields["id"] { stopRun(id) }
+        case "screen":
+            guard let task = fields["task"], let room = fields["room"], let bot = fields["bot"].flatMap({ self.bot($0) }) else { return }
+            workOnScreen(task, bot: bot, room: room)
+        default:
+            break
         }
     }
 

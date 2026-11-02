@@ -397,15 +397,19 @@ struct T3ResultCard: View {
                         NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil)
                     } label: { Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal") }
                         .buttonStyle(.theo(.secondary, .small))
+                } else if run.isRemote {
+                    RemoteRunBadge(run: run, showsTerminal: $showsTerminal)
                 } else {
                     Button { BotsT3.openInApp(run) } label: {
                         Label(run.harness == nil ? "Open in T3" : run.harness == CursorCloud.harnessID ? "Open in Cursor" : "Show terminal", systemImage: run.harness == nil ? "arrow.up.forward.app" : "terminal")
                     }
                     .buttonStyle(.theo(.secondary, .small))
                 }
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.worktree ?? run.folder)])
-                } label: { Label("Open folder", systemImage: "folder") }.buttonStyle(.theo(.secondary, .small))
+                if !run.isRemote {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.worktree ?? run.folder)])
+                    } label: { Label("Open folder", systemImage: "folder") }.buttonStyle(.theo(.secondary, .small))
+                }
                 if run.repo == nil, let page = BotsT3.page(of: run) {
                     Button { NSWorkspace.shared.open(page) } label: { Label("Open page", systemImage: "safari") }.buttonStyle(.theo(.secondary, .small))
                 }
@@ -423,6 +427,7 @@ struct T3ResultCard: View {
                         .menuStyle(.borderlessButton).fixedSize()
                 }
             }
+            if showsTerminal, run.isRemote { RemoteRunTerminal(run: run) }
             if showsTerminal, let session {
                 TerminalPanel(session: session)
                     .frame(height: 300)

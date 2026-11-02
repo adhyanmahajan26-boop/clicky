@@ -1595,6 +1595,8 @@ final class CompanionManager: ObservableObject {
         }
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
+        // The owner spoke: this turn isn't a bot's screen job any more.
+        if turnOptions.isOwnersWords && !turnOptions.keepsLiveScreenMarks { ActionConfinement.clear() }
         // Marks from the previous answer would be confusing next to a new one
         // (an action task's observe turn keeps what its highlight steps drew).
         if !turnOptions.keepsLiveScreenMarks { clearLiveScreenMarks() }
