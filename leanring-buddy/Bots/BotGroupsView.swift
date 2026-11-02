@@ -407,7 +407,22 @@ struct ClickyAvatar: View {
     var isActive = false
 
     var body: some View {
-        CrewAvatar(look: BotsStore.shared.clickyBot.crewLook, size: size, pose: isActive ? .working : .awake)
+        if let companion = CompanionManager.current {
+            SpeakingClickyAvatar(companion: companion, size: size, isActive: isActive)
+        } else {
+            CrewAvatar(look: BotsStore.shared.clickyBot.crewLook, size: size, pose: isActive ? .working : .awake)
+        }
+    }
+}
+
+private struct SpeakingClickyAvatar: View {
+    @ObservedObject var companion: CompanionManager
+    let size: CGFloat
+    let isActive: Bool
+
+    var body: some View {
+        let pose: CrewPose = companion.voiceState == .responding ? .talking : isActive ? .working : .awake
+        CrewAvatar(look: BotsStore.shared.clickyBot.crewLook, size: size, pose: pose)
     }
 }
 

@@ -29,7 +29,7 @@ def has(words, number=None):
     return any(needle in line for line in text_on_screen(number))
 
 
-SIDEBAR = (0, 60, 248, 800)
+SIDEBAR = (0, 0, 264, 820)
 
 
 def step(name, click=None, expect=None, gone=None, index=0, settle=0.9, xy=None, shot=True, within=None):
@@ -67,7 +67,7 @@ def go(pane):
 # Settings: every page is one click away, and "Back to Theo" returns.
 go("home")
 step("open-settings", click="Settings", expect="Back to Theo", within=SIDEBAR)
-for page, words in [("Clicky", "Thinks with"), ("Harnesses", "Builds go to"), ("Models & API keys", "Anthropic"), ("Voice", "speak with"),
+for page, words in [("Clicky", "Thinks with"), ("Harnesses", "Builds go to"), ("Models & API keys", "Anthropic"), ("Voice", "Hears you with"),
                     ("Screen", "Theo's screen"), ("Permissions", "Microphone"), ("Updates", "This is Theo"), ("About", "Show Theo in the Dock"), ("Look", "Cursor")]:
     step(f"settings-{page.split()[0].lower()}", click=page, expect=words, within=SIDEBAR)
 step("settings-back", click="Back to Theo", gone="Back to Theo", within=SIDEBAR)
@@ -78,7 +78,8 @@ step("sidebar-notes", click="Notes", expect="Everything Theo saved", within=SIDE
 step("sidebar-routines", click="Routines", expect="Bots doing a job", within=SIDEBAR)
 step("sidebar-connectors", click="Connectors", expect="Gmail", settle=1.2, within=SIDEBAR)
 step("sidebar-home", click="Home", expect="Your team", within=SIDEBAR)
-step("sidebar-clicky", click="Clicky", expect="Message Clicky", within=SIDEBAR)
+# The pill at the bottom. A team called Clicky also has a label higher up, so its second line tells them apart.
+step("sidebar-clicky", click="Listening for", expect="Message Clicky", within=SIDEBAR)
 step("sidebar-theo", click="Theo", expect="Message Theo", within=SIDEBAR)
 
 # API keys: a row opens, a bad key shows the provider's own error.
@@ -109,8 +110,9 @@ step("harness-state", expect="Signed in")
 
 # New bot sheet.
 go("home")
-step("new-bot-opens", click="New bot", expect="Pick a starting point", settle=1.0, within=SIDEBAR)
-step("new-bot-stencil", click="Researcher", expect="Create bot")
+# The new-bot button is an icon on Theo's row at the top of the sidebar.
+step("new-bot-opens", xy=(233, 64), expect="Pick a starting point", settle=1.0)
+step("new-bot-stencil", click="Researcher", expect="Create bot", within=(270, 60, 1010, 760))
 step("new-bot-cancel", click="Cancel", gone="Create bot")
 
 report = out / "click-test.json"
