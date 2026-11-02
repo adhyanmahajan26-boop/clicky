@@ -64,6 +64,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var origin: String?
     /// The end of its terminal, for watching from the other Mac.
     var paneTail: String?
+    /// The group chat that wrote its prompt: it hears how the run went too.
+    var alsoRoom: String?
     /// What the result card shows, filled in when the run ends.
     var changedFiles: [RunFileChange]?
     var tests: String?
@@ -224,10 +226,10 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
-        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo) }
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice) }
         guard let cli else { throw BotsT3Error.noCLI }
         var arguments = ["thread", "start"]
         var run: T3Run
@@ -259,8 +261,8 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
         }
         // Settings › Harnesses can pick another model; Claude Opus 5.5 at high effort otherwise.
-        let chosenModel = (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
-        let chosenEffort = (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
+        let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
+        let chosenEffort = effortChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
         let message = subfolder + prompt + (plainFolder ? plainFolderNote : deliveryNote)
         run.model = chosenModel
@@ -352,6 +354,12 @@ enum BotsT3 {
     }
 
     /// Brings the run's project up in the T3 Code app.
+    /// Stops a T3 Code thread as its Stop button does.
+    static func stopThread(_ run: T3Run) async {
+        guard let cli else { return }
+        _ = try? await shell(cli, ["thread", "stop", run.id])
+    }
+
     static func openInApp(_ run: T3Run) {
         if run.harness == CursorCloud.harnessID {
             if let link = run.link.flatMap(URL.init(string:)) { NSWorkspace.shared.open(link) }

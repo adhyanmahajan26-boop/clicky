@@ -173,6 +173,15 @@ extension BotsStore {
 
     /// A background job for one of Clicky's team. Returns at once.
     func delegate(_ duty: ClickyDuty, task: String, ownerWords: String?, reportsToCEO: Bool) {
+        if duty == .researcher, ResearchTrigger.isHandover(task) {
+            _ = handResearchToCEO()
+            return
+        }
+        // One at a time: this one waits for the research going on rather than ending it.
+        if duty == .researcher, CompanionManager.current?.researchController.isRunning == true {
+            queuedResearch.append { [weak self] in self?.delegate(duty, task: task, ownerWords: ownerWords, reportsToCEO: reportsToCEO) }
+            return
+        }
         if duty == .researcher {
             let urls = ResearchTrigger.namedURLs(in: task)
             let request = ResearchTrigger.parse(task) ?? (urls.isEmpty
@@ -391,6 +400,10 @@ extension BotsStore {
             post(BotChatMessage(author: worker, text: text), to: worker)
         }
         finish(id, result: text, succeeded: succeeded)
+        if !queuedResearch.isEmpty {
+            let next = queuedResearch.removeFirst()
+            Task { @MainActor in next() }
+        }
     }
 
     // MARK: Helpers from the brain's [WORKER] lines
@@ -484,13 +497,15 @@ extension BotsStore {
         let chats = groups.filter { $0.headID != nil }
         let group = chats.first { BotsStore.searchName($0.name) == wanted }
         let bot = everyone.first { BotsStore.searchName($0.name) == wanted }
-        let words = Self.withTeamWork(message, memory: memoryStore)
+        let words = withTeamWork(message, ownerWords: ownerWords)
         let report: (String, String) -> Void = { [weak self] who, answer in
             self?.post(BotChatMessage(author: ceo.id, text: "**\(who):** \(answer)"), to: ceo.id)
-            onReport?("\(who) answered: \(answer)")
+            // On a call the prompt itself isn't for reading out.
+            let spoken = answer.components(separatedBy: "```prompt").first ?? answer
+            onReport?("\(who) answered: \(spoken)")
         }
         if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
-            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id) { answer in report(chat.name, answer) }
+            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { answer in report(chat.name, answer) }
         } else if let target = bot ?? everyone.first(where: { BotsStore.searchName($0.name).contains(wanted) }), target.isOn {
             post(BotChatMessage(author: ceo.id, text: words), to: target.id)
             Task { [weak self] in
@@ -511,11 +526,29 @@ extension BotsStore {
 
     /// Theo sends something to code on the harness named. Agents run with full access, so only the owner's own words do this.
     private func startRunOrdered(_ prompt: String, harness: String, ownerWords: String?, ceo: NativeBot, onReport: ((String) -> Void)?) {
+        let live = t3Runs.last { ($0.phase == "running" || $0.phase == "waiting") && ($0.harness ?? "t3") == harness }
+        if CodingIntent.asksToCancelRun(prompt) || prompt.lowercased().hasPrefix("cancel") || prompt.lowercased().hasPrefix("stop") {
+            if let live {
+                stopRun(live.id)
+                onReport?("\(live.title) is stopped.")
+            } else {
+                onReport?("Nothing's running on \(HarnessCatalog.label(harness)) to stop.")
+            }
+            return
+        }
+        // A run's already going there: it's a change for that run.
+        if let live, ownerWords != nil, let room = live.room {
+            sendToCoder(prompt, room: room)
+            onReport?("That's passed to \(live.title), which is still running.")
+            return
+        }
         guard let ownerWords, BotsStore.ownerAskedToBuild(ownerWords) else {
             onReport?("That needs Addy's own go-ahead: they have to say to send it to code.")
             return
         }
-        submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: BotsT3.targetRepo(answer: "", pitch: ownerWords), room: ceo.id, harness: harness) { started, problem in
+        let choices = codingChoices(from: ownerWords + "\n" + prompt)
+        submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: BotsT3.targetRepo(answer: "", pitch: ownerWords), room: ceo.id, harness: harness,
+                   modelChoice: choices.model, effortChoice: choices.effort) { started, problem in
             onReport?(started ? "It's started on \(HarnessCatalog.label(harness)), and it shows on its card in your chat." : problem ?? "The run didn't start.")
         }
     }
@@ -553,11 +586,35 @@ extension BotsStore {
         name.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    /// When work is passed on, what Clicky's team found goes with it.
-    nonisolated private static func withTeamWork(_ message: String, memory: ClickyMemoryStore) -> String {
-        guard message.range(of: #"(?i)\b(clicky|research|researcher|data|collected|brief|bundle|notes?|findings?|photos?)\b"#, options: .regularExpression) != nil else { return message }
-        let work = memory.teamWork().suffix(4).map(\.text).joined(separator: "\n\n")
-        return work.isEmpty ? message : "\(message)\n\nWhat Clicky's team has on file:\n\n\(work)"
+    /// When work is passed on, what Clicky's team found on that subject goes with it, once.
+    private func withTeamWork(_ message: String, ownerWords: String?) -> String {
+        let asked = message + "\n" + (ownerWords ?? "")
+        guard asked.range(of: #"(?i)\b(clicky|research|researcher|data|collected|brief|bundle|notes?|findings?|photos?)\b|रिसर्च"#, options: .regularExpression) != nil else { return message }
+        let fresh = CodingIntent.relevantWork(for: asked, in: memoryStore.teamWork().map(\.text)).filter { !passedOnWork.contains($0) }
+        passedOnWork.formUnion(fresh)
+        return fresh.isEmpty ? message : "\(message)\n\nWhat Clicky's team found on this:\n\n\(fresh.joined(separator: "\n\n"))"
+    }
+
+    /// Hands Researcher's latest finished brief to Theo. False when there isn't one.
+    func handResearchToCEO() -> Bool {
+        guard let ceo = primary, let brief = memoryStore.teamWork().last(where: { $0.text.hasPrefix(teamBot(.researcher)?.name ?? "Researcher") }) else { return false }
+        post(BotChatMessage(author: Self.clickyID, text: brief.text), to: ceo.id)
+        onCEOReport?(brief.text)
+        return true
+    }
+
+    /// The coding runs going on and the latest finished, so nobody has to look at T3 Code's window or guess.
+    var runsStatus: String {
+        let live = t3Runs.filter { ["running", "waiting", "reporting"].contains($0.phase) }
+        let recent = t3Runs.filter { $0.phase == "done" || $0.phase == "failed" }.suffix(2)
+        guard !live.isEmpty || !recent.isEmpty else { return "No coding runs have started yet." }
+        let lines = (live + recent).map { run -> String in
+            let engine = run.harness.map(HarnessCatalog.label) ?? "T3 Code"
+            let model = run.model.map { " on \(NativeBot.label(for: $0))" } ?? ""
+            let doing = run.activity.map { "; latest: \($0.prefix(120))" } ?? ""
+            return "- \"\(run.title)\" in \(engine)\(model): \(run.phase), folder \(run.folder)\(doing)"
+        }
+        return "Coding runs right now, and this is the real state:\n" + lines.joined(separator: "\n")
     }
 
     /// Who Theo can reach, and what they've said lately. Theo sees this every turn.
@@ -583,7 +640,7 @@ extension BotsStore {
     func ceoTurnNote(for bot: NativeBot) -> String {
         guard bot.primary, !rosterForCEO.isEmpty else { return "" }
         let work = memoryStore.teamWorkContext()
-        return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n" +
+        return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n" +
             "To give one of them work, put a line [TELL: its exact name: what to do] in your reply; their answer comes back here. Don't ask Addy how to reach them." +
             (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
     }

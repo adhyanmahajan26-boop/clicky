@@ -53,6 +53,10 @@ final class ResearchController: CompanionActivitySource {
             say(cancel() ? "Research cancelled." : "No research is running.", speaks: speaks)
             return true
         }
+        if ResearchTrigger.isHandover(transcript) {
+            say(BotsStore.shared.handResearchToCEO() ? "Sent the research to Theo." : "There's no finished research to send yet.", speaks: speaks)
+            return true
+        }
         guard let request = ResearchTrigger.parse(transcript) else { return false }
         start(request, speaks: speaks)
         return true
@@ -146,13 +150,40 @@ final class ResearchController: CompanionActivitySource {
                                                 parentAgentID: parentAgentID, allowsLocalHostForTests: allowsLocalHostForTests, model: helperModel, jobID: jobID)
             guard !Task.isCancelled else { return }
             self.lastStatus["state"] = "writing"
-            let brief = await Self.synthesize(question: request.question, reports: reports, model: briefModel)
+            var brief = await Self.synthesize(question: request.question, reports: reports, model: briefModel)
             guard !Task.isCancelled else { return }
+            if request.question.range(of: #"(?i)\b(photos?|images?|pictures?|pics?)\b"#, options: .regularExpression) != nil {
+                let photos = await Self.photoLinks(from: urls)
+                brief += photos.isEmpty ? "\n\nI couldn't find any usable photos on those pages." : "\n\n**Photos from these pages:**\n" + photos.map { "- \($0)" }.joined(separator: "\n")
+            }
             self.present(topic: self.lastStatus["topic"] as? String ?? topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
         }
     }
 
     // MARK: - Helpers
+
+    /// Each page's own lead image and its first few pictures.
+    private static func photoLinks(from urls: [URL]) async -> [String] {
+        var found: [String] = []
+        for url in urls.prefix(ResearchTrigger.maximumLinks) {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10
+            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+            guard let (data, _) = try? await URLSession.shared.data(for: request), let html = String(data: data, encoding: .utf8) else { continue }
+            let patterns = [#"<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)"#, #"<img[^>]+src=[\"']([^\"']+\.(?:jpe?g|png|webp)[^\"']*)"#]
+            var fromThisPage = 0
+            for pattern in patterns {
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+                for match in regex.matches(in: html, range: NSRange(html.startIndex..., in: html)) where fromThisPage < 3 {
+                    guard let range = Range(match.range(at: 1), in: html), let link = URL(string: String(html[range]), relativeTo: url)?.absoluteString,
+                          link.hasPrefix("http"), !link.lowercased().contains("logo"), !link.lowercased().contains("icon"), !found.contains(link) else { continue }
+                    found.append(link)
+                    fromThisPage += 1
+                }
+            }
+        }
+        return Array(found.prefix(8))
+    }
 
     private struct Report {
         let index: Int

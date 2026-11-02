@@ -87,6 +87,7 @@ enum CallPrompt {
             if !roster.isEmpty { parts.append(roster) }
             let work = store.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
+            parts.append(store.runsStatus)
             let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
                 guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
                 let who = message.author == "user" ? "Addy: " : message.author == theo.id ? "Theo: " : "Clicky: "
@@ -475,7 +476,7 @@ final class TheoCallSession: ObservableObject {
 
     /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
     private func orderClicky(_ order: String) {
-        let addySaid = lines.last { $0.who == .addy && !$0.isLive }?.text
+        let addySaid = lines.filter { $0.who == .addy && !$0.isLive }.suffix(6).map(\.text).joined(separator: "\n")
         // Clicky's helpers finish after Clicky's first answer: their reports come here too.
         store.onCEOReport = { [weak self] report in self?.reportArrived(report) }
         store.carryOutOrder(order, ownerWords: addySaid) { [weak self] report in

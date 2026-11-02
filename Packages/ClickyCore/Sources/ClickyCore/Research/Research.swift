@@ -37,8 +37,16 @@ public enum ResearchTrigger {
     public static let maximumLinks = 4
     static let numberWords: [String: Int] = ["one": 1, "two": 2, "three": 3, "four": 4, "1": 1, "2": 2, "3": 3, "4": 4, "teen": 3]
 
+    /// "Hand the research over to the CEO": passing on what's done, not new research.
+    public static func isHandover(_ transcript: String) -> Bool {
+        let text = CodingIntent.normalized(transcript).lowercased()
+        return text.range(of: #"\b(hand ?over|hand|give|send|pass|share|forward)\b.{0,40}\b(research|brief|findings|notes)\b.{0,30}\b(to|ko)\b"#, options: .regularExpression) != nil
+            || text.range(of: #"\bresearch\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo|project manager|it guys)\b"#, options: .regularExpression) != nil
+    }
+
     /// The owner's words only. Nil when it isn't a research request.
     public static func parse(_ transcript: String) -> ResearchRequest? {
+        guard !isHandover(transcript) else { return nil }
         let text = transcript.lowercased()
         let urls = namedURLs(in: transcript)
         let linkWords = "(?:links?|websites?|sites?|pages?|articles?|results?)"

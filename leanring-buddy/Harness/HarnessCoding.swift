@@ -141,14 +141,14 @@ enum HarnessCoding {
 
     // MARK: Starting
 
-    static func start(harness: String, prompt: String, title: String, repo: URL?) async throws -> T3Run {
+    static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil) async throws -> T3Run {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
         // The coding target's model and effort are for that harness only; another one would refuse to start on them.
         let isCodingTarget = harness == HarnessPrefs.codingTarget
-        let model = (isCodingTarget ? HarnessPrefs.codingModel : nil) ?? HarnessPrefs.defaultModel(harness) ?? (harness == "codex" ? codexPlanModel() : nil)
-        let effort = (isCodingTarget ? HarnessPrefs.codingEffort : nil) ?? HarnessPrefs.defaultEffort(harness)
+        let model = modelChoice ?? (isCodingTarget ? HarnessPrefs.codingModel : nil) ?? HarnessPrefs.defaultModel(harness) ?? (harness == "codex" ? codexPlanModel() : nil)
+        let effort = effortChoice ?? (isCodingTarget ? HarnessPrefs.codingEffort : nil) ?? HarnessPrefs.defaultEffort(harness)
         let git = BotsT3.git
         var run: T3Run
         let workdir: URL

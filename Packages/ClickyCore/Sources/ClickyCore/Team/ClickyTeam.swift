@@ -225,9 +225,10 @@ public enum CodingHarnessWords {
 
     /// The harness in "send it to Codex", "run this on Claude Code", "use Cursor for it". Nil when none was named.
     public static func named(in text: String) -> String? {
+        let words = CodingIntent.normalized(text)
         for name in names {
-            let pattern = "(?i)\\b(?:to|on|in|into|with|using|use|via|through)\\s+(?:the\\s+)?\(name.pattern)\\b"
-            if text.range(of: pattern, options: .regularExpression) != nil { return name.id }
+            let pattern = "(?i)\\b(?:to|on|in|into|with|using|use|via|through)\\s+(?:the\\s+)?\(name.pattern)\\b|\\b\(name.pattern)\\s+(?:in|on)\\b"
+            if words.range(of: pattern, options: .regularExpression) != nil { return name.id }
         }
         return nil
     }
@@ -241,7 +242,7 @@ public enum CodingHarnessWords {
     /// "Send it to code", "hand this to Codex", "start coding on it".
     public static func asksToSendToCode(_ text: String) -> Bool {
         let pattern = "(?i)\\b(send|hand|give|pass|put|start|run|move|take)\\b.*\\b(to|in|on|into|with)\\s+(the\\s+)?(code|coding|harness|\(allNames))\\b|\\bstart coding\\b"
-        return text.range(of: pattern, options: .regularExpression) != nil
+        return CodingIntent.normalized(text).range(of: pattern, options: .regularExpression) != nil
     }
 }
 
@@ -300,11 +301,11 @@ public enum ClickyTeamPrompts {
     /// In Theo's instructions, for his chat.
     public static func theoHowTo(team: [String]) -> String {
         let helpers = team.isEmpty ? "" : " and runs a small team (\(team.joined(separator: ", ")))"
-        return "Clicky works for you. It sees Addy's screens, points at things, acts on screen\(helpers). To have it do something on your own, put a line [CLICKY: what to do, in plain words] in your reply, like [CLICKY: point at the Save button], [CLICKY: research the best vector databases] or [CLICKY: remember that Addy prefers Hinglish]. It carries it out and reports back in this chat, so don't wait for it and don't do that part yourself. Use it for anything on the screen, for remembering things and for research. To give work to another bot or a group chat, put a line [TELL: its exact name: what to do]. It goes to them, and their answer comes back here. When Addy tells you to send something to code on a harness (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), put [TELL: that harness: the full instructions]. Do this yourself: don't ask Addy how to reach them, and never write @Name to someone on a call."
+        return "Clicky works for you. It sees Addy's screens, points at things, acts on screen\(helpers). To have it do something on your own, put a line [CLICKY: what to do, in plain words] in your reply, like [CLICKY: point at the Save button], [CLICKY: research the best vector databases] or [CLICKY: remember that Addy prefers Hinglish]. It carries it out and reports back in this chat, so don't wait for it and don't do that part yourself. Use it for anything on the screen, for remembering things and for research. To give work to another bot or a group chat, put a line [TELL: its exact name: what to do]. It goes to them, and their answer comes back here. When Addy tells you to send something to code on a harness (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), put [TELL: that harness: the full instructions]. The same line with \"cancel\" stops the run going on there, and with anything else while a run is going it passes the change to that run. An idea or build Addy wants the team on goes to their group chat: they critique it among themselves, and the run starts by itself once they've written the final prompt, so don't start it twice. Do this yourself: don't ask Addy how to reach them, and never write @Name to someone on a call."
     }
 
     /// In Theo's instructions on a call.
-    public static let callHowTo = "You can't do things yourself on this call, but Clicky works for you: it sees Addy's screens, points at things, acts on screen, researches and remembers. To have it do something, say a few words like \"I'll get Clicky on that\" and put [CLICKY: what to do, in plain words] at the very end of your reply. The tag is never read aloud. When Clicky is done you'll get a note with what it said; tell Addy in a sentence. To give work to another bot or a group chat, put [TELL: its exact name: what to do] at the very end of your reply, the same way. When Addy says to send something to code on a harness (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), use [TELL: that harness: the full instructions]. You know who they are from the list you have, so never ask Addy how to reach them, and saying @Name out loud reaches nobody. Anything Clicky can't do, say you'll do right after the call; it goes in your chat with the transcript."
+    public static let callHowTo = "You can't do things yourself on this call, but Clicky works for you: it sees Addy's screens, points at things, acts on screen, researches and remembers. To have it do something, say a few words like \"I'll get Clicky on that\" and put [CLICKY: what to do, in plain words] at the very end of your reply. The tag is never read aloud. When Clicky is done you'll get a note with what it said; tell Addy in a sentence. To give work to another bot or a group chat, put [TELL: its exact name: what to do] at the very end of your reply, the same way. When Addy says to send something to code on a harness (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), use [TELL: that harness: the full instructions], and the word cancel there stops the run going on. An idea or build for a team goes to their group chat: they critique it among themselves and the run starts by itself after that. You know who they are from the list you have, so never ask Addy how to reach them, and saying @Name out loud reaches nobody. Anything Clicky can't do, say you'll do right after the call; it goes in your chat with the transcript."
 
     public static func theoFromCallNote(report: String) -> String {
         "(Clicky reported back: \(report) Tell Addy in a sentence or two.)"

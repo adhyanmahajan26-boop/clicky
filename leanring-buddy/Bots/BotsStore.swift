@@ -143,6 +143,21 @@ final class BotsStore: ObservableObject {
     var teamHelpersRunning = 0
     /// A call that's listening: Clicky's team reporting to the CEO after the call's order was already answered.
     var onCEOReport: ((String) -> Void)?
+    /// A group chat talking an idea through: it plans, the others critique, the head merges, and the run starts.
+    struct GroupRunBrief {
+        enum Stage { case plan, critique, merge }
+        var ownerWords: String?
+        var harness: String?
+        var model: String?
+        var effort: String?
+        var stage: Stage = .plan
+        var reportsTo: ((String) -> Void)?
+    }
+    private var groupBriefs: [String: GroupRunBrief] = [:]
+    /// Team work already passed on, so the same brief doesn't go with every message.
+    var passedOnWork: Set<String> = []
+    /// Research waiting for the one in progress to end, so one job doesn't kill another.
+    var queuedResearch: [() -> Void] = []
     /// How many screen jobs in a row a bot has asked for since the owner last spoke to it.
     var screenTurns: [String: Int] = [:]
     /// Theo is waiting on the head of these group chats, by room.
@@ -339,6 +354,8 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: botID)
             return
         }
+        // "Cancel that run": stopped right away, whatever else the message goes on to say.
+        if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
         // "Clicky, research X" to the CEO: straight to Clicky, who reports back here.
         if bot.primary, let order = ClickyOrder.parse(command ?? text) {
             orderClicky(order, ownerWords: text)
@@ -354,6 +371,7 @@ final class BotsStore: ObservableObject {
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
+        if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
@@ -424,18 +442,112 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: room)
             return
         }
+        if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
         let tagged = BotPrompts.mentioned(in: text, bots: members(of: group))
+        if tagged.isEmpty, CodingIntent.wantsDiscussion(command ?? text), groupBriefs[room] == nil {
+            groupBriefs[room] = groupRunBrief(ownerWords: text, message: text, reportsTo: nil)
+            askTeam([head], chain: 0, group: group, note: BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty))
+            return
+        }
         askTeam(tagged.isEmpty ? [head] : tagged, chain: 0, group: group)
     }
 
+    private func otherMembers(of group: BotGroup) -> [NativeBot] { members(of: group).filter { $0.id != group.headID && $0.isOn } }
+
+    private func groupRunBrief(ownerWords: String?, message: String, reportsTo: ((String) -> Void)?) -> GroupRunBrief {
+        let choices = codingChoices(from: [ownerWords ?? "", message].joined(separator: "\n"))
+        return GroupRunBrief(ownerWords: ownerWords, harness: choices.harness, model: choices.model, effort: choices.effort, reportsTo: reportsTo)
+    }
+
+    /// The harness, model and effort in someone's words. A model that harness doesn't have is left out, and said so.
+    func codingChoices(from words: String) -> (harness: String?, model: String?, effort: String?, problem: String?) {
+        let harness = CodingHarnessWords.named(in: words)
+        let target = harness ?? HarnessPrefs.codingTarget
+        let effort = CodingIntent.effort(in: words)
+        guard let hint = CodingIntent.modelHint(in: words) else { return (harness, nil, effort, nil) }
+        if ["t3", "claude"].contains(target), let id = CodingIntent.claudeModelID(forHint: hint) { return (harness, id, effort, nil) }
+        let tokens = hint.split(whereSeparator: { " -".contains($0) }).map(String.init)
+        let listed = HarnessCenter.shared.models(for: target).first { model in
+            let name = (model.id + " " + model.label).lowercased()
+            return tokens.allSatisfy { name.contains($0) }
+        }
+        if let listed { return (harness, listed.id, effort, nil) }
+        return (harness, nil, effort, "\(HarnessCatalog.label(target)) doesn't have a model called \(hint), so it's on its usual one.")
+    }
+
+    /// The last things the owner said in a chat, for what they asked of a run.
+    func recentOwnerWords(in room: String) -> String? {
+        let said = conversation(room).messages.filter { $0.author == "user" }.suffix(3).map(\.text)
+        return said.isEmpty ? nil : said.joined(separator: "\n")
+    }
+
     /// Theo posts to a group chat. The head's final answer comes to `then`.
-    func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, then: @escaping (String) -> Void) {
+    func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, ownerWords: String?, then: @escaping (String) -> Void) {
         guard let group = group(groupID), let head = head(of: group) else { return }
-        post(BotChatMessage(author: ceo.id, text: text), to: group.roomID)
-        groupWaiters[group.roomID] = then
+        let room = group.roomID
+        post(BotChatMessage(author: ceo.id, text: text), to: room)
+        // They're already talking it through: this joins the discussion rather than starting another.
+        if groupBriefs[room] != nil {
+            then("That's added to what they're already discussing.")
+            return
+        }
+        var note: String?
+        if CodingIntent.wantsDiscussion(text) || CodingIntent.wantsDiscussion(ownerWords ?? "") {
+            groupBriefs[room] = groupRunBrief(ownerWords: ownerWords, message: text, reportsTo: then)
+            note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
+        } else {
+            groupWaiters[room] = then
+        }
         Task { [weak self] in
             while self?.replying[head.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-            self?.askTeam([head], chain: 0, group: group)
+            self?.askTeam([head], chain: 0, group: group, note: note)
+        }
+    }
+
+    /// Where a group's discussion goes next, once one of them has answered. True when it was part of one.
+    private func advanceBrief(_ room: String, group: BotGroup, head: NativeBot, isHead: Bool, answer: String?, chain: Int) -> Bool {
+        guard var brief = groupBriefs[room] else { return false }
+        let others = otherMembers(of: group)
+        if isHead {
+            guard let answer else {
+                groupBriefs[room] = nil
+                finishBrief(brief, group: group, head: head, answer: "\(head.name) stopped before answering.", hasFailed: true)
+                return true
+            }
+            if brief.stage == .merge || others.isEmpty {
+                groupBriefs[room] = nil
+                finishBrief(brief, group: group, head: head, answer: answer, hasFailed: false)
+            } else {
+                brief.stage = .critique
+                groupBriefs[room] = brief
+                askTeam(others, chain: chain + 1, group: group, note: BotPrompts.critiqueNote)
+            }
+        } else if others.allSatisfy({ replying[$0.id] == nil }) {
+            brief.stage = .merge
+            groupBriefs[room] = brief
+            askTeam([head], chain: chain + 1, group: group, note: BotPrompts.mergeNote)
+        }
+        return true
+    }
+
+    /// The discussion is over: its outcome goes to Theo's chat, and a final prompt the owner asked for starts its run.
+    private func finishBrief(_ brief: GroupRunBrief, group: BotGroup, head: NativeBot, answer: String, hasFailed: Bool) {
+        guard let ceo = primary else { return }
+        let prompt = hasFailed ? nil : BotsT3.promptBlock(in: answer)
+        let owner = brief.ownerWords ?? ""
+        let repo = BotsT3.targetRepo(answer: "", pitch: owner)
+        let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (repo != nil || !BotsStore.isAboutExistingCode(owner))
+        if let reportsTo = brief.reportsTo {
+            reportsTo(answer)
+        } else {
+            post(BotChatMessage(author: ceo.id, text: "**\(group.name):** \(answer)"), to: ceo.id)
+        }
+        guard mayStart, let prompt else { return }
+        let title = BotsT3.projectTitle(in: answer, prompt: prompt)
+        submitToT3(prompt: prompt, title: title, repo: repo, room: ceo.id, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: group.roomID) { [weak self] started, problem in
+            let line = started ? "Started **\(title)**. You can follow it in \(ceo.name)'s chat." : "**\(title)** didn't start: \(problem ?? "no reason given")."
+            self?.post(BotChatMessage(author: head.id, text: line), to: group.roomID)
+            self?.onCEOReport?(started ? "\(title) has started coding." : line)
         }
     }
 
@@ -446,7 +558,7 @@ final class BotsStore: ObservableObject {
     /// How many bot-to-bot hand-offs one message of yours can set off.
     private static let maxChain = 8
 
-    private func askTeam(_ targets: [NativeBot], chain: Int, group: BotGroup) {
+    private func askTeam(_ targets: [NativeBot], chain: Int, group: BotGroup, note: String? = nil) {
         let room = group.roomID
         let team = members(of: group)
         let headID = group.headID
@@ -454,8 +566,10 @@ final class BotsStore: ObservableObject {
             let record = conversation(room)
             let seen = record.seen[bot.id] ?? 0
             let newMessages = Array(record.messages.dropFirst(seen))
-            let prompt = BotPrompts.teamMessage(bot: bot, team: team, group: group, firstTime: record.sessions[bot.id] == nil,
+            var prompt = BotPrompts.teamMessage(bot: bot, team: team, group: group, firstTime: record.sessions[bot.id] == nil,
                                                 newMessages: newMessages)
+            if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
+            if let note { prompt += "\n\n(\(note))" }
             var updated = record
             updated.seen[bot.id] = record.messages.count
             conversations[room] = updated
@@ -463,6 +577,7 @@ final class BotsStore: ObservableObject {
                 guard let self, chain < Self.maxChain, let group = self.group(group.id), let head = self.head(of: group) else { return }
                 let team = self.members(of: group)
                 let isHead = bot.id == headID
+                if self.advanceBrief(room, group: group, head: head, isHead: isHead, answer: answer, chain: chain) { return }
                 guard let answer else {
                     // A member that failed or timed out doesn't stall the room: the head merges what's there.
                     if !isHead, team.allSatisfy({ self.replying[$0.id] == nil }) { self.askTeam([head], chain: chain + 1, group: group) }
@@ -564,7 +679,7 @@ final class BotsStore: ObservableObject {
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
-            let ownerSaid = fromOwner ? self.conversation(conversationID).messages.last { $0.author == "user" }?.text : nil
+            let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
@@ -606,8 +721,10 @@ final class BotsStore: ObservableObject {
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
         if repo == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
+        let choices = codingChoices(from: recentOwnerWords(in: room) ?? pitch.text)
+        if let problem = choices.problem { post(BotChatMessage(author: speaker(for: room)?.id ?? "theo", text: problem), to: room) }
         submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: repo, room: room,
-                   harness: CodingHarnessWords.named(in: pitch.text))
+                   harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort)
     }
 
     /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between. As whole words, so @codemirror or
@@ -622,9 +739,10 @@ final class BotsStore: ObservableObject {
     /// Asked in so many words to build or change something, as opposed to "make me a prompt" or "update me on this".
     static func ownerAskedToBuild(_ text: String) -> Bool {
         if CodingHarnessWords.asksToSendToCode(text) { return true }
+        let text = CodingIntent.normalized(text)
         if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
         let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
-        let makeThing = #"(?i)\b(make|create|write|add|change|update)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo)\b"#
+        let makeThing = #"(?i)\b(make|create|write|add|change|update|want|need)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo)\b"#
         return text.range(of: direct, options: .regularExpression) != nil || text.range(of: makeThing, options: .regularExpression) != nil
     }
 
@@ -649,7 +767,8 @@ final class BotsStore: ObservableObject {
         if repo == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
         } else {
-            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room, harness: CodingHarnessWords.named(in: words))
+            let choices = codingChoices(from: words)
+            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: repo, room: room, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort)
         }
     }
 
@@ -664,6 +783,7 @@ final class BotsStore: ObservableObject {
         run.phase = "reporting"
         upsert(run)
         HarnessCoding.stop(run)
+        if run.harness == nil { Task { await BotsT3.stopThread(run) } }
         if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
         Task { [weak self] in
             let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
@@ -684,12 +804,12 @@ final class BotsStore: ObservableObject {
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
     /// `started`: told once whether the run got going, for a job waiting on it.
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
-                    started: ((Bool, String?) -> Void)? = nil) {
+                    modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
         if !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected {
-            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? ""]
+            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? ""]
             if TheoLink.shared.request("run", fields) {
                 post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your other Mac"). You can watch it here."), to: room)
                 started?(true, nil)
@@ -701,8 +821,9 @@ final class BotsStore: ObservableObject {
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.submitting = true
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target)
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice)
                 run.room = room
+                run.alsoRoom = alsoRoom
                 guard let self else { return }
                 self.submitting = false
                 self.upsert(run)
@@ -834,6 +955,9 @@ final class BotsStore: ObservableObject {
         let room = room ?? runID.flatMap { id in t3Runs.first { $0.id == id }?.room } ?? Self.teamID
         guard let speaker = speaker(for: room) else { return }
         post(BotChatMessage(author: speaker.id, text: text, runID: runID), to: room)
+        if let alsoRoom = runID.flatMap({ id in t3Runs.first { $0.id == id }?.alsoRoom }), let head = self.speaker(for: alsoRoom) {
+            post(BotChatMessage(author: head.id, text: text, runID: runID), to: alsoRoom)
+        }
     }
 
     /// How far along the wrap-up is, for the run's card.
@@ -1059,6 +1183,17 @@ enum BotPrompts {
         }
         return parts.joined(separator: "\n\n")
     }
+
+    /// A group chat's discussion, step by step.
+    static func planNote(hasOthers: Bool) -> String {
+        hasOthers
+            ? "Lay out your plan for the group in a few lines, so they can pick it apart. No ```prompt block yet, and don't say anything has been sent or started."
+            : mergeNote
+    }
+
+    static let critiqueNote = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt."
+
+    static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs."
 
     /// Bots work on the far right screen of Addy's Mac Studio, through Clicky.
     static let screenHowTo =
@@ -1936,7 +2071,8 @@ extension BotsStore {
         case "run":
             guard let prompt = fields["prompt"], let title = fields["title"], let room = fields["room"] else { return }
             let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: fields["harness"].flatMap { $0.isEmpty ? nil : $0 })
+            func field(_ key: String) -> String? { fields[key].flatMap { $0.isEmpty ? nil : $0 } }
+            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"))
         case "followup":
             guard let room = fields["room"], let text = fields["text"] else { return }
             sendToCoder(text, room: room)
@@ -1944,10 +2080,23 @@ extension BotsStore {
             if let id = fields["id"] { stopRun(id) }
         case "clicky":
             guard let text = fields["text"], !text.isEmpty else { return }
+            // It's done here, silently. The answer goes back and the Mac that was asked says it.
             var options = CompanionManager.TurnOptions()
             options.cameFromOtherMac = true
-            options.speaksResponse = fields["speaks"] != "no"
+            options.speaksResponse = false
+            let speaks = fields["speaks"] ?? "yes"
+            options.onTurnFinished = { directory, error in
+                Task { @MainActor in
+                    let said = directory.flatMap { ClaudiaControlInbox.spokenAnswer(inTurn: $0) } ?? ""
+                    let answer = error.map { "Clicky couldn't do that: \($0.localizedDescription)" } ?? said
+                    if !answer.isEmpty { _ = TheoLink.shared.request("clickyAnswer", ["text": answer, "speaks": speaks]) }
+                }
+            }
             CompanionManager.current?.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: options)
+        case "clickyAnswer":
+            guard let text = fields["text"] else { return }
+            post(BotChatMessage(author: Self.clickyID, text: text), to: Self.clickyID)
+            if fields["speaks"] != "no" { CompanionManager.current?.speakCodeModeLine(text) }
         case "order":
             guard let order = fields["order"], let id = fields["id"] else { return }
             orderClicky(order, ownerWords: fields["ownerWords"].flatMap { $0.isEmpty ? nil : $0 }, cameFromOtherMac: true) { report in

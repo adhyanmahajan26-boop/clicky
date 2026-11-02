@@ -305,3 +305,31 @@ struct ClickyTeamTests {
         #expect(!CodingHarnessWords.asksToSendToCode("what is the code for this door"))
     }
 }
+
+@Suite struct CodingIntentTests {
+    private let call = "मुझे एक वेबसाइट चाहिए टी थ्री कोड में, ओपस फाइव पॉइंट फाइव हाई पे बनाएगा वो वेबसाइट"
+
+    @Test func hindiOnACallIsUnderstood() {
+        #expect(CodingHarnessWords.named(in: call) == "t3")
+        #expect(CodingIntent.modelHint(in: call) == "opus 5.5")
+        #expect(CodingIntent.claudeModelID(forHint: "opus 5.5") == "claude-opus-5-5")
+        #expect(CodingIntent.effort(in: call) == "high")
+        #expect(CodingIntent.wantsDiscussion(call))
+        #expect(CodingIntent.asksToCancelRun("पुराना वाला T3 code को thread को cancel करो"))
+        #expect(!CodingIntent.asksToCancelRun("what does this code do"))
+    }
+
+    @Test func handingOverIsNotNewResearch() {
+        let words = "can you handover the research to the main CEO what which is the"
+        #expect(ResearchTrigger.isHandover(words))
+        #expect(ResearchTrigger.parse(words) == nil)
+        #expect(ResearchTrigger.parse("research the best vector databases for me") != nil)
+    }
+
+    @Test func onlyWorkOnTheSameSubjectGoesAlong() {
+        let webb = "Researcher finished the James Webb Space Telescope: mission, mirror, instruments"
+        let holes = "Researcher finished: a black hole is matter packed so densely, event horizon, how a hole forms"
+        let found = CodingIntent.relevantWork(for: "give the black hole research to IT guys", in: [webb, holes])
+        #expect(found == [holes])
+    }
+}

@@ -26,6 +26,7 @@ enum BotsPane: Hashable {
     /// Clicky's own chat: Theo's on-screen companion.
     case clicky
     case routines
+    case activity
     case connectors
     /// A page of Settings, in this window.
     case settings(SettingsTab.Section)
@@ -209,6 +210,7 @@ struct BotsRootView: View {
                 navRow(.notes, "note.text", "Notes")
                 navRow(.routines, "clock.arrow.circlepath", "Routines",
                        trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)")
+                navRow(.activity, "bubble.left.and.text.bubble.right", "Activity")
                 if showsConnectors { navRow(.connectors, "puzzlepiece.extension", "Connectors") }
                 Button { selection.openSettings(.look) } label: { navLabel("gearshape", "Settings", shortcut: "⌘,") }
                     .buttonStyle(SidebarButtonStyle(isSelected: false))
@@ -650,6 +652,8 @@ struct BotsRootView: View {
             ConnectorsScreen(bots: store.bots)
         case .routines:
             RoutinesScreen(store: store)
+        case .activity:
+            ActivityScreen(store: store, selection: selection)
         case .settings(let section):
             SettingsPage(section: section)
         }
@@ -1795,7 +1799,7 @@ struct T3RunCard: View {
             Button("Stop", role: .destructive) { BotsStore.shared.stopRun(run.id) }
             Button("Keep going", role: .cancel) {}
         } message: {
-            Text(run.harness == nil ? "T3 Code keeps its thread: open it there to stop the agent. Theo stops following it here." : "The agent stops now. What it did so far stays on its branch.")
+            Text(run.harness == nil ? "The agent stops and its thread stays in T3 Code." : "The agent stops now. What it did so far stays on its branch.")
         }
     }
 
