@@ -132,9 +132,13 @@ struct BotsRootView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 1) {
                 HStack(spacing: 0) {
-                    Button { addingBot = true } label: { navLabel("square.and.pencil", "New bot") }
-                        .buttonStyle(SidebarButtonStyle(isSelected: false))
-                        .keyboardShortcut("n", modifiers: .command)
+                    navRow(.home, "house", "Home")
+                    Button { addingBot = true } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
+                            .frame(width: 28, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help("New bot")
+                    .keyboardShortcut("n", modifiers: .command)
                     Menu {
                         Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
                         Button(action: newCategory) { Label("New category", systemImage: "folder.badge.plus") }
@@ -155,7 +159,6 @@ struct BotsRootView: View {
                 .padding(.horizontal, 8).frame(height: 32)
                 .background(RoundedRectangle(cornerRadius: 8).fill(searchFocused ? DS.Colors.hover : .clear))
                 .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
-                navRow(.home, "house", "Home")
             }
             .padding(.horizontal, 8)
             ScrollView {
@@ -176,17 +179,16 @@ struct BotsRootView: View {
                         if store.rootSections.isEmpty {
                             emptyHint("Make a category, add bots, pick a leader", action: newCategory)
                         }
-                        sectionTitle("Bots", add: ("New bot", { addingBot = true }))
-                            .dropTarget { items in items.forEach { unfile($0) } }
-                        ForEach(loose.bots, id: \.self) { item in itemRow(item) }
-                        if loose.bots.isEmpty {
-                            emptyHint("Make a bot from a stencil") { addingBot = true }
+                        // Only what's there. New ones come from the buttons at the top.
+                        if !loose.bots.isEmpty {
+                            sectionTitle("Bots", add: ("New bot", { addingBot = true }))
+                                .dropTarget { items in items.forEach { unfile($0) } }
+                            ForEach(loose.bots, id: \.self) { item in itemRow(item) }
                         }
-                        sectionTitle("Group chats", add: ("New group chat", { editingGroup = Self.blankGroup }))
-                            .dropTarget { items in items.forEach { unfile($0) } }
-                        ForEach(loose.groups, id: \.self) { item in itemRow(item) }
-                        if loose.groups.isEmpty {
-                            emptyHint("Start a group chat with a head bot") { editingGroup = Self.blankGroup }
+                        if !loose.groups.isEmpty {
+                            sectionTitle("Group chats", add: ("New group chat", { editingGroup = Self.blankGroup }))
+                                .dropTarget { items in items.forEach { unfile($0) } }
+                            ForEach(loose.groups, id: \.self) { item in itemRow(item) }
                         }
                         let hidden = store.layout.hidden.filter(itemExists)
                         if !hidden.isEmpty {
@@ -206,16 +208,17 @@ struct BotsRootView: View {
                 .padding(.horizontal, 8).padding(.bottom, 10)
             }
             Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
-            VStack(spacing: 1) {
-                navRow(.notes, "note.text", "Notes")
-                navRow(.routines, "clock.arrow.circlepath", "Routines",
-                       trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)")
-                navRow(.activity, "bubble.left.and.text.bubble.right", "Activity")
-                if showsConnectors { navRow(.connectors, "puzzlepiece.extension", "Connectors") }
-                Button { selection.openSettings(.look) } label: { navLabel("gearshape", "Settings", shortcut: "⌘,") }
-                    .buttonStyle(SidebarButtonStyle(isSelected: false))
+            HStack(spacing: 2) {
+                navIcon(.notes, "note.text", "Notes")
+                navIcon(.routines, "clock.arrow.circlepath", store.routines.isEmpty ? "Routines" : "Routines: \(store.routines.filter { !$0.paused }.count) active")
+                navIcon(.activity, "bubble.left.and.text.bubble.right", "Activity")
+                if showsConnectors { navIcon(.connectors, "puzzlepiece.extension", "Connectors") }
+                Button { selection.openSettings(.look) } label: {
+                    NavIcon(symbol: "gearshape", size: 20).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
+                }
+                .buttonStyle(SidebarButtonStyle(isSelected: false)).help("Settings (⌘,)")
             }
-            .padding(.horizontal, 8).padding(.vertical, 8)
+            .padding(.horizontal, 8).padding(.vertical, 6)
         }
         .frame(width: 248)
         .background(DS.Colors.sidebar)
@@ -408,7 +411,9 @@ struct BotsRootView: View {
         }
         let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) && $0 != manager }
         let children = store.subsections(of: section.id)
-        let collapsed = section.collapsed ?? false
+        // Folded unless opened, and always open on the bot you're looking at.
+        let holdsSelection = (manager.map { [$0] } ?? []).contains { pane(for: $0) == selection.pane } || items.contains { pane(for: $0) == selection.pane }
+        let collapsed = (section.collapsed ?? true) && !holdsSelection
         let line = Color(hex: CategoryTile.swatch(for: section).from).opacity(0.38)
         let rows = (manager == nil ? items.count : 1) + children.count
         return AnyView(VStack(alignment: .leading, spacing: 2) {
@@ -463,18 +468,9 @@ struct BotsRootView: View {
         return HStack(spacing: 0) {
             Button { selection.pane = .category(section.id) } label: {
                 HStack(spacing: 9) {
-                    CategoryTile(section: section, size: depth == 0 ? 28 : 24)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                        HStack(spacing: 3) {
-                            if let manager {
-                                Image(systemName: "crown.fill").font(.system(size: 8)).foregroundColor(DS.Colors.gold)
-                                Text(manager.name).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
-                            } else {
-                                Text("No manager").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
-                            }
-                        }
-                    }
+                    CategoryTile(section: section, size: 22)
+                    Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        .help(manager.map { "Manager: \($0.name)" } ?? "No manager")
                     Spacer(minLength: 2)
                     if busy { PulseDot(color: DS.Colors.accent) }
                     Text("\(members.count)").font(.system(size: 10.5, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
@@ -482,7 +478,7 @@ struct BotsRootView: View {
                         .background(Capsule().fill(Color(hex: swatch.from).opacity(0.18)))
                         .help("\(members.count) in this team")
                 }
-                .padding(.leading, 6).frame(height: 42).contentShape(Rectangle())
+                .padding(.leading, 6).frame(height: 32).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -505,7 +501,7 @@ struct BotsRootView: View {
                 Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .bold))
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
                     .foregroundColor(DS.Colors.textSecondary)
-                    .frame(width: 26, height: 42).contentShape(Rectangle())
+                    .frame(width: 26, height: 32).contentShape(Rectangle())
             }
             .buttonStyle(.plain).help(collapsed ? "Show the team" : "Fold the team")
         }
@@ -594,6 +590,13 @@ struct BotsRootView: View {
         }
         .padding(.horizontal, 8).frame(height: 32)
         .contentShape(Rectangle())
+    }
+
+    private func navIcon(_ pane: BotsPane, _ symbol: String, _ title: String) -> some View {
+        Button { selection.pane = pane } label: {
+            NavIcon(symbol: symbol, active: selection.pane == pane, size: 20).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane)).help(title)
     }
 
     private func navRow(_ pane: BotsPane, _ symbol: String, _ title: String, trailing: String? = nil) -> some View {

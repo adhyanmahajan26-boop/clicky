@@ -605,6 +605,66 @@ extension BotsStore {
 
     nonisolated private static let maximumScreenTurns = 8
 
+    nonisolated private static let maximumDirectMessages = 12
+
+    /// For a bot's turn: who it can reach, and how.
+    func directMessageNote(for bot: NativeBot) -> String {
+        let names = reachable(from: bot).map { $0.description.isEmpty ? $0.name : "\($0.name) (\($0.description.prefix(70)))" }.joined(separator: "; ")
+        return "You can privately message any of these, whichever chat you're in: \(names). Put a line [TELL: their exact name: what you need] in your reply and it goes to them directly, with nobody added to a group. They answer you privately and you then carry on and tell Addy here. Writing their name or saying you'll hand it over doesn't reach them: only that line does. Never ask Addy to add someone to a group for this."
+    }
+
+    /// One bot messages another in private. The other answers in its own chat, and the first carries on where it was asked.
+    func sendDirectMessage(from sender: NativeBot, to name: String, message: String, room: String, ownerWords: String?) {
+        func carryOn(_ note: String) {
+            Task { [weak self] in
+                while self?.replying[sender.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+                guard let self else { return }
+                let session = self.conversation(room).sessions[sender.id]
+                let words = note + "\n\nCarry on and tell Addy where things stand."
+                self.reply(bot: sender, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: sender, team: self.bots, text: words) : words, session: session) { _ in }
+            }
+        }
+        guard directMessagesSent < Self.maximumDirectMessages else {
+            post(BotChatMessage(author: sender.id, text: "I've stopped messaging the others for now, to keep this from going in circles. Tell me if you want me to keep going."), to: room)
+            return
+        }
+        directMessagesSent += 1
+        let wanted = Self.searchName(name)
+        let candidates = reachable(from: sender)
+        guard let target = candidates.first(where: { Self.searchName($0.name) == wanted }) ?? candidates.first(where: { Self.searchName($0.name).contains(wanted) }) else {
+            carryOn("There's nobody called \(name) you can message. Who you can reach: \(candidates.map(\.name).joined(separator: ", ")).")
+            return
+        }
+        post(BotChatMessage(author: sender.id, text: "Messaged \(target.name) privately."), to: room)
+        post(BotChatMessage(author: sender.id, text: message), to: target.id)
+        Task { [weak self] in
+            while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+            guard let self else { return }
+            let session = self.conversation(target.id).sessions[target.id]
+            var words = "Private message from \(sender.name): \(message)\n\nAnswer \(sender.name) directly."
+            if !target.primary { words = "(\(self.directMessageNote(for: target)))\n\n(\(self.projectsNote))\n\n" + words }
+            let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: words) : words
+            self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
+                guard let self else { return }
+                guard let answer, !answer.isEmpty else {
+                    carryOn("\(target.name) didn't answer.")
+                    return
+                }
+                // A coder's final prompt for work the owner asked for starts the run, in the chat the owner asked in.
+                if let owner = ownerWords, let prompt = BotsT3.promptBlock(in: answer), BotsStore.ownerAskedToBuild(owner) {
+                    let folder = self.projectChoice(ownerWords: owner, answer: answer)
+                    if folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner) {
+                        let choices = self.codingChoices(from: owner)
+                        self.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: folder.repo, room: room, harness: choices.harness,
+                                        modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
+                    }
+                }
+                let spoken = answer.components(separatedBy: "```prompt").first ?? answer
+                carryOn("\(target.name) answered you privately: \(spoken)")
+            }
+        }
+    }
+
     /// Letters and digits only, so "IT guys" is found however it's written or heard.
     nonisolated static func searchName(_ name: String) -> String {
         name.lowercased().filter { $0.isLetter || $0.isNumber }

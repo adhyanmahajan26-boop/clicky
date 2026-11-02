@@ -165,6 +165,23 @@ final class ClaudiaControlInbox {
             }
             let encoded = (try? JSONEncoder().encode(store.routines)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
             reply(identifier, ok: true, result: encoded ?? [], error: nil)
+        case "botsImport":
+            // {section, leader, bots: [{name, description, instructions}], provider, model}: into a category, once each by name.
+            let store = BotsStore.shared
+            guard let sectionName = command["section"] as? String, let section = store.layout.sections.first(where: { $0.name.trimmingCharacters(in: .whitespaces) == sectionName }),
+                  let list = command["bots"] as? [[String: String]] else { reply(identifier, ok: false, result: nil, error: "Needs a section and bots"); return }
+            let provider = command["provider"] as? String ?? "grok"
+            let model = command["model"] as? String ?? "grok-4.7"
+            var added: [String] = []
+            for entry in list {
+                guard let name = entry["name"], !store.bots.contains(where: { $0.name == name && $0.owner == nil }) else { continue }
+                let made = store.addBot(name: name, description: entry["description"] ?? "", instructions: entry["instructions"] ?? "You are \(name).",
+                                        provider: provider, model: model, groupID: nil)
+                store.move("bot:\(made.id)", toSection: section.id)
+                added.append(made.id)
+            }
+            if let leader = command["leader"] as? String, let bot = store.bots.first(where: { $0.name == leader && $0.owner == nil }) { store.setLeader(bot.id, of: section.id) }
+            reply(identifier, ok: true, result: ["added": added], error: nil)
         case "botCreate":
             // {name, description, instructions, provider, model, group, authority, canMessage, enabled}
             let store = BotsStore.shared

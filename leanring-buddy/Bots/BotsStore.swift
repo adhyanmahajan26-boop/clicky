@@ -154,6 +154,8 @@ final class BotsStore: ObservableObject {
         var reportsTo: ((String) -> Void)?
     }
     private var groupBriefs: [String: GroupRunBrief] = [:]
+    /// Private messages between bots since the owner last spoke, so they can't go on forever.
+    var directMessagesSent = 0
     /// The folder list from the Mac where coding runs.
     var peerProjects: [String] = []
     /// Team work already passed on, so the same brief doesn't go with every message.
@@ -389,6 +391,8 @@ final class BotsStore: ObservableObject {
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if bot.owner == nil { prompt = "(\(projectsNote))\n\n" + prompt }
+        if bot.owner == nil, !bot.primary { prompt = "(\(directMessageNote(for: bot)))\n\n" + prompt }
+        directMessagesSent = 0
         if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
@@ -464,13 +468,19 @@ final class BotsStore: ObservableObject {
             return
         }
         if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
+        directMessagesSent = 0
         let tagged = BotPrompts.mentioned(in: text, bots: members(of: group))
+        var note: String?
         if tagged.isEmpty, CodingIntent.wantsDiscussion(command ?? text), groupBriefs[room] == nil {
             groupBriefs[room] = groupRunBrief(ownerWords: text, message: text, reportsTo: nil)
-            askTeam([head], chain: 0, group: group, note: BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty))
-            return
+            note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         }
-        askTeam(tagged.isEmpty ? [head] : tagged, chain: 0, group: group)
+        // A bot busy in another chat answers when it's free: nothing said to a group goes unanswered.
+        let targets = tagged.isEmpty ? [head] : tagged
+        Task { [weak self] in
+            while let self, targets.contains(where: { self.replying[$0.id] != nil }) { try? await Task.sleep(nanoseconds: 500_000_000) }
+            self?.askTeam(targets, chain: 0, group: group, note: note)
+        }
     }
 
     private func otherMembers(of group: BotGroup) -> [NativeBot] { members(of: group).filter { $0.id != group.headID && $0.isOn } }
@@ -653,6 +663,7 @@ final class BotsStore: ObservableObject {
             var prompt = BotPrompts.teamMessage(bot: bot, team: team, group: group, firstTime: record.sessions[bot.id] == nil,
                                                 newMessages: newMessages)
             if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
+            if bot.owner == nil, !bot.primary { prompt = "(\(directMessageNote(for: bot)))\n\n" + prompt }
             if let note { prompt += "\n\n(\(note)) (\(projectsNote))" }
             var updated = record
             updated.seen[bot.id] = record.messages.count
@@ -711,7 +722,7 @@ final class BotsStore: ObservableObject {
             do {
                 let team = self?.bots ?? []
                 let result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team) { text in
-                    let shown = bot.primary ? ClickyOrder.withoutTags(streaming: text) : text
+                    let shown = bot.owner == nil ? ClickyOrder.withoutTags(streaming: text) : text
                     self?.replying[bot.id] = BotScreenOrder.withoutTags(streaming: shown)
                 }
                 answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -734,6 +745,13 @@ final class BotsStore: ObservableObject {
                 let taken = ClickyOrder.extract(from: said)
                 answer = taken.text
                 orders = taken.orders
+            }
+            // Any other bot can message someone privately.
+            var directMessages: [(name: String, message: String)] = []
+            if !bot.primary, bot.owner == nil, let said = answer {
+                let taken = ClickyOrder.extract(from: said)
+                answer = taken.text
+                directMessages = taken.orders.compactMap { ClickyOrder.tellTarget(in: $0) }
             }
             // A turn the owner set off can ask for the work screen; one set off by a page or another bot's job can't.
             var screenOrders: [String] = []
@@ -758,7 +776,7 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.seen[bot.id] = record.messages.count }
-            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)"))
             }
             self.conversations[conversationID] = record
@@ -766,6 +784,9 @@ final class BotsStore: ObservableObject {
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
+            for direct in directMessages {
+                self.sendDirectMessage(from: bot, to: direct.name, message: direct.message, room: conversationID, ownerWords: fromOwner ? self.recentOwnerWords(in: conversationID) : nil)
+            }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
             if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
@@ -1659,7 +1680,7 @@ extension BotsStore {
 
     func toggleCollapsed(_ sectionID: String) {
         guard let index = layout.sections.firstIndex(where: { $0.id == sectionID }) else { return }
-        layout.sections[index].collapsed = !(layout.sections[index].collapsed ?? false)
+        layout.sections[index].collapsed = !(layout.sections[index].collapsed ?? true)
         writeLayout()
     }
 
@@ -1675,6 +1696,8 @@ extension BotsStore {
     func reachable(from bot: NativeBot) -> [NativeBot] {
         // Clicky's team gets its jobs from Clicky.
         let others = bots.filter { $0.id != bot.id && $0.isOn && ($0.owner == nil || bot.id == Self.clickyID) }
+        // Anyone can message anyone, unless Addy has picked who this one may reach.
+        guard bot.canMessage != nil else { return others }
         var allowed = Set(bot.canMessage ?? [])
         switch bot.authorityLevel {
         case "ceo": return others
