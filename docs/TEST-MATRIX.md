@@ -1,12 +1,34 @@
 # Theo test matrix
 
-Final pass and round 2, 2 November 2026, on the build in this commit.
+Final pass, round 2 and round 3, 2 November 2026, on the build in this commit.
 
 ✅ done and looked at. ⚠️ works as far as could be tested, the gap is stated. ❌ doesn't work.
 
 How to read the evidence: screenshots are of Theo's own window, in `docs/evidence/final/`. Clicks go through the app's own event path in a test profile (`docs/TESTING.md`), because the owner's mouse and focus are off limits.
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
+
+## Round 3 (2026-11-02): Clicky's team
+
+Quick checks on Haiku (Clicky and Theo on Sonnet) in a test profile, one per flow. Screenshots: `~/jstest/theo-final/round3/`.
+
+| What | Result | Evidence |
+|---|---|---|
+| Category "Clicky" with Clicky as manager, new setup | ✅ | `clickyTeam`: leader clicky, items clicky + 3 bots, Theo alone pinned; `sidebar-and-org-chart.png` |
+| Org chart: members → Clicky → Theo | ✅ | `sidebar-and-org-chart.png` |
+| Memory: "remember…" through Clicky's brain | ✅ 4 s | Memory card done; found again later ("what did I say about…") in 4 s; `delegation-card-done.png` |
+| Researcher: "research…" | ✅ 22 s | Avatar lit, pages in its chat, cited brief on a card; `t2-clicky-chat.png` |
+| Runner: "tell Ada to…" | ✅ 9 s | Hand-off shows in Ada's chat, her answer on Runner's card |
+| Hidden helper after removing Runner | ✅ 6 s | Card reads "A hidden helper"; same hand-off to Ada |
+| "Clicky, point at…" typed to Theo | ✅ 6 s | Order card and Clicky's report in Theo's chat |
+| Theo on his own, `[CLICKY: …]` | ✅ 5 s + 3 s | Theo → Clicky → Memory, both reports in Theo's chat |
+| Order on a call (synthetic speech) | ✅ 10 s | The tag isn't read aloud; Clicky's report came back and Theo spoke it |
+| Report to Theo: sub-bots → Clicky → Theo | ✅ | Three reports in Clicky's chat, the roll-up in Theo's |
+| Unit tests | ✅ 1,113 in ClickyCore | `swift test` |
+
+Not run live: a coding run started through Runner (the path it joins is the one the PR tests already cover), and pointing as seen on screen (overlays don't run in a test profile).
+
+Found and fixed by these checks: Clicky's chat redrew forever and froze the window (a publisher re-subscribed in `body`); Memory filed a plain statement as a lookup; Clicky answered "nothing saved" from its short memory note instead of asking Memory.
 
 ## Round 2 (build 202611021157): teams, characters, managers, dictation, Clicky's voice, calls
 

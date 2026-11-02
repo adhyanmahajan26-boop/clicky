@@ -9,6 +9,7 @@
 
 import AppKit
 import ClickyCore
+import Combine
 import SwiftUI
 
 // MARK: - Group editor
@@ -424,24 +425,59 @@ struct ClickyAvatar: View {
     }
 }
 
-/// Clicky's own chat, in the bots' style: the same brain as talking to Theo (it sees your screens, points,
-/// draws boards and researches), typed instead of spoken.
+/// Clicky's own chat, in the bots' style: the same brain as talking to Theo (it sees your screens, points, draws boards
+/// and researches), typed instead of spoken. Its team's jobs and reports land here as cards, in time order with the turns.
 struct ClickyChatScreen: View {
+    @ObservedObject private var store = BotsStore.shared
     @State private var draft = ""
     @State private var turns: [[String: Any]] = []
     @State private var pending: String?
     @State private var speaks = false
 
+    private var messages: [BotChatMessage] {
+        store.conversation(BotsStore.clickyID).messages.filter { message in
+            // A job's waiting card gives way to its finished one.
+            guard message.text.isEmpty, let id = BotsStore.delegationID(of: message) else { return true }
+            return store.delegation(id)?.isLive == true
+        }
+    }
+
+    private var entries: [ClickyChatEntry] {
+        let fromTurns = turns.map { turn -> ClickyChatEntry in
+            let id = turn["id"] as? String ?? UUID().uuidString
+            return .turn(id: id, you: turn["you"] as? String ?? "", answer: turn["claudia"] as? String ?? "", at: ClickyChatEntry.date(ofTurn: id))
+        }
+        return (fromTurns + messages.map { ClickyChatEntry.message($0) }).sorted { $0.at < $1.at }
+    }
+
+    /// "Manages Clicky · reports to Theo · Sonnet 5.5"
+    private var statusLine: String {
+        var parts = store.categories(of: BotsStore.clickyID).filter { $0.leaderID == BotsStore.clickyID }.map { "Manages \($0.name)" }
+        if !parts.isEmpty { parts.append("reports to \(store.primary?.name ?? "the CEO")") }
+        if parts.isEmpty { parts.append("Screen companion") }
+        parts.append(NativeBot.label(for: ClickyModels.main))
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        let timeline = entries
+        return VStack(spacing: 0) {
             HStack(spacing: 10) {
-                ClickyAvatar(size: 34)
+                ClickyAvatar(size: 34, isActive: store.isClickyBusy)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Clicky").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text("Screen companion · \(NativeBot.label(for: ClickyModels.main)) with \(NativeBot.label(for: ClickyModels.helper)) helpers")
-                        .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    Text(statusLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer()
+                HStack(spacing: 4) {
+                    ForEach(store.clickyTeam) { bot in
+                        Button { BotsSelection.shared.pane = .bot(bot.id) } label: {
+                            BotAvatar(bot: bot, size: 24, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                        }
+                        .buttonStyle(.plain).help("\(bot.name)'s chat")
+                    }
+                }
+                .padding(.trailing, 6)
                 Toggle("Speak answers", isOn: $speaks).toggleStyle(.switch).controlSize(.mini)
                     .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
             }
@@ -451,19 +487,28 @@ struct ClickyChatScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        if turns.isEmpty && pending == nil {
+                        if timeline.isEmpty && pending == nil {
                             VStack(spacing: 12) {
                                 ClickyAvatar(size: 84)
                                     .padding(.top, 120)
                                 Text("Clicky").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                                Text("Ask about what's on your screen, have it point things out, draw a whiteboard, or research a few links.")
+                                Text("Ask about what's on your screen, have it point things out, draw a whiteboard, or say \u{201C}remember this\u{201D} or \u{201C}research this\u{201D} and its team takes it from there.")
                                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity).padding(.top, 80)
                         }
-                        ForEach(Array(turns.enumerated()), id: \.offset) { _, turn in
-                            UserBubble(text: turn["you"] as? String ?? "")
-                            clickyLine(turn["claudia"] as? String ?? "")
+                        ForEach(timeline) { entry in
+                            switch entry {
+                            case .turn(_, let you, let answer, _):
+                                if you.hasPrefix(ClickyTeamPrompts.orderPrefix), let ceo = store.primary {
+                                    BotLine(bot: ceo, text: String(you.dropFirst(ClickyTeamPrompts.orderPrefix.count)), showsName: true, animatesIn: false, isLive: false)
+                                } else {
+                                    UserBubble(text: you)
+                                }
+                                clickyLine(answer)
+                            case .message(let message):
+                                messageRow(message)
+                            }
                         }
                         if let pending {
                             UserBubble(text: pending)
@@ -479,8 +524,14 @@ struct ClickyChatScreen: View {
                     .padding(.horizontal, 24).padding(.vertical, 22)
                     .frame(maxWidth: .infinity)
                 }
-                .onChange(of: turns.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                .modifier(ChatScrollAnchor())
+                .onChange(of: timeline.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
                 .onChange(of: pending) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                // A job's finished card takes the place of its waiting one, so the count can stay the same.
+                .onChange(of: store.conversation(BotsStore.clickyID).messages.count) { _, _ in
+                    for delay in [0.1, 0.5, 1.2] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("end", anchor: .bottom) } }
+                }
+                .onAppear { proxy.scrollTo("end", anchor: .bottom) }
             }
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Message Clicky", text: $draft, axis: .vertical)
@@ -525,7 +576,28 @@ struct ClickyChatScreen: View {
             .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
             .frame(maxWidth: .infinity)
         }
-        .onAppear(perform: load)
+        .onAppear {
+            store.viewing = BotsStore.clickyID
+            load()
+        }
+        .onDisappear { if store.viewing == BotsStore.clickyID { store.viewing = nil } }
+        // A voice turn, or one the CEO ordered, shows as soon as it's done.
+        // Without dropFirst this never settles: each redraw subscribes anew, gets the current state, loads and redraws.
+        .onReceive(CompanionManager.current?.$voiceState.dropFirst().eraseToAnyPublisher() ?? Empty<CompanionVoiceState, Never>().eraseToAnyPublisher()) { state in
+            if state == .idle { load() }
+        }
+        .onChange(of: store.delegations.count) { _, _ in load() }
+    }
+
+    @ViewBuilder private func messageRow(_ message: BotChatMessage) -> some View {
+        if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
+            DelegationCard(job: job)
+        } else if message.author == "routine" {
+            RoutineMarker(text: message.text, at: message.at)
+        } else if let author = store.bot(message.author) {
+            // A team report that came up to Clicky.
+            BotLine(bot: author, text: message.text, showsName: true, animatesIn: false, isLive: false)
+        }
     }
 
     private func clickyLine(_ text: String) -> some View {
@@ -542,8 +614,7 @@ struct ClickyChatScreen: View {
 
     private func load() {
         ClaudiaControlInbox.shared?.execute(["cmd": "turns", "limit": 30]) { _, result, _ in
-            // The log lists the newest turn first; the chat reads top to bottom.
-            turns = (result as? [[String: Any]] ?? []).reversed()
+            turns = result as? [[String: Any]] ?? []
         }
     }
 
@@ -552,7 +623,7 @@ struct ClickyChatScreen: View {
         guard !text.isEmpty, pending == nil else { return }
         draft = ""
         pending = text
-        ClaudiaControlInbox.shared?.execute(["cmd": "ask", "text": text, "speak": speaks]) { _, _, _ in
+        ClaudiaControlInbox.shared?.execute(["cmd": "ask", "text": text, "speak": speaks, "owner": true]) { _, _, _ in
             pending = nil
             load()
         }

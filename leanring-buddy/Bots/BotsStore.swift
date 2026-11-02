@@ -47,6 +47,10 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var authority: String?
     /// Bots this one may message directly from its own chat (besides what its authority allows).
     var canMessage: [String]?
+    /// "clicky": Clicky spawned this bot and gives it its jobs.
+    var owner: String?
+    /// Which job it does for its owner (a ClickyDuty's raw value).
+    var duty: String?
 
     var isOn: Bool { enabled ?? true }
     var authorityLevel: String { authority ?? (primary ? "ceo" : "member") }
@@ -83,7 +87,7 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     var at: Date = Date()
     /// A T3 Code run this message reports on (its result card shows under it).
     var runID: String?
-    /// "settings": the bot's settings card shows under it.
+    /// "settings": the bot's settings card shows under it. "delegation:<id>": this message is that job's card.
     var card: String?
 }
 
@@ -131,6 +135,10 @@ final class BotsStore: ObservableObject {
     @Published private(set) var layout = BotsLayout()
     /// New replies per conversation since it was last open.
     @Published private(set) var unread: [String: Int] = [:]
+    /// Jobs Clicky handed its team, and Theo's orders to Clicky, newest last.
+    @Published var delegations: [ClickyDelegation] = []
+    /// Helpers from the brain's own [WORKER] lines running under Clicky's Researcher right now.
+    var teamHelpersRunning = 0
     /// The conversation on screen, which collects no unread count.
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
     private var routineTimer: Timer?
@@ -138,7 +146,7 @@ final class BotsStore: ObservableObject {
 
     static let teamID = "team"
 
-    private let folder: URL
+    let folder: URL
 
     private init() {
         folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -148,7 +156,7 @@ final class BotsStore: ObservableObject {
         bots = loadBots()
         groups = loadGroups()
         writeGroups()
-        for id in groups.filter { $0.headID != nil }.map(\.roomID) + bots.map(\.id) {
+        for id in groups.filter { $0.headID != nil }.map(\.roomID) + bots.map(\.id) + [Self.clickyID] {
             conversations[id] = loadConversation(id)
         }
         if let data = try? Data(contentsOf: runsFile), let runs = try? Self.decoder.decode([T3Run].self, from: data) {
@@ -158,9 +166,23 @@ final class BotsStore: ObservableObject {
         for index in t3Runs.indices where t3Runs[index].phase == "reporting" { t3Runs[index].phase = "running" }
         for run in t3Runs where run.phase == "running" || run.phase == "waiting" { track(run.id) }
         loadRoutinesAndLayout()
+        provisionClickyTeam()
+        loadDelegations()
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
+
+    /// A whole new bots list and sidebar at once, for setting up Clicky's team.
+    func setTeamSetup(bots newBots: [NativeBot], layout newLayout: BotsLayout) {
+        bots = newBots
+        layout = newLayout
+        for bot in newBots where conversations[bot.id] == nil { conversations[bot.id] = BotConversationRecord() }
+        writeBots()
+        writeLayout()
+    }
+
+    /// Lights a team bot up, or down, for work that doesn't run through a reply of its own.
+    func setReplying(_ text: String?, _ botID: String) { replying[botID] = text }
 
     /// Once, on the first launch of this version: the old bots, chats and groups move to
     /// Bots-archive-<date> and Theo starts fresh with only Theo and Clicky, for Addy to set up.
@@ -230,7 +252,7 @@ final class BotsStore: ObservableObject {
 
     /// Removes a bot from Theo (its chat file stays on disk). Theo, the CEO, stays.
     func deleteBot(_ id: String) {
-        guard let bot = bot(id), !bot.primary else { return }
+        guard id != Self.clickyID, let bot = bot(id), !bot.primary else { return }
         bots.removeAll { $0.id == id }
         for index in groups.indices {
             groups[index].memberIDs.removeAll { $0 == id }
@@ -246,11 +268,13 @@ final class BotsStore: ObservableObject {
         forget(item: "bot:\(id)")
     }
 
-    func bot(_ id: String) -> NativeBot? { bots.first { $0.id == id } }
+    func bot(_ id: String) -> NativeBot? { id == Self.clickyID ? clickyBot : bots.first { $0.id == id } }
 
     func conversation(_ id: String) -> BotConversationRecord { conversations[id] ?? BotConversationRecord() }
 
     func save(_ bot: NativeBot) {
+        // Clicky's own settings live in Settings › Clicky.
+        guard bot.id != Self.clickyID else { return }
         let old = self.bot(bot.id)
         if let index = bots.firstIndex(where: { $0.id == bot.id }) { bots[index] = bot } else { bots.append(bot) }
         writeBots()
@@ -278,6 +302,7 @@ final class BotsStore: ObservableObject {
     /// `command`: what the owner typed, without attachments, which decides whether this is "@code …". A word in an
     /// attached file doesn't start an agent.
     func send(_ text: String, command: String? = nil, to botID: String) {
+        if botID == Self.clickyID { return askClicky(text) }
         guard let bot = bot(botID), replying[botID] == nil else { return }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
@@ -292,6 +317,11 @@ final class BotsStore: ObservableObject {
             // "@code …" goes straight to a coding agent, in any chat: a change for this chat's latest run,
             // or a new run when there's none or the message names a folder.
             runCommand(text, room: botID)
+            return
+        }
+        // "Clicky, research X" to the CEO: straight to Clicky, who reports back here.
+        if bot.primary, let order = ClickyOrder.parse(command ?? text) {
+            orderClicky(order, ownerWords: text)
             return
         }
         if let intent = BotSettingsIntent.parse(command ?? text) {
@@ -431,8 +461,9 @@ final class BotsStore: ObservableObject {
     }
 
     /// `handsOnWhenStopped`: a stopped turn still calls `then`, for a roll-up that is waiting on it.
-    private func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false,
-                       then: @escaping (String?) -> Void) {
+    /// `fromOwner`: false when Clicky's team set this off: its answer can't start a coding run or a routine by itself.
+    func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true,
+               then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
         replying[bot.id] = ""
         Task { [weak self] in
@@ -441,7 +472,7 @@ final class BotsStore: ObservableObject {
             do {
                 let team = self?.bots ?? []
                 let result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team) { text in
-                    self?.replying[bot.id] = text
+                    self?.replying[bot.id] = bot.primary ? ClickyOrder.withoutTags(streaming: text) : text
                 }
                 answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 newSession = result.session ?? session
@@ -457,6 +488,13 @@ final class BotsStore: ObservableObject {
                 }
             }
             guard let self else { return }
+            // The CEO's orders to Clicky don't show in the chat: they turn into Clicky's cards.
+            var orders: [String] = []
+            if bot.primary, let said = answer {
+                let taken = ClickyOrder.extract(from: said)
+                answer = taken.text
+                orders = taken.orders
+            }
             let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil
             if self.stopped.remove(bot.id) != nil {
@@ -473,16 +511,17 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.seen[bot.id] = record.messages.count }
-            } else if answer != nil {
+            } else if answer != nil && orders.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)"))
             }
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
+            for order in orders { self.orderClicky(order, ownerWords: nil) }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
-            if let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
+            if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
             }
-            if let answer, let request = Self.routineRequest(in: answer) {
+            if fromOwner, let answer, let request = Self.routineRequest(in: answer) {
                 let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
                 self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
             }
@@ -587,7 +626,9 @@ final class BotsStore: ObservableObject {
     func latestRun(in room: String) -> T3Run? { t3Runs.last { ($0.room ?? Self.teamID) == room } }
 
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
-    func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil) {
+    /// `started`: told once whether the run got going, for a job waiting on it.
+    func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
+                    started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         Task { [weak self] in
@@ -606,9 +647,11 @@ final class BotsStore: ObservableObject {
                     "It's coding on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
                     (run.effort.flatMap { $0 == "default" ? nil : " at \($0) effort" } ?? "") + ". You can follow along here, and I'll post the result when it's done."), to: room)
                 self.track(run.id)
+                started?(true, nil)
             } catch {
                 self?.submitting = false
                 self?.post(BotChatMessage(author: theo.id, text: "Couldn't start the run on \(HarnessCatalog.label(target)): \(error.localizedDescription)"), to: room)
+                started?(false, error.localizedDescription)
             }
         }
     }
@@ -701,6 +744,7 @@ final class BotsStore: ObservableObject {
                     run.finishedAt = Date()
                     self.upsert(run)
                     if run.stoppedByOwner != true { self.postFromTheo(report, runID: run.id) }
+                    self.teamRunFinished(run, report: report)
                     self.releaseOldTerminals()
                     break
                 } else {
@@ -731,7 +775,7 @@ final class BotsStore: ObservableObject {
         if let data = try? Self.encoder.encode(t3Runs) { try? data.write(to: runsFile, options: .atomic) }
     }
 
-    private func post(_ message: BotChatMessage, to conversationID: String) {
+    func post(_ message: BotChatMessage, to conversationID: String) {
         noteUnread(message, in: conversationID)
         var record = conversation(conversationID)
         record.messages.append(message)
@@ -796,7 +840,7 @@ final class BotsStore: ObservableObject {
         return (try? Self.decoder.decode(BotConversationRecord.self, from: data)) ?? BotConversationRecord()
     }
 
-    private func writeConversation(_ id: String) {
+    func writeConversation(_ id: String) {
         guard let data = try? Self.encoder.encode(conversation(id)) else { return }
         try? data.write(to: chatFile(id), options: .atomic)
     }
@@ -814,7 +858,7 @@ enum BotImport {
         "You are Theo, Addy's primary bot. Help directly with anything Addy asks. " +
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
-    /// A fresh setup starts with Theo alone; Addy adds every other bot.
+    /// A fresh setup starts with Theo and the Clicky team (BotImport.addClickyTeam); Addy adds every other bot.
     static let starters: [NativeBot] = [
         NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to T3 Code.",
                   instructions: primaryInstructions,
@@ -901,14 +945,17 @@ enum BotPrompts {
             }
         }
         if bot.primary {
-            let others = team.filter { $0.id != bot.id }
+            let others = team.filter { $0.id != bot.id && $0.owner == nil }
             if !others.isEmpty {
                 parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") +
                              ". Mention one with @Name in the team chat to bring them in.")
             }
+            parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name)))
         }
-        parts.append(BotPrompts.routineHowTo)
-        parts.append(BotPrompts.codingHowTo)
+        if bot.owner == nil {
+            parts.append(BotPrompts.routineHowTo)
+            parts.append(BotPrompts.codingHowTo)
+        }
         parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
         let reachable = BotsStore.shared.reachable(from: bot)
         if !reachable.isEmpty {
@@ -918,6 +965,8 @@ enum BotPrompts {
         if bot.provider.hasPrefix("api:") {
             // No file tools on this engine: Theo reads the memory file in for it.
             parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
+        } else if bot.owner != nil {
+            // Clicky's team gets what it needs in each job.
         } else if bot.provider == "grok" {
             parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
@@ -1039,6 +1088,15 @@ struct BotsLayout: Codable, Equatable {
     }
 
     func section(of item: String) -> Section? { sections.first { $0.items.contains(item) } }
+
+    /// A bot's item in the sidebar: Clicky has its own.
+    static func item(forBot botID: String) -> String { botID == BotsStore.clickyID ? "clicky" : "bot:\(botID)" }
+
+    /// The bot an item stands for; nil for a group chat.
+    static func botID(ofItem item: String) -> String? {
+        if item == "clicky" { return BotsStore.clickyID }
+        return item.hasPrefix("bot:") ? String(item.dropFirst(4)) : nil
+    }
 }
 
 // MARK: - Routines, layout and unread
@@ -1078,7 +1136,7 @@ extension BotsStore {
         if let data = try? Self.encoder.encode(routines) { try? data.write(to: routinesFile, options: .atomic) }
     }
 
-    private func writeLayout() {
+    func writeLayout() {
         if let data = try? Self.encoder.encode(layout) { try? data.write(to: layoutFile, options: .atomic) }
     }
 
@@ -1298,7 +1356,8 @@ extension BotsStore {
     /// A category's manager also reaches its team and the CEO; a member its manager (or, with no manager, its
     /// teammates and the CEO).
     func reachable(from bot: NativeBot) -> [NativeBot] {
-        let others = bots.filter { $0.id != bot.id && $0.isOn }
+        // Clicky's team gets its jobs from Clicky.
+        let others = bots.filter { $0.id != bot.id && $0.isOn && ($0.owner == nil || bot.id == Self.clickyID) }
         var allowed = Set(bot.canMessage ?? [])
         switch bot.authorityLevel {
         case "ceo": return others
@@ -1329,7 +1388,8 @@ extension BotsStore {
         if named.isEmpty, let manager = manager(of: bot), !BotPrompts.mentioned(in: answer, bots: bots.filter { $0.id != bot.id }).isEmpty {
             named = [manager]
         }
-        let targets = named.filter { replying[$0.id] == nil }
+        // Clicky isn't a bot turn: it has a screen and a voice of its own, so it's reached through its orders.
+        let targets = named.filter { replying[$0.id] == nil && $0.id != Self.clickyID }
         guard !targets.isEmpty else { return }
         var answers: [String] = []
         var remaining = targets.count
@@ -1366,7 +1426,7 @@ extension BotsStore {
     /// Makes a bot the primary one (the star): it leads by default, gets the T3 hand-off in its own chat
     /// and takes the old primary's pinned spot.
     func makePrimary(_ botID: String) {
-        guard let old = primary, old.id != botID, var new = bot(botID) else { return }
+        guard botID != Self.clickyID, let old = primary, old.id != botID, var new = bot(botID) else { return }
         var demoted = old
         demoted.primary = false
         if demoted.authority == nil || demoted.authority == "ceo" { demoted.authority = "lead" }
@@ -1398,19 +1458,19 @@ extension BotsStore {
 
     /// The bot ids filed in a category (its sub-categories have their own teams).
     func memberIDs(of section: BotsLayout.Section) -> [String] {
-        section.items.compactMap { $0.hasPrefix("bot:") ? String($0.dropFirst(4)) : nil }.filter { bot($0) != nil }
+        section.items.compactMap(BotsLayout.botID(ofItem:)).filter { bot($0) != nil }
     }
 
     func members(of section: BotsLayout.Section) -> [NativeBot] { memberIDs(of: section).compactMap { bot($0) } }
 
-    func categories(of botID: String) -> [BotsLayout.Section] { layout.sections.filter { $0.items.contains("bot:\(botID)") } }
+    func categories(of botID: String) -> [BotsLayout.Section] { layout.sections.filter { $0.items.contains(BotsLayout.item(forBot: botID)) } }
 
     func updateCategory(_ id: String, _ change: (inout BotsLayout.Section) -> Void) {
         guard let index = layout.sections.firstIndex(where: { $0.id == id }) else { return }
         change(&layout.sections[index])
         // A leader always sits in its own team.
-        if let leader = layout.sections[index].leaderID, !layout.sections[index].items.contains("bot:\(leader)") {
-            if bot(leader) == nil { layout.sections[index].leaderID = nil } else { layout.sections[index].items.append("bot:\(leader)") }
+        if let leader = layout.sections[index].leaderID, !layout.sections[index].items.contains(BotsLayout.item(forBot: leader)) {
+            if bot(leader) == nil { layout.sections[index].leaderID = nil } else { layout.sections[index].items.append(BotsLayout.item(forBot: leader)) }
         }
         writeLayout()
     }
@@ -1433,19 +1493,19 @@ extension BotsStore {
             }
             section.wantsManager = true
             if section.leaderID == nil {
-                section.leaderID = section.items.compactMap { $0.hasPrefix("bot:") ? self.bot(String($0.dropFirst(4))) : nil }.first { !$0.primary }?.id
+                section.leaderID = section.items.compactMap(BotsLayout.botID(ofItem:)).compactMap { self.bot($0) }.first { !$0.primary }?.id
             }
         }
     }
 
     /// Adds a bot to a team; a bot can sit in more than one.
     func addMember(_ botID: String, to sectionID: String) {
-        updateCategory(sectionID) { if !$0.items.contains("bot:\(botID)") { $0.items.append("bot:\(botID)") } }
+        updateCategory(sectionID) { if !$0.items.contains(BotsLayout.item(forBot: botID)) { $0.items.append(BotsLayout.item(forBot: botID)) } }
     }
 
     func removeMember(_ botID: String, from sectionID: String) {
         updateCategory(sectionID) {
-            $0.items.removeAll { $0 == "bot:\(botID)" }
+            $0.items.removeAll { $0 == BotsLayout.item(forBot: botID) }
             if $0.leaderID == botID { $0.leaderID = nil }
         }
     }
@@ -1464,9 +1524,9 @@ extension BotsStore {
 
     /// What a bot did lately: its last few exchanges and routine runs, for a report.
     private func recentWork(of bot: NativeBot) -> String {
-        let messages = conversation(bot.id).messages.suffix(8)
+        let messages = conversation(bot.id).messages.filter { !$0.text.isEmpty }.suffix(8)
         var lines = messages.map { message -> String in
-            let who = message.author == "user" ? "Addy" : message.author == "routine" ? "Routine" : bot.name
+            let who = message.author == "user" ? "Addy" : message.author == "routine" ? "Routine" : self.bot(message.author)?.name ?? bot.name
             return "- \(who): " + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(280))
         }
         for routine in routines where routine.target == bot.id {
@@ -1582,7 +1642,7 @@ extension BotsStore {
         var record = conversation(bot.id)
         let seen = record.seen[bot.id] ?? 0
         let waiting = record.messages.dropFirst(min(seen, record.messages.count)).filter { message in
-            message.author != "user" && message.author != bot.id && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
+            !message.text.isEmpty && message.author != "user" && message.author != bot.id && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
         }.suffix(6)
         record.seen[bot.id] = record.messages.count
         conversations[bot.id] = record

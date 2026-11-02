@@ -18,22 +18,34 @@ struct ProviderKeysView: View {
     var body: some View {
         // `revision` is read so the custom list redraws when one is added or removed.
         let providers = keys.revision >= 0 ? keys.providers : []
-        VStack(alignment: .leading, spacing: 22) {
-            summary
-            group("AI models", hint: "A saved key adds that provider's models to every engine picker: bots, Theo and Clicky.", providers.filter { $0.group == .models })
-            group("Voice and listening", hint: "Pick which one speaks and listens in Settings › Voice.", providers.filter { $0.group == .voice })
-            group("On this Mac", hint: "Local servers need no key. Test finds out whether they're running.", providers.filter { $0.group == .local })
-            VStack(alignment: .leading, spacing: 8) {
-                let custom = providers.filter { $0.group == .custom }
-                if !custom.isEmpty { group("Custom", hint: nil, custom) }
-                Button { addingCustom = true } label: { Label("Add a custom OpenAI-compatible provider", systemImage: "plus") }
-                    .buttonStyle(.theoSecondary)
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 22) {
+                summary
+                group("AI models", hint: "A saved key adds that provider's models to every engine picker: bots, Theo and Clicky.", providers.filter { $0.group == .models })
+                group("Voice and listening", hint: "Pick which one speaks and listens in Settings › Voice.", providers.filter { $0.group == .voice })
+                group("On this Mac", hint: "Local servers need no key. Test finds out whether they're running.", providers.filter { $0.group == .local })
+                VStack(alignment: .leading, spacing: 8) {
+                    let custom = providers.filter { $0.group == .custom }
+                    if !custom.isEmpty { group("Custom", hint: nil, custom) }
+                    Button { addingCustom = true } label: { Label("Add a custom OpenAI-compatible provider", systemImage: "plus") }
+                        .buttonStyle(.theoSecondary)
+                }
             }
+            .onAppear { openRequestedRow(proxy) }
+            .onChange(of: keys.rowToOpen) { _, _ in openRequestedRow(proxy) }
         }
         .sheet(isPresented: $addingCustom) { CustomProviderSheet { added in
             addingCustom = false
             if let added { openID = added.id }
         } }
+    }
+
+    /// Someone asked to be taken to a provider: its row opens and comes into view.
+    private func openRequestedRow(_ proxy: ScrollViewProxy) {
+        guard let id = keys.rowToOpen else { return }
+        keys.rowToOpen = nil
+        openID = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { withAnimation(DS.Motion.hover) { proxy.scrollTo(id, anchor: .center) } }
     }
 
     private var summary: some View {
@@ -51,6 +63,7 @@ struct ProviderKeysView: View {
                 ProviderKeyRow(provider: provider, isOpen: openID == provider.id) {
                     withAnimation(DS.Motion.hover) { openID = openID == provider.id ? nil : provider.id }
                 }
+                .id(provider.id)
             }
         }
     }
@@ -92,7 +105,12 @@ private struct ProviderKeyRow: View {
             .buttonStyle(SidebarButtonStyle(isSelected: false))
             if isOpen { editor.padding(.leading, 54).padding(.trailing, 14).padding(.bottom, 14).padding(.top, 2) }
         }
-        .onAppear { baseURL = provider.baseURL }
+        .onAppear {
+            baseURL = provider.baseURL
+            if isOpen { focusFieldSoon() }
+        }
+        // A row that opens is ready for the paste.
+        .onChange(of: isOpen) { _, open in if open { focusFieldSoon() } }
         .alert("Remove the \(provider.label) key?", isPresented: $confirmsRemove) {
             Button("Remove", role: .destructive) {
                 if provider.group == .custom { keys.deleteCustom(provider.id) } else { keys.remove(provider.id) }
@@ -101,6 +119,10 @@ private struct ProviderKeyRow: View {
         } message: {
             Text("Anything set to run on it stops until you add a key again.")
         }
+    }
+
+    private func focusFieldSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { fieldFocused = true }
     }
 
     private var subtitle: String {

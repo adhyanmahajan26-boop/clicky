@@ -89,7 +89,7 @@ public enum ResearchTrigger {
         return 3
     }
 
-    static func namedURLs(in transcript: String) -> [URL] {
+    public static func namedURLs(in transcript: String) -> [URL] {
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
         let range = NSRange(transcript.startIndex..., in: transcript)
         return detector.matches(in: transcript, range: range).compactMap(\.url).filter { ResearchURLPolicy.isAllowed($0) }

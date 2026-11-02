@@ -13,6 +13,7 @@ private func summarize(_ outputs: [ResponseRouterOutput], into summary: inout Ro
         switch output {
         case .narration(let text): summary.narration += text
         case .tag(let index, let tag): summary.events.append("tag\(index):\(tag.raw)")
+        case .delegate(let duty, let task): summary.events.append("delegate:\(duty.rawValue):\(task)")
         case .worker(let title, let task): summary.events.append("worker:\(title):\(task)")
         case .block(let name, let body): summary.events.append("block:\(name):\(body)")
         case .unsupportedBlock(let name): summary.events.append("unsupported:\(name)")

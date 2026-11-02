@@ -103,6 +103,8 @@ final class AnswerSession: SpeechCoordinatorHost {
     private var isYieldingToBoard = false
 
     private(set) var workerRequests: [CompanionWorkerRequest] = []
+    /// Theo ordered this turn: jobs handed out in it report back to him too.
+    var theoOrder: ClickyTheoOrder?
     private var workerTasks: [Task<CompanionWorkerResult, Never>] = []
     /// Index into workerTasks → the board section that helper draws (P6.7).
     private var boardSectionByWorkerIndex: [Int: (sectionIdentifier: String, title: String)] = [:]
@@ -409,6 +411,10 @@ final class AnswerSession: SpeechCoordinatorHost {
                 prepare(tag, index: globalIndex)
             case .worker(let title, let task):
                 spawnWorker(CompanionWorkerRequest(workerTitle: title, workerTaskPrompt: task))
+            case .delegate(let duty, let task):
+                // Clicky's team works in the background: nothing waits for it, and its result comes back as a card.
+                agentsCenter.log(brainAgentID, "handed to \(duty.rawValue): \(task)")
+                BotsStore.shared.delegate(duty, task: task, ownerWords: theoOrder == nil ? transcript : theoOrder?.ownerWords, reportsToCEO: theoOrder != nil)
             case .codeModeToggle(let isOn):
                 // The spoken switch: on only when the user's words say "code mode" (CodeModeToggle); else the chip.
                 let decision = companionManager.codeModeController.handleSpokenToggle(isOn: isOn, transcript: transcript)
@@ -863,9 +869,13 @@ final class AnswerSession: SpeechCoordinatorHost {
         agentsCenter.log(workerAgentID, "task: \(request.workerTaskPrompt)")
         agentsCenter.log(brainAgentID, "spawned helper: \(request.workerTitle)")
         let workerTurnRecord = turnRecord
+        // A plain helper is Clicky's Researcher at work (it lights up, and its chat shows the job). A board section stays
+        // hidden: it draws into the board. With no Researcher it's a hidden helper, as ever.
+        let teamJob = boardSection == nil ? BotsStore.shared.helperStarted(title: request.workerTitle, task: request.workerTaskPrompt) : nil
+        let workerModel = BotsStore.shared.researcherClaudeModel
         let workerTask = companionManager.companionWorkerRunner.spawnWorker(request) { workerRequest in
             do {
-                let workerTurn = try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+                let workerTurn = try await ClaudeCodeBridge(model: workerModel).runTurn(
                     systemPromptFileName: systemPromptFileName,
                     systemPrompt: systemPrompt,
                     contentBlocks: [.text(workerRequest.workerTaskPrompt)] + screenBlocks
@@ -873,6 +883,7 @@ final class AnswerSession: SpeechCoordinatorHost {
                 agentsCenter.log(workerAgentID, workerTurn.text)
                 agentsCenter.finish(workerAgentID, status: .done, usage: workerTurn.usageSummary)
                 workerTurnRecord?.recordWorker(title: workerRequest.workerTitle, kind: workerKind, status: .done, usage: workerTurn.usageSummary)
+                BotsStore.shared.helperFinished(teamJob, text: workerTurn.text, succeeded: true)
                 return workerTurn.text
             } catch {
                 let wasCancelled = error is CancellationError || Task.isCancelled
@@ -880,6 +891,7 @@ final class AnswerSession: SpeechCoordinatorHost {
                 agentsCenter.log(workerAgentID, wasCancelled ? "cancelled" : "failed: \(error.localizedDescription)")
                 agentsCenter.finish(workerAgentID, status: workerStatus, errorDescription: wasCancelled ? nil : error.localizedDescription)
                 workerTurnRecord?.recordWorker(title: workerRequest.workerTitle, kind: workerKind, status: workerStatus, usage: nil)
+                BotsStore.shared.helperFinished(teamJob, text: wasCancelled ? "Stopped." : error.localizedDescription, succeeded: false)
                 throw error
             }
         }

@@ -70,8 +70,8 @@ enum CallPrompt {
         Talk the way you would on the phone: usually one to three short sentences, in plain words. Start with the answer; your first sentence should be short, because it's spoken while you're still writing the rest.
         No markdown, lists, headings, code, emoji or stage directions. Spell out what's awkward to read aloud. Numbers are fine.
         Addy may cut in at any time. If a message starts where your last answer was cut off, just carry on with what they said.
-        You have no tools on this call. If Addy wants something done, say you'll do it right after the call; it goes in your chat with the transcript.
         """
+        rules += "\n" + ClickyTeamPrompts.callHowTo
         switch language {
         case .auto, .hinglish:
             rules += usesSarvamVoice
@@ -144,6 +144,9 @@ final class TheoCallSession: ObservableObject {
     private var voice: CallVoice?
     private var gate = VoiceActivityGate(endSeconds: 0.55)
     private var chunker = CallSpeechChunker()
+    /// Keeps Theo's orders to Clicky out of the voice, wherever a tag splits.
+    private var orders = ClickyOrderStream()
+    private var clickyReports: [String] = []
     private var flushTimer: Task<Void, Never>?
     private var replyInProgress = false
     private var speechEndedAt: Date?
@@ -393,6 +396,7 @@ final class TheoCallSession: ObservableObject {
         pendingTurnTiming = timing
         replyInProgress = true
         chunker = CallSpeechChunker()
+        orders = ClickyOrderStream()
         let line = Line(who: .theo, text: "", isLive: true)
         lines.append(line)
         theoLineID = line.id
@@ -407,11 +411,15 @@ final class TheoCallSession: ObservableObject {
         })
     }
 
-    private func replyDelta(_ delta: String) {
+    private func replyDelta(_ rawDelta: String) {
         if firstTextAt == nil {
             firstTextAt = Date()
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
         }
+        let filtered = orders.feed(rawDelta)
+        filtered.orders.forEach(orderClicky)
+        let delta = filtered.speech
+        guard !delta.isEmpty else { return }
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) { lines[index].text += delta }
         for piece in chunker.feed(delta) { speak(piece) }
         // Nothing more for a moment and the sentence looks done: say it, rather than wait for the end of the reply.
@@ -431,21 +439,52 @@ final class TheoCallSession: ObservableObject {
 
     private func replyFinished(_ result: Result<String, Error>) {
         replyInProgress = false
+        let neverStreamed = firstTextAt == nil
+        var unstreamed = ""
+        if case .success(let whole) = result, neverStreamed {
+            let taken = ClickyOrder.extract(from: whole)
+            unstreamed = taken.text
+            taken.orders.forEach(orderClicky)
+        }
+        let rest = orders.finish()
+        rest.orders.forEach(orderClicky)
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
             lines[index].isLive = false
-            if lines[index].text.isEmpty, case .success(let text) = result { lines[index].text = text }
+            lines[index].text += rest.speech
+            if lines[index].text.isEmpty { lines[index].text = unstreamed }
         }
         theoLineID = nil
         switch result {
-        case .success(let whole):
+        case .success:
             // A reply that never streamed (a CLI that gave only its result) still gets spoken.
             flushTimer?.cancel()
-            if firstTextAt == nil { for piece in chunker.feed(whole) { speak(piece) } }
+            if neverStreamed { for piece in chunker.feed(unstreamed) { speak(piece) } }
+            for piece in chunker.feed(rest.speech) { speak(piece) }
             if let piece = chunker.finish() { speak(piece) }
             voice?.endOfTurn()
         case .failure(let error):
             problem = error.localizedDescription
             if state == .thinking { state = .listening }
+        }
+    }
+
+    /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
+    private func orderClicky(_ order: String) {
+        let addySaid = lines.last { $0.who == .addy && !$0.isLive }?.text
+        store.orderClicky(order, ownerWords: addySaid) { [weak self] report in
+            guard let self, self.state != .ended else { return }
+            self.clickyReports.append(report)
+            Task { @MainActor [weak self] in
+                for _ in 0..<90 {
+                    guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
+                    if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking {
+                        self.speechEndedAt = nil
+                        self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst()))
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
         }
     }
 

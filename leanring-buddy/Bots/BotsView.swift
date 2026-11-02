@@ -34,7 +34,10 @@ enum BotsPane: Hashable {
 @MainActor
 final class BotsSelection: ObservableObject {
     static let shared = BotsSelection()
-    @Published var pane: BotsPane = .home
+    @Published var pane: BotsPane = .home {
+        // Clicky has a chat of its own, wherever a team page or a card links to it from.
+        didSet { if pane == .bot(BotsStore.clickyID) { pane = .clicky } }
+    }
     /// Where "Back to Theo" returns to.
     private var paneBeforeSettings: BotsPane = .home
 
@@ -262,7 +265,9 @@ struct BotsRootView: View {
             }
             Button("Cancel", role: .cancel) { confirmingDelete = nil }
         } message: {
-            Text("Its chat and its routines go too. To keep it working out of sight, hide it instead.")
+            Text(confirmingDelete.flatMap { store.bot(String($0.dropFirst(4))) }?.owner != nil
+                 ? "Its chat goes too, and a hidden helper does this job for Clicky from now on. To keep it working out of sight, hide it instead."
+                 : "Its chat and its routines go too. To keep it working out of sight, hide it instead.")
         }
     }
 
@@ -317,7 +322,10 @@ struct BotsRootView: View {
     @ViewBuilder private func itemRow(_ item: String, inTeam: Bool = false) -> some View {
         Group {
             if item == "clicky" {
-                sidebarRow(.clicky, title: "Clicky", inTeam: inTeam) { ClickyAvatar(size: 20) }
+                sidebarRow(.clicky, title: "Clicky", leads: store.layout.sections.contains { $0.leaderID == BotsStore.clickyID },
+                           unread: store.unread[BotsStore.clickyID] ?? 0, busy: store.isClickyBusy, inTeam: inTeam) {
+                    ClickyAvatar(size: 22, isActive: store.isClickyBusy)
+                }
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
                 sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, leads: store.layout.sections.contains { $0.leaderID == bot.id },
                            unread: store.unread[bot.id] ?? 0,
@@ -361,7 +369,7 @@ struct BotsRootView: View {
                 }
             }
             Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
-            if !bot.primary { Button("Make primary") { store.makePrimary(bot.id) } }
+            if !bot.primary && bot.owner == nil { Button("Make primary") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
             Divider()
             Button("Edit group chat…") { editingGroup = group }
@@ -392,25 +400,42 @@ struct BotsRootView: View {
     /// A category with its bots and its sub-categories: a team header, then its members indented under a guide line
     /// in the team's colour. Drop bots on the header to file them.
     private func sectionTree(_ section: BotsLayout.Section, depth: Int) -> AnyView {
-        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) }
+        // The manager is always in its own team, first, even when it's pinned too. Its members sit under it.
+        let manager = section.leaderID.map(BotsLayout.item(forBot:)).flatMap { item in
+            section.items.contains(item) && itemExists(item) && !store.isHidden(item) ? item : nil
+        }
+        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) && $0 != manager }
         let children = store.subsections(of: section.id)
         let collapsed = section.collapsed ?? false
         let line = Color(hex: CategoryTile.swatch(for: section).from).opacity(0.38)
-        let rows = items.count + children.count
+        let rows = (manager == nil ? items.count : 1) + children.count
         return AnyView(VStack(alignment: .leading, spacing: 2) {
             sectionHeader(section, collapsed: collapsed, depth: depth)
             if !collapsed {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
-                        itemRow(item, inTeam: true)
-                            .background(alignment: .leading) { TeamGuideLine(isLast: index == rows - 1).stroke(line, lineWidth: 1).frame(width: 13) }
-                            .padding(.leading, 0)
+                    if let manager {
+                        itemRow(manager)
+                            .background(alignment: .leading) { TeamGuideLine(isLast: children.isEmpty).stroke(line, lineWidth: 1).frame(width: 13) }
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                                itemRow(item, inTeam: true)
+                                    .background(alignment: .leading) { TeamGuideLine(isLast: index == items.count - 1).stroke(line, lineWidth: 1).frame(width: 13) }
+                            }
+                        }
+                        .padding(.leading, 18)
+                        .background(alignment: .leading) { if !children.isEmpty { Rectangle().fill(line).frame(width: 1).padding(.leading, 1) } }
+                    } else {
+                        ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                            itemRow(item, inTeam: true)
+                                .background(alignment: .leading) { TeamGuideLine(isLast: index == rows - 1).stroke(line, lineWidth: 1).frame(width: 13) }
+                                .padding(.leading, 0)
+                        }
                     }
                     ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
                         sectionTree(child, depth: depth + 1)
-                            .background(alignment: .leading) { TeamGuideLine(isLast: items.count + index == rows - 1, tickAt: 22).stroke(line, lineWidth: 1).frame(width: 13) }
+                            .background(alignment: .leading) { TeamGuideLine(isLast: rows - children.count + index == rows - 1, tickAt: 22).stroke(line, lineWidth: 1).frame(width: 13) }
                     }
-                    if items.isEmpty && children.isEmpty {
+                    if manager == nil && items.isEmpty && children.isEmpty {
                         Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
                             .padding(.horizontal, 12).padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -674,7 +699,10 @@ struct BotChatScreen: View {
                     // scrolling to the end then lands in empty space until something redraws.
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(Array(record.messages.enumerated()), id: \.element.id) { index, message in
-                            if message.author == "user" {
+                            if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
+                                // The pending card gives way to the finished one, which lands at the end of the chat.
+                                if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
+                            } else if message.author == "user" {
                                 UserBubble(text: message.text)
                             } else if message.author == "routine" {
                                 RoutineMarker(text: message.text, at: message.at)
@@ -1292,7 +1320,9 @@ struct BotAvatar: View {
     }
 
     @ViewBuilder private func face(time: Double?) -> some View {
-        if ownMark {
+        if bot.id == BotsStore.clickyID {
+            ClickyAvatar(size: size, isActive: state != .idle)
+        } else if ownMark {
             BotFace(seed: bot.id, isTheo: true, size: size, awake: state != .idle && bot.isOn, time: time)
         } else {
             BotCharacterView(character: .of(bot), size: size, working: state != .idle && bot.isOn, time: time, phase: BotFace.phase(of: bot.id))

@@ -25,6 +25,7 @@ Commands for `cmd`:
 - `uiShowPanel` (the menu-bar panel), `uiStopRun {id}`.
 - App commands: `botCreate`, `botUpdate`, `botDelete`, `botSay {bot, text}`, `botChat {id, limit}`, `botsState`, `groupSave`, `groupDelete`, `routines {action, id}`, `harnessState {refresh}`, `harnessSet {codingTarget, codingModel, codingEffort, defaultHarness}`, `terminalText {id}`.
 
+- Clicky's team: `clickyTeam` (the team, its category and recent jobs), `clickyTeam {action: "delegate", duty, task}`, `clickyTeam {action: "order", text}` (the CEO's order to Clicky), `clickyTeam {action: "memorySearch", query}`. `ask {text, speak: false, owner: true}` is a message typed in Clicky's chat.
 - Voice: `uiDictationFeed {path, app, window}` (a sound file through dictation into a background window), `uiDictationField`, `uiDictationStatus`, `uiDictationPill {state}`, `uiDictationKeys {flags}`; `uiCallStart`, `uiCallFeed {path, silence}`, `uiCallStatus`, `uiCallMute`, `uiCallEnd`; `uiSpeak`, `uiSpeakStop`; `uiSet {key, value}`, `uiTestKey {provider, value}`.
 
 `Tools/theo-click-test.py <out>` is the regression pass over the main screens.

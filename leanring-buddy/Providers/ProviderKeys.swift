@@ -258,6 +258,9 @@ enum CustomProviders {
 final class ProviderKeys: ObservableObject {
     static let shared = ProviderKeys()
 
+    /// A provider whose row should open, with its key field ready, on the Models & API keys page.
+    @Published var rowToOpen: String?
+
     struct TestResult: Equatable {
         let isOK: Bool
         let message: String

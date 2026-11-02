@@ -51,15 +51,17 @@ struct BotInspector: View {
                     apps(bot)
                     schedules(bot)
                     if !bot.primary {
-                        Button {
-                            commit()
-                            store.makePrimary(bot.id)
-                            draft = store.bot(botID)
-                        } label: {
-                            Label("Make \(bot.name) the primary bot", systemImage: "star")
-                                .font(.system(size: 12, weight: .medium))
+                        if bot.owner == nil {
+                            Button {
+                                commit()
+                                store.makePrimary(bot.id)
+                                draft = store.bot(botID)
+                            } label: {
+                                Label("Make \(bot.name) the primary bot", systemImage: "star")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .buttonStyle(.theo(.ghost, .small))
                         }
-                        .buttonStyle(.theo(.ghost, .small))
                         danger(bot)
                     }
                 }
@@ -94,7 +96,9 @@ struct BotInspector: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its chat and routines go too. Turn it off or hide it instead to keep it.")
+            Text(draft?.owner != nil
+                 ? "Its chat goes too, and a hidden helper does this job for Clicky from now on. Turn it off or hide it instead to keep it."
+                 : "Its chat and routines go too. Turn it off or hide it instead to keep it.")
         }
     }
 
@@ -226,6 +230,9 @@ struct ClickyInspector: View {
     @State private var silent = ClickySettings.isSilentModeEnabled
     @State private var listens = ClickySettings.isWakeWordEnabled
     @State private var actions = ClickySettings.isActionsEnabled
+    @State private var memoryQuery = ""
+    @State private var memoryHits: [ClickyMemoryHit] = []
+    @ObservedObject private var store = BotsStore.shared
 
     var body: some View {
         ScrollView {
@@ -250,14 +257,15 @@ struct ClickyInspector: View {
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
+                team
                 InspectorSection("Brain") {
                     Text("Thinks with").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                     BrainModelPicker(title: "Thinks with", setting: Binding(get: { main }, set: { value in
                         main = value
                         if let manager = CompanionManager.current { manager.setSelectedModel(value) } else { ClickyModels.main = value }
                     }))
-                    Text("Helpers").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
-                    BrainModelPicker(title: "Helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 }))
+                    Text("Hidden helpers").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    BrainModelPicker(title: "Hidden helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 }))
                     Button("All of Clicky's settings") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
                 }
                 InspectorSection("Cursor", hint: "One click changes it everywhere.") {
@@ -295,6 +303,46 @@ struct ClickyInspector: View {
         .frame(width: 340)
         .clipped()
         .background(DS.Colors.surface1)
+    }
+
+    /// The bots Clicky runs, and what Memory has kept.
+    private var team: some View {
+        InspectorSection("Team", hint: "Clicky hands these bots its background jobs. Rename or remove any of them; a hidden helper does a removed bot's job.") {
+            ForEach(store.clickyTeam) { bot in
+                Button { BotsSelection.shared.pane = .bot(bot.id) } label: {
+                    HStack(spacing: 10) {
+                        BotAvatar(bot: bot, size: 26, state: store.replying[bot.id] != nil ? .thinking : .idle)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(bot.name).font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                            Text((store.replying[bot.id] != nil ? "Working" : bot.isOn ? "Ready" : "Off") + " · " + bot.modelLabel)
+                                .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: 34).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if store.clickyTeam.isEmpty {
+                Text("Hidden helpers do the team's jobs now.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            }
+            TextField("Search what you've said to Clicky", text: $memoryQuery)
+                .textFieldStyle(.plain).font(.system(size: 12.5))
+                .padding(.horizontal, 10).frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.hover))
+                .onChange(of: memoryQuery) { _, query in
+                    memoryHits = query.trimmingCharacters(in: .whitespaces).count < 2 ? [] : store.memoryStore.search(query, limit: 6)
+                }
+            ForEach(Array(memoryHits.enumerated()), id: \.offset) { _, hit in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(hit.text).font(.system(size: 12)).foregroundColor(DS.Colors.textPrimary).lineLimit(3).textSelection(.enabled)
+                    Text(hit.at.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
+                }
+            }
+            if memoryHits.isEmpty, memoryQuery.trimmingCharacters(in: .whitespaces).count >= 2 {
+                Text("Nothing on that yet.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            }
+        }
     }
 
     private var clickyOn: Bool { listens || (CompanionManager.current?.isClickyCursorEnabled ?? true) }

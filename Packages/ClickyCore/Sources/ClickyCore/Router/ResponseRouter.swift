@@ -16,6 +16,8 @@
 //     once and never spoken;
 //   - [WORKER:title:task]: on its own line, ending at the line's last "]";
 //     emitted at once (spawned unanchored);
+//   - [DELEGATE:duty:task]: the same shape, a job for one of Clicky's team
+//     (ClickyDuty), which runs in the background with no follow-up answer;
 //   - <whiteboard>, <code>, <type>, <codetask>, <actions> blocks: handed to
 //     their consumer, or "I can't do that yet" when nothing consumes them
 //     (<codetask> is P5 Code mode's JSON task; "<code" alone stays <code>;
@@ -36,6 +38,8 @@ public enum ResponseRouterOutput: Equatable, Sendable {
     case narration(String)
     case tag(index: Int, tag: ParsedTag)
     case worker(title: String, task: String)
+    /// [DELEGATE:memory|researcher|runner:task]: a background job for Clicky's team.
+    case delegate(duty: ClickyDuty, task: String)
     /// [CODEMODE:on] (true) or [CODEMODE:off] (false).
     case codeModeToggle(isOn: Bool)
     /// [AGENTS:open]: open the Agents dashboard.
@@ -53,15 +57,17 @@ public struct ResponseRouter: Sendable {
     public static let maximumHeldTagLength = 800
     public static let maximumHeldBlockLength = 40_000
     public static let maximumWorkers = 4
+    public static let maximumDelegations = 4
     public static let blockNames = ["whiteboard", "code", "type", "codetask", "actions"]
     public static let unsupportedBlockSentence = "I can't do that yet."
 
-    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:", "AGENTS:", "NOTES:"]
+    private static let tagHeads = ["POINT:", "MARK:", "WORKER:", "DELEGATE:", "CLEAR]", "SNAP:", "SNAP]", "CODEMODE:", "AGENTS:", "NOTES:"]
 
     /// Block names that have a consumer (P4+ register theirs).
     public var blockConsumers: Set<String>
     public private(set) var tags: [ParsedTag] = []
     public private(set) var workerCount = 0
+    public private(set) var delegationCount = 0
     public private(set) var droppedCount = 0
 
     private var pending = ""
@@ -173,7 +179,16 @@ public struct ResponseRouter: Sendable {
                     }
                     let line = pending[..<lineEnd]
                     pending = String(pending[lineEnd...])
-                    if let lastClose = line.lastIndex(of: "]"), let worker = Self.parseWorker(String(line[...lastClose])) {
+                    if let lastClose = line.lastIndex(of: "]"), let job = Self.parseDelegate(String(line[...lastClose])) {
+                        if delegationCount < Self.maximumDelegations {
+                            delegationCount += 1
+                            flushNarration()
+                            outputs.append(.delegate(duty: job.duty, task: job.task))
+                        } else {
+                            record(&outputs, reason: "more than \(Self.maximumDelegations) delegations", raw: String(line))
+                        }
+                        narration += line[line.index(after: lastClose)...]
+                    } else if let lastClose = line.lastIndex(of: "]"), let worker = Self.parseWorker(String(line[...lastClose])) {
                         if workerCount < Self.maximumWorkers {
                             workerCount += 1
                             flushNarration()
@@ -278,7 +293,7 @@ public struct ResponseRouter: Sendable {
         if index < characters.count, characters[index] == " " { index += 1 }
         let afterBracket = String(characters[min(index, characters.count)...]).uppercased()
         for head in tagHeads {
-            if afterBracket.hasPrefix(head) { return .match(.tag(isWorker: head == "WORKER:")) }
+            if afterBracket.hasPrefix(head) { return .match(.tag(isWorker: head == "WORKER:" || head == "DELEGATE:")) }
             if !afterBracket.isEmpty, head.hasPrefix(afterBracket) { return .incomplete }
         }
         if afterBracket.isEmpty { return .incomplete }
@@ -329,10 +344,23 @@ public struct ResponseRouter: Sendable {
         return (title, task)
     }
 
+    /// "[DELEGATE:memory:task]" → (.memory, task); nil for a duty Clicky doesn't have.
+    static func parseDelegate(_ rawTag: String) -> (duty: ClickyDuty, task: String)? {
+        var body = rawTag.trimmingCharacters(in: .whitespaces)
+        guard body.hasPrefix("["), body.hasSuffix("]") else { return nil }
+        body = String(body.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        guard body.uppercased().hasPrefix("DELEGATE:") else { return nil }
+        body = String(body.dropFirst("DELEGATE:".count))
+        guard let colonIndex = body.firstIndex(of: ":"),
+              let duty = ClickyDuty(rawValue: body[..<colonIndex].trimmingCharacters(in: .whitespaces).lowercased()) else { return nil }
+        let task = body[body.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+        return task.isEmpty ? nil : (duty, task)
+    }
+
     // MARK: - Narration clean-up
 
     private static let strayCoordinatePattern = try! NSRegularExpression(pattern: #"@\d+(\.\d+)?,\d+(\.\d+)?"#)
-    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER|SNAP|CODEMODE|AGENTS):[^\s\]]*\]"#, options: [.caseInsensitive])
+    private static let strayHeadPattern = try! NSRegularExpression(pattern: #"\b(?:POINT|MARK|WORKER|DELEGATE|SNAP|CODEMODE|AGENTS):[^\s\]]*\]"#, options: [.caseInsensitive])
 
     /// Removes "@x,y" and tag heads that lost their "[" ("POINT:#5]").
     static func cleanNarration(_ text: String) -> String {

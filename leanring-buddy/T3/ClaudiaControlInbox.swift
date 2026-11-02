@@ -108,6 +108,32 @@ final class ClaudiaControlInbox {
                 BotsStore.shared.send(text, to: botID)
             }
             reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "openSettings":
+            // Takes the owner to a page of Settings, in front, when they ask to be taken there: {section, provider}.
+            // With a provider, its row opens with the key field ready. Nothing is typed or read.
+            let section = (command["section"] as? String).flatMap(SettingsTab.Section.init(rawValue:)) ?? .look
+            if let provider = command["provider"] as? String { ProviderKeys.shared.rowToOpen = provider }
+            TheoSettingsWindowController.show(section: section)
+            let window = NSApp.windows.first { $0.isVisible && $0.title == "Theo" }
+            reply(identifier, ok: true, result: ["section": section.rawValue, "screen": window?.screen?.localizedName ?? NSNull(), "window": window?.windowNumber ?? 0], error: nil)
+        case "clickyTeam":
+            // {action: state|delegate|order|memorySearch, duty, task, ownerWords, text, query}
+            let store = BotsStore.shared
+            switch command["action"] as? String ?? "state" {
+            case "delegate":
+                guard let duty = (command["duty"] as? String).flatMap(ClickyDuty.init(rawValue:)), let task = command["task"] as? String else {
+                    reply(identifier, ok: false, result: nil, error: "Needs duty and task."); return
+                }
+                store.delegate(duty, task: task, ownerWords: command["ownerWords"] as? String, reportsToCEO: false)
+            case "order":
+                guard let text = command["text"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs text."); return }
+                store.orderClicky(text, ownerWords: nil)
+            case "memorySearch":
+                let hits = store.memoryStore.search(command["query"] as? String ?? "").map { ["kind": $0.kind.rawValue, "text": $0.text] }
+                reply(identifier, ok: true, result: hits, error: nil); return
+            default: break
+            }
+            reply(identifier, ok: true, result: store.clickyTeamReport, error: nil)
         case "dictationStatus":
             // Whether dictation is listening for its keys, and what the last one did. Never the words.
             reply(identifier, ok: true, result: CompanionManager.current?.dictationController.statusReport() ?? [:], error: nil)
@@ -242,16 +268,16 @@ final class ClaudiaControlInbox {
         case "ask":
             guard let text = command["text"] as? String, !text.isEmpty else { return reply(identifier, ok: false, result: nil, error: "ask needs \"text\"") }
             let speaks = command["speak"] as? Bool ?? true
-            companionManager.sendTranscriptToClaudeWithScreenshot(
-                transcript: text,
-                turnOptions: CompanionManager.TurnOptions(speaksResponse: speaks, keyUpDate: Date(), onTurnFinished: { [weak self] turnDirectoryURL, turnError in
-                    Task { @MainActor in
-                        let answer = turnDirectoryURL.flatMap { Self.spokenAnswer(inTurn: $0) } ?? ""
-                        respond(turnError == nil, ["answer": answer, "board": self?.companionManager.boardController.stateSummary() ?? [:]],
-                                turnError.map { String(describing: $0) })
-                    }
-                })
-            )
+            var askOptions = CompanionManager.TurnOptions(speaksResponse: speaks, keyUpDate: Date(), onTurnFinished: { [weak self] turnDirectoryURL, turnError in
+                Task { @MainActor in
+                    let answer = turnDirectoryURL.flatMap { Self.spokenAnswer(inTurn: $0) } ?? ""
+                    respond(turnError == nil, ["answer": answer, "board": self?.companionManager.boardController.stateSummary() ?? [:]],
+                            turnError.map { String(describing: $0) })
+                }
+            })
+            // An agent's words don't go in Memory's log. Clicky's chat says "owner".
+            askOptions.isOwnersWords = command["owner"] as? Bool ?? false
+            companionManager.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: askOptions)
 
         case "show":
             guard let text = command["text"] as? String, !text.isEmpty else { return reply(identifier, ok: false, result: nil, error: "show needs \"text\"") }
@@ -462,7 +488,7 @@ final class ClaudiaControlInbox {
               let raw = object["rawResponse"] as? String else { return nil }
         var words = ArticleSummarySpeech.narrationOutsideActionBlocks(raw)
         words = words.replacingOccurrences(of: #"(?s)<whiteboard>.*?(</whiteboard>|$)"#, with: "", options: .regularExpression)
-        words = words.replacingOccurrences(of: #"\[(POINT|MARK|WORKER|SNAP|NOTES|CODEMODE|AGENTS):[^\]]*\]"#, with: "", options: .regularExpression)
+        words = words.replacingOccurrences(of: #"\[(POINT|MARK|WORKER|DELEGATE|SNAP|NOTES|CODEMODE|AGENTS):[^\]]*\]"#, with: "", options: .regularExpression)
         return words.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

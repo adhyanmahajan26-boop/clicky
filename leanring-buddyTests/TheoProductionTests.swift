@@ -14,6 +14,39 @@ import Testing
 
 @MainActor
 struct TheoProductionTests {
+    // MARK: Clicky's team
+
+    @Test func theTeamJoinsAnySetupOnceAndKeepsTheRest() {
+        var bots = BotImport.starters
+        var layout = BotsLayout()
+        layout.sections = [BotsLayout.Section(name: "Work", items: ["bot:theo"])]
+        BotImport.addClickyTeam(to: &bots, layout: &layout)
+        #expect(bots.count == 4)
+        for bot in bots where bot.owner == BotsStore.clickyID { #expect(bot.model == "claude-haiku-5-5") }
+        #expect(Set(bots.compactMap(\.avatar)).count == 3)
+        #expect(layout.pinned == ["bot:theo"])
+        #expect(layout.sections.first?.name == "Clicky")
+        #expect(layout.sections.first?.leaderID == BotsStore.clickyID)
+        #expect(layout.sections.first?.items.first == "clicky")
+        #expect(layout.sections.first?.items.count == 4)
+        #expect(layout.sections.last?.name == "Work")
+        // Run again (an old setup with a Clicky category already): nothing doubles.
+        BotImport.addClickyTeam(to: &bots, layout: &layout)
+        #expect(bots.count == 4)
+        #expect(layout.sections.count == 2)
+        #expect(layout.sections.first?.items.count == 4)
+    }
+
+    @Test func clickyHasItsOwnPlaceInTheSidebarAndItsOwnChat() {
+        #expect(BotsLayout.item(forBot: BotsStore.clickyID) == "clicky")
+        #expect(BotsLayout.botID(ofItem: "clicky") == BotsStore.clickyID)
+        #expect(BotsLayout.botID(ofItem: "bot:theo") == "theo")
+        #expect(BotsLayout.botID(ofItem: "group:x") == nil)
+        BotsSelection.shared.pane = .bot(BotsStore.clickyID)
+        #expect(BotsSelection.shared.pane == .clicky)
+        BotsSelection.shared.pane = .home
+    }
+
     // MARK: Icons
 
     /// A symbol name macOS doesn't know draws nothing at all, so every one in the source is checked.

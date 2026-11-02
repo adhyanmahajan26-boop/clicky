@@ -34,6 +34,8 @@ final class ResearchController: CompanionActivitySource {
     }
     private var researchTask: Task<Void, Never>?
     private var parentAgentID: String?
+    /// The card this run answers to, when it's a job for Clicky's team.
+    private var teamJobID: String?
     /// For researchStatus (tests): the last run's outcome.
     private(set) var lastStatus: [String: Any] = ["state": "idle"]
 
@@ -63,16 +65,24 @@ final class ResearchController: CompanionActivitySource {
         self.researchTask = nil
         workers.removeAll()
         onActivityChanged?()
+        BotsStore.shared.researchEnded(teamJobID, text: "Stopped before it finished.", succeeded: false)
+        teamJobID = nil
         companionManager?.agentsCenter.finish(parentAgentID, status: .cancelled)
         lastStatus["state"] = "cancelled"
         return true
     }
 
     /// `allowsLocalHostForTests`: the debug inbox's researchStart may use 127.0.0.1 test pages.
-    func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false) {
+    /// `reportsToCEO`: Theo asked for it, so the brief goes to his chat too.
+    func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false, reportsToCEO: Bool = false) {
         guard let companionManager else { return }
         cancel()
         runNumber += 1
+        // Researcher does it when there is one (it lights up, and its chat shows the work); otherwise hidden helpers.
+        teamJobID = BotsStore.shared.researchStarted(question: request.question, reportsToCEO: reportsToCEO)
+        let helperModel = BotsStore.shared.researcherClaudeModel
+        let briefModel = BotsStore.shared.teamBot(.researcher) == nil ? ClickyModels.main : helperModel
+        let jobID = teamJobID
         let topic: String
         switch request.source {
         case .topic(let text): topic = text
@@ -128,14 +138,15 @@ final class ResearchController: CompanionActivitySource {
                 return
             }
             self.say("Researching \(urls.count) link\(urls.count == 1 ? "" : "s") in the background.", speaks: speaks)
+            BotsStore.shared.researchProgress(jobID, line: "Reading " + urls.prefix(ResearchTrigger.maximumLinks).map { $0.host ?? $0.absoluteString }.joined(separator: ", ") + ".")
             self.lastStatus = ["state": "reading", "topic": topic, "urls": urls.map(\.absoluteString)]
             agentsCenter.log(parentAgentID, "links: " + urls.map(\.absoluteString).joined(separator: ", "))
 
             let reports = await self.runHelpers(urls: Array(urls.prefix(ResearchTrigger.maximumLinks)), question: request.question,
-                                                parentAgentID: parentAgentID, allowsLocalHostForTests: allowsLocalHostForTests)
+                                                parentAgentID: parentAgentID, allowsLocalHostForTests: allowsLocalHostForTests, model: helperModel, jobID: jobID)
             guard !Task.isCancelled else { return }
             self.lastStatus["state"] = "writing"
-            let brief = await Self.synthesize(question: request.question, reports: reports)
+            let brief = await Self.synthesize(question: request.question, reports: reports, model: briefModel)
             guard !Task.isCancelled else { return }
             self.present(topic: self.lastStatus["topic"] as? String ?? topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
         }
@@ -151,7 +162,7 @@ final class ResearchController: CompanionActivitySource {
         let succeeded: Bool
     }
 
-    private func runHelpers(urls: [URL], question: String, parentAgentID: String, allowsLocalHostForTests: Bool) async -> [Report] {
+    private func runHelpers(urls: [URL], question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
         guard let agentsCenter = companionManager?.agentsCenter else { return [] }
         let jobs = urls.enumerated().map { (index: $0.offset + 1, url: $0.element) }
         return await withTaskGroup(of: Report.self) { group in
@@ -168,10 +179,11 @@ final class ResearchController: CompanionActivitySource {
                         return Report(index: job.index, url: job.url, title: page?.title, text: "unreadable (empty, blocked or a sign-in wall)", succeeded: false)
                     }
                     do {
-                        let turn = try await Self.readPage(question: question, url: job.url, page: page)
+                        let turn = try await Self.readPage(question: question, url: job.url, page: page, model: model)
                         await MainActor.run {
                             agentsCenter.log(agentID, turn.text)
                             agentsCenter.finish(agentID, status: .done, usage: turn.usageSummary)
+                            BotsStore.shared.researchProgress(jobID, line: "**\(job.url.host ?? job.url.absoluteString)**: " + String(turn.text.prefix(280)))
                         }
                         return Report(index: job.index, url: job.url, title: page.title, text: turn.text, succeeded: true)
                     } catch {
@@ -188,22 +200,22 @@ final class ResearchController: CompanionActivitySource {
     }
 
     /// One helper reading one page; a stalled helper gets one more try before the page counts as failed.
-    private static func readPage(question: String, url: URL, page: (title: String?, text: String)) async throws -> ClaudeTurnResult {
+    private static func readPage(question: String, url: URL, page: (title: String?, text: String), model: String) async throws -> ClaudeTurnResult {
         let contentBlocks: [ClaudeContentBlock] = [.text(ResearchPrompts.workerPrompt(question: question, url: url, title: page.title, text: page.text))]
         do {
-            return try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+            return try await ClaudeCodeBridge(model: model).runTurn(
                 systemPromptFileName: "research-worker-prompt.md", systemPrompt: ResearchPrompts.workerSystemPrompt, contentBlocks: contentBlocks)
         } catch ClaudeCodeBridgeError.claudeCodeStalled {
             try Task.checkCancellation()
-            return try await CompanionWorkerRunner.makeWorkerClaudeCodeBridge().runTurn(
+            return try await ClaudeCodeBridge(model: model).runTurn(
                 systemPromptFileName: "research-worker-prompt.md", systemPrompt: ResearchPrompts.workerSystemPrompt, contentBlocks: contentBlocks)
         }
     }
 
-    private static func synthesize(question: String, reports: [Report]) async -> String {
+    private static func synthesize(question: String, reports: [Report], model: String) async -> String {
         let prompt = ResearchPrompts.synthesisPrompt(question: question, reports: reports.map { ($0.index, $0.url, $0.title, $0.text) })
         do {
-            let turn = try await ClaudeCodeBridge(model: ClickyModels.main).runTurn(systemPromptFileName: "research-synthesis-prompt.md",
+            let turn = try await ClaudeCodeBridge(model: model).runTurn(systemPromptFileName: "research-synthesis-prompt.md",
                                                                            systemPrompt: ResearchPrompts.synthesisSystemPrompt,
                                                                            contentBlocks: [.text(prompt)])
             return turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -230,6 +242,9 @@ final class ResearchController: CompanionActivitySource {
         lastStatus = ["state": "done", "topic": topic, "brief": brief, "savedPath": savedPath ?? NSNull(),
                       "sources": reports.map { ["index": $0.index, "url": $0.url.absoluteString, "ok": $0.succeeded] }]
         researchTask = nil
+        let sources = reports.filter(\.succeeded).map { "[\($0.index)] \($0.title ?? $0.url.host ?? "source"): \($0.url.absoluteString)" }.joined(separator: "\n")
+        BotsStore.shared.researchEnded(teamJobID, text: brief + (sources.isEmpty ? "" : "\n\n" + sources), succeeded: true)
+        teamJobID = nil
         // A research brief belongs to no article on screen: it opens on Theo's own display.
         companionManager.articleController.showNotes(notes, target: nil)
         companionManager.showHandsFreeStatusMessage("Research ready")
@@ -242,6 +257,8 @@ final class ResearchController: CompanionActivitySource {
         companionManager?.agentsCenter.finish(agentID, status: status)
         lastStatus["state"] = status == .failed ? "failed" : "done"
         researchTask = nil
+        BotsStore.shared.researchEnded(teamJobID, text: line, succeeded: status != .failed)
+        teamJobID = nil
         say(line, speaks: speaks)
     }
 

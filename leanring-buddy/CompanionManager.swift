@@ -1420,6 +1420,8 @@ final class CompanionManager: ObservableObject {
         if assistantName.lowercased() != "theo" {
             mainPrompt = mainPrompt.replacingOccurrences(of: "you're theo (built on clicky)", with: "you're \(assistantName.lowercased())")
         }
+        // Clicky's team, and Theo above it. Added here so the warm standby brain gets the same prompt.
+        mainPrompt += "\n\n" + BotsStore.shared.clickyTeamPromptSection
         // A screen of its own: searches and links open in Claudia's own browser window there.
         if let claudiaScreen = ClaudiaScreen.picked, ClickySettings.isActionsEnabled {
             mainPrompt += "\n\nyour own screen: you have a display of your own (\"\(claudiaScreen.localizedName)\"). to search the web or open a site, always use a search or open_url step: they open in your own browser window on that display, so the user's windows stay as they are. never switch to the user's browser and type a search into it, unless they ask you to do something in a specific window of theirs."
@@ -1487,6 +1489,10 @@ final class CompanionManager: ObservableObject {
         var keepsLiveScreenMarks = false
         /// P8: the fast path already looked at this transcript (it had nothing by that name): straight to Claude.
         var skipsFastPath = false
+        /// False for words that aren't the owner's own (an agent's, Theo's): those stay out of Memory's log.
+        var isOwnersWords = true
+        /// Theo ordered this turn: what the team does for it reports back to him too.
+        var theoOrder: ClickyTheoOrder?
     }
 
     /// Reads the screens, streams Claude's answer and speaks it as it
@@ -1496,6 +1502,10 @@ final class CompanionManager: ObservableObject {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         var turnOptions = requestedTurnOptions ?? TurnOptions()
+        // Memory keeps what the owner says to Clicky. Only their first pass at it, not a turn's continuations.
+        if turnOptions.isOwnersWords, turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, !turnOptions.skipsFastPath {
+            BotsStore.shared.noteOwnerSaid(transcript)
+        }
         // "Do it for me" after a step-by-step answer: Claudia clicks the steps she marked, in order
         // (an actions block on the fresh screen, with the usual countdown and safety tiers).
         if turnOptions.extraUserText == nil, ClickForMeCommand.matches(transcript), let markedSteps = lastMarkedStepsDescription {
@@ -1630,6 +1640,8 @@ final class CompanionManager: ObservableObject {
                 let modeHint = turnOptions.forcedModeHint ?? ModeHint.detect(transcript)
                 var userText = modeHint.line.map { conversationText + "\n" + $0 } ?? conversationText
                 if let extraUserText = turnOptions.extraUserText { userText += "\n" + extraUserText }
+                let remembered = BotsStore.shared.memoryStore.context()
+                if !remembered.isEmpty { userText += "\n\n" + remembered }
                 let systemPrompt = companionSystemPrompt(modeHint: modeHint)
 
                 // Streamed: the router, segmenter and voice start on the first words.
@@ -1637,6 +1649,7 @@ final class CompanionManager: ObservableObject {
                                                   companionManager: self, speaksResponse: turnOptions.speaksResponse)
                 answerSession.isWhiteboardTurn = modeHint.isWhiteboard
                 answerSession.brainAgentID = brainAgentID
+                answerSession.theoOrder = turnOptions.theoOrder
                 currentAnswerSession = answerSession
                 activeAnswerSession = answerSession
                 markController.startAnswer(turnRecord: turnRecord)

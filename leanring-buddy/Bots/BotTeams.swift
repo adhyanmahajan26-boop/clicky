@@ -351,7 +351,7 @@ struct CategoryScreen: View {
 
     private func membersGrid(_ section: BotsLayout.Section) -> some View {
         let members = store.members(of: section)
-        let others = store.bots.filter { bot in !members.contains { $0.id == bot.id } }
+        let others = ([store.clickyBot] + store.bots).filter { bot in !members.contains { $0.id == bot.id } }
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Members").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
