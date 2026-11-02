@@ -26,12 +26,34 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case look, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case look, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
+
+        /// The pages this Mac has: Studio is on a Mac Studio only.
+        static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
+
+        /// Its Hairline icon.
+        var icon: String {
+            switch self {
+            case .look: return "paint"
+            case .studio: return "studio"
+            case .clicky: return "clicky"
+            case .coding: return "term"
+            case .keys: return "key"
+            case .voice: return "voice"
+            case .dictation: return "mic"
+            case .screen: return "screen"
+            case .link: return "link"
+            case .permissions: return "lock"
+            case .updates: return "updates"
+            case .about: return "info"
+            }
+        }
 
         var title: String {
             switch self {
             case .look: return "Look"
+            case .studio: return "Studio"
             case .clicky: return "Clicky"
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
@@ -47,7 +69,8 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
-            case .look: return "Light or dark, the cursor and the pill. Click one and it changes right away."
+            case .look: return "How Theo looks and moves. Click one and it changes right away."
+            case .studio: return "Hidden screens your bots work on, with small live views inside Theo."
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."
@@ -64,6 +87,7 @@ enum SettingsTab {
         var symbol: String {
             switch self {
             case .look: return "paintbrush.pointed.fill"
+            case .studio: return "rectangle.split.2x1"
             case .clicky: return "cursorarrow.rays"
             case .coding: return "terminal.fill"
             case .keys: return "key.fill"
@@ -80,6 +104,7 @@ enum SettingsTab {
         var colors: [Color] {
             switch self {
             case .look: return TileColors.violet
+            case .studio: return TileColors.graphite
             case .clicky: return TileColors.ember
             case .coding: return TileColors.graphite
             case .keys: return TileColors.amber
@@ -114,21 +139,21 @@ struct SettingsSidebar: View {
             .keyboardShortcut(.cancelAction)
             Text("SETTINGS").font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
                 .padding(.leading, 10).padding(.top, 14).padding(.bottom, 4)
-            ForEach(SettingsTab.Section.allCases) { section in
+            ForEach(SettingsTab.Section.shown) { section in
                 Button { selection.openSettings(section) } label: {
                     HStack(spacing: 10) {
-                        IconTile(symbol: section.symbol, colors: section.colors, size: 22)
-                        Text(section.title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        HairlineIcon(name: section.icon, size: 20, color: current == section ? DS.Colors.textPrimary : DS.Colors.textSecondary, selected: current == section)
+                        Text(section.title).font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 8).frame(height: 34).contentShape(Rectangle())
+                    .padding(.horizontal, 8).frame(height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(SidebarButtonStyle(isSelected: current == section))
             }
             Spacer()
         }
-        .padding(.horizontal, 8)
-        .frame(width: 248)
+        .padding(.horizontal, 10)
+        .frame(width: 264)
         .background(DS.Colors.sidebar)
     }
 }
@@ -156,6 +181,7 @@ struct SettingsPage: View {
     @ViewBuilder private var content: some View {
         switch section {
         case .look: LookSettingsContent()
+        case .studio: StudioSettingsContent()
         case .clicky: ClickySettingsContent()
         case .coding: CodingSettingsView()
         case .keys: ProviderKeysView()
@@ -175,11 +201,38 @@ struct SettingsPage: View {
 struct LookSettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
     @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
+    @AppStorage(TheoAccent.settingKey) private var accent = "ember"
+    @AppStorage(TheoMotionLevel.settingKey) private var motion = TheoMotionLevel.lively.rawValue
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             TheoSection(title: "Appearance", hint: nil) {
-                ChoiceChips(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title, $0.symbol) }, selection: $appearance).padding(12)
+                HStack(spacing: 10) {
+                    ForEach(TheoAppearance.allCases) { option in appearanceCard(option) }
+                }
+                .padding(12)
+            }
+            TheoSection(title: "Accent", hint: nil) {
+                HStack(spacing: 10) {
+                    ForEach(TheoPalette.accents, id: \.id) { swatch in
+                        Button { accent = swatch.id } label: {
+                            Circle().fill(Color(hex: scheme == .dark ? swatch.dark : swatch.light)).frame(width: 24, height: 24)
+                                .overlay(Circle().strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
+                                .padding(3)
+                                .overlay(Circle().strokeBorder(accent == swatch.id ? DS.Colors.textPrimary : .clear, lineWidth: 2))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain).help(swatch.id.capitalized)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+            }
+            TheoSection(title: "Motion", hint: DS.Motion.level == .off && motion != "off" ? "Reduce Motion is on in macOS, so everything holds still." : nil) {
+                SettingRow(title: "Motion", detail: "Your crew, animated icons and live dots. Off stops all of it.") {
+                    HairlineSegments(options: TheoMotionLevel.allCases.map { ($0.rawValue, $0.title) }, selection: $motion)
+                }
             }
             TheoSection(title: "Cursor", hint: "The spark that follows you, and where it lives.") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
@@ -209,6 +262,52 @@ struct LookSettingsContent: View {
             }
         }
         .onAppear { look.reload() }
+    }
+
+    private func appearanceCard(_ option: TheoAppearance) -> some View {
+        let on = appearance == option.rawValue
+        return Button { appearance = option.rawValue } label: {
+            VStack(spacing: 6) {
+                AppearancePreview(option: option).frame(height: 52)
+                Text(option.title).font(.system(size: 11.5)).foregroundColor(on ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity)
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(on ? DS.Colors.accent : DS.Colors.borderSubtle, lineWidth: on ? 2 : 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A tiny Theo window in Black, Light or half of each.
+private struct AppearancePreview: View {
+    let option: TheoAppearance
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        Group {
+            switch option {
+            case .dark: window(page: Color.black, side: Color(hex: 0x0B0B0B))
+            case .light: window(page: Color.white, side: Color(hex: 0xF4F4F4))
+            case .system:
+                HStack(spacing: 0) { Color.black; Color.white }
+            }
+        }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(option == .light ? Color(hex: 0xE5E5E5) : Color(hex: 0x333333), lineWidth: 1))
+    }
+
+    private func window(page: Color, side: Color) -> some View {
+        GeometryReader { box in
+            HStack(spacing: 0) {
+                side.frame(width: box.size.width * 0.28)
+                ZStack(alignment: .topLeading) {
+                    page
+                    Capsule().fill(DS.Colors.accent).frame(width: box.size.width * 0.3, height: 6).padding(10)
+                }
+            }
+        }
     }
 }
 

@@ -55,11 +55,13 @@ extension BotsStore {
     /// Clicky as a member of a team: its name, its brain, its place in the chart.
     var clickyBot: NativeBot {
         let brain = BrainModel(setting: ClickyModels.main)
-        return NativeBot(id: Self.clickyID, name: "Clicky",
+        var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
                          instructions: "You are Clicky, Addy's screen companion. You manage a small team and report to the CEO.",
                          hue: 20, accentHue: 40, primary: false, provider: "claude",
                          model: brain.isClaude ? brain.modelIdentifier : ClickyModels.sonnet, effort: nil, apps: [], category: "personal")
+        clicky.look = Self.savedClickyLook
+        return clicky
     }
 
     /// The bots Clicky spawned, in the order of their duties.

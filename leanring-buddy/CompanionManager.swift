@@ -417,7 +417,7 @@ final class CompanionManager: ObservableObject {
     func putSparkOnScreens(greeting: Bool) {
         guard TheoLink.shared.clickyRunsHere else { return }
         if !greeting { sparkOverlay.hasShownOverlayBefore = true }
-        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
     }
 
@@ -505,7 +505,7 @@ final class CompanionManager: ObservableObject {
     /// Setup's "Test the spark": the overlay has to be up to show it.
     func showOverlayForSparkTest() {
         guard !isOverlayVisible else { return }
-        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
         scheduleTransientHideIfNeeded()
     }
@@ -806,7 +806,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
         if !isClickyCursorEnabled && !isOverlayVisible && TheoLink.shared.clickyRunsHere {
             sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
             isOverlayVisible = true
         }
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -936,7 +936,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
         if !isOverlayVisible {
             sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
             isOverlayVisible = true
         }
 

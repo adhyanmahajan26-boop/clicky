@@ -51,8 +51,11 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var owner: String?
     /// Which job it does for its owner (a ClickyDuty's raw value).
     var duty: String?
+    /// Its crew figure, from Make your bot. Nil: the standard look for its job.
+    var look: CrewLook?
 
     var isOn: Bool { enabled ?? true }
+    var crewLook: CrewLook { look ?? .standard(id: id, name: name, isPrimary: primary) }
     var authorityLevel: String { authority ?? (primary ? "ceo" : "member") }
 
     var isProjectHandler: Bool { (category ?? BotImport.defaultCategory(id)) == "project" }
@@ -281,6 +284,8 @@ final class BotsStore: ObservableObject {
                             accentHue: hue + 30, primary: false, provider: provider, model: model, effort: nil,
                             apps: [], category: groupID == BotGroup.projectID ? "project" : "personal")
         bot.avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(id), among: bots).rawValue
+        // A random tasteful figure of its own, until someone dresses it.
+        bot.look = .shuffled()
         bots.append(bot)
         writeBots()
         conversations[id] = BotConversationRecord()
@@ -312,6 +317,19 @@ final class BotsStore: ObservableObject {
     func bot(_ id: String) -> NativeBot? { id == Self.clickyID ? clickyBot : bots.first { $0.id == id } }
 
     func conversation(_ id: String) -> BotConversationRecord { conversations[id] ?? BotConversationRecord() }
+
+    /// Test profile only (CrewTestCommands).
+    func setConversationForTest(_ id: String, _ record: BotConversationRecord) {
+        guard TheoProfile.isTest else { return }
+        conversations[id] = record
+    }
+
+    /// Test profile only: a run on a card, with nothing behind it.
+    func injectRunForTest(_ run: T3Run) {
+        guard TheoProfile.isTest else { return }
+        t3Runs.removeAll { $0.id == run.id }
+        t3Runs.append(run)
+    }
 
     func save(_ bot: NativeBot) {
         // Clicky's own settings live in Settings › Clicky.
@@ -1233,6 +1251,12 @@ enum BotImport {
 
 /// What each bot is told.
 enum BotPrompts {
+    /// Shown in the chat as a card with option tiles (BotCallCard).
+    static let askingStyle =
+        "When the user really has to choose between options, end your message with one line in exactly this form, " +
+        "and don't also list the options in your words: [CHOOSE: the question | First option: a few words on it | Second option: a few words on it]. " +
+        "Two to four options, the one you'd pick first. Most messages need none of this."
+
     static let chatStyle =
         "Reply like a chat message: talk directly to the user, keep it short unless they ask for depth, " +
         "and don't start with your name or a heading."
@@ -1270,7 +1294,7 @@ enum BotPrompts {
     }
 
     static func persona(bot: NativeBot, team: [NativeBot]) -> String {
-        var parts = [bot.instructions, chatStyle]
+        var parts = [bot.instructions, chatStyle, askingStyle]
         let apps = BotConnectors.known.filter { bot.apps.contains($0.id) }
         if !apps.isEmpty {
             parts.append("Apps you can use: \(apps.map(\.name).joined(separator: ", ")). If one isn't available, " +

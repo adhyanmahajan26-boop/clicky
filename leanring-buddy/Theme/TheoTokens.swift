@@ -8,34 +8,45 @@
 //
 
 import AppKit
+import ClickyCore
 import SwiftUI
 
 enum DS {
-    /// The palette from docs/DESIGN.md: two surfaces, three text tiers, one accent (ember), adaptive to
-    /// light and dark.
+    /// The Hairline palette (TheoPalette in ClickyCore): true black or white, one accent, hairlines. Every view gets its
+    /// colours here; the values adapt to the window's appearance.
     enum Colors {
-        static let background = adaptive(dark: 0x0E0E10, light: 0xFAFAF9)
+        static let background = ink(\.background)
         /// Cards and the composer.
-        static let surface1 = adaptive(dark: 0x17171A, light: 0xFFFFFF)
+        static let surface1 = ink(\.card)
         /// Popovers, panels, the user's bubble, code blocks.
-        static let surface = adaptive(dark: 0x1E1E22, light: 0xF5F5F3)
+        static let surface = ink(\.card2)
         static let surface3 = surface
-        static let sidebar = adaptive(dark: 0x121214, light: 0xF1F0EE)
-        static let hover = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.05, lightAlpha: 0.04)
-        static let selected = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.12, lightAlpha: 0.09)
-        static let borderSubtle = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.08, lightAlpha: 0.10)
-        static let borderStrong = adaptive(dark: 0xFFFFFF, light: 0x000000, darkAlpha: 0.14, lightAlpha: 0.16)
-        static let textPrimary = adaptive(dark: 0xF2F2F4, light: 0x17171A)
-        static let textSecondary = adaptive(dark: 0xA1A1AA, light: 0x5C5C66)
-        static let textTertiary = adaptive(dark: 0x83838D, light: 0x72727C)
-        static let textDisabled = adaptive(dark: 0x4A4A52, light: 0xB4B4BC)
-        static let textOnAccent = Color.white
-        /// Ember: the primary button, focus ring, send and the selection dot. Nothing else.
-        static let accent = adaptive(dark: 0xE8704F, light: 0xD9532F)
-        /// Ember as words and small marks, dark enough to read on a light page.
-        static let accentText = adaptive(dark: 0xE8704F, light: 0xB8431F)
-        /// Ember behind white text.
-        static let accentFill = Color(hex: 0xC8502F)
+        static let sidebar = ink(\.sidebar)
+        static let hover = ink(\.hover)
+        static let selected = ink(\.selection)
+        static let borderSubtle = ink(\.line)
+        static let borderStrong = ink(\.line2)
+        static let textPrimary = ink(\.text)
+        static let textSecondary = ink(\.text2)
+        static let textTertiary = ink(\.text3)
+        static let textDisabled = ink(\.text3)
+        static let textOnAccent = dynamic { dark in
+            let accent = TheoPalette.accent(accentID, dark: dark)
+            // Black on a bright accent, white on a dark one, whichever the swatch needs.
+            return NSColor(hex: luminance(accent) > 0.32 ? 0x000000 : 0xFFFFFF)
+        }
+        /// The accent: the primary button, focus ring, send, live dots and the one detail on an icon.
+        static let accent = dynamic { NSColor(hex: TheoPalette.accent(accentID, dark: $0)) }
+        /// The accent as words and small marks, dark enough to read on a light page.
+        static let accentText = dynamic { dark in
+            guard accentID == "ember" else { return NSColor(hex: TheoPalette.accent(accentID, dark: dark)) }
+            let palette = dark ? TheoPalette.black : TheoPalette.light
+            return NSColor(hex: palette.accentInk.hex)
+        }
+        /// The accent behind text.
+        static let accentFill = accent
+        /// The accent as a soft wash.
+        static let accentSoft = dynamic { NSColor(hex: TheoPalette.accent(accentID, dark: $0), alpha: $0 ? 0.13 : 0.10) }
         /// The leader's crown and label.
         static let gold = adaptive(dark: 0xF5B13D, light: 0x9A6400)
         /// A neutral tile behind a logo.
@@ -50,10 +61,24 @@ enum DS {
         static let destructiveText = adaptive(dark: 0xE5594F, light: 0xD1453B)
 
         static func adaptive(dark: UInt32, light: UInt32, darkAlpha: CGFloat = 1, lightAlpha: CGFloat = 1) -> Color {
-            Color(nsColor: NSColor(name: nil) { appearance in
-                let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                return NSColor(hex: isDark ? dark : light, alpha: isDark ? darkAlpha : lightAlpha)
-            })
+            dynamic { NSColor(hex: $0 ? dark : light, alpha: $0 ? darkAlpha : lightAlpha) }
+        }
+
+        private static func ink(_ token: KeyPath<TheoPalette, TheoInk>) -> Color {
+            dynamic { dark in
+                let value = (dark ? TheoPalette.black : TheoPalette.light)[keyPath: token]
+                return NSColor(hex: value.hex, alpha: value.alpha)
+            }
+        }
+
+        private static func dynamic(_ make: @escaping (Bool) -> NSColor) -> Color {
+            Color(nsColor: NSColor(name: nil) { make($0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) })
+        }
+
+        private static var accentID: String { UserDefaults.standard.string(forKey: TheoAccent.settingKey) ?? "ember" }
+
+        private static func luminance(_ hex: UInt32) -> Double {
+            0.2126 * Double((hex >> 16) & 0xFF) / 255 + 0.7152 * Double((hex >> 8) & 0xFF) / 255 + 0.0722 * Double(hex & 0xFF) / 255
         }
     }
 
@@ -65,18 +90,28 @@ enum DS {
     }
 
     enum Motion {
-        static var isReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+        /// Settings › Look › Motion, with macOS's Reduce Motion counting as Off.
+        static var level: TheoMotionLevel {
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { return .off }
+            return TheoMotionLevel(rawValue: UserDefaults.standard.string(forKey: TheoMotionLevel.settingKey) ?? "") ?? .lively
+        }
+        static var isReduced: Bool { level == .off }
         static var hover: Animation { isReduced ? .linear(duration: 0) : .snappy(duration: 0.18) }
         static var panel: Animation { isReduced ? .linear(duration: 0) : .spring(response: 0.35, dampingFraction: 0.86) }
     }
 }
 
-/// Light, dark or follow the Mac. Dark is Theo's own look, so it's the default.
+/// The accent swatch in Settings › Look.
+enum TheoAccent {
+    static let settingKey = "theo.accent"
+}
+
+/// Black, Light or follow the Mac. True black is Theo's own look, so it's the default.
 enum TheoAppearance: String, CaseIterable, Identifiable {
     case dark, light, system
     static let settingKey = "theo.appearance"
     var id: String { rawValue }
-    var title: String { self == .dark ? "Dark" : self == .light ? "Light" : "Match my Mac" }
+    var title: String { self == .dark ? "Black" : self == .light ? "Light" : "Match Mac" }
     var symbol: String { self == .dark ? "moon.fill" : self == .light ? "sun.max.fill" : "circle.lefthalf.filled" }
     var colorScheme: ColorScheme? { self == .dark ? .dark : self == .light ? .light : nil }
     /// For AppKit surfaces such as the terminal's window.
@@ -86,8 +121,10 @@ enum TheoAppearance: String, CaseIterable, Identifiable {
 /// Applies the appearance setting to a window's root view.
 struct TheoAppearanceRoot: ViewModifier {
     @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
+    @AppStorage(TheoAccent.settingKey) private var accent = "ember"
     func body(content: Content) -> some View {
-        content.preferredColorScheme(TheoAppearance(rawValue: appearance)?.colorScheme)
+        // The accent is read when a colour draws, so a new swatch redraws the tree.
+        content.id(accent).preferredColorScheme(TheoAppearance(rawValue: appearance)?.colorScheme)
     }
 }
 

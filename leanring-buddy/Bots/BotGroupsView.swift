@@ -278,9 +278,6 @@ struct NewBotSheet: View {
                     TextField("What it does", text: $role).textFieldStyle(.plain).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            field("Look") {
-                BotLookPicker(bot: $look, tile: 40, columns: 8)
-            }
             field("Instructions") {
                 TextEditor(text: $instructions)
                     .font(.system(size: 13)).scrollContentBackground(.hidden).padding(8).frame(height: 120)
@@ -352,12 +349,15 @@ struct NewBotSheet: View {
         instructions = item.instructions
         look.avatar = BotCharacter.firstFree(preferring: item.character, among: store.bots).rawValue
         look.name = name
+        // A stencil wears the gear of its job; a blank bot gets a random tasteful figure.
+        look.look = item.id == "blank" ? .shuffled() : .standard(id: item.id, name: item.name)
     }
 
     private func preview(of item: BotStencil) -> NativeBot {
         var bot = look
         bot.name = item.name
         bot.avatar = item.character.rawValue
+        bot.look = item.id == "blank" ? .clicky : .standard(id: item.id, name: item.name)
         return bot
     }
 
@@ -367,6 +367,7 @@ struct NewBotSheet: View {
                                instructions: instructions.isEmpty ? "You are \(trimmedName). \(role)" : instructions,
                                provider: provider, model: model, groupID: groupID.isEmpty ? nil : groupID)
         bot.avatar = look.avatar
+        if let dressed = look.look { bot.look = dressed }
         bot.apps = stencil?.apps ?? []
         bot.effort = provider.hasPrefix("api:") ? nil : HarnessPrefs.defaultEffort(provider)
         store.save(bot)
@@ -400,28 +401,13 @@ struct TypingDots: View {
     }
 }
 
-/// Clicky's tile: flat ember with the spark-and-cursor mark (docs/DESIGN.md).
+/// Clicky's crew figure: white, with a cursor for an antenna. It talks while it speaks and works while it's busy.
 struct ClickyAvatar: View {
     let size: CGFloat
     var isActive = false
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-            .fill(DS.Colors.accent)
-            .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
-            .overlay {
-                // While it's working the cursor drifts in a small loop and its rays pulse, like Clicky on screen.
-                TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !isActive || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { timeline in
-                    let t = isActive && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? timeline.date.timeIntervalSinceReferenceDate : 0
-                    Image(systemName: "cursorarrow.rays").font(.system(size: size * 0.46, weight: .semibold)).foregroundColor(.white)
-                        .offset(x: cos(t * 1.4) * size * 0.04, y: sin(t * 2.1) * size * 0.04)
-                        .scaleEffect(1 + 0.05 * sin(t * 3))
-                }
-            }
-            .overlay {
-                if isActive { RoundedRectangle(cornerRadius: size * 0.34, style: .continuous).inset(by: -3).stroke(DS.Colors.accent, lineWidth: 1.5) }
-            }
-            .frame(width: size, height: size)
+        CrewAvatar(look: BotsStore.shared.clickyBot.crewLook, size: size, pose: isActive ? .working : .awake)
     }
 }
 

@@ -119,6 +119,8 @@ extension ScreenTopology {
         let flipH = mainDisplayHeight
         return NSScreen.screens.enumerated().compactMap { screenIndex, screen in
             guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
+            // Theo's hidden Studio screens aren't anything Clicky should see or point at.
+            guard !StudioDisplays.virtualIDs.contains(displayID) else { return nil }
             return DisplayInfo(
                 displayID: displayID,
                 localizedName: screen.localizedName,

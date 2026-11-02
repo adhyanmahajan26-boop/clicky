@@ -238,7 +238,7 @@ struct ClickyInspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 12) {
-                    ClickyAvatar(size: 46)
+                    LookButton(bot: Binding(get: { store.clickyBot }, set: { if let look = $0.look { store.setLook(look, for: BotsStore.clickyID) } }))
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Clicky").font(.system(size: 17, weight: .semibold))
                         Text("Your screen companion. Sees your screens, points, draws boards, researches and acts on Theo's own screen.")
@@ -401,13 +401,12 @@ struct LookButton: View {
                         .padding(4).background(Circle().fill(Color.black.opacity(0.7)))
                 }
         }
-        .buttonStyle(.plain).help("Change its look")
-        .popover(isPresented: $open) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Pick a look").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                BotLookPicker(bot: $bot, tile: 46, columns: 4)
+        .buttonStyle(.plain).help("Make your bot")
+        .sheet(isPresented: $open) {
+            MakeYourBotSheet(name: bot.name, look: bot.crewLook, isClicky: bot.id == BotsStore.clickyID) { saved in
+                if let saved { bot.look = saved }
+                open = false
             }
-            .padding(14)
         }
     }
 }

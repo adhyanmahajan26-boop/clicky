@@ -440,6 +440,8 @@ enum TheoUIDriver {
             default: break
             }
             settle { respond(true, state(), nil) }
+        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults":
+            respond(true, CrewTestCommands.run(name, command, in: target), nil)
         case "uiHitMap": respond(true, hitMap(target!), nil)
         case "uiTree":
             let roles = (command["roles"] as? [String]).map(Set.init)

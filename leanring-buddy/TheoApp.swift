@@ -136,6 +136,8 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             openAtLogin()
         }
 
+        StudioController.shared.startIfEnabled()
+
         // A Dock app with its own window, unless that's turned off in Settings.
         NSApp.setActivationPolicy(ClickySettings.showsInDock && !TheoProfile.isTest ? .regular : .accessory)
         if SetupGuideWindowController.isNeededAtLaunch {
@@ -171,6 +173,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        StudioController.shared.shutDown()
         if Self.isHostingUnitTests { return }
         pill?.stop()
         companionManager.stop()

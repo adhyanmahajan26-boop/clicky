@@ -118,8 +118,8 @@ enum BotBlocks {
 
 /// One chat text style, for a finished reply and one still typing, so nothing re-wraps when typing ends.
 enum ChatText {
-    static let size: CGFloat = 15
-    static let lineSpacing: CGFloat = 6
+    static let size: CGFloat = 14
+    static let lineSpacing: CGFloat = 4
     /// A comfortable line length, about 75 characters.
     static let measure: CGFloat = 640
     static let font = Font.system(size: size)

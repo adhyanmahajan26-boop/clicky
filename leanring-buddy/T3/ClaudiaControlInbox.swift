@@ -285,7 +285,7 @@ final class ClaudiaControlInbox {
             reply(identifier, ok: true, result: [
                 "brain": companionManager.selectedModel,
                 "helpers": ClickyModels.helper,
-                "screens": NSScreen.screens.map(\.localizedName),
+                "screens": NSScreen.ownerScreens.map(\.localizedName),
                 "claudiaScreen": ClickySettings.claudiaScreenName,
                 "silentMode": ClickySettings.isSilentModeEnabled,
                 "accessibility": companionManager.hasAccessibilityPermission,
@@ -423,7 +423,7 @@ final class ClaudiaControlInbox {
                 "sparkStyles": CompanionIconStyle.allCases.map { ["id": $0.rawValue, "name": $0.displayName] },
                 "claudiaScreen": ClickySettings.claudiaScreenName,
                 "autoBoard": ClickySettings.isWhiteboardAutoEnabled,
-                "screens": NSScreen.screens.map(\.localizedName),
+                "screens": NSScreen.ownerScreens.map(\.localizedName),
                 "models": Dictionary(uniqueKeysWithValues: BrainProvider.allCases.map { provider in
                     (provider.rawValue, (catalog.models[provider] ?? []).map { BrainModel(provider: provider, modelIdentifier: $0).setting })
                 }),

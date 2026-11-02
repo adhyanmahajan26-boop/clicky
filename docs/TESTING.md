@@ -25,6 +25,7 @@ Commands for `cmd`:
 - `uiShowPanel` (the menu-bar panel), `uiStopRun {id}`.
 - App commands: `botCreate`, `botUpdate`, `botDelete`, `botSay {bot, text}`, `botChat {id, limit}`, `botsState`, `groupSave`, `groupDelete`, `routines {action, id}`, `harnessState {refresh}`, `harnessSet {codingTarget, codingModel, codingEffort, defaultHarness}`, `terminalText {id}`.
 
+- Crew and Studio: `uiSeedDemo` (a team and a chat with every card), `uiCrew {pointer: {x, y}}` (a stand-in pointer in window points, the real one stays put; `{pointer: null}` lets go), `uiStudio {action: on|off|state|panel|assign|clear, botID or botName, screen, tile}`, `uiSetDefaults {key, value}`. `test.studio.model` set before launch tests the Mac Studio gate. Boops need `uiClick`; `uiClickPost` doesn't reach a sheet.
 - Clicky's team: `clickyTeam` (the team, its category and recent jobs), `clickyTeam {action: "delegate", duty, task}`, `clickyTeam {action: "order", text}` (the CEO's order to Clicky), `clickyTeam {action: "memorySearch", query}`. `ask {text, speak: false, owner: true}` is a message typed in Clicky's chat.
 - Voice: `uiDictationFeed {path, app, window}` (a sound file through dictation into a background window), `uiDictationField`, `uiDictationStatus`, `uiDictationPill {state}`, `uiDictationKeys {flags}`; `uiCallStart`, `uiCallFeed {path, silence}`, `uiCallStatus`, `uiCallMute`, `uiCallEnd`; `uiSpeak`, `uiSpeakStop`; `uiSet {key, value}`, `uiTestKey {provider, value}`.
 
@@ -35,6 +36,7 @@ To use Accessibility and Speech, start the profile through LaunchServices (`open
 With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. Set `uiSet test.sarvam.base = http://127.0.0.1:8765` and `uiTestKey {provider: "sarvam", value: "anything"}`. For a live test with the owner's saved key: `uiSet test.sarvam.useOwnerKey = true` (the key is read where it is, never copied or shown).
 
 ## Rules
+- Studio screens are real displays for the whole Mac while they're on, so keep tests short and check the real monitors are back after turning them off. Never turn on Live capture in a test.
 - Never record the screen. Screenshots of Theo's window only (`theoui.py shot`). Never screenshot the whole display.
 - Don't move the pointer, take focus or press real keys. Don't open apps.
 - Never print, log or paste API keys.
