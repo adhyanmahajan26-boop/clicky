@@ -108,6 +108,9 @@ final class ClaudiaControlInbox {
                 BotsStore.shared.send(text, to: botID)
             }
             reply(identifier, ok: true, result: ["sent": botID], error: nil)
+        case "dictationStatus":
+            // Whether dictation is listening for its keys, and what the last one did. Never the words.
+            reply(identifier, ok: true, result: CompanionManager.current?.dictationController.statusReport() ?? [:], error: nil)
         case "routines":
             // {action: list|pause|resume|run|delete, id}
             let store = BotsStore.shared

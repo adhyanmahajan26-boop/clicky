@@ -51,6 +51,7 @@ enum TheoProfile {
     /// The first thing the app does. In the test profile it restarts itself with the test home (the path has to
     /// be in place before anything asks where home is), then swaps the defaults and stops focus changes.
     static func prepareAtLaunch() {
+        clearInheritedClaudeEnvironment()
         guard isTest else { return }
         if getenv(homeVariable) == nil {
             makeTestHome()
@@ -65,6 +66,14 @@ enum TheoProfile {
         usePrivatePasteboard()
         stopTakingFocus()
         keepRealHomeForChildProcesses()
+    }
+
+    /// `open` passes on its caller's environment. Started from inside a Claude Code session, Theo would hand that session's
+    /// variables to every CLI it runs, which then act as its children (2 to 4 s slower per turn, and on its token).
+    private static func clearInheritedClaudeEnvironment() {
+        for name in ProcessInfo.processInfo.environment.keys where name == "CLAUDECODE" || name.hasPrefix("CLAUDE_") {
+            unsetenv(name)
+        }
     }
 
     /// Tests of Copy and ⌘V use a pasteboard of their own, never the owner's clipboard.

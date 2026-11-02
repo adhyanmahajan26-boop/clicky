@@ -225,7 +225,9 @@ final class DictationCapture {
                 try? await Task.sleep(nanoseconds: 1_100_000_000)
                 await MainActor.run { self.finishApple() }
             }
-            await group.waitForAll()
+            // Whichever comes first: Apple's last words or the time limit.
+            await group.next()
+            group.cancelAll()
         }
         task?.cancel()
         task = nil
@@ -300,7 +302,7 @@ final class DictationController: ObservableObject {
     static let levelCount = 18
 
     /// How long the words wait for Haiku before going in as they are.
-    static let cleanupBudgetSeconds: TimeInterval = 1.5
+    static let cleanupBudgetSeconds: TimeInterval = 1.8
 
     let keys = DictationKeys()
     private let hub: AudioEngineHub
@@ -460,6 +462,9 @@ final class DictationController: ObservableObject {
     private func finish(_ capture: DictationCapture, target: DictationInserter.Target, session: UUID) async {
         let started = Date()
         phase = .transcribing
+        // Someone is waiting: no App Nap or timer coalescing while Theo sits in the background.
+        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Dictation")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
         await capture.finish()
         let appleSeconds = Date().timeIntervalSince(started)
         let appleText = capture.appleText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -510,7 +515,7 @@ final class DictationController: ObservableObject {
         let outcome = await DictationInserter.insert(text, into: target)
         let totalSeconds = Date().timeIntervalSince(started)
         lastReport = ["engine": engine, "heard": true, "appleSeconds": appleSeconds, "heardSeconds": heardSeconds,
-                      "cleanup": cleanupNote, "cleanupSeconds": lastCleanupSeconds, "totalSeconds": totalSeconds,
+                      "cleanup": cleanupNote, "cleanupSeconds": lastCleanupSeconds, "cleanupModelSeconds": lastCleanupModelSeconds, "totalSeconds": totalSeconds,
                       "method": outcome.method, "inserted": outcome.didInsert, "problem": engineProblem ?? "",
                       "characters": text.count]
         if !outcome.didInsert {
@@ -521,7 +526,9 @@ final class DictationController: ObservableObject {
         hideSoon(after: 0.7)
         if let lateCleanup {
             Task { @MainActor [weak self] in
-                guard let cleaned = await lateCleanup.value else { return }
+                let cleaned = await lateCleanup.value
+                self?.lastReport["cleanupModelSeconds"] = self?.lastCleanupModelSeconds ?? 0
+                guard let cleaned else { return }
                 let replaced = DictationInserter.replace(text, with: cleaned, target: outcome.element)
                 self?.lastReport["cleanup"] = replaced ? "haiku, replaced late" : "too late, kept raw"
             }
@@ -529,6 +536,7 @@ final class DictationController: ObservableObject {
     }
 
     private var lastCleanupSeconds: TimeInterval = 0
+    private var lastCleanupModelSeconds: TimeInterval = 0
 
     private func cleanupTask(for text: String) -> Task<String?, Never> {
         warmCleaner()
@@ -536,7 +544,9 @@ final class DictationController: ObservableObject {
         cleanerTurns += 1
         return Task { @MainActor in
             let reply: String? = await withCheckedContinuation { continuation in
-                cleaner.send(DictationCleanup.userMessage(text), onDelta: { _ in }, onDone: { result in
+                let sent = Date()
+                cleaner.send(DictationCleanup.userMessage(text), onDelta: { _ in }, onDone: { [weak self] result in
+                    self?.lastCleanupModelSeconds = Date().timeIntervalSince(sent)
                     continuation.resume(returning: try? result.get())
                 })
             }

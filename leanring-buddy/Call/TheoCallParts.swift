@@ -48,7 +48,6 @@ final class ClaudeConversation {
     private let promptFileName: String
     private let effort: String?
     private var process: StandbyCLIProcess?
-    private var readLoop: Task<Void, Never>?
     private var turns: [Turn] = []
     private var requestCounter = 0
     /// The process ended by itself (signed out, crashed).
@@ -80,18 +79,19 @@ final class ClaudeConversation {
         let spec = CLILaunchSpec(executableURL: executable, arguments: arguments, environment: environment, workingDirectoryURL: folder, systemPromptText: systemPrompt)
         let launched = try StandbyCLIProcess.spawn(spec)
         process = launched
-        readLoop = Task { @MainActor [weak self] in
+        // A blocking read on its own thread: FileHandle.bytes hands over stream output in lumps, seconds late.
+        let handle = launched.standardOutputHandle
+        DispatchQueue(label: "theo.claude-conversation").async { [weak self] in
             var reader = LineReader()
-            var pending = Data()
-            do {
-                for try await byte in launched.standardOutputHandle.bytes {
-                    pending.append(byte)
-                    guard byte == 0x0A else { continue }
-                    for line in reader.append(pending) { self?.handle(line) }
-                    pending.removeAll(keepingCapacity: true)
-                }
-            } catch {}
-            self?.processEnded()
+            var chunk = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let count = read(handle.fileDescriptor, &chunk, chunk.count)
+                guard count > 0 else { break }
+                let lines = reader.append(Data(chunk[0..<count]))
+                guard !lines.isEmpty else { continue }
+                DispatchQueue.main.async { MainActor.assumeIsolated { lines.forEach { self?.handle($0) } } }
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.processEnded(launched) } }
         }
     }
 
@@ -128,8 +128,6 @@ final class ClaudeConversation {
     }
 
     func stop() {
-        readLoop?.cancel()
-        readLoop = nil
         process?.reap()
         process = nil
         let waiting = turns
@@ -159,8 +157,8 @@ final class ClaudeConversation {
         }
     }
 
-    private func processEnded() {
-        guard process != nil else { return }
+    private func processEnded(_ ended: StandbyCLIProcess) {
+        guard process === ended else { return }
         process = nil
         let waiting = turns
         turns = []

@@ -166,6 +166,8 @@ final class TheoCallSession: ObservableObject {
     // MARK: Start and end
 
     func start() {
+        // No App Nap or timer coalescing while someone is on the line, even with Theo in the background.
+        liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with Theo")
         audio.onBlock = { [weak self] block in self?.handle(block) }
         audio.onDrained = { [weak self] in self?.voiceDrained() }
         do {
@@ -196,6 +198,8 @@ final class TheoCallSession: ObservableObject {
     func end() {
         guard state != .ended else { return }
         state = .ended
+        if let liveActivity { ProcessInfo.processInfo.endActivity(liveActivity) }
+        liveActivity = nil
         ears?.stop()
         voice?.shutDown()
         brain?.stop()
@@ -281,6 +285,7 @@ final class TheoCallSession: ObservableObject {
     }
 
     private var pendingLanguageNote = ""
+    private var liveActivity: NSObjectProtocol?
 
     // MARK: Mic
 

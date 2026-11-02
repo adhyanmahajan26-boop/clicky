@@ -1,12 +1,41 @@
 # Theo test matrix
 
-Final pass, 2 November 2026, on the build in this commit.
+Final pass and round 2, 2 November 2026, on the build in this commit.
 
 ✅ done and looked at. ⚠️ works as far as could be tested, the gap is stated. ❌ doesn't work.
 
 How to read the evidence: screenshots are of Theo's own window, in `docs/evidence/final/`. Clicks go through the app's own event path in a test profile (`docs/TESTING.md`), because the owner's mouse and focus are off limits.
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
+
+## Round 2 (build 202611021157): teams, characters, managers, dictation, Clicky's voice, calls
+
+Small tests only, on Haiku and Sonnet, in a test profile with synthetic speech. No real mic, no real key presses and no Sarvam key were used. Screenshots: `~/jstest/theo-final/round2/`.
+
+| | What | Evidence |
+|---|---|---|
+| ✅ | Sidebar: team headers (tile, group glyph, semibold, manager, count, chevron), bots indented under a guide line, dark and light | `sidebar-orgchart-*.png` |
+| ✅ | 16 characters with their own silhouettes, in the New bot gallery. Theo and Clicky keep their marks | `icon-gallery-new-bot-dark.png` |
+| ⚠️ | The same picker in bot settings: built, the popover wasn't looked at | |
+| ✅ | Manager, live on Haiku: Bo and Cy report to Ada's chat (5.4 s, 2.2 s), Ada rolls up to Theo's chat (5.4 s, 13 s in all), nothing from members straight to Theo, and Theo used the roll-up when asked | run log |
+| ⚠️ | No-manager path and DMs rerouted to the manager: built on the old path, not run live this round | |
+| ✅ | Dictation on synthetic audio into a background TextEdit window: words 0.13 to 0.2 s after release, Haiku done 1.6 s later, typed through Accessibility, focus never moved | `dictation-textedit-result.png` |
+| ✅ | Slow clean-up: raw words go in, Haiku's version replaces them when it lands; a second sentence gets its own space | status log |
+| ✅ | The real app's key listener is running with Accessibility | `dictationStatus` |
+| ⚠️ | A physical hold of Control + Fn: never pressed. The chord logic is unit tested, including that Clicky's Control + Option can't trigger it | |
+| ⚠️ | This Mac's Globe key opens Emoji & Symbols. Whether that pops up after the chord can't be known without a real press. Settings explains it and offers shortcuts without Fn | |
+| ⚠️ | Paste route (apps with no Accessibility): shared with type-for-me, not run here because tests keep off the owner's clipboard | |
+| ⚠️ | Apple's recognizer on Hinglish is weak with a synthetic voice: "kal meeting hai" became "Call meeting, hi". Sarvam is the fix, not yet tried | |
+| ✅ | Clicky's voice picker: Sarvam by language, speakers, pace; Mac voices; ElevenLabs when a key exists | `voice-picker-*.png` |
+| ✅ | Stop: the voice went quiet 3.5 ms after the call | `uiSpeakStop` |
+| ✅ | Call on Sonnet with Apple listening and the Mac voice. First sound after the voice stops: 3.93, 4.23, 2.81, 1.81 s. About 0.6 s of that is the wait to be sure Addy finished, the rest mostly Sonnet's first words | call run |
+| ✅ | Barge-in: the voice stopped about 0.38 s after the speech began, the reply marked as cut, the new question answered. Mute: nothing heard. Transcript lands in Theo's chat | `call-window-*.png` |
+| ⚠️ | Live mic and echo cancelling on a real call: not run. The engine is the one hands-free uses | |
+| ⚠️ | Sarvam live, everything: no key saved. REST, both listening sockets, the voice socket, realtime refused → standard socket, linear16 refused → MP3 all ran against `Tools/mock-sarvam.py`, written from Sarvam's docs. That proves Theo's side, not Sarvam's. Time to first audio on Sarvam is unknown | mock log |
+
+Found on the way: `open` passes on its caller's environment, so a Theo started from a Claude Code session handed that session's variables to every CLI (2 to 4 s slower per turn). Theo now clears them at launch. Earlier numbers in this file may have paid that cost.
+
+Tests: ClickyCore 1,095 passed, app 80 passed.
 
 ## Clicking
 
@@ -103,7 +132,7 @@ Numbers are from the real app with the real voice at zero volume. Nothing was au
 
 ## Tests
 
-ClickyCore 1,076 passed, app 68 passed, on this commit. No failures.
+ClickyCore 1,076 passed, app 68 passed, on the final pass's commit. No failures. Round 2's counts are above.
 
 ## Videos
 

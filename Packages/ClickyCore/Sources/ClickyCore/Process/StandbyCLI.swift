@@ -87,6 +87,8 @@ public final class StandbyCLIProcess: @unchecked Sendable {
         environment["PWD"] = spec.workingDirectoryURL.path
         launchedProcess.environment = environment
         launchedProcess.currentDirectoryURL = spec.workingDirectoryURL
+        // Someone is waiting on it, even when Theo itself is in the background and macOS would slow its children down.
+        launchedProcess.qualityOfService = .userInitiated
 
         let standardInputPipe = Pipe()
         let standardOutputPipe = Pipe()
