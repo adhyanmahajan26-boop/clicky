@@ -25,6 +25,7 @@ final class TheoLink: ObservableObject {
     private static let serviceType = "_theolink._tcp"
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
+    private static let usesThisScreenKey = "v3.clicky.usesThisScreen"
     nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 
     @Published private(set) var isPaired = false
@@ -42,6 +43,7 @@ final class TheoLink: ObservableObject {
     private var digestTimer: Timer?
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
+    private var waitingOrders: [String: (String) -> Void] = [:]
     private var connectionState = "none"
     private var isConnectionReady = false
     private var failedDials = 0
@@ -65,18 +67,63 @@ final class TheoLink: ObservableObject {
     }
 
     var statusReport: [String: Any] {
-        ["paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
+        ["clickyHere": clickyRunsHere, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
          "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials]
     }
 
+    // MARK: Where Clicky works
+
+    /// The owner opened this Mac's screen to Clicky. Off by default on the Mac without the work screen.
+    @Published var clickyUsesThisScreen = UserDefaults.standard.bool(forKey: TheoLink.usesThisScreenKey) {
+        didSet {
+            UserDefaults.standard.set(clickyUsesThisScreen, forKey: Self.usesThisScreenKey)
+            CompanionManager.current?.clickyPlaceChanged()
+        }
+    }
+
+    /// With linked Macs, Clicky works on the one with the work screen, and here only when the owner opens this one to it.
+    var clickyRunsHere: Bool { !isPaired || isWorkMac || clickyUsesThisScreen }
+
+    /// This Mac has a work screen picked, even with that monitor off for now.
+    var isWorkMac: Bool { !ClickySettings.claudiaScreenName.isEmpty }
+
+    private static let clickyElsewhere = "Clicky only works on your Mac Studio, and it isn't connected right now. To use Clicky here, turn it on in Settings, Your other Mac."
+
+    /// Something said to Clicky here goes to the Mac it works on. It's never done here instead.
+    func sendClickyToOtherMac(_ text: String) {
+        let sent = request("clicky", ["text": text])
+        CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Sent to \(peerName ?? "your Mac Studio")" : "Your Mac Studio isn't connected")
+        if !sent { BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: Self.clickyElsewhere), to: BotsStore.clickyID) }
+    }
+
+    func sendOrderToOtherMac(_ order: String, ownerWords: String?, onReport: ((String) -> Void)?) {
+        let id = UUID().uuidString
+        guard request("order", ["order": order, "ownerWords": ownerWords ?? "", "id": id]) else {
+            onReport?(Self.clickyElsewhere)
+            if onReport == nil, let ceo = BotsStore.shared.primary {
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: Self.clickyElsewhere), to: ceo.id)
+            }
+            return
+        }
+        if let onReport { waitingOrders[id] = onReport }
+    }
+
+    func orderReported(_ id: String, report: String) {
+        waitingOrders.removeValue(forKey: id)?(report)
+    }
+
     // MARK: Pairing
 
+    private init() {
+        if let saved = try? String(contentsOf: Self.secretFile, encoding: .utf8), let normalized = LinkPairing.normalized(saved) {
+            code = normalized
+            isPaired = true
+        }
+    }
+
     func start() {
-        guard let saved = try? String(contentsOf: Self.secretFile, encoding: .utf8), let normalized = LinkPairing.normalized(saved) else { return }
-        code = normalized
-        isPaired = true
-        startNetworking()
+        if isPaired { startNetworking() }
     }
 
     /// A new code for this Mac, to type on the other one.
@@ -422,6 +469,14 @@ struct LinkSettingsContent: View {
                 HStack {
                     TextField("Other Mac's address (optional)", text: $address).textFieldStyle(.roundedBorder)
                     Button("Save") { link.host = address }
+                }
+            }
+            if !link.isWorkMac {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Let Clicky work on this Mac's screen", isOn: $link.clickyUsesThisScreen)
+                        .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                    Text("Off, anything you ask Clicky here, by voice, in its chat or through Theo, happens on your Mac Studio's screen, and Clicky doesn't look at this one.")
+                        .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
                 }
             }
             Text("Bots, group chats, chats, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")

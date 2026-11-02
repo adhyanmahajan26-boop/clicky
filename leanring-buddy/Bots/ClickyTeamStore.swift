@@ -423,8 +423,13 @@ extension BotsStore {
     /// and points, acts or hands it to its team. What it says lands in the CEO's chat, and comes to `onReport`.
     /// `ownerWords`: the owner's own words behind the order, when they said it.
     /// `room` and `note`: a bot's screen job, whose card goes in that bot's chat.
-    func orderClicky(_ order: String, ownerWords: String?, room: String? = nil, note: String? = nil, onReport: ((String) -> Void)? = nil) {
+    func orderClicky(_ order: String, ownerWords: String?, room: String? = nil, note: String? = nil, cameFromOtherMac: Bool = false, onReport: ((String) -> Void)? = nil) {
         guard let ceo = primary else { return }
+        // Clicky works on the Mac Studio's screen unless the owner opened this Mac to it.
+        if !cameFromOtherMac, !TheoLink.shared.clickyRunsHere {
+            TheoLink.shared.sendOrderToOtherMac(order, ownerWords: ownerWords, onReport: onReport)
+            return
+        }
         let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? ceo.id)
         add(job)
         guard let manager = CompanionManager.current else {
@@ -449,6 +454,7 @@ extension BotsStore {
             // Extra text keeps it away from everything that only the owner's own words may do (a yes on a confirm card, sends).
             options.extraUserText = note ?? ClickyTeamPrompts.orderNote(ceoName: ceo.name)
             options.theoOrder = ClickyTheoOrder(ownerWords: ownerWords)
+            options.cameFromOtherMac = cameFromOtherMac
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
         }
     }
@@ -517,7 +523,9 @@ extension BotsStore {
     /// A bot's job for the work screen: Clicky does it there, and the bot hears how it went and can carry on.
     func workOnScreen(_ task: String, bot: NativeBot, room: String) {
         guard let screen = ClaudiaScreen.picked else {
-            if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
+            if TheoLink.shared.isWorkMac {
+                post(BotChatMessage(author: bot.id, text: "The right-hand screen isn't connected, so I can't work on it right now."), to: room)
+            } else if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
                 post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's screen right now: your other Mac isn't connected."), to: room)
             }
             return

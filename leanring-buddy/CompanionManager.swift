@@ -409,7 +409,13 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Shows the spark layer on every screen (`greeting` plays the first-run hello).
+    /// The owner opened or closed this Mac's screen to Clicky.
+    func clickyPlaceChanged() {
+        if TheoLink.shared.clickyRunsHere { showSparkIfReady() } else if isOverlayVisible { takeSparkOffScreens() }
+    }
+
     func putSparkOnScreens(greeting: Bool) {
+        guard TheoLink.shared.clickyRunsHere else { return }
         if !greeting { sparkOverlay.hasShownOverlayBefore = true }
         sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
@@ -482,7 +488,7 @@ final class CompanionManager: ObservableObject {
 
     /// Once everything is allowed the spark appears; the very first time it says hello.
     func showSparkIfReady() {
-        guard allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible else { return }
+        guard allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible, TheoLink.shared.clickyRunsHere else { return }
         let isFirstTime = !hasCompletedOnboarding
         hasCompletedOnboarding = true
         putSparkOnScreens(greeting: isFirstTime)
@@ -692,7 +698,7 @@ final class CompanionManager: ObservableObject {
 
         // The wake listener gives up the mic until key-up.
         speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)
-        groundingCoordinator.prewarm()
+        if TheoLink.shared.clickyRunsHere { groundingCoordinator.prewarm() }
         transientHideTask?.cancel()
         transientHideTask = nil
         // With the spark hidden by choice it still shows for this exchange.
@@ -795,10 +801,10 @@ final class CompanionManager: ObservableObject {
             wakeWordController.cancelCurrentTurn()
             return
         }
-        groundingCoordinator.prewarm()
+        if TheoLink.shared.clickyRunsHere { groundingCoordinator.prewarm() }
         transientHideTask?.cancel()
         transientHideTask = nil
-        if !isClickyCursorEnabled && !isOverlayVisible {
+        if !isClickyCursorEnabled && !isOverlayVisible && TheoLink.shared.clickyRunsHere {
             sparkOverlay.hasShownOverlayBefore = true
             sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
@@ -1002,7 +1008,7 @@ final class CompanionManager: ObservableObject {
     private func handleHandsFreePartialTranscript(_ partialTranscript: String) {
         handsFreeLastHeardText = partialTranscript
         // First words of an utterance: start reading the screens and the CLI.
-        groundingCoordinator.prewarm()
+        if TheoLink.shared.clickyRunsHere { groundingCoordinator.prewarm() }
         if claudeCodeBridge.standbySlot.currentProcess?.isHealthy != true {
             prespawnMainBrainStandby()
         }
@@ -1494,6 +1500,8 @@ final class CompanionManager: ObservableObject {
         var isOwnersWords = true
         /// Theo ordered this turn: what the team does for it reports back to him too.
         var theoOrder: ClickyTheoOrder?
+        /// The other Mac sent this here because Clicky doesn't work there.
+        var cameFromOtherMac = false
     }
 
     /// Reads the screens, streams Claude's answer and speaks it as it
@@ -1503,6 +1511,13 @@ final class CompanionManager: ObservableObject {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         var turnOptions = requestedTurnOptions ?? TurnOptions()
+        // Clicky works on the Mac Studio's screen unless the owner opened this Mac to it.
+        if !turnOptions.cameFromOtherMac, !TheoLink.shared.clickyRunsHere {
+            TheoLink.shared.sendClickyToOtherMac(transcript)
+            voiceState = .idle
+            turnOptions.onTurnFinished?(nil, nil)
+            return
+        }
         // Memory keeps what the owner says to Clicky. Only their first pass at it, not a turn's continuations.
         if turnOptions.isOwnersWords, turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, !turnOptions.skipsFastPath {
             BotsStore.shared.noteOwnerSaid(transcript)

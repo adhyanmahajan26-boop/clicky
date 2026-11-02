@@ -688,7 +688,7 @@ final class BotsStore: ObservableObject {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
         // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
-        if ClaudiaScreen.picked == nil, TheoLink.shared.isConnected {
+        if !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected {
             let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? ""]
             if TheoLink.shared.request("run", fields) {
                 post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your other Mac"). You can watch it here."), to: room)
@@ -1942,6 +1942,18 @@ extension BotsStore {
             sendToCoder(text, room: room)
         case "stopRun":
             if let id = fields["id"] { stopRun(id) }
+        case "clicky":
+            guard let text = fields["text"], !text.isEmpty else { return }
+            var options = CompanionManager.TurnOptions()
+            options.cameFromOtherMac = true
+            CompanionManager.current?.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: options)
+        case "order":
+            guard let order = fields["order"], let id = fields["id"] else { return }
+            orderClicky(order, ownerWords: fields["ownerWords"].flatMap { $0.isEmpty ? nil : $0 }, cameFromOtherMac: true) { report in
+                _ = TheoLink.shared.request("orderReport", ["id": id, "report": report])
+            }
+        case "orderReport":
+            if let id = fields["id"], let report = fields["report"] { TheoLink.shared.orderReported(id, report: report) }
         case "screen":
             guard let task = fields["task"], let room = fields["room"], let bot = fields["bot"].flatMap({ self.bot($0) }) else { return }
             workOnScreen(task, bot: bot, room: room)
