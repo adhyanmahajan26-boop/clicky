@@ -1513,7 +1513,7 @@ final class CompanionManager: ObservableObject {
         var turnOptions = requestedTurnOptions ?? TurnOptions()
         // Clicky works on the Mac Studio's screen unless the owner opened this Mac to it.
         if !turnOptions.cameFromOtherMac, !TheoLink.shared.clickyRunsHere {
-            TheoLink.shared.sendClickyToOtherMac(transcript)
+            TheoLink.shared.sendClickyToOtherMac(transcript, speaks: turnOptions.speaksResponse)
             voiceState = .idle
             turnOptions.onTurnFinished?(nil, nil)
             return

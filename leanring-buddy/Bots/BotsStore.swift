@@ -1946,6 +1946,7 @@ extension BotsStore {
             guard let text = fields["text"], !text.isEmpty else { return }
             var options = CompanionManager.TurnOptions()
             options.cameFromOtherMac = true
+            options.speaksResponse = fields["speaks"] != "no"
             CompanionManager.current?.sendTranscriptToClaudeWithScreenshot(transcript: text, turnOptions: options)
         case "order":
             guard let order = fields["order"], let id = fields["id"] else { return }

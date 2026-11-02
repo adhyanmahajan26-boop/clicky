@@ -91,8 +91,8 @@ final class TheoLink: ObservableObject {
     private static let clickyElsewhere = "Clicky only works on your Mac Studio, and it isn't connected right now. To use Clicky here, turn it on in Settings, Your other Mac."
 
     /// Something said to Clicky here goes to the Mac it works on. It's never done here instead.
-    func sendClickyToOtherMac(_ text: String) {
-        let sent = request("clicky", ["text": text])
+    func sendClickyToOtherMac(_ text: String, speaks: Bool) {
+        let sent = request("clicky", ["text": text, "speaks": speaks ? "yes" : "no"])
         CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Sent to \(peerName ?? "your Mac Studio")" : "Your Mac Studio isn't connected")
         if !sent { BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: Self.clickyElsewhere), to: BotsStore.clickyID) }
     }
