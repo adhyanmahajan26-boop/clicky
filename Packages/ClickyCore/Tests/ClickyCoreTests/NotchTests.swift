@@ -33,8 +33,9 @@ struct NotchGeometryTests {
         #expect(layout.notchRect == CGRect(x: 662, y: 950, width: 188, height: 32))
         // Wings on both sides for the logo and the status.
         let collapsed = NotchGeometry.collapsedSize(layout: layout)
-        // Slim wings in proportion to the housing: 32 % of 188.
-        #expect(abs(layout.wingWidth - 188 * 0.32) < 0.001)
+        // Wide enough for a status while busy, and slim while idle.
+        #expect(layout.wingWidth == NotchGeometry.physicalNotchWingWidth)
+        #expect(NotchGeometry.collapsedSize(layout: layout, isIdle: true).width == 188 + 2 * NotchGeometry.idleWingWidth + 2 * NotchGeometry.topFlareRadius)
         #expect(collapsed.width == 188 + 2 * layout.wingWidth + 2 * NotchGeometry.topFlareRadius)
         #expect(collapsed.height == 32)
         let frame = NotchGeometry.panelFrame(layout: layout, size: collapsed)

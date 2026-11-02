@@ -129,9 +129,14 @@ public struct NotchView: View {
 
     /// The pill's size for this content (the app sizes the panel the same way).
     public static func pillSize(content: NotchContent, layout: NotchLayout, isExpanded: Bool) -> CGSize {
-        guard isExpanded else { return NotchGeometry.collapsedSize(layout: layout) }
+        guard isExpanded else { return NotchGeometry.collapsedSize(layout: layout, isIdle: isIdle(content)) }
         return NotchGeometry.expandedSize(layout: layout, agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0,
                                           hasCaption: content.captionText != nil, actionStepLineCount: content.actionStepLines.count)
+    }
+
+    /// Nothing to show beside the logo: no status, no helpers orbiting it.
+    private static func isIdle(_ content: NotchContent) -> Bool {
+        content.phase == .idle && content.statusText.isEmpty && content.orbitingAgentIDs.isEmpty
     }
 
     private var pillShape: NotchShape {
@@ -186,15 +191,17 @@ public struct NotchView: View {
     // MARK: - Collapsed
 
     private var collapsedContent: some View {
-        let bodySize = NotchGeometry.collapsedBodySize(layout: layout)
+        let isIdle = Self.isIdle(content)
+        let bodySize = NotchGeometry.collapsedBodySize(layout: layout, isIdle: isIdle)
+        let wingWidth = NotchGeometry.collapsedWingWidth(layout: layout, isIdle: isIdle)
         return Group {
             if layout.hasPhysicalNotch {
                 // The hardware notch hides the middle: logo in the left wing, status in the right.
                 HStack(spacing: 0) {
-                    logo.frame(width: layout.wingWidth)
+                    logo.frame(width: wingWidth)
                     Spacer().frame(width: layout.notchRect.width)
                     statusLabel
-                        .frame(width: layout.wingWidth - 10, alignment: .leading)
+                        .frame(width: wingWidth - 10, alignment: .leading)
                         .padding(.trailing, 10)
                 }
             } else if content.statusText.isEmpty {

@@ -74,7 +74,9 @@ public enum NotchGeometry {
     /// The drawn notch on a display without one.
     public static let virtualNotchSize = CGSize(width: 200, height: 32)
     /// Logo on the left wing, status on the right, around a real notch.
-    public static let physicalNotchWingWidth: CGFloat = 60
+    public static let physicalNotchWingWidth: CGFloat = 70
+    /// With nothing to report the wings only hold the logo, so the pill stays off the menu bar.
+    public static let idleWingWidth: CGFloat = 26
     /// The small outward curves where the pill meets the screen's top edge
     /// (NotchShape), added on both sides of the body.
     public static let topFlareRadius: CGFloat = 6
@@ -117,8 +119,8 @@ public enum NotchGeometry {
             if notchWidth > 0 {
                 let notchHeight = metrics.safeAreaTopInset
                 let notchRect = CGRect(x: screenFrame.minX + leftArea.width, y: screenFrame.maxY - notchHeight, width: notchWidth, height: notchHeight)
-                // Wings in proportion to this Mac's notch (a 14" and a 13" Air differ), never wider than the free menu bar.
-                let wingWidth = min(max(notchWidth * 0.32, 48), 72, min(leftArea.width, rightArea.width) * 0.5)
+                // Room for a short status beside the notch, never wider than the free menu bar.
+                let wingWidth = min(physicalNotchWingWidth, min(leftArea.width, rightArea.width) * 0.5)
                 return NotchLayout(notchRect: notchRect, hasPhysicalNotch: true, screenFrame: screenFrame, wingWidth: wingWidth)
             }
         }
@@ -135,15 +137,22 @@ public enum NotchGeometry {
         return CGSize(width: width.rounded(), height: height.rounded())
     }
 
+    /// One wing beside a real notch: slim while idle, wide enough for the status otherwise.
+    public static func collapsedWingWidth(layout: NotchLayout, isIdle: Bool) -> CGFloat {
+        isIdle ? min(idleWingWidth, layout.wingWidth) : layout.wingWidth
+    }
+
     /// The black body of the collapsed pill (without the top flares).
-    public static func collapsedBodySize(layout: NotchLayout) -> CGSize {
-        let bodyWidth = layout.hasPhysicalNotch ? layout.notchRect.width + 2 * layout.wingWidth : layout.notchRect.width
+    public static func collapsedBodySize(layout: NotchLayout, isIdle: Bool = false) -> CGSize {
+        let bodyWidth = layout.hasPhysicalNotch
+            ? layout.notchRect.width + 2 * collapsedWingWidth(layout: layout, isIdle: isIdle)
+            : layout.notchRect.width
         return CGSize(width: bodyWidth, height: layout.notchRect.height)
     }
 
     /// The collapsed pill including its flares (the panel's collapsed size).
-    public static func collapsedSize(layout: NotchLayout) -> CGSize {
-        let bodySize = collapsedBodySize(layout: layout)
+    public static func collapsedSize(layout: NotchLayout, isIdle: Bool = false) -> CGSize {
+        let bodySize = collapsedBodySize(layout: layout, isIdle: isIdle)
         return CGSize(width: bodySize.width + 2 * topFlareRadius, height: bodySize.height)
     }
 
