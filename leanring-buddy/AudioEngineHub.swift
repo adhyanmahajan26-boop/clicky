@@ -28,6 +28,17 @@ import ClickyCore
 import CoreAudio
 import Foundation
 
+extension AVAudioInputNode {
+    /// False when there's no real mic (none plugged in, or one that just went away). A tap then raises an
+    /// Objective-C exception. AppKit catches it on the main thread, but it leaves Swift's executor tracking
+    /// pointing at a dead stack frame, so the app crashes seconds later in whichever timer checks it next.
+    var hasUsableMicFormat: Bool {
+        let hardware = inputFormat(forBus: 0)
+        let output = outputFormat(forBus: 0)
+        return hardware.sampleRate > 0 && hardware.channelCount > 0 && output.sampleRate > 0 && output.channelCount > 0
+    }
+}
+
 /// Who is capturing from the mic for a turn (the wake listener yields to them).
 enum ExclusiveMicrophoneUser: String {
     case pushToTalk
