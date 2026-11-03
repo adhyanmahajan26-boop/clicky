@@ -4,7 +4,7 @@
 //
 //  macOS treats a virtual display as part of the owner's desktop, with no setting to keep it out. So while the hidden screens
 //  exist, the owner's pointer is put straight back if it gets onto one, and any window that isn't a bot job's is moved back to
-//  the main monitor. They run only while the screens are on.
+//  the main monitor. They run only while the screens are on, and on events: pointer moves, apps opening, windows opening or moving.
 //
 
 import AppKit
@@ -18,6 +18,8 @@ final class StudioGuards {
     private var mouseMonitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var sweepTimer: Timer?
+    private var appObservers: [pid_t: AXObserver] = [:]
+    private var checkIsDue = false
     private(set) var pointerCatches = 0
     private(set) var windowsMovedBack = 0
 
@@ -37,15 +39,20 @@ final class StudioGuards {
         }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { StudioGuards.shared.checkWindows() }
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { note in
+                let launched = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                MainActor.assumeIsolated {
+                    if let launched { StudioGuards.shared.watch(launched) }
+                    StudioGuards.shared.windowsChanged()
+                }
             })
         }
-        // A window can also open or move with no app change. The same list the notch already reads each second.
-        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+        NSWorkspace.shared.runningApplications.forEach(watch)
+        // Every app says when a window opens or moves. This is only in case one doesn't.
+        let timer = Timer(timeInterval: 5, repeats: true) { _ in
             MainActor.assumeIsolated { StudioGuards.shared.checkWindows() }
         }
-        timer.tolerance = 0.2
+        timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         sweepTimer = timer
         checkPointer()
@@ -59,11 +66,45 @@ final class StudioGuards {
         observers = []
         sweepTimer?.invalidate()
         sweepTimer = nil
+        for observer in appObservers.values {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        }
+        appObservers = [:]
+    }
+
+    private func watch(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard app.activationPolicy == .regular, pid != getpid(), appObservers[pid] == nil else { return }
+        var observer: AXObserver?
+        let callback: AXObserverCallback = { _, _, _, _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { StudioGuards.shared.windowsChanged() } }
+        }
+        guard AXObserverCreate(pid, callback, &observer) == .success, let observer else { return }
+        let element = TypeForMeAccessibility.applicationElement(processIdentifier: pid)
+        for name in [kAXWindowCreatedNotification, kAXWindowMovedNotification] {
+            AXObserverAddNotification(observer, element, name as CFString, nil)
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        appObservers[pid] = observer
+    }
+
+    /// Dragging a window sends many of these: one look shortly after is enough.
+    private func windowsChanged() {
+        guard !checkIsDue else { return }
+        checkIsDue = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self?.checkIsDue = false
+            self?.checkWindows()
+        }
+    }
+
+    func landing(for point: CGPoint) -> CGPoint? {
+        StudioGuardRules.pointerLanding(for: point, hidden: hidden, monitors: monitors)
     }
 
     private func checkPointer() {
-        guard let location = CGEvent(source: nil)?.location,
-              let landing = StudioGuardRules.pointerLanding(for: location, hidden: hidden, monitors: monitors) else { return }
+        guard let location = CGEvent(source: nil)?.location, let landing = landing(for: location) else { return }
         CGWarpMouseCursorPosition(landing)
         // A warp otherwise freezes the pointer for a moment.
         CGAssociateMouseAndMouseCursorPosition(1)

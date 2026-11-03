@@ -167,7 +167,7 @@ public struct StudioRemoteView: Codable, Equatable, Sendable {
 public enum StudioPreviewSchedule {
     public static let defaultFPS = 2
     /// The tile the owner is hovering or has opened.
-    public static let focusedFPS = 10
+    public static let focusedFPS = 6
 
     public static func framesPerSecond(for tile: StudioTileID, focused: StudioTileID?, base: Int = defaultFPS) -> Int {
         tile == focused ? max(focusedFPS, base) : max(1, base)

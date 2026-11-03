@@ -107,7 +107,18 @@ final class ClaudiaControlInbox {
             reply(identifier, ok: true, result: ["state": "\(updates.state)"], error: nil)
         case "showPane":
             // Changes what Theo's window shows, without bringing it forward: {bot}.
-            if let bot = command["bot"] as? String { BotsSelection.shared.pane = bot == "home" ? .home : .bot(bot) }
+            if let bot = command["bot"] as? String {
+                let selection = BotsSelection.shared
+                switch bot {
+                case "home": selection.pane = .home
+                case "notes": selection.pane = .notes
+                case "routines": selection.pane = .routines
+                case "clicky": selection.pane = .clicky
+                case let value where value.hasPrefix("settings:"):
+                    selection.openSettings(SettingsTab.Section(rawValue: String(value.dropFirst(9))) ?? .look)
+                default: selection.pane = .bot(bot)
+                }
+            }
             reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
         case "studioState":
             reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
@@ -115,6 +126,11 @@ final class ClaudiaControlInbox {
             // By hand only: 15 seconds of pictures of the hidden screens while video plays.
             StudioController.shared.startVideoTest()
             reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
+        case "studioGuardCheck":
+            // Where the guard would send a point, without moving the pointer: {x, y}.
+            let point = CGPoint(x: command["x"] as? Double ?? 0, y: command["y"] as? Double ?? 0)
+            let landing = StudioController.shared.pointerLanding(forTest: point)
+            reply(identifier, ok: true, result: ["landing": landing.map { ["x": $0.x, "y": $0.y] } as Any], error: nil)
         case "studioSet":
             // By hand, for measuring: {enabled} and/or {refresh}. Moves the monitors the way the Settings switch does.
             StudioController.shared.setForTest(enabled: command["enabled"] as? Bool, refresh: command["refresh"] as? Int)

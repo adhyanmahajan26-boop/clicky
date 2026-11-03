@@ -75,10 +75,14 @@ struct StudioPanel: View {
 
     private var off: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(studio.problem ?? "Hidden screens for your bots are off.").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
-            Text("Two invisible 1440×900 screens with two tiles each. Your bots work there and you watch small views here.")
+            Text(studio.problem ?? (studio.isEnabled ? "Screens asleep" : "Hidden screens for your bots are off.")).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+            Text(studio.isEnabled ? "They wake when a bot needs one and sleep after 15 quiet minutes. Waking moves your left monitor for a moment." : "Invisible screens your bots work on while you watch small views here.")
                 .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
-            Button("Turn on in Settings") { selection.openSettings(.studio) }.buttonStyle(.theoSecondary).padding(.top, 4)
+            if studio.isEnabled {
+                Button("Wake") { Task { _ = await studio.wakeForWork() } }.buttonStyle(.theoSecondary).padding(.top, 4)
+            } else {
+                Button("Turn on in Settings") { selection.openSettings(.studio) }.buttonStyle(.theoSecondary).padding(.top, 4)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -467,7 +471,7 @@ struct StudioSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Theo puts your pointer and windows straight back if they land on one. Mac Studio only. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
-                SettingRow(title: "Hidden bot screens", detail: "Bots work on screens you never see") {
+                SettingRow(title: "Hidden bot screens", detail: "They come up when a bot needs one and sleep after 15 quiet minutes") {
                     Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
             }

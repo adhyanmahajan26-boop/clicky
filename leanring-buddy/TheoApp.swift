@@ -136,7 +136,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             openAtLogin()
         }
 
-        StudioController.shared.startIfEnabled()
+        // The hidden screens come up when a bot first needs one. Making them moves a monitor, so not on every launch.
 
         // A Dock app with its own window, unless that's turned off in Settings.
         NSApp.setActivationPolicy(ClickySettings.showsInDock && !TheoProfile.isTest ? .regular : .accessory)

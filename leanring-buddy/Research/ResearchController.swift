@@ -242,6 +242,8 @@ final class ResearchController: CompanionActivitySource {
     private func runAgents(topic: String, question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
         let roles = ResearchAgentSettings.roles
         self.lastStatus = ["state": "reading", "topic": topic, "agents": roles.map(\.title)]
+        // Asleep and allowed: up before the agents look for tiles. Otherwise they read without a browser, as they do on any Mac.
+        if StudioController.shared.researchUsesBrowser { _ = await StudioController.shared.wakeForWork() }
         // One search at a time: the search page turns away several at once.
         var results: [(role: ResearchRole, urls: [URL])] = []
         var plainResults: [URL]?

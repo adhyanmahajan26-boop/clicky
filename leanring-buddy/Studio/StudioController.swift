@@ -159,6 +159,9 @@ final class StudioController: ObservableObject {
     @Published private(set) var isWaitingToApply = false
     @Published private(set) var measuredAfterApply: String?
     private var waitToApply: Task<Void, Never>?
+    private var lastBotWork = Date()
+    private var idleTimer: Timer?
+    private static let idleSeconds: TimeInterval = 15 * 60
 
     var hasStagedChanges: Bool { draft != config }
     var stagedNeedsRebuild: Bool { draft.needsRebuild(from: config) }
@@ -243,6 +246,9 @@ final class StudioController: ObservableObject {
         }
     }
 
+    /// For checking the guard on real screens without moving the pointer: where it would send a point.
+    func pointerLanding(forTest point: CGPoint) -> CGPoint? { StudioGuards.shared.landing(for: point) }
+
     /// For measuring, by hand: turns the screens on or off, or changes every screen's refresh.
     func setForTest(enabled: Bool?, refresh: Int?) {
         if let refresh {
@@ -285,14 +291,29 @@ final class StudioController: ObservableObject {
         if enabled, DeviceRoles.runsHere(.studioScreens) { start() } else { stop() }
     }
 
-    /// At launch: back on if the owner left it on.
-    func startIfEnabled() {
-        if Self.isAvailable, isEnabled, DeviceRoles.runsHere(.studioScreens) { start() }
-    }
-
     /// Settings › Devices changed where the screens belong.
     func followDeviceSetting() {
-        if DeviceRoles.runsHere(.studioScreens) { startIfEnabled() } else { stop() }
+        if !DeviceRoles.runsHere(.studioScreens) { stop() }
+    }
+
+    /// Bot work needs a screen. Up if they're allowed and nothing's playing, since making them moves a monitor and can black out
+    /// a video. They stay up between jobs and sleep after a long quiet spell, so that move happens as rarely as possible.
+    func wakeForWork() async -> Bool {
+        lastBotWork = Date()
+        if isOn { return true }
+        guard Self.isAvailable, isEnabled, DeviceRoles.runsHere(.studioScreens) else { return false }
+        if await Task.detached(operation: { Self.somethingIsPlaying() }).value { return false }
+        start()
+        for _ in 0..<60 where !isOn {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return isOn
+    }
+
+    private func sleepIfIdle() async {
+        guard isOn, roster.bots.isEmpty, Date().timeIntervalSince(lastBotWork) >= Self.idleSeconds else { return }
+        if await Task.detached(operation: { Self.somethingIsPlaying() }).value { return }
+        if isOn, roster.bots.isEmpty { stop() }
     }
 
     // MARK: Displays
@@ -332,6 +353,13 @@ final class StudioController: ObservableObject {
             self.displays = made
             self.isOn = true
             StudioGuards.shared.start()
+            self.lastBotWork = Date()
+            let idle = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { Task { await self?.sleepIfIdle() } }
+            }
+            idle.tolerance = 10
+            RunLoop.main.add(idle, forMode: .common)
+            self.idleTimer = idle
             self.place(made, realOrigins: realOrigins)
             // Somewhere the pointer could reach, or that macOS refused: try again, then don't keep them.
             for _ in 0..<2 where self.problem != nil {
@@ -450,6 +478,8 @@ final class StudioController: ObservableObject {
     private func stop() {
         guard isOn else { return }
         StudioGuards.shared.stop()
+        idleTimer?.invalidate()
+        idleTimer = nil
         stopStreams()
         screenFilters = [:]
         BrowserResearcher.shared.closeEverything()
@@ -599,6 +629,7 @@ final class StudioController: ObservableObject {
 
     /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
     func holdForResearch(_ tile: StudioTileID, botID: String, note: String, app: NSRunningApplication?) {
+        lastBotWork = Date()
         roster.hold(botID, tile: tile)
         // The agents should be seen: the panel opens by itself.
         if !panelVisible { panelVisible = true }
@@ -625,6 +656,7 @@ final class StudioController: ObservableObject {
     func isPulledOut(_ tile: StudioTileID) -> Bool { pulledOut.contains(tile) }
 
     func releaseResearch(_ tile: StudioTileID) {
+        lastBotWork = Date()
         defer { refreshPreviewing() }
         tileCursors[tile] = nil
         tilePages[tile] = nil

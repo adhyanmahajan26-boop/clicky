@@ -577,11 +577,8 @@ extension BotsStore {
     /// A bot's job for a hidden screen: Clicky does it on a tile the owner can watch, and the bot hears how it went and can carry
     /// on. If it couldn't be done, the chat says so straight away. `onReport`: for a job from the other Mac.
     func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
-        guard StudioController.shared.isOn else {
-            if TheoLink.shared.isWorkMac {
-                let said = "I can't do that: the hidden screens are off, so nothing was done."
-                if let onReport { onReport(said) } else { post(BotChatMessage(author: bot.id, text: said), to: room) }
-            } else if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
+        guard StudioController.isAvailable else {
+            if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
                 post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's hidden screens right now: your other Mac isn't connected."), to: room)
             }
             return
@@ -591,14 +588,25 @@ extension BotsStore {
             post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) jobs on the hidden screens, so I'll stop here. Tell me to keep going if you want more."), to: room)
             return
         }
-        screenTurns[bot.id] = turns
-        StudioScreenTask.shared.run(task, bot: bot) { [weak self] result in
-            if let onReport {
-                onReport(result.report)
-            } else if result.finished {
-                self?.continueAfterScreen(bot: bot, room: room, report: result.report)
-            } else {
-                self?.post(BotChatMessage(author: bot.id, text: result.report), to: room)
+        Task { [weak self] in
+            guard let self else { return }
+            let studio = StudioController.shared
+            guard await studio.wakeForWork() else {
+                let said = studio.isEnabled
+                    ? "The hidden screens are asleep while something's playing, because waking them can interrupt it. Nothing was done, so ask again when it's stopped."
+                    : "I can't do that: the hidden screens are off, so nothing was done. Addy can turn them on in Settings › Studio."
+                if let onReport { onReport(said) } else { self.post(BotChatMessage(author: bot.id, text: said), to: room) }
+                return
+            }
+            self.screenTurns[bot.id] = turns
+            StudioScreenTask.shared.run(task, bot: bot) { [weak self] result in
+                if let onReport {
+                    onReport(result.report)
+                } else if result.finished {
+                    self?.continueAfterScreen(bot: bot, room: room, report: result.report)
+                } else {
+                    self?.post(BotChatMessage(author: bot.id, text: result.report), to: room)
+                }
             }
         }
     }
