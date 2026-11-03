@@ -56,7 +56,7 @@ struct StudioScreensSection: View {
                         number(spec.height).frame(width: 64)
                     }
                     Picker("Resolution", selection: sizeChoice(spec)) {
-                        ForEach(StudioScreenSpec.presets, id: \.width) { Text("\($0.width)×\($0.height)").tag("\($0.width)x\($0.height)") }
+                        ForEach(StudioScreenSpec.presets, id: \.width) { Text(verbatim: "\($0.width)×\($0.height)").tag("\($0.width)x\($0.height)") }
                         Text("Custom").tag("custom")
                     }
                     .labelsHidden().frame(width: 130)
