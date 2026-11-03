@@ -17,7 +17,9 @@ import ClickyCore
 import Combine
 import Foundation
 import IOKit.pwr_mgt
+import CoreMedia
 import ScreenCaptureKit
+import VideoToolbox
 
 /// What changes many times a second, apart from the controller: most of the window watches the controller, and only the panel
 /// should redraw for these.
@@ -74,12 +76,12 @@ final class StudioController: ObservableObject {
     /// The tile the owner is hovering: it gets a faster picture.
     var hoveredTile: StudioTileID? {
         get { live.hoveredTile }
-        set { if live.hoveredTile != newValue { live.hoveredTile = newValue } }
+        set { if live.hoveredTile != newValue { live.hoveredTile = newValue; syncStreams() } }
     }
     /// The tile opened large in the panel.
     var expandedTile: StudioTileID? {
         get { live.expandedTile }
-        set { live.expandedTile = newValue }
+        set { live.expandedTile = newValue; syncStreams() }
     }
     /// What each tile's agent is reading, from the page itself. Shown when there's no picture.
     @Published private(set) var tilePages: [StudioTileID: StudioTilePage] = [:]
@@ -125,6 +127,8 @@ final class StudioController: ObservableObject {
     private var frameIsCapturing = false
     private var lastFrames: [StudioTileID: Double] = [:]
     private var screenFilters: [CGDirectDisplayID: (SCContentFilter, CGSize)] = [:]
+    private var streams: [CGDirectDisplayID: StudioScreenStream] = [:]
+    private var streamSettings: [CGDirectDisplayID: (rate: Int, width: Int)] = [:]
     private static let videoTestSeconds: Double = 15
     private var videoTestUntil: Double = 0
     private var videoTestFrames = 0
@@ -219,6 +223,7 @@ final class StudioController: ObservableObject {
         let rebuild = isOn && stagedNeedsRebuild
         config = draft
         saveConfig()
+        stopStreams()
         screenFilters = [:]
         objectWillChange.send()
         if rebuild {
@@ -236,6 +241,15 @@ final class StudioController: ObservableObject {
             let live = self.live
             self.measuredAfterApply = "Measured after Apply: Theo \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
         }
+    }
+
+    /// For measuring, by hand: turns the screens on or off, or changes every screen's refresh.
+    func setForTest(enabled: Bool?, refresh: Int?) {
+        if let refresh {
+            for index in draft.screens.indices { draft.screens[index].refresh = refresh }
+            applyNow()
+        }
+        if let enabled { setEnabled(enabled) }
     }
 
     private func previewFPS(forScreen screen: Int) -> Int {
@@ -423,6 +437,8 @@ final class StudioController: ObservableObject {
 
     private func stop() {
         guard isOn else { return }
+        stopStreams()
+        screenFilters = [:]
         BrowserResearcher.shared.closeEverything()
         StudioActivity.shared.stop()
         for tile in Array(windows.keys) { clear(tile) }
@@ -486,7 +502,7 @@ final class StudioController: ObservableObject {
         window.setFrame(frame, display: false)
         // Never key, never in front of anything the owner can see: it's the only thing on that screen.
         window.orderFrontRegardless()
-        refreshPreviewing()
+        refreshPreviewing(restart: true)
     }
 
     /// The API for later: opens an app for a bot and moves its front window into a tile. Moving another app's window needs
@@ -640,8 +656,8 @@ final class StudioController: ObservableObject {
         if restart { previewTimer?.invalidate(); previewTimer = nil }
         if shouldPreview, previewTimer == nil {
             // The clock runs at the fastest any tile may go; each tile is only drawn when it's due.
-            let fastest = max(StudioPreviewSchedule.focusedFPS, config.screens.map(\.previewFPS).max() ?? 0)
-            let timer = Timer(timeInterval: 1 / Double(fastest), repeats: true) { [weak self] _ in
+            // Pictures arrive by themselves. This is for windows of Theo's own, and to check on video: once a second is plenty without them.
+            let timer = Timer(timeInterval: windows.isEmpty ? 1 : 1 / Double(StudioPreviewSchedule.focusedFPS), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.previewTick() }
             }
             RunLoop.main.add(timer, forMode: .common)
@@ -698,17 +714,7 @@ final class StudioController: ObservableObject {
             }
         }
         if now - lastPush >= 2 { pushToOtherMac() }
-        // The hidden screens themselves, whatever's on them: with Live capture on, the permission already there, nothing playing,
-        // and the panel where it can be seen.
-        if liveCapture, hasVideoAnswer, !liveViewPaused, !frameIsCapturing, hasCapturePermission, panelCanBeSeen {
-            let due = (0..<screenCount).filter { screen in
-                (0..<tiles(onScreen: screen)).contains { tile in
-                    let id = StudioTileID(screen: screen, tile: tile)
-                    return windows[id] == nil && StudioPreviewSchedule.isDue(id, last: lastFrames[id], now: now, focused: focused, base: previewFPS(forScreen: screen))
-                }
-            }
-            if !due.isEmpty { captureScreens(due, at: now) }
-        }
+        syncStreams()
     }
 
     /// Live pictures stop while video plays, because capturing might black the video out. The test below finds out.
@@ -774,7 +780,7 @@ final class StudioController: ObservableObject {
         }
     }
 
-    private struct UncheckedImage: @unchecked Sendable { let image: CGImage? }
+    struct UncheckedImage: @unchecked Sendable { let image: CGImage? }
 
     nonisolated private static func smallJPEG(_ image: CGImage) -> Data? {
         NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.45])
@@ -790,40 +796,76 @@ final class StudioController: ObservableObject {
     /// Whether this Mac has a Studio panel at all: its own screens, or the other Mac's.
     static var hasPanel: Bool { isAvailable || TheoLink.shared.isPaired }
 
-    /// One picture of each due hidden screen, cut into its tiles. Only Theo's own virtual displays are ever captured, never a
-    /// monitor of the owner's. A window of Theo's on a tile is drawn without capture instead.
-    private func captureScreens(_ due: [Int], at now: Double) {
-        frameIsCapturing = true
-        let ids = displays.map(\.id)
+    /// One running stream a hidden screen, cut into its tiles, while the panel can be seen and nothing's playing. A stream only
+    /// delivers when the picture changes, and macOS checks its permission once. Taking separate pictures made it check on every
+    /// frame, which cost about a whole core across systemstatusd, tccd and ControlCenter. Only Theo's own virtual displays are ever
+    /// captured, never a monitor of the owner's. A window of Theo's on a tile is drawn without capture instead.
+    private func syncStreams() {
+        let wanted = isOn && liveCapture && hasVideoAnswer && !liveViewPaused && hasCapturePermission && panelCanBeSeen
+        guard wanted else { return stopStreams() }
+        guard !frameIsCapturing else { return }
         let focused = expandedTile ?? hoveredTile
-        Task { [weak self] in
-            defer { self?.frameIsCapturing = false }
-            for screen in due where ids.indices.contains(screen) && StudioDisplays.virtualIDs.contains(ids[screen]) {
-                guard let self, let (filter, size) = await self.screenFilter(for: ids[screen]) else { continue }
+        for (screen, display) in displays.enumerated() where StudioDisplays.virtualIDs.contains(display.id) && config.screens.indices.contains(screen) {
+            let id = display.id
+            let isFocused = focused?.screen == screen
+            let rate = isFocused ? max(StudioPreviewSchedule.focusedFPS, previewFPS(forScreen: screen)) : NSApp.isActive ? previewFPS(forScreen: screen) : 1
+            let grid = StudioLayout.grid(forTiles: tiles(onScreen: screen))
+            let width = (isFocused ? 720 : 360) * grid.columns
+            if streams[id] != nil, streamSettings[id]?.rate == rate, streamSettings[id]?.width == width { continue }
+            frameIsCapturing = true
+            streamSettings[id] = (rate, width)
+            Task { [weak self] in
+                defer { self?.frameIsCapturing = false }
+                guard let self, let (filter, size) = await self.screenFilter(for: id) else { return }
                 let configuration = SCStreamConfiguration()
-                let count = self.tiles(onScreen: screen)
-                let grid = StudioLayout.grid(forTiles: count)
-                configuration.width = (focused?.screen == screen ? 720 : 360) * grid.columns
-                configuration.height = Int(CGFloat(configuration.width) * size.height / size.width)
+                configuration.width = width
+                configuration.height = Int(CGFloat(width) * size.height / size.width)
                 configuration.showsCursor = false
-                guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) else {
-                    self.screenFilters[ids[screen]] = nil
-                    continue
+                configuration.queueDepth = 3
+                configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(rate))
+                if let running = self.streams[id] {
+                    await running.update(configuration)
+                    return
                 }
-                guard self.isOn else { return }
-                var pictures = self.thumbnails
-                let tileWidth = image.width / grid.columns, tileHeight = image.height / grid.rows
-                for tile in 0..<count {
-                    let id = StudioTileID(screen: screen, tile: tile)
-                    guard self.windows[id] == nil else { continue }
-                    self.lastFrames[id] = now
-                    pictures[id] = image.cropping(to: CGRect(x: (tile % grid.columns) * tileWidth, y: (tile / grid.columns) * tileHeight, width: tileWidth, height: tileHeight))
-                }
-                self.thumbnails = pictures
-                self.framesThisSecond += 1
-                self.videoTestFrames += 1
+                let made = StudioScreenStream(filter: filter, configuration: configuration, onFrame: { [weak self] image in
+                    let picture = UncheckedImage(image: image)
+                    Task { @MainActor in self?.receive(picture.image, fromScreen: screen, display: id) }
+                }, onStopped: { [weak self] in
+                    Task { @MainActor in
+                        self?.streams[id] = nil
+                        self?.screenFilters[id] = nil
+                    }
+                })
+                self.streams[id] = made
+                if await made?.start() != true { self.streams[id] = nil }
             }
         }
+    }
+
+    private func stopStreams() {
+        guard !streams.isEmpty else { return }
+        let stopping = Array(streams.values)
+        streams = [:]
+        streamSettings = [:]
+        Task { for stream in stopping { await stream.stop() } }
+    }
+
+    private func receive(_ image: CGImage?, fromScreen screen: Int, display: CGDirectDisplayID) {
+        guard let image, isOn, !liveViewPaused, streams[display] != nil else { return }
+        let count = tiles(onScreen: screen)
+        let grid = StudioLayout.grid(forTiles: count)
+        var pictures = thumbnails
+        let tileWidth = image.width / grid.columns, tileHeight = image.height / grid.rows
+        let now = ProcessInfo.processInfo.systemUptime
+        for tile in 0..<count {
+            let id = StudioTileID(screen: screen, tile: tile)
+            guard windows[id] == nil else { continue }
+            lastFrames[id] = now
+            pictures[id] = image.cropping(to: CGRect(x: (tile % grid.columns) * tileWidth, y: (tile / grid.columns) * tileHeight, width: tileWidth, height: tileHeight))
+        }
+        thumbnails = pictures
+        framesThisSecond += 1
+        videoTestFrames += 1
     }
 
     /// Kept between pictures, since asking macOS for the list of displays is the slow part.
@@ -883,4 +925,45 @@ final class StudioController: ObservableObject {
         }
         if result == KERN_SUCCESS { memoryMB = Double(info.phys_footprint) / 1_048_576 }
     }
+}
+
+/// One hidden screen's pictures, delivered as they change.
+final class StudioScreenStream: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+    private var stream: SCStream?
+    private let queue = DispatchQueue(label: "theo.studio.stream", qos: .utility)
+    private let onFrame: @Sendable (CGImage) -> Void
+    private let onStopped: @Sendable () -> Void
+
+    init?(filter: SCContentFilter, configuration: SCStreamConfiguration, onFrame: @escaping @Sendable (CGImage) -> Void, onStopped: @escaping @Sendable () -> Void) {
+        self.onFrame = onFrame
+        self.onStopped = onStopped
+        super.init()
+        let made = SCStream(filter: filter, configuration: configuration, delegate: self)
+        guard (try? made.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)) != nil else { return nil }
+        stream = made
+    }
+
+    func start() async -> Bool {
+        do {
+            try await stream?.startCapture()
+            return stream != nil
+        } catch {
+            return false
+        }
+    }
+
+    func stop() async { try? await stream?.stopCapture() }
+
+    func update(_ configuration: SCStreamConfiguration) async { try? await stream?.updateConfiguration(configuration) }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let info = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              (info.first?[.status] as? Int).flatMap(SCFrameStatus.init(rawValue:)) == .complete else { return }
+        var image: CGImage?
+        VTCreateCGImageFromCVPixelBuffer(pixels, options: nil, imageOut: &image)
+        if let image { onFrame(image) }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) { onStopped() }
 }

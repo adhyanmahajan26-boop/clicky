@@ -95,7 +95,6 @@ struct BotsRootView: View {
                             .frame(width: 340)
                             .background(DS.Colors.surface1)
                             .overlay(alignment: .leading) { Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1) }
-                            .shadow(color: .black.opacity(0.28), radius: 24, x: -2)
                             .overlay(alignment: .topTrailing) {
                                 Button { withAnimation(DS.Motion.panel) { showsInspector = false } } label: {
                                     Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)

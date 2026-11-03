@@ -115,6 +115,10 @@ final class ClaudiaControlInbox {
             // By hand only: 15 seconds of pictures of the hidden screens while video plays.
             StudioController.shared.startVideoTest()
             reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
+        case "studioSet":
+            // By hand, for measuring: {enabled} and/or {refresh}. Moves the monitors the way the Settings switch does.
+            StudioController.shared.setForTest(enabled: command["enabled"] as? Bool, refresh: command["refresh"] as? Int)
+            reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
         case "updatePeer":
             // Asks the other Mac to update itself when it's idle. Only a build that knows this will act on it.
             reply(identifier, ok: TheoLink.shared.request("updateWhenIdle", [:]), result: TheoLink.shared.statusReport, error: nil)

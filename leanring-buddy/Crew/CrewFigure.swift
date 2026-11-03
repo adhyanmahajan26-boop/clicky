@@ -770,6 +770,8 @@ final class CrewDriver {
     private static let calmInterval: TimeInterval = 1.0 / 20
     /// Everyone settled and the pointer still: only checking whether a glance or a blink is due.
     private static let restingInterval: TimeInterval = 1.0 / 5
+    /// Calm has no idle glances, so there's almost nothing to check for.
+    private static let calmRestingInterval: TimeInterval = 0.8
     private static let hiddenInterval: TimeInterval = 1
 
     private func schedule(_ seconds: TimeInterval) {
@@ -805,7 +807,8 @@ final class CrewDriver {
             lastPointer = pointer
             pointerMovedAt = now
         }
-        let fresh = now - pointerMovedAt < 2.2
+        // Calm: nobody's eyes chase the pointer, so moving the mouse doesn't redraw every figure in the window.
+        let fresh = level == .lively && now - pointerMovedAt < 2.2
         let steps = min(12, max(1, Int(((now - lastTick) * 60).rounded())))
         lastTick = now
         var anyMoving = false
@@ -815,6 +818,6 @@ final class CrewDriver {
             if figure.step(now: now, pointer: pointer, pointerIsFresh: fresh, steps: steps, level: level) { anyMoving = true }
         }
         CATransaction.commit()
-        schedule(anyMoving ? (level == .calm ? Self.calmInterval : Self.fastInterval) : Self.restingInterval)
+        schedule(anyMoving ? (level == .calm ? Self.calmInterval : Self.fastInterval) : (level == .calm ? Self.calmRestingInterval : Self.restingInterval))
     }
 }

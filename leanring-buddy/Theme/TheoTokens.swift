@@ -93,7 +93,7 @@ enum DS {
         /// Settings › Look › Motion, with macOS's Reduce Motion counting as Off.
         static var level: TheoMotionLevel {
             if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { return .off }
-            return TheoMotionLevel(rawValue: UserDefaults.standard.string(forKey: TheoMotionLevel.settingKey) ?? "") ?? .lively
+            return TheoMotionLevel(rawValue: UserDefaults.standard.string(forKey: TheoMotionLevel.settingKey) ?? "") ?? .calm
         }
         static var isReduced: Bool { level == .off }
         static var hover: Animation { isReduced ? .linear(duration: 0) : .snappy(duration: 0.18) }

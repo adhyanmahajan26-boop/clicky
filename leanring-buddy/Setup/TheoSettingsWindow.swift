@@ -208,7 +208,7 @@ struct LookSettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
     @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
     @AppStorage(TheoAccent.settingKey) private var accent = "ember"
-    @AppStorage(TheoMotionLevel.settingKey) private var motion = TheoMotionLevel.lively.rawValue
+    @AppStorage(TheoMotionLevel.settingKey) private var motion = TheoMotionLevel.calm.rawValue
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
