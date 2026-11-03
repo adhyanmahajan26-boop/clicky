@@ -262,6 +262,65 @@ final class StudioOwnershipTests: XCTestCase {
     }
 }
 
+final class ResearchAgentTests: XCTestCase {
+    private func url(_ text: String) -> URL { URL(string: "https://\(text)")! }
+    private let all = Set(ResearchRole.allCases)
+
+    func testTwoAgentsByDefaultAndUpToFour() {
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: all, count: 2), [.ideas, .info])
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: all, count: 3), [.ideas, .info, .examples])
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: all, count: 4), [.ideas, .info, .examples, .check])
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: all, count: 9).count, 4)
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: all, count: 1).count, 2)
+    }
+
+    func testRolesSwitchedOffAreLeftOut() {
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: [.info, .check], count: 2), [.info, .check])
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: [.check], count: 4), [.check])
+    }
+
+    func testAQuestionIsStillAnsweredWithEveryRoleOff() {
+        XCTAssertEqual(ResearchAgentPlan.roles(enabled: [], count: 3), [.ideas, .info])
+    }
+
+    func testAgentsDontReadTheSamePage() {
+        let shared = url("a.com/1")
+        let plan = ResearchAgentPlan.pages(from: [(.ideas, [shared, url("b.com/1")]), (.info, [shared, url("c.com/1")])])
+        XCTAssertEqual(plan[0].urls, [shared, url("b.com/1")])
+        XCTAssertEqual(plan[1].urls, [url("c.com/1")])
+    }
+
+    func testDifferentSitesComeFirstButASiteCanRepeatIfThatsAllThereIs() {
+        let plan = ResearchAgentPlan.pages(from: [(.ideas, [url("a.com/1"), url("a.com/2"), url("b.com/1")])])
+        XCTAssertEqual(plan[0].urls, [url("a.com/1"), url("b.com/1")])
+        let only = ResearchAgentPlan.pages(from: [(.ideas, [url("a.com/1"), url("a.com/2")])])
+        XCTAssertEqual(only[0].urls, [url("a.com/1"), url("a.com/2")])
+    }
+
+    func testAnAgentWithNoResultsGetsNothing() {
+        let plan = ResearchAgentPlan.pages(from: [(.ideas, []), (.info, [url("a.com/1")])])
+        XCTAssertEqual(plan[0].urls, [])
+        XCTAssertEqual(plan[1].urls, [url("a.com/1")])
+    }
+
+    func testEachRoleSearchesItsOwnWay() {
+        let queries = Set(ResearchRole.allCases.map { $0.searchQuery(for: "menu bar apps") })
+        XCTAssertEqual(queries.count, 4)
+        XCTAssertTrue(queries.allSatisfy { $0.hasPrefix("menu bar apps") })
+    }
+
+    func testTheMergeKeepsAgentsApart() {
+        let prompt = ResearchAgentPlan.mergePrompt(question: "q", reports: [(.info, 2, url("b.com"), nil, "two"), (.ideas, 1, url("a.com"), "A", "one")])
+        XCTAssertLessThan(prompt.range(of: "agent: Ideas")!.lowerBound, prompt.range(of: "agent: Info")!.lowerBound)
+        XCTAssertTrue(prompt.contains("[1] A"))
+    }
+
+    func testTheFallbackBriefHasASectionPerAgent() {
+        let brief = ResearchAgentPlan.plainBrief(topic: "T", reports: [(.ideas, 1, nil, "first line\nmore"), (.info, 2, nil, "facts")])
+        XCTAssertEqual(brief, "# T\n\n## Ideas\n- first line [1]\n\n## Info\n- facts [2]")
+    }
+}
+
 final class DeviceRoutingTests: XCTestCase {
     private func route(_ feature: DeviceFeature, _ choice: DeviceChoice? = nil, on mac: DeviceKind, paired: Bool = true, online: Bool = true) -> DeviceRoute {
         DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, thisMac: mac, paired: paired, otherMacOnline: online)

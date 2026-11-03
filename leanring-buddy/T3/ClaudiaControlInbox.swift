@@ -105,6 +105,10 @@ final class ClaudiaControlInbox {
             let updates = companionManager.updateController
             updates.installAvailableUpdate()
             reply(identifier, ok: true, result: ["state": "\(updates.state)"], error: nil)
+        case "showPane":
+            // Changes what Theo's window shows, without bringing it forward: {bot}.
+            if let bot = command["bot"] as? String { BotsSelection.shared.pane = bot == "home" ? .home : .bot(bot) }
+            reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
         case "studioState":
             reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
         case "updatePeer":

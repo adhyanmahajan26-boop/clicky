@@ -312,7 +312,7 @@ struct StudioSettingsContent: View {
                     }
                 }
             }
-            TheoSection(title: "Who owns each screen", hint: "These screens only hold Chrome windows, for bots that need your signed-in browser. A screen's owner goes first; any bot can use a shared one. Coding runs and terminals never come here: they stay on your own monitors.") {
+            TheoSection(title: "Who owns each screen", hint: "These screens only hold Chrome windows, for Clicky's research agents. Coding runs and terminals never come here: they stay on your own monitors.") {
                 ForEach(0..<studio.screenCount, id: \.self) { screen in
                     if screen > 0 { RowDivider() }
                     SettingRow(title: "Screen \(screen + 1)") {
@@ -324,8 +324,9 @@ struct StudioSettingsContent: View {
                     }
                 }
             }
+            ResearchAgentSettingsSection()
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
-                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Researcher, on its own screen and then the shared one. Each tile is freed when its page is done") {
+                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Clicky's research agents, one tile each. Tiles are freed when they're done") {
                     Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
                 if studio.researchUsesBrowser {

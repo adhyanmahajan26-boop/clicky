@@ -414,11 +414,11 @@ final class StudioController: ObservableObject {
 
     // MARK: Who owns each screen
 
-    /// Screen 1 is Researcher's and Screen 2 is shared, until the owner changes it. Only signed-in Chrome windows ever go on
+    /// Both screens are for Clicky's research agents, until the owner changes it. Only signed-in Chrome windows ever go on
     /// these screens: coding runs keep their normal terminal on the owner's own monitors.
     func owner(ofScreen screen: Int) -> String? {
         if let saved = UserDefaults.standard.string(forKey: Keys.owner(screen)) { return saved.isEmpty ? nil : saved }
-        return screen == 0 ? BotsStore.shared.teamBot(.researcher)?.id : nil
+        return BotsStore.shared.teamBot(.researcher)?.id
     }
 
     func setOwner(_ botID: String?, ofScreen screen: Int) {

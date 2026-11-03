@@ -110,19 +110,29 @@ final class BrowserResearcher: ObservableObject {
 
     // MARK: Reading a page
 
-    func read(_ url: URL) async -> Outcome {
+    /// `label`: the agent's job, shown on its tile. `agent`: holds one tile across pages until `endAgent`; with none, the tile is
+    /// freed after this page.
+    func read(_ url: URL, label: String? = nil, agent: String? = nil) async -> Outcome {
         guard isReady, let researcherID else { return .skipped("Studio screens or my browser aren't available") }
         guard BrowserResearchPolicy.mayOpen(url, allowsLocalHostForTests: testAllowsLocalHost) else { return .skipped("not opened in your browser: it looks private") }
         let host = url.host ?? "page"
-        let id = UUID().uuidString
+        let prefix = label.map { "\($0) · " } ?? ""
+        let id = agent ?? UUID().uuidString
         guard let tile = await acquireTile(id), let frame = StudioController.shared.frame(of: tile), !Task.isCancelled else {
             finishTile(id, tile: nil)
             return .skipped(Task.isCancelled ? "cancelled" : "no tile came free")
         }
         let studio = StudioController.shared
-        studio.holdForResearch(tile, botID: researcherID, note: "Opening \(host)", app: chromeApp)
+        studio.holdForResearch(tile, botID: researcherID, note: "\(prefix)Opening \(host)", app: chromeApp)
         tiles[id] = tile
-        defer { finishTile(id, tile: tile); tiles[id] = nil }
+        defer {
+            if agent == nil {
+                finishTile(id, tile: tile)
+                tiles[id] = nil
+            } else {
+                studio.noteResearch(tile, note: "\(prefix)Between pages", app: chromeApp)
+            }
+        }
 
         guard let window = await openWindow(url, frame: frame) else { return .skipped("Chrome didn't open a window") }
         windows[id] = window
@@ -130,7 +140,7 @@ final class BrowserResearcher: ObservableObject {
         defer {
             if windows[id] != nil { close(id) }
         }
-        studio.noteResearch(tile, note: "Reading \(host)", app: chromeApp)
+        studio.noteResearch(tile, note: "\(prefix)Reading \(host)", app: chromeApp)
         holdPageTree()
         await BackgroundWebTree.waitUntilBuilt()
         await Self.waitForLoad(chromeID: window.chromeID)
@@ -138,11 +148,11 @@ final class BrowserResearcher: ObservableObject {
         var page = await settledText(of: window.element)
         if page.title == nil { page.title = Self.chromeTitle(of: window.chromeID) }
         if BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) {
-            studio.noteResearch(tile, note: "Needs you · \(host)", app: chromeApp)
+            studio.noteResearch(tile, note: "\(prefix)Needs you · \(host)", app: chromeApp)
             switch await askOwner(id: id, host: host, botID: researcherID) {
             case .skip: return .skipped("human check on \(host) skipped")
             case .done:
-                studio.noteResearch(tile, note: "Reading \(host)", app: chromeApp)
+                studio.noteResearch(tile, note: "\(prefix)Reading \(host)", app: chromeApp)
                 page = await settledText(of: window.element)
                 if BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) { return .skipped("still a human check on \(host)") }
             }
@@ -150,6 +160,13 @@ final class BrowserResearcher: ObservableObject {
         guard !Task.isCancelled else { return .skipped("cancelled") }
         guard !page.text.isEmpty else { return .skipped("nothing to read") }
         return .page(title: page.title, text: page.text)
+    }
+
+    /// An agent is done: its tile goes back.
+    func endAgent(_ agent: String) {
+        let tile = tiles.removeValue(forKey: agent)
+        queue.leave(agent)
+        finishTile(agent, tile: tile)
     }
 
     /// Studio is going off: its windows would land on the owner's monitors, so they close first.
@@ -512,6 +529,49 @@ struct ResearchBrowserPermissionRow: View {
                 }
                 .buttonStyle(.theoSecondary)
             }
+        }
+    }
+}
+
+enum ResearchAgentSettings {
+    static let countKey = "v3.research.agentsPerQuestion"
+    static func roleKey(_ role: ResearchRole) -> String { "v3.research.role.\(role.rawValue)" }
+
+    static var count: Int { UserDefaults.standard.object(forKey: countKey) as? Int ?? ResearchAgentPlan.defaultCount }
+    static func isOn(_ role: ResearchRole) -> Bool { UserDefaults.standard.object(forKey: roleKey(role)) as? Bool ?? true }
+    static var roles: [ResearchRole] { ResearchAgentPlan.roles(enabled: Set(ResearchRole.allCases.filter(isOn)), count: count) }
+}
+
+/// Settings › Studio: how many agents a question gets, and which jobs they can have.
+struct ResearchAgentSettingsSection: View {
+    @AppStorage(ResearchAgentSettings.countKey) private var count = ResearchAgentPlan.defaultCount
+
+    var body: some View {
+        TheoSection(title: "Research agents", hint: "Each question is split between agents with different jobs, one tile each. Clicky merges what they find into one brief.") {
+            SettingRow(title: "Research agents per question") {
+                HairlineSegments(options: ResearchAgentPlan.countRange.map { (String($0), String($0)) }, selection: Binding(get: { String(count) }, set: { count = Int($0) ?? ResearchAgentPlan.defaultCount }))
+                    .frame(width: 120)
+            }
+            ForEach(ResearchRole.allCases) { role in
+                RowDivider()
+                ResearchRoleRow(role: role)
+            }
+        }
+    }
+}
+
+private struct ResearchRoleRow: View {
+    let role: ResearchRole
+    @AppStorage private var isOn: Bool
+
+    init(role: ResearchRole) {
+        self.role = role
+        _isOn = AppStorage(wrappedValue: true, ResearchAgentSettings.roleKey(role))
+    }
+
+    var body: some View {
+        SettingRow(title: role.title, detail: role.detail) {
+            Toggle(role.title, isOn: $isOn).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
         }
     }
 }

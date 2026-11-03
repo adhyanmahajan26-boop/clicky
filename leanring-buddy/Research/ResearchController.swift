@@ -102,6 +102,19 @@ final class ResearchController: CompanionActivitySource {
 
         researchTask = Task { [weak self] in
             guard let self else { return }
+            // A question goes to agents with different jobs, each with its own tile. A list of links, or photos, reads as before.
+            if case .topic(let text) = request.source, request.namedURLs.isEmpty,
+               request.question.range(of: #"(?i)\b(photos?|images?|pictures?|pics?)\b"#, options: .regularExpression) == nil {
+                let reports = await self.runAgents(topic: text, question: request.question, parentAgentID: parentAgentID, allowsLocalHostForTests: allowsLocalHostForTests, model: helperModel, jobID: jobID)
+                guard !Task.isCancelled else { return }
+                if !reports.isEmpty {
+                    self.lastStatus["state"] = "writing"
+                    let brief = await Self.mergeAgents(topic: topic, question: request.question, reports: reports, model: briefModel)
+                    guard !Task.isCancelled else { return }
+                    self.present(topic: topic, question: request.question, brief: brief, reports: reports, parentAgentID: parentAgentID, speaks: speaks)
+                    return
+                }
+            }
             // Chrome builds a page's accessibility tree on the first query: a fresh tab can show no links, so look again.
             var screenPage: ScreenLinks?
             if needsScreenLinks {
@@ -203,11 +216,96 @@ final class ResearchController: CompanionActivitySource {
     }
 
     private struct Report {
+        var role: ResearchRole? = nil
         let index: Int
         let url: URL
         let title: String?
         let text: String
         let succeeded: Bool
+    }
+
+    // MARK: Agents
+
+    /// Each agent searches its own way, then reads its own pages: in the owner's Chrome on its own tile when it can, the plain
+    /// way when it can't. Extra agents wait for a tile.
+    private func runAgents(topic: String, question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
+        let roles = ResearchAgentSettings.roles
+        self.lastStatus = ["state": "reading", "topic": topic, "agents": roles.map(\.title)]
+        let results = await withTaskGroup(of: (ResearchRole, [URL]).self) { group -> [(role: ResearchRole, urls: [URL])] in
+            for role in roles { group.addTask { (role, await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)) } }
+            var found: [ResearchRole: [URL]] = [:]
+            for await (role, urls) in group { found[role] = urls }
+            return roles.map { (role: $0, urls: found[$0] ?? []) }
+        }
+        let plan = ResearchAgentPlan.pages(from: results).filter { !$0.urls.isEmpty }
+        guard !plan.isEmpty else { return [] }
+        BotsStore.shared.researchProgress(jobID, line: "Working on it with " + plan.map(\.role.title).joined(separator: " and ") + ".")
+        companionManager?.agentsCenter.log(parentAgentID, "agents: " + plan.map { "\($0.role.title): \($0.urls.map { $0.host ?? "" }.joined(separator: ", "))" }.joined(separator: "; "))
+        var next = 1
+        var jobs: [(role: ResearchRole, pages: [(index: Int, url: URL)])] = []
+        for entry in plan {
+            jobs.append((entry.role, entry.urls.map { url in defer { next += 1 }; return (next, url) }))
+        }
+        let frozenJobs = jobs
+        return await withTaskGroup(of: [Report].self) { group in
+            for job in frozenJobs {
+                group.addTask { [weak self] in
+                    await self?.runAgent(job.role, pages: job.pages, question: question, parentAgentID: parentAgentID, allowsLocalHostForTests: allowsLocalHostForTests, model: model, jobID: jobID) ?? []
+                }
+            }
+            var all: [Report] = []
+            for await reports in group { all += reports }
+            return all.sorted { $0.index < $1.index }
+        }
+    }
+
+    private func runAgent(_ role: ResearchRole, pages: [(index: Int, url: URL)], question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
+        guard let agentsCenter = companionManager?.agentsCenter else { return [] }
+        let tileKey = "agent-\(role.rawValue)-\(UUID().uuidString)"
+        let agentID = agentsCenter.begin(kind: .worker, title: role.title, model: CompanionWorkerRunner.workerClaudeModel, parentID: parentAgentID)
+        setHelper(agentID, title: role.title, isWorking: true)
+        defer {
+            setHelper(agentID, title: role.title, isWorking: false)
+            BrowserResearcher.shared.endAgent(tileKey)
+        }
+        var reports: [Report] = []
+        for page in pages {
+            if Task.isCancelled { break }
+            var read: (title: String?, text: String)?
+            if BrowserResearcher.shared.isReady {
+                switch await BrowserResearcher.shared.read(page.url, label: role.title, agent: tileKey) {
+                case .page(let title, let text):
+                    read = (title, text)
+                    agentsCenter.log(agentID, "read \(page.url.host ?? "a page") in your browser")
+                case .skipped(let reason):
+                    agentsCenter.log(agentID, reason)
+                }
+            }
+            if read == nil { read = await Self.fetchReadableText(page.url, allowsLocalHostForTests: allowsLocalHostForTests) }
+            guard let read, !read.text.isEmpty, !ReadableText.looksWalled(read.text), !BrowserResearchPolicy.isHumanCheck(title: read.title, text: read.text) else {
+                reports.append(Report(role: role, index: page.index, url: page.url, title: read?.title, text: "unreadable (empty, blocked or a sign-in wall)", succeeded: false))
+                continue
+            }
+            do {
+                let turn = try await Self.readPage(question: "\(question)\n\(role.job)", url: page.url, page: read, model: model)
+                agentsCenter.log(agentID, turn.text)
+                BotsStore.shared.researchProgress(jobID, line: "**\(role.title), \(page.url.host ?? page.url.absoluteString)**: " + String(turn.text.prefix(280)))
+                reports.append(Report(role: role, index: page.index, url: page.url, title: read.title, text: turn.text, succeeded: true))
+            } catch {
+                reports.append(Report(role: role, index: page.index, url: page.url, title: read.title, text: "the helper failed", succeeded: false))
+            }
+        }
+        agentsCenter.finish(agentID, status: Task.isCancelled ? .cancelled : (reports.contains(where: \.succeeded) ? .done : .failed), errorDescription: reports.contains(where: \.succeeded) ? nil : "nothing readable")
+        return reports
+    }
+
+    private static func mergeAgents(topic: String, question: String, reports: [Report], model: String) async -> String {
+        let withRoles = reports.compactMap { report in report.role.map { (role: $0, index: report.index, url: report.url, title: report.title, report: report.text) } }
+        let prompt = ResearchAgentPlan.mergePrompt(question: question, reports: withRoles)
+        if let turn = try? await ClaudeCodeBridge(model: model).runTurn(systemPromptFileName: "research-merge-prompt.md", systemPrompt: ResearchAgentPlan.mergeSystemPrompt, contentBlocks: [.text(prompt)]) {
+            return turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ResearchAgentPlan.plainBrief(topic: topic, reports: withRoles.map { (role: $0.role, index: $0.index, title: $0.title, report: $0.report) })
     }
 
     private func runHelpers(urls: [URL], question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
