@@ -61,6 +61,7 @@ final class StudioController: ObservableObject {
         static let researchBrowser = "theo.studio.researchBrowser"
         static let panelVisible = "theo.studio.panelVisible"
         static func owner(_ screen: Int) -> String { "theo.studio.owner.\(screen)" }
+        static let config = "theo.studio.config"
     }
 
     /// Remembered, so the panel is where it was left.
@@ -147,34 +148,98 @@ final class StudioController: ObservableObject {
 
     // MARK: Settings
 
-    var tilesPerScreen: Int {
-        get { let value = UserDefaults.standard.integer(forKey: Keys.tiles); return value == 1 ? 1 : 2 }
-        set {
-            UserDefaults.standard.set(newValue, forKey: Keys.tiles)
-            objectWillChange.send()
-            retile()
+    /// The screens as they stand.
+    @Published private(set) var config = StudioController.loadConfig()
+    /// The same, with what Settings has changed but not applied yet.
+    @Published var draft = StudioController.loadConfig()
+    @Published private(set) var isWaitingToApply = false
+    @Published private(set) var measuredAfterApply: String?
+    private var waitToApply: Task<Void, Never>?
+
+    var hasStagedChanges: Bool { draft != config }
+    var stagedNeedsRebuild: Bool { draft.needsRebuild(from: config) }
+    var screenCount: Int { config.screens.count }
+
+    func tiles(onScreen screen: Int) -> Int {
+        config.screens.indices.contains(screen) ? config.screens[screen].tiles : 0
+    }
+
+    nonisolated private static func loadConfig() -> StudioScreensConfig {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: Keys.config), let saved = StudioScreensConfig.decoded(data) { return saved }
+        return .migrated(screenCount: defaults.integer(forKey: Keys.screens), tilesPerScreen: defaults.integer(forKey: Keys.tiles),
+                         previewFPS: defaults.integer(forKey: Keys.fps)) { defaults.string(forKey: Keys.owner($0)) }
+    }
+
+    private func saveConfig() {
+        UserDefaults.standard.set(config.encoded(), forKey: Keys.config)
+    }
+
+    /// Who a bot belongs with. No display changes, so it holds from the bot's next job.
+    func setScreen(_ choice: StudioScreenChoice, forBot botID: String) {
+        config.set(choice, for: botID)
+        draft.set(choice, for: botID)
+        saveConfig()
+    }
+
+    func stageNewScreen() { draft.addScreen() }
+
+    func discardDraft() {
+        cancelWaitingToApply()
+        draft = config
+    }
+
+    func cancelWaitingToApply() {
+        waitToApply?.cancel()
+        waitToApply = nil
+        isWaitingToApply = false
+    }
+
+    /// `wait`: when a display has to be made again, not while anything plays or an agent is on a tile.
+    func applyDraft(wait: Bool) {
+        cancelWaitingToApply()
+        guard wait, stagedNeedsRebuild, isOn else { return applyNow() }
+        isWaitingToApply = true
+        waitToApply = Task { [weak self] in
+            var quietSeconds = 0
+            // A change in the moment is fine when nothing's going on; otherwise a full minute of quiet.
+            let needed = (await Task.detached { Self.somethingIsPlaying() }.value) || self?.liveCount != 0 ? 60 : 0
+            while !Task.isCancelled, quietSeconds < needed {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let playing = await Task.detached { Self.somethingIsPlaying() }.value
+                quietSeconds = playing || self?.liveCount != 0 ? 0 : quietSeconds + 1
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.isWaitingToApply = false
+            self.applyNow()
         }
     }
 
-    var screenCount: Int {
-        get { let value = UserDefaults.standard.integer(forKey: Keys.screens); return value == 1 ? 1 : 2 }
-        set {
-            UserDefaults.standard.set(min(2, max(1, newValue)), forKey: Keys.screens)
-            objectWillChange.send()
-            guard isOn else { return }
+    private func applyNow() {
+        let rebuild = isOn && stagedNeedsRebuild
+        config = draft
+        saveConfig()
+        screenFilters = [:]
+        objectWillChange.send()
+        if rebuild {
             // Rebuilt rather than patched: a screen coming or going moves the rest.
             stop()
             start()
+        } else {
+            retile()
+            refreshPreviewing(restart: true)
+        }
+        measuredAfterApply = "Applied. Measuring…"
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self else { return }
+            let live = self.live
+            self.measuredAfterApply = "Measured after Apply: Theo \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
         }
     }
 
-    var previewFPS: Int {
-        get { let value = UserDefaults.standard.integer(forKey: Keys.fps); return value > 0 ? value : StudioPreviewSchedule.defaultFPS }
-        set {
-            UserDefaults.standard.set(min(5, max(1, newValue)), forKey: Keys.fps)
-            objectWillChange.send()
-            refreshPreviewing(restart: true)
-        }
+    private func previewFPS(forScreen screen: Int) -> Int {
+        config.screens.indices.contains(screen) ? config.screens[screen].previewFPS : StudioPreviewSchedule.defaultFPS
     }
 
     /// On, and it never captures while anything's playing.
@@ -228,8 +293,8 @@ final class StudioController: ObservableObject {
         let realOrigins = Self.activeDisplayBounds()
         rememberMonitors()
         var made: [VirtualDisplay] = []
-        for index in 0..<screenCount {
-            guard let display = VirtualDisplay(name: "Theo Studio \(index + 1)", serial: UInt32(0x7400 + index), size: StudioLayout.screenSize) else {
+        for (index, spec) in config.screens.enumerated() {
+            guard let display = VirtualDisplay(name: "Theo Studio \(index + 1)", serial: UInt32(0x7400 + index), size: spec.size, hiDPI: spec.hiDPI, refresh: Double(spec.refresh)) else {
                 problem = "This version of macOS wouldn't make the hidden screens."
                 made.forEach { $0.remove() }
                 isStarting = false
@@ -253,14 +318,14 @@ final class StudioController: ObservableObject {
             self.displays = made
             self.isOn = true
             self.place(made, realOrigins: realOrigins)
-            self.roster.trim(screens: self.screenCount, tilesPerScreen: self.tilesPerScreen)
+            self.trimRoster()
             self.refreshPreviewing()
             StudioActivity.shared.start()
         }
     }
 
     private func place(_ made: [VirtualDisplay], realOrigins: [CGDirectDisplayID: CGRect]) {
-        let origins = StudioLayout.origins(forScreens: made.count, besides: Array(realOrigins.values))
+        let origins = StudioLayout.origins(forSizes: config.screens.prefix(made.count).map(\.size), besides: Array(realOrigins.values))
         if let refusal = VirtualDisplay.arrange(made, at: origins, restoring: realOrigins.mapValues(\.origin)) {
             problem = "macOS wouldn't place the hidden screens off to the side (\(refusal))."
             return
@@ -392,13 +457,13 @@ final class StudioController: ObservableObject {
 
     // MARK: Tiles
 
-    var allTiles: [StudioTileID] { StudioTileID.all(screens: screenCount, tilesPerScreen: tilesPerScreen) }
+    var allTiles: [StudioTileID] { config.allTiles }
     var liveCount: Int { roster.bots.count }
 
     /// Where a tile is, in AppKit's global coordinates.
     func frame(of tile: StudioTileID) -> NSRect? {
         guard displays.indices.contains(tile.screen), let screen = displays[tile.screen].screen else { return nil }
-        let local = StudioLayout.tileFrame(index: tile.tile, tilesPerScreen: tilesPerScreen, in: screen.frame.size)
+        let local = StudioLayout.tileFrame(index: tile.tile, tilesPerScreen: tiles(onScreen: tile.screen), in: screen.frame.size)
         return NSRect(x: screen.frame.minX + local.minX, y: screen.frame.minY + local.minY, width: local.width, height: local.height)
     }
 
@@ -465,34 +530,29 @@ final class StudioController: ObservableObject {
 
     // MARK: Who owns each screen
 
-    /// Both screens are for Clicky's research agents, until the owner changes it. Only signed-in Chrome windows ever go on
-    /// these screens: coding runs keep their normal terminal on the owner's own monitors.
+    /// Only signed-in Chrome windows and simple screen jobs go on these screens: coding runs keep their normal terminal on the
+    /// owner's own monitors.
     func owner(ofScreen screen: Int) -> String? {
-        if let saved = UserDefaults.standard.string(forKey: Keys.owner(screen)) { return saved.isEmpty ? nil : saved }
-        return BotsStore.shared.teamBot(.researcher)?.id
+        config.screens.indices.contains(screen) ? config.screens[screen].owners.first : nil
     }
 
     func setOwner(_ botID: String?, ofScreen screen: Int) {
-        UserDefaults.standard.set(botID ?? "", forKey: Keys.owner(screen))
-        objectWillChange.send()
+        guard config.screens.indices.contains(screen) else { return }
+        config.screens[screen].owners = botID.map { [$0] } ?? []
+        if draft.screens.indices.contains(screen) { draft.screens[screen].owners = config.screens[screen].owners }
+        saveConfig()
     }
 
-    private var owners: [Int: String] {
-        var result: [Int: String] = [:]
-        for screen in 0..<screenCount { if let owner = owner(ofScreen: screen) { result[screen] = owner } }
-        return result
-    }
-
-    /// Its own screen first, then the shared one.
+    /// Its own screen first, then the shared pool, never another bot's.
     func freeTiles(for botID: String) -> [StudioTileID] {
-        StudioOwnership.freeTiles(for: botID, owners: owners, roster: roster, screens: screenCount, tilesPerScreen: tilesPerScreen)
+        config.freeTiles(for: botID, roster: roster)
     }
 
     /// What's on the screens, for `studioState`. No page or chat text beyond a tile's short note.
     var report: [String: Any] {
         var tiles: [String: String] = [:]
         for (tile, bot) in roster.bots { tiles["\(tile.screen + 1).\(tile.tile + 1)"] = "\(bot): \(tileNotes[tile] ?? "")" }
-        return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": owners.reduce(into: [String: String]()) { $0["\($1.key + 1)"] = $1.value },
+        return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": config.screens.enumerated().reduce(into: [String: String]()) { $0["\($1.offset + 1)"] = $1.element.owners.joined(separator: ",") },
                 "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible,
                 "pausedForVideo": isPausedForVideo, "liveViewPaused": liveViewPaused, "videoTestFrames": videoTestFrames, "pictures": thumbnails.count, "pages": tilePages.count]
     }
@@ -552,8 +612,13 @@ final class StudioController: ObservableObject {
         roster.clear(tile)
     }
 
+    private func trimRoster() {
+        let valid = Set(allTiles)
+        for tile in roster.bots.keys where !valid.contains(tile) { roster.clear(tile) }
+    }
+
     private func retile() {
-        roster.trim(screens: screenCount, tilesPerScreen: tilesPerScreen)
+        trimRoster()
         for tile in Array(windows.keys) {
             if roster.bots[tile] == nil {
                 windows[tile]?.close()
@@ -575,7 +640,8 @@ final class StudioController: ObservableObject {
         if restart { previewTimer?.invalidate(); previewTimer = nil }
         if shouldPreview, previewTimer == nil {
             // The clock runs at the fastest any tile may go; each tile is only drawn when it's due.
-            let timer = Timer(timeInterval: 1 / Double(StudioPreviewSchedule.focusedFPS), repeats: true) { [weak self] _ in
+            let fastest = max(StudioPreviewSchedule.focusedFPS, config.screens.map(\.previewFPS).max() ?? 0)
+            let timer = Timer(timeInterval: 1 / Double(fastest), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.previewTick() }
             }
             RunLoop.main.add(timer, forMode: .common)
@@ -603,7 +669,7 @@ final class StudioController: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         let focused = expandedTile ?? hoveredTile
         var drew = false
-        for (tile, window) in windows where window.isVisible && StudioPreviewSchedule.isDue(tile, last: lastFrames[tile], now: now, focused: focused, base: previewFPS) {
+        for (tile, window) in windows where window.isVisible && StudioPreviewSchedule.isDue(tile, last: lastFrames[tile], now: now, focused: focused, base: previewFPS(forScreen: tile.screen)) {
             if let image = Self.snapshot(of: window) {
                 thumbnails[tile] = image
                 lastFrames[tile] = now
@@ -636,9 +702,9 @@ final class StudioController: ObservableObject {
         // and the panel where it can be seen.
         if liveCapture, hasVideoAnswer, !liveViewPaused, !frameIsCapturing, hasCapturePermission, panelCanBeSeen {
             let due = (0..<screenCount).filter { screen in
-                (0..<tilesPerScreen).contains { tile in
+                (0..<tiles(onScreen: screen)).contains { tile in
                     let id = StudioTileID(screen: screen, tile: tile)
-                    return windows[id] == nil && StudioPreviewSchedule.isDue(id, last: lastFrames[id], now: now, focused: focused, base: previewFPS)
+                    return windows[id] == nil && StudioPreviewSchedule.isDue(id, last: lastFrames[id], now: now, focused: focused, base: previewFPS(forScreen: screen))
                 }
             }
             if !due.isEmpty { captureScreens(due, at: now) }
@@ -695,7 +761,7 @@ final class StudioController: ObservableObject {
         lastPush = now
         lastPushHadTiles = busy
         let parts = roster.bots.map { tile, bot in (tile: tile, bot: bot, note: tileNotes[tile], page: tilePages[tile], image: UncheckedImage(image: thumbnails[tile])) }
-        let screens = screenCount, perScreen = tilesPerScreen, paused = isPausedForVideo, on = isOn
+        let screens = screenCount, perScreen = config.screens.map(\.tiles).max() ?? 2, paused = isPausedForVideo, on = isOn
         // Making the pictures small is real work: not on the main thread.
         Task.detached(priority: .utility) {
             let tiles = parts.map { part in
@@ -729,14 +795,15 @@ final class StudioController: ObservableObject {
     private func captureScreens(_ due: [Int], at now: Double) {
         frameIsCapturing = true
         let ids = displays.map(\.id)
-        let perScreen = tilesPerScreen
         let focused = expandedTile ?? hoveredTile
         Task { [weak self] in
             defer { self?.frameIsCapturing = false }
             for screen in due where ids.indices.contains(screen) && StudioDisplays.virtualIDs.contains(ids[screen]) {
                 guard let self, let (filter, size) = await self.screenFilter(for: ids[screen]) else { continue }
                 let configuration = SCStreamConfiguration()
-                configuration.width = (focused?.screen == screen ? 720 : 360) * perScreen
+                let count = self.tiles(onScreen: screen)
+                let grid = StudioLayout.grid(forTiles: count)
+                configuration.width = (focused?.screen == screen ? 720 : 360) * grid.columns
                 configuration.height = Int(CGFloat(configuration.width) * size.height / size.width)
                 configuration.showsCursor = false
                 guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) else {
@@ -745,12 +812,12 @@ final class StudioController: ObservableObject {
                 }
                 guard self.isOn else { return }
                 var pictures = self.thumbnails
-                let tileWidth = image.width / max(perScreen, 1)
-                for tile in 0..<perScreen {
+                let tileWidth = image.width / grid.columns, tileHeight = image.height / grid.rows
+                for tile in 0..<count {
                     let id = StudioTileID(screen: screen, tile: tile)
                     guard self.windows[id] == nil else { continue }
                     self.lastFrames[id] = now
-                    pictures[id] = image.cropping(to: CGRect(x: tile * tileWidth, y: 0, width: tileWidth, height: image.height))
+                    pictures[id] = image.cropping(to: CGRect(x: (tile % grid.columns) * tileWidth, y: (tile / grid.columns) * tileHeight, width: tileWidth, height: tileHeight))
                 }
                 self.thumbnails = pictures
                 self.framesThisSecond += 1

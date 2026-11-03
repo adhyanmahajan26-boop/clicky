@@ -20,7 +20,7 @@ struct StudioScreenTaskResult {
 final class StudioScreenTask {
     static let shared = StudioScreenTask()
 
-    private static let maximumSteps = 14
+    private static let maximumSteps = 20
     /// How long the result stays up on the tile.
     private static let lingerSeconds: UInt64 = 30
     private static let tileWaitSeconds = 45
@@ -49,8 +49,12 @@ final class StudioScreenTask {
                 onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that on the hidden screen: Theo doesn't have Accessibility here. Nothing was done."))
                 return
             }
+            guard StudioController.shared.config.choice(for: bot.id) != .none else {
+                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that: I'm set to have no screen. Addy can change that in my settings. Nothing was done."))
+                return
+            }
             guard let tile = await claimTile(for: bot) else {
-                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that: every hidden screen tile stayed busy. Nothing was done."))
+                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that: every tile I may use stayed busy. Nothing was done."))
                 return
             }
             let job = Job(task: task, tile: tile)
@@ -71,10 +75,9 @@ final class StudioScreenTask {
         if let desk = StudioActivity.shared.takeDesk(of: bot.id) { return desk }
         for _ in 0..<Self.tileWaitSeconds {
             guard studio.isOn else { return nil }
-            // From the far end, so research keeps the tiles it reaches for first.
-            if let tile = studio.freeTiles.last { return tile }
+            if let tile = studio.freeTiles(for: bot.id).first { return tile }
             StudioActivity.shared.makeRoomForResearch()
-            if let tile = studio.freeTiles.last { return tile }
+            if let tile = studio.freeTiles(for: bot.id).first { return tile }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         return nil

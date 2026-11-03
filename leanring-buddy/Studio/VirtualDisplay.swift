@@ -16,7 +16,7 @@ final class VirtualDisplay {
     /// Keeping this alive keeps the display. Letting go removes it.
     private var object: NSObject?
 
-    init?(name: String, serial: UInt32, size: CGSize) {
+    init?(name: String, serial: UInt32, size: CGSize, hiDPI: Bool = false, refresh: Double = 60) {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
               let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
               let modeClass: AnyObject = NSClassFromString("CGVirtualDisplayMode"),
@@ -24,8 +24,9 @@ final class VirtualDisplay {
 
         let descriptor = descriptorClass.init()
         descriptor.setValue(name, forKey: "name")
-        descriptor.setValue(UInt32(size.width), forKey: "maxPixelsWide")
-        descriptor.setValue(UInt32(size.height), forKey: "maxPixelsHigh")
+        let pixelScale: CGFloat = hiDPI ? 2 : 1
+        descriptor.setValue(UInt32(size.width * pixelScale), forKey: "maxPixelsWide")
+        descriptor.setValue(UInt32(size.height * pixelScale), forKey: "maxPixelsHigh")
         descriptor.setValue(NSValue(size: CGSize(width: size.width / 4.2, height: size.height / 4.2)), forKey: "sizeInMillimeters")
         descriptor.setValue(UInt32(0x7468), forKey: "vendorID")
         descriptor.setValue(UInt32(0x5354), forKey: "productID")
@@ -39,20 +40,20 @@ final class VirtualDisplay {
         guard let blankMode = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(), blankMode.responds(to: initMode) else { return nil }
         typealias ModeInit = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>
         let makeMode = unsafeBitCast(blankMode.method(for: initMode), to: ModeInit.self)
-        var mode = makeMode(blankMode, initMode, UInt(size.width), UInt(size.height), 60).takeRetainedValue()
+        var mode = makeMode(blankMode, initMode, UInt(size.width), UInt(size.height), refresh).takeRetainedValue()
         // Macs drop real monitors out of HDR while a plain virtual display exists. Modes can name a transfer function, which
         // may be the way round that. Test profile only, until it's been tried.
         if TheoProfile.isTest, let wanted = UserDefaults.standard.object(forKey: "test.studio.transferFunction") as? Int {
             let initHDR = NSSelectorFromString("initWithWidth:height:refreshRate:transferFunction:")
             if let blank = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(), blank.responds(to: initHDR) {
                 typealias ModeInitHDR = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double, UInt32) -> Unmanaged<AnyObject>
-                mode = unsafeBitCast(blank.method(for: initHDR), to: ModeInitHDR.self)(blank, initHDR, UInt32(size.width), UInt32(size.height), 60, UInt32(wanted)).takeRetainedValue()
+                mode = unsafeBitCast(blank.method(for: initHDR), to: ModeInitHDR.self)(blank, initHDR, UInt32(size.width), UInt32(size.height), refresh, UInt32(wanted)).takeRetainedValue()
             }
         }
 
         let settings = settingsClass.init()
-        // One to one pixels: nobody looks at these, so there's no need for the memory a Retina screen takes.
-        settings.setValue(UInt32(0), forKey: "hiDPI")
+        // One to one pixels unless the owner asks otherwise: a Retina screen takes four times the memory.
+        settings.setValue(UInt32(hiDPI ? 1 : 0), forKey: "hiDPI")
         settings.setValue([mode], forKey: "modes")
 
         let initDisplay = NSSelectorFromString("initWithDescriptor:")

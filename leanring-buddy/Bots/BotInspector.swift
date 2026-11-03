@@ -42,6 +42,9 @@ struct BotInspector: View {
                         .id(bot.provider + bot.model)
                     }
                     authority(bot)
+                    InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "Screens live on the Mac Studio.") {
+                        if StudioController.isAvailable { BotScreenPicker(botID: bot.id).labelsHidden() }
+                    }
                     InspectorSection("Instructions") {
                         TextEditor(text: Binding(get: { draft?.instructions ?? "" }, set: { draft?.instructions = $0; saveSoon() }))
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)

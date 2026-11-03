@@ -62,7 +62,7 @@ final class StudioActivity {
         }
         for bot in working {
             finishedAt[bot.id] = nil
-            guard desks[bot.id] == nil, studio.roster.tile(of: bot.id) == nil, let tile = studio.freeTiles.first else { continue }
+            guard desks[bot.id] == nil, studio.roster.tile(of: bot.id) == nil, let tile = studio.freeTiles(for: bot.id).first else { continue }
             desks[bot.id] = tile
             studio.assign(botID: bot.id, to: tile)
             if !studio.panelVisible { studio.panelVisible = true }

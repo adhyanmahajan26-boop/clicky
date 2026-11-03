@@ -603,6 +603,44 @@ extension BotsStore {
         }
     }
 
+    /// A bot's research job: Clicky's agents do it in the owner's browser on hidden tiles, and the bot hears the brief.
+    func researchForBot(_ question: String, bot: NativeBot, room: String) {
+        guard let research = CompanionManager.current?.researchController else {
+            post(BotChatMessage(author: bot.id, text: "I couldn't start the research: Clicky isn't ready on this Mac. Nothing was done."), to: room)
+            return
+        }
+        guard !research.isRunning else {
+            post(BotChatMessage(author: bot.id, text: "Clicky's agents are already researching something, so I didn't start this: \(question)"), to: room)
+            return
+        }
+        research.start(ResearchTrigger.parse(question) ?? ResearchRequest(source: .topic(question), question: question), speaks: false)
+        let run = research.runNumber
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let deadline = Date().addingTimeInterval(300)
+            while Date() < deadline, research.isRunning, research.runNumber == run { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+            let brief = (research.lastStatus["brief"] as? String) ?? ""
+            if research.runNumber == run, !research.isRunning, !brief.isEmpty {
+                self?.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
+            } else {
+                self?.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" didn't come back with anything."), to: room)
+            }
+        }
+    }
+
+    /// A screen for a bot, on a card: nothing changes until the owner confirms it.
+    func proposeScreen(_ gift: (bot: String, screen: String), from bot: NativeBot, room: String) {
+        guard let target = bots.first(where: { $0.name.compare(gift.bot, options: .caseInsensitive) == .orderedSame }) else {
+            post(BotChatMessage(author: bot.id, text: "I couldn't find a bot called \(gift.bot), so nothing changed."), to: room)
+            return
+        }
+        guard let choice = BotScreenGift.choice(for: gift.screen, in: StudioController.shared.config) else {
+            post(BotChatMessage(author: bot.id, text: "There's no free screen matching \"\(gift.screen)\". You can make one in Settings › Studio › Screens. Nothing changed."), to: room)
+            return
+        }
+        post(BotChatMessage(author: bot.id, text: "Confirm this and it's done:", card: "screen|\(target.id)|\(choice.tag)"), to: room)
+    }
+
     func continueAfterScreen(bot: NativeBot, room: String, report: String) {
         guard replying[bot.id] == nil else { return }
         let session = conversation(room).sessions[bot.id]

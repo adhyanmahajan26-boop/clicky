@@ -236,9 +236,12 @@ final class BrowserResearchTests: XCTestCase {
 
 final class StudioOwnershipTests: XCTestCase {
     private let owners = [0: "researcher"]
+    private func config(_ owners: [Int: String]) -> StudioScreensConfig {
+        StudioScreensConfig(screens: (0..<2).map { StudioScreenSpec(id: "screen-\($0 + 1)", name: "Screen \($0 + 1)", owners: owners[$0].map { [$0] } ?? []) })
+    }
     private func tile(_ screen: Int, _ index: Int) -> StudioTileID { StudioTileID(screen: screen, tile: index) }
     private func free(_ bot: String, _ roster: StudioRoster = StudioRoster(), owners: [Int: String]? = nil) -> [StudioTileID] {
-        StudioOwnership.freeTiles(for: bot, owners: owners ?? self.owners, roster: roster, screens: 2, tilesPerScreen: 2)
+        config(owners ?? self.owners).freeTiles(for: bot, roster: roster)
     }
 
     func testTheOwnerFillsItsOwnScreenThenTheSharedOne() {

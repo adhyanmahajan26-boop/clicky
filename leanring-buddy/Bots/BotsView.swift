@@ -428,6 +428,9 @@ struct BotsRootView: View {
                 }
             }
             Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
+            if StudioController.isAvailable {
+                Menu("Give a screen") { BotScreenPicker(botID: bot.id).pickerStyle(.inline) }
+            }
             if !bot.primary && bot.owner == nil { Button("Make primary") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
             Divider()
@@ -678,6 +681,7 @@ struct BotChatScreen: View {
                                     T3ResultCard(run: run).padding(.leading, 36)
                                 }
                                 if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
+                                if let card = message.card, card.hasPrefix("screen|") { BotScreenGiftCard(card: card) }
                                 if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
@@ -1205,12 +1209,13 @@ struct BotLine: View {
             total = newText.count
             rate = max(320, Double(total - anchorCount) * 2.5)
         }
-        .task(id: total) {
-            // Marks the reveal done once it has caught up and the stream has ended.
-            while !finished {
-                if !isLive && shownCount(at: Date()) >= total { finished = true; break }
-                try? await Task.sleep(nanoseconds: 120_000_000)
-            }
+        .task(id: "\(total)|\(isLive)") {
+            // Marks the reveal done once it has caught up and the stream has ended. A stale isLive here once kept finished lines
+            // redrawing at 30 fps for good, so this is keyed on it and waits once rather than polling.
+            guard !finished, !isLive else { return }
+            let left = Double(total - shownCount(at: Date())) / rate
+            if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000) + 50_000_000) }
+            if !Task.isCancelled { finished = true }
         }
     }
 

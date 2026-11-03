@@ -32,9 +32,21 @@ public enum StudioGate {
 public enum StudioLayout {
     public static let screenSize = CGSize(width: 1440, height: 900)
 
-    /// Where tile `index` sits on a screen of `size`: the whole screen for one tile, else left and right halves.
+    /// Tiles go side by side, except 4, which make a square.
+    public static func grid(forTiles tiles: Int) -> (columns: Int, rows: Int) {
+        tiles == 4 ? (2, 2) : (max(tiles, 1), 1)
+    }
+
+    /// Where tile `index` sits on a screen of `size`: the whole screen for one tile, else left and right halves, or quarters
+    /// reading from the top left. Bottom-left coordinates.
     public static func tileFrame(index: Int, tilesPerScreen: Int, in size: CGSize = screenSize) -> CGRect {
         guard tilesPerScreen > 1 else { return CGRect(origin: .zero, size: size) }
+        if tilesPerScreen == 4 {
+            let clamped = min(max(index, 0), 3)
+            let width = (size.width / 2).rounded(.down), height = (size.height / 2).rounded(.down)
+            return CGRect(x: clamped % 2 == 0 ? 0 : width, y: clamped < 2 ? height : 0,
+                          width: clamped % 2 == 0 ? width : size.width - width, height: clamped < 2 ? size.height - height : height)
+        }
         let width = (size.width / CGFloat(tilesPerScreen)).rounded(.down)
         let clamped = min(max(index, 0), tilesPerScreen - 1)
         let lastWidth = size.width - width * CGFloat(tilesPerScreen - 1)
@@ -47,6 +59,16 @@ public enum StudioLayout {
     public static func origins(forScreens count: Int, besides displays: [CGRect], size: CGSize = screenSize) -> [CGPoint] {
         let anchor = displays.max { ($0.maxX, $0.maxY) < ($1.maxX, $1.maxY) } ?? .zero
         return (0..<count).map { CGPoint(x: anchor.maxX + CGFloat($0) * size.width, y: anchor.maxY) }
+    }
+
+    /// The same, for screens of different sizes.
+    public static func origins(forSizes sizes: [CGSize], besides displays: [CGRect]) -> [CGPoint] {
+        let anchor = displays.max { ($0.maxX, $0.maxY) < ($1.maxX, $1.maxY) } ?? .zero
+        var x = anchor.maxX
+        return sizes.map { size in
+            defer { x += size.width }
+            return CGPoint(x: x, y: anchor.maxY)
+        }
     }
 
     /// Whether two displays meet along an edge the pointer could cross. A shared corner doesn't count.
@@ -71,15 +93,6 @@ public struct StudioTileID: Hashable, Codable, Sendable {
     /// Every tile, screen by screen.
     public static func all(screens: Int, tilesPerScreen: Int) -> [StudioTileID] {
         (0..<max(screens, 0)).flatMap { screen in (0..<max(tilesPerScreen, 0)).map { StudioTileID(screen: screen, tile: $0) } }
-    }
-}
-
-/// A hidden screen can belong to a bot, or be shared by any bot that needs the owner's signed-in Chrome.
-public enum StudioOwnership {
-    /// The free tiles this bot may use: its own screens first, then shared ones, left tile first. Never another bot's.
-    public static func freeTiles(for bot: String, owners: [Int: String], roster: StudioRoster, screens: Int, tilesPerScreen: Int) -> [StudioTileID] {
-        let all = StudioTileID.all(screens: screens, tilesPerScreen: tilesPerScreen).filter { roster.bots[$0] == nil }
-        return all.filter { owners[$0.screen] == bot } + all.filter { owners[$0.screen] == nil }
     }
 }
 

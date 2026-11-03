@@ -42,8 +42,18 @@ struct StudioPanel: View {
             }
             .frame(height: 30)
             if studio.isOn {
-                Text("\(studio.screenCount) hidden screen\(studio.screenCount == 1 ? "" : "s") · \(studio.tilesPerScreen) tile\(studio.tilesPerScreen == 1 ? "" : "s") each · Mac Studio only")
-                    .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).padding(.top, -6)
+                HStack {
+                    Text("\(studio.screenCount) hidden screen\(studio.screenCount == 1 ? "" : "s") · \(studio.allTiles.count) tiles · Mac Studio only")
+                        .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary)
+                    Spacer(minLength: 8)
+                    Button {
+                        studio.stageNewScreen()
+                        selection.openSettings(.studio)
+                    } label: { Label("New screen", systemImage: "plus") }
+                    .buttonStyle(.theo(.ghost, .small))
+                    .help("Add a hidden screen. It's made when you press Apply in Settings.")
+                }
+                .padding(.top, -6)
                 LinkStatusLine(link: link)
                 if let problem = studio.problem {
                     Text(problem).font(.system(size: 11.5)).foregroundColor(DS.Colors.warningText).fixedSize(horizontal: false, vertical: true)
@@ -77,18 +87,20 @@ struct StudioPanel: View {
     }
 
     private func screenCard(_ screen: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let spec = studio.config.screens.indices.contains(screen) ? studio.config.screens[screen] : nil
+        let count = studio.tiles(onScreen: screen)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Screen \(screen + 1)").font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text(spec?.name ?? "Screen \(screen + 1)").font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                 Spacer()
-                Text("1440×900").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
+                Text(spec?.sizeLabel ?? "").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
             }
-            HStack(spacing: 4) {
-                ForEach(0..<studio.tilesPerScreen, id: \.self) { tile in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: StudioLayout.grid(forTiles: count).columns), spacing: 4) {
+                ForEach(0..<count, id: \.self) { tile in
                     tileView(StudioTileID(screen: screen, tile: tile))
+                        .aspectRatio(Double(spec?.width ?? 1440) / Double(StudioLayout.grid(forTiles: count).columns) / (Double(spec?.height ?? 900) / Double(StudioLayout.grid(forTiles: count).rows)), contentMode: .fit)
                 }
             }
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .padding(0)
             .background(Color.black)
@@ -192,7 +204,7 @@ struct StudioPanel: View {
                         Text(owner.name).font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
                     }
                 } else {
-                    Text("Shared browser screen").font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.55)).multilineTextAlignment(.center)
+                    Text("Shared pool").font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.55)).multilineTextAlignment(.center)
                 }
             }
         }
@@ -220,12 +232,12 @@ struct StudioPanel: View {
         }
         Button("Clicky") { studio.assign(botID: BotsStore.clickyID, to: tile) }
         Divider()
-        Menu("Screen \(tile.screen + 1) belongs to") {
+        Menu("\(studio.config.screens.indices.contains(tile.screen) ? studio.config.screens[tile.screen].name : "This screen") belongs to") {
             ForEach(store.bots) { candidate in
                 Button((studio.owner(ofScreen: tile.screen) == candidate.id ? "✓ " : "") + candidate.name) { studio.setOwner(candidate.id, ofScreen: tile.screen) }
             }
             Divider()
-            Button("Shared browser screen") { studio.setOwner(nil, ofScreen: tile.screen) }
+            Button("Shared pool") { studio.setOwner(nil, ofScreen: tile.screen) }
         }
         if occupied {
             Divider()
@@ -257,7 +269,8 @@ struct StudioPanel: View {
         HStack(spacing: 8) {
             meterCell("CPU", value: String(format: "%.0f%%", studio.cpuPercent), fill: min(1, studio.cpuPercent / 100))
             meterCell("Memory", value: String(format: "%.0f MB", studio.memoryMB), fill: min(1, studio.memoryMB / 1024))
-            meterCell("Preview", value: studio.isOn && studio.liveCount > 0 ? "\(studio.previewFPS) fps" : "Off", fill: studio.isOn && studio.liveCount > 0 ? Double(studio.previewFPS) / 5 : 0)
+            let previewRate = studio.config.screens.map(\.previewFPS).max() ?? StudioPreviewSchedule.defaultFPS
+            meterCell("Preview", value: studio.isOn && !studio.liveViewPaused ? "\(previewRate) fps" : "Off", fill: studio.isOn && !studio.liveViewPaused ? Double(previewRate) / Double(StudioScreenSpec.previewFPSRange.upperBound) : 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
@@ -457,38 +470,11 @@ struct StudioSettingsContent: View {
                 SettingRow(title: "Hidden bot screens", detail: "Bots work on screens you never see") {
                     Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
-                RowDivider()
-                SettingRow(title: "Screens") {
-                    HStack(spacing: 10) {
-                        stepButton("−") { studio.screenCount -= 1 }.disabled(studio.screenCount <= 1)
-                        Text("\(studio.screenCount)").font(.system(size: 12.5).monospacedDigit()).foregroundColor(DS.Colors.textPrimary)
-                        stepButton("+") { studio.screenCount += 1 }.disabled(studio.screenCount >= 2)
-                    }
-                }
-                RowDivider()
-                SettingRow(title: "Tiles per screen") {
-                    HairlineSegments(options: [("1", "1"), ("2", "2")], selection: Binding(get: { String(studio.tilesPerScreen) }, set: { studio.tilesPerScreen = Int($0) ?? 2 }))
-                }
-                RowDivider()
-                SettingRow(title: "Live preview", detail: "Frames a second, for windows of Theo's own") {
-                    HStack(spacing: 10) {
-                        stepButton("−") { studio.previewFPS -= 1 }.disabled(studio.previewFPS <= 1)
-                        Text("\(studio.previewFPS) fps").font(.system(size: 12.5).monospacedDigit()).foregroundColor(DS.Colors.textPrimary)
-                        stepButton("+") { studio.previewFPS += 1 }.disabled(studio.previewFPS >= 5)
-                    }
-                }
             }
-            TheoSection(title: "Who owns each screen", hint: "These screens only hold Chrome windows, for Clicky's research agents. Coding runs and terminals never come here: they stay on your own monitors.") {
-                ForEach(0..<studio.screenCount, id: \.self) { screen in
-                    if screen > 0 { RowDivider() }
-                    SettingRow(title: "Screen \(screen + 1)") {
-                        Picker("Screen \(screen + 1)", selection: Binding(get: { studio.owner(ofScreen: screen) ?? "" }, set: { studio.setOwner($0.isEmpty ? nil : $0, ofScreen: screen) })) {
-                            Text("Shared browser screen").tag("")
-                            ForEach(BotsStore.shared.bots) { Text($0.name).tag($0.id) }
-                        }
-                        .labelsHidden().frame(width: 220)
-                    }
-                }
+            if StudioController.isAvailable {
+                StudioScreensSection()
+            } else {
+                TheoSection(title: "Screens", hint: "Screens live on the Mac Studio. Set them up there, and this Mac shows them in the Studio panel.") { EmptyView() }
             }
             ResearchAgentSettingsSection()
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
@@ -508,7 +494,7 @@ struct StudioSettingsContent: View {
             if !studio.displays.isEmpty {
                 TheoSection(title: "Where they are") {
                     ForEach(Array(studio.displayBounds().enumerated()), id: \.offset) { index, box in
-                        SettingRow(title: "Screen \(index + 1)", detail: "Off to the side, away from your monitors") {
+                        SettingRow(title: studio.config.screens.indices.contains(index) ? studio.config.screens[index].name : "Screen \(index + 1)", detail: "Off to the side, away from your monitors") {
                             Text("\(Int(box["x"] ?? 0)), \(Int(box["y"] ?? 0))").font(.system(size: 12, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
                         }
                     }
@@ -520,16 +506,6 @@ struct StudioSettingsContent: View {
     private var captureNote: String {
         let permission = studio.hasCapturePermission ? "" : " It also needs Screen Recording, which Theo never asks for by itself."
         return "Capturing can black out Netflix on your monitors, the way screen recording does, so nothing is captured while anything's playing: tiles show the page's words instead, and pictures come back when it stops. A tile with another app shows its bot and status instead." + permission
-    }
-
-    private func stepButton(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.selected))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

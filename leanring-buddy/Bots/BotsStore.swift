@@ -767,7 +767,7 @@ final class BotsStore: ObservableObject {
                 let team = self?.bots ?? []
                 let result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team) { text in
                     let shown = bot.owner == nil ? ClickyOrder.withoutTags(streaming: text) : text
-                    self?.replying[bot.id] = BotScreenOrder.withoutTags(streaming: shown)
+                    self?.replying[bot.id] = BotTagWords.withoutTags(streaming: BotScreenOrder.withoutTags(streaming: shown))
                 }
                 answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 newSession = result.session ?? session
@@ -805,14 +805,20 @@ final class BotsStore: ObservableObject {
             // A turn the owner set off can ask for the work screen, and so can a bot Theo asked on the owner's behalf. One set
             // off by a page or another bot's job can't, and says so: the tag never just sits in the chat looking like it ran.
             var screenOrders: [String] = []
+            var researchOrders: [String] = []
+            var screenGifts: [(bot: String, screen: String)] = []
             if bot.owner == nil, let said = answer {
                 let taken = BotScreenOrder.extract(from: said)
-                answer = taken.text
+                let research = BotResearchOrder.extract(from: taken.text)
+                let gifts = BotScreenGift.extract(from: research.text)
+                answer = gifts.text
                 if fromOwner || mayUseScreen {
                     screenOrders = taken.orders
-                } else if !taken.orders.isEmpty {
-                    answer = taken.text + "\n\n_(I can't use the screen on this turn, because Addy didn't ask for it. Nothing was done there.)_"
+                    researchOrders = research.questions
+                } else if !taken.orders.isEmpty || !research.questions.isEmpty {
+                    answer = gifts.text + "\n\n_(I can't use the screen or research on this turn, because Addy didn't ask for it. Nothing was done.)_"
                 }
+                if fromOwner { screenGifts = gifts.gifts }
             }
             let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil
@@ -838,6 +844,8 @@ final class BotsStore: ObservableObject {
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
+            for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
+            for gift in screenGifts { self.proposeScreen(gift, from: bot, room: conversationID) }
             for direct in directMessages {
                 self.sendDirectMessage(from: bot, to: direct.name, message: direct.message, room: conversationID, ownerWords: fromOwner ? self.recentOwnerWords(in: conversationID) : nil)
             }
@@ -1379,6 +1387,8 @@ enum BotPrompts {
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
         "Clicky does it on a free tile without touching Addy's own monitors, then tells you what happened. Say a job happened only if " +
         "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +
+        "To have Clicky's research agents look something up in Addy's browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
+        "If Addy asks for a bot to get a screen, put a line [GIVE SCREEN: bot name: screen name, own, shared or none]; Addy confirms it on a card. " +
         "Writing or changing code doesn't go through this: use a ```prompt block."
 
     /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
