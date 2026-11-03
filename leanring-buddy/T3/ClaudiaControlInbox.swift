@@ -105,6 +105,11 @@ final class ClaudiaControlInbox {
             let updates = companionManager.updateController
             updates.installAvailableUpdate()
             reply(identifier, ok: true, result: ["state": "\(updates.state)"], error: nil)
+        case "studioState":
+            reply(identifier, ok: true, result: StudioController.shared.report, error: nil)
+        case "updatePeer":
+            // Asks the other Mac to update itself when it's idle. Only a build that knows this will act on it.
+            reply(identifier, ok: TheoLink.shared.request("updateWhenIdle", [:]), result: TheoLink.shared.statusReport, error: nil)
         case "clickyMac":
             let changed = TheoLink.shared.setClickyMac(word: (command["word"] as? String ?? "").lowercased())
             reply(identifier, ok: changed, result: TheoLink.shared.statusReport, error: changed ? nil : "no Mac by that name")

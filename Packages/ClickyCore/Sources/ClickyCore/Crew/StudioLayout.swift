@@ -74,6 +74,15 @@ public struct StudioTileID: Hashable, Codable, Sendable {
     }
 }
 
+/// A hidden screen can belong to a bot, or be shared by any bot that needs the owner's signed-in Chrome.
+public enum StudioOwnership {
+    /// The free tiles this bot may use: its own screens first, then shared ones, left tile first. Never another bot's.
+    public static func freeTiles(for bot: String, owners: [Int: String], roster: StudioRoster, screens: Int, tilesPerScreen: Int) -> [StudioTileID] {
+        let all = StudioTileID.all(screens: screens, tilesPerScreen: tilesPerScreen).filter { roster.bots[$0] == nil }
+        return all.filter { owners[$0.screen] == bot } + all.filter { owners[$0.screen] == nil }
+    }
+}
+
 /// Live views in the panel: when each tile gets a new picture, and what may ever be captured.
 public enum StudioPreviewSchedule {
     public static let defaultFPS = 2

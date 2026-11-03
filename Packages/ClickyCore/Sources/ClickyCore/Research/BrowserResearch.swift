@@ -10,8 +10,8 @@
 import Foundation
 
 public enum BrowserResearchPolicy {
-    /// Two tiles at most, so the others stay free for the owner's own use.
-    public static let maximumBrowsersAtOnce = 2
+    /// Every tile: Researcher's own screen, then the shared one.
+    public static let maximumBrowsersAtOnce = 4
     public static let secondsToWaitForATile: TimeInterval = 120
     public static let secondsToWaitForTheOwner: TimeInterval = 300
     public static let maximumCharacters = 40_000

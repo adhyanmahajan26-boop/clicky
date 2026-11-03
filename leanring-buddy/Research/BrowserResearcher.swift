@@ -161,8 +161,11 @@ final class BrowserResearcher: ObservableObject {
 
     // MARK: Tiles
 
+    /// Its own screen first, then the shared browser screen.
+    private var ownTiles: [StudioTileID] { researcherID.map { StudioController.shared.freeTiles(for: $0) } ?? [] }
+
     private func acquireTile(_ id: String) async -> StudioTileID? {
-        if let tile = queue.request(id, free: StudioController.shared.freeTiles) { return tile }
+        if let tile = queue.request(id, free: ownTiles) { return tile }
         return await withCheckedContinuation { continuation in
             waiters[id] = continuation
             Task { @MainActor [weak self] in
@@ -178,7 +181,7 @@ final class BrowserResearcher: ObservableObject {
         queue.leave(id)
         queue.release(id)
         if let tile { StudioController.shared.releaseResearch(tile) }
-        while let next = queue.grantNext(free: StudioController.shared.freeTiles) {
+        while let next = queue.grantNext(free: ownTiles) {
             if let waiter = waiters.removeValue(forKey: next.id) { waiter.resume(returning: next.tile) } else { queue.release(next.id) }
         }
     }

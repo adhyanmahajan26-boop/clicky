@@ -35,6 +35,12 @@ struct DevicesSettingsContent: View {
                 RowDivider()
                 if let other = link.peerName ?? link.knownPeerName {
                     macRow(name: TheoLink.shortName(other), kind: DeviceRoles.thisMac == .macStudio ? .macBookAir : .macStudio, tag: nil, isOnline: link.isConnected, build: link.peerBuild)
+                    if link.isConnected, let theirs = link.peerBuild, let mine = currentBuild, theirs < mine {
+                        RowDivider()
+                        SettingRow(title: "Update \(TheoLink.shortName(other))", detail: "It checks for the latest build and installs it once it's idle.") {
+                            Button("Update it") { _ = link.request("updateWhenIdle", [:]) }.buttonStyle(.theoSecondary)
+                        }
+                    }
                 } else {
                     SettingRow(title: "No other Mac linked", detail: "Link one in Your other Mac to share the work between them.") { EmptyView() }
                 }

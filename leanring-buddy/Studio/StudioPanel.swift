@@ -169,7 +169,15 @@ struct StudioPanel: View {
                 .padding(6)
             }
             if bot == nil {
-                Text("Assign").font(.system(size: 11.5, weight: .medium)).foregroundColor(.white.opacity(0.6))
+                if let owner = studio.owner(ofScreen: tile.screen).flatMap({ store.bot($0) }) {
+                    // Nothing here right now: its owner, asleep.
+                    VStack(spacing: 4) {
+                        CrewAvatar(look: owner.crewLook, size: 44, pose: .sleep, moves: false, interactive: false)
+                        Text(owner.name).font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                    }
+                } else {
+                    Text("Shared browser screen").font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.55)).multilineTextAlignment(.center)
+                }
             }
         }
         .overlay {
@@ -195,6 +203,14 @@ struct StudioPanel: View {
             Button(candidate.name) { studio.assign(botID: candidate.id, to: tile) }
         }
         Button("Clicky") { studio.assign(botID: BotsStore.clickyID, to: tile) }
+        Divider()
+        Menu("Screen \(tile.screen + 1) belongs to") {
+            ForEach(store.bots) { candidate in
+                Button((studio.owner(ofScreen: tile.screen) == candidate.id ? "✓ " : "") + candidate.name) { studio.setOwner(candidate.id, ofScreen: tile.screen) }
+            }
+            Divider()
+            Button("Shared browser screen") { studio.setOwner(nil, ofScreen: tile.screen) }
+        }
         if occupied {
             Divider()
             Button("Clear this tile") { studio.clear(tile) }
@@ -296,8 +312,20 @@ struct StudioSettingsContent: View {
                     }
                 }
             }
+            TheoSection(title: "Who owns each screen", hint: "These screens only hold Chrome windows, for bots that need your signed-in browser. A screen's owner goes first; any bot can use a shared one. Coding runs and terminals never come here: they stay on your own monitors.") {
+                ForEach(0..<studio.screenCount, id: \.self) { screen in
+                    if screen > 0 { RowDivider() }
+                    SettingRow(title: "Screen \(screen + 1)") {
+                        Picker("Screen \(screen + 1)", selection: Binding(get: { studio.owner(ofScreen: screen) ?? "" }, set: { studio.setOwner($0.isEmpty ? nil : $0, ofScreen: screen) })) {
+                            Text("Shared browser screen").tag("")
+                            ForEach(BotsStore.shared.bots) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden().frame(width: 220)
+                    }
+                }
+            }
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
-                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Only Researcher, at most two tiles at once, freed when each page is done") {
+                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Researcher, on its own screen and then the shared one. Each tile is freed when its page is done") {
                     Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
                 if studio.researchUsesBrowser {

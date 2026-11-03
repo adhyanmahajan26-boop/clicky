@@ -234,6 +234,34 @@ final class BrowserResearchTests: XCTestCase {
     }
 }
 
+final class StudioOwnershipTests: XCTestCase {
+    private let owners = [0: "researcher"]
+    private func tile(_ screen: Int, _ index: Int) -> StudioTileID { StudioTileID(screen: screen, tile: index) }
+    private func free(_ bot: String, _ roster: StudioRoster = StudioRoster(), owners: [Int: String]? = nil) -> [StudioTileID] {
+        StudioOwnership.freeTiles(for: bot, owners: owners ?? self.owners, roster: roster, screens: 2, tilesPerScreen: 2)
+    }
+
+    func testTheOwnerFillsItsOwnScreenThenTheSharedOne() {
+        XCTAssertEqual(free("researcher"), [tile(0, 0), tile(0, 1), tile(1, 0), tile(1, 1)])
+        var roster = StudioRoster()
+        roster.hold("researcher", tile: tile(0, 0))
+        roster.hold("researcher", tile: tile(0, 1))
+        XCTAssertEqual(free("researcher", roster), [tile(1, 0), tile(1, 1)])
+    }
+
+    func testAnotherBotOnlyGetsTheSharedScreen() {
+        XCTAssertEqual(free("someone"), [tile(1, 0), tile(1, 1)])
+    }
+
+    func testAScreenWithAnotherOwnerIsNeverUsed() {
+        XCTAssertEqual(free("someone", owners: [0: "researcher", 1: "other"]), [])
+    }
+
+    func testResearchCanUseEveryTile() {
+        XCTAssertEqual(BrowserResearchPolicy.maximumBrowsersAtOnce, 4)
+    }
+}
+
 final class DeviceRoutingTests: XCTestCase {
     private func route(_ feature: DeviceFeature, _ choice: DeviceChoice? = nil, on mac: DeviceKind, paired: Bool = true, online: Bool = true) -> DeviceRoute {
         DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, thisMac: mac, paired: paired, otherMacOnline: online)

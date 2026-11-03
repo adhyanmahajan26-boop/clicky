@@ -2256,6 +2256,9 @@ extension BotsStore {
     /// The other Mac asks this one to do something it can't do itself.
     func handleLinkRequest(_ action: String, _ fields: [String: String]) {
         switch action {
+        case "updateWhenIdle":
+            // Only ever the normal update, with its checksum and signature checks.
+            CompanionManager.current?.updateController.installWhenIdle()
         case "run":
             guard let prompt = fields["prompt"], let title = fields["title"], let room = fields["room"] else { return }
             let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }

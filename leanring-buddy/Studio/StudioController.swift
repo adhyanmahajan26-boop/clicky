@@ -46,6 +46,7 @@ final class StudioController: ObservableObject {
         static let capture = "theo.studio.liveCapture"
         static let researchBrowser = "theo.studio.researchBrowser"
         static let panelVisible = "theo.studio.panelVisible"
+        static func owner(_ screen: Int) -> String { "theo.studio.owner.\(screen)" }
     }
 
     /// Remembered, so the panel is where it was left.
@@ -410,6 +411,39 @@ final class StudioController: ObservableObject {
 
     /// Tiles nobody holds.
     var freeTiles: [StudioTileID] { allTiles.filter { roster.bots[$0] == nil } }
+
+    // MARK: Who owns each screen
+
+    /// Screen 1 is Researcher's and Screen 2 is shared, until the owner changes it. Only signed-in Chrome windows ever go on
+    /// these screens: coding runs keep their normal terminal on the owner's own monitors.
+    func owner(ofScreen screen: Int) -> String? {
+        if let saved = UserDefaults.standard.string(forKey: Keys.owner(screen)) { return saved.isEmpty ? nil : saved }
+        return screen == 0 ? BotsStore.shared.teamBot(.researcher)?.id : nil
+    }
+
+    func setOwner(_ botID: String?, ofScreen screen: Int) {
+        UserDefaults.standard.set(botID ?? "", forKey: Keys.owner(screen))
+        objectWillChange.send()
+    }
+
+    private var owners: [Int: String] {
+        var result: [Int: String] = [:]
+        for screen in 0..<screenCount { if let owner = owner(ofScreen: screen) { result[screen] = owner } }
+        return result
+    }
+
+    /// Its own screen first, then the shared one.
+    func freeTiles(for botID: String) -> [StudioTileID] {
+        StudioOwnership.freeTiles(for: botID, owners: owners, roster: roster, screens: screenCount, tilesPerScreen: tilesPerScreen)
+    }
+
+    /// What's on the screens, for `studioState`. No page or chat text beyond a tile's short note.
+    var report: [String: Any] {
+        var tiles: [String: String] = [:]
+        for (tile, bot) in roster.bots { tiles["\(tile.screen + 1).\(tile.tile + 1)"] = "\(bot): \(tileNotes[tile] ?? "")" }
+        return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": owners.reduce(into: [String: String]()) { $0["\($1.key + 1)"] = $1.value },
+                "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible]
+    }
 
     /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
     func holdForResearch(_ tile: StudioTileID, botID: String, note: String, app: NSRunningApplication?) {
