@@ -155,6 +155,12 @@ final class PushToTalkRecorder: ObservableObject {
         self.recognizer = recognizer
         transcriptionProviderDisplayName = recognizer.supportsOnDeviceRecognition ? "Apple Speech (on this Mac)" : "Apple Speech"
 
+        guard engine.inputNode.hasUsableMicFormat else {
+            isPreparingToRecord = false
+            print("⚠️ Push-to-talk: this Mac has no usable microphone right now")
+            return
+        }
+
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.contextualStrings = expectedPhrases + [ClickySettings.assistantName]
