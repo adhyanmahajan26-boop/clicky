@@ -190,3 +190,22 @@ public struct StudioScreenCost: Equatable, Sendable {
 
     public var label: String { "~\(graphicsMB) MB graphics · ~\(String(format: "%.1f", cpuPercent))% CPU · ~\(memoryMB) MB memory" }
 }
+
+/// What keeps the owner's own pointer and windows off the hidden screens, which macOS treats as part of their desktop.
+public enum StudioGuardRules {
+    /// The closest point on the owner's monitors, a little inside the edge. Nil when the point isn't on a hidden screen.
+    public static func pointerLanding(for point: CGPoint, hidden: [CGRect], monitors: [CGRect]) -> CGPoint? {
+        guard hidden.contains(where: { $0.contains(point) }) else { return nil }
+        let spots = monitors.map { box -> CGPoint in
+            CGPoint(x: min(max(point.x, box.minX + 2), box.maxX - 2), y: min(max(point.y, box.minY + 2), box.maxY - 2))
+        }
+        return spots.min { hypot($0.x - point.x, $0.y - point.y) < hypot($1.x - point.x, $1.y - point.y) }
+    }
+
+    /// Whether a window on a hidden screen has to go. Only one a bot's job put at the corner of a tile it holds may stay.
+    public static func mustMoveBack(window: CGRect, ownerPID: Int32, theoPID: Int32, jobPIDs: Set<Int32>, heldTileOrigins: [CGPoint], hidden: [CGRect]) -> Bool {
+        guard hidden.contains(where: { $0.contains(CGPoint(x: window.midX, y: window.midY)) }), ownerPID != theoPID else { return false }
+        guard jobPIDs.contains(ownerPID) else { return true }
+        return !heldTileOrigins.contains { abs($0.x - window.minX) <= 2 && abs($0.y - window.minY) <= 2 }
+    }
+}

@@ -177,3 +177,32 @@ final class StudioScreensConfigTests: XCTestCase {
         XCTAssertNil(BotScreenGift.choice(for: "own", in: config))
     }
 }
+
+final class StudioGuardRulesTests: XCTestCase {
+    private let monitors = [CGRect(x: 0, y: 0, width: 3440, height: 1440), CGRect(x: 3440, y: 198, width: 1920, height: 1080)]
+    private let hidden = [CGRect(x: 5360, y: 1278, width: 1440, height: 900)]
+
+    func testThePointerOnAMonitorIsLeftAlone() {
+        XCTAssertNil(StudioGuardRules.pointerLanding(for: CGPoint(x: 100, y: 100), hidden: hidden, monitors: monitors))
+    }
+
+    func testThePointerOnAHiddenScreenGoesToTheNearestMonitor() {
+        let landing = StudioGuardRules.pointerLanding(for: CGPoint(x: 5400, y: 1300), hidden: hidden, monitors: monitors)
+        XCTAssertEqual(landing, CGPoint(x: 5358, y: 1276))
+    }
+
+    func testAnOrdinaryAppsWindowIsMovedBack() {
+        XCTAssertTrue(StudioGuardRules.mustMoveBack(window: CGRect(x: 5500, y: 1400, width: 600, height: 400), ownerPID: 50, theoPID: 1, jobPIDs: [], heldTileOrigins: [], hidden: hidden))
+    }
+
+    func testTheosOwnAndWindowsOnTheOwnersMonitorsStay() {
+        XCTAssertFalse(StudioGuardRules.mustMoveBack(window: CGRect(x: 5500, y: 1400, width: 600, height: 400), ownerPID: 1, theoPID: 1, jobPIDs: [], heldTileOrigins: [], hidden: hidden))
+        XCTAssertFalse(StudioGuardRules.mustMoveBack(window: CGRect(x: 100, y: 100, width: 600, height: 400), ownerPID: 50, theoPID: 1, jobPIDs: [], heldTileOrigins: [], hidden: hidden))
+    }
+
+    func testOnlyAJobsWindowOnItsTileStays() {
+        let tile = CGPoint(x: 5360, y: 1278)
+        XCTAssertFalse(StudioGuardRules.mustMoveBack(window: CGRect(origin: tile, size: CGSize(width: 720, height: 900)), ownerPID: 50, theoPID: 1, jobPIDs: [50], heldTileOrigins: [tile], hidden: hidden))
+        XCTAssertTrue(StudioGuardRules.mustMoveBack(window: CGRect(x: 5500, y: 1400, width: 600, height: 400), ownerPID: 50, theoPID: 1, jobPIDs: [50], heldTileOrigins: [tile], hidden: hidden))
+    }
+}

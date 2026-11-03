@@ -331,7 +331,19 @@ final class StudioController: ObservableObject {
             }
             self.displays = made
             self.isOn = true
+            StudioGuards.shared.start()
             self.place(made, realOrigins: realOrigins)
+            // Somewhere the pointer could reach, or that macOS refused: try again, then don't keep them.
+            for _ in 0..<2 where self.problem != nil {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self.problem = nil
+                self.place(made, realOrigins: realOrigins)
+            }
+            if let trouble = self.problem {
+                self.setEnabled(false)
+                self.problem = trouble + " So I turned them off."
+                return
+            }
             self.trimRoster()
             self.refreshPreviewing()
             StudioActivity.shared.start()
@@ -437,6 +449,7 @@ final class StudioController: ObservableObject {
 
     private func stop() {
         guard isOn else { return }
+        StudioGuards.shared.stop()
         stopStreams()
         screenFilters = [:]
         BrowserResearcher.shared.closeEverything()
@@ -560,6 +573,17 @@ final class StudioController: ObservableObject {
     }
 
     /// Its own screen first, then the shared pool, never another bot's.
+    /// For the window guard: where a job's window may sit, top-left coordinates.
+    var heldTileOriginsCG: [CGPoint] {
+        roster.bots.keys.compactMap { tile -> CGPoint? in
+            guard displays.indices.contains(tile.screen), let frame = frame(of: tile), let screen = displays[tile.screen].screen else { return nil }
+            let box = CGDisplayBounds(displays[tile.screen].id)
+            return CGPoint(x: box.minX + frame.minX - screen.frame.minX, y: box.minY + screen.frame.maxY - frame.maxY)
+        }
+    }
+
+    var jobProcessIDs: Set<Int32> { Set(apps.values.map(\.processIdentifier)) }
+
     func freeTiles(for botID: String) -> [StudioTileID] {
         config.freeTiles(for: botID, roster: roster)
     }
@@ -570,7 +594,7 @@ final class StudioController: ObservableObject {
         for (tile, bot) in roster.bots { tiles["\(tile.screen + 1).\(tile.tile + 1)"] = "\(bot): \(tileNotes[tile] ?? "")" }
         return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": config.screens.enumerated().reduce(into: [String: String]()) { $0["\($1.offset + 1)"] = $1.element.owners.joined(separator: ",") },
                 "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible,
-                "pausedForVideo": isPausedForVideo, "liveViewPaused": liveViewPaused, "videoTestFrames": videoTestFrames, "pictures": thumbnails.count, "pages": tilePages.count]
+                "pointerCatches": StudioGuards.shared.pointerCatches, "windowsMovedBack": StudioGuards.shared.windowsMovedBack, "pausedForVideo": isPausedForVideo, "liveViewPaused": liveViewPaused, "videoTestFrames": videoTestFrames, "pictures": thumbnails.count, "pages": tilePages.count]
     }
 
     /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
