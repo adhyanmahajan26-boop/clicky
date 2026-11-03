@@ -2,7 +2,8 @@
 //  DictationSettingsView.swift
 //  leanring-buddy
 //
-//  Settings › Dictation: on or off, the shortcut, who listens, the clean-up, the language and the owner's own words.
+//  Settings › Dictation: the chat box's mic, then dictating anywhere: on or off, the shortcut, who listens, the clean-up,
+//  the language and the owner's own words.
 //
 
 import ClickyCore
@@ -18,12 +19,47 @@ struct DictationSettingsContent: View {
     @ObservedObject private var keys = ProviderKeys.shared
     @State private var newWord = ""
     @State private var tryItText = ""
+    @AppStorage(ComposerDictationSettings.enabledKey) private var composerEnabled = true
+    @AppStorage(ComposerDictationSettings.languageKey) private var composerLanguage = "auto"
+    @AppStorage(ComposerDictationSettings.autoStopKey) private var composerAutoStop = true
+    @AppStorage(ComposerDictationSettings.silenceSecondsKey) private var composerSilence = ComposerSilenceRule.defaultSeconds
+    @AppStorage(ComposerDictationSettings.shortcutKey) private var composerShortcut = ComposerDictationShortcut.optionSpace.rawValue
 
     private var picked: DictationShortcut { DictationShortcut(rawValue: shortcut) ?? .controlFn }
     private var manager: CompanionManager? { CompanionManager.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            TheoSection(title: "In the chat box", hint: "Your words go in at the cursor as you speak, and nothing is sent until you send it. No sounds. \u{201C}Hey \(ClickySettings.assistantName)\u{201D} pauses while you dictate.") {
+                SettingRow(title: "Dictation", detail: "Click the mic in a chat's message box to talk.") {
+                    Toggle("Dictation in the chat box", isOn: $composerEnabled).toggleStyle(.switch).labelsHidden()
+                }
+                if composerEnabled {
+                    RowDivider()
+                    SettingRow(title: "Language", detail: nil) {
+                        Picker("Language", selection: $composerLanguage) {
+                            ForEach(DictationSettings.languages, id: \.id) { Text($0.id == "auto" ? "This Mac's language" : $0.title).tag($0.id) }
+                        }
+                        .labelsHidden().frame(width: 200)
+                    }
+                    RowDivider()
+                    SettingRow(title: "Auto-stop on silence", detail: composerAutoStop ? "Stops and keeps your words after a pause this long." : "Keeps listening until you stop it.") {
+                        HStack(spacing: 10) {
+                            if composerAutoStop {
+                                HairlineSegments(options: [("2", "2 s"), ("3", "3 s"), ("5", "5 s")],
+                                                 selection: Binding(get: { String(Int(composerSilence)) }, set: { composerSilence = Double($0) ?? ComposerSilenceRule.defaultSeconds }))
+                                    .frame(width: 132)
+                            }
+                            Toggle("Auto-stop on silence", isOn: $composerAutoStop).toggleStyle(.switch).labelsHidden()
+                        }
+                    }
+                    RowDivider()
+                    SettingRow(title: "Shortcut", detail: composerShortcut == ComposerDictationShortcut.optionSpace.rawValue ? "⌥Space works while the message box is focused: tap to start and stop, or hold while you talk." : nil) {
+                        HairlineSegments(options: ComposerDictationShortcut.allCases.map { ($0.rawValue, $0.title) }, selection: $composerShortcut)
+                            .frame(width: 320)
+                    }
+                }
+            }
             TheoSection(title: "Dictate anywhere", hint: nil) {
                 HStack(spacing: 12) {
                     IconTile(symbol: "mic.fill", colors: TileColors.rose, size: 40)

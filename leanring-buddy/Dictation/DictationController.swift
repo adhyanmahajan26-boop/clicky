@@ -146,6 +146,8 @@ final class DictationCapture {
     private(set) var appleError: String?
     let tape = DictationTape()
     var onLevel: ((CGFloat) -> Void)?
+    /// The recognizer's words so far, each time they change.
+    var onWords: ((String) -> Void)?
 
     /// Starts Apple's recognizer, on this Mac when it can. False when it isn't allowed or has no such language.
     @discardableResult
@@ -172,7 +174,10 @@ final class DictationCapture {
             let failure = error?.localizedDescription
             Task { @MainActor in
                 guard let self else { return }
-                if let text, !text.isEmpty { self.appleText = text }
+                if let text, !text.isEmpty {
+                    self.appleText = text
+                    self.onWords?(text)
+                }
                 if let failure { self.appleError = failure }
                 if isFinal || failure != nil { self.finishApple() }
             }
@@ -345,7 +350,7 @@ final class DictationController: ObservableObject {
     }
 
     private func keysPressed() {
-        guard !isBlocked(), capture == nil else { return }
+        guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             showFailure("Theo needs the microphone")
             return
@@ -569,9 +574,8 @@ final class DictationController: ObservableObject {
         }
     }
 
-    private func sarvamTranscript(of tape: DictationTape) async throws -> String {
+    private func sarvamTranscript(of tape: DictationTape, language: (id: String, title: String, sarvam: String, apple: String?) = DictationSettings.currentLanguage) async throws -> String {
         guard let client = SarvamClient.fromKeychain() else { throw SarvamError.missingKey }
-        let language = DictationSettings.currentLanguage
         // Hinglish needs its own mode: Hindi and English each stay in their own words.
         let mode: SarvamClient.STTMode = language.id == "hinglish" || language.id == "auto" ? .codemix : .transcribe
         let keyterms = DictationSettings.dictionary.words
@@ -581,6 +585,33 @@ final class DictationController: ObservableObject {
             pieces.append(result.transcript)
         }
         return pieces.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: The composer
+
+    var isCapturing: Bool { capture != nil }
+
+    func warmCleanerForComposer() { warmCleaner() }
+
+    /// The composer's final words: Sarvam if it's in use (what Apple heard if that fails), then the same clean-up as the
+    /// chord. A slow clean-up doesn't hold the words back.
+    func composerWords(heard: String, tape: DictationTape, language: (id: String, title: String, sarvam: String, apple: String?)) async -> String {
+        defer { stopCleanerWhenIdle() }
+        var words = heard
+        if DictationSettings.usesSarvam, !tape.isEmpty {
+            do {
+                let sarvamWords = try await sarvamTranscript(of: tape, language: language)
+                if !sarvamWords.isEmpty { words = sarvamWords }
+            } catch {
+                print("⚠️ Dictation: Sarvam failed, using Apple's words: \(error.localizedDescription)")
+            }
+        }
+        words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return "" }
+        let raw = DictationCleanup.localPass(words, dictionary: DictationSettings.dictionary)
+        guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw) else { return raw }
+        if let cleaned = await Self.value(of: cleanupTask(for: raw), within: Self.cleanupBudgetSeconds), let cleaned { return cleaned }
+        return raw
     }
 
     // MARK: Test files

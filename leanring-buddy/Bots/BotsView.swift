@@ -61,6 +61,7 @@ struct BotsRootView: View {
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var dictation = ComposerDictation.shared
 
     private var showsStudioPanel: Bool {
         guard StudioController.isAvailable, studio.panelVisible else { return false }
@@ -390,11 +391,11 @@ struct BotsRootView: View {
                 ClickyAvatar(size: 34, isActive: store.isClickyBusy)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Clicky").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text(store.isClickyBusy ? "Working" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
+                    Text(dictation.isActive ? "Dictating\u{2026}" : store.isClickyBusy ? "Working" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
                         .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if listening { ListeningWave() }
+                if listening || dictation.isActive { ListeningWave() }
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selection.pane == .clicky ? DS.Colors.selected : .clear))
@@ -621,6 +622,8 @@ struct BotChatScreen: View {
     @State private var editsGroup = false
     @State private var attachments: [URL] = []
     @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var dictation = ComposerDictation.shared
+    @AppStorage(ComposerDictationSettings.enabledKey) private var dictationEnabled = true
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
@@ -862,7 +865,12 @@ struct BotChatScreen: View {
     /// The composer (docs/DESIGN.md): text on top; under it @-mentions, the model, and send or stop.
     private var composer: some View {
         let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
+        let dictating = dictation.isActive(for: conversationID)
+        let isFinishing = dictating && dictation.phase == .finishing
         return VStack(alignment: .leading, spacing: 10) {
+            if case .problem(let problem) = dictation.phase, dictation.ownerID == conversationID {
+                ComposerDictationNote(problem: problem, onOpenSettings: dictation.openPermissionSettings, onDismiss: dictation.dismissNote)
+            }
             if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -881,6 +889,10 @@ struct BotChatScreen: View {
                     }
                 }
             }
+            if dictating {
+                ComposerDictationField(live: dictation.live, isFinishing: isFinishing)
+                ComposerDictationBar(live: dictation.live, isFinishing: isFinishing, onCancel: dictation.cancel, onKeep: dictation.stop)
+            } else {
             TextField(bot.map { "Message \($0.name), or type / for commands" } ?? "Message \(group?.name ?? "the group")",
                       text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -907,13 +919,12 @@ struct BotChatScreen: View {
                     EffortChip(store: store, bot: bot)
                 }
                 Spacer()
-                Button { startDictationHint() } label: {
-                    HairlineIcon(name: "mic", size: 18, color: DS.Colors.textSecondary)
-                        .frame(width: 30, height: 30).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).help("Dictate: hold Control + Fn and talk")
-                .popover(isPresented: $showsDictationHint, arrowEdge: .top) {
-                    Text("Hold Control + Fn and talk. Your words land here.").font(.system(size: 12.5)).foregroundColor(DS.Colors.textPrimary).padding(12)
+                if dictationEnabled {
+                    Button { dictation.toggle(conversationID) } label: {
+                        HairlineIcon(name: "mic", size: 18, color: DS.Colors.textSecondary)
+                            .frame(width: 30, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help(dictationHelp)
                 }
                 if !inProgress.isEmpty && isEmpty {
                     Button {
@@ -934,11 +945,16 @@ struct BotChatScreen: View {
                     .keyboardShortcut(.return, modifiers: .command)
                 }
             }
+            }
         }
         .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(DS.Colors.surface1))
+        .background(ComposerDictationAnchor())
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(composerFocused ? DS.Colors.accent.opacity(0.6) : DS.Colors.borderStrong, lineWidth: composerFocused ? 1.5 : 1))
+            .strokeBorder(dictating || composerFocused ? DS.Colors.accent.opacity(dictating ? 1 : 0.6) : DS.Colors.borderStrong, lineWidth: dictating || composerFocused ? 1.5 : 1))
+        .onAppear { attachDictation() }
+        .onDisappear { dictation.detach(conversationID) }
+        .onChange(of: composerFocused) { _, focused in dictation.noteFocus(conversationID, focused: focused) }
         .frame(maxWidth: 704)
         .padding(.horizontal, 24).padding(.bottom, 18).padding(.top, 6)
         .frame(maxWidth: .infinity)
@@ -949,11 +965,23 @@ struct BotChatScreen: View {
         }
     }
 
-    @State private var showsDictationHint = false
+    private var dictationHelp: String {
+        switch ComposerDictationSettings.shortcut {
+        case .optionSpace: return "Dictate (⌥Space or ⌘⇧D)"
+        case .commandShiftD: return "Dictate (⌘⇧D)"
+        case .micButtonOnly: return "Dictate"
+        }
+    }
 
-    private func startDictationHint() {
-        composerFocused = true
-        showsDictationHint = true
+    private func attachDictation() {
+        let draft = $draft
+        let focused = $composerFocused
+        dictation.attach(ComposerDictation.Composer(id: conversationID, text: { draft.wrappedValue }, land: { text, cursor in
+            draft.wrappedValue = text
+            focused.wrappedValue = true
+            // The field comes back on the next pass, then its editor can take the cursor.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { ComposerDictation.shared.placeCursor(cursor) }
+        }))
     }
 
     /// Who an @ can reach from here: the group's bots, or the bots this one may message.

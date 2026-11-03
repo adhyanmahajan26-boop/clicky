@@ -75,7 +75,7 @@ enum SettingsTab {
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."
             case .voice: return "How Clicky and Theo speak, how they hear you, and calls."
-            case .dictation: return "Hold a shortcut in any app, talk, and it's typed."
+            case .dictation: return "Talk into the chat box, or hold a shortcut in any app."
             case .screen: return "The monitor Theo works on, leaving your main screen alone."
             case .link: return "Both Macs run as one Theo: the same bots, group chats, chats and memory."
             case .permissions: return "What Theo needs to hear, see and point."

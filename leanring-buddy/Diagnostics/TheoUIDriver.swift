@@ -643,6 +643,33 @@ extension TheoUIDriver {
             guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
             manager.dictationController.showForTest(state: command["state"] as? String ?? "listening")
             settle { respond(true, ["window": manager.dictationController.pill.windowNumber as Any? ?? NSNull()], nil) }
+        case "uiComposerDictation":
+            // {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions, bot, path, realTime, stopAtEnd, key, up, at, microphone, speech}
+            let dictation = ComposerDictation.shared
+            let owner = command["bot"] as? String ?? dictation.ownerID ?? BotsStore.shared.primary?.id ?? ""
+            switch command["action"] as? String ?? "state" {
+            case "toggle": dictation.toggle(owner)
+            case "stop": dictation.stop()
+            case "cancel": dictation.cancel()
+            case "dismiss": dictation.dismissNote()
+            case "feed":
+                guard let path = command["path"] as? String,
+                      dictation.feed(fileURL: URL(fileURLWithPath: path), realTime: command["realTime"] as? Bool ?? true, stopAtEnd: command["stopAtEnd"] as? Bool ?? false) else {
+                    respond(false, dictation.testReport(), "Needs a path, a readable file and dictation listening.")
+                    return true
+                }
+            case "key":
+                let taken = dictation.testKey(command["key"] as? String ?? "", isUp: command["up"] as? Bool ?? false)
+                settle { respond(true, ["taken": taken].merging(dictation.testReport()) { first, _ in first }, nil) }
+                return true
+            case "cursor":
+                guard dictation.testMoveCursor(command["at"] as? Int ?? 0) else { respond(false, nil, "The field isn't focused."); return true }
+            case "permissions":
+                dictation.testPermissions = ((command["microphone"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)),
+                                             (command["speech"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)))
+            default: break
+            }
+            settle { respond(true, dictation.testReport(), nil) }
         case "uiDictationFeed":
             guard let manager = CompanionManager.current, let path = command["path"] as? String else { respond(false, nil, "Needs path."); return true }
             var target = DictationInserter.Target.frontmost
