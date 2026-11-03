@@ -251,6 +251,8 @@ private struct StepHeader: View {
 }
 
 private struct WelcomeStep: View {
+    @AppStorage(TheoAppearance.settingKey) private var appearance = TheoAppearance.dark.rawValue
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             TheoMark(size: 72)
@@ -264,6 +266,11 @@ private struct WelcomeStep: View {
                 feature("arrow.triangle.pull", TileColors.lime, "Runs come back with a branch, a draft PR and a report")
             }
             .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pick your look").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                HairlineSegments(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance).frame(width: 260)
+            }
+            .padding(.top, 8)
         }
     }
 

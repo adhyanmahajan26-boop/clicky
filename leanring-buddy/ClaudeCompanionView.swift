@@ -368,18 +368,8 @@ final class CompanionSparkLayerView: NSView {
                 gradientLayer.add(twinkle, forKey: Self.twinkleKey)
             }
         } else {
-            let breathing = CABasicAnimation(keyPath: "transform.scale")
-            breathing.fromValue = 1 - ClaudeCompanionView.idleBreathingAmplitude
-            breathing.toValue = 1 + ClaudeCompanionView.idleBreathingAmplitude
-            breathing.duration = ClaudeCompanionView.idleBreathingCycleSeconds / 2
-            breathing.autoreverses = true
-            breathing.repeatCount = .infinity
-            breathing.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)  // ≈ the old sine
-            coordinatorLayer.add(breathing, forKey: Self.breathingKey)
-            // Idle: the halo drifts slowly.
-            if style.halo != .none {
-                haloLayer.add(Self.spin(degreesPerSecond: 12, sign: -clockwiseSign), forKey: Self.haloSpinKey)
-            }
+            // Idle: nothing moves. An endless animation in these full-screen windows keeps WindowServer redrawing all day
+            // (about 2 points of its CPU, measured), for a spark that's just sitting by the pointer.
         }
 
         if !configuration.workerIDs.isEmpty {

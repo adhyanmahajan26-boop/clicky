@@ -121,6 +121,20 @@ extension WhiteboardPanelRootView {
                 BoardToolbarButton(symbol: "chevron.right", help: "Next step (→)", palette: palette) { boardController.next() }
                 BoardToolbarButton(symbol: "arrow.counterclockwise", help: "Replay (R)", palette: palette) { boardController.replay() }
                 BoardToolbarButton(symbol: isPaused ? "play.fill" : "pause.fill", help: isPaused ? "Resume (Space)" : "Pause (Space)", palette: palette) { boardController.togglePause() }
+                if let board = boardController.board {
+                    let parts = BoardHistory.questionSections(of: board).count
+                    if parts > 0 {
+                        // Go deeper, which used to be voice only.
+                        Menu {
+                            ForEach(1...parts, id: \.self) { part in
+                                Button("Part \(part)") { CompanionManager.current?.goDeeper(onSection: part) }
+                            }
+                        } label: {
+                            Image(systemName: "text.magnifyingglass")
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Go deeper on a part of the board")
+                    }
+                }
                 BoardToolbarDivider(palette: palette)
                 BoardToolbarButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Expand the board", palette: palette) { boardController.expand() }
                 BoardToolbarButton(symbol: exportFlash ? "checkmark" : "square.and.arrow.up", help: "Export PNG, PDF and board file (E)", palette: palette) {
