@@ -44,6 +44,7 @@ final class StudioController: ObservableObject {
         static let screens = "theo.studio.screens"
         static let fps = "theo.studio.previewFPS"
         static let capture = "theo.studio.liveCapture"
+        static let researchBrowser = "theo.studio.researchBrowser"
     }
 
     @Published var panelVisible = false { didSet { refreshPreviewing() } }
@@ -55,6 +56,8 @@ final class StudioController: ObservableObject {
     @Published private(set) var cpuPercent: Double = 0
     @Published private(set) var memoryMB: Double = 0
     @Published private(set) var measuredFPS: Double = 0
+    /// What a tile's bot is doing there, when it's a page being read.
+    @Published private(set) var tileNotes: [StudioTileID: String] = [:]
     /// What each tile holds.
     private var windows: [StudioTileID: NSWindow] = [:]
     private var apps: [StudioTileID: NSRunningApplication] = [:]
@@ -110,6 +113,15 @@ final class StudioController: ObservableObject {
         get { UserDefaults.standard.bool(forKey: Keys.capture) }
         set {
             UserDefaults.standard.set(newValue, forKey: Keys.capture)
+            objectWillChange.send()
+        }
+    }
+
+    /// On by default once Studio is on: pages a plain fetch can't read open in the owner's own browser, on a tile.
+    var researchUsesBrowser: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.researchBrowser) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.researchBrowser)
             objectWillChange.send()
         }
     }
@@ -199,8 +211,10 @@ final class StudioController: ObservableObject {
 
     private func stop() {
         guard isOn else { return }
+        BrowserResearcher.shared.closeEverything()
         for tile in Array(windows.keys) { clear(tile) }
         apps = [:]
+        tileNotes = [:]
         displays.forEach { $0.remove() }
         displays = []
         StudioDisplays.virtualIDs = []
@@ -278,7 +292,11 @@ final class StudioController: ObservableObject {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXFocusedWindowAttribute as CFString, &value) == .success,
               let raw = value, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return false }
-        let window = unsafeBitCast(raw, to: AXUIElement.self)
+        return place(unsafeBitCast(raw, to: AXUIElement.self), in: frame)
+    }
+
+    /// Another app's window to a frame in AppKit's global coordinates.
+    static func place(_ window: AXUIElement, in frame: NSRect) -> Bool {
         let top = (NSScreen.screens.first?.frame.height ?? 0) - frame.maxY
         var origin = CGPoint(x: frame.minX, y: top)
         var size = frame.size
@@ -287,7 +305,30 @@ final class StudioController: ObservableObject {
             && AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success
     }
 
+    /// Tiles nobody holds.
+    var freeTiles: [StudioTileID] { allTiles.filter { roster.bots[$0] == nil } }
+
+    /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
+    func holdForResearch(_ tile: StudioTileID, botID: String, note: String, app: NSRunningApplication?) {
+        roster.hold(botID, tile: tile)
+        noteResearch(tile, note: note, app: app)
+    }
+
+    func noteResearch(_ tile: StudioTileID, note: String, app: NSRunningApplication?) {
+        tileNotes[tile] = note
+        apps[tile] = app
+        refreshPreviewing()
+    }
+
+    func releaseResearch(_ tile: StudioTileID) {
+        tileNotes[tile] = nil
+        apps[tile] = nil
+        thumbnails[tile] = nil
+        roster.clear(tile)
+    }
+
     func clear(_ tile: StudioTileID) {
+        tileNotes[tile] = nil
         windows[tile]?.close()
         windows[tile] = nil
         apps[tile] = nil

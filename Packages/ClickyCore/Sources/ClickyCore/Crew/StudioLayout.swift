@@ -84,6 +84,9 @@ public struct StudioRoster: Equatable, Sendable {
         bots[tile] = bot
     }
 
+    /// Research can have a page on each of several tiles at once.
+    public mutating func hold(_ bot: String, tile: StudioTileID) { bots[tile] = bot }
+
     public mutating func clear(_ tile: StudioTileID) { bots[tile] = nil }
 
     /// Assignments that no longer fit (fewer tiles per screen) come off.

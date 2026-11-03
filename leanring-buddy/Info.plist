@@ -12,6 +12,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Theo uses your local network to stay in step with Theo on your other Mac.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Theo opens research pages in new Chrome windows on its hidden Studio screens, and closes them when it's done.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clicky uses your microphone so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>

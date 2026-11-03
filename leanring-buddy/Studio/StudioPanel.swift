@@ -115,7 +115,7 @@ struct StudioPanel: View {
                     CrewAvatar(look: bot.crewLook, size: 20, pose: store.crewPose(of: bot).pose, moves: false, interactive: false)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(bot.name).font(.system(size: 11, weight: .medium)).foregroundColor(.white).lineLimit(1)
-                        Text(store.liveStatus(of: bot)).font(.system(size: 10.5)).foregroundColor(.white.opacity(0.65)).lineLimit(1)
+                        Text(studio.tileNotes[tile] ?? store.liveStatus(of: bot)).font(.system(size: 10.5)).foregroundColor(.white.opacity(0.65)).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -235,6 +235,15 @@ struct StudioSettingsContent: View {
                         Text("\(studio.previewFPS) fps").font(.system(size: 12.5).monospacedDigit()).foregroundColor(DS.Colors.textPrimary)
                         stepButton("+") { studio.previewFPS += 1 }.disabled(studio.previewFPS >= 5)
                     }
+                }
+            }
+            TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
+                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Only Researcher, at most two tiles at once, freed when each page is done") {
+                    Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
+                }
+                if studio.researchUsesBrowser {
+                    RowDivider()
+                    ResearchBrowserPermissionRow()
                 }
             }
             TheoSection(title: "Other apps on a tile", hint: captureNote) {

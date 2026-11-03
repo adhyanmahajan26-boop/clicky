@@ -677,6 +677,7 @@ struct BotChatScreen: View {
                                     T3ResultCard(run: run).padding(.leading, 36)
                                 }
                                 if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
+                                if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,

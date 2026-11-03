@@ -56,6 +56,7 @@ extension BotsStore {
         if state == .typing { return (.talking, nil) }
         let run = liveRun(of: bot.id)
         if run?.phase == "waiting" || openCall(of: bot.id) != nil { return (.needs, nil) }
+        if BrowserResearcher.shared.needsOwner, bot.id == teamBot(.researcher)?.id { return (.needs, nil) }
         if state == .thinking || replying[bot.id] != nil || run != nil { return (.working, nil) }
         let resting: CrewPose = bot.primary ? .awake : .sleep
         guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id }) else { return (resting, nil) }
@@ -75,6 +76,7 @@ extension BotsStore {
             return doing.isEmpty ? run.title : doing
         }
         if let call = openCall(of: bot.id) { return "Needs you · \(call.question)" }
+        if bot.id == teamBot(.researcher)?.id, let check = BrowserResearcher.shared.checks.values.first { return "Needs you · \(check.host)" }
         if let live = replying[bot.id] {
             let words = Self.firstLine(live)
             return words.isEmpty ? "Thinking…" : words

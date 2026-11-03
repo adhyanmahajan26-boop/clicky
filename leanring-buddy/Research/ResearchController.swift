@@ -221,8 +221,19 @@ final class ResearchController: CompanionActivitySource {
                 setHelper(agentID, title: helperTitle, isWorking: true)
                 group.addTask { [weak self] in
                     defer { Task { @MainActor in self?.setHelper(agentID, title: helperTitle, isWorking: false) } }
-                    let page = await Self.fetchReadableText(job.url, allowsLocalHostForTests: allowsLocalHostForTests)
-                    guard let page, !page.text.isEmpty, !ReadableText.looksWalled(page.text) else {
+                    var page = await Self.fetchReadableText(job.url, allowsLocalHostForTests: allowsLocalHostForTests)
+                    // Blocked or a shell of a page: Researcher reads it in the owner's own browser, on a Studio tile.
+                    let useBrowser = await MainActor.run { BrowserResearcher.shared.isReady && (BrowserResearchPolicy.needsBrowser(text: page?.text) || BrowserResearcher.alwaysForTests) }
+                    if useBrowser {
+                        switch await BrowserResearcher.shared.read(job.url) {
+                        case .page(let title, let text):
+                            page = (title, text)
+                            await MainActor.run { agentsCenter.log(agentID, "read in your browser on a Studio screen") }
+                        case .skipped(let reason):
+                            await MainActor.run { agentsCenter.log(agentID, reason) }
+                        }
+                    }
+                    guard let page, !page.text.isEmpty, !ReadableText.looksWalled(page.text), !BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) else {
                         await MainActor.run { agentsCenter.finish(agentID, status: .failed, errorDescription: "couldn't read the page") }
                         return Report(index: job.index, url: job.url, title: page?.title, text: "unreadable (empty, blocked or a sign-in wall)", succeeded: false)
                     }

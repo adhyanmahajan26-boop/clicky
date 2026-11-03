@@ -644,6 +644,40 @@ extension TheoUIDriver {
             guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
             manager.dictationController.showForTest(state: command["state"] as? String ?? "listening")
             settle { respond(true, ["window": manager.dictationController.pill.windowNumber as Any? ?? NSNull()], nil) }
+        case "uiBrowserResearch":
+            // {action: state|read|signedIn|askPermission|answer, url, accountWords, signedOutWords, answer, always, localHost}. Opens windows in the owner's real Chrome, on a
+            // hidden screen. Only yes or no comes back about an account, and never a page's words except through read's count.
+            let browser = BrowserResearcher.shared
+            if let always = command["always"] as? Bool { UserDefaults.standard.set(always, forKey: "test.research.alwaysBrowser") }
+            if let local = command["localHost"] as? Bool { browser.testAllowsLocalHost = local }
+            switch command["action"] as? String ?? "state" {
+            case "read":
+                guard let url = (command["url"] as? String).flatMap(URL.init(string:)) else { respond(false, nil, "Needs url."); return true }
+                Task { @MainActor in
+                    switch await browser.read(url) {
+                    case .page(let title, let text): respond(true, ["read": true, "hasTitle": title != nil, "characters": text.count, "state": browser.testState()], nil)
+                    case .skipped(let reason): respond(true, ["read": false, "reason": reason, "state": browser.testState()], nil)
+                    }
+                }
+            case "signedIn":
+                guard let url = (command["url"] as? String).flatMap(URL.init(string:)) else { respond(false, nil, "Needs url."); return true }
+                Task { @MainActor in
+                    let found = await browser.testSignedIn(url, accountWords: command["accountWords"] as? [String] ?? [], signedOutWords: command["signedOutWords"] as? [String] ?? [])
+                    respond(true, found, nil)
+                }
+            case "askPermission":
+                // Brings up macOS's prompt on the owner's screen. Only when they've said they're ready.
+                Task { @MainActor in
+                    let answer = await browser.askForPermission()
+                    respond(true, ["permission": answer.rawValue], nil)
+                }
+            case "answer":
+                let done = command["answer"] as? String == "done"
+                for id in browser.checks.keys { browser.answer(id, with: done ? .done : .skip) }
+                respond(true, browser.testState(), nil)
+            default:
+                respond(true, browser.testState(), nil)
+            }
         case "uiComposerDictation":
             // {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions|noMic, bot, path, realTime, stopAtEnd, key, up, at, microphone, speech}
             let dictation = ComposerDictation.shared
