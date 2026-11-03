@@ -410,7 +410,7 @@ final class BotsStore: ObservableObject {
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
-        if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
+        if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if bot.owner == nil { prompt = "(\(projectsNote))\n\n" + prompt }
@@ -1373,11 +1373,13 @@ enum BotPrompts {
 
     static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs."
 
-    /// Bots work on the far right screen of Addy's Mac Studio, through Clicky.
+    /// Bots' screen jobs run on the Mac Studio's hidden screens, through Clicky.
     static let screenHowTo =
-        "You can work on Addy's Mac Studio's right screen, which is set aside for you. For anything on it (opening an app or " +
-        "site, clicking, reading what's there) put a line [SCREEN: what to do, in plain words] in your reply. Clicky does it there and " +
-        "tells you what happened. Writing or changing code doesn't go through this: use a ```prompt block."
+        "Addy's Mac Studio has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
+        "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
+        "Clicky does it on a free tile without touching Addy's own monitors, then tells you what happened. Say a job happened only if " +
+        "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +
+        "Writing or changing code doesn't go through this: use a ```prompt block."
 
     /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
     static let routineHowTo =
@@ -1431,7 +1433,7 @@ enum BotPrompts {
                          "your name at the start. Tag someone with @Name only when you need them. In the Project " +
                          "room, answer the question you're given once, in your role; Theo collects the round and merges it.")
         }
-        if bot.owner == nil, !bot.primary { parts.append(screenHowTo) }
+        if bot.owner == nil { parts.append(screenHowTo) }
         parts.append("New in the group chat:\n\(transcript)")
         parts.append("Reply as \(bot.name).")
         return parts.joined(separator: "\n\n")

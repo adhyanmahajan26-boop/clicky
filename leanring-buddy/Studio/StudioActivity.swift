@@ -77,6 +77,14 @@ final class StudioActivity {
         }
     }
 
+    /// A bot starting a screen job works from its own desk's tile. The mirror window goes.
+    func takeDesk(of botID: String) -> StudioTileID? {
+        guard let tile = desks.removeValue(forKey: botID) else { return nil }
+        finishedAt[botID] = nil
+        StudioController.shared.clear(tile)
+        return tile
+    }
+
     /// Research needs a real tile more than a desk needs its mirror: a finished bot's goes first.
     func makeRoomForResearch() {
         guard StudioController.shared.freeTiles.isEmpty else { return }

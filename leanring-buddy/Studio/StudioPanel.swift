@@ -50,7 +50,7 @@ struct StudioPanel: View {
                 }
                 if let tile = studio.expandedTile { expanded(tile) }
                 ForEach(0..<studio.screenCount, id: \.self) { screen in screenCard(screen) }
-                StudioPanelHint(isPaused: studio.isPausedForVideo && !studio.tilePages.isEmpty, isIdle: studio.liveCount == 0)
+                StudioPanelHint(isPaused: studio.liveViewPaused, isIdle: studio.liveCount == 0)
                 queue
             } else {
                 off
@@ -154,7 +154,12 @@ struct StudioPanel: View {
             } else if let bot {
                 CrewAvatar(look: bot.crewLook, size: 54, pose: store.crewPose(of: bot).pose, interactive: false)
             }
-            if image != nil {
+            if image != nil, studio.liveViewPaused {
+                Color.black.opacity(0.45)
+                Text("Paused while video plays").font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.85)).multilineTextAlignment(.center).padding(8)
+            }
+            if let cursor = studio.tileCursors[tile] { StudioTileCursorView(cursor: cursor) }
+            if image != nil, !studio.liveViewPaused {
                 HStack(spacing: 4) {
                     Circle().fill(Color(hex: 0xFF4D4F)).frame(width: 5, height: 5)
                     Text("LIVE").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundColor(.white)
@@ -179,7 +184,7 @@ struct StudioPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(6)
             }
-            if bot == nil {
+            if bot == nil, image == nil {
                 if let owner = studio.owner(ofScreen: tile.screen).flatMap({ store.bot($0) }) {
                     // Nothing here right now: its owner, asleep.
                     VStack(spacing: 4) {
@@ -404,6 +409,23 @@ struct LinkStatusLine: View {
             }
             .font(.system(size: 11)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Clicky's own cursor drawn over a tile. The real pointer never moves for this.
+struct StudioTileCursorView: View {
+    let cursor: StudioTileCursor
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { area in
+            Image(systemName: "cursorarrow").font(.system(size: 17, weight: .medium)).foregroundColor(.white)
+                .shadow(color: .black.opacity(0.7), radius: 2)
+                .scaleEffect(cursor.clicks % 2 == 0 ? 1 : 0.86)
+                .position(x: area.size.width * min(max(cursor.point.x, 0), 1), y: area.size.height * min(max(cursor.point.y, 0), 1))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: cursor)
+        }
+        .allowsHitTesting(false)
     }
 }
 

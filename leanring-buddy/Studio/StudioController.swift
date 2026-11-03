@@ -82,6 +82,8 @@ final class StudioController: ObservableObject {
     }
     /// What each tile's agent is reading, from the page itself. Shown when there's no picture.
     @Published private(set) var tilePages: [StudioTileID: StudioTilePage] = [:]
+    /// Clicky's cursor on a tile while it does a screen job.
+    @Published private(set) var tileCursors: [StudioTileID: StudioTileCursor] = [:]
     /// Something's playing, so nothing is being captured.
     @Published private(set) var isPausedForVideo = false
     /// The Studio's panel, on a Mac that doesn't have screens of its own.
@@ -121,6 +123,10 @@ final class StudioController: ObservableObject {
     private var screensObserver: NSObjectProtocol?
     private var frameIsCapturing = false
     private var lastFrames: [StudioTileID: Double] = [:]
+    private var screenFilters: [CGDirectDisplayID: (SCContentFilter, CGSize)] = [:]
+    private static let videoTestSeconds: Double = 15
+    private var videoTestUntil: Double = 0
+    private var videoTestFrames = 0
     private var lastVideoCheck: Double = 0
     private var isCheckingVideo = false
     private var hasVideoAnswer = false
@@ -488,7 +494,7 @@ final class StudioController: ObservableObject {
         for (tile, bot) in roster.bots { tiles["\(tile.screen + 1).\(tile.tile + 1)"] = "\(bot): \(tileNotes[tile] ?? "")" }
         return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": owners.reduce(into: [String: String]()) { $0["\($1.key + 1)"] = $1.value },
                 "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible,
-                "pausedForVideo": isPausedForVideo, "pictures": thumbnails.count, "pages": tilePages.count]
+                "pausedForVideo": isPausedForVideo, "liveViewPaused": liveViewPaused, "videoTestFrames": videoTestFrames, "pictures": thumbnails.count, "pages": tilePages.count]
     }
 
     /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
@@ -509,8 +515,18 @@ final class StudioController: ObservableObject {
         refreshPreviewing()
     }
 
+    func moveCursor(on tile: StudioTileID, to point: CGPoint, clicks: Bool) {
+        let clicked = (tileCursors[tile]?.clicks ?? 0) + (clicks ? 1 : 0)
+        tileCursors[tile] = StudioTileCursor(point: point, clicks: clicked)
+    }
+
+    func clearCursor(on tile: StudioTileID) { tileCursors[tile] = nil }
+
+    func isPulledOut(_ tile: StudioTileID) -> Bool { pulledOut.contains(tile) }
+
     func releaseResearch(_ tile: StudioTileID) {
         defer { refreshPreviewing() }
+        tileCursors[tile] = nil
         tilePages[tile] = nil
         tileNotes[tile] = nil
         apps[tile] = nil
@@ -553,7 +569,7 @@ final class StudioController: ObservableObject {
 
     /// Only while someone can see them: the panel open and the window up.
     /// With nothing on the tiles, nothing runs.
-    private var shouldPreview: Bool { isOn && panelVisible && !roster.bots.isEmpty }
+    private var shouldPreview: Bool { isOn && panelVisible }
 
     private func refreshPreviewing(restart: Bool = false) {
         if restart { previewTimer?.invalidate(); previewTimer = nil }
@@ -602,7 +618,7 @@ final class StudioController: ObservableObject {
             frameCountStart = Date()
         }
         // Asked of macOS about once a second, off the main thread. A capture only starts once there's an answer.
-        if now - lastVideoCheck >= 1, !apps.isEmpty, !isCheckingVideo {
+        if now - lastVideoCheck >= 1, !isCheckingVideo {
             lastVideoCheck = now
             isCheckingVideo = true
             Task.detached(priority: .utility) { [weak self] in
@@ -612,16 +628,34 @@ final class StudioController: ObservableObject {
                     self.isCheckingVideo = false
                     self.hasVideoAnswer = true
                     if playing != self.isPausedForVideo { self.isPausedForVideo = playing }
-                    if playing { for tile in self.apps.keys { self.thumbnails[tile] = nil } }
                 }
             }
         }
         if now - lastPush >= 2 { pushToOtherMac() }
-        // Another app's window on a tile: with Live capture on, the permission already there, and nothing playing.
-        if liveCapture, hasVideoAnswer, !isPausedForVideo, !apps.isEmpty, !frameIsCapturing, hasCapturePermission {
-            let due = apps.keys.filter { StudioPreviewSchedule.isDue($0, last: lastFrames[$0], now: now, focused: focused, base: previewFPS) }
-            if !due.isEmpty { captureAppTiles(due, at: now) }
+        // The hidden screens themselves, whatever's on them: with Live capture on, the permission already there, nothing playing,
+        // and the panel where it can be seen.
+        if liveCapture, hasVideoAnswer, !liveViewPaused, !frameIsCapturing, hasCapturePermission, panelCanBeSeen {
+            let due = (0..<screenCount).filter { screen in
+                (0..<tilesPerScreen).contains { tile in
+                    let id = StudioTileID(screen: screen, tile: tile)
+                    return windows[id] == nil && StudioPreviewSchedule.isDue(id, last: lastFrames[id], now: now, focused: focused, base: previewFPS)
+                }
+            }
+            if !due.isEmpty { captureScreens(due, at: now) }
         }
+    }
+
+    /// Live pictures stop while video plays, because capturing might black the video out. The test below finds out.
+    var liveViewPaused: Bool { isPausedForVideo && ProcessInfo.processInfo.systemUptime >= videoTestUntil }
+
+    /// One short run of pictures with video playing, asked for by hand, to see whether the video survives it.
+    func startVideoTest() {
+        videoTestUntil = ProcessInfo.processInfo.systemUptime + Self.videoTestSeconds
+        videoTestFrames = 0
+    }
+
+    private var panelCanBeSeen: Bool {
+        NSApp.windows.contains { $0.canBecomeMain && $0.isVisible && $0.occlusionState.contains(.visible) }
     }
 
     /// A window of Theo's own drawn into a small image. No screen capture is involved.
@@ -690,34 +724,49 @@ final class StudioController: ObservableObject {
     /// Whether this Mac has a Studio panel at all: its own screens, or the other Mac's.
     static var hasPanel: Bool { isAvailable || TheoLink.shared.isPaired }
 
-    /// One picture of each due tile's window, and of that window alone. It refuses anything not wholly on a hidden screen.
-    private func captureAppTiles(_ tiles: [StudioTileID], at now: Double) {
+    /// One picture of each due hidden screen, cut into its tiles. Only Theo's own virtual displays are ever captured, never a
+    /// monitor of the owner's. A window of Theo's on a tile is drawn without capture instead.
+    private func captureScreens(_ due: [Int], at now: Double) {
         frameIsCapturing = true
-        let hidden = displays.map { CGDisplayBounds($0.id) }
+        let ids = displays.map(\.id)
         let perScreen = tilesPerScreen
         let focused = expandedTile ?? hoveredTile
-        let allowed = Set(apps.values.map(\.processIdentifier))
         Task { [weak self] in
             defer { self?.frameIsCapturing = false }
-            guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else { return }
-            for window in content.windows {
-                guard let app = window.owningApplication, allowed.contains(app.processID),
-                      StudioPreviewSchedule.mayCapture(window: window.frame, hiddenScreens: hidden),
-                      window.frame.width > 200, window.frame.height > 200,
-                      let tile = StudioPreviewSchedule.tile(of: window.frame, hiddenScreens: hidden, tilesPerScreen: perScreen), tiles.contains(tile) else { continue }
+            for screen in due where ids.indices.contains(screen) && StudioDisplays.virtualIDs.contains(ids[screen]) {
+                guard let self, let (filter, size) = await self.screenFilter(for: ids[screen]) else { continue }
                 let configuration = SCStreamConfiguration()
-                let width = tile == focused ? 720 : 360
-                configuration.width = width
-                configuration.height = Int(CGFloat(width) * window.frame.height / window.frame.width)
+                configuration.width = (focused?.screen == screen ? 720 : 360) * perScreen
+                configuration.height = Int(CGFloat(configuration.width) * size.height / size.width)
                 configuration.showsCursor = false
-                let filter = SCContentFilter(desktopIndependentWindow: window)
-                if let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration), let self {
-                    self.thumbnails[tile] = image
-                    self.lastFrames[tile] = now
-                    self.framesThisSecond += 1
+                guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) else {
+                    self.screenFilters[ids[screen]] = nil
+                    continue
                 }
+                guard self.isOn else { return }
+                var pictures = self.thumbnails
+                let tileWidth = image.width / max(perScreen, 1)
+                for tile in 0..<perScreen {
+                    let id = StudioTileID(screen: screen, tile: tile)
+                    guard self.windows[id] == nil else { continue }
+                    self.lastFrames[id] = now
+                    pictures[id] = image.cropping(to: CGRect(x: tile * tileWidth, y: 0, width: tileWidth, height: image.height))
+                }
+                self.thumbnails = pictures
+                self.framesThisSecond += 1
+                self.videoTestFrames += 1
             }
         }
+    }
+
+    /// Kept between pictures, since asking macOS for the list of displays is the slow part.
+    private func screenFilter(for id: CGDirectDisplayID) async -> (SCContentFilter, CGSize)? {
+        if let kept = screenFilters[id] { return kept }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let display = content.displays.first(where: { $0.displayID == id }) else { return nil }
+        let made = (SCContentFilter(display: display, excludingWindows: []), CGSize(width: display.width, height: display.height))
+        screenFilters[id] = made
+        return made
     }
 
     // MARK: Bringing a tile's window to the owner
@@ -731,6 +780,8 @@ final class StudioController: ObservableObject {
         if let window = windows[tile] {
             window.setFrame(frame, display: true)
             window.orderFrontRegardless()
+        } else if StudioScreenTask.shared.holds(tile) {
+            StudioScreenTask.shared.moveWindows(on: tile, to: frame)
         } else {
             BrowserResearcher.shared.moveWindow(on: tile, to: frame)
         }
@@ -741,6 +792,8 @@ final class StudioController: ObservableObject {
         guard let frame = frame(of: tile) else { return }
         if let window = windows[tile] {
             window.setFrame(frame, display: false)
+        } else if StudioScreenTask.shared.holds(tile) {
+            StudioScreenTask.shared.moveWindows(on: tile, to: frame)
         } else {
             BrowserResearcher.shared.moveWindow(on: tile, to: frame)
         }

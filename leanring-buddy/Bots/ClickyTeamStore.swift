@@ -574,34 +574,39 @@ extension BotsStore {
         }
     }
 
-    /// A bot's job for the work screen: Clicky does it there, and the bot hears how it went and can carry on.
-    /// `onReport`: for a job from the other Mac; otherwise the bot carries on here.
+    /// A bot's job for a hidden screen: Clicky does it on a tile the owner can watch, and the bot hears how it went and can carry
+    /// on. If it couldn't be done, the chat says so straight away. `onReport`: for a job from the other Mac.
     func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
-        guard let screen = ClaudiaScreen.picked else {
+        guard StudioController.shared.isOn else {
             if TheoLink.shared.isWorkMac {
-                post(BotChatMessage(author: bot.id, text: "The right-hand screen isn't connected, so I can't work on it right now."), to: room)
+                let said = "I can't do that: the hidden screens are off, so nothing was done."
+                if let onReport { onReport(said) } else { post(BotChatMessage(author: bot.id, text: said), to: room) }
             } else if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
-                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's screen right now: your other Mac isn't connected."), to: room)
+                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's hidden screens right now: your other Mac isn't connected."), to: room)
             }
             return
         }
         let turns = (screenTurns[bot.id] ?? 0) + 1
         guard turns <= Self.maximumScreenTurns else {
-            post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) steps on the screen, so I'll stop here. Tell me to keep going if you want more."), to: room)
+            post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) jobs on the hidden screens, so I'll stop here. Tell me to keep going if you want more."), to: room)
             return
         }
         screenTurns[bot.id] = turns
-        ActionConfinement.keep(to: CGDisplayBounds(screen.displayID), named: screen.localizedName)
-        let note = "(this comes from \(bot.name), one of Addy's bots, not from the user's voice. do it only on the display called \(screen.localizedName), the right-hand screen: open what's needed there and leave the other screens alone. nobody hears the answer. say briefly what you did and what's on the screen now.)"
-        orderClicky(task, ownerWords: nil, room: room, note: note, cameFromOtherMac: true) { [weak self] report in
-            if let onReport { onReport(report) } else { self?.continueAfterScreen(bot: bot, room: room, report: report) }
+        StudioScreenTask.shared.run(task, bot: bot) { [weak self] result in
+            if let onReport {
+                onReport(result.report)
+            } else if result.finished {
+                self?.continueAfterScreen(bot: bot, room: room, report: result.report)
+            } else {
+                self?.post(BotChatMessage(author: bot.id, text: result.report), to: room)
+            }
         }
     }
 
     func continueAfterScreen(bot: NativeBot, room: String, report: String) {
         guard replying[bot.id] == nil else { return }
         let session = conversation(room).sessions[bot.id]
-        let words = "Clicky did that on the screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell Addy how it went."
+        let words = "Clicky did that on a hidden screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell Addy how it went."
         reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: bots, text: words) : words, session: session) { _ in }
     }
 
