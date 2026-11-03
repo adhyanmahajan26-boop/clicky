@@ -64,7 +64,7 @@ struct BotsRootView: View {
     @ObservedObject private var dictation = ComposerDictation.shared
 
     private var showsStudioPanel: Bool {
-        guard StudioController.isAvailable, studio.panelVisible else { return false }
+        guard StudioController.hasPanel, studio.panelVisible else { return false }
         if case .settings = selection.pane { return false }
         return true
     }
@@ -150,8 +150,8 @@ struct BotsRootView: View {
                         }
                     } else {
                         hairlineRow("home", "Home", isSelected: selection.pane == .home) { selection.pane = .home }
-                        if StudioController.isAvailable {
-                            hairlineRow("studio", "Studio", trailing: studio.isOn ? "\(studio.liveCount) live" : nil, isSelected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0) {
+                        if StudioController.hasPanel {
+                            hairlineRow("studio", "Studio", trailing: studio.isOn ? "\(studio.liveCount) live" : (studio.remoteView?.tiles.isEmpty == false ? "\(studio.remoteView?.tiles.count ?? 0) live" : nil), isSelected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0) {
                                 withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() }
                             }
                         }
@@ -790,7 +790,7 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
-            if StudioController.isAvailable {
+            if StudioController.hasPanel {
                 Button { withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() } } label: {
                     HStack(spacing: 6) {
                         HairlineIcon(name: "studio", size: 16, color: DS.Colors.textPrimary, selected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0)

@@ -16,6 +16,7 @@ import AppKit
 import ClickyCore
 import Combine
 import Foundation
+import IOKit.pwr_mgt
 import ScreenCaptureKit
 
 @MainActor
@@ -60,6 +61,12 @@ final class StudioController: ObservableObject {
     @Published var hoveredTile: StudioTileID?
     /// The tile opened large in the panel.
     @Published var expandedTile: StudioTileID?
+    /// What each tile's agent is reading, from the page itself. Shown when there's no picture.
+    @Published private(set) var tilePages: [StudioTileID: StudioTilePage] = [:]
+    /// Something's playing, so nothing is being captured.
+    @Published private(set) var isPausedForVideo = false
+    /// The Studio's panel, on a Mac that doesn't have screens of its own.
+    @Published private(set) var remoteView: StudioRemoteView?
     /// Tiles whose window has been pulled onto the owner's monitor.
     @Published private(set) var pulledOut: Set<StudioTileID> = []
     @Published private(set) var isOn = false
@@ -83,6 +90,9 @@ final class StudioController: ObservableObject {
     private var screensObserver: NSObjectProtocol?
     private var frameIsCapturing = false
     private var lastFrames: [StudioTileID: Double] = [:]
+    private var lastVideoCheck: Double = 0
+    private var lastPush: Double = 0
+    private var lastPushHadTiles = false
     private var isStarting = false
     /// The owner's monitors just before Studio turned on, with the modes to put back if macOS ever changes one.
     private var monitorBaseline: [RealDisplayState] = []
@@ -128,9 +138,9 @@ final class StudioController: ObservableObject {
         }
     }
 
-    /// Off by default: see the note at the top.
+    /// On, and it never captures while anything's playing.
     var liveCapture: Bool {
-        get { UserDefaults.standard.bool(forKey: Keys.capture) }
+        get { UserDefaults.standard.object(forKey: Keys.capture) as? Bool ?? true }
         set {
             UserDefaults.standard.set(newValue, forKey: Keys.capture)
             objectWillChange.send()
@@ -442,13 +452,20 @@ final class StudioController: ObservableObject {
         var tiles: [String: String] = [:]
         for (tile, bot) in roster.bots { tiles["\(tile.screen + 1).\(tile.tile + 1)"] = "\(bot): \(tileNotes[tile] ?? "")" }
         return ["on": isOn, "enabled": isEnabled, "tiles": tiles, "owners": owners.reduce(into: [String: String]()) { $0["\($1.key + 1)"] = $1.value },
-                "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible]
+                "monitorCheck": lastMonitorCheck, "problem": problem ?? "", "liveCapture": liveCapture, "panel": panelVisible,
+                "pausedForVideo": isPausedForVideo, "pictures": thumbnails.count, "pages": tilePages.count]
     }
 
     /// Research takes a tile for one page. It holds no window of Theo's, so nothing here closes the browser's.
     func holdForResearch(_ tile: StudioTileID, botID: String, note: String, app: NSRunningApplication?) {
         roster.hold(botID, tile: tile)
+        // The agents should be seen: the panel opens by itself.
+        if !panelVisible { panelVisible = true }
         noteResearch(tile, note: note, app: app)
+    }
+
+    func notePage(_ page: StudioTilePage?, on tile: StudioTileID) {
+        tilePages[tile] = page
     }
 
     func noteResearch(_ tile: StudioTileID, note: String, app: NSRunningApplication?) {
@@ -458,6 +475,7 @@ final class StudioController: ObservableObject {
     }
 
     func releaseResearch(_ tile: StudioTileID) {
+        tilePages[tile] = nil
         tileNotes[tile] = nil
         apps[tile] = nil
         thumbnails[tile] = nil
@@ -465,6 +483,8 @@ final class StudioController: ObservableObject {
         pulledOut.remove(tile)
         if expandedTile == tile { expandedTile = nil }
         roster.clear(tile)
+        // The other Mac hears straight away that it's free.
+        lastPush = 0
     }
 
     func clear(_ tile: StudioTileID) {
@@ -543,8 +563,16 @@ final class StudioController: ObservableObject {
             framesThisSecond = 0
             frameCountStart = Date()
         }
-        // Another app's window on a tile, and only with Live capture on and the permission already there.
-        if liveCapture, hasCapturePermission, !apps.isEmpty, !frameIsCapturing {
+        // Asked of macOS about once a second, and every time before a capture starts.
+        if now - lastVideoCheck >= 1 {
+            lastVideoCheck = now
+            let playing = Self.somethingIsPlaying()
+            if playing != isPausedForVideo { isPausedForVideo = playing }
+            if playing { for tile in apps.keys { thumbnails[tile] = nil } }
+            pushToOtherMac()
+        }
+        // Another app's window on a tile: with Live capture on, the permission already there, and nothing playing.
+        if liveCapture, hasCapturePermission, !isPausedForVideo, !apps.isEmpty, !frameIsCapturing {
             let due = apps.keys.filter { StudioPreviewSchedule.isDue($0, last: lastFrames[$0], now: now, focused: focused, base: previewFPS) }
             if !due.isEmpty { captureAppTiles(due, at: now) }
         }
@@ -563,6 +591,50 @@ final class StudioController: ObservableObject {
             return rep.cgImage
         }
     }
+
+    /// Whether macOS says anything's playing right now.
+    private static func somethingIsPlaying() -> Bool {
+        var unmanaged: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess, let all = unmanaged?.takeRetainedValue() as? [AnyHashable: [[String: Any]]] else {
+            // Can't tell: don't risk it.
+            return true
+        }
+        let names = all.values.flatMap { $0 }.compactMap { $0[kIOPMAssertionNameKey] as? String }
+        return StudioCaptureGuard.videoIsPlaying(assertionNames: names)
+    }
+
+    // MARK: Showing the panel on the other Mac
+
+    /// Theo's other Mac sees the same tiles: small pictures and what's being read, about once every 2 seconds, only while
+    /// something's on them.
+    private func pushToOtherMac() {
+        guard TheoLink.shared.isConnected else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let busy = !roster.bots.isEmpty
+        guard busy || lastPushHadTiles, now - lastPush >= 2 else { return }
+        lastPush = now
+        lastPushHadTiles = busy
+        let tiles = roster.bots.map { tile, bot in
+            StudioRemoteView.Tile(screen: tile.screen, tile: tile.tile, bot: bot, note: tileNotes[tile], page: tilePages[tile], jpeg: thumbnails[tile].flatMap(Self.smallJPEG))
+        }
+        let view = StudioRemoteView(isOn: isOn, screens: screenCount, tilesPerScreen: tilesPerScreen, paused: isPausedForVideo, tiles: tiles)
+        guard let data = try? JSONEncoder().encode(view) else { return }
+        _ = TheoLink.shared.request("studioView", ["view": data.base64EncodedString()])
+    }
+
+    private static func smallJPEG(_ image: CGImage) -> Data? {
+        NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.45])
+    }
+
+    /// From the other Mac.
+    func receiveRemoteView(_ encoded: String) {
+        guard !Self.isAvailable, let data = Data(base64Encoded: encoded), let view = try? JSONDecoder().decode(StudioRemoteView.self, from: data) else { return }
+        remoteView = view
+        if !view.tiles.isEmpty, !panelVisible { panelVisible = true }
+    }
+
+    /// Whether this Mac has a Studio panel at all: its own screens, or the other Mac's.
+    static var hasPanel: Bool { isAvailable || TheoLink.shared.isPaired }
 
     /// One picture of each due tile's window, and of that window alone. It refuses anything not wholly on a hidden screen.
     private func captureAppTiles(_ tiles: [StudioTileID], at now: Double) {

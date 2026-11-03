@@ -16,6 +16,10 @@ struct StudioPanel: View {
     @ObservedObject private var studio = StudioController.shared
 
     var body: some View {
+        if StudioController.isAvailable { localPanel } else { RemoteStudioPanel(store: store, studio: studio) }
+    }
+
+    private var localPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 HairlineIcon(name: "studio", size: 20, color: DS.Colors.textPrimary, live: studio.isOn && studio.liveCount > 0)
@@ -43,6 +47,7 @@ struct StudioPanel: View {
                 }
                 if let tile = studio.expandedTile { expanded(tile) }
                 ForEach(0..<studio.screenCount, id: \.self) { screen in screenCard(screen) }
+                StudioPanelHint(isPaused: studio.isPausedForVideo && !studio.tilePages.isEmpty, isIdle: studio.liveCount == 0)
                 queue
             } else {
                 off
@@ -141,6 +146,8 @@ struct StudioPanel: View {
             Color(hex: 0x0C0C0E)
             if let image {
                 Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill).frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
+            } else if let page = studio.tilePages[tile] {
+                StudioPageCard(page: page)
             } else if let bot {
                 CrewAvatar(look: bot.crewLook, size: 54, pose: store.crewPose(of: bot).pose, interactive: false)
             }
@@ -157,9 +164,10 @@ struct StudioPanel: View {
             if let bot {
                 HStack(spacing: 6) {
                     CrewAvatar(look: bot.crewLook, size: 20, pose: store.crewPose(of: bot).pose, moves: false, interactive: false)
+                    let heading = StudioRemoteView.headline(note: studio.tileNotes[tile], fallback: bot.name)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(bot.name).font(.system(size: 11, weight: .medium)).foregroundColor(.white).lineLimit(1)
-                        Text(studio.tileNotes[tile] ?? store.liveStatus(of: bot)).font(.system(size: 10.5)).foregroundColor(.white.opacity(0.65)).lineLimit(1)
+                        Text(heading.title).font(.system(size: 11, weight: .medium)).foregroundColor(.white).lineLimit(1)
+                        Text(heading.detail ?? store.liveStatus(of: bot)).font(.system(size: 10.5)).foregroundColor(.white.opacity(0.65)).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -264,6 +272,115 @@ struct StudioPanel: View {
 }
 
 /// A tile's tiny view in the sidebar: its thumbnail if there is one, otherwise a dark frame.
+/// A tile with no picture: the page the agent is on, from the page itself.
+struct StudioPageCard: View {
+    let page: StudioTilePage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(page.host).font(.system(size: 9, design: .monospaced)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Capsule().fill(Color.white.opacity(0.1)))
+            if let title = page.title, !title.isEmpty {
+                Text(title).font(.system(size: 10.5, weight: .semibold)).foregroundColor(.white).lineLimit(2)
+            }
+            Text(page.excerpt).font(.system(size: 9)).foregroundColor(.white.opacity(0.6)).lineLimit(nil)
+            Spacer(minLength: 0)
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+    }
+}
+
+struct StudioPanelHint: View {
+    let isPaused: Bool
+    let isIdle: Bool
+
+    var body: some View {
+        if isPaused {
+            Text("Live view paused while video plays").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary)
+        } else if isIdle {
+            Text("Ask Clicky to research something and its agents work here.").font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
+        }
+    }
+}
+
+/// The panel on a Mac with no screens of its own: the Studio's tiles, sent over Theo Link.
+struct RemoteStudioPanel: View {
+    @ObservedObject var store: BotsStore
+    @ObservedObject var studio: StudioController
+    @ObservedObject private var link = TheoLink.shared
+
+    var body: some View {
+        let view = studio.remoteView
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                HairlineIcon(name: "studio", size: 20, color: DS.Colors.textPrimary, live: view?.tiles.isEmpty == false)
+                Text("Studio").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                if let count = view?.tiles.count, count > 0 {
+                    HStack(spacing: 6) {
+                        LiveDot()
+                        Text("\(count) live").font(.system(size: 11.5, weight: .medium)).foregroundColor(DS.Colors.accentText)
+                    }
+                    .padding(.horizontal, 9).frame(height: 22)
+                    .background(Capsule().fill(DS.Colors.accentSoft))
+                }
+                Spacer()
+            }
+            .frame(height: 30)
+            Text(link.isConnected ? "Your Mac Studio's screens" : "Your Mac Studio isn't connected").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).padding(.top, -6)
+            ForEach(0..<(view?.screens ?? 2), id: \.self) { screen in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Screen \(screen + 1)").font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    HStack(spacing: 4) {
+                        ForEach(0..<(view?.tilesPerScreen ?? 2), id: \.self) { index in tile(view?.tiles.first { $0.screen == screen && $0.tile == index }) }
+                    }
+                    .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            }
+            StudioPanelHint(isPaused: view?.paused == true && view?.tiles.isEmpty == false, isIdle: view?.tiles.isEmpty != false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 16)
+        .background(DS.Colors.sidebar)
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    private func tile(_ item: StudioRemoteView.Tile?) -> some View {
+        let bot = item.flatMap { store.bot($0.bot) }
+        return ZStack {
+            Color(hex: 0x0C0C0E)
+            if let data = item?.jpeg, let image = NSImage(data: data) {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill).frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
+            } else if let page = item?.page {
+                StudioPageCard(page: page)
+            } else if let bot {
+                CrewAvatar(look: bot.crewLook, size: 44, pose: .sleep, moves: false, interactive: false)
+            }
+            if let item, let bot {
+                let heading = StudioRemoteView.headline(note: item.note, fallback: bot.name)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(heading.title).font(.system(size: 11, weight: .medium)).foregroundColor(.white).lineLimit(1)
+                    if let detail = heading.detail { Text(detail).font(.system(size: 10.5)).foregroundColor(.white.opacity(0.65)).lineLimit(1) }
+                }
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.black.opacity(0.72)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(6)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}
+
 struct StudioTileThumb: View {
     @ObservedObject var studio: StudioController
     let tile: StudioTileID
@@ -353,7 +470,7 @@ struct StudioSettingsContent: View {
 
     private var captureNote: String {
         let permission = studio.hasCapturePermission ? "" : " It also needs Screen Recording, which Theo never asks for by itself."
-        return "Capturing a display can black out Netflix on your monitors, the way screen recording does, so this stays off until you've tried it. A tile with another app shows its bot and status instead." + permission
+        return "Capturing can black out Netflix on your monitors, the way screen recording does, so nothing is captured while anything's playing: tiles show the page's words instead, and pictures come back when it stops. A tile with another app shows its bot and status instead." + permission
     }
 
     private func stepButton(_ label: String, action: @escaping () -> Void) -> some View {

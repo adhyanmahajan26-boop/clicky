@@ -80,6 +80,17 @@ final class ResearchController: CompanionActivitySource {
     /// `reportsToCEO`: Theo asked for it, so the brief goes to his chat too.
     func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false, reportsToCEO: Bool = false) {
         guard let companionManager else { return }
+        // Research with screens belongs on the Studio. What's on this Mac's own screen can't be read from there, so that stays.
+        let needsThisScreen: Bool
+        if case .links(let count) = request.source, request.namedURLs.count < count { needsThisScreen = true } else { needsThisScreen = false }
+        if !needsThisScreen, !allowsLocalHostForTests {
+            let route = DeviceRoles.route(.researchBrowser)
+            if route == .sendAcross || route == .waitForOtherMac {
+                _ = TheoLink.shared.requestWhenConnected("research", ["question": request.question, "urls": request.namedURLs.map(\.absoluteString).joined(separator: "\n"), "ceo": reportsToCEO ? "1" : ""])
+                say(route == .sendAcross ? "Researching on your Mac Studio." : "I'll research that when your Mac Studio is back.", speaks: speaks)
+                return
+            }
+        }
         cancel()
         runNumber += 1
         // Researcher does it when there is one (it lights up, and its chat shows the work); otherwise hidden helpers.

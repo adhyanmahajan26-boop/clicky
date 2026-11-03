@@ -42,7 +42,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Work the other Mac can be asked to do. The rest simply doesn't happen here.
-    public var canBeSentAcross: Bool { self == .bots }
+    public var canBeSentAcross: Bool { self == .bots || self == .researchBrowser }
 }
 
 public enum DeviceChoice: String, CaseIterable, Identifiable, Sendable {

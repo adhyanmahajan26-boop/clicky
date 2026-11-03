@@ -145,7 +145,9 @@ final class BrowserResearcher: ObservableObject {
         await BackgroundWebTree.waitUntilBuilt()
         await Self.waitForLoad(chromeID: window.chromeID)
 
-        var page = await settledText(of: window.element)
+        var page = await settledText(of: window.element) { title, text in
+            studio.notePage(StudioTilePage(host: host, title: title, text: text), on: tile)
+        }
         if page.title == nil { page.title = Self.chromeTitle(of: window.chromeID) }
         if BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) {
             studio.noteResearch(tile, note: "\(prefix)Needs you · \(host)", app: chromeApp)
@@ -352,12 +354,14 @@ final class BrowserResearcher: ObservableObject {
     }
 
     /// Walks the page until its text stops growing: a page in a real browser arrives in pieces.
-    private func settledText(of window: UncheckedAXElement) async -> (title: String?, text: String) {
+    /// `onUpdate`: the words so far, for the page shown on the tile.
+    private func settledText(of window: UncheckedAXElement, onUpdate: ((String?, String) -> Void)? = nil) async -> (title: String?, text: String) {
         var last: (title: String?, text: String) = (nil, "")
         var steady = 0
         for _ in 0..<15 {
             if Task.isCancelled { return last }
             let current = await Self.pageText(of: window)
+            if !current.text.isEmpty { onUpdate?(current.title, current.text) }
             steady = !current.text.isEmpty && current.text.count == last.text.count ? steady + 1 : 0
             last = current
             if steady >= 1 && current.text.count > 200 { break }

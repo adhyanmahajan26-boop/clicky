@@ -83,6 +83,73 @@ public enum StudioOwnership {
     }
 }
 
+/// Capturing can black out protected video, so nothing is captured while macOS says something is playing.
+public enum StudioCaptureGuard {
+    /// macOS's names for "something's playing": Safari's, then Chrome's and everyone else's. Anything keeping the display awake
+    /// for another reason (Universal Control, say) doesn't count.
+    public static func videoIsPlaying(assertionNames: [String]) -> Bool {
+        assertionNames.contains { name in
+            let lowered = name.lowercased()
+            return ["htmlmediaelement", "media playback", "playing video", "playing audio", "video wake lock", "audio wake lock"].contains { lowered.contains($0) }
+        }
+    }
+}
+
+/// What a tile's agent is reading, from the page itself, with no capture.
+public struct StudioTilePage: Codable, Equatable, Sendable {
+    public var host: String
+    public var title: String?
+    public var excerpt: String
+
+    public init(host: String, title: String?, text: String) {
+        self.host = host
+        self.title = title
+        excerpt = String(text.prefix(420))
+    }
+}
+
+/// The Studio's panel as the other Mac sees it, sent over Theo Link.
+public struct StudioRemoteView: Codable, Equatable, Sendable {
+    public struct Tile: Codable, Equatable, Sendable {
+        public var screen: Int
+        public var tile: Int
+        public var bot: String
+        public var note: String?
+        public var page: StudioTilePage?
+        public var jpeg: Data?
+
+        public init(screen: Int, tile: Int, bot: String, note: String?, page: StudioTilePage?, jpeg: Data?) {
+            self.screen = screen
+            self.tile = tile
+            self.bot = bot
+            self.note = note
+            self.page = page
+            self.jpeg = jpeg
+        }
+    }
+
+    public var isOn: Bool
+    public var screens: Int
+    public var tilesPerScreen: Int
+    public var paused: Bool
+    public var tiles: [Tile]
+
+    public init(isOn: Bool, screens: Int, tilesPerScreen: Int, paused: Bool, tiles: [Tile]) {
+        self.isOn = isOn
+        self.screens = screens
+        self.tilesPerScreen = tilesPerScreen
+        self.paused = paused
+        self.tiles = tiles
+    }
+
+    /// "Ideas · Reading example.com" as a heading and a line under it.
+    public static func headline(note: String?, fallback: String) -> (title: String, detail: String?) {
+        guard let note else { return (fallback, nil) }
+        let parts = note.components(separatedBy: " · ")
+        return parts.count > 1 ? (parts[0], parts.dropFirst().joined(separator: " · ")) : (fallback, note)
+    }
+}
+
 /// Live views in the panel: when each tile gets a new picture, and what may ever be captured.
 public enum StudioPreviewSchedule {
     public static let defaultFPS = 2

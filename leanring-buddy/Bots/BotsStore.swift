@@ -2256,6 +2256,15 @@ extension BotsStore {
     /// The other Mac asks this one to do something it can't do itself.
     func handleLinkRequest(_ action: String, _ fields: [String: String]) {
         switch action {
+        case "studioView":
+            if let view = fields["view"] { StudioController.shared.receiveRemoteView(view) }
+        case "research":
+            // The other Mac asked: it runs here, on the screens, and the answer reaches it through the chats.
+            guard let question = fields["question"], let research = CompanionManager.current?.researchController else { return }
+            let urls = (fields["urls"] ?? "").split(separator: "\n").compactMap { URL(string: String($0)) }.filter { ResearchURLPolicy.isAllowed($0) }
+            let request = urls.isEmpty ? (ResearchTrigger.parse(question) ?? ResearchRequest(source: .topic(question), question: question))
+                : ResearchRequest(source: .links(count: urls.count), question: question, namedURLs: urls)
+            research.start(request, speaks: false, reportsToCEO: fields["ceo"] == "1")
         case "updateWhenIdle":
             // Only ever the normal update, with its checksum and signature checks.
             CompanionManager.current?.updateController.installWhenIdle()

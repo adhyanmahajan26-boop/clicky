@@ -262,6 +262,35 @@ final class StudioOwnershipTests: XCTestCase {
     }
 }
 
+final class StudioCaptureGuardTests: XCTestCase {
+    func testPlayingVideoStopsCapture() {
+        XCTAssertTrue(StudioCaptureGuard.videoIsPlaying(assertionNames: ["com.apple.WebCore: HTMLMediaElement playback"]))
+        XCTAssertTrue(StudioCaptureGuard.videoIsPlaying(assertionNames: ["Electron", "Video Wake Lock"]))
+        XCTAssertTrue(StudioCaptureGuard.videoIsPlaying(assertionNames: ["Playing video"]))
+    }
+
+    func testOtherAssertionsDontCount() {
+        XCTAssertFalse(StudioCaptureGuard.videoIsPlaying(assertionNames: []))
+        XCTAssertFalse(StudioCaptureGuard.videoIsPlaying(assertionNames: ["com.apple.universalcontrol.preventDisplaySleep", "Electron", "Powerd - Prevent sleep while display is on", "com.apple.audio.BuiltInSpeakerDevice.context.preventuseridlesleep"]))
+    }
+
+    func testAPageIsCutToSize() {
+        XCTAssertEqual(StudioTilePage(host: "a.com", title: nil, text: String(repeating: "x", count: 900)).excerpt.count, 420)
+    }
+
+    func testTileHeadings() {
+        XCTAssertEqual(StudioRemoteView.headline(note: "Ideas · Reading a.com", fallback: "Researcher").title, "Ideas")
+        XCTAssertEqual(StudioRemoteView.headline(note: "Ideas · Reading a.com", fallback: "Researcher").detail, "Reading a.com")
+        XCTAssertEqual(StudioRemoteView.headline(note: "Opening a.com", fallback: "Researcher").title, "Researcher")
+        XCTAssertEqual(StudioRemoteView.headline(note: nil, fallback: "Researcher").title, "Researcher")
+    }
+
+    func testTheViewSurvivesTheLink() throws {
+        let view = StudioRemoteView(isOn: true, screens: 2, tilesPerScreen: 2, paused: false, tiles: [.init(screen: 0, tile: 1, bot: "b", note: "n", page: StudioTilePage(host: "a", title: "t", text: "x"), jpeg: Data([1, 2]))])
+        XCTAssertEqual(try JSONDecoder().decode(StudioRemoteView.self, from: JSONEncoder().encode(view)), view)
+    }
+}
+
 final class ResearchAgentTests: XCTestCase {
     private func url(_ text: String) -> URL { URL(string: "https://\(text)")! }
     private let all = Set(ResearchRole.allCases)
@@ -354,9 +383,10 @@ final class DeviceRoutingTests: XCTestCase {
         }
     }
 
-    func testResearchBrowserStaysOnTheStudioAndIsNeverSent() {
+    func testResearchFromTheAirGoesToTheStudio() {
         XCTAssertEqual(route(.researchBrowser, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.researchBrowser, on: .macBookAir), .notHere)
+        XCTAssertEqual(route(.researchBrowser, on: .macBookAir), .sendAcross)
+        XCTAssertEqual(route(.researchBrowser, on: .macBookAir, online: false), .waitForOtherMac)
     }
 
     func testThePickerIsObeyed() {
