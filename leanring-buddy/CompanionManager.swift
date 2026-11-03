@@ -778,7 +778,7 @@ final class CompanionManager: ObservableObject {
         wakeWordVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.wakeWordController.refreshSpeechSuppression() }
         }
-        wakeWordController.start()
+        if DeviceRoles.runsHere(.voice) { wakeWordController.start() }
     }
 
     /// The wake phrase fired: the same set-up as a push-to-talk key-down

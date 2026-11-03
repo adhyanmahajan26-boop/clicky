@@ -82,7 +82,7 @@ final class BrowserResearcher: ObservableObject {
     /// Whether a page can be read this way right now.
     var isReady: Bool {
         StudioController.isAvailable && StudioController.shared.isOn && StudioController.shared.researchUsesBrowser
-            && researcherID != nil && AXIsProcessTrusted() && chromeURL != nil && permission != .refused && permission != .notAsked
+            && DeviceRoles.runsHere(.researchBrowser) && researcherID != nil && AXIsProcessTrusted() && chromeURL != nil && permission != .refused && permission != .notAsked
     }
 
     var permission: Permission { Self.permission(asking: false) }

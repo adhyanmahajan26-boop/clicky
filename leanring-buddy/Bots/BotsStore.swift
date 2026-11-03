@@ -477,9 +477,17 @@ final class BotsStore: ObservableObject {
     /// On the other Mac, bots run on the Mac with the work screen, so there's one of each with one memory and one set of
     /// sign-ins. The message shows here right away and the answer comes back through the chat. With that Mac away they run here.
     private func forwardToWorkMac(_ action: String, room: String, target: String, text: String, command: String?) -> Bool {
-        guard TheoLink.shared.isPaired, !TheoLink.shared.isWorkMac, TheoLink.shared.isConnected else { return false }
         let message = BotChatMessage(author: "user", text: text)
-        guard TheoLink.shared.request(action, ["target": target, "text": text, "command": command ?? "", "id": message.id]) else { return false }
+        let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id]
+        switch DeviceRoles.route(.bots) {
+        case .runHere, .notHere:
+            return false
+        case .sendAcross:
+            guard TheoLink.shared.request(action, fields) else { return false }
+        case .waitForOtherMac:
+            // Bots don't run on this Mac: it goes when the other one is back.
+            guard TheoLink.shared.requestWhenConnected(action, fields) else { return false }
+        }
         post(message, to: room)
         return true
     }
@@ -1573,6 +1581,7 @@ extension BotsStore {
     private func runDueRoutines() {
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
+        guard DeviceRoles.runsHere(.bots) else { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {

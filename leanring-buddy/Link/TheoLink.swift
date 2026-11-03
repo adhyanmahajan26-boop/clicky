@@ -85,7 +85,8 @@ final class TheoLink: ObservableObject {
     @Published private(set) var knownPeerName = UserDefaults.standard.string(forKey: TheoLink.knownPeerKey)
 
     /// Everything asked of Clicky, by voice, in its chat or through Theo, happens on the chosen Mac.
-    var clickyRunsHere: Bool { !isPaired || (clickyMac.map { $0 == Self.localName } ?? isWorkMac) }
+    /// Settings › Devices decides. Any means each Mac's Clicky works by itself; only a choice of Mac stops it here.
+    var clickyRunsHere: Bool { DeviceRoles.runsHere(.clicky) }
 
     var clickyMacChoices: [String] { [Self.localName] + (knownPeerName.map { [$0] } ?? []) }
 
@@ -485,7 +486,7 @@ struct ClickyMacSwitch: View {
     @ObservedObject private var link = TheoLink.shared
 
     var body: some View {
-        if link.clickyMacChoices.count > 1 {
+        if link.clickyMacChoices.count > 1, DeviceRoles.choice(.clicky) != .any {
             HStack(spacing: 8) {
                 Text("Clicky works on").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                 Spacer(minLength: 0)

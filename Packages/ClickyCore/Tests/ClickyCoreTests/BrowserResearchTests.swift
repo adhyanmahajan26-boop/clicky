@@ -233,3 +233,50 @@ final class BrowserResearchTests: XCTestCase {
         XCTAssertEqual(roster.bots.count, 1)
     }
 }
+
+final class DeviceRoutingTests: XCTestCase {
+    private func route(_ feature: DeviceFeature, _ choice: DeviceChoice? = nil, on mac: DeviceKind, paired: Bool = true, online: Bool = true) -> DeviceRoute {
+        DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, thisMac: mac, paired: paired, otherMacOnline: online)
+    }
+
+    func testBotsRunOnTheStudioAndTheAirSendsThem() {
+        XCTAssertEqual(route(.bots, on: .macStudio), .runHere)
+        XCTAssertEqual(route(.bots, on: .macBookAir), .sendAcross)
+    }
+
+    func testTheAirNeverRunsBotsWhileTheStudioIsAway() {
+        XCTAssertEqual(route(.bots, on: .macBookAir, online: false), .waitForOtherMac)
+    }
+
+    func testAMacOnItsOwnRunsItsBots() {
+        XCTAssertEqual(route(.bots, on: .macBookAir, paired: false, online: false), .runHere)
+    }
+
+    func testClickyDictationAndVoiceRunOnBoth() {
+        for feature in [DeviceFeature.clicky, .dictation, .voice] {
+            XCTAssertEqual(route(feature, on: .macStudio), .runHere, feature.title)
+            XCTAssertEqual(route(feature, on: .macBookAir), .runHere, feature.title)
+        }
+    }
+
+    func testStudioScreensAreNeverOnAnotherMac() {
+        XCTAssertEqual(route(.studioScreens, on: .macStudio), .runHere)
+        for choice in DeviceChoice.allCases {
+            XCTAssertEqual(route(.studioScreens, choice, on: .macBookAir), .notHere, choice.title)
+            XCTAssertEqual(route(.studioScreens, choice, on: .macBookAir, paired: false), .notHere, choice.title)
+        }
+    }
+
+    func testResearchBrowserStaysOnTheStudioAndIsNeverSent() {
+        XCTAssertEqual(route(.researchBrowser, on: .macStudio), .runHere)
+        XCTAssertEqual(route(.researchBrowser, on: .macBookAir), .notHere)
+    }
+
+    func testThePickerIsObeyed() {
+        XCTAssertEqual(route(.clicky, .macBookAir, on: .macStudio), .notHere)
+        XCTAssertEqual(route(.clicky, .macBookAir, on: .macBookAir), .runHere)
+        XCTAssertEqual(route(.bots, .thisMac, on: .macBookAir), .runHere)
+        XCTAssertEqual(route(.bots, .any, on: .macBookAir), .runHere)
+        XCTAssertEqual(route(.bots, .macBookAir, on: .macStudio), .sendAcross)
+    }
+}

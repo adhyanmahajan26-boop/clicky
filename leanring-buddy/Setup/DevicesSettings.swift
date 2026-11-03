@@ -1,0 +1,105 @@
+//
+//  DevicesSettings.swift
+//  leanring-buddy
+//
+//  Settings › Devices: which Mac does what. Each Mac keeps its own choices, so "This Mac" means the Mac you're on.
+//
+
+import ClickyCore
+import Combine
+import SwiftUI
+
+enum DeviceRoles {
+    static func key(_ feature: DeviceFeature) -> String { "v3.devices.\(feature.rawValue)" }
+
+    static var thisMac: DeviceKind { StudioController.isAvailable ? .macStudio : .macBookAir }
+
+    static func choice(_ feature: DeviceFeature) -> DeviceChoice {
+        UserDefaults.standard.string(forKey: key(feature)).flatMap(DeviceChoice.init(rawValue:)) ?? feature.defaultChoice
+    }
+
+    @MainActor static func route(_ feature: DeviceFeature) -> DeviceRoute {
+        DeviceRouting.route(feature, choice: choice(feature), thisMac: thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected)
+    }
+
+    @MainActor static func runsHere(_ feature: DeviceFeature) -> Bool { route(feature) == .runHere }
+}
+
+struct DevicesSettingsContent: View {
+    @ObservedObject private var link = TheoLink.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            TheoSection(title: "Your Macs", hint: nil) {
+                macRow(name: TheoLink.shortName(TheoLink.localName), kind: DeviceRoles.thisMac, tag: "This Mac", isOnline: true, build: currentBuild)
+                RowDivider()
+                if let other = link.peerName ?? link.knownPeerName {
+                    macRow(name: TheoLink.shortName(other), kind: DeviceRoles.thisMac == .macStudio ? .macBookAir : .macStudio, tag: nil, isOnline: link.isConnected, build: link.peerBuild)
+                } else {
+                    SettingRow(title: "No other Mac linked", detail: "Link one in Your other Mac to share the work between them.") { EmptyView() }
+                }
+            }
+            TheoSection(title: "What runs where", hint: "Bots always show on both Macs. If they're set to the other Mac, what you send them goes there, and waits if it's offline.") {
+                ForEach(Array(DeviceFeature.allCases.enumerated()), id: \.element.id) { index, feature in
+                    if index > 0 { RowDivider() }
+                    DeviceFeatureRow(feature: feature)
+                }
+            }
+        }
+    }
+
+    private var currentBuild: Int? { Bundle.main.infoDictionary?["CFBundleVersion"].flatMap { ($0 as? String).flatMap(Int.init) } }
+
+    private func macRow(name: String, kind: DeviceKind, tag: String?, isOnline: Bool, build: Int?) -> some View {
+        HStack(spacing: 10) {
+            HairlineIcon(name: "screen", size: 20, color: DS.Colors.textSecondary, selected: tag != nil)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(name).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                    if let tag {
+                        Text(tag).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.accentText)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(DS.Colors.accentSoft))
+                    }
+                }
+                Text(kind == .macStudio ? "Mac Studio" : "MacBook Air").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            }
+            Spacer()
+            if let build { Text("build \(String(build))").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textTertiary) }
+            HStack(spacing: 5) {
+                Circle().fill(isOnline ? Color(hex: 0x4ADE80) : DS.Colors.textDisabled).frame(width: 7, height: 7)
+                Text(isOnline ? "Online" : "Offline").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+            }
+        }
+        .padding(12)
+    }
+}
+
+private struct DeviceFeatureRow: View {
+    let feature: DeviceFeature
+    @AppStorage private var stored: String
+
+    init(feature: DeviceFeature) {
+        self.feature = feature
+        _stored = AppStorage(wrappedValue: feature.defaultChoice.rawValue, DeviceRoles.key(feature))
+    }
+
+    var body: some View {
+        SettingRow(title: feature.title, detail: feature.detail) {
+            if feature == .studioScreens, DeviceRoles.thisMac != .macStudio {
+                Text("Mac Studio only").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            } else {
+                Picker(feature.title, selection: Binding(get: { stored }, set: { stored = $0; applied() })) {
+                    ForEach(DeviceChoice.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 140)
+            }
+        }
+    }
+
+    /// Features that follow the setting straight away.
+    private func applied() {
+        if feature == .studioScreens { StudioController.shared.followDeviceSetting() }
+        if feature == .clicky { TheoLink.shared.objectWillChange.send() }
+    }
+}

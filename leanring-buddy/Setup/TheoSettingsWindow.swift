@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case look, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: Studio is on a Mac Studio only.
@@ -36,6 +36,7 @@ enum SettingsTab {
         var icon: String {
             switch self {
             case .look: return "paint"
+            case .devices: return "screen"
             case .studio: return "studio"
             case .clicky: return "clicky"
             case .coding: return "term"
@@ -53,6 +54,7 @@ enum SettingsTab {
         var title: String {
             switch self {
             case .look: return "Look"
+            case .devices: return "Devices"
             case .studio: return "Studio"
             case .clicky: return "Clicky"
             case .coding: return "Harnesses"
@@ -70,6 +72,7 @@ enum SettingsTab {
         var subtitle: String {
             switch self {
             case .look: return "How Theo looks and moves. Click one and it changes right away."
+            case .devices: return "Choose which Mac does what."
             case .studio: return "Hidden screens your bots work on, with small live views inside Theo."
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
@@ -87,6 +90,7 @@ enum SettingsTab {
         var symbol: String {
             switch self {
             case .look: return "paintbrush.pointed.fill"
+            case .devices: return "laptopcomputer.and.iphone"
             case .studio: return "rectangle.split.2x1"
             case .clicky: return "cursorarrow.rays"
             case .coding: return "terminal.fill"
@@ -104,6 +108,7 @@ enum SettingsTab {
         var colors: [Color] {
             switch self {
             case .look: return TileColors.violet
+            case .devices: return TileColors.teal
             case .studio: return TileColors.graphite
             case .clicky: return TileColors.ember
             case .coding: return TileColors.graphite
@@ -181,6 +186,7 @@ struct SettingsPage: View {
     @ViewBuilder private var content: some View {
         switch section {
         case .look: LookSettingsContent()
+        case .devices: DevicesSettingsContent()
         case .studio: StudioSettingsContent()
         case .clicky: ClickySettingsContent()
         case .coding: CodingSettingsView()

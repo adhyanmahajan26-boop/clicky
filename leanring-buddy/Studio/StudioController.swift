@@ -153,12 +153,17 @@ final class StudioController: ObservableObject {
     func setEnabled(_ enabled: Bool) {
         guard Self.isAvailable else { return }
         UserDefaults.standard.set(enabled, forKey: Keys.enabled)
-        if enabled { start() } else { stop() }
+        if enabled, DeviceRoles.runsHere(.studioScreens) { start() } else { stop() }
     }
 
     /// At launch: back on if the owner left it on.
     func startIfEnabled() {
-        if Self.isAvailable, isEnabled { start() }
+        if Self.isAvailable, isEnabled, DeviceRoles.runsHere(.studioScreens) { start() }
+    }
+
+    /// Settings › Devices changed where the screens belong.
+    func followDeviceSetting() {
+        if DeviceRoles.runsHere(.studioScreens) { startIfEnabled() } else { stop() }
     }
 
     // MARK: Displays

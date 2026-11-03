@@ -28,7 +28,7 @@ enum ComposerDictationSettings {
     static let silenceSecondsKey = "v3.composerDictation.silenceSeconds"
     static let shortcutKey = "v3.composerDictation.shortcut"
 
-    static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+    @MainActor static var isEnabled: Bool { (UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true) && DeviceRoles.runsHere(.dictation) }
     static var autoStops: Bool { UserDefaults.standard.object(forKey: autoStopKey) as? Bool ?? true }
     static var silenceSeconds: Double {
         let saved = UserDefaults.standard.double(forKey: silenceSecondsKey)

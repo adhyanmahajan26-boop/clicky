@@ -356,7 +356,7 @@ final class DictationController: ObservableObject {
 
     /// Follows the permission and the setting; called whenever either may have changed.
     func refresh(accessibilityGranted: Bool) {
-        if accessibilityGranted && DictationSettings.isEnabled { keys.start() } else { keys.stop() }
+        if accessibilityGranted && DictationSettings.isEnabled && DeviceRoles.runsHere(.dictation) { keys.start() } else { keys.stop() }
     }
 
     private func keysPressed() {
