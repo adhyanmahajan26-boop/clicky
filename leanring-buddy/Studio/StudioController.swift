@@ -19,8 +19,21 @@ import Foundation
 import IOKit.pwr_mgt
 import ScreenCaptureKit
 
+/// What changes many times a second, apart from the controller: most of the window watches the controller, and only the panel
+/// should redraw for these.
+@MainActor
+final class StudioLive: ObservableObject {
+    @Published var thumbnails: [StudioTileID: CGImage] = [:]
+    @Published var cpuPercent: Double = 0
+    @Published var memoryMB: Double = 0
+    @Published var measuredFPS: Double = 0
+    @Published var hoveredTile: StudioTileID?
+    @Published var expandedTile: StudioTileID?
+}
+
 @MainActor
 final class StudioController: ObservableObject {
+    let live = StudioLive()
     static let shared = StudioController()
 
     /// Mac Studio only. On any other Mac the feature isn't there at all.
@@ -58,9 +71,15 @@ final class StudioController: ObservableObject {
         }
     }
     /// The tile the owner is hovering: it gets a faster picture.
-    @Published var hoveredTile: StudioTileID?
+    var hoveredTile: StudioTileID? {
+        get { live.hoveredTile }
+        set { if live.hoveredTile != newValue { live.hoveredTile = newValue } }
+    }
     /// The tile opened large in the panel.
-    @Published var expandedTile: StudioTileID?
+    var expandedTile: StudioTileID? {
+        get { live.expandedTile }
+        set { live.expandedTile = newValue }
+    }
     /// What each tile's agent is reading, from the page itself. Shown when there's no picture.
     @Published private(set) var tilePages: [StudioTileID: StudioTilePage] = [:]
     /// Something's playing, so nothing is being captured.
@@ -72,11 +91,23 @@ final class StudioController: ObservableObject {
     @Published private(set) var isOn = false
     @Published private(set) var displays: [VirtualDisplay] = []
     @Published private(set) var roster = StudioRoster()
-    @Published private(set) var thumbnails: [StudioTileID: CGImage] = [:]
+    private(set) var thumbnails: [StudioTileID: CGImage] {
+        get { live.thumbnails }
+        set { live.thumbnails = newValue }
+    }
     @Published private(set) var problem: String?
-    @Published private(set) var cpuPercent: Double = 0
-    @Published private(set) var memoryMB: Double = 0
-    @Published private(set) var measuredFPS: Double = 0
+    private(set) var cpuPercent: Double {
+        get { live.cpuPercent }
+        set { live.cpuPercent = newValue }
+    }
+    private(set) var memoryMB: Double {
+        get { live.memoryMB }
+        set { live.memoryMB = newValue }
+    }
+    private(set) var measuredFPS: Double {
+        get { live.measuredFPS }
+        set { live.measuredFPS = newValue }
+    }
     /// What a tile's bot is doing there, when it's a page being read.
     @Published private(set) var tileNotes: [StudioTileID: String] = [:]
     /// What each tile holds.
@@ -91,6 +122,8 @@ final class StudioController: ObservableObject {
     private var frameIsCapturing = false
     private var lastFrames: [StudioTileID: Double] = [:]
     private var lastVideoCheck: Double = 0
+    private var isCheckingVideo = false
+    private var hasVideoAnswer = false
     private var lastPush: Double = 0
     private var lastPushHadTiles = false
     private var isStarting = false
@@ -475,6 +508,7 @@ final class StudioController: ObservableObject {
     }
 
     func releaseResearch(_ tile: StudioTileID) {
+        defer { refreshPreviewing() }
         tilePages[tile] = nil
         tileNotes[tile] = nil
         apps[tile] = nil
@@ -488,6 +522,7 @@ final class StudioController: ObservableObject {
     }
 
     func clear(_ tile: StudioTileID) {
+        defer { refreshPreviewing() }
         tileNotes[tile] = nil
         lastFrames[tile] = nil
         pulledOut.remove(tile)
@@ -515,7 +550,8 @@ final class StudioController: ObservableObject {
     // MARK: Thumbnails
 
     /// Only while someone can see them: the panel open and the window up.
-    private var shouldPreview: Bool { isOn && panelVisible }
+    /// With nothing on the tiles, nothing runs.
+    private var shouldPreview: Bool { isOn && panelVisible && !roster.bots.isEmpty }
 
     private func refreshPreviewing(restart: Bool = false) {
         if restart { previewTimer?.invalidate(); previewTimer = nil }
@@ -533,7 +569,7 @@ final class StudioController: ObservableObject {
             measuredFPS = 0
         }
         if panelVisible, meterTimer == nil {
-            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.updateMeter() }
             }
             RunLoop.main.add(timer, forMode: .common)
@@ -563,16 +599,24 @@ final class StudioController: ObservableObject {
             framesThisSecond = 0
             frameCountStart = Date()
         }
-        // Asked of macOS about once a second, and every time before a capture starts.
-        if now - lastVideoCheck >= 1 {
+        // Asked of macOS about once a second, off the main thread. A capture only starts once there's an answer.
+        if now - lastVideoCheck >= 1, !apps.isEmpty, !isCheckingVideo {
             lastVideoCheck = now
-            let playing = Self.somethingIsPlaying()
-            if playing != isPausedForVideo { isPausedForVideo = playing }
-            if playing { for tile in apps.keys { thumbnails[tile] = nil } }
-            pushToOtherMac()
+            isCheckingVideo = true
+            Task.detached(priority: .utility) { [weak self] in
+                let playing = Self.somethingIsPlaying()
+                await MainActor.run {
+                    guard let self else { return }
+                    self.isCheckingVideo = false
+                    self.hasVideoAnswer = true
+                    if playing != self.isPausedForVideo { self.isPausedForVideo = playing }
+                    if playing { for tile in self.apps.keys { self.thumbnails[tile] = nil } }
+                }
+            }
         }
+        if now - lastPush >= 2 { pushToOtherMac() }
         // Another app's window on a tile: with Live capture on, the permission already there, and nothing playing.
-        if liveCapture, hasCapturePermission, !isPausedForVideo, !apps.isEmpty, !frameIsCapturing {
+        if liveCapture, hasVideoAnswer, !isPausedForVideo, !apps.isEmpty, !frameIsCapturing, hasCapturePermission {
             let due = apps.keys.filter { StudioPreviewSchedule.isDue($0, last: lastFrames[$0], now: now, focused: focused, base: previewFPS) }
             if !due.isEmpty { captureAppTiles(due, at: now) }
         }
@@ -593,7 +637,7 @@ final class StudioController: ObservableObject {
     }
 
     /// Whether macOS says anything's playing right now.
-    private static func somethingIsPlaying() -> Bool {
+    nonisolated static func somethingIsPlaying() -> Bool {
         var unmanaged: Unmanaged<CFDictionary>?
         guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess, let all = unmanaged?.takeRetainedValue() as? [AnyHashable: [[String: Any]]] else {
             // Can't tell: don't risk it.
@@ -614,15 +658,23 @@ final class StudioController: ObservableObject {
         guard busy || lastPushHadTiles, now - lastPush >= 2 else { return }
         lastPush = now
         lastPushHadTiles = busy
-        let tiles = roster.bots.map { tile, bot in
-            StudioRemoteView.Tile(screen: tile.screen, tile: tile.tile, bot: bot, note: tileNotes[tile], page: tilePages[tile], jpeg: thumbnails[tile].flatMap(Self.smallJPEG))
+        let parts = roster.bots.map { tile, bot in (tile: tile, bot: bot, note: tileNotes[tile], page: tilePages[tile], image: UncheckedImage(image: thumbnails[tile])) }
+        let screens = screenCount, perScreen = tilesPerScreen, paused = isPausedForVideo, on = isOn
+        // Making the pictures small is real work: not on the main thread.
+        Task.detached(priority: .utility) {
+            let tiles = parts.map { part in
+                StudioRemoteView.Tile(screen: part.tile.screen, tile: part.tile.tile, bot: part.bot, note: part.note, page: part.page, jpeg: part.image.image.flatMap(Self.smallJPEG))
+            }
+            let view = StudioRemoteView(isOn: on, screens: screens, tilesPerScreen: perScreen, paused: paused, tiles: tiles)
+            guard let data = try? JSONEncoder().encode(view) else { return }
+            let encoded = data.base64EncodedString()
+            await MainActor.run { _ = TheoLink.shared.request("studioView", ["view": encoded]) }
         }
-        let view = StudioRemoteView(isOn: isOn, screens: screenCount, tilesPerScreen: tilesPerScreen, paused: isPausedForVideo, tiles: tiles)
-        guard let data = try? JSONEncoder().encode(view) else { return }
-        _ = TheoLink.shared.request("studioView", ["view": data.base64EncodedString()])
     }
 
-    private static func smallJPEG(_ image: CGImage) -> Data? {
+    private struct UncheckedImage: @unchecked Sendable { let image: CGImage? }
+
+    nonisolated private static func smallJPEG(_ image: CGImage) -> Data? {
         NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.45])
     }
 

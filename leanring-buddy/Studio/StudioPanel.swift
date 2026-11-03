@@ -14,6 +14,8 @@ struct StudioPanel: View {
     @ObservedObject var store: BotsStore
     @ObservedObject var selection: BotsSelection
     @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var live = StudioController.shared.live
+    @ObservedObject private var link = TheoLink.shared
 
     var body: some View {
         if StudioController.isAvailable { localPanel } else { RemoteStudioPanel(store: store, studio: studio) }
@@ -42,6 +44,7 @@ struct StudioPanel: View {
             if studio.isOn {
                 Text("\(studio.screenCount) hidden screen\(studio.screenCount == 1 ? "" : "s") · \(studio.tilesPerScreen) tile\(studio.tilesPerScreen == 1 ? "" : "s") each · Mac Studio only")
                     .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).padding(.top, -6)
+                LinkStatusLine(link: link)
                 if let problem = studio.problem {
                     Text(problem).font(.system(size: 11.5)).foregroundColor(DS.Colors.warningText).fixedSize(horizontal: false, vertical: true)
                 }
@@ -381,8 +384,32 @@ struct RemoteStudioPanel: View {
     }
 }
 
+/// Whether the other Mac is linked, and what to do if it isn't working.
+struct LinkStatusLine: View {
+    @ObservedObject var link: TheoLink
+
+    var body: some View {
+        if link.isPaired {
+            let other = TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "Your other Mac")
+            let build = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(link.isConnected ? Color(hex: 0x4ADE80) : DS.Colors.textDisabled).frame(width: 6, height: 6)
+                if !link.isConnected {
+                    Text("\(other) isn't connected. Open Theo there.")
+                } else if let theirs = link.peerBuild, theirs < build {
+                    Text("\(other) is linked, on an older build: click Update now there.")
+                } else {
+                    Text("\(other) is linked and sees these screens.")
+                }
+            }
+            .font(.system(size: 11)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct StudioTileThumb: View {
     @ObservedObject var studio: StudioController
+    @ObservedObject private var live = StudioController.shared.live
     let tile: StudioTileID
 
     var body: some View {

@@ -42,6 +42,10 @@ import Speech
 final class WakeWordController: ObservableObject {
     @Published private(set) var state: WakeWordListenerState = .off(.disabledInSettings)
     @Published private(set) var isEnabled = ClickySettings.isWakeWordEnabled
+    /// The mic wouldn't start: Clicky's pill says so rather than claiming it's listening.
+    @Published private(set) var isMicUnavailable = false
+    private var micRetryAt: Date?
+    private var micRetrySeconds: TimeInterval = 10
 
     /// The phrase fired; `initialTurnText` is what followed it in the same breath.
     var onWake: ((_ initialTurnText: String) -> Void)?
@@ -259,11 +263,18 @@ final class WakeWordController: ObservableObject {
         }
     }
 
+    private func noteMicFailed() {
+        micRetryAt = Date().addingTimeInterval(micRetrySeconds)
+        micRetrySeconds = min(micRetrySeconds * 2, 300)
+        if !isMicUnavailable { isMicUnavailable = true }
+    }
+
     private func pollTick() {
         pollTickCount += 1
         didAudioEngineFail = false
         if let isLockedNow = Self.readScreenLockState() { isScreenLocked = isLockedNow }
-        if ClickySettings.isWakeWordEnabled, audioEngineHub.exclusiveMicrophoneUsers.isEmpty, !isScreenLocked {
+        let isWaitingToRetry = micRetryAt.map { Date() < $0 } ?? false
+        if ClickySettings.isWakeWordEnabled, audioEngineHub.exclusiveMicrophoneUsers.isEmpty, !isScreenLocked, !isWaitingToRetry {
             isMicrophoneInUseElsewhere = MicrophoneInUseProbe.isMicrophoneInUseByAnotherProcess(isOwnEngineRunning: audioEngine?.isRunning == true)
             isDefaultInputBluetooth = Self.isBluetoothWithoutWiredFallback()
         }
@@ -281,6 +292,8 @@ final class WakeWordController: ObservableObject {
     /// Opens the wake mic if it isn't open. False if it couldn't.
     private func startMicrophoneIfNeeded() -> Bool {
         if audioEngine != nil { return true }
+        // It failed a moment ago: trying every 2 s stalls the main thread and won't help. Waits longer each time.
+        if let micRetryAt, Date() < micRetryAt { return false }
         guard let recognitionLocale else { return false }
         if pipeline == nil {
             pipeline = WakeWordRecognitionPipeline(locale: recognitionLocale, matcher: matcher,
@@ -318,6 +331,7 @@ final class WakeWordController: ObservableObject {
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             print("⚠️ Wake word: the mic has no usable format")
+            noteMicFailed()
             return false
         }
         // No format given: the node's own at this moment. A device or rate that changed just now would otherwise be a crash.
@@ -328,9 +342,13 @@ final class WakeWordController: ObservableObject {
         } catch {
             inputNode.removeTap(onBus: 0)
             print("⚠️ Wake word: the mic didn't start: \(error.localizedDescription)")
+            noteMicFailed()
             return false
         }
         audioEngine = engine
+        micRetryAt = nil
+        micRetrySeconds = 10
+        if isMicUnavailable { isMicUnavailable = false }
         engineStartCount += 1
         listeningDevice = AudioInputDeviceInfo.current(of: inputNode.audioUnit) ?? defaultInputDevice
         if let listeningDevice {

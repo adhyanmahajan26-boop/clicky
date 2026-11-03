@@ -385,13 +385,14 @@ struct BotsRootView: View {
 
     /// Clicky at the bottom, with what it's listening for.
     private var clickyPill: some View {
-        let listening = ClickySettings.isWakeWordEnabled && !store.isClickyBusy
+        let micDown = CompanionManager.current?.wakeWordController.isMicUnavailable == true
+        let listening = ClickySettings.isWakeWordEnabled && !store.isClickyBusy && !micDown
         return Button { selection.pane = .clicky } label: {
             HStack(spacing: 10) {
                 ClickyAvatar(size: 34, isActive: store.isClickyBusy)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Clicky").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                    Text(dictation.isActive ? "Dictating\u{2026}" : store.isClickyBusy ? "Working" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
+                    Text(dictation.isActive ? "Dictating\u{2026}" : store.isClickyBusy ? "Working" : micDown ? "Mic unavailable" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
                         .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)

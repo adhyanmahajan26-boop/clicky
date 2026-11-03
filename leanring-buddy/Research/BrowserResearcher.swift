@@ -148,7 +148,7 @@ final class BrowserResearcher: ObservableObject {
         var page = await settledText(of: window.element) { title, text in
             studio.notePage(StudioTilePage(host: host, title: title, text: text), on: tile)
         }
-        if page.title == nil { page.title = Self.chromeTitle(of: window.chromeID) }
+        if page.title == nil { page.title = await Self.chromeTitle(of: window.chromeID) }
         if BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) {
             studio.noteResearch(tile, note: "\(prefix)Needs you · \(host)", app: chromeApp)
             switch await askOwner(id: id, host: host, botID: researcherID) {
@@ -173,7 +173,9 @@ final class BrowserResearcher: ObservableObject {
 
     /// Studio is going off: its windows would land on the owner's monitors, so they close first.
     func closeEverything() {
-        for id in Array(windows.keys) { close(id) }
+        // These have to be gone before the screens are, so this one time it waits.
+        for (_, window) in windows { _ = Self.runOSAScript(Self.closeScript(window.chromeID)) }
+        windows = [:]
         for (id, answer) in answers { answer.resume(returning: .skip); checks[id] = nil }
         answers = [:]
     }
@@ -248,10 +250,8 @@ final class BrowserResearcher: ObservableObject {
             end tell
         end timeout
         """
-        var failure: NSDictionary?
-        let result = NSAppleScript(source: script)?.executeAndReturnError(&failure)
-        guard failure == nil, let idText = result?.stringValue ?? result.map({ String($0.int32Value) }), let chromeID = Int(idText) else {
-            print("⚠️ Research: Chrome didn't make a window (\(failure?[NSAppleScript.errorNumber] ?? "?"))")
+        guard let idText = await Self.askChrome(script), let chromeID = Int(idText) else {
+            print("⚠️ Research: Chrome didn't make a window")
             return nil
         }
         // Chrome can get there just after the script returns.
@@ -297,13 +297,36 @@ final class BrowserResearcher: ObservableObject {
         }
     }
 
-    private static func closeInChrome(_ chromeID: Int) {
-        var failure: NSDictionary?
-        _ = NSAppleScript(source: """
+    /// An Apple Event can block for seconds if Chrome is busy, so it never waits on the main thread.
+    nonisolated private static func askChrome(_ script: String) async -> String? {
+        await Task.detached(priority: .userInitiated) { runOSAScript(script) }.value
+    }
+
+    nonisolated private static func runOSAScript(_ script: String) -> String? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func closeScript(_ chromeID: Int) -> String {
+        """
         with timeout of 5 seconds
             tell application id "\(chromeBundleID)" to close (every window whose id is \(chromeID))
         end timeout
-        """)?.executeAndReturnError(&failure)
+        """
+    }
+
+    private static func closeInChrome(_ chromeID: Int) {
+        let script = closeScript(chromeID)
+        Task.detached(priority: .userInitiated) { _ = runOSAScript(script) }
     }
 
     private static func windows(of processIdentifier: pid_t) -> [AXUIElement] {
@@ -330,26 +353,23 @@ final class BrowserResearcher: ObservableObject {
     }
 
     /// The tab's title, from Chrome itself: a very thin page can show nothing to Accessibility. Only a question: it doesn't bring Chrome forward.
-    private static func chromeTitle(of chromeID: Int) -> String? {
-        var failure: NSDictionary?
-        return NSAppleScript(source: """
+    private static func chromeTitle(of chromeID: Int) async -> String? {
+        await askChrome("""
         with timeout of 3 seconds
             tell application id "\(chromeBundleID)" to return title of active tab of (first window whose id is \(chromeID))
         end timeout
-        """)?.executeAndReturnError(&failure).stringValue
+        """)
     }
 
     private static func waitForLoad(chromeID: Int) async {
-        let script = NSAppleScript(source: """
+        let script = """
         with timeout of 3 seconds
             tell application id "\(chromeBundleID)" to return loading of active tab of (first window whose id is \(chromeID))
         end timeout
-        """)
-        for _ in 0..<30 {
-            var failure: NSDictionary?
-            let result = script?.executeAndReturnError(&failure)
-            if failure != nil || result?.booleanValue == false { return }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        """
+        for _ in 0..<15 {
+            guard await askChrome(script) == "true" else { return }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
 
