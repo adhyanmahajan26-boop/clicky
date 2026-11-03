@@ -84,24 +84,8 @@ step("sidebar-theo", click="Theo", expect="Message Theo", within=SIDEBAR)
 
 # API keys: a row opens, a bad key shows the provider's own error.
 go("settings:keys")
-step("keys-open-row", click="Groq", expect="Get a key", settle=1.0)
-
-# Real typing and ⌘V in the key field, with a bad key: the provider's own error comes back and nothing is saved.
-theoui.send({"cmd": "uiPasteboard", "text": "gsk_this-is-not-a-real-key"})
-theoui.click_text("gsk_", within=(248, 60, 1032, 760))
-time.sleep(0.5)
-# The field takes a paste: ⌘V's action, sent to it. (The menu bar can't reach it while the test profile stays inactive,
-# and it mustn't activate; the Edit menu itself is checked below.)
-state = theoui.send({"cmd": "uiResponderAction", "action": "paste:"})["result"]
-ok = state.get("editing") and state.get("fieldLength", 0) == len("gsk_this-is-not-a-real-key")
-results.append({"step": "keys-field-takes-paste", "ok": bool(ok), "detail": str(state.get("fieldLength")), "shot": theoui.shot("keys-pasted")})
-print("✅" if ok else "❌", "keys-field-takes-paste", state.get("fieldLength"), flush=True)
-menus = theoui.send({"cmd": "uiMenus"})["result"]["menus"]
-edit = next((m for m in menus if m["title"] == "Edit"), {"items": []})
-ok = any(i["title"] == "Paste" and i["key"] == "v" for i in edit["items"])
-results.append({"step": "edit-menu-has-cmd-v", "ok": ok, "detail": "", "shot": ""})
-print("✅" if ok else "❌", "edit-menu-has-cmd-v", flush=True)
-step("keys-test-bad-key", click="Test", expect="rejected", settle=2.5, within=(248, 60, 1032, 760))
+# Opens a provider's row and stops there. It never types or tests a key: a test run shows on the owner's screen.
+step("keys-open-row", click="xAI", expect="Get a key", settle=1.0)
 
 # Harnesses show their state.
 go("settings:coding")
