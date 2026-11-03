@@ -5,6 +5,7 @@
 //  What may open in the owner's logged-in browser, when a page needs it, human checks, and who gets a tile.
 //
 
+import CoreGraphics
 import XCTest
 @testable import ClickyCore
 
@@ -68,6 +69,12 @@ final class BrowserResearchTests: XCTestCase {
         XCTAssertEqual(long.count, BrowserResearchPolicy.maximumCharacters)
     }
 
+    func testWaitsForAPauseInTheOwnersInput() {
+        XCTAssertFalse(BrowserResearchPolicy.ownerHasPaused(secondsSinceInput: 0.2))
+        XCTAssertFalse(BrowserResearchPolicy.ownerHasPaused(secondsSinceInput: 1.4))
+        XCTAssertTrue(BrowserResearchPolicy.ownerHasPaused(secondsSinceInput: 1.5))
+    }
+
     // MARK: Tiles
 
     private let a = StudioTileID(screen: 0, tile: 0), b = StudioTileID(screen: 0, tile: 1), c = StudioTileID(screen: 1, tile: 0)
@@ -122,6 +129,97 @@ final class BrowserResearchTests: XCTestCase {
         var queue = ResearchTileQueue(limit: 1)
         XCTAssertEqual(queue.request("one", free: [a]), a)
         XCTAssertEqual(queue.request("one", free: [b]), a)
+    }
+
+    // MARK: Live views
+
+    func testHoveredTileGoesFaster() {
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: a, focused: nil), 2)
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: a, focused: a), 10)
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: b, focused: a), 2)
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: b, focused: a, base: 5), 5)
+    }
+
+    func testTilesAreDrawnOnlyWhenDue() {
+        XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: nil, now: 10, focused: nil))
+        XCTAssertFalse(StudioPreviewSchedule.isDue(a, last: 10, now: 10.1, focused: nil))
+        XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: 10, now: 10.5, focused: nil))
+        XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: 10, now: 10.1, focused: a))
+        XCTAssertFalse(StudioPreviewSchedule.isDue(b, last: 10, now: 10.1, focused: a))
+    }
+
+    private let hidden = [CGRect(x: 5360, y: 1278, width: 1440, height: 900), CGRect(x: 6800, y: 1278, width: 1440, height: 900)]
+
+    func testOnlyWindowsOnHiddenScreensMayBeCaptured() {
+        XCTAssertTrue(StudioPreviewSchedule.mayCapture(window: CGRect(x: 5360, y: 1278, width: 720, height: 900), hiddenScreens: hidden))
+        // The owner's monitors, and anything hanging off a hidden screen.
+        XCTAssertFalse(StudioPreviewSchedule.mayCapture(window: CGRect(x: 100, y: 100, width: 720, height: 900), hiddenScreens: hidden))
+        XCTAssertFalse(StudioPreviewSchedule.mayCapture(window: CGRect(x: 5000, y: 1278, width: 720, height: 900), hiddenScreens: hidden))
+        XCTAssertFalse(StudioPreviewSchedule.mayCapture(window: .zero, hiddenScreens: hidden))
+        XCTAssertFalse(StudioPreviewSchedule.mayCapture(window: CGRect(x: 5360, y: 1278, width: 720, height: 900), hiddenScreens: []))
+    }
+
+    func testAWindowFindsItsTile() {
+        func tile(_ x: CGFloat) -> StudioTileID? { StudioPreviewSchedule.tile(of: CGRect(x: x, y: 1278, width: 720, height: 900), hiddenScreens: hidden, tilesPerScreen: 2) }
+        XCTAssertEqual(tile(5360), StudioTileID(screen: 0, tile: 0))
+        XCTAssertEqual(tile(6080), StudioTileID(screen: 0, tile: 1))
+        XCTAssertEqual(tile(6800), StudioTileID(screen: 1, tile: 0))
+        XCTAssertEqual(tile(7520), StudioTileID(screen: 1, tile: 1))
+        XCTAssertNil(tile(100))
+        XCTAssertEqual(StudioPreviewSchedule.tile(of: CGRect(x: 6080, y: 1278, width: 720, height: 900), hiddenScreens: hidden, tilesPerScreen: 1), StudioTileID(screen: 0, tile: 0))
+    }
+
+    // MARK: Looks for bots from before the crew
+
+    func testBotsGetAFigureThatFitsTheirJob() {
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Builder"), .builder)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Github Coder"), .builder)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Researcher"), .researcher)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "mail manager · invoice scanner for work mail"), .inbox)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Accountant"), .accountant)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Catalogue pricing"), .accountant)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "CEO"), .manager)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "project manager"), .manager)
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "Planner"), .manager)
+        XCTAssertEqual(CrewLook.standard(id: "theo", name: "Theo", isPrimary: true), .theo)
+    }
+
+    func testTheRoleIsUsedWhenTheNameSaysNothing() {
+        XCTAssertEqual(CrewLook.standard(id: "x", name: "kadi ninda", role: "Designs the screens"), .designer)
+        // Nothing to go on: its own figure, the same every time.
+        XCTAssertEqual(CrewLook.standard(id: "seven", name: "kadi ninda"), CrewLook.standard(id: "seven", name: "kadi ninda"))
+    }
+
+    func testALookSurvivesSaving() throws {
+        let data = try JSONEncoder().encode(CrewLook.manager)
+        XCTAssertEqual(try JSONDecoder().decode(CrewLook.self, from: data), .manager)
+    }
+
+    // MARK: The owner's monitors
+
+    private func monitor(id: UInt32 = 4, x: Int = 0, y: Int = 0, width: Int = 1920, height: Int = 1080, pixelWidth: Int = 3840, pixelHeight: Int = 2160, hz: Double = 120, rotation: Double = 0) -> RealDisplayState {
+        RealDisplayState(id: id, x: x, y: y, width: width, height: height, pixelWidth: pixelWidth, pixelHeight: pixelHeight, refreshRate: hz, rotation: rotation)
+    }
+
+    func testNothingChangedMeansNoDifferences() {
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor(), monitor(id: 2, x: 1920)], now: [monitor(id: 2, x: 1920), monitor()]), [])
+    }
+
+    func testAMovedMonitorIsCaught() {
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor(x: -1920)], now: [monitor(x: -3360)]), [.moved(4)])
+    }
+
+    func testEveryPartOfTheModeIsWatched() {
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor()], now: [monitor(width: 2560, height: 1440)]), [.modeChanged(4)])
+        // The same look at a different sharpness is still a change.
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor()], now: [monitor(pixelWidth: 1920, pixelHeight: 1080)]), [.modeChanged(4)])
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor()], now: [monitor(hz: 60)]), [.modeChanged(4)])
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor()], now: [monitor(hz: 119.88)]), [])
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor()], now: [monitor(rotation: 90)]), [.rotated(4)])
+    }
+
+    func testAMonitorUnpluggedIsLeftAlone() {
+        XCTAssertEqual(StudioDisplayGuard.differences(baseline: [monitor(), monitor(id: 2)], now: [monitor()]), [])
     }
 
     func testResearchCanHoldSeveralTilesWhileAssigningMoves() {

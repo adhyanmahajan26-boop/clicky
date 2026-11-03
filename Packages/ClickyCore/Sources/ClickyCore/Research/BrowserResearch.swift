@@ -15,6 +15,11 @@ public enum BrowserResearchPolicy {
     public static let secondsToWaitForATile: TimeInterval = 120
     public static let secondsToWaitForTheOwner: TimeInterval = 300
     public static let maximumCharacters = 40_000
+    /// Chrome comes forward for a moment when it opens a window, so that waits for a gap in the owner's input.
+    public static let secondsOfPauseNeeded: TimeInterval = 1.5
+    public static let secondsToWaitForAPause: TimeInterval = 60
+
+    public static func ownerHasPaused(secondsSinceInput: TimeInterval) -> Bool { secondsSinceInput >= secondsOfPauseNeeded }
 
     /// Hosts that are the owner's private life, not sources. A link on a page must not be able to send a logged-in window there.
     private static let privateHosts = ["mail.", "outlook.", "accounts.", "myaccount.", "login.", "signin.", "auth.", "icloud.", "drive.google.", "docs.google.",

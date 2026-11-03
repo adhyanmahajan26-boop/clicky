@@ -75,6 +75,8 @@ public struct CrewLook: Codable, Equatable, Sendable {
 
     public static let theo = CrewLook(shell: "black", glow: "#ff7a45", hat: .none, hatColor: "#ff7a45", antenna: .ball, eyes: .pill, extra: .tie)
     public static let clicky = CrewLook(shell: "white", glow: "#ff9a5c", hat: .none, hatColor: "#ff9a5c", antenna: .cursor, eyes: .round, extra: .none)
+    public static let manager = CrewLook(shell: "graphite", glow: "#f5b03c", hat: .tophat, hatColor: "#f5b03c", extra: .tie)
+    public static let accountant = CrewLook(glow: "#a3e635", eyes: .round, extra: .glasses)
     public static let builder = CrewLook(glow: "#f5b03c", hat: .hardhat, hatColor: "#f5b03c")
     public static let designer = CrewLook(glow: "#ff6f9f", hat: .beret, hatColor: "#ff6f9f", eyes: .round, extra: .scarf)
     public static let researcher = CrewLook(glow: "#34d3e6", hatColor: "#34d3e6", antenna: .dish, eyes: .round, extra: .glasses)
@@ -85,10 +87,18 @@ public struct CrewLook: Codable, Equatable, Sendable {
 
     /// The look a bot wears until someone dresses it: the gear of its job when its name says what that is, otherwise one
     /// picked from its id, so it never changes between launches.
-    public static func standard(id: String, name: String, isPrimary: Bool = false) -> CrewLook {
+    /// `role` is the bot's description, used when its name doesn't say what it does.
+    public static func standard(id: String, name: String, isPrimary: Bool = false, role: String? = nil) -> CrewLook {
         if isPrimary || id == "theo" { return .theo }
         if id == "clicky" { return .clicky }
-        let words = name.lowercased()
+        if let look = look(forJob: name) ?? role.flatMap(look(forJob:)) { return look }
+        var generator = SeededGenerator(seed: id)
+        return shuffled(using: &generator)
+    }
+
+    /// The figure for a job, if these words name one.
+    private static func look(forJob text: String) -> CrewLook? {
+        let words = text.lowercased()
         let jobs: [(needles: [String], look: CrewLook)] = [
             (["build", "engineer", "coder", "developer", "runner"], .builder),
             (["design"], .designer),
@@ -97,10 +107,10 @@ public struct CrewLook: Codable, Equatable, Sendable {
             (["copy", "writer", "editor"], .copyEditor),
             (["release", "ship", "deploy"], .release),
             (["review", "qa", "test"], .reviewer),
+            (["account", "finance", "pricing", "invoice", "ledger", "budget"], .accountant),
+            (["ceo", "manager", "planner", "lead", "head of"], .manager),
         ]
-        if let job = jobs.first(where: { $0.needles.contains { words.contains($0) } }) { return job.look }
-        var generator = SeededGenerator(seed: id)
-        return shuffled(using: &generator)
+        return jobs.first(where: { $0.needles.contains { words.contains($0) } })?.look
     }
 
     /// A random tasteful figure: mostly light bodies, one colour family, and only one thing on its head most of the time.

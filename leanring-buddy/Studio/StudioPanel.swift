@@ -41,6 +41,7 @@ struct StudioPanel: View {
                 if let problem = studio.problem {
                     Text(problem).font(.system(size: 11.5)).foregroundColor(DS.Colors.warningText).fixedSize(horizontal: false, vertical: true)
                 }
+                if let tile = studio.expandedTile { expanded(tile) }
                 ForEach(0..<studio.screenCount, id: \.self) { screen in screenCard(screen) }
                 queue
             } else {
@@ -90,6 +91,49 @@ struct StudioPanel: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
     }
 
+    /// A tile opened large, with a way to bring its window to the owner and send it back.
+    private func expanded(_ tile: StudioTileID) -> some View {
+        let bot = studio.roster.bots[tile].flatMap { store.bot($0) }
+        let isOut = studio.pulledOut.contains(tile)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Screen \(tile.screen + 1), \(tile.tile == 0 ? "left" : "right")").font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Spacer()
+                Button { studio.expandedTile = nil } label: {
+                    HairlineIcon(name: "close", size: 13, color: DS.Colors.textSecondary).frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("Close")
+            }
+            ZStack {
+                Color(hex: 0x0C0C0E)
+                if let image = studio.thumbnails[tile] {
+                    Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
+                } else if let bot {
+                    VStack(spacing: 6) {
+                        CrewAvatar(look: bot.crewLook, size: 64, pose: store.crewPose(of: bot).pose, interactive: false)
+                        Text(studio.liveCapture ? "Waiting for a picture" : "Turn on Live capture in Settings to see other apps here").font(.system(size: 11)).foregroundColor(.white.opacity(0.65)).multilineTextAlignment(.center).padding(.horizontal, 12)
+                    }
+                }
+            }
+            .aspectRatio(0.8, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            HStack(spacing: 8) {
+                if let bot {
+                    Text(studio.tileNotes[tile] ?? store.liveStatus(of: bot)).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Button(isOut ? "Send back" : "Show on my screen") {
+                    if isOut { studio.sendBack(tile) } else { studio.showOnMyScreen(tile) }
+                }
+                .buttonStyle(.theoSecondary)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
+    }
+
     private func tileView(_ tile: StudioTileID) -> some View {
         let bot = studio.roster.bots[tile].flatMap { store.bot($0) }
         let image = studio.thumbnails[tile]
@@ -128,18 +172,33 @@ struct StudioPanel: View {
                 Text("Assign").font(.system(size: 11.5, weight: .medium)).foregroundColor(.white.opacity(0.6))
             }
         }
-        .coverMenu(help: bot == nil ? "Assign a bot to this tile" : "Change or clear this tile") {
-            ForEach(store.bots) { candidate in
-                Button(candidate.name) { studio.assign(botID: candidate.id, to: tile) }
-            }
-            Button("Clicky") { studio.assign(botID: BotsStore.clickyID, to: tile) }
+        .overlay {
             if bot != nil {
-                Divider()
-                Button("Clear this tile") { studio.clear(tile) }
+                // A click opens it large; the menu for changing it is a right-click away.
+                Color.clear.contentShape(Rectangle())
+                    .onTapGesture { studio.expandedTile = studio.expandedTile == tile ? nil : tile }
+                    .contextMenu { tileMenu(tile, occupied: true) }
+                    .help("Open this tile")
+            } else {
+                Color.clear.contentShape(Rectangle()).coverMenu(help: "Assign a bot to this tile") { tileMenu(tile, occupied: false) }
             }
+        }
+        .onHover { inside in
+            if inside { studio.hoveredTile = tile } else if studio.hoveredTile == tile { studio.hoveredTile = nil }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+
+    @ViewBuilder private func tileMenu(_ tile: StudioTileID, occupied: Bool) -> some View {
+        ForEach(store.bots) { candidate in
+            Button(candidate.name) { studio.assign(botID: candidate.id, to: tile) }
+        }
+        Button("Clicky") { studio.assign(botID: BotsStore.clickyID, to: tile) }
+        if occupied {
+            Divider()
+            Button("Clear this tile") { studio.clear(tile) }
+        }
     }
 
     /// Bots at work with no tile of their own.
@@ -212,7 +271,7 @@ struct StudioSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Studio screens", hint: "Mac Studio only. Live previews run inside Theo, only while the Studio panel is open.") {
+            TheoSection(title: "Studio screens", hint: "Mac Studio only. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
                 SettingRow(title: "Hidden bot screens", detail: "Bots work on screens you never see") {
                     Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
@@ -237,7 +296,7 @@ struct StudioSettingsContent: View {
                     }
                 }
             }
-            TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
+            TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
                 SettingRow(title: "Research agents use my browser on Studio screens", detail: "Only Researcher, at most two tiles at once, freed when each page is done") {
                     Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }

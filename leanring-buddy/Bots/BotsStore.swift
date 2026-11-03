@@ -1165,6 +1165,12 @@ final class BotsStore: ObservableObject {
         for index in upgraded.indices where upgraded[index].avatar == nil && upgraded[index].id != "theo" {
             upgraded[index].avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(upgraded[index].id), among: upgraded).rawValue
         }
+        // Every bot from before the crew gets a figure that fits its job, saved, so it can be changed and stays put.
+        // An older build ignores this field, so going back is safe.
+        for index in upgraded.indices where upgraded[index].look == nil {
+            let bot = upgraded[index]
+            upgraded[index].look = .standard(id: bot.id, name: bot.name, isPrimary: bot.primary, role: bot.description)
+        }
         try? JSONEncoder().encode(Array(offered).sorted()).write(to: offeredFile, options: .atomic)
         bots = upgraded
         writeBots()
@@ -1565,6 +1571,8 @@ extension BotsStore {
     }
 
     private func runDueRoutines() {
+        // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
+        if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {

@@ -56,7 +56,7 @@ enum CrewTestCommands {
         for (key, value) in controller.roster.bots { roster["\(key.screen).\(key.tile)"] = value }
         return ["available": StudioController.isAvailable, "model": StudioGate.currentModel, "on": controller.isOn, "enabled": controller.isEnabled,
                 "displays": controller.displayBounds(), "roster": roster, "thumbnails": controller.thumbnails.count,
-                "captureAllowed": controller.hasCapturePermission, "liveCapture": controller.liveCapture, "problem": controller.problem ?? "",
+                "captureAllowed": controller.hasCapturePermission, "liveCapture": controller.liveCapture, "problem": controller.problem ?? "", "monitorCheck": controller.lastMonitorCheck,
                 "allScreens": NSScreen.screens.map { ["name": $0.localizedName, "x": $0.frame.minX, "y": $0.frame.minY, "w": $0.frame.width, "h": $0.frame.height] as [String: Any] },
                 "ownerScreens": NSScreen.ownerScreens.map(\.localizedName)] as [String: Any]
     }

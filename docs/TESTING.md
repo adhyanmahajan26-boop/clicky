@@ -36,6 +36,9 @@ To use Accessibility and Speech, start the profile through LaunchServices (`open
 With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. Set `uiSet test.sarvam.base = http://127.0.0.1:8765` and `uiTestKey {provider: "sarvam", value: "anything"}`. For a live test with the owner's saved key: `uiSet test.sarvam.useOwnerKey = true` (the key is read where it is, never copied or shown).
 
 ## Rules
+- A test profile can hold a copy of real bots signed in as the owner, so its routines never fire on schedule (`test.routines.run` overrides that). An older build has no such gate: pause routines in any copy it might read.
+- A test profile's child processes get its home folder, so never start a browser from one: Chrome comes up as a new, empty copy.
+- Studio screens drop the owner's monitors out of HDR while they exist, and each on or off nudges a monitor. Either can interrupt a video. Don't toggle them without the owner's OK that nothing's playing.
 - Studio screens are real displays for the whole Mac while they're on, so keep tests short and check the real monitors are back after turning them off. Never turn on Live capture in a test.
 - Never record the screen. Screenshots of Theo's window only (`theoui.py shot`). Never screenshot the whole display.
 - Don't move the pointer, take focus or press real keys. Don't open apps.

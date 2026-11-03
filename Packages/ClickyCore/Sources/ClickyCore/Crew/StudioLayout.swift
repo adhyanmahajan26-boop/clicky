@@ -74,6 +74,89 @@ public struct StudioTileID: Hashable, Codable, Sendable {
     }
 }
 
+/// Live views in the panel: when each tile gets a new picture, and what may ever be captured.
+public enum StudioPreviewSchedule {
+    public static let defaultFPS = 2
+    /// The tile the owner is hovering or has opened.
+    public static let focusedFPS = 10
+
+    public static func framesPerSecond(for tile: StudioTileID, focused: StudioTileID?, base: Int = defaultFPS) -> Int {
+        tile == focused ? max(focusedFPS, base) : max(1, base)
+    }
+
+    /// `last` nil means it has no picture yet.
+    public static func isDue(_ tile: StudioTileID, last: Double?, now: Double, focused: StudioTileID?, base: Int = defaultFPS) -> Bool {
+        guard let last else { return true }
+        // A little under the interval, or a timer that's slightly early skips a whole frame.
+        return now - last >= 0.9 / Double(framesPerSecond(for: tile, focused: focused, base: base))
+    }
+
+    /// Whether a window may be captured: wholly on one of Theo's hidden screens. Nothing on the owner's monitors, ever.
+    public static func mayCapture(window: CGRect, hiddenScreens: [CGRect]) -> Bool {
+        guard window.width > 0, window.height > 0 else { return false }
+        return hiddenScreens.contains { $0.insetBy(dx: -1, dy: -1).contains(window) }
+    }
+
+    /// The tile a window sits on, by its centre.
+    public static func tile(of window: CGRect, hiddenScreens: [CGRect], tilesPerScreen: Int) -> StudioTileID? {
+        let centre = CGPoint(x: window.midX, y: window.midY)
+        guard let screen = hiddenScreens.firstIndex(where: { $0.contains(centre) }) else { return nil }
+        let box = hiddenScreens[screen]
+        let tiles = max(tilesPerScreen, 1)
+        let column = min(Int((centre.x - box.minX) / (box.width / CGFloat(tiles))), tiles - 1)
+        return StudioTileID(screen: screen, tile: column)
+    }
+}
+
+/// One real monitor as it stands: where it is and what mode it's in.
+public struct RealDisplayState: Equatable, Sendable {
+    public let id: UInt32
+    public let x: Int
+    public let y: Int
+    public let width: Int
+    public let height: Int
+    public let pixelWidth: Int
+    public let pixelHeight: Int
+    public let refreshRate: Double
+    public let rotation: Double
+
+    public init(id: UInt32, x: Int, y: Int, width: Int, height: Int, pixelWidth: Int, pixelHeight: Int, refreshRate: Double, rotation: Double) {
+        self.id = id
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.refreshRate = refreshRate
+        self.rotation = rotation
+    }
+}
+
+/// Studio must leave the owner's monitors exactly as it found them. This says what's different from how they were just
+/// before it turned on.
+public enum StudioDisplayGuard {
+    public enum Difference: Equatable, Sendable {
+        case moved(UInt32)
+        /// Resolution, scale or refresh rate.
+        case modeChanged(UInt32)
+        case rotated(UInt32)
+    }
+
+    /// A monitor that's been unplugged isn't a difference: there's nothing to put back.
+    public static func differences(baseline: [RealDisplayState], now: [RealDisplayState]) -> [Difference] {
+        baseline.flatMap { before -> [Difference] in
+            guard let current = now.first(where: { $0.id == before.id }) else { return [] }
+            var found: [Difference] = []
+            if current.x != before.x || current.y != before.y { found.append(.moved(before.id)) }
+            if current.width != before.width || current.height != before.height || current.pixelWidth != before.pixelWidth
+                || current.pixelHeight != before.pixelHeight || abs(current.refreshRate - before.refreshRate) >= 0.5 { found.append(.modeChanged(before.id)) }
+            if current.rotation != before.rotation { found.append(.rotated(before.id)) }
+            return found
+        }
+    }
+}
+
 /// Who holds which tile. A bot has at most one; assigning it again moves it.
 public struct StudioRoster: Equatable, Sendable {
     public private(set) var bots: [StudioTileID: String] = [:]

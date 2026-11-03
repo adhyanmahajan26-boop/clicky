@@ -7,10 +7,13 @@
 //  and closes it. It never clicks, types or runs anything in the page, and never touches cookies or passwords, so a page
 //  can't talk it into doing anything: the words still go to a helper with no tools, as data.
 //
-//  Chrome won't take a debugging port on its default profile, and starting it with arguments makes a second process that
-//  takes the front (from a test profile, a second, empty Chrome). So Theo asks the running Chrome for a window with an
-//  Apple Event, which doesn't take the front. That permission is only ever asked for from a button in Settings: research
-//  checks it silently, and without it reads pages the plain way. Reading uses Accessibility, which Theo already has.
+//  Chrome won't take a debugging port on its default profile, and starting it with arguments makes a second process (from a
+//  test profile, a second, empty Chrome). So Theo asks the running Chrome for a window with an Apple Event. That permission is
+//  only ever asked for from a button in Settings: research checks it silently, and without it reads pages the plain way.
+//  Reading uses Accessibility, which Theo already has.
+//
+//  Chrome brings itself to the front when it's told to open or navigate, and nothing in Apple Events stops it. So this waits
+//  until the owner has paused, and hands the front straight back. It's a blink, not nothing, and only for blocked pages.
 //
 //  Sites see an ordinary signed-in person because that's what the browser is. Nothing here hides anything or gets past a
 //  human check: that's a card in Researcher's chat, and the page waits for the owner.
@@ -58,6 +61,7 @@ final class BrowserResearcher: ObservableObject {
     private var waiters: [String: CheckedContinuation<StudioTileID?, Never>] = [:]
     private var answers: [String: CheckedContinuation<OwnerAnswer, Never>] = [:]
     private var windows: [String: OpenWindow] = [:]
+    private var tiles: [String: StudioTileID] = [:]
     private var isOpening = false
 
     // Counted for tests. Never the words.
@@ -117,7 +121,8 @@ final class BrowserResearcher: ObservableObject {
         }
         let studio = StudioController.shared
         studio.holdForResearch(tile, botID: researcherID, note: "Opening \(host)", app: chromeApp)
-        defer { finishTile(id, tile: tile) }
+        tiles[id] = tile
+        defer { finishTile(id, tile: tile); tiles[id] = nil }
 
         guard let window = await openWindow(url, frame: frame) else { return .skipped("Chrome didn't open a window") }
         windows[id] = window
@@ -126,10 +131,12 @@ final class BrowserResearcher: ObservableObject {
             if windows[id] != nil { close(id) }
         }
         studio.noteResearch(tile, note: "Reading \(host)", app: chromeApp)
-        if let app = chromeApp { BackgroundWebTree.hold(app.processIdentifier, bundleIdentifier: Self.chromeBundleID) }
+        holdPageTree()
         await BackgroundWebTree.waitUntilBuilt()
+        await Self.waitForLoad(chromeID: window.chromeID)
 
         var page = await settledText(of: window.element)
+        if page.title == nil { page.title = Self.chromeTitle(of: window.chromeID) }
         if BrowserResearchPolicy.isHumanCheck(title: page.title, text: page.text) {
             studio.noteResearch(tile, note: "Needs you · \(host)", app: chromeApp)
             switch await askOwner(id: id, host: host, botID: researcherID) {
@@ -199,7 +206,10 @@ final class BrowserResearcher: ObservableObject {
         defer { isOpening = false }
         if chromeApp == nil, !(await startChromeQuietly()) { return nil }
         guard permission == .allowed, let app = chromeApp else { return nil }
+        guard await waitForOwnerPause() else { return nil }
         let frontBefore = NSWorkspace.shared.frontmostApplication
+        let handBack = handFrontBack(to: frontBefore)
+        defer { NSWorkspace.shared.notificationCenter.removeObserver(handBack) }
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let top = Int(primaryHeight - frame.maxY), left = Int(frame.minX)
         let address = url.absoluteString.replacingOccurrences(of: "\\", with: "%5C").replacingOccurrences(of: "\"", with: "%22")
@@ -222,11 +232,8 @@ final class BrowserResearcher: ObservableObject {
             print("⚠️ Research: Chrome didn't make a window (\(failure?[NSAppleScript.errorNumber] ?? "?"))")
             return nil
         }
-        // Chrome shouldn't take the front this way. If it ever does, it goes straight back, and the count shows it.
-        if let frontBefore, frontBefore.bundleIdentifier != Self.chromeBundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.chromeBundleID {
-            focusSlips += 1
-            frontBefore.activate()
-        }
+        // Chrome can get there just after the script returns.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
         var found: AXUIElement?
         for _ in 0..<50 {
             found = Self.windows(of: app.processIdentifier).first { Self.isWindow($0, in: frame) }
@@ -241,6 +248,28 @@ final class BrowserResearcher: ObservableObject {
         }
         AXUIElementSetMessagingTimeout(found, 2)
         return OpenWindow(chromeID: chromeID, element: UncheckedAXElement(element: found))
+    }
+
+    /// Opening a window makes Chrome come forward, so it waits for a gap in the owner's typing and pointing. If they don't
+    /// pause, the page goes unread rather than interrupt them.
+    private func waitForOwnerPause() async -> Bool {
+        let deadline = Date().addingTimeInterval(BrowserResearchPolicy.secondsToWaitForAPause)
+        while Date() < deadline, !Task.isCancelled {
+            let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+            if BrowserResearchPolicy.ownerHasPaused(secondsSinceInput: seconds) { return true }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return false
+    }
+
+    /// While a window opens: the moment Chrome comes forward, the front goes back to whoever had it.
+    private func handFrontBack(to app: NSRunningApplication?) -> NSObjectProtocol {
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let activated = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard activated?.bundleIdentifier == Self.chromeBundleID, let app, app.bundleIdentifier != Self.chromeBundleID else { return }
+            app.activate()
+            MainActor.assumeIsolated { self?.focusSlips += 1 }
+        }
     }
 
     private static func closeInChrome(_ chromeID: Int) {
@@ -269,6 +298,35 @@ final class BrowserResearcher: ObservableObject {
     }
 
     // MARK: Reading
+
+    /// Chrome only shows a page to Accessibility with this on.
+    private func holdPageTree() {
+        if let app = chromeApp { BackgroundWebTree.hold(app.processIdentifier, bundleIdentifier: Self.chromeBundleID, evenInFront: true) }
+    }
+
+    /// The tab's title, from Chrome itself: a very thin page can show nothing to Accessibility. Only a question: it doesn't bring Chrome forward.
+    private static func chromeTitle(of chromeID: Int) -> String? {
+        var failure: NSDictionary?
+        return NSAppleScript(source: """
+        with timeout of 3 seconds
+            tell application id "\(chromeBundleID)" to return title of active tab of (first window whose id is \(chromeID))
+        end timeout
+        """)?.executeAndReturnError(&failure).stringValue
+    }
+
+    private static func waitForLoad(chromeID: Int) async {
+        let script = NSAppleScript(source: """
+        with timeout of 3 seconds
+            tell application id "\(chromeBundleID)" to return loading of active tab of (first window whose id is \(chromeID))
+        end timeout
+        """)
+        for _ in 0..<30 {
+            var failure: NSDictionary?
+            let result = script?.executeAndReturnError(&failure)
+            if failure != nil || result?.booleanValue == false { return }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
 
     /// Walks the page until its text stops growing: a page in a real browser arrives in pieces.
     private func settledText(of window: UncheckedAXElement) async -> (title: String?, text: String) {
@@ -315,6 +373,12 @@ final class BrowserResearcher: ObservableObject {
     func answer(_ id: String, with answer: OwnerAnswer) {
         guard let continuation = answers.removeValue(forKey: id) else { return }
         continuation.resume(returning: answer)
+    }
+
+    /// The panel's "Show on my screen" and "Send back".
+    func moveWindow(on tile: StudioTileID, to frame: NSRect) {
+        guard let id = tiles.first(where: { $0.value == tile })?.key, let window = windows[id]?.element else { return }
+        _ = StudioController.place(window.element, in: frame)
     }
 
     /// The owner clicked to see it: the window comes to their monitor, in front. Only ever from that click.
@@ -366,8 +430,9 @@ final class BrowserResearcher: ObservableObject {
         windows[id] = window
         pagesOpened += 1
         defer { close(id) }
-        if let app = chromeApp { BackgroundWebTree.hold(app.processIdentifier, bundleIdentifier: Self.chromeBundleID) }
+        holdPageTree()
         await BackgroundWebTree.waitUntilBuilt()
+        await Self.waitForLoad(chromeID: window.chromeID)
         _ = await settledText(of: window.element)
         let labels = await Task.detached(priority: .userInitiated) { Self.labels(in: window.element.element) }.value
         let lowered = labels.map { $0.lowercased() }

@@ -45,9 +45,22 @@ final class StudioController: ObservableObject {
         static let fps = "theo.studio.previewFPS"
         static let capture = "theo.studio.liveCapture"
         static let researchBrowser = "theo.studio.researchBrowser"
+        static let panelVisible = "theo.studio.panelVisible"
     }
 
-    @Published var panelVisible = false { didSet { refreshPreviewing() } }
+    /// Remembered, so the panel is where it was left.
+    @Published var panelVisible = UserDefaults.standard.bool(forKey: Keys.panelVisible) {
+        didSet {
+            UserDefaults.standard.set(panelVisible, forKey: Keys.panelVisible)
+            refreshPreviewing()
+        }
+    }
+    /// The tile the owner is hovering: it gets a faster picture.
+    @Published var hoveredTile: StudioTileID?
+    /// The tile opened large in the panel.
+    @Published var expandedTile: StudioTileID?
+    /// Tiles whose window has been pulled onto the owner's monitor.
+    @Published private(set) var pulledOut: Set<StudioTileID> = []
     @Published private(set) var isOn = false
     @Published private(set) var displays: [VirtualDisplay] = []
     @Published private(set) var roster = StudioRoster()
@@ -68,7 +81,13 @@ final class StudioController: ObservableObject {
     private var frameCountStart = Date()
     private var screensObserver: NSObjectProtocol?
     private var frameIsCapturing = false
+    private var lastFrames: [StudioTileID: Double] = [:]
     private var isStarting = false
+    /// The owner's monitors just before Studio turned on, with the modes to put back if macOS ever changes one.
+    private var monitorBaseline: [RealDisplayState] = []
+    private var monitorModes: [UInt32: CGDisplayMode] = [:]
+    /// What the last check of the owner's monitors found, for tests.
+    private(set) var lastMonitorCheck = "none yet"
 
     private init() {
         screensObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -152,6 +171,7 @@ final class StudioController: ObservableObject {
         isStarting = true
         problem = nil
         let realOrigins = Self.activeDisplayBounds()
+        rememberMonitors()
         var made: [VirtualDisplay] = []
         for index in 0..<screenCount {
             guard let display = VirtualDisplay(name: "Theo Studio \(index + 1)", serial: UInt32(0x7400 + index), size: StudioLayout.screenSize) else {
@@ -193,10 +213,81 @@ final class StudioController: ObservableObject {
         let moved = realOrigins.contains { now[$0.key]?.origin != $0.value.origin }
         let hidden = made.map { CGDisplayBounds($0.id) }
         let reachable = hidden.contains { box in realOrigins.values.contains { StudioLayout.shareAnEdge($0, box) } }
+        checkMonitors(after: "on")
         if moved {
             problem = "macOS moved one of your monitors to make room. Turn this off to put it back."
         } else if reachable {
             problem = "macOS put a hidden screen beside one of your monitors, so the pointer could wander onto it."
+        }
+    }
+
+    // MARK: Leaving the owner's monitors exactly as they were
+
+    private static func realMonitors() -> [(state: RealDisplayState, mode: CGDisplayMode)] {
+        activeDisplayBounds().compactMap { id, box in
+            guard let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+            let state = RealDisplayState(id: id, x: Int(box.minX), y: Int(box.minY), width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth,
+                                         pixelHeight: mode.pixelHeight, refreshRate: mode.refreshRate, rotation: CGDisplayRotation(id))
+            return (state, mode)
+        }
+    }
+
+    private func rememberMonitors() {
+        let monitors = Self.realMonitors()
+        monitorBaseline = monitors.map(\.state)
+        monitorModes = Dictionary(uniqueKeysWithValues: monitors.map { ($0.state.id, $0.mode) })
+    }
+
+    private func monitorDifferences() -> [StudioDisplayGuard.Difference] {
+        StudioDisplayGuard.differences(baseline: monitorBaseline, now: Self.realMonitors().map(\.state))
+    }
+
+    /// Compares the monitors with how they were. Anything different is logged and put back. Only ever until logout, and only
+    /// what actually differs, so a monitor that's right is never touched.
+    @discardableResult
+    private func checkMonitors(after moment: String) -> Bool {
+        let differences = monitorDifferences()
+        guard !differences.isEmpty else {
+            lastMonitorCheck = "\(moment): exact"
+            return true
+        }
+        print("⚠️ Studio: monitors differ after \(moment): \(differences). Putting them back.")
+        reapply(differences)
+        let remaining = monitorDifferences()
+        lastMonitorCheck = "\(moment): differed (\(differences.count)), \(remaining.isEmpty ? "put back" : "still \(remaining.count) off")"
+        if !remaining.isEmpty {
+            print("⚠️ Studio: monitors still differ after \(moment): \(remaining)")
+            problem = "A monitor didn't go back to how it was. Check it in System Settings › Displays."
+        }
+        return remaining.isEmpty
+    }
+
+    private func reapply(_ differences: [StudioDisplayGuard.Difference]) {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        for difference in differences {
+            switch difference {
+            case .moved(let id):
+                if let before = monitorBaseline.first(where: { $0.id == id }) { CGConfigureDisplayOrigin(config, id, Int32(before.x), Int32(before.y)) }
+            case .modeChanged(let id):
+                if let mode = monitorModes[id] { CGConfigureDisplayWithDisplayMode(config, id, mode, nil) }
+            case .rotated:
+                break  // Nothing in this API can rotate a monitor. It's logged and reported.
+            }
+        }
+        if CGCompleteDisplayConfiguration(config, .forSession) != .success { CGCancelDisplayConfiguration(config) }
+    }
+
+    /// macOS puts a monitor it moved back by itself a moment after a hidden screen goes, so this waits for that first.
+    private func settleMonitors(after moment: String) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, !self.isOn, !self.isStarting else { return }
+                if self.monitorDifferences().isEmpty { break }
+            }
+            guard let self, !self.isOn, !self.isStarting else { return }
+            self.checkMonitors(after: moment)
         }
     }
 
@@ -222,10 +313,17 @@ final class StudioController: ObservableObject {
         thumbnails = [:]
         isOn = false
         refreshPreviewing()
+        settleMonitors(after: "off")
     }
 
-    /// Theo quitting.
-    func shutDown() { stop() }
+    /// Theo quitting: there's no later, so it waits here for macOS to settle, then checks.
+    func shutDown() {
+        guard isOn else { return }
+        stop()
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, !monitorDifferences().isEmpty { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        checkMonitors(after: "quit")
+    }
 
     /// Screens that really exist right now, by tile, in top-left global coordinates for the meter and tests.
     func displayBounds() -> [[String: Double]] {
@@ -324,11 +422,17 @@ final class StudioController: ObservableObject {
         tileNotes[tile] = nil
         apps[tile] = nil
         thumbnails[tile] = nil
+        lastFrames[tile] = nil
+        pulledOut.remove(tile)
+        if expandedTile == tile { expandedTile = nil }
         roster.clear(tile)
     }
 
     func clear(_ tile: StudioTileID) {
         tileNotes[tile] = nil
+        lastFrames[tile] = nil
+        pulledOut.remove(tile)
+        if expandedTile == tile { expandedTile = nil }
         windows[tile]?.close()
         windows[tile] = nil
         apps[tile] = nil
@@ -357,7 +461,8 @@ final class StudioController: ObservableObject {
     private func refreshPreviewing(restart: Bool = false) {
         if restart { previewTimer?.invalidate(); previewTimer = nil }
         if shouldPreview, previewTimer == nil {
-            let timer = Timer(timeInterval: 1 / Double(previewFPS), repeats: true) { [weak self] _ in
+            // The clock runs at the fastest any tile may go; each tile is only drawn when it's due.
+            let timer = Timer(timeInterval: 1 / Double(StudioPreviewSchedule.focusedFPS), repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.previewTick() }
             }
             RunLoop.main.add(timer, forMode: .common)
@@ -382,10 +487,17 @@ final class StudioController: ObservableObject {
     }
 
     private func previewTick() {
-        for (tile, window) in windows where window.isVisible {
-            if let image = Self.snapshot(of: window) { thumbnails[tile] = image }
+        let now = ProcessInfo.processInfo.systemUptime
+        let focused = expandedTile ?? hoveredTile
+        var drew = false
+        for (tile, window) in windows where window.isVisible && StudioPreviewSchedule.isDue(tile, last: lastFrames[tile], now: now, focused: focused, base: previewFPS) {
+            if let image = Self.snapshot(of: window) {
+                thumbnails[tile] = image
+                lastFrames[tile] = now
+                drew = true
+            }
         }
-        framesThisSecond += 1
+        if drew { framesThisSecond += 1 }
         let elapsed = Date().timeIntervalSince(frameCountStart)
         if elapsed >= 2 {
             measuredFPS = Double(framesThisSecond) / elapsed
@@ -393,7 +505,10 @@ final class StudioController: ObservableObject {
             frameCountStart = Date()
         }
         // Another app's window on a tile, and only with Live capture on and the permission already there.
-        if liveCapture, hasCapturePermission, !apps.isEmpty, !frameIsCapturing { captureAppTiles() }
+        if liveCapture, hasCapturePermission, !apps.isEmpty, !frameIsCapturing {
+            let due = apps.keys.filter { StudioPreviewSchedule.isDue($0, last: lastFrames[$0], now: now, focused: focused, base: previewFPS) }
+            if !due.isEmpty { captureAppTiles(due, at: now) }
+        }
     }
 
     /// A window of Theo's own drawn into a small image. No screen capture is involved.
@@ -410,30 +525,61 @@ final class StudioController: ObservableObject {
         }
     }
 
-    private func captureAppTiles() {
+    /// One picture of each due tile's window, and of that window alone. It refuses anything not wholly on a hidden screen.
+    private func captureAppTiles(_ tiles: [StudioTileID], at now: Double) {
         frameIsCapturing = true
-        let wanted = Set(displays.map(\.id))
-        let tiles = Array(apps.keys)
+        let hidden = displays.map { CGDisplayBounds($0.id) }
+        let perScreen = tilesPerScreen
+        let focused = expandedTile ?? hoveredTile
+        let allowed = Set(apps.values.map(\.processIdentifier))
         Task { [weak self] in
             defer { self?.frameIsCapturing = false }
-            guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return }
-            for tile in tiles {
-                guard let self, self.displays.indices.contains(tile.screen) else { continue }
-                let id = self.displays[tile.screen].id
-                // Only Theo's own hidden displays, never a real monitor.
-                guard wanted.contains(id), let display = content.displays.first(where: { $0.displayID == id }) else { continue }
+            guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else { return }
+            for window in content.windows {
+                guard let app = window.owningApplication, allowed.contains(app.processID),
+                      StudioPreviewSchedule.mayCapture(window: window.frame, hiddenScreens: hidden),
+                      window.frame.width > 200, window.frame.height > 200,
+                      let tile = StudioPreviewSchedule.tile(of: window.frame, hiddenScreens: hidden, tilesPerScreen: perScreen), tiles.contains(tile) else { continue }
                 let configuration = SCStreamConfiguration()
-                configuration.width = 720
-                configuration.height = 450
+                let width = tile == focused ? 720 : 360
+                configuration.width = width
+                configuration.height = Int(CGFloat(width) * window.frame.height / window.frame.width)
                 configuration.showsCursor = false
-                let local = StudioLayout.tileFrame(index: tile.tile, tilesPerScreen: self.tilesPerScreen)
-                configuration.sourceRect = local
-                let filter = SCContentFilter(display: display, excludingWindows: [])
-                if let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) {
+                let filter = SCContentFilter(desktopIndependentWindow: window)
+                if let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration), let self {
                     self.thumbnails[tile] = image
+                    self.lastFrames[tile] = now
+                    self.framesThisSecond += 1
                 }
             }
         }
+    }
+
+    // MARK: Bringing a tile's window to the owner
+
+    /// Pulls a tile's window onto the owner's own monitor, without taking the front from what they're doing.
+    func showOnMyScreen(_ tile: StudioTileID) {
+        guard isOn, let screen = NSScreen.ownerScreens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.ownerScreens.first else { return }
+        let area = screen.visibleFrame
+        let size = NSSize(width: min(1100, area.width - 80), height: min(800, area.height - 80))
+        let frame = NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height)
+        if let window = windows[tile] {
+            window.setFrame(frame, display: true)
+            window.orderFrontRegardless()
+        } else {
+            BrowserResearcher.shared.moveWindow(on: tile, to: frame)
+        }
+        pulledOut.insert(tile)
+    }
+
+    func sendBack(_ tile: StudioTileID) {
+        guard let frame = frame(of: tile) else { return }
+        if let window = windows[tile] {
+            window.setFrame(frame, display: false)
+        } else {
+            BrowserResearcher.shared.moveWindow(on: tile, to: frame)
+        }
+        pulledOut.remove(tile)
     }
 
     // MARK: The meter
