@@ -254,6 +254,8 @@ final class BrowserResearcher: ObservableObject {
         }
         // Chrome can get there just after the script returns.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // Later than that, or if the first try was refused, this keeps checking, and stops if the owner clicks or types.
+        BackgroundInput.FrontmostSnapshot(application: frontBefore).restore(ifStolenBy: [app.processIdentifier])
         var found: AXUIElement?
         for _ in 0..<50 {
             found = Self.windows(of: app.processIdentifier).first { Self.isWindow($0, in: frame) }
@@ -287,7 +289,8 @@ final class BrowserResearcher: ObservableObject {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             let activated = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             guard activated?.bundleIdentifier == Self.chromeBundleID, let app, app.bundleIdentifier != Self.chromeBundleID else { return }
-            app.activate()
+            // macOS can refuse this from an app in the background, but not from a fresh process.
+            if !app.activate(options: []) { BackgroundInput.bringForwardFromHelper(app.processIdentifier) }
             MainActor.assumeIsolated { self?.focusSlips += 1 }
         }
     }

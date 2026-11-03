@@ -231,11 +231,23 @@ final class ResearchController: CompanionActivitySource {
     private func runAgents(topic: String, question: String, parentAgentID: String, allowsLocalHostForTests: Bool, model: String, jobID: String?) async -> [Report] {
         let roles = ResearchAgentSettings.roles
         self.lastStatus = ["state": "reading", "topic": topic, "agents": roles.map(\.title)]
-        let results = await withTaskGroup(of: (ResearchRole, [URL]).self) { group -> [(role: ResearchRole, urls: [URL])] in
-            for role in roles { group.addTask { (role, await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)) } }
-            var found: [ResearchRole: [URL]] = [:]
-            for await (role, urls) in group { found[role] = urls }
-            return roles.map { (role: $0, urls: found[$0] ?? []) }
+        // One search at a time: the search page turns away several at once.
+        var results: [(role: ResearchRole, urls: [URL])] = []
+        var plainResults: [URL]?
+        for role in roles {
+            if Task.isCancelled { return [] }
+            if !results.isEmpty { try? await Task.sleep(nanoseconds: 800_000_000) }
+            var urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)
+            if urls.isEmpty {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)
+            }
+            // Still nothing for this angle: the agent works from the plain question.
+            if urls.isEmpty {
+                if plainResults == nil { plainResults = await Self.searchResults(for: topic, maximum: 8) }
+                urls = plainResults ?? []
+            }
+            results.append((role: role, urls: urls))
         }
         let plan = ResearchAgentPlan.pages(from: results).filter { !$0.urls.isEmpty }
         guard !plan.isEmpty else { return [] }
