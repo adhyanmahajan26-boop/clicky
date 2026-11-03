@@ -90,6 +90,7 @@ final class ComposerDictation: ObservableObject {
     private(set) var testPeakLevel: CGFloat = 0
     private(set) var testMicOpened = false
     var testPermissions: (microphone: ComposerDictationPermission?, speech: ComposerDictationPermission?) = (nil, nil)
+    var testNoUsableMicrophone = false
 
     var isActive: Bool { machine.isActive }
     func isActive(for id: String) -> Bool { machine.isActive && ownerID == id }
@@ -159,6 +160,19 @@ final class ComposerDictation: ObservableObject {
         live.draft = ComposerDictationDraft(text: text, selection: selection(in: text))
         live.levels = Array(repeating: 0, count: ComposerDictationLive.barCount)
         live.seconds = 0
+        // The mic comes first: with none to open, Clicky's voice and the wake listener are left alone. The test profile
+        // has no mic: its sound comes from `feed`.
+        capture.pretendsNoUsableMicrophone = testNoUsableMicrophone
+        if !TheoProfile.isTest || testNoUsableMicrophone {
+            do {
+                try capture.startMicrophone()
+                testMicOpened = true
+            } catch {
+                capture.cancel()
+                refuse(ComposerDictationProblem(micStartError: error))
+                return
+            }
+        }
         startedAt = Date()
         silence = ComposerSilenceRule(seconds: ComposerDictationSettings.autoStops ? ComposerDictationSettings.silenceSeconds : nil,
                                       startedAt: startedAt.timeIntervalSinceReferenceDate)
@@ -169,20 +183,6 @@ final class ComposerDictation: ObservableObject {
         manager.speechOutputClient.stopVoicesNow()
         machine.handle(.start)
         manager.dictationController.warmCleanerForComposer()
-        // The test profile has no mic: its sound comes from `feed`.
-        if !TheoProfile.isTest {
-            do {
-                try capture.startMicrophone()
-                testMicOpened = true
-            } catch {
-                capture.cancel()
-                self.capture = nil
-                manager.speechOutputClient.audioEngineHub.releaseMicrophone(for: .dictation)
-                machine.handle(.failed(.microphoneFailed))
-                hideNoteSoon()
-                return
-            }
-        }
         startTicker()
     }
 

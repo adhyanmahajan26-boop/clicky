@@ -207,6 +207,27 @@ final class ComposerDictationTests: XCTestCase {
         XCTAssertTrue(ComposerDictationProblem.nothingHeard.isBrief)
     }
 
+    func testNoUsableMicrophoneIsItsOwnNote() {
+        struct OtherError: Error {}
+        XCTAssertEqual(ComposerDictationProblem(micStartError: DictationMicError.noUsableMicrophone), .noUsableMicrophone)
+        XCTAssertEqual(ComposerDictationProblem(micStartError: OtherError()), .microphoneFailed)
+        let problem = ComposerDictationProblem.noUsableMicrophone
+        XCTAssertEqual(problem.message, "No usable microphone.")
+        // Settings can't fix it, and it stays until it's dismissed.
+        XCTAssertFalse(problem.needsPermission)
+        XCTAssertFalse(problem.isBrief)
+    }
+
+    func testNoUsableMicrophoneNeverReachesListening() {
+        var machine = ComposerDictationMachine()
+        XCTAssertTrue(machine.handle(.refused(.noUsableMicrophone)))
+        XCTAssertEqual(machine.phase, .problem(.noUsableMicrophone))
+        XCTAssertFalse(machine.isActive)
+        XCTAssertFalse(machine.handle(.stop))
+        XCTAssertTrue(machine.handle(.dismiss))
+        XCTAssertEqual(machine.phase, .idle)
+    }
+
     // MARK: Silence
 
     func testStopsThreeSecondsAfterTheLastSpeech() {

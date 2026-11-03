@@ -97,16 +97,28 @@ public struct ComposerDictationDraft: Equatable, Sendable {
     public var cursorAfterWords: Int { ((leading + spoken) as NSString).length }
 }
 
+/// Why the microphone couldn't open.
+public enum DictationMicError: Error, Equatable, Sendable {
+    /// No real input device, or one with an empty format. Tapping it would raise an exception, so it's never tapped.
+    case noUsableMicrophone
+}
+
 /// Why dictation isn't running or stopped short. The note in the composer says so.
 public enum ComposerDictationProblem: Equatable, Sendable {
     case microphoneDenied, microphoneUndecided, speechDenied, speechUndecided
-    case microphoneFailed, noRecognizer, nothingHeard, busy
+    case microphoneFailed, noUsableMicrophone, noRecognizer, nothingHeard, busy
+
+    /// What to tell the owner when the microphone wouldn't open.
+    public init(micStartError error: Error) {
+        self = (error as? DictationMicError) == .noUsableMicrophone ? .noUsableMicrophone : .microphoneFailed
+    }
 
     public var message: String {
         switch self {
         case .microphoneDenied, .microphoneUndecided: return "Theo needs the microphone to dictate."
         case .speechDenied, .speechUndecided: return "Theo needs Speech Recognition to dictate."
         case .microphoneFailed: return "The microphone didn't start."
+        case .noUsableMicrophone: return "No usable microphone."
         case .noRecognizer: return "This Mac has no recognizer for that language."
         case .nothingHeard: return "Didn't catch that."
         case .busy: return "The microphone is in use by a call or by Clicky."

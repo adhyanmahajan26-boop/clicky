@@ -22,6 +22,7 @@
 //
 
 import AppKit
+import AVFoundation
 import ClickyCore
 import SwiftUI
 
@@ -644,7 +645,7 @@ extension TheoUIDriver {
             manager.dictationController.showForTest(state: command["state"] as? String ?? "listening")
             settle { respond(true, ["window": manager.dictationController.pill.windowNumber as Any? ?? NSNull()], nil) }
         case "uiComposerDictation":
-            // {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions, bot, path, realTime, stopAtEnd, key, up, at, microphone, speech}
+            // {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions|noMic, bot, path, realTime, stopAtEnd, key, up, at, microphone, speech}
             let dictation = ComposerDictation.shared
             let owner = command["bot"] as? String ?? dictation.ownerID ?? BotsStore.shared.primary?.id ?? ""
             switch command["action"] as? String ?? "state" {
@@ -664,6 +665,21 @@ extension TheoUIDriver {
                 return true
             case "cursor":
                 guard dictation.testMoveCursor(command["at"] as? Int ?? 0) else { respond(false, nil, "The field isn't focused."); return true }
+            case "readMicFormat":
+                // What the no-mic guard would say on this Mac. Reads the format only: no tap, nothing started, and it
+                // only looks if macOS has already said yes, so it can't bring up a prompt.
+                guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+                    respond(false, nil, "The microphone isn't already allowed, so this doesn't look.")
+                    return true
+                }
+                let engine = AVAudioEngine()
+                let node = engine.inputNode
+                respond(true, ["usable": node.hasUsableMicFormat, "hardwareRate": node.inputFormat(forBus: 0).sampleRate,
+                               "hardwareChannels": node.inputFormat(forBus: 0).channelCount, "engineRunning": engine.isRunning], nil)
+                return true
+            case "noMic":
+                // Runs the real no-usable-mic path, stopping before any tap. Nothing is opened.
+                dictation.testNoUsableMicrophone = command["on"] as? Bool ?? true
             case "permissions":
                 dictation.testPermissions = ((command["microphone"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)),
                                              (command["speech"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)))

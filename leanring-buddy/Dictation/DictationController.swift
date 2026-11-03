@@ -144,6 +144,9 @@ final class DictationCapture {
     private var appleFinished: CheckedContinuation<Void, Never>?
     private(set) var appleText = ""
     private(set) var appleError: String?
+    private var hasTap = false
+    /// For tests: behaves as a Mac with no usable mic, with nothing opened.
+    var pretendsNoUsableMicrophone = false
     let tape = DictationTape()
     var onLevel: ((CGFloat) -> Void)?
     /// The recognizer's words so far, each time they change.
@@ -190,11 +193,13 @@ final class DictationCapture {
         appleFinished = nil
     }
 
-    /// Opens the microphone.
+    /// Opens the microphone. With no usable mic it throws before touching a tap: a tap on an empty format raises an
+    /// Objective-C exception, and the app crashes seconds later.
     func startMicrophone() throws {
+        guard !pretendsNoUsableMicrophone, engine.inputNode.hasUsableMicFormat else { throw DictationMicError.noUsableMicrophone }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.removeTap(onBus: 0)
+        hasTap = true
         let request = self.request
         let tape = self.tape
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -207,6 +212,13 @@ final class DictationCapture {
         try engine.start()
     }
 
+    private func closeMicrophone() {
+        guard hasTap else { return }
+        hasTap = false
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
     /// Takes one buffer from a test file, in place of the mic.
     func feed(_ buffer: AVAudioPCMBuffer) {
         request?.append(buffer)
@@ -216,8 +228,7 @@ final class DictationCapture {
 
     /// The mic closes; Apple gets a moment to finish its last words.
     func finish() async {
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        closeMicrophone()
         guard let request else { return }
         request.endAudio()
         await withTaskGroup(of: Void.self) { group in
@@ -240,8 +251,7 @@ final class DictationCapture {
     }
 
     func cancel() {
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        closeMicrophone()
         task?.cancel()
         task = nil
         request = nil
@@ -375,7 +385,7 @@ final class DictationController: ObservableObject {
             hub.releaseMicrophone(for: .dictation)
             capture.cancel()
             self.capture = nil
-            showFailure("The microphone didn't start")
+            showFailure(error is DictationMicError ? "No usable microphone" : "The microphone didn't start")
         }
     }
 
