@@ -163,7 +163,7 @@ final class StudioController: ObservableObject {
     }
 
     var previewFPS: Int {
-        get { let value = UserDefaults.standard.integer(forKey: Keys.fps); return value > 0 ? value : 2 }
+        get { let value = UserDefaults.standard.integer(forKey: Keys.fps); return value > 0 ? value : StudioPreviewSchedule.defaultFPS }
         set {
             UserDefaults.standard.set(min(5, max(1, newValue)), forKey: Keys.fps)
             objectWillChange.send()
@@ -249,6 +249,7 @@ final class StudioController: ObservableObject {
             self.place(made, realOrigins: realOrigins)
             self.roster.trim(screens: self.screenCount, tilesPerScreen: self.tilesPerScreen)
             self.refreshPreviewing()
+            StudioActivity.shared.start()
         }
     }
 
@@ -352,6 +353,7 @@ final class StudioController: ObservableObject {
     private func stop() {
         guard isOn else { return }
         BrowserResearcher.shared.closeEverything()
+        StudioActivity.shared.stop()
         for tile in Array(windows.keys) { clear(tile) }
         apps = [:]
         tileNotes = [:]

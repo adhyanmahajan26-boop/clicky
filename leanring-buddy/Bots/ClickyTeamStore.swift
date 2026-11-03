@@ -215,7 +215,7 @@ extension BotsStore {
             if let worker {
                 let session = self.conversation(worker.id).sessions[worker.id]
                 let prompt = session == nil ? BotPrompts.firstMessage(bot: worker, team: self.bots, text: plan.prompt) : plan.prompt
-                self.reply(bot: worker, in: worker.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
+                self.reply(bot: worker, in: worker.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false, mayUseScreen: ownerWords != nil) { [weak self] answer in
                     self?.jobAnswered(job.id, duty: duty, answer: answer, ownerWords: ownerWords, memoryKind: plan.memoryKind, room: worker.id)
                 }
             } else {

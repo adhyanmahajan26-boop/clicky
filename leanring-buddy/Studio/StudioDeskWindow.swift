@@ -33,10 +33,12 @@ private struct StudioDeskView: View {
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var bot: NativeBot? { store.bot(botID) }
+    private var run: T3Run? { store.liveRun(of: botID) }
     private var lines: [String] {
-        store.conversation(botID).messages.suffix(14).flatMap { message in
+        let live = (store.replying[botID] ?? "").split(whereSeparator: \.isNewline).suffix(10).map(String.init)
+        return store.conversation(botID).messages.suffix(live.isEmpty ? 14 : 6).flatMap { message in
             message.text.split(whereSeparator: \.isNewline).prefix(4).map { (message.author == "user" ? "> " : "") + String($0) }
-        }
+        } + live
     }
 
     var body: some View {
@@ -52,6 +54,18 @@ private struct StudioDeskView: View {
             }
             .padding(24)
             Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+            if let run {
+                // A mirror of the run's card. Its terminal stays on the owner's machine.
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(run.title).font(.system(size: 28, weight: .semibold)).foregroundColor(.white).lineLimit(2)
+                    RunStepBar(fills: RunSteps.fills(phase: run.phase, stage: run.stage), stopping: run.stoppedByOwner == true)
+                    if let activity = run.activity, !activity.isEmpty {
+                        Text(activity).font(.system(size: 22, design: .monospaced)).foregroundColor(.white.opacity(0.75)).lineLimit(4)
+                    }
+                }
+                .padding(24)
+                Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+            }
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text(line).font(.system(size: 24, design: .monospaced)).foregroundColor(line.hasPrefix(">") ? Color(hex: 0x82AAFF) : Color(hex: 0xCFCFCF)).lineLimit(1)

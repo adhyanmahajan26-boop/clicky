@@ -39,14 +39,14 @@ final class VirtualDisplay {
         guard let blankMode = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(), blankMode.responds(to: initMode) else { return nil }
         typealias ModeInit = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>
         let makeMode = unsafeBitCast(blankMode.method(for: initMode), to: ModeInit.self)
-        var mode = makeMode(blankMode, initMode, UInt(size.width), UInt(size.height), 30).takeRetainedValue()
+        var mode = makeMode(blankMode, initMode, UInt(size.width), UInt(size.height), 60).takeRetainedValue()
         // Macs drop real monitors out of HDR while a plain virtual display exists. Modes can name a transfer function, which
         // may be the way round that. Test profile only, until it's been tried.
         if TheoProfile.isTest, let wanted = UserDefaults.standard.object(forKey: "test.studio.transferFunction") as? Int {
             let initHDR = NSSelectorFromString("initWithWidth:height:refreshRate:transferFunction:")
             if let blank = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(), blank.responds(to: initHDR) {
                 typealias ModeInitHDR = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double, UInt32) -> Unmanaged<AnyObject>
-                mode = unsafeBitCast(blank.method(for: initHDR), to: ModeInitHDR.self)(blank, initHDR, UInt32(size.width), UInt32(size.height), 30, UInt32(wanted)).takeRetainedValue()
+                mode = unsafeBitCast(blank.method(for: initHDR), to: ModeInitHDR.self)(blank, initHDR, UInt32(size.width), UInt32(size.height), 60, UInt32(wanted)).takeRetainedValue()
             }
         }
 

@@ -152,7 +152,7 @@ public struct StudioRemoteView: Codable, Equatable, Sendable {
 
 /// Live views in the panel: when each tile gets a new picture, and what may ever be captured.
 public enum StudioPreviewSchedule {
-    public static let defaultFPS = 2
+    public static let defaultFPS = 4
     /// The tile the owner is hovering or has opened.
     public static let focusedFPS = 10
 

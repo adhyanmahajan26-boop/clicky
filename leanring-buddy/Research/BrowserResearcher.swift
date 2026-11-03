@@ -186,6 +186,7 @@ final class BrowserResearcher: ObservableObject {
     private var ownTiles: [StudioTileID] { researcherID.map { StudioController.shared.freeTiles(for: $0) } ?? [] }
 
     private func acquireTile(_ id: String) async -> StudioTileID? {
+        StudioActivity.shared.makeRoomForResearch()
         if let tile = queue.request(id, free: ownTiles) { return tile }
         return await withCheckedContinuation { continuation in
             waiters[id] = continuation
@@ -564,6 +565,8 @@ enum ResearchAgentSettings {
     static let countKey = "v3.research.agentsPerQuestion"
     static func roleKey(_ role: ResearchRole) -> String { "v3.research.role.\(role.rawValue)" }
 
+    static let pagesKey = "v3.research.pagesPerAgent"
+    static var pages: Int { UserDefaults.standard.object(forKey: pagesKey) as? Int ?? ResearchAgentPlan.defaultPages }
     static var count: Int { UserDefaults.standard.object(forKey: countKey) as? Int ?? ResearchAgentPlan.defaultCount }
     static func isOn(_ role: ResearchRole) -> Bool { UserDefaults.standard.object(forKey: roleKey(role)) as? Bool ?? true }
     static var roles: [ResearchRole] { ResearchAgentPlan.roles(enabled: Set(ResearchRole.allCases.filter(isOn)), count: count) }
@@ -572,11 +575,17 @@ enum ResearchAgentSettings {
 /// Settings › Studio: how many agents a question gets, and which jobs they can have.
 struct ResearchAgentSettingsSection: View {
     @AppStorage(ResearchAgentSettings.countKey) private var count = ResearchAgentPlan.defaultCount
+    @AppStorage(ResearchAgentSettings.pagesKey) private var pages = ResearchAgentPlan.defaultPages
 
     var body: some View {
         TheoSection(title: "Research agents", hint: "Each question is split between agents with different jobs, one tile each. Clicky merges what they find into one brief.") {
             SettingRow(title: "Research agents per question") {
                 HairlineSegments(options: ResearchAgentPlan.countRange.map { (String($0), String($0)) }, selection: Binding(get: { String(count) }, set: { count = Int($0) ?? ResearchAgentPlan.defaultCount }))
+                    .frame(width: 120)
+            }
+            RowDivider()
+            SettingRow(title: "Pages per agent", detail: "More pages take longer, and Chrome blinks to the front for each one.") {
+                HairlineSegments(options: ResearchAgentPlan.pageRange.map { (String($0), String($0)) }, selection: Binding(get: { String(pages) }, set: { pages = Int($0) ?? ResearchAgentPlan.defaultPages }))
                     .frame(width: 120)
             }
             ForEach(ResearchRole.allCases) { role in

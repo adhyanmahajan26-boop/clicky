@@ -248,10 +248,10 @@ final class ResearchController: CompanionActivitySource {
         for role in roles {
             if Task.isCancelled { return [] }
             if !results.isEmpty { try? await Task.sleep(nanoseconds: 800_000_000) }
-            var urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)
+            var urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 8)
             if urls.isEmpty {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 6)
+                urls = await Self.searchResults(for: role.searchQuery(for: topic), maximum: 8)
             }
             // Still nothing for this angle: the agent works from the plain question.
             if urls.isEmpty {
@@ -260,7 +260,7 @@ final class ResearchController: CompanionActivitySource {
             }
             results.append((role: role, urls: urls))
         }
-        let plan = ResearchAgentPlan.pages(from: results).filter { !$0.urls.isEmpty }
+        let plan = ResearchAgentPlan.pages(from: results, perAgent: ResearchAgentSettings.pages).filter { !$0.urls.isEmpty }
         guard !plan.isEmpty else { return [] }
         BotsStore.shared.researchProgress(jobID, line: "Working on it with " + plan.map(\.role.title).joined(separator: " and ") + ".")
         companionManager?.agentsCenter.log(parentAgentID, "agents: " + plan.map { "\($0.role.title): \($0.urls.map { $0.host ?? "" }.joined(separator: ", "))" }.joined(separator: "; "))

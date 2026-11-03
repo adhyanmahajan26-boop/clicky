@@ -134,16 +134,16 @@ final class BrowserResearchTests: XCTestCase {
     // MARK: Live views
 
     func testHoveredTileGoesFaster() {
-        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: a, focused: nil), 2)
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: a, focused: nil), 4)
         XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: a, focused: a), 10)
-        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: b, focused: a), 2)
+        XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: b, focused: a), 4)
         XCTAssertEqual(StudioPreviewSchedule.framesPerSecond(for: b, focused: a, base: 5), 5)
     }
 
     func testTilesAreDrawnOnlyWhenDue() {
         XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: nil, now: 10, focused: nil))
         XCTAssertFalse(StudioPreviewSchedule.isDue(a, last: 10, now: 10.1, focused: nil))
-        XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: 10, now: 10.5, focused: nil))
+        XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: 10, now: 10.3, focused: nil))
         XCTAssertTrue(StudioPreviewSchedule.isDue(a, last: 10, now: 10.1, focused: a))
         XCTAssertFalse(StudioPreviewSchedule.isDue(b, last: 10, now: 10.1, focused: a))
     }

@@ -756,7 +756,7 @@ final class BotsStore: ObservableObject {
 
     /// `handsOnWhenStopped`: a stopped turn still calls `then`, for a roll-up that is waiting on it.
     /// `fromOwner`: false when Clicky's team set this off: its answer can't start a coding run or a routine by itself.
-    func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true,
+    func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true, mayUseScreen: Bool = false,
                then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
         replying[bot.id] = ""
@@ -802,12 +802,17 @@ final class BotsStore: ObservableObject {
                 }
                 directPartner[bot.id] = nil
             }
-            // A turn the owner set off can ask for the work screen; one set off by a page or another bot's job can't.
+            // A turn the owner set off can ask for the work screen, and so can a bot Theo asked on the owner's behalf. One set
+            // off by a page or another bot's job can't, and says so: the tag never just sits in the chat looking like it ran.
             var screenOrders: [String] = []
-            if bot.owner == nil, !bot.primary, fromOwner, let said = answer {
+            if bot.owner == nil, let said = answer {
                 let taken = BotScreenOrder.extract(from: said)
                 answer = taken.text
-                screenOrders = taken.orders
+                if fromOwner || mayUseScreen {
+                    screenOrders = taken.orders
+                } else if !taken.orders.isEmpty {
+                    answer = taken.text + "\n\n_(I can't use the screen on this turn, because Addy didn't ask for it. Nothing was done there.)_"
+                }
             }
             let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil

@@ -56,6 +56,8 @@ public enum ResearchAgentPlan {
     public static let defaultCount = 2
     public static let countRange = 2...4
     public static let pagesPerAgent = 2
+    public static let defaultPages = 3
+    public static let pageRange = 2...4
 
     /// The agents for a question, in order. With every role off it falls back to the first two: a question still gets answered.
     public static func roles(enabled: Set<ResearchRole>, count: Int) -> [ResearchRole] {
