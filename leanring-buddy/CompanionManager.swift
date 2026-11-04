@@ -1455,19 +1455,22 @@ final class CompanionManager: ObservableObject {
             return pressable.contains(element.role) && element.isInteractive && element.isEnabled && !element.isBehind && !element.isSystemChrome
                 && element.source == .accessibility && !(element.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        // What's in front or under the pointer. It's what "press" means, and it keeps the other windows' words from going to Sarvam.
-        let pointerWindows = Set(entries.filter { $0.element.visibleFrameCG.contains(groundedTurn.cursorCG) }.compactMap(\.element.windowID))
-        let inFront = entries.filter { $0.element.isInFrontWindow || ($0.element.windowID.map(pointerWindows.contains) ?? false) }
-        if !inFront.isEmpty { entries = inFront }
         entries.sort { ($0.element.windowZIndex, $0.elementID) < ($1.element.windowZIndex, $1.elementID) }
-        let options = entries.prefix(FastDecisionPolicy.pressOptionsAtMost).map {
-            FastPressOption(id: String($0.elementID), role: $0.element.role.rawValue, label: $0.element.label ?? "", app: $0.element.applicationName ?? "this app")
+        let pointerOn = entries.filter { $0.element.visibleFrameCG.contains(groundedTurn.cursorCG) }.min { $0.element.visibleFrameCG.width < $1.element.visibleFrameCG.width }?.element
+        func ask(_ among: [ElementRegistry.Entry]) async -> (elementID: Int, label: String)? {
+            let options = among.prefix(FastDecisionPolicy.pressOptionsAtMost).map {
+                FastPressOption(id: String($0.elementID), role: $0.element.role.rawValue, label: $0.element.label ?? "", app: $0.element.applicationName ?? "this app")
+            }
+            guard let question = FastDecisions.whichToPress(words: words, options: Array(options), pointerOn: pointerOn?.label) else { return nil }
+            let answers = await PrismClient.decideAll("press", question, timeout: 1.2)
+            guard let pick = FastDecisions.pressPick(from: answers, options: Array(options)), let elementID = Int(pick.id) else { return nil }
+            return (elementID, pick.label)
         }
-        let pointerOn = entries.filter { $0.element.visibleFrameCG.contains(groundedTurn.cursorCG) }.min { $0.element.visibleFrameCG.width < $1.element.visibleFrameCG.width }?.element.label
-        guard let question = FastDecisions.whichToPress(words: words, options: Array(options), pointerOn: pointerOn) else { return nil }
-        let answers = await PrismClient.decideAll("press", question, timeout: 1.2)
-        guard let pick = FastDecisions.pressPick(from: answers, options: Array(options)), let elementID = Int(pick.id) else { return nil }
-        return (elementID, pick.label)
+        // What's in front or under the pointer first: it's what "press" usually means, and the other windows' words stay out of it.
+        let inFront = entries.filter { $0.element.isInFrontWindow || ($0.element.windowID != nil && $0.element.windowID == pointerOn?.windowID) }
+        if !inFront.isEmpty, let pick = await ask(inFront) { return pick }
+        // Then whatever else can be seen, for a page on another monitor. A button only counts if it's clear from everything showing.
+        return entries.count > inFront.count ? await ask(entries) : nil
     }
 
     private func companionSystemPrompt(modeHint: ModeHint) -> String {

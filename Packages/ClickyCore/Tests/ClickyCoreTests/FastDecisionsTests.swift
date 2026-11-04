@@ -93,7 +93,7 @@ struct FastDecisionsTests {
     @Test func whatCountsAsARequestToPress() {
         #expect(FastDecisions.pressRequest("press Continue") == ["press continue"])
         #expect(FastDecisions.pressRequest("Clicky, please click the blue button then press save") == ["click the blue button", "press save"])
-        #expect(FastDecisions.pressRequest("press this and that") == ["press this", "that"])
+        #expect(FastDecisions.pressRequest("press this and that") == ["press this", "press that"])
         #expect(FastDecisions.pressRequest("continue wala button dabao") != nil)
         #expect(FastDecisions.pressRequest("how do I press continue?") == nil)
         #expect(FastDecisions.pressRequest("what does this button do") == nil)
