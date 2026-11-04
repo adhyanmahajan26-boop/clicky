@@ -1411,6 +1411,8 @@ final class CompanionManager: ObservableObject {
         guard turnOptions.isOwnersWords, turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, PrismClient.isOn, ClickySettings.isActionsEnabled,
               ProviderKeys.shared.hasKey(for: "sarvam"), let steps = FastDecisions.pressRequest(transcript) else { return false }
         var grounded = groundedTurn
+        // A new press replaces whatever Clicky was still doing, the same as any new request.
+        if actionTaskController.isActive { actionTaskController.cancel(reason: "you asked something new", stopsSpeech: false, speaksLine: false) }
         // The whole phrase first: "press terms and conditions" is one button.
         // But Prism can settle on the first of two things, so with several steps it only counts if the label really has them both.
         if let pick = await prismPick(words: transcript, groundedTurn: grounded),
