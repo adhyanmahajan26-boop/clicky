@@ -111,7 +111,7 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
                      baseURL: "https://api.mistral.ai/v1", consoleURL: "https://console.mistral.ai/api-keys", keyHint: "Your Mistral key"),
         ProviderInfo(id: "deepseek", label: "DeepSeek", blurb: "DeepSeek's reasoning and flash models", group: .models, kind: .openAICompatible,
                      baseURL: "https://api.deepseek.com", consoleURL: "https://platform.deepseek.com/api_keys", keyHint: "sk-…"),
-        ProviderInfo(id: "sarvam", label: "Sarvam AI", blurb: "Indian-language chat, Bulbul voices and Saaras listening", group: .models, kind: .openAICompatible,
+        ProviderInfo(id: "sarvam", label: "Sarvam AI", blurb: "Indian-language chat, Bulbul voices, Saaras listening and Prism fast decisions", group: .models, kind: .openAICompatible,
                      baseURL: "https://api.sarvam.ai/v2", consoleURL: "https://dashboard.sarvam.ai", keyHint: "sk_…",
                      knownModels: ["sarvam-105b", "glm5.3", "gemma4", "deepseekv4.1-flash-1017"]),
         ProviderInfo(id: "together", label: "Together", blurb: "Hosted open models", group: .models, kind: .openAICompatible,

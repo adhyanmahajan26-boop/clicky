@@ -571,6 +571,7 @@ struct ClickySettingsContent: View {
 
 struct VoiceSettingsContent: View {
     @AppStorage(CloudListening.settingKey) private var listening = ""
+    @AppStorage(PrismClient.settingKey) private var fastDecisions = true
     @AppStorage(CallSettings.languageKey) private var callLanguage = CallSettings.Language.auto.rawValue
     @AppStorage(CallSettings.modelKey) private var callModel = "claude-sonnet-5-5"
     @ObservedObject private var keys = ProviderKeys.shared
@@ -586,6 +587,11 @@ struct VoiceSettingsContent: View {
                 listenRow(id: "assemblyai", logo: "assemblyai", title: "AssemblyAI", detail: "Cloud, very accurate", available: keys.hasKey(for: "assemblyai"))
                 RowDivider(inset: 54)
                 listenRow(id: "sarvam", logo: "sarvam", title: "Sarvam Saaras", detail: "Best for Indian languages and code-mixing", available: keys.hasKey(for: "sarvam"))
+            }
+            TheoSection(title: "Fast decisions", hint: keys.hasKey(for: "sarvam") ? "Sarvam Prism makes quick either-or choices, like which bot a message is for. It sees those words, and Claude still does the work." : "Add a Sarvam key to use this.") {
+                SettingRow(title: "Decide with Sarvam Prism", detail: "If it isn't sure, things go the usual way.") {
+                    Toggle("Decide with Sarvam Prism", isOn: $fastDecisions).toggleStyle(.switch).labelsHidden().disabled(!keys.hasKey(for: "sarvam"))
+                }
             }
             TheoSection(title: "Calls with Theo", hint: keys.hasKey(for: "sarvam") ? "Calls listen and speak with Sarvam, in Hindi, English or Hinglish." : "Calls use Apple's listening and the Mac voice until a Sarvam key is saved. Hindi and Hinglish sound far better with Sarvam.") {
                 SettingRow(title: "Language", detail: "Auto answers in whatever you just spoke.") {

@@ -1,0 +1,234 @@
+//
+//  FastDecisions.swift
+//  ClickyCore
+//
+//  Quick fixed-choice decisions on Sarvam Prism (POST /v2/systemone), a model that answers with probabilities and
+//  never writes text. It only ever decides which path a message takes: Claude still does the work, and anything Prism
+//  isn't sure of goes down the path it would have gone anyway. The pure parts live here: the questions, the wire
+//  format and the thresholds, so all of it can be tested with no network.
+//
+
+import Foundation
+
+public struct PrismQuestion: Equatable, Sendable {
+    public enum Kind: String, Sendable {
+        case noul, choice
+    }
+    public var kind: Kind
+    public var instructions: String
+    public var criteria: [String: String]
+
+    public init(kind: Kind, instructions: String, criteria: [String: String]) {
+        self.kind = kind
+        self.instructions = instructions
+        self.criteria = criteria
+    }
+}
+
+public struct PrismAnswer: Equatable, Sendable {
+    /// The option Prism picked. `noul` answers say "true" or "false".
+    public var choice: String
+    /// How likely that option is, from 0 to 1.
+    public var probability: Double
+    /// Every option's probability. A `noul` answer has "true" and "false".
+    public var probabilities: [String: Double]
+
+    public init(choice: String, probability: Double, probabilities: [String: Double]) {
+        self.choice = choice
+        self.probability = probability
+        self.probabilities = probabilities
+    }
+}
+
+public struct PrismFailure: Error, Equatable, LocalizedError, Sendable {
+    public var status: Int
+    public var message: String
+    public init(status: Int, message: String) {
+        self.status = status
+        self.message = message
+    }
+    public var errorDescription: String? { "Prism \(status): \(message)" }
+}
+
+public enum PrismWire {
+    public static let model = "sarvam-prism"
+    public static let path = "v2/systemone"
+
+    public static func body(state: String, questions: [String: PrismQuestion]) -> Data {
+        var encoded: [String: Any] = [:]
+        for (id, question) in questions {
+            encoded[id] = ["type": question.kind.rawValue, "instructions": question.instructions, "criteria": question.criteria]
+        }
+        let object: [String: Any] = ["model": model, "state": state, "questions": encoded]
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+    }
+
+    /// The answers by question id. A `noul` comes back as one number, the chance of yes, and is turned into a pick here.
+    public static func answers(from data: Data) -> [String: PrismAnswer]? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let answers = object["answers"] as? [String: [String: Any]] else { return nil }
+        var result: [String: PrismAnswer] = [:]
+        for (id, answer) in answers {
+            if let yes = (answer["noul"] as? NSNumber)?.doubleValue {
+                let isYes = yes >= 0.5
+                result[id] = PrismAnswer(choice: isYes ? "true" : "false", probability: isYes ? yes : 1 - yes, probabilities: ["true": yes, "false": 1 - yes])
+            } else if let choice = answer["choice"] as? String, let numbers = answer["probabilities"] as? [String: NSNumber] {
+                let probabilities = numbers.mapValues(\.doubleValue)
+                result[id] = PrismAnswer(choice: choice, probability: probabilities[choice] ?? 0, probabilities: probabilities)
+            }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    public static func errorMessage(from data: Data) -> String {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let error = object["error"] as? [String: Any],
+           let message = error["message"] as? String { return String(message.prefix(200)) }
+        return "No details"
+    }
+}
+
+/// What a decision needs to be asked.
+public struct FastDecisionQuestion: Equatable, Sendable {
+    public var state: String
+    public var question: PrismQuestion
+    public static let id = "decision"
+    public var questions: [String: PrismQuestion] { [Self.id: question] }
+}
+
+/// One teammate or group a message could go to.
+public struct FastDecisionTeammate: Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var job: String
+    public init(id: String, name: String, job: String) {
+        self.id = id
+        self.name = name
+        self.job = job
+    }
+}
+
+public enum FastDecisions {
+    /// Prism's option for "whoever was asked keeps it". It's what happens with no answer too.
+    public static let keepIt = "keep"
+
+    // MARK: Who takes this
+
+    public static func whoTakesIt(message: String, leader: String, team: [FastDecisionTeammate]) -> FastDecisionQuestion {
+        var criteria = [keepIt: "\(leader) should deal with it: chat, opinions, plans or decisions, anything about \(leader) or Addy's own setup, work across several teammates, a follow-up that needs the earlier conversation, or when no one teammate clearly owns it."]
+        for teammate in team where teammate.id != keepIt {
+            criteria[teammate.id] = "The message is plainly \(teammate.name)'s own work, and \(teammate.name) can do it alone: \(String(teammate.job.prefix(280)))"
+        }
+        return FastDecisionQuestion(state: "Addy wrote to \(leader): \(String(message.prefix(1500)))", question: PrismQuestion(
+            kind: .choice, instructions: "Who should take this message?", criteria: criteria))
+    }
+
+    // MARK: Clicky: answer now, or a research run
+
+    public static func needsResearch(transcript: String) -> FastDecisionQuestion {
+        FastDecisionQuestion(state: "Addy said to their voice assistant: \(String(transcript.prefix(800)))", question: PrismQuestion(
+            kind: .noul,
+            instructions: "Does this need a background research run that searches the web and reads several pages to write a brief?",
+            criteria: ["true": "Addy wants something found out from many sources: comparing products or options, the latest news on a topic, or a survey of what's out there.",
+                       "false": "A quick answer will do: a fact, an explanation, a definition, chat, a task on the computer, or a question about what's on the screen right now."]))
+    }
+
+    // MARK: A coding run's outcome
+
+    public static func runSucceeded(status: String, filesChanged: Int, tests: String?, report: String) -> FastDecisionQuestion {
+        var lines = ["The coding agent's run ended with status \(status).", "Files changed: \(filesChanged)."]
+        if let tests, !tests.isEmpty { lines.append("Tests: \(String(tests.prefix(300)))") }
+        lines.append("The agent's final report:\n\(String(report.suffix(2500)))")
+        return FastDecisionQuestion(state: lines.joined(separator: "\n"), question: PrismQuestion(
+            kind: .noul,
+            instructions: "Did this run do what it was asked?",
+            criteria: ["true": "The work is finished: the agent reports it done and nothing important was left out or failing.",
+                       "false": "The work isn't finished: the agent gave up, got blocked, needs an answer, skipped part of it, or tests are failing."]))
+    }
+
+    // MARK: A scheduled bot
+
+    public static func routineNeedsToAct(name: String, instruction: String, lastResult: String?, now: String) -> FastDecisionQuestion {
+        FastDecisionQuestion(state: "It is \(now). Scheduled job \"\(name)\": \(String(instruction.prefix(800)))\nLast run: \(lastResult.map { String($0.prefix(500)) } ?? "none")", question: PrismQuestion(
+            kind: .noul,
+            instructions: "Does the bot need to run this job now?",
+            criteria: ["true": "The job should run: it's unconditional, or its condition is met or can't be told from what's here.",
+                       "false": "The job's own condition clearly says there's nothing to do this time."]))
+    }
+
+    // MARK: Dictation: does it need the model's clean-up?
+
+    public static func dictationNeedsCleanup(text: String) -> FastDecisionQuestion {
+        FastDecisionQuestion(state: "Dictated text: \(String(text.prefix(1200)))", question: PrismQuestion(
+            kind: .noul,
+            instructions: "Does this dictated text need an editor to tidy it before it's typed in?",
+            criteria: ["true": "It has false starts, self-corrections, repeated phrases, spoken filler like 'you know' or 'matlab', or wrong punctuation that changes how it reads.",
+                       "false": "It already reads as written text and can go in as it is."]))
+    }
+
+    // MARK: What the answer means
+
+    public enum Routing: Equatable, Sendable {
+        case teammate(String)
+        case keep
+    }
+
+    /// Prism spreads its answer across every teammate, so a right pick rarely tops 0.8. In the labelled cases a teammate
+    /// came out on top only when that was the right one, so what counts is the lead over keeping it.
+    /// `.keep` also means "not sure": the message takes the path it always did.
+    public static func routing(from answer: PrismAnswer?) -> Routing {
+        guard let answer, answer.choice != keepIt, answer.probability >= FastDecisionPolicy.teammateAtLeast,
+              answer.probability - (answer.probabilities[keepIt] ?? 0) >= FastDecisionPolicy.teammateLeadOverKeep else { return .keep }
+        return .teammate(answer.choice)
+    }
+
+    public static func startsResearch(_ answer: PrismAnswer?) -> Bool {
+        (answer?.probabilities["true"] ?? 0) >= FastDecisionPolicy.researchAtLeast
+    }
+
+    public static func skipsCleanup(_ answer: PrismAnswer?) -> Bool {
+        guard let yes = answer?.probabilities["true"] else { return false }
+        return yes <= FastDecisionPolicy.cleanupSkipAtMost
+    }
+
+    public static func skipsRoutine(_ answer: PrismAnswer?) -> Bool {
+        guard let yes = answer?.probabilities["true"] else { return false }
+        return yes <= FastDecisionPolicy.routineSkipAtMost
+    }
+
+    public enum RunVerdict: Equatable, Sendable {
+        case finished, notFinished, unsure
+    }
+
+    public static func runVerdict(_ answer: PrismAnswer?) -> RunVerdict {
+        guard let yes = answer?.probabilities["true"] else { return .unsure }
+        if yes >= FastDecisionPolicy.runFinishedAtLeast { return .finished }
+        if yes <= FastDecisionPolicy.runUnfinishedAtMost { return .notFinished }
+        return .unsure
+    }
+
+    /// Only a routine that states a condition can be skipped. One that says "send the reminders" always runs, with no question asked.
+    public static func routineHasCondition(_ instruction: String) -> Bool {
+        instruction.range(of: #"(?i)\b(only|if|unless|when|except|agar|sirf|jab)\b"#, options: .regularExpression) != nil
+    }
+
+    /// Clicky's gate is for real questions: a word or two is a command or a reply.
+    public static func worthAskingAboutResearch(_ transcript: String) -> Bool {
+        transcript.split(whereSeparator: \.isWhitespace).count >= 4
+    }
+
+    /// Only romanised text was tested for clean-up, so Devanagari keeps going to the model.
+    public static func worthAskingAboutCleanup(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { (0x0900...0x097F).contains($0.value) }
+    }
+}
+
+/// How sure Prism has to be. Chosen on half of the labelled cases and checked on the other half. A wrong pick costs more than a slower right one.
+public enum FastDecisionPolicy {
+    public static let teammateAtLeast = 0.45
+    public static let teammateLeadOverKeep = 0.1
+    public static let researchAtLeast = 0.9
+    public static let cleanupSkipAtMost = 0.2
+    public static let routineSkipAtMost = 0.1
+    public static let runFinishedAtLeast = 0.75
+    public static let runUnfinishedAtMost = 0.25
+}

@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import ClickyCore
 import Foundation
 
 enum BotsT3Error: LocalizedError {
@@ -524,7 +525,27 @@ enum BotsT3 {
         }
         if !leftOut.isEmpty { problems.append("Left out of the commit, because they look like secrets: \(leftOut.joined(separator: ", ")).") }
         run.pullRequestProblem = problems.isEmpty ? nil : problems.joined(separator: " ")
+        // The status only says the agent stopped. Its own report can say the work isn't finished.
+        if !failed, !stopped, let summary = state.lastMessage, !summary.isEmpty,
+           await reportSaysUnfinished(status: state.status, filesChanged: run.changedFiles?.count ?? 0, tests: run.tests, report: summary) {
+            lines[0] = "**\(run.title)** stopped in \(engine) after \(minutes) min, but its report says the work isn't finished."
+        }
         return lines.joined(separator: "\n\n")
+    }
+
+    /// Prism reads the report. When it can't tell, Sonnet does, in a single short call. With no answer from either, it's false: the run's status stands, as it always did.
+    static func reportSaysUnfinished(status: String, filesChanged: Int, tests: String?, report: String) async -> Bool {
+        let question = FastDecisions.runSucceeded(status: status, filesChanged: filesChanged, tests: tests, report: report)
+        guard let answer = await PrismClient.decide("run", question, timeout: 3) else { return false }
+        switch FastDecisions.runVerdict(answer) {
+        case .finished: return false
+        case .notFinished: return true
+        case .unsure:
+            guard let claude = ClaudeCodeBridge.locateClaudeCodeExecutable() else { return false }
+            let words = "\(question.state)\n\nDid this run do what it was asked? \(question.question.criteria["true"] ?? "")\nIf not: \(question.question.criteria["false"] ?? "")\nReply with only true or false."
+            let reply = try? await shell(claude, ["-p", "--model", "sonnet", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"], stdin: words, limit: 30)
+            return reply?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("false") == true
+        }
     }
 
     /// Files changed between two commits, from `git diff --numstat` ("12\t3\tpath"; binary files say "-").

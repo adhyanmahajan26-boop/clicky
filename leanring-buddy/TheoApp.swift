@@ -91,6 +91,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        PrismClient.warm()
         if Self.isHostingUnitTests { return }
         TheoFirstClick.install()
         Self.keepConsoleLog()

@@ -514,7 +514,9 @@ final class DictationController: ObservableObject {
         var text = raw
         var cleanupNote = "off"
         var lateCleanup: Task<String?, Never>?
-        if DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw) {
+        let skipsCleanup = await readsCleanAlready(raw)
+        if skipsCleanup { cleanupNote = "already clean" }
+        if DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw), !skipsCleanup {
             let cleanupStart = Date()
             let cleaning = cleanupTask(for: raw)
             if let cleaned = await Self.value(of: cleaning, within: Self.cleanupBudgetSeconds) {
@@ -552,6 +554,13 @@ final class DictationController: ObservableObject {
 
     private var lastCleanupSeconds: TimeInterval = 0
     private var lastCleanupModelSeconds: TimeInterval = 0
+
+    /// Prism says the words already read as written text, so they needn't wait for Haiku. Anything else goes to Haiku as before.
+    private func readsCleanAlready(_ text: String) async -> Bool {
+        guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(text), PrismClient.isOn, ProviderKeys.shared.hasKey(for: "sarvam"),
+              FastDecisions.worthAskingAboutCleanup(text) else { return false }
+        return FastDecisions.skipsCleanup(await PrismClient.decide("dictation", FastDecisions.dictationNeedsCleanup(text: text), timeout: 0.3))
+    }
 
     private func cleanupTask(for text: String) -> Task<String?, Never> {
         warmCleaner()
@@ -620,6 +629,7 @@ final class DictationController: ObservableObject {
         guard !words.isEmpty else { return "" }
         let raw = DictationCleanup.localPass(words, dictionary: DictationSettings.dictionary)
         guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw) else { return raw }
+        if await readsCleanAlready(raw) { return raw }
         if let cleaned = await Self.value(of: cleanupTask(for: raw), within: Self.cleanupBudgetSeconds), let cleaned { return cleaned }
         return raw
     }

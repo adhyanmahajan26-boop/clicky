@@ -305,6 +305,9 @@ final class ClaudiaControlInbox {
                                  headID: command["head"] as? String, memberIDs: command["members"] as? [String] ?? [])
             BotsStore.shared.save(group)
             reply(identifier, ok: true, result: ["saved": id], error: nil)
+        case "fastDecisions":
+            // What Prism decided lately: the choice and its time, never the words.
+            reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)
         case "botsState":
             let store = BotsStore.shared
             let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder,
