@@ -451,7 +451,9 @@ extension BotsStore {
             TheoLink.shared.sendOrderToOtherMac(order, ownerWords: ownerWords, onReport: onReport)
             return
         }
-        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? ceo.id)
+        // "...and send it to Theo": the card lands in that bot's chat, and the bot answers it.
+        let handedTo = room == nil ? ClickyHandoff.target(in: order, among: bots.filter(\.isOn).map(\.name)).flatMap { name in bots.first { $0.name == name } } : nil
+        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? handedTo?.id ?? ceo.id)
         add(job)
         guard let manager = CompanionManager.current else {
             finish(job.id, result: "Clicky isn't running.", succeeded: false)
@@ -469,6 +471,7 @@ extension BotsStore {
                     let report = error == nil ? (said.isEmpty ? "Done." : said) : "Clicky couldn't do that: \(error?.localizedDescription ?? "it stopped")."
                     self?.finish(job.id, result: report, succeeded: error == nil)
                     onReport?(report)
+                    if error == nil, let handedTo { self?.acknowledgeHandoff(to: handedTo, task: order, result: report) }
                 }
             })
             options.isOwnersWords = false
@@ -477,6 +480,18 @@ extension BotsStore {
             options.theoOrder = ClickyTheoOrder(ownerWords: ownerWords)
             options.cameFromOtherMac = cameFromOtherMac
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
+        }
+    }
+
+    /// The bot Clicky's card went to says it has it, in its own chat.
+    private func acknowledgeHandoff(to bot: NativeBot, task: String, result: String) {
+        Task { [weak self] in
+            while self?.replying[bot.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+            guard let self else { return }
+            let session = self.conversation(bot.id).sessions[bot.id]
+            let asked = ClickyHandoff.acknowledgement(task: task, result: result)
+            let prompt = session == nil ? BotPrompts.firstMessage(bot: bot, team: self.bots, text: asked) : asked
+            self.reply(bot: bot, in: bot.id, prompt: prompt, session: session, handsOnWhenStopped: false, fromOwner: false) { _ in }
         }
     }
 
