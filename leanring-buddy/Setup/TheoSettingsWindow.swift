@@ -588,7 +588,7 @@ struct VoiceSettingsContent: View {
                 RowDivider(inset: 54)
                 listenRow(id: "sarvam", logo: "sarvam", title: "Sarvam Saaras", detail: "Best for Indian languages and code-mixing", available: keys.hasKey(for: "sarvam"))
             }
-            TheoSection(title: "Fast decisions", hint: keys.hasKey(for: "sarvam") ? "Sarvam Prism makes quick either-or choices, like which bot a message is for. It sees those words, and Claude still does the work." : "Add a Sarvam key to use this.") {
+            TheoSection(title: "Fast decisions", hint: keys.hasKey(for: "sarvam") ? "Sarvam Prism picks the button when you tell Clicky to press something, and checks if dictation needs tidying. It sees those words and the button names on screen." : "Add a Sarvam key to use this.") {
                 SettingRow(title: "Decide with Sarvam Prism", detail: "If it isn't sure, things go the usual way.") {
                     Toggle("Decide with Sarvam Prism", isOn: $fastDecisions).toggleStyle(.switch).labelsHidden().disabled(!keys.hasKey(for: "sarvam"))
                 }

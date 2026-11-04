@@ -133,8 +133,6 @@ final class BotsStore: ObservableObject {
     @Published private(set) var conversations: [String: BotConversationRecord] = [:]
     /// Bots with a reply in progress, and the reply text so far ("" while thinking).
     @Published private(set) var replying: [String: String] = [:]
-    /// Chats waiting the fraction of a second it takes Prism to say who a message is for.
-    private var routingNow: Set<String> = []
     @Published private(set) var groups: [BotGroup] = []
     /// Scheduled jobs, like Grok Bot's routines.
     @Published private(set) var routines: [BotRoutine] = []
@@ -365,7 +363,7 @@ final class BotsStore: ObservableObject {
     func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
         if messageID == nil, forwardToWorkMac("botSay", room: botID, target: botID, text: text, command: command) { return }
-        guard let bot = bot(botID), replying[botID] == nil, !routingNow.contains(botID) else { return }
+        guard let bot = bot(botID), replying[botID] == nil else { return }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
             post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
@@ -407,38 +405,6 @@ final class BotsStore: ObservableObject {
             answerWithSettings(intent, bot: bot)
             return
         }
-        // Plainly a teammate's job: to them straight away, the way [TELL] from Theo goes, and their answer lands here. Anything else is Theo's.
-        if cancelNote == nil, let question = routingQuestion(for: command ?? text, leader: bot) {
-            routingNow.insert(botID)
-            Task { [weak self] in
-                let answer = await PrismClient.decideAll("who", question, timeout: Self.routingBudgetSeconds)
-                guard let self else { return }
-                self.routingNow.remove(botID)
-                if case .teammate(let id) = FastDecisions.routing(from: answer), let teammate = self.bot(id), teammate.isOn, teammate.id != bot.id {
-                    self.post(BotChatMessage(author: bot.id, text: "Asking \(teammate.name)."), to: botID)
-                    self.tell(teammate.name, message: text, ownerWords: text)
-                } else {
-                    self.startTurn(bot: bot, room: botID, text: text, command: command, cancelNote: nil)
-                }
-            }
-            return
-        }
-        startTurn(bot: bot, room: botID, text: text, command: command, cancelNote: cancelNote)
-    }
-
-    /// Longer than this and the message just goes to Theo, as it always did.
-    private static let routingBudgetSeconds: TimeInterval = 0.8
-
-    /// Nil when this message isn't one for Prism. Builds, runs and schedules are Sonnet's to plan, and a message of a word or two needs the chat around it.
-    private func routingQuestion(for words: String, leader bot: NativeBot) -> FastDecisionQuestion? {
-        guard bot.primary, PrismClient.isOn, ProviderKeys.shared.hasKey(for: "sarvam"), words.split(whereSeparator: \.isWhitespace).count >= 3,
-              !BotsStore.ownerAskedToBuild(words), !BotsStore.isAboutExistingCode(words), !BotPrompts.asksForSchedule(words), !CodingHarnessWords.asksToSendToCode(words) else { return nil }
-        let team = reachable(from: bot).filter { !$0.primary && $0.owner == nil }.map { FastDecisionTeammate(id: $0.id, name: $0.name, job: $0.description) }
-        return team.isEmpty ? nil : FastDecisions.whoTakesIt(message: words, leader: bot.name, team: team)
-    }
-
-    private func startTurn(bot: NativeBot, room botID: String, text: String, command: String?, cancelNote: String?) {
-        let record = conversation(botID)
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
@@ -1638,23 +1604,7 @@ extension BotsStore {
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {
                 routines[index].nextRunAt = routine.schedule.next(after: now)
             }
-            guard PrismClient.isOn, FastDecisions.routineHasCondition(routine.instruction), ProviderKeys.shared.hasKey(for: "sarvam") else {
-                start(routine, scheduled: true)
-                continue
-            }
-            // A routine with a condition of its own: when that clearly says there's nothing to do, its bot isn't woken.
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEEE d MMMM yyyy HH:mm"
-            let question = FastDecisions.routineNeedsToAct(name: routine.name, instruction: routine.instruction, lastResult: routine.runs.last(where: { $0.status != "running" })?.summary, now: formatter.string(from: now))
-            Task { [weak self] in
-                let answer = await PrismClient.decide("routine", question, timeout: 2)
-                guard let self else { return }
-                if FastDecisions.skipsRoutine(answer) {
-                    self.record(routine.id, .init(startedAt: now, finishedAt: Date(), status: "skipped", summary: "Nothing to do this time, by its own condition."))
-                } else {
-                    self.start(routine, scheduled: true)
-                }
-            }
+            start(routine, scheduled: true)
         }
         writeRoutines()
     }

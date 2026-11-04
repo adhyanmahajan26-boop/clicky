@@ -1570,8 +1570,6 @@ final class CompanionManager: ObservableObject {
         var keepsLiveScreenMarks = false
         /// P8: the fast path already looked at this transcript (it had nothing by that name): straight to Claude.
         var skipsFastPath = false
-        /// Prism has already said this isn't a research run.
-        var skipsResearchGate = false
         /// What's left of "press this and that", for Claude: Prism wasn't sure of it.
         var skipsFastPress = false
         /// False for words that aren't the owner's own (an agent's, Theo's): those stay out of Memory's log.
@@ -1694,24 +1692,6 @@ final class CompanionManager: ObservableObject {
                 fallBackToClaude: { [weak self] in self?.sendTranscriptToClaudeWithScreenshot(transcript: transcript, turnOptions: claudeTurnOptions) },
                 onFinished: { turnOptions.onTurnFinished?(nil, nil) })
             if isHandledByFastPath { return }
-        }
-        // "Compare a few of these for me" in words the rules don't catch: straight to research, with no Claude turn first.
-        // Prism gets a moment to say so. If it doesn't, or isn't sure, this is a normal turn.
-        if turnOptions.isOwnersWords, turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, !turnOptions.skipsResearchGate,
-           PrismClient.isOn, FastDecisions.worthAskingAboutResearch(transcript), ProviderKeys.shared.hasKey(for: "sarvam") {
-            var claudeTurnOptions = turnOptions
-            claudeTurnOptions.skipsResearchGate = true
-            Task { @MainActor [weak self] in
-                let answer = await PrismClient.decide("research", FastDecisions.needsResearch(transcript: transcript), timeout: 0.35)
-                guard let self else { return }
-                if FastDecisions.startsResearch(answer) {
-                    self.researchController.start(ResearchRequest(source: .topic(transcript), question: transcript), speaks: turnOptions.speaksResponse, reportsToCEO: ResearchTrigger.wantsItHandedOver(transcript))
-                    turnOptions.onTurnFinished?(nil, nil)
-                } else {
-                    self.sendTranscriptToClaudeWithScreenshot(transcript: transcript, turnOptions: claudeTurnOptions)
-                }
-            }
-            return
         }
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()

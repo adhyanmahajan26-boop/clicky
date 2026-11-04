@@ -3,9 +3,10 @@
 //  ClickyCore
 //
 //  Quick fixed-choice decisions on Sarvam Prism (POST /v2/systemone), a model that answers with probabilities and
-//  never writes text. It only ever decides which path a message takes: Claude still does the work, and anything Prism
-//  isn't sure of goes down the path it would have gone anyway. The pure parts live here: the questions, the wire
+//  never writes text. Clicky uses it to pick what "press this" means and dictation to skip Haiku on clean words. Anything
+//  Prism isn't sure of goes down the path it would have gone anyway. The pure parts live here: the questions, the wire
 //  format and the thresholds, so all of it can be tested with no network.
+//  It's deliberately not on Theo's bots: custom bots with vague descriptions can't be routed from a list.
 //
 
 import Foundation
@@ -103,18 +104,6 @@ public struct FastDecisionQuestion: Equatable, Sendable {
     }
 }
 
-/// One teammate or group a message could go to.
-public struct FastDecisionTeammate: Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var job: String
-    public init(id: String, name: String, job: String) {
-        self.id = id
-        self.name = name
-        self.job = job
-    }
-}
-
 public struct FastPressOption: Equatable, Sendable {
     public var id: String
     public var role: String
@@ -129,64 +118,6 @@ public struct FastPressOption: Equatable, Sendable {
 }
 
 public enum FastDecisions {
-    /// Prism's option for "whoever was asked keeps it". It's what happens with no answer too.
-    public static let keepIt = "keep"
-
-    // MARK: Who takes this
-
-    /// Two questions, so each answer means what it says: is this one teammate's to do at all, and if so whose. With "keep" as
-    /// just another option beside the teammates, the odds spread out and a right pick rarely gets near Sarvam's suggested 0.9.
-    public static let teamsJobID = "teamsJob"
-
-    public static func whoTakesIt(message: String, leader: String, team: [FastDecisionTeammate]) -> FastDecisionQuestion {
-        var criteria: [String: String] = [:]
-        for teammate in team { criteria[teammate.id] = "It's \(teammate.name)'s work: \(String(teammate.job.prefix(280)))" }
-        // A choice needs two options.
-        if criteria.count < 2 { criteria[keepIt] = "None of the teammates." }
-        let roster = team.map { "- \($0.name): \(String($0.job.prefix(280)))" }.joined(separator: "\n")
-        return FastDecisionQuestion(
-            state: "Addy wrote to \(leader): \(String(message.prefix(1500)))\n\n\(leader)'s teammates:\n\(roster)",
-            question: PrismQuestion(kind: .choice, instructions: "Which teammate's work is closest to this message?", criteria: criteria),
-            alsoAsk: [teamsJobID: PrismQuestion(
-                kind: .noul,
-                instructions: "Is this a request that one teammate's job plainly covers, which they can carry out alone?",
-                criteria: ["true": "Addy wants something done or looked up, and one teammate's job clearly covers it.",
-                           "false": "It's for \(leader): chat, opinions, plans or decisions, anything about \(leader) or Addy's own setup, work across several teammates, a follow-up that needs the earlier conversation, or no one teammate clearly owns it."])])
-    }
-
-    // MARK: Clicky: answer now, or a research run
-
-    public static func needsResearch(transcript: String) -> FastDecisionQuestion {
-        FastDecisionQuestion(state: "Addy said to their voice assistant: \(String(transcript.prefix(800)))", question: PrismQuestion(
-            kind: .noul,
-            instructions: "Does this need a background research run that searches the web and reads several pages to write a brief?",
-            criteria: ["true": "Addy wants something found out from many sources: comparing products or options, the latest news on a topic, or a survey of what's out there.",
-                       "false": "A quick answer will do: a fact, an explanation, a definition, chat, a task on the computer, or a question about what's on the screen right now."]))
-    }
-
-    // MARK: A coding run's outcome
-
-    public static func runSucceeded(status: String, filesChanged: Int, tests: String?, report: String) -> FastDecisionQuestion {
-        var lines = ["The coding agent's run ended with status \(status).", "Files changed: \(filesChanged)."]
-        if let tests, !tests.isEmpty { lines.append("Tests: \(String(tests.prefix(300)))") }
-        lines.append("The agent's final report:\n\(String(report.suffix(2500)))")
-        return FastDecisionQuestion(state: lines.joined(separator: "\n"), question: PrismQuestion(
-            kind: .noul,
-            instructions: "Did this run do what it was asked?",
-            criteria: ["true": "The work is finished: the agent reports it done and nothing important was left out or failing.",
-                       "false": "The work isn't finished: the agent gave up, got blocked, needs an answer, skipped part of it, or tests are failing."]))
-    }
-
-    // MARK: A scheduled bot
-
-    public static func routineNeedsToAct(name: String, instruction: String, lastResult: String?, now: String) -> FastDecisionQuestion {
-        FastDecisionQuestion(state: "It is \(now). Scheduled job \"\(name)\": \(String(instruction.prefix(800)))\nLast run: \(lastResult.map { String($0.prefix(500)) } ?? "none")", question: PrismQuestion(
-            kind: .noul,
-            instructions: "Does the bot need to run this job now?",
-            criteria: ["true": "The job should run: it's unconditional, or its condition is met or can't be told from what's here.",
-                       "false": "The job's own condition clearly says there's nothing to do this time."]))
-    }
-
     // MARK: Dictation: does it need the model's clean-up?
 
     public static func dictationNeedsCleanup(text: String) -> FastDecisionQuestion {
@@ -254,51 +185,9 @@ public enum FastDecisions {
 
     // MARK: What the answer means
 
-    public enum Routing: Equatable, Sendable {
-        case teammate(String)
-        case keep
-    }
-
-    /// `.keep` also means "not sure": the message takes the path it always did.
-    public static func routing(from answers: [String: PrismAnswer]?) -> Routing {
-        guard let pick = answers?[FastDecisionQuestion.id], pick.choice != keepIt, pick.probability >= FastDecisionPolicy.teammateAtLeast,
-              (answers?[teamsJobID]?.probabilities["true"] ?? 0) >= FastDecisionPolicy.teamsJobAtLeast else { return .keep }
-        return .teammate(pick.choice)
-    }
-
-    public static func startsResearch(_ answer: PrismAnswer?) -> Bool {
-        (answer?.probabilities["true"] ?? 0) >= FastDecisionPolicy.researchAtLeast
-    }
-
     public static func skipsCleanup(_ answer: PrismAnswer?) -> Bool {
         guard let yes = answer?.probabilities["true"] else { return false }
         return yes <= FastDecisionPolicy.cleanupSkipAtMost
-    }
-
-    public static func skipsRoutine(_ answer: PrismAnswer?) -> Bool {
-        guard let yes = answer?.probabilities["true"] else { return false }
-        return yes <= FastDecisionPolicy.routineSkipAtMost
-    }
-
-    public enum RunVerdict: Equatable, Sendable {
-        case finished, notFinished, unsure
-    }
-
-    public static func runVerdict(_ answer: PrismAnswer?) -> RunVerdict {
-        guard let yes = answer?.probabilities["true"] else { return .unsure }
-        if yes >= FastDecisionPolicy.runFinishedAtLeast { return .finished }
-        if yes <= FastDecisionPolicy.runUnfinishedAtMost { return .notFinished }
-        return .unsure
-    }
-
-    /// Only a routine that states a condition can be skipped. One that says "send the reminders" always runs, with no question asked.
-    public static func routineHasCondition(_ instruction: String) -> Bool {
-        instruction.range(of: #"(?i)\b(only|if|unless|when|except|agar|sirf|jab)\b"#, options: .regularExpression) != nil
-    }
-
-    /// Clicky's gate is for real questions: a word or two is a command or a reply.
-    public static func worthAskingAboutResearch(_ transcript: String) -> Bool {
-        transcript.split(whereSeparator: \.isWhitespace).count >= 4
     }
 
     /// Only romanised text was tested for clean-up, so Devanagari keeps going to the model.
@@ -309,14 +198,8 @@ public enum FastDecisions {
 
 /// How sure Prism has to be. Chosen on half of the labelled cases and checked on the other half. A wrong pick costs more than a slower right one.
 public enum FastDecisionPolicy {
-    public static let teammateAtLeast = 0.8
-    public static let teamsJobAtLeast = 0.7
-    public static let researchAtLeast = 0.9
     public static let pressLeadOverNext = 5.0
     public static let pressNamesOneAtLeast = 0.85
     public static let pressOptionsAtMost = 200
     public static let cleanupSkipAtMost = 0.2
-    public static let routineSkipAtMost = 0.1
-    public static let runFinishedAtLeast = 0.75
-    public static let runUnfinishedAtMost = 0.25
 }

@@ -16,14 +16,10 @@ enum PrismEval {
         guard let data = FileManager.default.contents(atPath: casesPath),
               let file = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let cases = file["cases"] as? [[String: Any]] else { return ["error": "Can't read the cases"] }
-        let leader = file["leader"] as? String ?? "Theo"
-        let team = (file["team"] as? [[String: String]] ?? []).map {
-            FastDecisionTeammate(id: $0["id"] ?? "", name: $0["name"] ?? "", job: $0["job"] ?? "")
-        }
         var rows: [[String: Any]] = []
         for item in cases {
             let kind = item["kind"] as? String ?? ""
-            guard let question = question(for: item, kind: kind, leader: leader, team: team) else { continue }
+            guard let question = question(for: item, kind: kind) else { continue }
             var row = item
             do {
                 let outcome = try await PrismClient.ask(question, timeout: 30)
@@ -31,14 +27,11 @@ enum PrismEval {
                 row["p"] = outcome.answer.probability
                 row["probabilities"] = outcome.answer.probabilities
                 row["ms"] = outcome.milliseconds
-                if let job = outcome.all[FastDecisions.teamsJobID]?.probabilities["true"] { row["teamsJob"] = job }
                 if let one = outcome.all[FastDecisions.namesOneID]?.probabilities["true"] { row["namesOne"] = one }
                 row["options"] = nil
-                if kind == "who" { row["routing"] = String(describing: FastDecisions.routing(from: outcome.all)) }
             } catch {
                 row["error"] = error.localizedDescription
             }
-            if kind == "research" { row["rulesAnswer"] = ResearchTrigger.parse(item["text"] as? String ?? "") != nil ? "true" : "false" }
             rows.append(row)
         }
         let output = ["rows": rows]
@@ -49,7 +42,7 @@ enum PrismEval {
         return ["rows": rows.count, "errors": failed.count, "firstError": failed.first?["error"] ?? ""]
     }
 
-    /// One real pass over Sarvam's voice models and the run check. Bulbul's audio goes back through Saaras, and each socket's address is opened and pinged.
+    /// One real pass over Sarvam's voice models. Bulbul's audio goes back through Saaras, and each socket's address is opened and pinged.
     static func liveCheck() async -> [String: Any] {
         var report: [String: Any] = [:]
         guard let client = SarvamClient.fromKeychain() else { return ["error": "No Sarvam key"] }
@@ -68,15 +61,6 @@ enum PrismEval {
             guard let url else { continue }
             report[name] = await socketAnswers(url, key: client.apiKey)
         }
-        var runs: [[String: Any]] = []
-        for text in ["All done. Added the export button, wired it to the CSV writer, and tests pass.",
-                     "I couldn't finish this. The API needs a key I don't have, so nothing was changed.",
-                     "Implemented the upload. I skipped the retry logic and the error states for now, they still need doing."] {
-            let started = Date()
-            let unfinished = await BotsT3.reportSaysUnfinished(status: "completed", filesChanged: 2, tests: nil, report: text)
-            runs.append(["report": String(text.prefix(40)), "saysUnfinished": unfinished, "ms": Int(Date().timeIntervalSince(started) * 1000)])
-        }
-        report["runCheck"] = runs
         if let dictation = CompanionManager.current?.dictationController {
             var clean: [[String: Any]] = []
             for text in ["Please send the invoice to Rahul by Friday and copy the accounts team.",
@@ -250,13 +234,9 @@ enum PrismEval {
         return Data(bytes: samples[0], count: Int(output.frameLength) * 2)
     }
 
-    private static func question(for item: [String: Any], kind: String, leader: String, team: [FastDecisionTeammate]) -> FastDecisionQuestion? {
+    private static func question(for item: [String: Any], kind: String) -> FastDecisionQuestion? {
         let text = item["text"] as? String ?? ""
         switch kind {
-        case "who": return FastDecisions.whoTakesIt(message: text, leader: leader, team: team)
-        case "research": return FastDecisions.needsResearch(transcript: text)
-        case "run": return FastDecisions.runSucceeded(status: item["status"] as? String ?? "completed", filesChanged: item["files"] as? Int ?? 0, tests: item["tests"] as? String, report: text)
-        case "routine": return FastDecisions.routineNeedsToAct(name: item["name"] as? String ?? "", instruction: text, lastResult: item["last"] as? String, now: item["now"] as? String ?? "Monday 09:00")
         case "dictation": return FastDecisions.dictationNeedsCleanup(text: text)
         case "press":
             let options = (item["options"] as? [[String: String]] ?? []).map { FastPressOption(id: $0["id"] ?? "", role: $0["role"] ?? "", label: $0["label"] ?? "", app: $0["app"] ?? "") }
