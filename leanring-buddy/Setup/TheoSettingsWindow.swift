@@ -435,7 +435,7 @@ struct BrainModelPicker: View {
                 }
             }
             if !claudeOnly {
-                ForEach(keys.usableChatProviders) { provider in
+                ForEach(keys.usableChatProviders(for: .clicky)) { provider in
                     Section("\(provider.label) API") {
                         ForEach(keys.models(for: provider), id: \.self) { model in
                             Text(model).tag(BrainModel(provider: .api, modelIdentifier: "\(provider.id)/\(model)").setting)
@@ -457,7 +457,7 @@ struct BrainModelPicker: View {
         let model = BrainModel(setting: setting)
         if model.provider == .api {
             let parts = model.modelIdentifier.split(separator: "/", maxSplits: 1).map(String.init)
-            return parts.count == 2 && keys.usableChatProviders.contains { $0.id == parts[0] && keys.models(for: $0).contains(parts[1]) }
+            return parts.count == 2 && keys.usableChatProviders(for: .clicky).contains { $0.id == parts[0] && keys.models(for: $0).contains(parts[1]) }
         }
         return (catalog.models[model.provider] ?? []).contains(model.modelIdentifier)
     }

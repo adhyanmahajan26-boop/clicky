@@ -684,8 +684,9 @@ struct BotChatScreen: View {
                                 if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
+                                    let sentRun = store.t3Runs.first { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) }
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
-                                                    alreadySent: store.t3Runs.contains { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) })
+                                                    alreadySent: sentRun != nil, sentRunHarness: sentRun?.harness)
                                 }
                             }
                         }
@@ -1506,6 +1507,8 @@ struct T3HandoffButton: View {
     var room: String = BotsStore.teamID
     let prominent: Bool
     var alreadySent = false
+    /// The harness of the run this prompt started. Nil with a run means T3 Code.
+    var sentRunHarness: String? = nil
     @ObservedObject private var center = HarnessCenter.shared
     @ObservedObject private var keys = ProviderKeys.shared
     @State private var sentHere = false
@@ -1520,7 +1523,7 @@ struct T3HandoffButton: View {
         let target = folder ?? namedFolder
         VStack(alignment: .leading, spacing: 8) {
             if sent {
-                Label("Sent to \(HarnessCatalog.label(harness))", systemImage: "checkmark").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                Label("Sent to \(HarnessCatalog.label(SentEngine.resolve(hasMatchingRun: alreadySent && !sentHere, runHarness: sentRunHarness, chosen: harness)))", systemImage: "checkmark").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
             } else {
                 HStack(spacing: 8) {
                     BrandLogo(id: harness, name: HarnessCatalog.label(harness), size: 24)
@@ -1891,11 +1894,13 @@ struct BotModelSettings: View {
                         }
                     }
                     Section("API keys") {
-                        ForEach(keys.usableChatProviders) { provider in
+                        let offered = keys.usableChatProviders(for: bot.primary ? .theo : .bots)
+                        ForEach(offered) { provider in
                             Text(provider.label).tag("api:\(provider.id)")
                         }
-                        if bot.provider.hasPrefix("api:"), !keys.usableChatProviders.contains(where: { "api:\($0.id)" == bot.provider }) {
-                            Text("\(String(bot.provider.dropFirst(4))) (no key)").tag(bot.provider)
+                        if bot.provider.hasPrefix("api:"), !offered.contains(where: { "api:\($0.id)" == bot.provider }) {
+                            let hasKey = keys.usableChatProviders.contains { "api:\($0.id)" == bot.provider }
+                            Text("\(String(bot.provider.dropFirst(4)))\(hasKey ? "" : " (no key)")").tag(bot.provider)
                         }
                         Text("Add a key…").tag("__add_key")
                     }

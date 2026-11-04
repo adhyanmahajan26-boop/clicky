@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import ClickyCore
 import SwiftUI
 
 struct ProviderKeysView: View {
@@ -21,7 +22,7 @@ struct ProviderKeysView: View {
         ScrollViewReader { proxy in
             VStack(alignment: .leading, spacing: 22) {
                 summary
-                group("AI models", hint: "A saved key adds that provider's models to every engine picker: bots, Theo and Clicky.", providers.filter { $0.group == .models })
+                group("AI models", hint: "A saved key adds that provider's models to the engine pickers. Open it to choose which: bots, Theo, Clicky.", providers.filter { $0.group == .models })
                 group("Voice and listening", hint: "Pick which one speaks and listens in Settings › Voice.", providers.filter { $0.group == .voice })
                 group("On this Mac", hint: "Local servers need no key. Test finds out whether they're running.", providers.filter { $0.group == .local })
                 VStack(alignment: .leading, spacing: 8) {
@@ -64,6 +65,33 @@ struct ProviderKeysView: View {
                     withAnimation(DS.Motion.hover) { openID = openID == provider.id ? nil : provider.id }
                 }
                 .id(provider.id)
+            }
+        }
+    }
+}
+
+/// Which pickers offer this provider's models. All on until turned off.
+private struct ProviderUseChips: View {
+    let providerID: String
+    @ObservedObject private var keys = ProviderKeys.shared
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Offer its models to").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).padding(.trailing, 4)
+            ForEach(ProviderUse.allCases) { use in
+                let isOn = ProviderUses.allows(use, providerID: providerID)
+                Button { keys.setUse(use, isOn: !isOn, for: providerID) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).opacity(isOn ? 1 : 0)
+                        Text(use.label).font(TheoType.caption)
+                    }
+                    .foregroundColor(isOn ? DS.Colors.accentText : DS.Colors.textTertiary)
+                    .padding(.horizontal, 10).frame(height: 26)
+                    .overlay(Capsule().strokeBorder(isOn ? DS.Colors.accentText.opacity(0.6) : DS.Colors.borderSubtle, lineWidth: 1))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(use.label) \(isOn ? "on" : "off")")
             }
         }
     }
@@ -192,6 +220,7 @@ private struct ProviderKeyRow: View {
                     }
                 }
             }
+            if provider.canChat, keys.isUsable(provider) { ProviderUseChips(providerID: provider.id) }
             if saveFailed {
                 Text("The Keychain didn't save that, so the key is still in the field. Try Save again.").font(TheoType.caption).foregroundColor(DS.Colors.destructiveText)
             }

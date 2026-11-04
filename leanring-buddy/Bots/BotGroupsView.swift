@@ -299,7 +299,7 @@ struct NewBotSheet: View {
                             ForEach(installedEngines, id: \.id) { engine in Text(engine.label).tag(engine.id) }
                         }
                         Section("API keys") {
-                            ForEach(keys.usableChatProviders) { key in Text(key.label).tag("api:\(key.id)") }
+                            ForEach(keys.usableChatProviders(for: .bots)) { key in Text(key.label).tag("api:\(key.id)") }
                             Text("Add a key…").tag("__add_key")
                         }
                     }

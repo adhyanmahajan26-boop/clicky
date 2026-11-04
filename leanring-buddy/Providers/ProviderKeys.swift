@@ -8,6 +8,7 @@
 //
 
 import Combine
+import ClickyCore
 import Foundation
 import Security
 
@@ -320,6 +321,16 @@ final class ProviderKeys: ObservableObject {
     /// Providers bots, Theo and Clicky can run on right now.
     var usableChatProviders: [ProviderInfo] { providers.filter(isUsable) }
 
+    /// The ones the owner left on for this kind of picker.
+    func usableChatProviders(for use: ProviderUse) -> [ProviderInfo] {
+        usableChatProviders.filter { ProviderUses.allows(use, providerID: $0.id) }
+    }
+
+    func setUse(_ use: ProviderUse, isOn: Bool, for providerID: String) {
+        ProviderUses.set(isOn, use: use, providerID: providerID)
+        revision += 1
+    }
+
     func models(for provider: ProviderInfo) -> [String] {
         let live = modelLists[provider.id] ?? []
         return live.isEmpty ? provider.knownModels : live
@@ -336,6 +347,7 @@ final class ProviderKeys: ObservableObject {
 
     func remove(_ providerID: String) {
         ProviderKeychain.delete(providerID)
+        ProviderUses.forget(providerID: providerID)
         testResults[providerID] = nil
         modelLists[providerID] = nil
         storeModels()
