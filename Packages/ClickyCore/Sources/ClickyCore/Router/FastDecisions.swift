@@ -91,8 +91,10 @@ public enum PrismWire {
 public struct FastDecisionQuestion: Equatable, Sendable {
     public var state: String
     public var question: PrismQuestion
+    /// More questions about the same state. The state is billed once per request, however many are asked.
+    public var alsoAsk: [String: PrismQuestion] = [:]
     public static let id = "decision"
-    public var questions: [String: PrismQuestion] { [Self.id: question] }
+    public var questions: [String: PrismQuestion] { alsoAsk.merging([Self.id: question]) { _, decision in decision } }
 }
 
 /// One teammate or group a message could go to.
@@ -113,13 +115,24 @@ public enum FastDecisions {
 
     // MARK: Who takes this
 
+    /// Two questions, so each answer means what it says: is this one teammate's to do at all, and if so whose. With "keep" as
+    /// just another option beside the teammates, the odds spread out and a right pick rarely gets near Sarvam's suggested 0.9.
+    public static let teamsJobID = "teamsJob"
+
     public static func whoTakesIt(message: String, leader: String, team: [FastDecisionTeammate]) -> FastDecisionQuestion {
-        var criteria = [keepIt: "\(leader) should deal with it: chat, opinions, plans or decisions, anything about \(leader) or Addy's own setup, work across several teammates, a follow-up that needs the earlier conversation, or when no one teammate clearly owns it."]
-        for teammate in team where teammate.id != keepIt {
-            criteria[teammate.id] = "The message is plainly \(teammate.name)'s own work, and \(teammate.name) can do it alone: \(String(teammate.job.prefix(280)))"
-        }
-        return FastDecisionQuestion(state: "Addy wrote to \(leader): \(String(message.prefix(1500)))", question: PrismQuestion(
-            kind: .choice, instructions: "Who should take this message?", criteria: criteria))
+        var criteria: [String: String] = [:]
+        for teammate in team { criteria[teammate.id] = "It's \(teammate.name)'s work: \(String(teammate.job.prefix(280)))" }
+        // A choice needs two options.
+        if criteria.count < 2 { criteria[keepIt] = "None of the teammates." }
+        let roster = team.map { "- \($0.name): \(String($0.job.prefix(280)))" }.joined(separator: "\n")
+        return FastDecisionQuestion(
+            state: "Addy wrote to \(leader): \(String(message.prefix(1500)))\n\n\(leader)'s teammates:\n\(roster)",
+            question: PrismQuestion(kind: .choice, instructions: "Which teammate's work is closest to this message?", criteria: criteria),
+            alsoAsk: [teamsJobID: PrismQuestion(
+                kind: .noul,
+                instructions: "Is this a request that one teammate's job plainly covers, which they can carry out alone?",
+                criteria: ["true": "Addy wants something done or looked up, and one teammate's job clearly covers it.",
+                           "false": "It's for \(leader): chat, opinions, plans or decisions, anything about \(leader) or Addy's own setup, work across several teammates, a follow-up that needs the earlier conversation, or no one teammate clearly owns it."])])
     }
 
     // MARK: Clicky: answer now, or a research run
@@ -172,13 +185,11 @@ public enum FastDecisions {
         case keep
     }
 
-    /// Prism spreads its answer across every teammate, so a right pick rarely tops 0.8. In the labelled cases a teammate
-    /// came out on top only when that was the right one, so what counts is the lead over keeping it.
     /// `.keep` also means "not sure": the message takes the path it always did.
-    public static func routing(from answer: PrismAnswer?) -> Routing {
-        guard let answer, answer.choice != keepIt, answer.probability >= FastDecisionPolicy.teammateAtLeast,
-              answer.probability - (answer.probabilities[keepIt] ?? 0) >= FastDecisionPolicy.teammateLeadOverKeep else { return .keep }
-        return .teammate(answer.choice)
+    public static func routing(from answers: [String: PrismAnswer]?) -> Routing {
+        guard let pick = answers?[FastDecisionQuestion.id], pick.choice != keepIt, pick.probability >= FastDecisionPolicy.teammateAtLeast,
+              (answers?[teamsJobID]?.probabilities["true"] ?? 0) >= FastDecisionPolicy.teamsJobAtLeast else { return .keep }
+        return .teammate(pick.choice)
     }
 
     public static func startsResearch(_ answer: PrismAnswer?) -> Bool {
@@ -224,8 +235,8 @@ public enum FastDecisions {
 
 /// How sure Prism has to be. Chosen on half of the labelled cases and checked on the other half. A wrong pick costs more than a slower right one.
 public enum FastDecisionPolicy {
-    public static let teammateAtLeast = 0.45
-    public static let teammateLeadOverKeep = 0.1
+    public static let teammateAtLeast = 0.8
+    public static let teamsJobAtLeast = 0.7
     public static let researchAtLeast = 0.9
     public static let cleanupSkipAtMost = 0.2
     public static let routineSkipAtMost = 0.1

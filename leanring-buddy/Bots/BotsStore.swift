@@ -411,7 +411,7 @@ final class BotsStore: ObservableObject {
         if cancelNote == nil, let question = routingQuestion(for: command ?? text, leader: bot) {
             routingNow.insert(botID)
             Task { [weak self] in
-                let answer = await PrismClient.decide("who", question, timeout: Self.routingBudgetSeconds)
+                let answer = await PrismClient.decideAll("who", question, timeout: Self.routingBudgetSeconds)
                 guard let self else { return }
                 self.routingNow.remove(botID)
                 if case .teammate(let id) = FastDecisions.routing(from: answer), let teammate = self.bot(id), teammate.isOn, teammate.id != bot.id {

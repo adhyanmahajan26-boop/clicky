@@ -29,7 +29,7 @@ enum SarvamWire {
         return parts?.url
     }
 
-    static func realtimeSTTURL(languageCode: String = "auto", mode: String = "codemix", model: String = "saaras:v3-realtime") -> URL? {
+    static func realtimeSTTURL(languageCode: String = "auto", mode: String = "codemix", model: String = "saaras:v4") -> URL? {
         var parts = URLComponents(string: socketBase() + "/speech-to-text-realtime/ws")
         parts?.queryItems = [URLQueryItem(name: "language_code", value: languageCode), URLQueryItem(name: "model", value: model),
                              URLQueryItem(name: "mode", value: mode), URLQueryItem(name: "stream_type", value: "fast"),

@@ -26,6 +26,7 @@ enum PrismClient {
 
     struct Outcome {
         var answer: PrismAnswer
+        var all: [String: PrismAnswer]
         var milliseconds: Int
     }
 
@@ -52,10 +53,10 @@ enum PrismClient {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw PrismFailure(status: status, message: PrismWire.errorMessage(from: data)) }
-        guard let answer = PrismWire.answers(from: data)?[FastDecisionQuestion.id] else {
+        guard let all = PrismWire.answers(from: data), let answer = all[FastDecisionQuestion.id] else {
             throw PrismFailure(status: status, message: "No answer in the reply")
         }
-        return Outcome(answer: answer, milliseconds: Int(Date().timeIntervalSince(started) * 1000))
+        return Outcome(answer: answer, all: all, milliseconds: Int(Date().timeIntervalSince(started) * 1000))
     }
 
     /// Opens the connection ahead of time, so the first real decision isn't the slow one. Costs a request with no question, which Prism refuses unbilled.
@@ -78,6 +79,13 @@ enum PrismClient {
         let outcome = await decide(question, timeout: timeout)
         record.add(kind: kind, pick: outcome?.answer.choice, probability: outcome?.answer.probability, milliseconds: outcome?.milliseconds)
         return outcome?.answer
+    }
+
+    /// The same, for a decision made of several questions.
+    static func decideAll(_ kind: String, _ question: FastDecisionQuestion, timeout: TimeInterval) async -> [String: PrismAnswer]? {
+        let outcome = await decide(question, timeout: timeout)
+        record.add(kind: kind, pick: outcome?.answer.choice, probability: outcome?.answer.probability, milliseconds: outcome?.milliseconds)
+        return outcome?.all
     }
 
     /// The last decisions, for the `fastDecisions` control command.

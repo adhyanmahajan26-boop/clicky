@@ -31,16 +31,27 @@ struct FastDecisionsTests {
         #expect(PrismWire.errorMessage(from: Data(#"{"error":{"message":"Rate limit exceeded"}}"#.utf8)) == "Rate limit exceeded")
     }
 
-    private func pick(_ choice: String, _ top: Double, keep: Double) -> PrismAnswer {
-        PrismAnswer(choice: choice, probability: top, probabilities: [choice: top, FastDecisions.keepIt: keep])
+    private func routed(_ choice: String, _ top: Double, job: Double?) -> FastDecisions.Routing {
+        var answers = [FastDecisionQuestion.id: PrismAnswer(choice: choice, probability: top, probabilities: [choice: top])]
+        if let job { answers[FastDecisions.teamsJobID] = PrismAnswer(choice: job >= 0.5 ? "true" : "false", probability: max(job, 1 - job), probabilities: ["true": job, "false": 1 - job]) }
+        return FastDecisions.routing(from: answers)
     }
 
-    @Test func aTeammateHasToBeClearlyAheadOfKeepingIt() {
-        #expect(FastDecisions.routing(from: pick("accountant", 0.63, keep: 0.29)) == .teammate("accountant"))
-        #expect(FastDecisions.routing(from: pick("site", 0.48, keep: 0.39)) == .keep)
-        #expect(FastDecisions.routing(from: pick("planner", 0.37, keep: 0.36)) == .keep)
-        #expect(FastDecisions.routing(from: PrismAnswer(choice: FastDecisions.keepIt, probability: 0.9, probabilities: [FastDecisions.keepIt: 0.9])) == .keep)
+    @Test func aTeammateNeedsBothAnswersToBeClear() {
+        #expect(routed("accountant", 0.95, job: 0.95) == .teammate("accountant"))
+        #expect(routed("accountant", 0.95, job: 0.2) == .keep)
+        #expect(routed("accountant", 0.4, job: 0.95) == .keep)
+        #expect(routed("accountant", 0.95, job: nil) == .keep)
+        #expect(routed(FastDecisions.keepIt, 0.95, job: 0.95) == .keep)
         #expect(FastDecisions.routing(from: nil) == .keep)
+    }
+
+    @Test func routingAsksBothQuestionsOfOneState() {
+        let team = [FastDecisionTeammate(id: "a", name: "A", job: "Invoices"), FastDecisionTeammate(id: "b", name: "B", job: "Mail")]
+        let question = FastDecisions.whoTakesIt(message: "hello", leader: "Theo", team: team)
+        #expect(Set(question.questions.keys) == [FastDecisionQuestion.id, FastDecisions.teamsJobID])
+        #expect(question.question.criteria.keys.sorted() == ["a", "b"])
+        #expect(question.state.contains("Invoices"))
     }
 
     private func yes(_ value: Double) -> PrismAnswer {

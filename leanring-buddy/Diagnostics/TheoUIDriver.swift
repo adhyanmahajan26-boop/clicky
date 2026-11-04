@@ -578,6 +578,10 @@ extension TheoUIDriver {
         case "uiPrismEval":
             guard let cases = command["cases"] as? String, let out = command["out"] as? String else { respond(false, nil, "Needs cases and out."); return true }
             Task { @MainActor in respond(true, await PrismEval.run(casesPath: cases, outPath: out), nil) }
+        case "uiSarvamSocketCheck":
+            Task { @MainActor in respond(true, await PrismEval.socketCheck(), nil) }
+        case "uiSarvamLiveCheck":
+            Task { @MainActor in respond(true, await PrismEval.liveCheck(), nil) }
         case "uiTestKey":
             // A throwaway key for the local stand-in server, in the test profile's own Keychain service.
             guard let provider = command["provider"] as? String else { respond(false, nil, "Needs provider."); return true }

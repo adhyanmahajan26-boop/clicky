@@ -7,7 +7,7 @@
 - For Theo: the LLM emits a JSON/three.js scene with named, labelled parts; a WKWebView renders it with three.js; clicking a part sends "tell me about <part>" plus context. Real-asset option later: Meshy / Tripo / Rodin (paid APIs) or local Hunyuan3D-2 / TRELLIS (GPU, ask first).
 
 ## Sarvam AI (api.sarvam.ai, header api-subscription-key)
-- Speech-to-text: saaras:v4 (REST 30 s max; WebSocket streaming; codemix mode for Hinglish; auto language detect). ₹0.49/min.
+- Speech-to-text: saaras:v4 (REST 30 s max; WebSocket streaming; codemix mode for Hinglish; auto language detect). ₹0.49/min. The realtime socket defaulted to saaras:v3-realtime but takes saaras:v4, which Theo uses.
 - Text-to-speech: bulbul:v4-flash (200+ voices, Hinglish `enhi`), bulbul:v3. REST, HTTP stream, WebSocket. ₹1 per 1k chars (v4 flash).
 - Translate (mayura, sarvam-translate), transliterate, text language ID.
 - LLM: sarvam-105b (128K, OpenAI-compatible /v2/chat/completions); also hosts glm5.3, gemma4, deepseekv4.1-flash and more.

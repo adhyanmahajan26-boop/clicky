@@ -556,7 +556,7 @@ final class DictationController: ObservableObject {
     private var lastCleanupModelSeconds: TimeInterval = 0
 
     /// Prism says the words already read as written text, so they needn't wait for Haiku. Anything else goes to Haiku as before.
-    private func readsCleanAlready(_ text: String) async -> Bool {
+    func readsCleanAlready(_ text: String) async -> Bool {
         guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(text), PrismClient.isOn, ProviderKeys.shared.hasKey(for: "sarvam"),
               FastDecisions.worthAskingAboutCleanup(text) else { return false }
         return FastDecisions.skipsCleanup(await PrismClient.decide("dictation", FastDecisions.dictationNeedsCleanup(text: text), timeout: 0.3))
