@@ -218,9 +218,10 @@ public enum FastDecisions {
         guard (1...4).contains(parts.count) else { return nil }
         // "press this and that": the second step is a press too.
         let first = parts[0].split(separator: " ").first.map(String.init) ?? "press"
-        let lead = first.range(of: "^\\(verb)$", options: .regularExpression) != nil ? first : "press"
+        let lead = first.range(of: "^\(verb)$", options: .regularExpression) != nil ? first : "press"
         return parts.enumerated().map { index, part in
-            index == 0 || part.range(of: "^\\(verb)\\b", options: .regularExpression) != nil || part.range(of: "\\b\\(hindi)[.!]*$", options: .regularExpression) != nil ? part : "\\(lead) \\(part)"
+            let isOwnStep = index == 0 || part.range(of: "^\(verb)\\b", options: .regularExpression) != nil || part.range(of: "\\b\(hindi)[.!]*$", options: .regularExpression) != nil
+            return isOwnStep ? part : "\(lead) \(part)"
         }
     }
 

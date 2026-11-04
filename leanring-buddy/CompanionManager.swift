@@ -1412,7 +1412,9 @@ final class CompanionManager: ObservableObject {
               ProviderKeys.shared.hasKey(for: "sarvam"), let steps = FastDecisions.pressRequest(transcript) else { return false }
         var grounded = groundedTurn
         // The whole phrase first: "press terms and conditions" is one button.
-        if let pick = await prismPick(words: transcript, groundedTurn: grounded) {
+        // But Prism can settle on the first of two things, so with several steps it only counts if the label really has them both.
+        if let pick = await prismPick(words: transcript, groundedTurn: grounded),
+           steps.count == 1 || pick.label.range(of: #"(?i)\band\b|&"#, options: .regularExpression) != nil {
             turnRecord?.markTiming("prismPicked")
             if turnOptions.speaksResponse { speakCodeModeLine("Pressing \(String(pick.label.prefix(40))).") }
             _ = await actionTaskController.press(elementID: pick.elementID, label: pick.label, ownerWords: transcript, groundedTurn: grounded, speaks: turnOptions.speaksResponse)
