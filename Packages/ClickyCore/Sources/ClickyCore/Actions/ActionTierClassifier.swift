@@ -272,6 +272,13 @@ public enum ActionTierClassifier {
         "erase", "discard", "don't save", "dont save", "save", "save changes", "apply", "confirm", "ok", "allow", "accept", "agree", "approve", "merge",
         "deploy", "install", "uninstall", "sign out", "log out", "sign in", "log in", "upload", "block", "report", "leave", "end call", "archive"
     ]
+    /// Buttons that commit to a booking or a hold, whatever the task was.
+    static let bookingLabelPhrases = ["book", "book with", "book flight", "hold", "hold seat", "hold fare", "continue to book", "continue to booking",
+                                      "continue to payment", "proceed to payment", "proceed to pay", "proceed to checkout"]
+    /// Plain "next step" buttons only need a yes when the task is about booking or paying for something.
+    static let onwardLabelPhrases = ["continue", "next", "proceed"]
+    static let bookingTaskWords = ["book", "booking", "flight", "flights", "ticket", "tickets", "hold", "reserve", "reservation", "seat", "checkout",
+                                   "pay", "payment", "purchase", "buy", "order"]
     /// Field labels that mean a payment form.
     /// Button words the owner's "send it" / "submit" covers.
     static let sendLabelPhrases: Set<String> = ["send", "send now", "submit"]
@@ -351,6 +358,13 @@ public enum ActionTierClassifier {
                     return ActionTierDecision(.countdown, "you asked me to send it")
                 }
                 return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} \(confirmVerb(for: word))")
+            }
+            if ActionWordMatch.firstWord(in: label, of: bookingLabelPhrases) != nil {
+                return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} moves toward a booking")
+            }
+            if ActionWordMatch.firstWord(in: label, of: onwardLabelPhrases) != nil,
+               context.ownerTranscripts.contains(where: { ActionWordMatch.containsWord(in: $0, anyOf: bookingTaskWords) }) {
+                return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} moves toward a booking")
             }
             if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
             switch target?.groundingRole ?? roleFromAX(target?.role) {
