@@ -1455,6 +1455,10 @@ final class CompanionManager: ObservableObject {
             return pressable.contains(element.role) && element.isInteractive && element.isEnabled && !element.isBehind && !element.isSystemChrome
                 && element.source == .accessibility && !(element.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        // What's in front or under the pointer. It's what "press" means, and it keeps the other windows' words from going to Sarvam.
+        let pointerWindows = Set(entries.filter { $0.element.visibleFrameCG.contains(groundedTurn.cursorCG) }.compactMap(\.element.windowID))
+        let inFront = entries.filter { $0.element.isInFrontWindow || ($0.element.windowID.map(pointerWindows.contains) ?? false) }
+        if !inFront.isEmpty { entries = inFront }
         entries.sort { ($0.element.windowZIndex, $0.elementID) < ($1.element.windowZIndex, $1.elementID) }
         let options = entries.prefix(FastDecisionPolicy.pressOptionsAtMost).map {
             FastPressOption(id: String($0.elementID), role: $0.element.role.rawValue, label: $0.element.label ?? "", app: $0.element.applicationName ?? "this app")

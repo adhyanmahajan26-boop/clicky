@@ -237,7 +237,9 @@ public enum FastDecisions {
 
     /// The option to press, or nil when it isn't clear. A label two items share is never clear.
     public static func pressPick(from answers: [String: PrismAnswer]?, options: [FastPressOption]) -> FastPressOption? {
-        guard let pick = answers?[FastDecisionQuestion.id], pick.probability >= FastDecisionPolicy.pressAtLeast,
+        // The top option's own odds fall as a screen gets busier, so what counts is how far it's ahead of the next one.
+        guard let pick = answers?[FastDecisionQuestion.id],
+              pick.probability >= FastDecisionPolicy.pressLeadOverNext * (pick.probabilities.filter { $0.key != pick.choice }.values.max() ?? 0),
               (answers?[namesOneID]?.probabilities["true"] ?? 0) >= FastDecisionPolicy.pressNamesOneAtLeast,
               let option = options.first(where: { $0.id == pick.choice }) else { return nil }
         let sameLabel = options.filter { $0.role == option.role && $0.label.lowercased() == option.label.lowercased() && $0.app == option.app }
@@ -304,7 +306,7 @@ public enum FastDecisionPolicy {
     public static let teammateAtLeast = 0.8
     public static let teamsJobAtLeast = 0.7
     public static let researchAtLeast = 0.9
-    public static let pressAtLeast = 0.65
+    public static let pressLeadOverNext = 5.0
     public static let pressNamesOneAtLeast = 0.85
     public static let pressOptionsAtMost = 200
     public static let cleanupSkipAtMost = 0.2

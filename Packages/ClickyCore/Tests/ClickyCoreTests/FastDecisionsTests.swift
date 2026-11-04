@@ -111,5 +111,8 @@ struct FastDecisionsTests {
         #expect(FastDecisions.pressPick(from: answers("3", 0.95), options: options)?.label == "Back")
         #expect(FastDecisions.pressPick(from: answers("3", 0.3), options: options) == nil)
         #expect(FastDecisions.pressPick(from: nil, options: options) == nil)
+        let close = [FastDecisionQuestion.id: PrismAnswer(choice: "3", probability: 0.47, probabilities: ["3": 0.47, "1": 0.3]),
+                     FastDecisions.namesOneID: PrismAnswer(choice: "true", probability: 0.95, probabilities: ["true": 0.95])]
+        #expect(FastDecisions.pressPick(from: close, options: options) == nil)
     }
 }
