@@ -95,6 +95,12 @@ public struct FastDecisionQuestion: Equatable, Sendable {
     public var alsoAsk: [String: PrismQuestion] = [:]
     public static let id = "decision"
     public var questions: [String: PrismQuestion] { alsoAsk.merging([Self.id: question]) { _, decision in decision } }
+
+    public init(state: String, question: PrismQuestion, alsoAsk: [String: PrismQuestion] = [:]) {
+        self.state = state
+        self.question = question
+        self.alsoAsk = alsoAsk
+    }
 }
 
 /// One teammate or group a message could go to.
