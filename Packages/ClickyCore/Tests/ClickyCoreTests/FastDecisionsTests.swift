@@ -89,4 +89,27 @@ struct FastDecisionsTests {
         #expect(!FastDecisions.worthAskingAboutCleanup("यह ठीक है"))
         #expect(FastDecisions.worthAskingAboutCleanup("yeh theek hai"))
     }
+
+    @Test func whatCountsAsARequestToPress() {
+        #expect(FastDecisions.pressRequest("press Continue") == ["press continue"])
+        #expect(FastDecisions.pressRequest("Clicky, please click the blue button then press save") == ["click the blue button", "press save"])
+        #expect(FastDecisions.pressRequest("press this and that") == ["press this", "that"])
+        #expect(FastDecisions.pressRequest("continue wala button dabao") != nil)
+        #expect(FastDecisions.pressRequest("how do I press continue?") == nil)
+        #expect(FastDecisions.pressRequest("what does this button do") == nil)
+        #expect(FastDecisions.pressRequest("the press release is out") == nil)
+    }
+
+    @Test func aLabelTwoItemsShareIsNeverClear() {
+        let options = [FastPressOption(id: "1", role: "btn", label: "Continue", app: "Chrome"), FastPressOption(id: "2", role: "btn", label: "Continue", app: "Chrome"),
+                       FastPressOption(id: "3", role: "btn", label: "Back", app: "Chrome")]
+        func answers(_ id: String, _ one: Double) -> [String: PrismAnswer] {
+            [FastDecisionQuestion.id: PrismAnswer(choice: id, probability: 0.95, probabilities: [id: 0.95]),
+             FastDecisions.namesOneID: PrismAnswer(choice: "true", probability: one, probabilities: ["true": one])]
+        }
+        #expect(FastDecisions.pressPick(from: answers("1", 0.95), options: options) == nil)
+        #expect(FastDecisions.pressPick(from: answers("3", 0.95), options: options)?.label == "Back")
+        #expect(FastDecisions.pressPick(from: answers("3", 0.3), options: options) == nil)
+        #expect(FastDecisions.pressPick(from: nil, options: options) == nil)
+    }
 }

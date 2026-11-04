@@ -232,6 +232,7 @@ final class GroundingCoordinator {
     /// (push-to-talk key-down / first words of a hands-free utterance).
     func prewarm() {
         guard prewarmTask == nil else { return }
+        PrismClient.warm()
         prewarmStartDate = Date()
         lastPrewarmReadyDate = nil
         prewarmTask = Task { [weak self] in

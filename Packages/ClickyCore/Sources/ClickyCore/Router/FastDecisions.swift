@@ -109,6 +109,19 @@ public struct FastDecisionTeammate: Equatable, Sendable {
     }
 }
 
+public struct FastPressOption: Equatable, Sendable {
+    public var id: String
+    public var role: String
+    public var label: String
+    public var app: String
+    public init(id: String, role: String, label: String, app: String) {
+        self.id = id
+        self.role = role
+        self.label = label
+        self.app = app
+    }
+}
+
 public enum FastDecisions {
     /// Prism's option for "whoever was asked keeps it". It's what happens with no answer too.
     public static let keepIt = "keep"
@@ -178,6 +191,53 @@ public enum FastDecisions {
                        "false": "It already reads as written text and can go in as it is."]))
     }
 
+    // MARK: Clicky: "press this and that"
+
+    public static let namesOneID = "namesOne"
+
+    /// The steps in a request to press things, or nil when it isn't one. A question about pressing isn't a request to press.
+    public static func pressRequest(_ transcript: String) -> [String]? {
+        var text = transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        text = text.replacingOccurrences(of: #"^(hey |hi |ok |okay )?(clicky|theo|claudia)[,:]?\s+"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"^(please |can you |could you |just |now |go ahead and )+"#, with: "", options: .regularExpression)
+        guard text.split(whereSeparator: \.isWhitespace).count <= 24 else { return nil }
+        let verb = #"(press|click|tap|hit|select)"#
+        let hindi = #"(dabao|daba do|dabana|click karo|click kar do|press karo|press kar do|select karo)"#
+        guard text.range(of: "^\(verb)\\b", options: .regularExpression) != nil || text.range(of: "\\b\(hindi)[.!]*$", options: .regularExpression) != nil else { return nil }
+        let marked = text.replacingOccurrences(of: #"\s*(,?\s*and then|,\s*then|\bthen\b|\bafter that\b|\buske baad\b|\bphir\b|,\s*and)\s+"#, with: "\u{1}", options: .regularExpression)
+        var parts = marked.components(separatedBy: "\u{1}")
+        // "press this and that": the plain "and" only splits once the whole phrase didn't name one thing, which the caller finds out.
+        parts = parts.flatMap { $0.components(separatedBy: " and ") + [] }
+        parts = parts.map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)) }.filter { !$0.isEmpty }
+        guard (1...4).contains(parts.count) else { return nil }
+        return parts
+    }
+
+    public static func whichToPress(words: String, options: [FastPressOption], pointerOn: String?) -> FastDecisionQuestion? {
+        guard options.count >= 2 else { return nil }
+        let shown = Array(options.prefix(FastDecisionPolicy.pressOptionsAtMost))
+        var criteria: [String: String] = [:]
+        for option in shown { criteria[option.id] = "Addy means the \(option.role) \"\(String(option.label.prefix(120)))\" in \(option.app)." }
+        let list = shown.map { "- \($0.role) \"\(String($0.label.prefix(120)))\" in \($0.app)" }.joined(separator: "\n")
+        return FastDecisionQuestion(
+            state: "Addy told their assistant: \(String(words.prefix(300)))\nThe pointer is on: \(pointerOn ?? "nothing in particular")\nWhat can be pressed on screen:\n\(list)",
+            question: PrismQuestion(kind: .choice, instructions: "Which item does Addy mean?", criteria: criteria),
+            alsoAsk: [namesOneID: PrismQuestion(
+                kind: .noul,
+                instructions: "Did Addy clearly name one thing to press that's in this list?",
+                criteria: ["true": "What they said matches one listed item by its name or meaning, or they said 'this' and the pointer is on it.",
+                           "false": "Nothing listed matches, several match equally, they named more than one thing, or they aren't asking for something to be pressed."])])
+    }
+
+    /// The option to press, or nil when it isn't clear. A label two items share is never clear.
+    public static func pressPick(from answers: [String: PrismAnswer]?, options: [FastPressOption]) -> FastPressOption? {
+        guard let pick = answers?[FastDecisionQuestion.id], pick.probability >= FastDecisionPolicy.pressAtLeast,
+              (answers?[namesOneID]?.probabilities["true"] ?? 0) >= FastDecisionPolicy.pressNamesOneAtLeast,
+              let option = options.first(where: { $0.id == pick.choice }) else { return nil }
+        let sameLabel = options.filter { $0.role == option.role && $0.label.lowercased() == option.label.lowercased() && $0.app == option.app }
+        return sameLabel.count == 1 ? option : nil
+    }
+
     // MARK: What the answer means
 
     public enum Routing: Equatable, Sendable {
@@ -238,6 +298,9 @@ public enum FastDecisionPolicy {
     public static let teammateAtLeast = 0.8
     public static let teamsJobAtLeast = 0.7
     public static let researchAtLeast = 0.9
+    public static let pressAtLeast = 0.65
+    public static let pressNamesOneAtLeast = 0.85
+    public static let pressOptionsAtMost = 200
     public static let cleanupSkipAtMost = 0.2
     public static let routineSkipAtMost = 0.1
     public static let runFinishedAtLeast = 0.75

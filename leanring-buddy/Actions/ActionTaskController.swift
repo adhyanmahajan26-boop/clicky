@@ -161,6 +161,27 @@ final class ActionTaskController {
         startBatch(plan: plan, steps: plan.steps, groundedTurn: session.groundedTurn, session: session, screenChangedEarlier: false, approvedFirstStep: false)
     }
 
+    // MARK: - One press Prism picked
+
+    /// The same steps, tiers and confirm cards as a click from Claude. Returns when it's finished, and whether it went through.
+    func press(elementID: Int, label: String, ownerWords: String, groundedTurn: GroundedTurn, speaks: Bool) async -> Bool {
+        guard task == nil, ClickySettings.isActionsEnabled else { return false }
+        let plan = #"{"goal":"press","steps":[{"do":"click","id":\#(elementID)}],"done":true}"#
+        guard case .success(let parsed) = ActionDSL.parse(plan) else { return false }
+        let agentID = companionManager.agentsCenter.begin(kind: .actionTask, title: "press \(label)", model: nil)
+        let newTask = ActiveTask(loop: ActionTaskLoop(goal: "press \(label)", ownerTranscript: ownerWords), agentID: agentID, isAnswerTurnOpen: false,
+                                 speaks: speaks, continuesWithModel: false)
+        task = newTask
+        companionManager.agentsCenter.setCancelHandler(agentID) { [weak self] in self?.cancel(reason: "cancelled from the dashboard", stopsSpeech: true) }
+        companionManager.agentsCenter.log(agentID, "heard: \(ownerWords)")
+        startBatch(plan: parsed, steps: parsed.steps, groundedTurn: groundedTurn, session: nil, screenChangedEarlier: false, approvedFirstStep: false)
+        while task === newTask {
+            if Task.isCancelled { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return !newTask.isCancelled
+    }
+
     // MARK: - The batch
 
     /// A click in a task the owner started with "do it for me" (the steps Claudia had marked).

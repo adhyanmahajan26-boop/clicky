@@ -32,6 +32,8 @@ enum PrismEval {
                 row["probabilities"] = outcome.answer.probabilities
                 row["ms"] = outcome.milliseconds
                 if let job = outcome.all[FastDecisions.teamsJobID]?.probabilities["true"] { row["teamsJob"] = job }
+                if let one = outcome.all[FastDecisions.namesOneID]?.probabilities["true"] { row["namesOne"] = one }
+                row["options"] = nil
                 if kind == "who" { row["routing"] = String(describing: FastDecisions.routing(from: outcome.all)) }
             } catch {
                 row["error"] = error.localizedDescription
@@ -125,6 +127,14 @@ enum PrismEval {
             restTimes.append(Int(Date().timeIntervalSince(started) * 1000))
         }
         report["ttsRestMs"] = restTimes
+        var socketTimes: [Int] = []
+        for _ in 0..<3 {
+            let started = Date()
+            do { _ = try await client.synthesizeOverSocket(text: line, languageSetting: "en-IN", speaker: "shubh_en_narration", model: SarvamVoiceConfig.model, pace: 1) }
+            catch { report["ttsSocketWholeError"] = error.localizedDescription }
+            socketTimes.append(Int(Date().timeIntervalSince(started) * 1000))
+        }
+        report["ttsSocketWholeMs"] = socketTimes
         guard let pcm = pcm16k(fromWAV: audio) else { report["error"] = "Couldn't read Bulbul's audio"; return report }
         report["audioSeconds"] = Double(pcm.count) / 32000
         if let url = SarvamWire.realtimeSTTURL(model: "saaras:v3-realtime") { report["realtime v3"] = await listen(url, key: client.apiKey, pcm: pcm, realtime: true) }
@@ -248,6 +258,9 @@ enum PrismEval {
         case "run": return FastDecisions.runSucceeded(status: item["status"] as? String ?? "completed", filesChanged: item["files"] as? Int ?? 0, tests: item["tests"] as? String, report: text)
         case "routine": return FastDecisions.routineNeedsToAct(name: item["name"] as? String ?? "", instruction: text, lastResult: item["last"] as? String, now: item["now"] as? String ?? "Monday 09:00")
         case "dictation": return FastDecisions.dictationNeedsCleanup(text: text)
+        case "press":
+            let options = (item["options"] as? [[String: String]] ?? []).map { FastPressOption(id: $0["id"] ?? "", role: $0["role"] ?? "", label: $0["label"] ?? "", app: $0["app"] ?? "") }
+            return FastDecisions.whichToPress(words: text, options: options, pointerOn: item["pointer"] as? String)
         default: return nil
         }
     }

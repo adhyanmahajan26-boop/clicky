@@ -59,17 +59,12 @@ enum PrismClient {
         return Outcome(answer: answer, all: all, milliseconds: Int(Date().timeIntervalSince(started) * 1000))
     }
 
-    /// Opens the connection ahead of time, so the first real decision isn't the slow one. Costs a request with no question, which Prism refuses unbilled.
+    /// Opens the connection ahead of time, so the first real decision isn't the slow one. The smallest real question, which costs a fraction of a paisa.
     static func warm() {
         guard isOn else { return }
         Task.detached(priority: .utility) {
-            guard let key = ProviderKeychain.get("sarvam") else { return }
-            var request = URLRequest(url: SarvamClient.restBaseURL.appendingPathComponent(PrismWire.path), timeoutInterval: 5)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(key, forHTTPHeaderField: "api-subscription-key")
-            request.httpBody = Data("{}".utf8)
-            _ = try? await session.data(for: request)
+            let question = FastDecisionQuestion(state: "ok", question: PrismQuestion(kind: .noul, instructions: "Is this a word?", criteria: ["true": "Yes.", "false": "No."]))
+            _ = try? await ask(question, timeout: 10)
         }
     }
 
