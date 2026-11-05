@@ -248,7 +248,7 @@ struct T3HandoffButton: View {
                     if target == nil {
                         RunChoiceNote(text: "Pick a folder to see its chats.")
                     } else if chats.isEmpty {
-                        RunChoiceNote(text: harness == "t3" && isHere && !HarnessChats.isT3ServerUp ? "Open T3 Code to see its threads." : isLoadingChats ? "Looking\u{2026}" : "No earlier \(HarnessCatalog.label(harness)) chats in this folder.")
+                        RunChoiceNote(text: !isHere && !link.isConnected ? "Your \(TheoLink.shortName(mac)) isn't reachable, so its chats can't be listed." : harness == "t3" && isHere && !HarnessChats.isT3ServerUp ? "Open T3 Code to see its threads." : isLoadingChats ? "Looking\u{2026}" : "No earlier \(HarnessCatalog.label(harness)) chats in this folder.")
                     } else {
                         RunChoiceHeader(text: "In \(target?.lastPathComponent ?? "this folder")")
                         ScrollView {

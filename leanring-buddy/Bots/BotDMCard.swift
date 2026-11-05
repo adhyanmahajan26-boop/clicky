@@ -136,6 +136,37 @@ struct ChatNote: View {
     }
 }
 
+/// Something set to the other Mac, which can't be reached right now: said plainly, with the way to run it here instead.
+struct BotWaitingCard: View {
+    static func card(id: String) -> String { "waiting:\(id)" }
+    static func id(of card: String?) -> String? {
+        guard let card, card.hasPrefix("waiting:") else { return nil }
+        return String(card.dropFirst("waiting:".count))
+    }
+
+    @ObservedObject var store: BotsStore
+    @ObservedObject private var link = TheoLink.shared
+    let id: String
+    let text: String
+
+    var body: some View {
+        if let waiting = link.waiting(id) {
+            VStack(alignment: .leading, spacing: 8) {
+                ChatNote(text: text)
+                if waiting.canRunHere {
+                    Button("Run it on this \(TheoLink.shortName(TheoLink.localName)) instead") { store.runWaitingHere(id) }
+                        .buttonStyle(.theo(.secondary, .small))
+                        .pointerCursor()
+                        .padding(.leading, 54)
+                }
+            }
+        } else {
+            // It's gone now, or was run here. This Mac said so at the time.
+            ChatNote(text: "This waited for your other Mac.")
+        }
+    }
+}
+
 /// A bot's private threads with the other bots, for reading. Under its settings.
 struct BotPrivateThreadsList: View {
     @ObservedObject var store: BotsStore

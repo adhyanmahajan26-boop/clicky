@@ -340,7 +340,7 @@ public enum BotProtocol {
             "in a ```prompt fenced block. Theo then runs it on \(harnessLabel): an existing git repo gets its own branch and " +
             "worktree, and the result comes back with the changes, tests and a draft pull request. The run goes on the Mac your \"where you are\" note says; if the owner names their other Mac, add a line \"Mac: <that Mac>\". " +
             "To carry on an earlier harness chat instead of starting a new one, add a line \"Continue: <chat id or title>\". For a change to the run you already started, " +
-            "put it in a ```followup fenced block instead."
+            "put it in a ```followup fenced block instead. Writing a block doesn't start anything by itself: never say a run has started or been passed on until the list of runs shows it, or Theo's own line in the chat says so."
     }
 
     /// One team a bot is on, for its reporting lines.
@@ -417,6 +417,50 @@ public enum BotProtocol {
 
     public static func wordCount(_ text: String) -> Int {
         text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    }
+}
+
+// MARK: - What an engine session hasn't seen
+
+/// Each Mac has its own engine session for a chat, and the chat also goes on from the other Mac. This says what a session still has to be told.
+public enum BotCatchUp {
+    public static let maximumMessages = 20
+    public static let maximumCharactersEach = 1500
+    public static let maximumCharactersTotal = 12_000
+    /// In `heard`: nothing here has been seen yet. A session may still hold earlier words, but none of what's here is certain.
+    public static let fromTheStart = ""
+
+    /// The messages after the newest one this session has heard. With no session at all: the chat's latest, if another Mac could have written it.
+    public static func unheard<Message>(messages: [Message], id: (Message) -> String, heard: String?, hasSession: Bool, isLinked: Bool) -> [Message] {
+        guard hasSession else { return isLinked ? Array(messages.suffix(6)) : [] }
+        if heard == fromTheStart { return Array(messages.suffix(maximumMessages)) }
+        guard let heard, let index = messages.lastIndex(where: { id($0) == heard }) else { return [] }
+        return Array(messages[messages.index(after: index)...].suffix(maximumMessages))
+    }
+
+    /// Lines to read: each cut to a size, and the newest kept when there's too much.
+    public static func lines(_ said: [(who: String, text: String)]) -> [String] {
+        var kept: [String] = []
+        var used = 0
+        for line in said.suffix(maximumMessages).reversed() {
+            let text = "\(line.who): \(line.text.prefix(maximumCharactersEach))"
+            used += text.count
+            if used > maximumCharactersTotal { break }
+            kept.insert(text, at: 0)
+        }
+        return kept
+    }
+
+    /// After messages arrive from the other Mac, possibly in the middle of what's here: what a session has heard moves back so none of them is missed.
+    public static func heardAfterMerge(heard: String?, merged: [String], arrived: Set<String>) -> String? {
+        guard let heard, let heardAt = merged.lastIndex(of: heard), let firstArrived = merged.firstIndex(where: arrived.contains), firstArrived < heardAt else { return heard }
+        return firstArrived == 0 ? fromTheStart : merged[firstArrived - 1]
+    }
+
+    /// The same for a group chat's count of how many messages a bot has read.
+    public static func seenAfterMerge(seen: Int, merged: [String], arrived: Set<String>) -> Int {
+        guard let firstArrived = merged.firstIndex(where: arrived.contains) else { return seen }
+        return min(seen, firstArrived)
     }
 }
 

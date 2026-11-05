@@ -96,6 +96,14 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     var card: String?
     /// In a private thread: the exchange this message belongs to.
     var exchangeID: String?
+    /// Its time to the fraction of a second. `at` only keeps whole seconds once saved or sent, and the order of a chat can't depend on that.
+    var exact: Double? = Date().timeIntervalSince1970
+
+    /// When it was written, for putting chats from two Macs in order.
+    var sortDate: Date {
+        guard let exact, abs(exact - at.timeIntervalSince1970) < 2 else { return at }
+        return Date(timeIntervalSince1970: exact)
+    }
 }
 
 /// A group of bots with a head who leads its group chat: the head hands the work out with @Name and
@@ -406,7 +414,7 @@ final class BotsStore: ObservableObject {
     /// attached file doesn't start an agent.
     func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
-        if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command) { return }
+        if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command, engine: bot(botID)?.provider) { return }
         guard let bot = bot(botID) else { return }
         // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now and goes in when it's free.
         if replying[botID] != nil {
@@ -552,28 +560,56 @@ final class BotsStore: ObservableObject {
     }
 
     /// Settings › Devices can put bots on one Mac by hand. Then what's typed on the other goes there: it shows here right away and the
-    /// answer comes back through the chat. By default a message is answered on the Mac it was typed on, and this does nothing.
-    private func forwardToBotsMac(_ action: String, room: String, target: String, text: String, command: String?) -> Bool {
+    /// answer comes back through the chat. If that Mac can't be reached the chat says so at once, and offers this Mac when it can. By default a
+    /// message is answered on the Mac it was typed on, and this does nothing.
+    private func forwardToBotsMac(_ action: String, room: String, target: String, text: String, command: String?, engine: String?) -> Bool {
         let message = BotChatMessage(author: "user", text: text)
         let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id]
-        switch DeviceRoles.route(.bots) {
-        case .runHere, .notHere:
+        let problem = engine.flatMap { EngineReadiness.problem(with: $0) }
+        switch DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected, engineHere: problem == nil, engineThere: true) {
+        case .runHere, .engineOnOtherMac, .tryHere:
             return false
         case .sendAcross:
             guard TheoLink.shared.request(action, fields) else { return false }
-        case .waitForOtherMac:
-            // Bots don't run on this Mac: it goes when the other one is back.
-            guard TheoLink.shared.requestWhenConnected(action, fields) else { return false }
+            post(message, to: room)
+        case .waitForOtherMac(let canRunHere):
+            post(message, to: room)
+            waitForOtherMac(action, fields, room: room, label: "your message", canRunHere: canRunHere, problem: problem)
         }
-        post(message, to: room)
         return true
+    }
+
+    /// Something set to the other Mac can't reach it: it waits for that Mac, and the chat says so with a way to run it here instead. Never a silent queue.
+    func waitForOtherMac(_ action: String, _ fields: [String: String], room: String, label: String, canRunHere: Bool, problem: String?) {
+        let other = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        let id = TheoLink.shared.queueForOtherMac(action, fields, room: room, label: label, canRunHere: canRunHere)
+        post(BotChatMessage(author: Self.noteAuthor, text: DeviceRouting.unreachableLine(otherMac: other, thisMac: TheoLink.shortName(TheoLink.localName), engineProblem: problem), card: BotWaitingCard.card(id: id)), to: room)
+    }
+
+    /// "Run it here instead", from the card of something waiting for the other Mac.
+    func runWaitingHere(_ id: String) {
+        guard let waiting = TheoLink.shared.takeWaiting(id) else { return }
+        func field(_ key: String) -> String? { waiting.fields[key].flatMap { $0.isEmpty ? nil : $0 } }
+        switch waiting.action {
+        case "botSay":
+            if let target = field("target"), let text = field("text") { send(text, command: field("command"), to: target, messageID: field("id")) }
+        case "groupSay":
+            if let target = field("target"), let text = field("text") { sendToGroup(text, command: field("command"), groupID: target, messageID: field("id")) }
+        case "run":
+            guard let prompt = field("prompt"), let title = field("title"), let room = field("room") else { return }
+            let continued = field("chatID").map { HarnessChatChoice(idOrTitle: $0, title: field("chatTitle")) }
+            submitToT3(prompt: prompt, title: title, repo: field("repo").map { URL(fileURLWithPath: $0, isDirectory: true) }, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"),
+                       alsoRoom: field("alsoRoom"), newFolder: field("newFolder"), macName: TheoLink.localName, continuing: continued)
+        default:
+            break
+        }
     }
 
     /// Posts to a group chat. The head reads it first, or the bots tagged when someone is; then they take turns (`startRound`).
     func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
-        if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command) { return }
+        if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command, engine: head.provider) { return }
         var record = conversation(room)
         let ownerMessageID = messageID ?? UUID().uuidString
         if !record.messages.contains(where: { $0.id == ownerMessageID }) {
@@ -1214,10 +1250,16 @@ final class BotsStore: ObservableObject {
                 fields["chatID"] = continuing.idOrTitle
                 fields["chatTitle"] = continuing.title ?? ""
             }
-            // It never runs here instead: if that Mac's away it goes as soon as it's back.
-            let sentNow = TheoLink.shared.requestWhenConnected("run", fields)
-            post(BotChatMessage(author: theo.id, text: sentNow ? "Sent **\(title)** to your \(shortName). You can watch it here."
-                                : "**\(title)** is waiting for your \(shortName), which isn't connected right now. It starts as soon as it's back."), to: room)
+            guard TheoLink.shared.request("run", fields) else {
+                // That Mac's away: it doesn't start anywhere yet, and the chat says so plainly. It can run here if this Mac has what it needs.
+                let harnessReady = target == CursorCloud.harnessID || HarnessCenter.shared.statuses[target]?.ready != false
+                let folderIsHere = repo.map { FileManager.default.fileExists(atPath: $0.path) } ?? true
+                let problem = !harnessReady ? "\(HarnessCatalog.label(target)) isn't ready here" : !folderIsHere ? "that folder isn't on this Mac" : nil
+                waitForOtherMac("run", fields, room: room, label: "**\(title)**", canRunHere: problem == nil, problem: problem)
+                started?(false, "Your \(shortName) isn't reachable right now.")
+                return
+            }
+            post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to your \(shortName). You can watch it here."), to: room)
             started?(true, nil)
             return
         }
@@ -1897,9 +1939,16 @@ extension BotsStore {
     fileprivate func addRoutineFromChat(_ request: (name: String, when: String, schedule: BotRoutine.Schedule, instruction: String),
                                         target: String, conversationID: String, author: String) {
         // Routines fire on one Mac (Settings › Devices), so one set up on the other goes there.
+        let routineFields = ["name": request.name, "target": target, "when": request.when, "do": request.instruction]
+        let routinesMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
         switch DeviceRoles.route(.routines) {
-        case .sendAcross, .waitForOtherMac:
-            _ = TheoLink.shared.requestWhenConnected("routineAdd", ["name": request.name, "target": target, "when": request.when, "do": request.instruction])
+        case .sendAcross:
+            _ = TheoLink.shared.request("routineAdd", routineFields)
+            post(BotChatMessage(author: Self.noteAuthor, text: "\(request.name) is set up on your \(routinesMac), where routines fire."), to: conversationID)
+            return
+        case .waitForOtherMac:
+            _ = TheoLink.shared.queueForOtherMac("routineAdd", routineFields, room: conversationID, label: request.name, canRunHere: false)
+            post(BotChatMessage(author: Self.noteAuthor, text: "Routines fire on your \(routinesMac), which isn't reachable right now, so \(request.name) isn't set up yet. It will be as soon as that Mac is back."), to: conversationID)
             return
         case .runHere, .notHere:
             break
@@ -2430,10 +2479,7 @@ extension BotsStore {
         case "runs":
             guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }
             // Each Mac is the only one writing its own runs.
-            for run in theirs where run.isRemote {
-                if let index = t3Runs.firstIndex(where: { $0.id == run.id }) { t3Runs[index] = run } else { t3Runs.append(run) }
-            }
-            t3Runs.sort { $0.startedAt != $1.startedAt ? $0.startedAt < $1.startedAt : $0.id < $1.id }
+            t3Runs = LinkMerge.ownedRuns(local: t3Runs, remote: theirs, isTheirs: \.isRemote, id: \.id, at: \.startedAt)
             if let saved = try? Self.encoder.encode(t3Runs) { try? saved.write(to: runsFile, options: .atomic) }
         case "memory":
             guard let theirs = try? decoder.decode([ClickyMemoryEntry].self, from: data) else { return }
@@ -2449,10 +2495,17 @@ extension BotsStore {
             var record = conversation(id)
             let known = Set(record.messages.map(\.id))
             let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
-            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.at, clearedAt: clearedAt)
+            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.sortDate, clearedAt: clearedAt)
             let arrived = merged.filter { !known.contains($0.id) }
             record.messages = merged
             record.clearedAt = clearedAt
+            // What came in may sit in the middle of what's here, written while the Macs were apart. Nobody's session has seen it yet.
+            if !arrived.isEmpty {
+                let ids = merged.map(\.id)
+                let arrivedIDs = Set(arrived.map(\.id))
+                record.heard = record.heard?.mapValues { BotCatchUp.heardAfterMerge(heard: $0, merged: ids, arrived: arrivedIDs) ?? $0 }
+                record.seen = record.seen.mapValues { BotCatchUp.seenAfterMerge(seen: $0, merged: ids, arrived: arrivedIDs) }
+            }
             conversations[id] = record
             writeConversation(id)
             for message in arrived where !message.text.isEmpty { noteUnread(message, in: id) }
@@ -2579,20 +2632,11 @@ extension BotsStore {
     func catchUp(_ id: String, bot: NativeBot, before messageID: String) -> String {
         let record = conversation(id)
         let earlier = Array(record.messages.prefix { $0.id != messageID }).filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }
-        let unheard: [BotChatMessage]
-        if record.sessions[bot.id] == nil {
-            guard TheoLink.shared.isPaired else { return "" }
-            unheard = Array(earlier.suffix(6))
-        } else if let heard = record.heard?[bot.id], let index = earlier.lastIndex(where: { $0.id == heard }) {
-            unheard = Array(earlier[(index + 1)...].suffix(20))
-        } else {
-            unheard = []
-        }
+        let unheard = BotCatchUp.unheard(messages: earlier, id: \.id, heard: record.heard?[bot.id], hasSession: record.sessions[bot.id] != nil, isLinked: TheoLink.shared.isPaired)
         guard !unheard.isEmpty else { return "" }
-        let lines = unheard.map { message -> String in
-            let who = message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author)
-            return "\(who): \(message.text.prefix(1500))"
-        }.joined(separator: "\n")
+        let lines = BotCatchUp.lines(unheard.map { message in
+            (message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author), message.text)
+        }).joined(separator: "\n")
         return "(This chat also went on while you weren't here, some of it maybe from Addy's other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
     }
 }

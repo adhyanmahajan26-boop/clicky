@@ -378,6 +378,139 @@ struct BotProtocolTests {
         #expect(DeviceFeature.routines.anyChoiceTitle == "Any")
     }
 
+    // MARK: The other Mac can be away
+
+    private func turn(_ choice: DeviceChoice, on mac: DeviceKind = .macBookAir, paired: Bool = true, online: Bool, here: Bool, there: Bool = true) -> BotTurnRoute {
+        DeviceRouting.botTurn(choice: choice, thisMac: mac, paired: paired, otherMacOnline: online, engineHere: here, engineThere: there)
+    }
+
+    @Test func theDefaultNeverDependsOnTheOtherMac() {
+        #expect(turn(DeviceFeature.bots.defaultChoice, online: false, here: true) == .runHere)
+        #expect(turn(DeviceFeature.bots.defaultChoice, online: true, here: true) == .runHere)
+        #expect(turn(DeviceFeature.bots.defaultChoice, paired: false, online: false, here: true) == .runHere)
+    }
+
+    @Test func setToTheOtherMacAndItsReachable() {
+        #expect(turn(.macStudio, online: true, here: true) == .sendAcross)
+        #expect(turn(.macStudio, online: true, here: false) == .sendAcross)
+    }
+
+    @Test func setToTheOtherMacAndItsAwayWithTheEngineHere() {
+        #expect(turn(.macStudio, online: false, here: true) == .waitForOtherMac(canRunHere: true))
+    }
+
+    @Test func setToTheOtherMacAndItsAwayWithNoEngineHere() {
+        #expect(turn(.macStudio, online: false, here: false) == .waitForOtherMac(canRunHere: false))
+    }
+
+    @Test func noEngineHereGoesAcrossOnlyWhenTheOtherMacCanHelp() {
+        #expect(turn(.any, online: true, here: false, there: true) == .engineOnOtherMac)
+        #expect(turn(.any, online: true, here: false, there: false) == .tryHere)
+        #expect(turn(.any, online: false, here: false, there: true) == .tryHere)
+        #expect(turn(.any, paired: false, online: false, here: false) == .tryHere)
+    }
+
+    @Test func beingAwayIsSaidPlainly() {
+        #expect(DeviceRouting.unreachableLine(otherMac: "Mac Studio", thisMac: "MacBook Air", engineProblem: nil) == "Your Mac Studio isn't reachable right now. This starts when it is.")
+        let noEngine = DeviceRouting.unreachableLine(otherMac: "Mac Studio", thisMac: "MacBook Air", engineProblem: "Grok isn't signed in")
+        #expect(noEngine.contains("It can't run on this MacBook Air instead: Grok isn't signed in."))
+    }
+
+    // MARK: The Macs meet again
+
+    private struct Line: Equatable {
+        let id: String
+        let at: Date
+    }
+
+    private func merged(_ local: [Line], _ remote: [Line]) -> [Line] { LinkMerge.union(local: local, remote: remote, id: \.id, at: \.at) }
+
+    @Test func offlineMessagesOnBothSidesMergeTheSameWayWithNoDuplicates() {
+        let base = Date(timeIntervalSince1970: 1000)
+        let shared = [Line(id: "s1", at: base), Line(id: "s2", at: base.addingTimeInterval(1))]
+        // Apart, with their fractions kept: one question and answer here, another there, in the same second.
+        let air = shared + [Line(id: "air-ask", at: base.addingTimeInterval(10.1)), Line(id: "air-answer", at: base.addingTimeInterval(10.3))]
+        let studio = shared + [Line(id: "studio-ask", at: base.addingTimeInterval(10.2)), Line(id: "studio-answer", at: base.addingTimeInterval(10.4))]
+        let onAir = merged(air, studio)
+        let onStudio = merged(studio, air)
+        #expect(onAir == onStudio)
+        #expect(onAir.map(\.id) == ["s1", "s2", "air-ask", "studio-ask", "air-answer", "studio-answer"])
+        // Again, and again: nothing doubles or moves.
+        #expect(merged(onAir, onStudio) == onAir)
+        #expect(merged(merged(onAir, air), studio) == onAir)
+    }
+
+    @Test func anOlderChatWithWholeSecondsKeepsItsOwnOrder() {
+        let second = Date(timeIntervalSince1970: 1000)
+        let lines = [Line(id: "z-question", at: second), Line(id: "a-answer", at: second), Line(id: "m-next", at: second)]
+        #expect(merged(lines, []).map(\.id) == ["z-question", "a-answer", "m-next"])
+        #expect(merged([], lines).map(\.id) == ["z-question", "a-answer", "m-next"])
+        #expect(merged(lines, lines).map(\.id) == ["z-question", "a-answer", "m-next"])
+    }
+
+    @Test func eachMacKeepsWritingOnlyItsOwnRuns() {
+        struct Run: Equatable { let id: String; let origin: String; let phase: String; let at: Date }
+        let at = Date(timeIntervalSince1970: 1000)
+        let mine = Run(id: "mine", origin: "Air", phase: "running", at: at)
+        let theirs = Run(id: "theirs", origin: "Studio", phase: "running", at: at.addingTimeInterval(5))
+        // Their copy of my run is old, and mine stands. Their own run comes through, and an update to it wins.
+        let staleCopyOfMine = Run(id: "mine", origin: "Air", phase: "done", at: at)
+        let once = LinkMerge.ownedRuns(local: [mine], remote: [staleCopyOfMine, theirs], isTheirs: { $0.origin != "Air" }, id: \.id, at: \.at)
+        #expect(once == [mine, theirs])
+        let finished = Run(id: "theirs", origin: "Studio", phase: "done", at: at.addingTimeInterval(5))
+        let twice = LinkMerge.ownedRuns(local: once, remote: [finished], isTheirs: { $0.origin != "Air" }, id: \.id, at: \.at)
+        #expect(twice == [mine, finished])
+    }
+
+    @Test func memoryWrittenApartEndsUpTheSameOnBoth() {
+        let air = "likes tea\nadded on the Air\n"
+        let studio = "likes tea\nadded on the Studio\n"
+        let onAir = BotMemoryMerge.union(air, studio)
+        let onStudio = BotMemoryMerge.union(studio, air)
+        #expect(BotMemoryMerge.digest(onAir) == BotMemoryMerge.digest(onStudio))
+        #expect(BotMemoryMerge.union(onAir, onStudio) == onAir)
+        #expect(onAir.components(separatedBy: "\n").filter { $0 == "likes tea" }.count == 1)
+    }
+
+    @Test func aSessionHearsWhatItMissedAndNothingElse() {
+        let ids = ["a", "b", "c", "d"]
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: "b", hasSession: true, isLinked: true) == ["c", "d"])
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: "d", hasSession: true, isLinked: true).isEmpty)
+        // No record of what it heard: it knows its own chat.
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: nil, hasSession: true, isLinked: true).isEmpty)
+        // A new session here on a linked Mac gets the chat's latest. On a lone Mac there's nothing it could have missed.
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: nil, hasSession: false, isLinked: true) == ids)
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: nil, hasSession: false, isLinked: false).isEmpty)
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: BotCatchUp.fromTheStart, hasSession: true, isLinked: true) == ids)
+    }
+
+    @Test func messagesFromTheOtherMacInTheMiddleAreStillHeard() {
+        // The Studio's session had heard up to "here-2". What the Air wrote while apart sorts before that.
+        let merged = ["here-1", "air-1", "air-2", "here-2"]
+        let arrived: Set<String> = ["air-1", "air-2"]
+        let heard = BotCatchUp.heardAfterMerge(heard: "here-2", merged: merged, arrived: arrived)
+        #expect(heard == "here-1")
+        #expect(BotCatchUp.unheard(messages: merged, id: { $0 }, heard: heard, hasSession: true, isLinked: true) == ["air-1", "air-2", "here-2"])
+        // Nothing moves when they come after it.
+        #expect(BotCatchUp.heardAfterMerge(heard: "here-1", merged: merged, arrived: ["here-2"]) == "here-1")
+        // At the very start.
+        #expect(BotCatchUp.heardAfterMerge(heard: "here-1", merged: ["air-1", "here-1"], arrived: ["air-1"]) == BotCatchUp.fromTheStart)
+        #expect(BotCatchUp.heardAfterMerge(heard: nil, merged: merged, arrived: arrived) == nil)
+        #expect(BotCatchUp.seenAfterMerge(seen: 4, merged: merged, arrived: arrived) == 1)
+        #expect(BotCatchUp.seenAfterMerge(seen: 1, merged: merged, arrived: ["here-2"]) == 1)
+    }
+
+    @Test func aCatchUpStaysASensibleSize() {
+        let long = String(repeating: "x", count: 5000)
+        let lines = BotCatchUp.lines((0..<50).map { (who: "Bot\($0)", text: long) })
+        #expect(lines.count * BotCatchUp.maximumCharactersEach <= BotCatchUp.maximumCharactersTotal + BotCatchUp.maximumCharactersEach)
+        #expect(lines.allSatisfy { $0.count <= BotCatchUp.maximumCharactersEach + 8 })
+        // The newest are the ones kept.
+        #expect(lines.last?.hasPrefix("Bot49:") == true)
+        #expect(lines.joined().count <= BotCatchUp.maximumCharactersTotal)
+        #expect(BotCatchUp.lines([(who: "A", text: "hi")]) == ["A: hi"])
+    }
+
     @Test func theMacTheOwnerNamedForARun() {
         #expect(CodingDeviceWords.named(in: "run it on the Studio") == "studio")
         #expect(CodingDeviceWords.named(in: "build this on my MacBook Air") == "air")

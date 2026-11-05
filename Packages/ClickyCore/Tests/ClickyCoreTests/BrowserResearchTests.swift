@@ -358,13 +358,25 @@ final class DeviceRoutingTests: XCTestCase {
         DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, thisMac: mac, paired: paired, otherMacOnline: online)
     }
 
-    func testBotsRunOnTheStudioAndTheAirSendsThem() {
+    func testBotsAndCodingRunOnTheMacYoureUsing() {
         XCTAssertEqual(route(.bots, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.bots, on: .macBookAir), .sendAcross)
+        XCTAssertEqual(route(.bots, on: .macBookAir), .runHere)
     }
 
-    func testTheAirNeverRunsBotsWhileTheStudioIsAway() {
-        XCTAssertEqual(route(.bots, on: .macBookAir, online: false), .waitForOtherMac)
+    func testRoutinesFireOnTheStudioAndTheAirSendsThem() {
+        XCTAssertEqual(route(.routines, on: .macStudio), .runHere)
+        XCTAssertEqual(route(.routines, on: .macBookAir), .sendAcross)
+    }
+
+    func testTheAirKeepsWorkingWhileTheStudioIsAway() {
+        XCTAssertEqual(route(.bots, on: .macBookAir, online: false), .runHere)
+        // Routines still wait for the Mac that fires them.
+        XCTAssertEqual(route(.routines, on: .macBookAir, online: false), .waitForOtherMac)
+    }
+
+    func testBotsSetToTheStudioByHandStillGoThere() {
+        XCTAssertEqual(route(.bots, .macStudio, on: .macBookAir), .sendAcross)
+        XCTAssertEqual(route(.bots, .macStudio, on: .macBookAir, online: false), .waitForOtherMac)
     }
 
     func testAMacOnItsOwnRunsItsBots() {

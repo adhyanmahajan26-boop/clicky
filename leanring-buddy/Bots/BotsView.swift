@@ -663,6 +663,8 @@ struct BotChatScreen: View {
                                 if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
                             } else if let exchange = BotDMThread.parseCard(message.card) {
                                 BotDMCard(store: store, senderID: message.author, targetID: exchange.targetID, exchangeID: exchange.exchangeID, at: message.at)
+                            } else if let waiting = BotWaitingCard.id(of: message.card) {
+                                BotWaitingCard(store: store, id: waiting, text: message.text)
                             } else if message.author == BotsStore.noteAuthor {
                                 ChatNote(text: message.text)
                             } else if message.author == "user" {

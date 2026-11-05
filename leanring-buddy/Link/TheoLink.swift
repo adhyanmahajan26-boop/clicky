@@ -56,7 +56,8 @@ final class TheoLink: ObservableObject {
     private var waitingOrders: [String: (String) -> Void] = [:]
     private var waitingReplies: [String: ([String: String]?) -> Void] = [:]
     private var isSyncQueued = false
-    private var waitingRequests: [(action: String, fields: [String: String])] = []
+    /// What waits for the other Mac, kept on disk so a restart doesn't lose it.
+    @Published private(set) var waitingRequests: [LinkWaitingRequest] = []
     private var connectionState = "none"
     private var isConnectionReady = false
     private var failedDials = 0
@@ -64,6 +65,9 @@ final class TheoLink: ObservableObject {
     private static let dialTimeoutSeconds: UInt64 = 15
 
     private let queue = DispatchQueue(label: "theo.link")
+    private static var waitingFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/link-waiting.json")
+    }
     private static var secretFile: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/link-secret")
     }
@@ -175,6 +179,7 @@ final class TheoLink: ObservableObject {
             code = normalized
             isPaired = true
         }
+        waitingRequests = (try? Data(contentsOf: Self.waitingFile)).flatMap { try? LinkCoding.decoder.decode([LinkWaitingRequest].self, from: $0) } ?? []
     }
 
     func start() {
@@ -434,8 +439,7 @@ final class TheoLink: ObservableObject {
             digestTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.sendDigest() }
             }
-            for waiting in waitingRequests { _ = request(waiting.action, waiting.fields) }
-            waitingRequests.removeAll()
+            sendWhatWaited(to: envelope.name.map(Self.shortName) ?? "other Mac")
             HarnessCenter.shared.refresh()
             if (envelope.build ?? 0) > localBuild {
                 // The other Mac is ahead: offer the update here too, so they don't drift.
@@ -508,8 +512,48 @@ final class TheoLink: ObservableObject {
     /// Like `request`, but if the other Mac's away it goes as soon as it's back. True when it went now.
     func requestWhenConnected(_ action: String, _ fields: [String: String]) -> Bool {
         if request(action, fields) { return true }
-        waitingRequests.append((action, fields))
+        _ = queueForOtherMac(action, fields, room: nil, label: nil, canRunHere: false)
         return false
+    }
+
+    /// Waits for the other Mac. Returns its id, for the card that says so.
+    func queueForOtherMac(_ action: String, _ fields: [String: String], room: String?, label: String?, canRunHere: Bool) -> String {
+        let waiting = LinkWaitingRequest(action: action, fields: fields, room: room, label: label, canRunHere: canRunHere)
+        waitingRequests.append(waiting)
+        saveWaiting()
+        return waiting.id
+    }
+
+    func waiting(_ id: String) -> LinkWaitingRequest? { waitingRequests.first { $0.id == id } }
+
+    /// Takes something out of the queue, to run here instead.
+    func takeWaiting(_ id: String) -> LinkWaitingRequest? {
+        guard let index = waitingRequests.firstIndex(where: { $0.id == id }) else { return nil }
+        let taken = waitingRequests.remove(at: index)
+        saveWaiting()
+        return taken
+    }
+
+    private func saveWaiting() {
+        let file = Self.waitingFile
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? LinkCoding.encoder.encode(waitingRequests) { try? data.write(to: file, options: .atomic) }
+    }
+
+    /// The Macs have met again: what waited goes now, and the chat says so. Anything over a day old isn't what the owner wants any more, and the chat says that too.
+    private func sendWhatWaited(to macName: String) {
+        guard !waitingRequests.isEmpty else { return }
+        let waited = waitingRequests
+        waitingRequests.removeAll()
+        saveWaiting()
+        for item in waited {
+            let isStale = Date().timeIntervalSince(item.at) > DeviceRouting.maximumWaitSeconds
+            if !isStale { _ = request(item.action, item.fields) }
+            guard let room = item.room, let label = item.label else { continue }
+            BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: isStale
+                                                 ? "\(label) didn't go: your \(macName) was away for over a day. Send it again if you still want it."
+                                                 : "Your \(macName) is back, so \(label) went to it."), to: room)
+        }
     }
 
     private func sendDigest() {
@@ -532,6 +576,19 @@ final class TheoLink: ObservableObject {
         digests.merge(fromDisk) { _, new in new }
         return digests
     }
+}
+
+/// Something waiting for the other Mac to come back.
+struct LinkWaitingRequest: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var action: String
+    var fields: [String: String]
+    /// The chat that's told when it goes. Nil: nothing in a chat is waiting on it.
+    var room: String?
+    /// How the chat refers to it: "your message", "**Moon page**".
+    var label: String?
+    var canRunHere: Bool
+    var at = Date()
 }
 
 struct ClickyMacItem: Codable {

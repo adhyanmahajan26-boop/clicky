@@ -79,7 +79,41 @@ public enum DeviceRoute: Equatable, Sendable {
     case notHere
 }
 
+/// Where one bot's turn goes, once its engine is taken into account.
+public enum BotTurnRoute: Equatable, Sendable {
+    case runHere
+    /// The owner set bots to the other Mac, and it's connected.
+    case sendAcross
+    /// The owner set bots to the other Mac, and it can't be reached. The chat says so at once, it goes when that Mac is back, and it's offered here meanwhile if this Mac can.
+    case waitForOtherMac(canRunHere: Bool)
+    /// It would run here, but its engine can't, and the other Mac's can: this one turn goes across, and the chat says why.
+    case engineOnOtherMac
+    /// Its engine can't run here and the other Mac can't help. It tries here, and says what's wrong.
+    case tryHere
+}
+
 public enum DeviceRouting {
+    /// The Mac travels, so nothing here may depend on the other Mac unless the owner set this to that Mac.
+    public static func botTurn(choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool, engineHere: Bool, engineThere: Bool) -> BotTurnRoute {
+        switch route(.bots, choice: choice, thisMac: thisMac, paired: paired, otherMacOnline: otherMacOnline) {
+        case .sendAcross: return .sendAcross
+        case .waitForOtherMac: return .waitForOtherMac(canRunHere: engineHere)
+        case .runHere, .notHere:
+            if engineHere { return .runHere }
+            return paired && otherMacOnline && engineThere ? .engineOnOtherMac : .tryHere
+        }
+    }
+
+    /// Said at once in the chat when something can't reach the Mac it's set to.
+    public static func unreachableLine(otherMac: String, thisMac: String, engineProblem: String?) -> String {
+        let reach = "Your \(otherMac) isn't reachable right now. This starts when it is."
+        guard let engineProblem else { return reach }
+        return "\(reach) It can't run on this \(thisMac) instead: \(engineProblem)."
+    }
+
+    /// A queued message or run this old isn't what the owner wants any more.
+    public static let maximumWaitSeconds: TimeInterval = 24 * 60 * 60
+
     /// `paired` false: there's only this Mac, so it does everything it's able to.
     public static func route(_ feature: DeviceFeature, choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool) -> DeviceRoute {
         // Hidden screens exist only on a Mac Studio, whatever the setting says.

@@ -84,7 +84,9 @@ extension BotsStore {
 
     /// When this bot's engine can't run on this Mac but can on the other, connected one: that Mac's name, and why. Nil means it runs here.
     func turnGoesAcross(_ bot: NativeBot) -> (mac: String, why: String)? {
-        guard let problem = EngineReadiness.problem(with: bot.provider), TheoLink.shared.isConnected, let peer = TheoLink.shared.peerName, peerDevice?.harnesses[bot.provider] == true else { return nil }
+        guard let problem = EngineReadiness.problem(with: bot.provider), let peer = TheoLink.shared.peerName,
+              DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected,
+                                    engineHere: false, engineThere: peerDevice?.harnesses[bot.provider] == true) == .engineOnOtherMac else { return nil }
         return (peer, "\(problem) on the \(TheoLink.shortName(TheoLink.localName))")
     }
 
