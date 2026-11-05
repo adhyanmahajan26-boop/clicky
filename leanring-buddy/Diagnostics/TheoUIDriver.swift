@@ -642,8 +642,11 @@ extension TheoUIDriver {
             guard let prompt = command["prompt"] as? String, let title = command["title"] as? String else { respond(false, nil, "Needs prompt and title."); return true }
             let chat = (command["chat"] as? String).map { HarnessChatChoice(idOrTitle: $0) }
             BotsStore.shared.submitToT3(prompt: prompt, title: title, repo: (command["folder"] as? String).map { URL(fileURLWithPath: $0, isDirectory: true) }, room: command["room"] as? String ?? BotsStore.teamID,
-                                        harness: command["harness"] as? String, modelChoice: command["model"] as? String, effortChoice: command["effort"] as? String, macName: command["mac"] as? String, continuing: chat)
-            respond(true, ["started": title], nil)
+                                        harness: command["harness"] as? String, modelChoice: command["model"] as? String, effortChoice: command["effort"] as? String, macName: command["mac"] as? String, continuing: chat) { didStart, problem in
+                // {await: true}: the answer is whether it really started.
+                if command["await"] as? Bool == true { respond(true, ["didStart": didStart, "problem": problem ?? ""], nil) }
+            }
+            if command["await"] as? Bool != true { respond(true, ["started": title], nil) }
         case "uiPrismEval":
             guard let cases = command["cases"] as? String, let out = command["out"] as? String else { respond(false, nil, "Needs cases and out."); return true }
             Task { @MainActor in respond(true, await PrismEval.run(casesPath: cases, outPath: out), nil) }

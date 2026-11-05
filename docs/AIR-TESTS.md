@@ -29,7 +29,10 @@ ls ~/.t3/bots 2>/dev/null
 find ~/.t3 -type f -not -path '*/logs/*' -exec stat -f '%N %m' {} + | sort > "$SCRATCH/t3-before.txt"
 defaults read com.personal.clicky v3.devices.bots 2>/dev/null
 defaults read com.personal.clicky v3.devices.routines 2>/dev/null
+python3 -c 'import json,os; print([(r.get("name"), r.get("target"), r.get("paused")) for r in json.load(open(os.path.expanduser("~/Library/Application Support/Theo/Bots/routines.json")))])'
 ```
+
+That last line lists the real Air's routines, by name, target and whether they're paused, and nothing else. Routines now sync between the Macs, so these join the Studio's the first time the Macs link, and from then on they fire there. Put the list in your report.
 
 `$SCRATCH` is your scratchpad. Stock T3 should be v0.1.7 at `~/.t3/bin/t3`; say if it isn't. Don't print the contents of any file under `~/.t3`.
 
@@ -227,6 +230,6 @@ Or the `pkill` line from step 2. The `air-t3` project stays in T3 Code's list: o
 
 - Build tested, and whether real Theo was updated or you ran from the zip.
 - The seven rows with ✅, ⚠️ or ❌ and evidence paths.
-- `v3.devices.bots` and `v3.devices.routines` on the real Air.
+- `v3.devices.bots` and `v3.devices.routines` on the real Air, and its routines from step 0.
 - Whether stock T3 is still stock, with the file names that changed.
 - Everything your tests created or changed outside the test profile and your scratchpad.

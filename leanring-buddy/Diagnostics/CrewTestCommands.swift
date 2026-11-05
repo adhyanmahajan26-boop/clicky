@@ -56,7 +56,7 @@ enum CrewTestCommands {
         guard let id = command["bot"] as? String, let bot = store.bot(id) else { return ["error": "No such bot."] }
         let room = command["room"] as? String ?? id
         return ["persona": BotPrompts.persona(bot: bot, team: store.bots), "awareness": BotPrompts.awarenessNote(for: bot, room: room), "reach": BotPrompts.reachNote(for: bot),
-                "ceoNote": store.ceoTurnNote(for: bot), "memory": bot.memoryPath, "workspace": BotRunner.workspace.path, "tools": BotRunner.claudeAllowedTools(for: bot)] as [String: Any]
+                "runMac": store.runMac(named: nil, room: room), "ceoNote": store.ceoTurnNote(for: bot), "memory": bot.memoryPath, "workspace": BotRunner.workspace.path, "tools": BotRunner.claudeAllowedTools(for: bot)] as [String: Any]
     }
 
     private static func crew(_ command: [String: Any], window: NSWindow?) -> Any {

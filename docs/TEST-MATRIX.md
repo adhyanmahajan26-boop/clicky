@@ -21,6 +21,16 @@ Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor A
 | ✅ | A word game between bots ends after 3 round trips | `live/team1.txt` |
 | ⚠️ | The plain line at the limit didn't show live, because the models stopped first. Unit-tested only | `BotProtocolTests` |
 | ✅ | A routine that messages two bots: one note, two cards, one result. Before: 3 or 4 full copies | `live/routine-brief.txt` |
+| ✅ | A routine where Theo asks two group chats: one note, one result holding both answers. Before: a follow-up per group | `live/smoke-final-one.txt` |
+| ✅ | Routines on both Macs: one made on the "Air" reaches the "Studio" in about a second and fires only there; its history shows on both; Pause and Delete from the "Air" apply on the "Studio" | `live/smoke-final-two.txt`, `live/smoke-routine-fires.txt` |
+| ✅ | Theo has a group plan and build something: exactly one run, no stray folder | `live/smoke-final-one.txt` |
+| ✅ | A continued T3 Code thread (fork, Haiku) stays one run, and the same thread carries on | `live/smoke-final-one.txt` |
+| ✅ | A run sent to the other Mac reports that Mac's real answer: refused for a missing folder, started for a real one | `live/smoke-final-two.txt` |
+| ✅ | Other Mac away and the run continues a chat there: no "run it here", and the chat says why | `live/smoke-final-two.txt` |
+| ✅ | Bots & coding set to the Studio: "where you are" names both Macs and why, and the run card defaults to the Studio | `live/smoke-final-two.txt` |
+| ✅ | New folder with a name that exists: a clear note, and nothing else is made or picked | `live/new-folder-existing.txt`, `shots/existing-folder.png` |
+| ✅ | Restarting Theo doesn't mark everything as just changed, so the Mac started last no longer overrides newer edits | `live/smoke-routine-fires.txt` |
+| ⚠️ | Unit-tested or read in the code, not forced live: a private turn run on the other Mac, the member waiting when the owner speaks, a continued chat whose message never went in, git failing on a new folder, continuing with a remote latest run, the chats list in a group turn | unit tests where testable |
 | ✅ | Group: one at a time, later bots refer to earlier ones, one wrap-up | `live/smoke-after-review.txt`, `shots/group-chat.png` |
 | ✅ | Stop on a group stops all of it at once | `live/group2.txt` |
 | ✅ | Build discussion: plan, a critique from each, merge, exactly one run, no stray folder | `live/smoke-build-isolated.txt` |
@@ -58,7 +68,7 @@ Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor A
 
 With the Macs apart, two things still can't run here. A routine set up on the Air waits for the Mac that fires routines, and the chat says so. Hidden screens exist only on a Mac Studio, and a bot says so at once.
 
-Tests on the final commit: ClickyCore 1,249 passed, app 86 passed.
+Tests on the final commit: ClickyCore 1,255 passed, app 100 passed.
 
 ## Round 3 (2026-11-02): Clicky's team
 

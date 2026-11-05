@@ -221,6 +221,8 @@ final class BotsStore: ObservableObject {
     private var linkSavedBots: [NativeBot] = []
     private var linkSavedGroups: [BotGroup] = []
     private var linkRoutineStamps = LinkMerge.Stamps()
+    /// Saves while Theo is starting up aren't edits: nothing has been compared yet, and everything would look new.
+    private var hasLoadedLinkStamps = false
     private var linkSavedRoutines: [BotRoutine] = []
     private var linkSavedLayout = BotsLayout()
     /// The conversation on screen, which collects no unread count.
@@ -2016,7 +2018,7 @@ extension BotsStore {
     private func writeRoutines() {
         noteLinkChanges()
         if let data = try? Self.encoder.encode(routines) { try? data.write(to: routinesFile, options: .atomic) }
-        TheoLink.shared.syncSoon()
+        if hasLoadedLinkStamps { TheoLink.shared.syncSoon() }
     }
 
     func writeLayout() {
@@ -2569,11 +2571,12 @@ extension BotsStore {
         linkSavedBots = bots
         linkSavedGroups = groups
         linkSavedLayout = layout
+        hasLoadedLinkStamps = true
     }
 
     /// Runs on every save: what the owner changed here wins over older changes on the other Mac.
     fileprivate func noteLinkChanges() {
-        guard !isApplyingLink else { return }
+        guard hasLoadedLinkStamps, !isApplyingLink else { return }
         LinkMerge.noteChanges(from: linkSavedBots, to: bots, id: \.id, stamps: &linkBotStamps)
         LinkMerge.noteChanges(from: linkSavedGroups, to: groups, id: \.id, stamps: &linkGroupStamps)
         // Only what the owner decides counts as a change: a run or the next due time isn't one.
