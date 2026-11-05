@@ -1358,7 +1358,9 @@ final class BotsStore: ObservableObject {
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.submitting = true
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, continuing: continuing)
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, continuing: continuing) { [weak self] in
+                    self?.post(BotChatMessage(author: Self.noteAuthor, text: "Another \(HarnessCatalog.label(target)) run in this folder is still starting, so **\(title)** goes right after it. That keeps each run in its own chat."), to: room)
+                }
                 run.room = room
                 run.alsoRoom = alsoRoom
                 guard let self else { return }
@@ -1517,8 +1519,23 @@ final class BotsStore: ObservableObject {
     private func upsert(_ run: T3Run) {
         var run = run
         if run.origin == nil { run.origin = TheoLink.localName }
-        if let index = t3Runs.firstIndex(where: { $0.id == run.id }) { t3Runs[index] = run } else { t3Runs.append(run) }
+        if let index = t3Runs.firstIndex(where: { $0.id == run.id }) {
+            // What's been found out about its chat meanwhile stays: the copy being saved can be from before.
+            if run.sessionID == nil { run.sessionID = t3Runs[index].sessionID }
+            if run.chatUnknown == nil { run.chatUnknown = t3Runs[index].chatUnknown }
+            t3Runs[index] = run
+        } else {
+            t3Runs.append(run)
+        }
         if let data = try? Self.encoder.encode(t3Runs) { try? data.write(to: runsFile, options: .atomic) }
+    }
+
+    /// Which chat a new run made, for a harness that doesn't say. A run can still be on its way to the list.
+    func noteChat(of runID: String, _ found: HarnessNewChat) async {
+        for _ in 0..<30 where !t3Runs.contains(where: { $0.id == runID }) { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        guard var run = t3Runs.first(where: { $0.id == runID }) else { return }
+        if case .found(let id) = found { run.sessionID = id } else { run.chatUnknown = true }
+        upsert(run)
     }
 
     func post(_ message: BotChatMessage, to conversationID: String) {
@@ -2622,12 +2639,25 @@ extension BotsStore {
         case "studioView":
             if let view = fields["view"] { StudioController.shared.receiveRemoteView(view) }
         case "research":
-            // The other Mac asked: it runs here, on the screens, and the answer reaches it through the chats.
+            // The other Mac asked: it runs here, on the screens. Its answer reaches that Mac through the chats, or straight back to a bot that's waiting for it.
             guard let question = fields["question"], let research = CompanionManager.current?.researchController else { return }
             let urls = (fields["urls"] ?? "").split(separator: "\n").compactMap { URL(string: String($0)) }.filter { ResearchURLPolicy.isAllowed($0) }
             let request = urls.isEmpty ? (ResearchTrigger.parse(question) ?? ResearchRequest(source: .topic(question), question: question))
                 : ResearchRequest(source: .links(count: urls.count), question: question, namedURLs: urls)
-            research.start(request, speaks: false, reportsToCEO: fields["ceo"] == "1")
+            guard let replyID = fields["replyID"] else {
+                research.start(request, speaks: false, reportsToCEO: fields["ceo"] == "1", askedByOtherMac: true)
+                return
+            }
+            guard !research.isRunning else {
+                _ = TheoLink.shared.request("reply", ["replyID": replyID, "message": "Clicky's agents on your \(TheoLink.shortName(TheoLink.localName)) are already researching something, so I didn't start this: \(question)"])
+                return
+            }
+            research.start(request, speaks: false, askedByOtherMac: true)
+            let run = research.runNumber
+            Task {
+                let brief = await Self.brief(of: research, run: run)
+                _ = TheoLink.shared.request("reply", ["replyID": replyID, "answer": brief ?? ""])
+            }
         case "updateWhenIdle":
             // Only ever the normal update, with its checksum and signature checks.
             CompanionManager.current?.updateController.installWhenIdle()

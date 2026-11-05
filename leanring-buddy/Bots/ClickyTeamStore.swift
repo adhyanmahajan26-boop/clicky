@@ -644,23 +644,51 @@ extension BotsStore {
             post(BotChatMessage(author: bot.id, text: "I couldn't start the research: Clicky isn't ready on this Mac. Nothing was done."), to: room)
             return
         }
+        let route = DeviceRoles.route(.researchBrowser)
+        let otherMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        // Set to the other Mac and it's there: the work happens there, and its brief comes back here.
+        if route == .sendAcross {
+            post(BotChatMessage(author: Self.noteAuthor, text: "Researching on your \(otherMac)."), to: room)
+            Task { [weak self] in
+                let reply = await TheoLink.shared.ask("research", ["question": question], timeoutSeconds: Self.researchWaitSeconds + 15)
+                guard let self else { return }
+                if let brief = reply?["answer"], !brief.isEmpty {
+                    self.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
+                } else if let problem = reply?["message"], !problem.isEmpty {
+                    self.post(BotChatMessage(author: bot.id, text: problem), to: room)
+                } else {
+                    self.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" on your \(otherMac) didn't come back, so I don't have an answer."), to: room)
+                }
+            }
+            return
+        }
         guard !research.isRunning else {
             post(BotChatMessage(author: bot.id, text: "Clicky's agents are already researching something, so I didn't start this: \(question)"), to: room)
             return
         }
+        if route == .waitForOtherMac { post(BotChatMessage(author: Self.noteAuthor, text: ResearchController.researchingHereLine(otherMac: otherMac)), to: room) }
         research.start(ResearchTrigger.parse(question) ?? ResearchRequest(source: .topic(question), question: question), speaks: false)
         let run = research.runNumber
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            let deadline = Date().addingTimeInterval(300)
-            while Date() < deadline, research.isRunning, research.runNumber == run { try? await Task.sleep(nanoseconds: 1_000_000_000) }
-            let brief = (research.lastStatus["brief"] as? String) ?? ""
-            if research.runNumber == run, !research.isRunning, !brief.isEmpty {
-                self?.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
+            let brief = await Self.brief(of: research, run: run)
+            guard let self else { return }
+            if let brief {
+                self.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
             } else {
-                self?.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" didn't come back with anything."), to: room)
+                self.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" didn't come back with anything."), to: room)
             }
         }
+    }
+
+    static let researchWaitSeconds: TimeInterval = 300
+
+    /// Waits for that research run to end. Its brief, or nil when it ended without one or ran out of time.
+    static func brief(of research: ResearchController, run: Int) async -> String? {
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let deadline = Date().addingTimeInterval(researchWaitSeconds)
+        while Date() < deadline, research.isRunning, research.runNumber == run { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        guard research.runNumber == run, !research.isRunning, let brief = research.lastStatus["brief"] as? String, !brief.isEmpty else { return nil }
+        return brief
     }
 
     /// A screen for a bot, on a card: nothing changes until the owner confirms it.

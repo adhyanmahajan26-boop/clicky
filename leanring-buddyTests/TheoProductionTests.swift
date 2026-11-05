@@ -64,6 +64,26 @@ struct TheoProductionTests {
         #expect(new.starts(with: ["--session-id", "id-1"]))
     }
 
+    @Test func aNewChatCanHaveItsIdFromTheStart() {
+        func args(_ harness: String) -> [String] { HarnessCoding.interactiveArguments(harness: harness, model: nil, effort: nil, folder: "/f", newSessionID: "id-1") }
+        #expect(args("claude").starts(with: ["--session-id", "id-1"]))
+        #expect(args("gemini").starts(with: ["--session-id", "id-1"]))
+        #expect(args("grok").starts(with: ["--session-id", "id-1"]))
+        // Cursor hands out the id, so its new chat is resumed.
+        #expect(args("cursor").starts(with: ["--resume", "id-1"]))
+        // These have no such flag: their runs wait their turn instead.
+        #expect(!args("codex").contains("id-1"))
+        #expect(!args("opencode").contains("id-1"))
+        func headless(_ harness: String) -> [String] { HarnessCoding.headlessArguments(harness: harness, model: nil, effort: nil, folder: "/f", prompt: "hi", outFile: "/o", newSessionID: "id-1") }
+        #expect(headless("claude").contains("--session-id"))
+        #expect(headless("gemini").contains("--session-id"))
+        #expect(headless("grok").contains("--session-id"))
+        let cursor = headless("cursor")
+        #expect(cursor.contains("--resume") && !cursor.contains("--session-id"))
+        #expect(!headless("codex").contains("id-1"))
+        #expect(!headless("opencode").contains("id-1"))
+    }
+
     @Test func aHeadlessRunContinuesByIdToo() {
         func args(_ harness: String) -> [String] { HarnessCoding.headlessArguments(harness: harness, model: nil, effort: nil, folder: "/f", prompt: "hi", outFile: "/o", resume: "abc") }
         #expect(args("claude").contains("--resume"))

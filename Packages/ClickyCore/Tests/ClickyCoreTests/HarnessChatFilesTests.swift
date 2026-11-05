@@ -181,6 +181,100 @@ struct HarnessChatFilesTests {
     }
 }
 
+struct HarnessChatGateTests {
+    private let folder = HarnessChatGate.Key(harness: "codex", folder: "/p/moon")
+    private let start = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test func theFirstRunGoesAndTheNextWaitsForItsChat() {
+        var gate = HarnessChatGate()
+        let first = UUID(), second = UUID()
+        #expect(gate.ask(folder, ticket: first, now: start) == .go)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(5)) == .wait)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(10)) == .wait)
+        gate.leave(folder, ticket: first)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(11)) == .go)
+    }
+
+    @Test func anotherFolderOrHarnessDoesntWait() {
+        var gate = HarnessChatGate()
+        #expect(gate.ask(folder, ticket: UUID(), now: start) == .go)
+        #expect(gate.ask(HarnessChatGate.Key(harness: "codex", folder: "/p/sun"), ticket: UUID(), now: start) == .go)
+        #expect(gate.ask(HarnessChatGate.Key(harness: "opencode", folder: "/p/moon"), ticket: UUID(), now: start) == .go)
+    }
+
+    @Test func theNextRunGoesAnywayWhenTheChatNeverShows() {
+        var gate = HarnessChatGate()
+        let first = UUID(), second = UUID()
+        #expect(gate.ask(folder, ticket: first, now: start) == .go)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(HarnessChatGate.waitSeconds - 1)) == .wait)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(HarnessChatGate.waitSeconds)) == .go)
+        // The late one finishing doesn't free the turn the next one now holds.
+        gate.leave(folder, ticket: first)
+        #expect(gate.ask(folder, ticket: UUID(), now: start.addingTimeInterval(HarnessChatGate.waitSeconds + 1)) == .wait)
+    }
+
+    @Test func theTimeStartsWhenThePromptGoesIn() {
+        var gate = HarnessChatGate()
+        let first = UUID(), second = UUID()
+        #expect(gate.ask(folder, ticket: first, now: start) == .go)
+        gate.started(folder, ticket: first, now: start.addingTimeInterval(30))
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(HarnessChatGate.waitSeconds + 1)) == .wait)
+        #expect(gate.ask(folder, ticket: second, now: start.addingTimeInterval(30 + HarnessChatGate.waitSeconds)) == .go)
+    }
+
+    @Test func runsGoInTheOrderTheyAsked() {
+        var gate = HarnessChatGate()
+        let first = UUID(), second = UUID(), third = UUID()
+        #expect(gate.ask(folder, ticket: first, now: start) == .go)
+        #expect(gate.ask(folder, ticket: second, now: start) == .wait)
+        #expect(gate.ask(folder, ticket: third, now: start) == .wait)
+        gate.leave(folder, ticket: first)
+        #expect(gate.ask(folder, ticket: third, now: start) == .wait)
+        #expect(gate.ask(folder, ticket: second, now: start) == .go)
+        // Asking again while it holds the turn changes nothing.
+        #expect(gate.ask(folder, ticket: second, now: start) == .go)
+    }
+
+    @Test func aRunThatGaveUpLeavesTheQueue() {
+        var gate = HarnessChatGate()
+        let first = UUID(), second = UUID(), third = UUID()
+        #expect(gate.ask(folder, ticket: first, now: start) == .go)
+        #expect(gate.ask(folder, ticket: second, now: start) == .wait)
+        #expect(gate.ask(folder, ticket: third, now: start) == .wait)
+        gate.leave(folder, ticket: second)
+        gate.leave(folder, ticket: first)
+        #expect(gate.ask(folder, ticket: third, now: start) == .go)
+    }
+
+    private func chat(_ id: String, at seconds: Double) -> HarnessChat {
+        HarnessChat(id: id, title: id, updatedAt: start.addingTimeInterval(seconds))
+    }
+
+    @Test func aRunsChatIsTheOneThatWasntThereBefore() {
+        let old = [chat("old", at: -100)]
+        #expect(HarnessNewChat.find(before: ["old"], chats: old, since: start) == .notYet)
+        #expect(HarnessNewChat.find(before: ["old"], chats: old + [chat("new", at: 3)], since: start) == .found("new"))
+    }
+
+    @Test func anOldChatBeingUsedIsntTheNewOne() {
+        // A chat in the folder carrying on elsewhere stays old, however recently it changed.
+        #expect(HarnessNewChat.find(before: ["busy"], chats: [chat("busy", at: 10)], since: start) == .notYet)
+        // One the list didn't reach before isn't new either.
+        #expect(HarnessNewChat.find(before: [], chats: [chat("older", at: -100)], since: start) == .notYet)
+    }
+
+    @Test func twoNewChatsCantBeToldApart() {
+        let chats = [chat("a", at: 2), chat("b", at: 3)]
+        #expect(HarnessNewChat.find(before: [], chats: chats, since: start) == .moreThanOne)
+    }
+
+    @Test func onlyHarnessesThatTakeAnIdSkipTheGate() {
+        #expect(HarnessChatGate.takesNewChatID == ["claude", "gemini", "grok"])
+        #expect(!HarnessChatGate.takesNewChatID.contains("codex"))
+        #expect(!HarnessChatGate.takesNewChatID.contains("opencode"))
+    }
+}
+
 struct BotChatMergeTests {
     private struct Line { let id: String; let at: Date }
 

@@ -9,6 +9,79 @@
 import CryptoKit
 import Foundation
 
+/// Keeps each new run in its own chat. Most harnesses can be told a new chat's id, or hand one out. For the ones that say nothing, new runs in
+/// a folder go one at a time, so the chat that appears there is that run's.
+public struct HarnessChatGate: Sendable {
+    public struct Key: Hashable, Sendable {
+        public var harness: String
+        public var folder: String
+
+        public init(harness: String, folder: String) {
+            self.harness = harness
+            self.folder = folder
+        }
+    }
+
+    public enum Decision: Equatable, Sendable { case go, wait }
+
+    /// These take a new chat's id up front, as each one's --help says. Cursor hands one out (`create-chat`) and T3 Code prints its thread's.
+    public static let takesNewChatID: Set<String> = ["claude", "gemini", "grok"]
+    /// How long a run has to show its chat. After that it can't be told, and the next run goes.
+    public static let waitSeconds: TimeInterval = 45
+
+    private struct Holder: Sendable {
+        var ticket: UUID
+        var since: Date
+    }
+
+    private var holders: [Key: Holder] = [:]
+    private var queues: [Key: [UUID]] = [:]
+
+    public init() {}
+
+    /// Asking to start: first come, first served, one at a time for each harness and folder.
+    public mutating func ask(_ key: Key, ticket: UUID, now: Date = Date()) -> Decision {
+        if holders[key]?.ticket == ticket { return .go }
+        if queues[key]?.contains(ticket) != true { queues[key, default: []].append(ticket) }
+        if let holder = holders[key], now.timeIntervalSince(holder.since) < Self.waitSeconds { return .wait }
+        guard queues[key]?.first == ticket else { return .wait }
+        queues[key]?.removeFirst()
+        if queues[key]?.isEmpty == true { queues[key] = nil }
+        holders[key] = Holder(ticket: ticket, since: now)
+        return .go
+    }
+
+    /// Its prompt has gone in: the time to show its chat starts now.
+    public mutating func started(_ key: Key, ticket: UUID, now: Date = Date()) {
+        if holders[key]?.ticket == ticket { holders[key]?.since = now }
+    }
+
+    /// Its chat is known, or can't be, or it never started: the next run can go.
+    public mutating func leave(_ key: Key, ticket: UUID) {
+        if holders[key]?.ticket == ticket { holders[key] = nil }
+        queues[key]?.removeAll { $0 == ticket }
+        if queues[key]?.isEmpty == true { queues[key] = nil }
+    }
+}
+
+/// Which chat a new run made: the one that wasn't in its folder before it started.
+public enum HarnessNewChat: Equatable, Sendable {
+    case found(String)
+    case notYet
+    /// Something else started a chat there too, so it can't be told which is the run's.
+    case moreThanOne
+
+    /// `before`: the chats in the folder just before the run started. `since`: anything older isn't new, even if it wasn't listed then.
+    public static func find(before: Set<String>, chats: [HarnessChat], since: Date) -> HarnessNewChat {
+        let new = chats.filter { !before.contains($0.id) && $0.updatedAt >= since }
+        switch new.count {
+        case 0: return .notYet
+        case 1: return .found(new[0].id)
+        default: return .moreThanOne
+        }
+    }
+}
+
 /// One existing chat of a harness in a folder.
 public struct HarnessChat: Codable, Equatable, Identifiable, Sendable {
     /// What the harness resumes it by.

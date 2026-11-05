@@ -164,6 +164,7 @@ enum HarnessChats {
     }
 
     /// The session a harness started for a run in this folder, for a follow-up once its terminal has gone: never "the last one in this folder".
+    /// Only for a run from before runs recorded their chat: anything newer knows its own, or says it couldn't tell.
     static func session(startedFor run: T3Run) async -> String? {
         guard let harness = run.harness, harness != "t3" else { return nil }
         let chats = await list(harness: harness, folder: run.worktree ?? run.folder)
@@ -207,7 +208,7 @@ enum HarnessChats {
     }
 
     /// A tool's output, or nothing when it fails: no list is an empty list, never an error in the chat.
-    private static func output(of executable: URL, _ arguments: [String], in folder: String? = nil) -> String {
+    static func output(of executable: URL, _ arguments: [String], in folder: String? = nil) -> String {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments

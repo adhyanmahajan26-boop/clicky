@@ -47,12 +47,18 @@ Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor A
 | ⚠️ | Continue a chat: Gemini is not signed in on the Studio and has no chats. Reader unit-tested only | `HarnessChatFilesTests` |
 | ⏳ | Continue a chat: stock T3 Code on the Air, with stock left stock | `AIR-TESTS.md` |
 | ✅ | A plan limit shows the real reason: "Cursor Agent can't run this on your plan: …" | `live/smoke-after-review.txt` |
+| ✅ | Each new run keeps its own chat: Grok takes its id up front, Cursor gets one from `create-chat`, and both continue in that same chat | `live/chat-identity.txt` |
+| ✅ | Each new run keeps its own chat: two OpenCode runs started at once in one folder take turns and end with their own chats | `live/chat-identity.txt` |
+| ⚠️ | Same, for Gemini (`--session-id`) and Codex (takes turns): unit-tested only. Gemini isn't signed in here, and Codex is off limits in this job | `HarnessChatGateTests`, `TheoProductionTests` |
+| ⚠️ | "Couldn't tell which chat it made" on a run's card, and the follow-up that won't guess: the logic is unit-tested, the card wasn't made to show it live | `HarnessChatGateTests` |
+| ✅ | Research with the Macs apart runs on this Mac and says so, without waiting | `live/research-apart.txt` |
+| ✅ | A bot's research sent to the other Mac brings the real brief back to that bot. Before: "didn't come back", or an old brief | `live/research-apart.txt` |
 | ✅ | Upgrade: the release build opens a copy of the Studio's real data. 14 of 14 bots, 8 runs, 6 routines, 12 chats and 507 messages match, nothing starts by itself, and memory files move byte for byte. No model calls | `live/upgrade-real-data.txt` |
 | ⏳ | All of it on the real Air, on another network | `AIR-TESTS.md` |
 
-Known limit: Codex, Cursor, OpenCode, Grok and Gemini don't say which chat a new run made, so Theo takes the newest one in that folder after the run started. Two new runs at once in one folder could swap chats.
+With the Macs apart, two things still can't run here. A routine set up on the Air waits for the Mac that fires routines, and the chat says so. Hidden screens exist only on a Mac Studio, and a bot says so at once.
 
-Tests on the final commit: ClickyCore 1,239 passed, app 85 passed.
+Tests on the final commit: ClickyCore 1,249 passed, app 86 passed.
 
 ## Round 3 (2026-11-02): Clicky's team
 

@@ -77,18 +77,22 @@ final class ResearchController: CompanionActivitySource {
     }
 
     /// `allowsLocalHostForTests`: the debug inbox's researchStart may use 127.0.0.1 test pages.
-    /// `reportsToCEO`: Theo asked for it, so the brief goes to his chat too.
-    func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false, reportsToCEO: Bool = false) {
+    /// `reportsToCEO`: Theo asked for it, so the brief goes to his chat too. `askedByOtherMac`: it runs here, whatever this Mac's own setting says.
+    func start(_ request: ResearchRequest, speaks: Bool, allowsLocalHostForTests: Bool = false, reportsToCEO: Bool = false, askedByOtherMac: Bool = false) {
         guard let companionManager else { return }
         // Research with screens belongs on the Studio. What's on this Mac's own screen can't be read from there, so that stays.
         let needsThisScreen: Bool
         if case .links(let count) = request.source, request.namedURLs.count < count { needsThisScreen = true } else { needsThisScreen = false }
-        if !needsThisScreen, !allowsLocalHostForTests {
+        if !needsThisScreen, !allowsLocalHostForTests, !askedByOtherMac {
             let route = DeviceRoles.route(.researchBrowser)
-            if route == .sendAcross || route == .waitForOtherMac {
-                _ = TheoLink.shared.requestWhenConnected("research", ["question": request.question, "urls": request.namedURLs.map(\.absoluteString).joined(separator: "\n"), "ceo": reportsToCEO ? "1" : ""])
-                say(route == .sendAcross ? "Researching on your Mac Studio." : "I'll research that when your Mac Studio is back.", speaks: speaks)
+            let otherMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+            if route == .sendAcross, TheoLink.shared.request("research", ["question": request.question, "urls": request.namedURLs.map(\.absoluteString).joined(separator: "\n"), "ceo": reportsToCEO ? "1" : ""]) {
+                say("Researching on your \(otherMac).", speaks: speaks)
                 return
+            }
+            // Only a blocked page needs that Mac's browser, so being apart is no reason to wait.
+            if route == .sendAcross || route == .waitForOtherMac {
+                say(Self.researchingHereLine(otherMac: otherMac), speaks: speaks)
             }
         }
         cancel()
@@ -442,6 +446,11 @@ final class ResearchController: CompanionActivitySource {
         BotsStore.shared.researchEnded(teamJobID, text: line, succeeded: status != .failed)
         teamJobID = nil
         say(line, speaks: speaks)
+    }
+
+    /// Said when research runs here because the Mac it's set to can't be reached.
+    static func researchingHereLine(otherMac: String) -> String {
+        "Your \(otherMac) isn't reachable, so I'm researching on this Mac. Pages that need its browser get skipped."
     }
 
     private func say(_ line: String, speaks: Bool) {

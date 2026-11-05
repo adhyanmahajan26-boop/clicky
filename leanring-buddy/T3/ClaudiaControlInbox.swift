@@ -318,7 +318,7 @@ final class ClaudiaControlInbox {
             reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)
         case "botsState":
             let store = BotsStore.shared
-            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder, "harness": $0.harness ?? "t3", "origin": $0.origin ?? NSNull(), "chat": $0.continuedChat ?? NSNull(), "session": $0.sessionID ?? NSNull(),
+            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder, "harness": $0.harness ?? "t3", "origin": $0.origin ?? NSNull(), "chat": $0.continuedChat ?? NSNull(), "session": $0.sessionID ?? NSNull(), "chatUnknown": $0.chatUnknown ?? false,
                                            "branch": $0.branch ?? NSNull(), "pullRequest": $0.pullRequest ?? NSNull()] as [String: Any] }
             reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "replyingIn": store.replyingIn, "runs": runs, "exchanges": store.liveExchanges.map { ["id": $0.key, "from": $0.value.senderID, "to": $0.value.targetID, "room": $0.value.room, "replying": $0.value.isReplying] as [String: Any] },
                                                  "threads": store.conversations.keys.filter(BotDMThread.isThread),

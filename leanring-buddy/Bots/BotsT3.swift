@@ -84,6 +84,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var continuedChat: String?
     /// The exact session of its harness, so a follow-up never lands in another one. (T3 Code's is `id`.)
     var sessionID: String?
+    /// Its harness doesn't say which chat a new run made, and Theo couldn't tell. It never guesses.
+    var chatUnknown: Bool?
 }
 
 /// One file a run changed.
@@ -249,11 +251,11 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil, onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
         if let continuing { return try await continueChat(continuing, prompt: prompt, title: title, folder: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice) }
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
-        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder) }
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, onWaiting: onWaiting) }
         guard let cli else { throw BotsT3Error.noCLI }
         // Everything below talks to T3 Code's server, so it's opened first when it's closed. Its CLI with no server up writes into T3 Code's folder.
         await openServerIfNeeded(cli: cli)

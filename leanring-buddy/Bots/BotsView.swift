@@ -1631,6 +1631,7 @@ struct T3RunCard: View {
     private var detailLine: String {
         var parts = [engine]
         if let chat = run.continuedChat { parts.append("Continuing \(chat)") } else if let model = run.model { parts.append(NativeBot.label(for: model)) }
+        if run.chatUnknown == true { parts.append("Couldn't tell which chat it made") }
         if let branch = run.branch { parts.append(branch) } else { parts.append(URL(fileURLWithPath: run.folder).lastPathComponent) }
         return parts.joined(separator: " · ")
     }

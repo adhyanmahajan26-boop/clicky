@@ -479,6 +479,7 @@ struct T3ResultCard: View {
     private var detailLine: String {
         var parts = [engine]
         if let chat = run.continuedChat { parts.append("Continuing \(chat)") }
+        if run.chatUnknown == true { parts.append("Couldn't tell which chat it made") }
         if let branch = run.branch { parts.append(branch) }
         if let finished = run.finishedAt {
             let minutes = max(1, Int((finished.timeIntervalSince(run.startedAt) / 60).rounded()))

@@ -7,11 +7,12 @@ The Air travels and isn't on the Studio's network. Nothing here needs the Studio
 ## Rules
 
 - Everything runs in a test profile (`--profile test-air`), never in Addy's real chats. If anything lands in a real chat, clean it up and say so.
-- Models: bots and coding runs on `claude-haiku-5-5` at low effort. **No Codex at all**: Addy's monthly limit is at 21%. Cursor only on its Auto model, except the one check in row 8. T3 Code tests use a Claude Haiku thread.
+- Models: bots and coding runs on `claude-haiku-5-5` at low effort. **No Codex at all**: Addy's monthly limit is at 21%. Cursor only on its Auto model. T3 Code tests use a Claude Haiku thread.
 - Test agents keep Addy's real home, so `~` in their shell is the real one. Everything that runs a harness works in a folder under the profile's own area, `~/Library/Application Support/Theo-Test-air/home/Projects`, and test prompts say "the current folder". Never `~/Projects` or Addy's other real folders. Your tools and evidence go in your scratchpad.
 - Secrets: no raw dumps of databases, config files or meta rows, in your session or any subagent's. Select named, non-secret columns only, and pass this rule to every subagent. Never print, log or paste API keys.
 - Stock T3 Code on the Air must stay stock. Theo may only use the `t3` CLI. Nothing of Theo's goes into `~/.t3` or T3 Code's settings.
 - Don't touch Addy's real Link pairing or Devices settings. Reading them is fine.
+- The test profile isn't linked to anything, so it can't show what happens when the real Macs are apart. That was simulated on the Studio.
 - Don't sign in to anything, on any harness. A CLI that isn't installed or signed in gets its row marked and you move on.
 - Never record the screen. Screenshots of Theo's own window only. Don't move Addy's mouse, take focus or press real keys. Don't kill processes you didn't start.
 - Keep tests tiny: one run per row.
@@ -214,19 +215,6 @@ From step 0, report what `v3.devices.bots` and `v3.devices.routines` hold on the
 
 Check whether Gemini is installed and signed in with `{"cmd":"harnessState"}`: read only `installed` and `loggedIn` from its entry in `harnesses`. If it is, use a folder under `PROJECTS`: one tiny run on its cheapest model, then `uiChatsList`, then a second run with `"chat":<its id>`, as in row 5. ✅ when it continues the same chat and the file has both lines. If it isn't signed in, mark it untested and **don't sign in**. Never call `gemini --list-sessions`, it writes.
 
-### Row 8: Cursor's plan limit shows the real reason
-
-If `cursor-agent` isn't installed or signed in on the Air, mark it untested. Otherwise, one run on the model the account refused on the Studio:
-
-```python
-folder = PROJECTS/"air-cursor"; folder.mkdir(parents=True, exist_ok=True)
-send({"cmd":"uiRunStart","prompt":"Create a file named lim.txt in the current folder with the word one. Only that.","title":"Air limit","folder":str(folder),"harness":"cursor","model":"gpt-5.3-codex-low","room":"theo"})
-```
-
-This is the only Cursor run in this job that isn't on Auto. On the Studio the account refused it before any work, with "Additional usage is off". If the run starts working here, stop it from its card and mark the row untested.
-
-`{"cmd":"uiRunPane","run":"<run id>"}` shows its screen. ✅ when the run ends as failed and the chat says "Cursor Agent can't run this on your plan: You've turned off usage beyond what's included…". ❌ if it says "hasn't started" or "done". Never call `cursor-agent ls`, it rewrites chats.
-
 ## 4. Clean up
 
 ```bash
@@ -238,7 +226,7 @@ Or the `pkill` line from step 2. The `air-t3` project stays in T3 Code's list: o
 ## 5. Report to the coordinator
 
 - Build tested, and whether real Theo was updated or you ran from the zip.
-- The eight rows with ✅, ⚠️ or ❌ and evidence paths.
+- The seven rows with ✅, ⚠️ or ❌ and evidence paths.
 - `v3.devices.bots` and `v3.devices.routines` on the real Air.
 - Whether stock T3 is still stock, with the file names that changed.
 - Everything your tests created or changed outside the test profile and your scratchpad.

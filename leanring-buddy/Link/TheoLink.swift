@@ -521,12 +521,6 @@ final class TheoLink: ObservableObject {
     }
 
     /// Like `request`, but if the other Mac's away it goes as soon as it's back. True when it went now.
-    func requestWhenConnected(_ action: String, _ fields: [String: String]) -> Bool {
-        if request(action, fields) { return true }
-        _ = queueForOtherMac(action, fields, room: nil, label: nil, canRunHere: false)
-        return false
-    }
-
     /// Waits for the other Mac. Returns its id, for the card that says so.
     func queueForOtherMac(_ action: String, _ fields: [String: String], room: String?, label: String?, canRunHere: Bool) -> String {
         let waiting = LinkWaitingRequest(action: action, fields: fields, room: room, label: label, canRunHere: canRunHere)
