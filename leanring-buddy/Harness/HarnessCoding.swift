@@ -177,6 +177,7 @@ enum HarnessCoding {
         var run: T3Run
         let workdir: URL
         var plainFolder = false
+        var isNewProject = false
         var gitFolder: String?
         var topLevel: URL?
         if let repo { topLevel = await BotsT3.gitTopLevel(of: repo) }
@@ -210,6 +211,7 @@ enum HarnessCoding {
             try await BotsT3.startEmpty(in: workdir)
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: workdir).trimmingCharacters(in: .whitespacesAndNewlines)
             run = T3Run(id: "", title: title, folder: workdir.path, baseCommit: base)
+            isNewProject = true
         }
         run.harness = harness
         run.model = model ?? HarnessCatalog.label(harness)
@@ -218,7 +220,7 @@ enum HarnessCoding {
         // Claude Code takes its session's id up front. The others say what they made afterwards (HarnessChats.session).
         let newSessionID = harness == "claude" ? UUID().uuidString.lowercased() : nil
         run.sessionID = newSessionID
-        var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
+        var message = (isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
         if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
             message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +

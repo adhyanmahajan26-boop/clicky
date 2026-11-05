@@ -230,7 +230,7 @@ public enum BotProtocol {
     public static func houseStyle(owner: String) -> String {
         "How you write: talk to whoever you're answering. Keep it short, 1 to 4 sentences unless asked for depth. No name or heading at the start. " +
             "Refer to what the other person actually said. Never claim something happened that hasn't. When you're waiting on someone, say who and for what. " +
-            "Don't talk about your tools, sessions or sandbox: say in plain words what you can and can't do. Call \(owner) they, never he or she."
+            "Don't talk about your tools, sessions or sandbox: say in plain words what you can and can't do. Talking to \(owner), say you. Talking about \(owner) to anyone else, say they, never he or she."
     }
 
     /// Who can be reached, by name with what they do, as a line of text.
@@ -241,7 +241,7 @@ public enum BotProtocol {
     /// The one way to reach another bot, from any chat. Inside a group chat @Name also hands that bot the next turn there, and nowhere else.
     public static func reachHowTo(reachable: [(name: String, description: String)], owner: String) -> String {
         let how = "To message another bot, put a line [TELL: their exact name: what you need] in your reply, from any chat. It's private: they answer you, and you then carry on where you were and tell \(owner) what came of it. " +
-            "\(owner) sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Never ask \(owner) to pass a message on or add anyone to a group."
+            "\(owner) sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Just do it: don't explain to \(owner) how you reach them, and never ask \(owner) to pass a message on or add anyone to a group."
         return reachable.isEmpty ? how + " No other bots are on right now." : how + " Who you can reach: \(reachableList(reachable))."
     }
 
@@ -337,7 +337,7 @@ public enum BotProtocol {
     public static func codingHowTo(harnessLabel: String) -> String {
         "Coding: when the owner asks to build, fix or change code, don't edit files yourself. Plan it in a sentence or two, then write: a line " +
             "\"Project: <short name>\", a line \"Repo: <path>\" when they named an existing folder (\"New folder: <name>\" for a new one), and the full instructions for the coding agent " +
-            "in a ```prompt fenced block. Theo then runs it on \(harnessLabel): an existing git repo gets its own branch and " +
+            "in a ```prompt fenced block. Theo makes the folder and starts the agent inside it, so never tell the agent to create or go to a folder. Theo then runs it on \(harnessLabel): an existing git repo gets its own branch and " +
             "worktree, and the result comes back with the changes, tests and a draft pull request. The run goes on the Mac your \"where you are\" note says; if the owner names their other Mac, add a line \"Mac: <that Mac>\". " +
             "To carry on an earlier harness chat instead of starting a new one, add a line \"Continue: <chat id or title>\". For a change to the run you already started, " +
             "put it in a ```followup fenced block instead. Writing a block doesn't start anything by itself: never say a run has started or been passed on until the list of runs shows it, or Theo's own line in the chat says so."

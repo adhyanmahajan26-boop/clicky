@@ -44,7 +44,7 @@ enum HarnessChats {
     /// folder is T3 Code's own. (If the server's down the menu says to open T3 Code.)
     static var isT3ServerUp: Bool {
         guard let cli = BotsT3.cli else { return false }
-        let t3Home = cli.deletingLastPathComponent().deletingLastPathComponent()
+        let t3Home = cli.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
         let runtime = try? String(contentsOf: t3Home.appendingPathComponent("userdata/server-runtime.json"), encoding: .utf8)
         guard let pid = HarnessChatFiles.t3ServerPID(runtimeJSON: runtime) else { return false }
         return kill(pid, 0) == 0

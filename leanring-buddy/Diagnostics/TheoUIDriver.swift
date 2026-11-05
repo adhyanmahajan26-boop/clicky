@@ -623,6 +623,11 @@ extension TheoUIDriver {
                 let chats = await HarnessChats.list(harness: harness, folder: folder)
                 respond(true, chats.map { ["id": $0.id, "title": $0.title, "age": HarnessChatText.age(of: $0.updatedAt)] }, nil)
             }
+        case "uiRunFollowup":
+            // {run, text}: what the box on a run's card does.
+            guard let id = command["run"] as? String, let text = command["text"] as? String, let run = BotsStore.shared.t3Runs.first(where: { $0.id == id }) else { respond(false, nil, "Needs run and text."); return true }
+            BotsStore.shared.sendFollowup(text, on: run)
+            respond(true, ["sent": id], nil)
         case "uiRunStart":
             // {prompt, title, folder, harness, model, effort, room, mac, chat}: what Start on a run's card does, with the same choices.
             guard let prompt = command["prompt"] as? String, let title = command["title"] as? String else { respond(false, nil, "Needs prompt and title."); return true }

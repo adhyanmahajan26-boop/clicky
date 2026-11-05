@@ -188,6 +188,11 @@ enum BotsT3 {
         return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
     }
 
+    /// A new project's folder is made first and the agent starts inside it, whatever a bot's prompt says about making one.
+    static func newFolderNote(_ folder: URL) -> String {
+        "You're already in this project's folder, \(folder.path). Work right here: don't make another folder or go anywhere else, whatever the instructions below say about where it goes.\n\n"
+    }
+
     /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
     static let plainFolderNote = "\n\nThis folder isn't a git repository. Edit the files here and don't run git init or commit."
 
@@ -274,6 +279,7 @@ enum BotsT3 {
             try await shell(cli, ["project", "add", folder.path, "--title", title])
             arguments += [folder.path, "-"]
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
+            subfolder = newFolderNote(folder)
         }
         // Settings › Harnesses can pick another model; Claude Opus 5.5 at high effort otherwise.
         let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
@@ -550,7 +556,9 @@ enum BotsT3 {
         let engine = run.harness.map { HarnessCatalog.label($0) } ?? "T3 Code"
         let usedModel = run.model.map(NativeBot.label(for:)) ?? modelName
         let usedEffort = run.effort ?? effort
-        let modelPart = usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
+        // A continued chat keeps the model it was on, which Theo doesn't always know. It isn't claimed.
+        let knowsModel = run.continuedChat == nil || (run.model != nil && run.model != run.harness.map { HarnessCatalog.label($0) })
+        let modelPart = !knowsModel ? nil : usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
         // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
         // named that's only safe in the run's own worktree, never the checkout they work in.
         var commitProblem: String?
@@ -569,7 +577,7 @@ enum BotsT3 {
             ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. " + ((run.changedFiles ?? []).isEmpty ? "It hadn't changed anything yet." : "The work so far is kept on its branch.")
             : failed
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
-            : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
+            : "**\(run.title)** is done in \(engine)\(modelPart.map { ": \($0)," } ?? ",") \(minutes) min."]
         if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
             // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card. A heading alone says nothing.
             let paragraphs = summary.components(separatedBy: "\n\n")

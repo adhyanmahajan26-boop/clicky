@@ -412,14 +412,14 @@ final class BotsStore: ObservableObject {
     /// Sends your message to a bot's own chat and streams its reply in.
     /// `command`: what the owner typed, without attachments, which decides whether this is "@code …". A word in an
     /// attached file doesn't start an agent.
-    func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil) {
+    func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil, writtenAt: Date? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
         if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command, engine: bot(botID)?.provider) { return }
         guard let bot = bot(botID) else { return }
         // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now and goes in when it's free.
         if replying[botID] != nil {
             let id = messageID ?? UUID().uuidString
-            if !conversation(botID).messages.contains(where: { $0.id == id }) { post(BotChatMessage(id: id, author: "user", text: text), to: botID) }
+            if !conversation(botID).messages.contains(where: { $0.id == id }) { post(ownerMessage(id: id, text: text, writtenAt: writtenAt), to: botID) }
             Task { [weak self] in
                 while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
                 self?.send(text, command: command, to: botID, messageID: id)
@@ -434,7 +434,7 @@ final class BotsStore: ObservableObject {
         var record = conversation(botID)
         let ownerMessageID = messageID ?? UUID().uuidString
         if !record.messages.contains(where: { $0.id == ownerMessageID }) {
-            record.messages.append(BotChatMessage(id: ownerMessageID, author: "user", text: text))
+            record.messages.append(ownerMessage(id: ownerMessageID, text: text, writtenAt: writtenAt))
         }
         conversations[botID] = record
         writeConversation(botID)
@@ -508,6 +508,12 @@ final class BotsStore: ObservableObject {
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
     }
 
+    /// The owner's message. `writtenAt`: when they wrote it on the other Mac, so it holds its place in the chat on both.
+    private func ownerMessage(id: String, text: String, writtenAt: Date?) -> BotChatMessage {
+        guard let writtenAt else { return BotChatMessage(id: id, author: "user", text: text) }
+        return BotChatMessage(id: id, author: "user", text: text, at: writtenAt, exact: writtenAt.timeIntervalSince1970)
+    }
+
     /// "Switch to haiku", "what model are you on": no reply to read, a card to use. Applies what the message names first.
     private func answerWithSettings(_ intent: BotSettingsIntent, bot original: NativeBot) {
         var bot = original
@@ -564,7 +570,8 @@ final class BotsStore: ObservableObject {
     /// message is answered on the Mac it was typed on, and this does nothing.
     private func forwardToBotsMac(_ action: String, room: String, target: String, text: String, command: String?, engine: String?) -> Bool {
         let message = BotChatMessage(author: "user", text: text)
-        let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id]
+        // It keeps its time when it goes over, so it sits in the same place in the chat on both Macs.
+        let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id, "at": String(message.sortDate.timeIntervalSince1970)]
         let problem = engine.flatMap { EngineReadiness.problem(with: $0) }
         switch DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected, engineHere: problem == nil, engineThere: true) {
         case .runHere, .engineOnOtherMac, .tryHere:
@@ -606,14 +613,14 @@ final class BotsStore: ObservableObject {
     }
 
     /// Posts to a group chat. The head reads it first, or the bots tagged when someone is; then they take turns (`startRound`).
-    func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil) {
+    func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil, writtenAt: Date? = nil) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
         if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command, engine: head.provider) { return }
         var record = conversation(room)
         let ownerMessageID = messageID ?? UUID().uuidString
         if !record.messages.contains(where: { $0.id == ownerMessageID }) {
-            record.messages.append(BotChatMessage(id: ownerMessageID, author: "user", text: text))
+            record.messages.append(ownerMessage(id: ownerMessageID, text: text, writtenAt: writtenAt))
         }
         conversations[room] = record
         writeConversation(room)
@@ -2495,7 +2502,10 @@ extension BotsStore {
             var record = conversation(id)
             let known = Set(record.messages.map(\.id))
             let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
-            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.sortDate, clearedAt: clearedAt)
+            // If each Mac holds a copy of one message, the earlier time is the one it was written.
+            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.sortDate, clearedAt: clearedAt) { first, second in
+                first.sortDate <= second.sortDate ? first : second
+            }
             let arrived = merged.filter { !known.contains($0.id) }
             record.messages = merged
             record.clearedAt = clearedAt
@@ -2593,10 +2603,11 @@ extension BotsStore {
         case "botSay", "groupSay":
             guard let target = fields["target"], let text = fields["text"], let id = fields["id"] else { return }
             let command = fields["command"].flatMap { $0.isEmpty ? nil : $0 }
+            let writtenAt = fields["at"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
             if action == "botSay" {
-                send(text, command: command, to: target, messageID: id)
+                send(text, command: command, to: target, messageID: id, writtenAt: writtenAt)
             } else {
-                sendToGroup(text, command: command, groupID: target, messageID: id)
+                sendToGroup(text, command: command, groupID: target, messageID: id, writtenAt: writtenAt)
             }
         case "botTurn":
             handleTurnFromOtherMac(fields)
