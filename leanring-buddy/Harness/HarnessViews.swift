@@ -554,7 +554,7 @@ struct CrewDecisionsSection: View {
                 }
             }
             RowDivider()
-            SettingRow(title: "Light tier runs on", detail: "Harness and model, like \"opencode opencode/deepseek-v4.1-flash-free\". Empty: where builds go.") {
+            SettingRow(title: "Light tier runs on", detail: "Harness, model and effort, like \"claude claude-haiku-5-5 low\". Empty: where builds go.") {
                 TextField("Where builds go", text: $lightRunner).theoField().frame(maxWidth: 260)
             }
             RowDivider()

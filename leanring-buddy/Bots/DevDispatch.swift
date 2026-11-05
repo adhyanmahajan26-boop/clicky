@@ -121,11 +121,12 @@ extension BotsStore {
             // 4. Which harness and model tier.
             var harness: String?
             var model: String?
+            var effort: String?
             let tiered = await DevDecider.decide(.runner, task: title, question: DevDecisions.runner(task: text)) { answers, _ in DevDecisions.runnerVerdict(answers) }
             outcome.decisions += tiered.logs
             if let tier = tiered.verdict.flatMap({ DevTier(rawValue: $0.option) }) {
                 outcome.tier = tier
-                if let runner = DevDecider.runner(for: tier) { harness = runner.harness; model = runner.model }
+                if let runner = DevDecider.runner(for: tier) { harness = runner.harness; model = runner.model; effort = runner.effort }
             }
             let tierWords = outcome.tier.map { " on the \($0.rawValue) tier" } ?? ""
             switch outcome.placement {
@@ -146,7 +147,7 @@ extension BotsStore {
             }
             if room != taker.id { self.post(BotChatMessage(author: lead.id, text: text), to: taker.id) }
             let prompt = "You are \(taker.name). Your job: \(taker.description.isEmpty ? "as the lead asks" : taker.description)\n\nTask from Addy, through \(lead.name):\n\(text)\n\nKeep to this task. Run the project's tests before you finish and make sure they pass."
-            self.submitToT3(prompt: prompt, title: title, repo: repo, room: taker.id, harness: harness, modelChoice: model, alsoRoom: lead.id, place: place) { started, problem in
+            self.submitToT3(prompt: prompt, title: title, repo: repo, room: taker.id, harness: harness, modelChoice: model, effortChoice: effort, alsoRoom: lead.id, place: place) { started, problem in
                 outcome.started = started
                 outcome.problem = problem
                 done?(outcome)

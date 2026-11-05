@@ -22,15 +22,15 @@ enum DevDecider {
 
     static var anyOn: Bool { DevDecisionKind.allCases.contains { engine(for: $0) != .off } }
 
-    /// "harness model" for each tier, e.g. "opencode opencode/deepseek-v4.1-flash-free". Empty means the usual coding target.
+    /// "harness model effort" for each tier, e.g. "claude claude-haiku-5-5 low". Model and effort are optional. Empty means the usual coding target.
     static let lightRunnerKey = "v4.decider.tier.light"
     static let strongRunnerKey = "v4.decider.tier.strong"
 
-    static func runner(for tier: DevTier) -> (harness: String, model: String?)? {
+    static func runner(for tier: DevTier) -> (harness: String, model: String?, effort: String?)? {
         let text = UserDefaults.standard.string(forKey: tier == .light ? lightRunnerKey : strongRunnerKey)?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !text.isEmpty else { return nil }
-        let parts = text.split(separator: " ", maxSplits: 1).map(String.init)
-        return (parts[0], parts.count > 1 ? parts[1] : nil)
+        let parts = text.split(separator: " ").map(String.init)
+        return (parts[0], parts.count > 1 ? parts[1] : nil, parts.count > 2 ? parts[2] : nil)
     }
 
     /// Who decided, what, and the log line for it. Nil verdict: no engine is on for this decision, or nothing answered, so today's path stands.
