@@ -111,11 +111,16 @@ export THEOUI_PROFILE=air THEOUI_OUT="$SCRATCH/shots"
 python3 "$SCRATCH/theoui.py" start --tab bots
 ```
 
-`theoui.py start` refuses if `v2.screen.claudia` isn't set on the Air. It reads those keys from the real profile and never changes them. If it refuses, start the profile behind whatever Addy is doing instead, and stop it at the end with `pkill -f -- '--profile test-air'`:
+`theoui.py start` refuses if `v2.screen.claudia` isn't set on the Air. It reads those keys from the real profile and never changes them. If it refuses, start the profile behind whatever Addy is doing instead, and save its process id so you can stop exactly that process at the end:
 
 ```bash
 env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/open -g -n /Applications/Theo.app --args --profile test-air
+sleep 3
+for pid in $(pgrep -x Clicky); do ps -o args= -p "$pid" | /usr/bin/grep -q -- '--profile test-air$' && echo "$pid" > "$SCRATCH/test-air.pid"; done
+cat "$SCRATCH/test-air.pid"
 ```
+
+That looks only at processes named exactly `Clicky`, so it can't pick up a shell. Never stop the profile with `pkill -f`: the pattern also matches your own shell, whose command line holds the same words.
 
 Use `$THEOUI_BINARY`'s app instead of `/Applications/Theo.app` if you're testing from the zip. A window of the test profile may show on the Air's screen. It doesn't take focus.
 
@@ -224,7 +229,13 @@ Check whether Gemini is installed and signed in with `{"cmd":"harnessState"}`: r
 python3 "$SCRATCH/theoui.py" stop
 ```
 
-Or the `pkill` line from step 2. The `air-t3` project stays in T3 Code's list: on the Studio, T3's `project remove` refused a project that still had a thread, and its CLI can't delete threads. Report it, so Addy can remove it in T3 Code. Leave everything under `Theo-Test-air`. Don't delete anything else.
+If you started the profile with `open` in step 2, stop that one process instead:
+
+```bash
+kill "$(cat "$SCRATCH/test-air.pid")"
+```
+
+The `air-t3` project stays in T3 Code's list: on the Studio, T3's `project remove` refused a project that still had a thread, and its CLI can't delete threads. Report it, so Addy can remove it in T3 Code. Leave everything under `Theo-Test-air`. Don't delete anything else.
 
 ## 5. Report to the coordinator
 
