@@ -47,6 +47,45 @@ struct TheoProductionTests {
         BotsSelection.shared.pane = .home
     }
 
+    // MARK: Continuing a harness chat
+
+    @Test func aChatIsContinuedByItsOwnIdOnEveryHarness() {
+        func args(_ harness: String, resume: String? = "abc") -> [String] { HarnessCoding.interactiveArguments(harness: harness, model: nil, effort: nil, folder: "/f", resume: resume) }
+        #expect(args("claude").starts(with: ["--resume", "abc"]))
+        #expect(args("codex").starts(with: ["resume", "abc"]))
+        #expect(args("cursor").starts(with: ["--resume", "abc"]))
+        #expect(args("gemini").starts(with: ["--resume", "abc"]))
+        #expect(args("grok").starts(with: ["--resume", "abc"]))
+        #expect(args("opencode").starts(with: ["--session", "abc"]))
+        // Never "the last one in this folder" once the session is known.
+        let known = HarnessCoding.interactiveArguments(harness: "claude", model: nil, effort: nil, folder: "/f", continues: true, resume: "abc")
+        #expect(!known.contains("--continue"))
+        let new = HarnessCoding.interactiveArguments(harness: "claude", model: nil, effort: nil, folder: "/f", newSessionID: "id-1")
+        #expect(new.starts(with: ["--session-id", "id-1"]))
+    }
+
+    @Test func aHeadlessRunContinuesByIdToo() {
+        func args(_ harness: String) -> [String] { HarnessCoding.headlessArguments(harness: harness, model: nil, effort: nil, folder: "/f", prompt: "hi", outFile: "/o", resume: "abc") }
+        #expect(args("claude").contains("--resume"))
+        // `codex exec resume` has no -C or -s: the folder is the process's, the sandbox a config value.
+        let codex = args("codex")
+        #expect(codex.starts(with: ["exec", "resume"]))
+        #expect(!codex.contains("-C") && !codex.contains("-s"))
+        #expect(args("opencode").contains("--session"))
+        #expect(args("grok").contains("--resume"))
+    }
+
+    @Test func aBotsMemoryIsntInT3CodesFolder() {
+        let bot = BotImport.starters[0]
+        #expect(!bot.memoryPath.contains("/.t3"))
+        #expect(bot.memoryPath.hasSuffix("/Theo/Bots/memory/theo/memory.md"))
+        #expect(!BotRunner.workspace.path.contains("/.t3"))
+        for tool in BotRunner.claudeAllowedTools(for: bot) where tool.hasPrefix("Edit(") || tool.hasPrefix("Write(") {
+            #expect(!tool.contains("/.t3"))
+            #expect(tool.contains("(//"))
+        }
+    }
+
     // MARK: Icons
 
     /// A symbol name macOS doesn't know draws nothing at all, so every one in the source is checked.

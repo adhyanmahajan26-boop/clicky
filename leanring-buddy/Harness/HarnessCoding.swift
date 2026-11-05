@@ -732,6 +732,12 @@ enum HarnessCoding {
     /// Signs a run did its work even if every poll missed it being busy: a finished line, or a new commit or changed file.
     private static func workHappened(_ run: T3Run, pane: String) -> Bool {
         if pane.range(of: #"(?i)worked for \d|(crunched|baked|brewed|cooked|churned|sauteed|cogitated) for \d"#, options: .regularExpression) != nil { return true }
+        // A plain folder has no git to ask: a file changed since the run began says it.
+        if run.baseCommit == nil, run.repo == nil {
+            let folder = URL(fileURLWithPath: run.worktree ?? run.folder, isDirectory: true)
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])) ?? []
+            if files.contains(where: { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) > run.startedAt }) { return true }
+        }
         let process = Process()
         let pipe = Pipe()
         process.executableURL = BotsT3.git

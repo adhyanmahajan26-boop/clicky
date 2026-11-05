@@ -29,7 +29,24 @@ Commands for `cmd`:
 - Clicky's team: `clickyTeam` (the team, its category and recent jobs), `clickyTeam {action: "delegate", duty, task}`, `clickyTeam {action: "order", text}` (the CEO's order to Clicky), `clickyTeam {action: "memorySearch", query}`. `ask {text, speak: false, owner: true}` is a message typed in Clicky's chat.
 - Voice: `uiDictationFeed {path, app, window}` (a sound file through dictation into a background window), `uiDictationField`, `uiDictationStatus`, `uiDictationPill {state}`, `uiDictationKeys {flags}`; `uiComposerDictation {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions}` (the composer's dictation: `feed {path, realTime, stopAtEnd}` sends a sound file down the mic's path, `key {key, up}` runs a key through the real handling, `permissions {microphone, speech}` forces a status, `noMic {on}` runs the no-usable-mic path, and the profile never opens the mic); `uiCallStart`, `uiCallFeed {path, silence}`, `uiCallStatus`, `uiCallMute`, `uiCallEnd`; `uiSpeak`, `uiSpeakStop`; `uiSet {key, value}`, `uiTestKey {provider, value}`.
 
+- Bots and harnesses: `uiBotPrompt {bot, room?}` (everything a bot is told, as it would go out), `uiChatsList {harness, folder}` (what the Chat choice offers), `uiRunStart {prompt, title, folder, harness, model, effort, room, mac, chat}` (what Start on a run's card does), `uiRunFollowup {run, text}`, `uiGroupStop {id}`. `botChat` returns `at`, `card`, `exchange` and `run` too; `botsState` returns `replyingIn` and the live exchanges and private threads.
+
 `Tools/theo-click-test.py <out>` is the regression pass over the main screens.
+
+## Two Macs on one Mac
+
+Two test profiles can stand in for two Macs, each with its own home folder and `~/Projects`, over a real Theo Link on ports of their own. Neither touches the owner's pairing, since a test profile links by address only:
+
+```
+defaults write com.personal.clicky.test-mba test.link.name "Adhyan’s MacBook Air"
+defaults write com.personal.clicky.test-mba test.studio.model "MacBookAir10,1"
+defaults write com.personal.clicky.test-mba v2.setup.completed -bool true
+defaults write com.personal.clicky.test-mba v3.bots.freshStart -bool true
+# in one profile: uiLink {action: start, port: 47401}, which returns the code
+# in the other: uiLink {action: start, code, port: 47402, dialHost: "127.0.0.1", dialPort: 47401}
+```
+
+`uiLink {action: down | up | state}` takes the link away and brings it back. A profile needs `up` after a restart. `uiSetDefaults {key: "test.engines.missing", value: ["claude"]}` makes an engine count as signed out on that side. Both profiles share one disk, so a folder check can't tell them apart: test a refused folder with a path that doesn't exist anywhere.
 
 To use Accessibility and Speech, start the profile through LaunchServices (`open -g -n Clicky.app --args --profile test-x`), not from a shell, so the app answers for its own permissions. Never ask for a permission in a test.
 
@@ -38,6 +55,7 @@ With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. S
 ## Rules
 - A test profile can hold a copy of real bots signed in as the owner, so its routines never fire on schedule (`test.routines.run` overrides that). An older build has no such gate: pause routines in any copy it might read.
 - A test profile's child processes get its home folder, so never start a browser from one: Chrome comes up as a new, empty copy.
+- A coding agent started from a test profile has the owner's real HOME. Prompts in tests must say "the current folder", never `~/...`: a `~/Projects/x` in a prompt lands in the owner's real `~/Projects`.
 - Studio screens drop the owner's monitors out of HDR while they exist, and each on or off nudges a monitor. Either can interrupt a video. Don't toggle them without the owner's OK that nothing's playing.
 - Studio screens are real displays for the whole Mac while they're on, so keep tests short and check the real monitors are back after turning them off. Never turn on Live capture in a test.
 - Never record the screen. Screenshots of Theo's window only (`theoui.py shot`). Never screenshot the whole display.
