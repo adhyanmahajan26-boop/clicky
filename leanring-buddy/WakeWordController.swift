@@ -329,7 +329,8 @@ final class WakeWordController: ObservableObject {
                                   : "⚠️ Wake word: couldn't pin device \(pinnedDeviceID) (\(status))")
         }
         let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+        // Checks the hardware side too: with no input device the output side still reads 48 kHz and start throws -10868.
+        guard inputNode.hasUsableMicFormat else {
             print("⚠️ Wake word: the mic has no usable format")
             noteMicFailed()
             return false
