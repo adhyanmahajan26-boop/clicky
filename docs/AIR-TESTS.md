@@ -1,4 +1,4 @@
-# Air tests for Theo build 202611051656
+# Air tests for Theo build 202611051711
 
 For a separate Claude session working on the MacBook Air. Do these in order and report each row at the end as ✅, ⚠️ or ❌, with the evidence file. A ⚠️ is fine, a fake ✅ is not.
 
@@ -44,19 +44,19 @@ pgrep -P "$(pgrep -f "$MAIN")" -fl | cut -c1-60
 
 Both should print nothing that's Addy's work. Theo's `--mcp` children belong to Claude sessions and aren't work in progress. If Addy is busy, wait and check again later.
 
-Then use the app's own update path, the same one as Settings › Updates › Update now. These go through real Theo's control inbox: write `{"cmd":"updateCheck"}` and then `{"cmd":"updateInstall"}` as `~/.clicky/control-inbox/<any id>.json`, and read the reply from `~/.clicky/control-outbox/<same id>.json`. Theo quits and comes back by itself. Afterwards check the build is 202611051656.
+Then use the app's own update path, the same one as Settings › Updates › Update now. These go through real Theo's control inbox: write `{"cmd":"updateCheck"}` and then `{"cmd":"updateInstall"}` as `~/.clicky/control-inbox/<any id>.json`, and read the reply from `~/.clicky/control-outbox/<same id>.json`. Theo quits and comes back by itself. Afterwards check the build is 202611051711.
 
 If your permission system refuses this, don't route around it. Tell the coordinator, and Addy can press Update now. The tests below don't wait for it: run them from the release zip instead, with nothing changed in `/Applications`:
 
 ```bash
 mkdir -p "$SCRATCH/theo"
-gh release download build-202611051656 --repo adhyanmahajan26-boop/claudia-releases --pattern 'Theo-*.zip' --dir "$SCRATCH/theo"
-shasum -a 256 "$SCRATCH/theo/Theo-202611051656.zip"
-ditto -x -k "$SCRATCH/theo/Theo-202611051656.zip" "$SCRATCH/theo"
+gh release download build-202611051711 --repo adhyanmahajan26-boop/claudia-releases --pattern 'Theo-*.zip' --dir "$SCRATCH/theo"
+shasum -a 256 "$SCRATCH/theo/Theo-202611051711.zip"
+ditto -x -k "$SCRATCH/theo/Theo-202611051711.zip" "$SCRATCH/theo"
 export THEOUI_BINARY="$SCRATCH/theo/Theo.app/Contents/MacOS/Clicky"
 ```
 
-The sha256 must be `31f62f7d52f5e6b77c0fd954c70a5b5b9f070905ff31f0c041be5245eb707bd9`. Say in your report which of the two you tested.
+The sha256 must be `38279044e3d50ebd56bc18bd7cdcf5427601370c33bc20ea02e629e2cf802dd9`. Say in your report which of the two you tested.
 
 ## 2. Start a test profile
 
@@ -224,7 +224,7 @@ This is the only Cursor run in this job that isn't on Auto. On the Studio the ac
 python3 "$SCRATCH/theoui.py" stop
 ```
 
-Or the `pkill` line from step 2. If T3's server is up, remove the test projects with `~/.t3/bin/t3 project remove "<folder>"` for `air-t3`. Leave everything under `Theo-Test-air`. Don't delete anything else.
+Or the `pkill` line from step 2. The `air-t3` project stays in T3 Code's list: on the Studio, T3's `project remove` refused a project that still had a thread, and its CLI can't delete threads. Report it, so Addy can remove it in T3 Code. Leave everything under `Theo-Test-air`. Don't delete anything else.
 
 ## 5. Report to the coordinator
 

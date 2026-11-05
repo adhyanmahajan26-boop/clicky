@@ -47,6 +47,7 @@ Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor A
 | ⚠️ | Continue a chat: Gemini is not signed in on the Studio and has no chats. Reader unit-tested only | `HarnessChatFilesTests` |
 | ⏳ | Continue a chat: stock T3 Code on the Air, with stock left stock | `AIR-TESTS.md` |
 | ✅ | A plan limit shows the real reason: "Cursor Agent can't run this on your plan: …" | `live/smoke-after-review.txt` |
+| ✅ | Upgrade: the release build opens a copy of the Studio's real data. 14 of 14 bots, 8 runs, 6 routines, 12 chats and 507 messages match, nothing starts by itself, and memory files move byte for byte. No model calls | `live/upgrade-real-data.txt` |
 | ⏳ | All of it on the real Air, on another network | `AIR-TESTS.md` |
 
 Known limit: Codex, Cursor, OpenCode, Grok and Gemini don't say which chat a new run made, so Theo takes the newest one in that folder after the run started. Two new runs at once in one folder could swap chats.
