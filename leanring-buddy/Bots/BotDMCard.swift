@@ -23,15 +23,15 @@ struct BotDMCard: View {
     private var target: NativeBot? { store.bot(targetID) }
     private var messages: [BotChatMessage] { store.exchangeMessages(exchangeID, senderID: senderID, targetID: targetID) }
     /// What's said in words. A card nested in the exchange isn't one.
-    private var spoken: [BotChatMessage] { messages.filter { !$0.text.isEmpty } }
+    private var spoken: [BotChatMessage] { messages.filter { !$0.text.isEmpty && $0.author != BotsStore.noteAuthor } }
     private var live: BotDMLive? { store.liveExchanges[exchangeID] }
 
     /// "Coder is replying…" while it writes here; on the other Mac the thread itself shows there's no answer yet.
     private var statusLine: String? {
         guard let target else { return nil }
         if let live { return live.isReplying ? "\(target.name) is replying\u{2026}" : "\(target.name) is busy, and will answer when it's free" }
-        guard let last = spoken.last else { return nil }
-        return BotDMCardText.looksLive(lastAuthorIsTarget: last.author == targetID, lastAt: last.at) ? "\(target.name) is replying\u{2026}" : nil
+        guard let last = messages.last(where: { !$0.text.isEmpty }) else { return nil }
+        return BotDMCardText.looksLive(lastAuthorIsSender: last.author == senderID, lastAt: last.at) ? "\(target.name) is replying\u{2026}" : nil
     }
 
     var body: some View {
@@ -39,7 +39,6 @@ struct BotDMCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 Button {
                     withAnimation(DS.Motion.hover) { isOpen.toggle() }
-                    if isOpen { NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil) }
                 } label: {
                     HStack(spacing: 10) {
                         figures(sender, target)

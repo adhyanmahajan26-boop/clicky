@@ -18,18 +18,15 @@ enum DeviceRoles {
         UserDefaults.standard.string(forKey: key(feature)).flatMap(DeviceChoice.init(rawValue:)) ?? feature.defaultChoice
     }
 
-    /// Once: "Bots" used to mean bots, coding and routines, on the Mac Studio. That was the old default, so a setup still on it moves to
-    /// "the Mac you're using"; anything else it was set to is the owner's own choice, and stays for bots. Routines keep their Mac.
+    /// Once: "Bots" used to mean bots, coding and routines together. A setup that never picked is on the new default by itself, since only a
+    /// choice someone made is saved. One that did pick keeps it for bots, and its routines stay on that Mac too.
     static func migrateOnce() {
         let flag = "v3.devices.splitBotsAndRoutines"
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: flag) else { return }
         defaults.set(true, forKey: flag)
-        let botsKey = key(.bots)
-        guard let stored = defaults.string(forKey: botsKey) else { return }
-        // "Bots run on this Mac Studio" was also where its routines were: that stays what the Routines row says.
-        if defaults.string(forKey: key(.routines)) == nil { defaults.set(stored == DeviceChoice.any.rawValue ? DeviceChoice.macStudio.rawValue : stored, forKey: key(.routines)) }
-        if stored == DeviceChoice.macStudio.rawValue { defaults.removeObject(forKey: botsKey) }
+        guard let stored = defaults.string(forKey: key(.bots)), stored != DeviceChoice.any.rawValue, defaults.string(forKey: key(.routines)) == nil else { return }
+        defaults.set(stored, forKey: key(.routines))
     }
 
     @MainActor static func route(_ feature: DeviceFeature) -> DeviceRoute {

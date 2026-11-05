@@ -109,10 +109,10 @@ public enum BotDMCardText {
         return line.count > limit ? String(line.prefix(limit - 1)) + "\u{2026}" : line
     }
 
-    /// Is the other bot still answering, as far as the thread can tell? `lastAuthorIsTarget`: the newest message is theirs.
-    /// A message over eight minutes old got no answer: a turn is stopped at seven.
-    public static func looksLive(lastAuthorIsTarget: Bool, lastAt: Date, now: Date = Date()) -> Bool {
-        !lastAuthorIsTarget && now.timeIntervalSince(lastAt) < 8 * 60
+    /// Is the other bot still answering, as far as the thread can tell? `lastAuthorIsSender`: the newest message is the sender's, with
+    /// nothing after it, not even a note that it was stopped. A message over eight minutes old got no answer: a turn is stopped at seven.
+    public static func looksLive(lastAuthorIsSender: Bool, lastAt: Date, now: Date = Date()) -> Bool {
+        lastAuthorIsSender && now.timeIntervalSince(lastAt) < 8 * 60
     }
 }
 
@@ -274,14 +274,15 @@ public enum BotProtocol {
     }
 
     /// What the sender reads when the answers are in.
-    public static func repliesPrompt(_ replies: [(name: String, text: String)], notes: [String], lastRoundWith: [String], owner: String) -> String {
+    /// `reader`: who it tells: the owner, or the bot it's answering when this is inside a private thread.
+    public static func repliesPrompt(_ replies: [(name: String, text: String)], notes: [String], lastRoundWith: [String], reader: String, mayMessage: Bool = true) -> String {
         var parts = replies.map { "\($0.name) answered you privately:\n\n\($0.text)" }
         parts += notes
         if !lastRoundWith.isEmpty {
             parts.append("That was your last message to \(lastRoundWith.joined(separator: " and ")) on this, so finish without them.")
         }
-        parts.append("Carry on where you were and tell \(owner) what came of it, in your own words, using what they actually said. Only say what's new: don't repeat what you've already told \(owner) in this chat. " +
-                     "Don't thank them or confirm with them. Send another [TELL:] line only if you really need something more from them.")
+        parts.append("Carry on where you were and tell \(reader) what came of it, in your own words, using what they actually said. Only say what's new: don't repeat what you've already told \(reader) in this chat. " +
+                     "Don't thank them or confirm with them. " + (mayMessage ? "Send another [TELL:] line only if you really need something more from them." : "Don't send any more [TELL:] lines for now: tell \(reader) where things stand."))
         return parts.joined(separator: "\n\n")
     }
 
@@ -382,7 +383,7 @@ public enum BotProtocol {
 
     public static let critiqueNote = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt."
 
-    public static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs."
+    public static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs. Theo makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder."
 
     // MARK: What a group member reads
 
@@ -479,6 +480,8 @@ public struct BotPlaceFacts: Equatable, Sendable {
     public var codingMac: String
     /// Project folder names there, most recent first.
     public var projects: [String]
+    /// Where those folders are, in words an agent's shell understands.
+    public var projectsFolder: String
     /// "Claude Code (signed in)", "T3 Code 0.1.7", …
     public var ready: [String]
     public var otherMac: String?
@@ -487,8 +490,9 @@ public struct BotPlaceFacts: Equatable, Sendable {
     public var otherMacHasScreens: Bool
     public var thisMacHasScreens: Bool
 
-    public init(owner: String, thisMac: String, ownerMac: String? = nil, whyHere: String? = nil, codingMac: String? = nil, projects: [String] = [], ready: [String] = [],
+    public init(owner: String, thisMac: String, ownerMac: String? = nil, whyHere: String? = nil, codingMac: String? = nil, projects: [String] = [], projectsFolder: String = "~/Projects", ready: [String] = [],
                 otherMac: String? = nil, otherMacConnected: Bool = false, otherMacHasScreens: Bool = false, thisMacHasScreens: Bool = false) {
+        self.projectsFolder = projectsFolder
         self.owner = owner
         self.thisMac = thisMac
         self.ownerMac = ownerMac
@@ -519,9 +523,11 @@ public struct BotIdentityFacts: Equatable, Sendable {
     public var canStartCoding: Bool
     public var canMessageOthers: Bool
     public var canSetRoutines: Bool
+    /// Its memory file, said every turn: a session that began before the file moved still remembers the old place.
+    public var memoryPath: String?
 
     public init(name: String, owner: String, job: String, isCEO: Bool = false, teams: [String] = [], managerName: String? = nil, managesTeams: [String] = [],
-                ceoName: String? = nil, apps: [String] = [], canStartCoding: Bool = true, canMessageOthers: Bool = true, canSetRoutines: Bool = true) {
+                ceoName: String? = nil, apps: [String] = [], canStartCoding: Bool = true, canMessageOthers: Bool = true, canSetRoutines: Bool = true, memoryPath: String? = nil) {
         self.name = name
         self.owner = owner
         self.job = job
@@ -534,6 +540,7 @@ public struct BotIdentityFacts: Equatable, Sendable {
         self.canStartCoding = canStartCoding
         self.canMessageOthers = canMessageOthers
         self.canSetRoutines = canSetRoutines
+        self.memoryPath = memoryPath
     }
 }
 
@@ -552,7 +559,7 @@ public enum BotAwareness {
         let shown = facts.projects.prefix(maximumProjectsShown)
         let more = facts.projects.count - shown.count
         let names = shown.isEmpty ? "none yet" : shown.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
-        lines.append("Folders and coding runs from this chat are on the \(facts.codingMac) (~/Projects: \(names)).")
+        lines.append("Folders and coding runs from this chat are on the \(facts.codingMac) (\(facts.projectsFolder): \(names)).")
         if !facts.ready.isEmpty { lines.append("Ready on the \(facts.thisMac): \(facts.ready.joined(separator: ", ")).") }
         if let other = facts.otherMac {
             var line = "\(facts.owner)'s other Mac, the \(other), is \(facts.otherMacConnected ? "connected" : "not connected right now")"
@@ -589,6 +596,7 @@ public enum BotAwareness {
         if facts.canSetRoutines { can.append("set routines") }
         if !facts.apps.isEmpty { can.append("use \(facts.apps.joined(separator: ", "))") }
         lines.append("You can: \(can.joined(separator: ", ")).")
+        if let memory = facts.memoryPath { lines.append("Your memory file is \(memory).") }
         if facts.canMessageOthers { lines.append("When a request is outside your job, say who on the team fits and offer to message them.") }
         lines.append("Work out what \(facts.owner) actually wants, not just the literal words; if the next step is obvious and safe, take it; ask one short question only when you really can't tell.")
         return lines.joined(separator: " ")

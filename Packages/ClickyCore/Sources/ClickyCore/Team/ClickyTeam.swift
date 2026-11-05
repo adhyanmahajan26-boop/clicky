@@ -89,8 +89,9 @@ public enum ClickyOrder {
         return nil
     }
 
-    private static let tag = try! NSRegularExpression(pattern: #"(?i)\[\s*(CLICKY|TELL)\s*:\s*([^\]\n]{2,1500}?)\s*\]"#)
+    private static let tagHead = try! NSRegularExpression(pattern: #"(?i)\[\s*(CLICKY|TELL)\s*:"#)
     private static let tellMark = "\u{1F}"
+    /// Orders to Clicky in one reply. Messages to bots aren't cut here: their own limits say so in the chat.
     public static let maximumPerReply = 3
 
     /// A [TELL: name: message] order, for another bot or a group chat. Nil for an order to Clicky.
@@ -100,36 +101,101 @@ public enum ClickyOrder {
         return (parts[1], parts[2])
     }
 
-    /// Takes the [CLICKY: …] and [TELL: …] lines out of Theo's reply: what's left to show, and the orders.
-    public static func extract(from text: String) -> (text: String, orders: [String]) {
-        let range = NSRange(text.startIndex..., in: text)
-        let orders = tag.matches(in: text, range: range).compactMap { match -> String? in
-            guard let kindRange = Range(match.range(at: 1), in: text), let bodyRange = Range(match.range(at: 2), in: text) else { return nil }
-            let body = String(text[bodyRange])
-            // "[CLICKY: …]" in a sentence is someone talking about the tag, not an order.
-            guard OrderWords.isRealOrder(body) else { return nil }
-            guard text[kindRange].uppercased() == "TELL" else { return body }
-            guard let colon = body.firstIndex(of: ":") else { return nil }
-            let name = body[..<colon].trimmingCharacters(in: .whitespaces)
-            let message = body[body.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            // "[TELL: name: …]" in a sentence is someone talking about the tag.
-            guard OrderWords.isRealOrder(message), OrderWords.isRealName(name) else { return nil }
-            return name.isEmpty || message.isEmpty ? nil : [tellMark, name, tellMark, message].joined()
+    /// Where a tag's body ends: at the `]` that closes it, so `is arr[0] safe?` stays whole and a message can run over several lines.
+    /// Nil when it isn't closed.
+    static func closingBracket(in text: String, from start: String.Index) -> String.Index? {
+        var depth = 1
+        var index = start
+        while index < text.endIndex {
+            switch text[index] {
+            case "[": depth += 1
+            case "]":
+                depth -= 1
+                if depth == 0 { return index }
+            default: break
+            }
+            index = text.index(after: index)
         }
-        let left = tag.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-            .replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
+        return nil
+    }
+
+    private struct FoundTag {
+        let isTell: Bool
+        let body: String
+        let range: Range<String.Index>
+    }
+
+    /// Every tag in the text, in order. `isFinal`: a tag nobody closed runs to the end of its paragraph. Otherwise it's still being written, and `open` says where it starts.
+    private static func tags(in text: String, isFinal: Bool) -> (found: [FoundTag], open: String.Index?) {
+        var found: [FoundTag] = []
+        var searchStart = text.startIndex
+        while searchStart < text.endIndex,
+              let match = tagHead.firstMatch(in: text, range: NSRange(searchStart..<text.endIndex, in: text)),
+              let whole = Range(match.range, in: text), let kind = Range(match.range(at: 1), in: text) {
+            let isTell = text[kind].uppercased() == "TELL"
+            if let close = closingBracket(in: text, from: whole.upperBound) {
+                let body = text[whole.upperBound..<close].trimmingCharacters(in: .whitespacesAndNewlines)
+                let end = text.index(after: close)
+                found.append(FoundTag(isTell: isTell, body: body, range: whole.lowerBound..<end))
+                searchStart = end
+                continue
+            }
+            guard isFinal else { return (found, whole.lowerBound) }
+            let paragraphEnd = text.range(of: "\n\n", range: whole.upperBound..<text.endIndex)?.lowerBound ?? text.endIndex
+            found.append(FoundTag(isTell: isTell, body: text[whole.upperBound..<paragraphEnd].trimmingCharacters(in: .whitespacesAndNewlines), range: whole.lowerBound..<paragraphEnd))
+            searchStart = paragraphEnd
+        }
+        return (found, nil)
+    }
+
+    /// The order a tag holds, or nil when it's only someone talking about the tag.
+    private static func order(from tag: FoundTag) -> String? {
+        // "[CLICKY: …]" in a sentence is someone talking about the tag, not an order.
+        guard OrderWords.isRealOrder(tag.body), tag.body.count >= 2 else { return nil }
+        guard tag.isTell else { return tag.body }
+        guard let colon = tag.body.firstIndex(of: ":") else { return nil }
+        let name = tag.body[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = tag.body[tag.body.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        // "[TELL: name: …]" in a sentence is someone talking about the tag.
+        guard OrderWords.isRealOrder(message), OrderWords.isRealName(name), !name.isEmpty, !message.isEmpty else { return nil }
+        return [tellMark, name, tellMark, message].joined()
+    }
+
+    private static func tidied(_ text: String) -> String {
+        text.replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (left, Array(orders.prefix(maximumPerReply)))
+    }
+
+    /// Takes the [CLICKY: …] and [TELL: …] lines out of Theo's reply: what's left to show, and the orders. A tag that's only being talked about stays in the words.
+    public static func extract(from text: String) -> (text: String, orders: [String]) {
+        var left = text
+        var orders: [String] = []
+        var clickyOrders = 0
+        // From the end, so earlier ranges stay right as the later ones come out.
+        for tag in tags(in: text, isFinal: true).found.reversed() {
+            guard let order = order(from: tag) else { continue }
+            left.replaceSubrange(tag.range, with: "")
+            orders.insert(order, at: 0)
+        }
+        orders = orders.filter { order in
+            if tellTarget(in: order) != nil { return true }
+            clickyOrders += 1
+            return clickyOrders <= maximumPerReply
+        }
+        return (tidied(left).trimmingCharacters(in: .whitespacesAndNewlines), orders)
     }
 
     /// A reply still streaming, with its finished tags gone and one still being written hidden.
     public static func withoutTags(streaming text: String) -> String {
-        var left = extract(from: text).text
-        if let open = left.range(of: #"(?i)\[\s*(?:C|CL|CLI|CLIC|CLICK|CLICKY|T|TE|TEL|TELL)?(?:\s*:[^\]]*)?$"#, options: .regularExpression) {
-            left.removeSubrange(open)
-        }
-        return left
+        let (found, open) = tags(in: text, isFinal: false)
+        var left = text
+        if let open { left.removeSubrange(open...) }
+        for tag in found.reversed() where order(from: tag) != nil { left.replaceSubrange(tag.range, with: "") }
+        // Its last space stays: the next piece follows on from it.
+        var shown = tidied(left)
+        // The first letters of a tag, before there's a colon to know it by.
+        if let partial = shown.range(of: #"(?i)\[\s*(?:C|CL|CLI|CLIC|CLICK|CLICKY|T|TE|TEL|TELL)?\s*$"#, options: .regularExpression) { shown.removeSubrange(partial) }
+        return shown
     }
 }
 
@@ -187,7 +253,7 @@ public struct ClickyOrderStream: Sendable {
             index = text.index(after: index)
         }
         guard candidates.contains(where: { $0.count == matched }) else { return .incomplete }
-        guard let close = text[index...].firstIndex(of: "]") else { return .incomplete }
+        guard let close = ClickyOrder.closingBracket(in: text, from: index) else { return .incomplete }
         return .closed(close)
     }
 }

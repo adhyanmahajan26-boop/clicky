@@ -90,7 +90,11 @@ struct T3HandoffButton: View {
             }
         }
         .padding(.leading, 38)
-        .onAppear { center.refresh() }
+        .onAppear {
+            center.refresh()
+            // What this card shows stays what it shows, whatever else happens to this chat's turns meanwhile.
+            if pickedMac == nil { pickedMac = mac }
+        }
         .task(id: "\(harness)|\(mac)|\(target?.path ?? "")") { await loadChats() }
         .sheet(isPresented: $isNamingFolder) { newFolderSheet }
     }
@@ -270,7 +274,8 @@ struct T3HandoffButton: View {
 
     private func loadChats() async {
         chats = []
-        guard let path = target?.path, harness != CursorCloud.harnessID else { return }
+        // A chat holds many of these cards, and a sent one has nothing left to choose.
+        guard !sent, let path = target?.path, harness != CursorCloud.harnessID else { return }
         isLoadingChats = true
         defer { isLoadingChats = false }
         let onMac = mac

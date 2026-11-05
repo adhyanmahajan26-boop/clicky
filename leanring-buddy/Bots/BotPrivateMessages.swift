@@ -52,6 +52,8 @@ struct BotDMTurn {
     var exchangeID: String?
     var askerID: String?
     var context: BotDMContext
+    /// False after its last messages reached nobody: it says where things stand instead of trying again.
+    var mayMessage = true
 }
 
 extension BotsStore {
@@ -201,15 +203,10 @@ extension BotsStore {
         messages.map { "\(bot($0.author)?.name ?? $0.author): \($0.text)" }
     }
 
-    /// A coder's final prompt for work the owner asked for starts the run, in the chat the owner asked in. The sender hears that rather
+    /// A coder's final prompt for work the owner just asked for starts the run, in the chat the owner asked in. The sender hears that rather
     /// than the whole prompt. Anything else goes back as it was written.
     private func startRunIfAsked(_ answer: String, target: NativeBot, context: BotDMContext) -> String {
-        guard let owner = context.ownerWords, let prompt = BotsT3.promptBlock(in: answer), BotsStore.ownerAskedToBuild(owner) else { return answer }
-        let folder = projectChoice(ownerWords: owner, answer: answer)
-        guard folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner) else { return answer }
-        let choices = codingChoices(from: owner)
-        let title = BotsT3.projectTitle(in: answer, prompt: prompt)
-        submitToT3(prompt: prompt, title: title, repo: folder.repo, room: context.rootRoom, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
+        guard context.ownerWords != nil, let title = startRunFromPrivateAnswer(answer, room: context.rootRoom) else { return answer }
         let words = answer.components(separatedBy: "```prompt").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return (words.isEmpty ? "" : words + "\n\n") + "(\(target.name)'s prompt has started the run \"\(title)\", so don't start it again. It shows on its card in this chat.)"
     }
@@ -217,14 +214,18 @@ extension BotsStore {
     /// The sender reads the answers and carries on where it was.
     func carryOn(_ sender: NativeBot, room: String, replies: [(name: String, text: String)], notes: [String], lastRound: [String], context: BotDMContext,
                          askerID: String?, exchangeID: String?, then: @escaping (String?) -> Void) {
+        // Nothing got through this time: it says where things stand. Letting it try again is how a stubborn model loops forever.
+        let mayMessage = !replies.isEmpty
         Task { [weak self] in
             while self?.replying[sender.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard let self else { return then(nil) }
             if self.stoppedExchangeRooms.contains(context.rootRoom) { return then(nil) }
             let session = self.conversation(room).sessions[sender.id]
-            let words = BotProtocol.repliesPrompt(replies, notes: notes, lastRoundWith: lastRound, owner: BotPrompts.ownerName)
+            // Inside a private thread it's answering the bot that asked, not the owner.
+            let reader = askerID.flatMap { self.bot($0)?.name } ?? BotPrompts.ownerName
+            let words = BotProtocol.repliesPrompt(replies, notes: notes, lastRoundWith: lastRound, reader: reader, mayMessage: mayMessage)
             let prompt = session == nil ? BotPrompts.firstMessage(bot: sender, team: self.bots, text: words) : words
-            let turn = BotDMTurn(exchangeID: exchangeID, askerID: askerID, context: context)
+            let turn = BotDMTurn(exchangeID: exchangeID, askerID: askerID, context: context, mayMessage: mayMessage)
             self.reply(bot: sender, in: room, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: context.fromOwner, mayUseScreen: context.ownerWords != nil, privately: turn, then: then)
         }
     }
@@ -237,6 +238,8 @@ extension BotsStore {
         for (id, exchange) in live {
             stoppedExchangeRooms.insert(exchange.rootRoom)
             liveExchanges[id] = nil
+            // The card can tell it's over.
+            post(BotChatMessage(author: Self.noteAuthor, text: "Stopped.", exchangeID: id), to: BotDMThread.id(exchange.senderID, exchange.targetID))
             if replyingIn[exchange.targetID] == BotDMThread.id(exchange.senderID, exchange.targetID) { stop(exchange.targetID) }
         }
     }

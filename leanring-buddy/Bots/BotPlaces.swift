@@ -65,12 +65,14 @@ extension BotsStore {
         let otherName = link.isPaired ? (link.peerName ?? link.knownPeerName).map(TheoLink.shortName) : nil
         // This turn is about to run on the other Mac, and the bot should hear so from that Mac's side.
         if let bot, let across = turnGoesAcross(bot), let other = otherName {
-            return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: other, ownerMac: here, whyHere: across.why, codingMac: here, projects: hereProjects,
+            return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: other, ownerMac: here, whyHere: across.why, codingMac: here, projects: hereProjects, projectsFolder: BotsT3.projectsWords,
                                  ready: peerReadyLabels, otherMac: here, otherMacConnected: true, otherMacHasScreens: StudioController.isAvailable, thisMacHasScreens: peerDevice?.hasScreens ?? false)
         }
         let forwarded = forwardedTurns[room]
         let projects = forwarded != nil ? (peerDevice?.projects.map(\.name) ?? []) : hereProjects
-        return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac, whyHere: forwarded?.why, codingMac: forwarded?.fromMac, projects: projects, ready: hereReady,
+        // Run on this Mac for the other one, its folders are the other Mac's. Only a test profile's folder isn't "~/Projects" there.
+        let projectsFolder = forwarded != nil && TheoProfile.isTest ? (peerDevice?.projectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
+        return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac, whyHere: forwarded?.why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
                              otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? (DeviceRoles.thisMac != .macStudio)),
                              thisMacHasScreens: StudioController.isAvailable)
     }
@@ -94,7 +96,8 @@ extension BotsStore {
     func runTurnOnOtherMac(_ bot: NativeBot, across: (mac: String, why: String), in room: String, prompt: String, exchangeID: String?, fromOwner: Bool, then: @escaping (String?) -> Void) {
         turnsOnOtherMac.insert(bot.id)
         post(BotChatMessage(author: Self.noteAuthor, text: "Answered on your \(TheoLink.shortName(across.mac)): \(across.why).", exchangeID: exchangeID), to: room)
-        var fields = ["bot": bot.id, "room": room, "prompt": prompt, "fromMac": TheoLink.localName, "why": across.why, "fromOwner": fromOwner ? "1" : "0"]
+        // While a group talks a build through, this Mac starts the run from the outcome: the other Mac mustn't start one too.
+        var fields = ["bot": bot.id, "room": room, "prompt": prompt, "fromMac": TheoLink.localName, "why": across.why, "fromOwner": fromOwner && !isDiscussing(room) ? "1" : "0"]
         if let exchangeID { fields["exchange"] = exchangeID }
         Task { [weak self] in
             let reply = await TheoLink.shared.ask("botTurn", fields, timeoutSeconds: BotRunner.turnLimitSeconds + 60)
@@ -120,8 +123,14 @@ extension BotsStore {
 
     /// The other Mac asks this one to run a bot's turn, because its engine can't run there.
     func handleTurnFromOtherMac(_ fields: [String: String]) {
-        guard let botID = fields["bot"], let room = fields["room"], let prompt = fields["prompt"], let replyID = fields["replyID"], let target = bot(botID) else { return }
+        guard let botID = fields["bot"], let room = fields["room"], let prompt = fields["prompt"], let replyID = fields["replyID"] else { return }
+        guard let target = bot(botID) else {
+            // This Mac doesn't have that bot yet: the asker hears at once rather than waiting out the turn's time limit.
+            _ = TheoLink.shared.request("reply", ["replyID": replyID, "answer": "", "message": ""])
+            return
+        }
         if let from = fields["fromMac"], let why = fields["why"] { forwardedTurns[room] = ForwardedTurn(fromMacFullName: from, why: why) }
+        if fields["fromOwner"] == "1" { ownerSpoke(in: room) }
         Task { [weak self] in
             // It might be busy here too.
             while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
@@ -145,20 +154,22 @@ extension BotsStore {
         let job = description.isEmpty ? firstSentence : description
         return BotIdentityFacts(name: bot.name, owner: BotPrompts.ownerName, job: String(job.prefix(160)), isCEO: bot.primary, teams: teams.map(\.name),
                                 managerName: manager(of: bot)?.name, managesTeams: teams.filter { $0.leaderID == bot.id }.map(\.name),
-                                ceoName: primary?.name, apps: BotConnectors.known.filter { bot.apps.contains($0.id) }.map(\.name))
+                                ceoName: primary?.name, apps: BotConnectors.known.filter { bot.apps.contains($0.id) }.map(\.name), memoryPath: bot.provider.hasPrefix("api:") ? nil : bot.memoryPath)
     }
 
     /// When the owner talks about carrying on earlier work: that folder's chats on that harness, for the bot to pick from.
     func recentChatsNote(for words: String, room: String) async -> String? {
         guard CodingIntent.asksToContinueChat(words) else { return nil }
-        let choice = codingChoices(from: words)
-        let harness = choice.harness ?? latestRun(in: room)?.harness ?? HarnessPrefs.codingTarget
+        let harness = continuingHarness(words: words, room: room)
         let named = projectChoice(ownerWords: words, answer: nil).repo?.path
         guard let folder = named ?? latestRun(in: room).flatMap({ $0.isRemote ? nil : $0.folder }) else {
             return "Addy wants to carry on earlier work but no folder is clear yet: ask which folder, in one short question."
         }
         let chats = await HarnessChats.list(harness: harness, folder: folder)
         let label = HarnessCatalog.label(harness)
+        if chats.isEmpty, harness == "t3", !HarnessChats.isT3ServerUp {
+            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If Addy names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
+        }
         guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if Addy asked to continue one." }
         let lines = chats.prefix(8).map { "- \($0.title) (\(HarnessChatText.age(of: $0.updatedAt)) ago): \($0.id)" }.joined(separator: "\n")
         return "Earlier \(label) chats in \(folder), newest first:\n\(lines)\nTo continue one, write a line \"Continue: <its id>\" next to the ```prompt block, with \"Repo: \(folder)\"."

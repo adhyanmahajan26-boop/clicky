@@ -60,6 +60,11 @@ public enum CodingIntent {
         normalized(text).range(of: #"(?i)\b(continue|carry on|resume|pick up|go on with|keep going)\b.{0,50}\b(chat|thread|session|conversation|run|where|left off|earlier|existing|previous|last)\b"#, options: .regularExpression) != nil
     }
 
+    /// The words are about code or a harness at all, so "let's continue where we left off" in a chat about something else isn't taken for a coding chat.
+    public static func mentionsCodeWork(_ text: String) -> Bool {
+        normalized(text).range(of: #"(?i)\b(code|coding|repo|folder|project|thread|session|harness|t3|codex|claude code|cursor|opencode|open code|gemini|grok)\b"#, options: .regularExpression) != nil
+    }
+
     /// An idea or a build, which the group talks through before anyone acts on it.
     public static func wantsDiscussion(_ text: String) -> Bool {
         normalized(text).range(of: #"(?i)\b(idea|plan|critique|discuss|what do you think|build|make|create|website|app|game|feature|design|prompt)\b"#, options: .regularExpression) != nil

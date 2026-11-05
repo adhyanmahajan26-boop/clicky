@@ -300,6 +300,7 @@ final class TheoLink: ObservableObject {
     }
 
     private func stopNetworking() {
+        failWaitingReplies()
         retryTimer?.invalidate()
         retryTimer = nil
         digestTimer?.invalidate()
@@ -385,7 +386,15 @@ final class TheoLink: ObservableObject {
         newConnection.start(queue: queue)
     }
 
+    /// Nobody will answer now: whoever's waiting hears at once, not when its time runs out.
+    private func failWaitingReplies() {
+        let waiting = waitingReplies
+        waitingReplies.removeAll()
+        for reply in waiting.values { reply(nil) }
+    }
+
     private func connectionEnded() {
+        failWaitingReplies()
         connection?.cancel()
         connection = nil
         connectionState = "none"
@@ -449,7 +458,9 @@ final class TheoLink: ObservableObject {
             guard let theirs = envelope.digests else { return }
             let store = BotsStore.shared
             Task {
-                let mine = await self.currentDigests()
+                var mine = await self.currentDigests()
+                // Each Mac describes itself, so what to compare the other's description with is the copy of it held here.
+                mine["device"] = store.peerDevice.map { LinkCoding.digest($0) }
                 let wanted = theirs.filter { mine[$0.key] != $0.value && store.wantsLinkItem($0.key) }.map(\.key)
                 if wanted.isEmpty {
                     if mine == theirs || Set(theirs.keys).isSubset(of: Set(mine.keys)) { self.lastSync = Date() }

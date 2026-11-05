@@ -577,10 +577,10 @@ final class HarnessCenter: ObservableObject {
     // MARK: Refreshing
 
     /// Detects every harness and reloads the model lists in the background. Skipped when run less than a
-    /// minute ago unless `force`.
-    func refresh(force: Bool = false) {
+    /// minute ago (or `maximumAge` seconds, for a check that's only there to stay roughly current) unless `force`.
+    func refresh(force: Bool = false, maximumAge: TimeInterval = 60) {
         if isRefreshing { return }
-        if !force, let lastRefresh, Date().timeIntervalSince(lastRefresh) < 60 { return }
+        if !force, let lastRefresh, Date().timeIntervalSince(lastRefresh) < maximumAge { return }
         lastRefresh = Date()
         isRefreshing = true
         let cachedCursorAge = HarnessModels.readCache().map { Date().timeIntervalSince($0.fetchedAt) } ?? .infinity

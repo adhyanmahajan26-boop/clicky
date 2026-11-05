@@ -530,6 +530,14 @@ extension BotsStore {
             onReport?("\(who) answered: \(spoken)")
         }
         if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
+            // A round in a group counts as a message too, or Theo could keep asking the group forever.
+            let verdict = (directMessageBudgets[ceo.id] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
+            if let line = BotDMBudget.capLine(verdict, sender: ceo.name, target: chat.name) {
+                post(BotChatMessage(author: Self.noteAuthor, text: line), to: ceo.id)
+                onReport?(line)
+                return
+            }
+            directMessageBudgets[ceo.id, default: BotDMBudget()].noteSent()
             let words = withTeamWork(message, ownerWords: ownerWords)
             post(BotChatMessage(author: Self.noteAuthor, text: "\(ceo.name) asked \(chat.name) in their group chat."), to: ceo.id)
             sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { [weak self] answer in
@@ -585,9 +593,10 @@ extension BotsStore {
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
-        let folder = projectChoice(ownerWords: ownerWords, answer: prompt)
+        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords), room: ceo.id)
+        let folder = projectChoice(ownerWords: ownerWords, answer: prompt, macName: mac)
         submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: folder.repo, room: ceo.id, harness: harness,
-                   modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder) { started, problem in
+                   modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac) { started, problem in
             onReport?(started ? "It's started on \(HarnessCatalog.label(harness)), and it shows on its card in your chat." : problem ?? "The run didn't start.")
         }
     }

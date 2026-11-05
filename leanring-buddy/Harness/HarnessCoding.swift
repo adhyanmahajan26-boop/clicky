@@ -220,7 +220,7 @@ enum HarnessCoding {
         // Claude Code takes its session's id up front. The others say what they made afterwards (HarnessChats.session).
         let newSessionID = harness == "claude" ? UUID().uuidString.lowercased() : nil
         run.sessionID = newSessionID
-        var message = (isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
+        var message = BotsT3.forAgent((isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (isNewProject ? BotsT3.newFolderReminder : "") + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote))
         if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
             message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +
@@ -251,7 +251,8 @@ enum HarnessCoding {
     }
 
     /// Carries on a chat this harness already has, in its own folder and terminal. `run` already says which folder and chat.
-    static func continueChat(_ chatID: String, run original: T3Run, harness: String, message: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+    static func continueChat(_ chatID: String, run original: T3Run, harness: String, message words: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+        let message = BotsT3.forAgent(words)
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so that chat can't carry on here.")
         }
@@ -264,6 +265,8 @@ enum HarnessCoding {
         run.harness = harness
         run.model = model ?? HarnessCatalog.label(harness)
         run.effort = effort ?? "default"
+        // A finished run's agent stays open in its terminal, ready for a follow-up, and that can hold this very chat. A run still going is left alone.
+        await closeFinishedTerminals(harness: harness, folder: run.folder)
         if useTmux, let tmux, HarnessCatalog.apiKeyEnvironment(for: harness).isEmpty {
             let session = "theo-\(BotsT3.slug(run.title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
@@ -275,8 +278,15 @@ enum HarnessCoding {
             PaneWatch.reset(session)
         } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: nil, resume: chatID) {
             run.id = terminal.id
-            await deliver(message, to: terminal, isFirstPrompt: true)
-            PaneWatch.reset(terminal.id)
+            var screenBefore = ""
+            guard await deliver(message, to: terminal, isFirstPrompt: true, beforeSending: { screenBefore = $0 }) else {
+                let screen = await terminal.screenText()
+                await TerminalSessions.shared.close(terminal.id)
+                throw BotsT3Error.failed(isOpenElsewhereScreen(screen)
+                    ? "That chat is open somewhere else. Close it there, then try again."
+                    : "\(HarnessCatalog.label(harness)) is showing a question instead of the chat, so nothing went in. Try it in \(HarnessCatalog.label(harness)) itself.")
+            }
+            PaneWatch.reset(terminal.id, screenBefore: screenBefore)
             PaneWatch.delivered(terminal.id)
         } else {
             run.id = "headless:\(UUID().uuidString.lowercased())"
@@ -314,6 +324,13 @@ enum HarnessCoding {
                                              arguments: args, environment: environment, workingDirectory: folder.path)
     }
 
+    @MainActor
+    private static func closeFinishedTerminals(harness: String, folder: String) {
+        for other in BotsStore.shared.t3Runs where other.harness == harness && other.folder == folder && (other.phase == "done" || other.phase == "failed") {
+            if TerminalSessions.shared.session(for: other.id) != nil { TerminalSessions.shared.close(other.id) }
+        }
+    }
+
     /// A fresh terminal under an existing run's id.
     @MainActor
     private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?, resume: String?) -> TerminalSession? {
@@ -343,19 +360,23 @@ enum HarnessCoding {
 
     /// Waits for the TUI to settle (answering a folder-trust question on the way), then pastes the text and presses Return.
     /// False when a question on the screen meant the text couldn't go in.
+    /// `beforeSending`: the screen just before the text goes in. A resumed chat shows its old turns, and their "Worked for 1m" isn't this turn ending.
     @MainActor
     @discardableResult
-    private static func deliver(_ text: String, to terminal: TerminalSession, isFirstPrompt: Bool) async -> Bool {
+    private static func deliver(_ text: String, to terminal: TerminalSession, isFirstPrompt: Bool, beforeSending: ((String) -> Void)? = nil) async -> Bool {
         var previous = ""
         var stable = 0
         var answeredTrust = 0
-        for _ in 0..<36 {
+        var waited = 0
+        for _ in 0..<60 {
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard terminal.isRunning else { return false }
             let screen = terminal.screenText().trimmingCharacters(in: .whitespacesAndNewlines)
             stable = (screen == previous && screen.count > 20) ? stable + 1 : 0
             previous = screen
             if stable >= 2 {
+                // Still starting up: a quiet screen isn't enough. Typed now, the prompt lands in the bare terminal and its Return is lost.
+                if isFirstPrompt, !terminal.acceptsPaste, !isQuestionScreen(screen), waited < 25 { waited += 1; continue }
                 if isFirstPrompt, answeredTrust < 3, answerTrustScreen(screen, terminal: terminal) {
                     answeredTrust += 1
                     stable = 0
@@ -376,6 +397,7 @@ enum HarnessCoding {
         // Still on a question screen after all that: don't type the prompt into it.
         let final = terminal.screenText()
         if Self.isQuestionScreen(final) { return false }
+        beforeSending?(final)
         await terminal.send(text: text)
         // Some TUIs (Codex) read the Return right after a paste as part of the paste, and the prompt sits unsent.
         for _ in 0..<3 {
@@ -427,9 +449,15 @@ enum HarnessCoding {
         let tail = screen.split(separator: "\n", omittingEmptySubsequences: false).suffix(16).joined(separator: "\n")
         if tail.range(of: #"(?i)\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this|enter to confirm|trust this folder|do you trust|esc to cancel(?!,\s*\d)"#,
                       options: .regularExpression) != nil { return true }
+        if isOpenElsewhereScreen(tail) { return true }
         // "Do you want to…" in an agent's report is only words. A dialog offers the choices under it.
         return tail.range(of: #"(?i)do you want to"#, options: .regularExpression) != nil
             && tail.range(of: #"(?im)^\W*(1\.\s*yes|(❯|›|>)\s*(1\.\s*)?yes)\b"#, options: .regularExpression) != nil
+    }
+
+    /// Codex won't share a chat: "This conversation is open in another app. Close it there and press R to continue here."
+    static func isOpenElsewhereScreen(_ screen: String) -> Bool {
+        screen.range(of: #"(?i)conversation is open in another app|close it there and press r"#, options: .regularExpression) != nil
     }
 
     /// A harness's own line saying a turn ended ("✻ Baked for 19s", "─ Worked for 1m 12s ─"), not prose that happens to say so.
@@ -476,7 +504,8 @@ enum HarnessCoding {
         try await BotsT3.shell(tmux, ["send-keys", "-t", session, "Enter"])
     }
 
-    static func sendFollowup(_ text: String, to run: T3Run) async throws {
+    static func sendFollowup(_ words: String, to run: T3Run) async throws {
+        let text = BotsT3.forAgent(words)
         // An agent waiting on a question gets just the answer, typed straight in.
         let answersQuestion = run.phase == "waiting"
         let label = HarnessCatalog.label(run.harness ?? "")
@@ -509,10 +538,11 @@ enum HarnessCoding {
             guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder, resume: session) else {
                 throw BotsT3Error.failed("The \(HarnessCatalog.label(harness)) terminal couldn't start.")
             }
-            if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true)) {
+            var screenBefore = ""
+            if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true, beforeSending: { screenBefore = $0 })) {
                 throw BotsT3Error.failed("\(label) is showing a question on its screen, so that couldn't go in. Open it from the run's card to answer, then send it again.")
             }
-            PaneWatch.reset(run.id)
+            PaneWatch.reset(run.id, screenBefore: screenBefore)
             PaneWatch.delivered(run.id)
             return
         }
@@ -679,7 +709,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         guard terminal.isRunning else {
-            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane)
+            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane, prompt: run.prompt)
             return BotsT3.ThreadState(status: terminal.exitCode == 0 ? "completed" : "failed", busy: false, waitingForAnswer: false,
                                       lastMessage: summary.isEmpty ? "The \(HarnessCatalog.label(run.harness ?? "")) session ended without a report." : summary,
                                       worktree: run.worktree, pullRequest: nil)
@@ -706,7 +736,7 @@ enum HarnessCoding {
         }
         // A plan's limit or a model it can't use: the agent would sit there (OpenCode retries for hours), so say so now.
         // The agent's own output can carry those words too, so a working agent only counts when it says it's retrying.
-        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression),
+        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|usage beyond what's included|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression),
            tail[tail.lineRange(for: blocked)].range(of: "(?i)retrying", options: .regularExpression) != nil || (!working && !saysFinished && unchanged >= 8) {
             let raw = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
             // OpenCode's "[retrying in 6h 10m attempt #1" says nothing useful here.
@@ -721,7 +751,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         if settled {
-            let summary = transcriptSummary(for: run) ?? paneSummary(pane)
+            let summary = transcriptSummary(for: run) ?? paneSummary(pane, prompt: run.prompt)
             return BotsT3.ThreadState(status: "completed", busy: false, waitingForAnswer: false, lastMessage: summary,
                                       worktree: run.worktree, pullRequest: nil)
         }
@@ -761,13 +791,18 @@ enum HarnessCoding {
         return now != base
     }
 
-    private static func paneSummary(_ pane: String) -> String {
-        // The agent's words, without the TUI's frames, status bars and hints.
-        let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$"#
+    private static func paneSummary(_ pane: String, prompt: String? = nil) -> String {
+        // The agent's words, without the TUI's frames, status bars and hints, and without the prompt it was given showing back.
+        let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$|^(❯|›)\s|^cursor agent$|^v\d{4}\.\d|^tip: |run everything$"#
+        let promptStart = prompt.map { String($0.prefix(40)) }
         let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map { line in
             line.trimmingCharacters(in: CharacterSet(charactersIn: "│┃╹▀╭╮╰╯─ ")).trimmingCharacters(in: .whitespaces)
         }
-        .filter { $0.range(of: chrome, options: .regularExpression) == nil }
+        .filter { line in
+            guard line.range(of: chrome, options: .regularExpression) == nil else { return false }
+            guard let promptStart, !line.isEmpty else { return true }
+            return !line.hasPrefix(promptStart)
+        }
         return lines.suffix(40).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -823,6 +858,17 @@ enum HarnessCoding {
         let resolved = URL(fileURLWithPath: folder).resolvingSymlinksInPath().path
         switch harness {
         case "claude":
+            // Its own session when it's known: another chat in the same folder has other words.
+            if let session = run.sessionID {
+                for path in Set([folder, resolved]) {
+                    let file = home.appendingPathComponent(".claude/projects/\(mangled(path))/\(session).jsonl")
+                    guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                    for event in jsonLines(file).reversed() where event["type"] as? String == "assistant" {
+                        if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
+                    }
+                }
+                return nil
+            }
             for path in Set([folder, resolved]) {
                 let dir = home.appendingPathComponent(".claude/projects/\(mangled(path))", isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) {
@@ -839,7 +885,7 @@ enum HarnessCoding {
             for day in days {
                 let parts = calendar.dateComponents([.year, .month, .day], from: day)
                 let dir = sessions.appendingPathComponent(String(format: "%04d/%02d/%02d", parts.year!, parts.month!, parts.day!), isDirectory: true)
-                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") {
+                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") && (run.sessionID.map { file.lastPathComponent.contains($0) } ?? true) {
                     guard let meta = jsonLines(file, keeping: 200_000_000).first?["payload"] as? [String: Any], let cwd = meta["cwd"] as? String,
                           cwd == folder || cwd == resolved else { continue }
                     for event in jsonLines(file).reversed() {

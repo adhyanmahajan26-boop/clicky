@@ -193,6 +193,18 @@ enum BotsT3 {
         "You're already in this project's folder, \(folder.path). Work right here: don't make another folder or go anywhere else, whatever the instructions below say about where it goes.\n\n"
     }
 
+    /// The same again after the instructions: a quick model follows whatever it read last.
+    static let newFolderReminder = "\n\nRemember: this project's folder already exists and you're in it. Keep everything in the current folder."
+
+    /// Where the project folders are, in words an agent's shell understands. A test profile's folders are its own, while its agents keep the
+    /// owner's real home, so "~/Projects" would send them into the owner's real folders.
+    static var projectsWords: String { TheoProfile.isTest ? projectsFolder.path : "~/Projects" }
+
+    /// What goes to an agent. In a test profile "~/Projects" means that profile's folder, whoever wrote it.
+    static func forAgent(_ text: String) -> String {
+        TheoProfile.isTest ? text.replacingOccurrences(of: "~/Projects", with: projectsFolder.path) : text
+    }
+
     /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
     static let plainFolderNote = "\n\nThis folder isn't a git repository. Edit the files here and don't run git init or commit."
 
@@ -285,7 +297,7 @@ enum BotsT3 {
         let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
         let chosenEffort = effortChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
-        let message = subfolder + prompt + (plainFolder ? plainFolderNote : deliveryNote)
+        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote))
         run.model = chosenModel
         run.effort = chosenEffort
         run.prompt = prompt
@@ -312,6 +324,8 @@ enum BotsT3 {
     static func continueChat(_ choice: HarnessChatChoice, prompt: String, title: String, folder: URL?, harness: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
         guard let folder else { throw BotsT3Error.failed("That needs the folder the chat is in. Pick a folder first.") }
         let label = harness == "t3" ? "T3 Code" : HarnessCatalog.label(harness)
+        // T3 Code's threads can only be listed with its server up.
+        if harness == "t3", let cli { await openServerIfNeeded(cli: cli) }
         let chats = await HarnessChats.list(harness: harness, folder: folder.path)
         guard let chat = choice.match(in: chats) ?? choice.title.map({ HarnessChat(id: choice.idOrTitle, title: $0, updatedAt: Date()) }) else {
             throw BotsT3Error.failed("\(label) has no chat called \"\(choice.idOrTitle)\" in \(folder.lastPathComponent).")
@@ -326,8 +340,6 @@ enum BotsT3 {
             return try await HarnessCoding.continueChat(chat.id, run: run, harness: harness, message: message, modelChoice: modelChoice, effortChoice: effortChoice)
         }
         guard let cli else { throw BotsT3Error.noCLI }
-        // T3 Code's server has to be up for this, same as starting a thread.
-        await openServerIfNeeded(cli: cli)
         _ = try await startThread(cli: cli, arguments: ["thread", "send", chat.id, "-"], message: message)
         run.id = chat.id
         return run

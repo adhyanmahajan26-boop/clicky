@@ -628,6 +628,10 @@ extension TheoUIDriver {
             guard let id = command["id"] as? String else { respond(false, nil, "Needs id."); return true }
             BotsStore.shared.stopGroup(id)
             respond(true, ["stopped": id], nil)
+        case "uiRunPane":
+            // {run}: the screen of a run's terminal, what "Watch" shows.
+            guard let id = command["run"] as? String, let terminal = TerminalSessions.shared.session(for: id) else { respond(false, nil, "No terminal for that run."); return true }
+            respond(true, ["text": String(terminal.screenText().suffix(3000)), "running": terminal.isRunning, "acceptsPaste": terminal.acceptsPaste], nil)
         case "uiRunFollowup":
             // {run, text}: what the box on a run's card does.
             guard let id = command["run"] as? String, let text = command["text"] as? String, let run = BotsStore.shared.t3Runs.first(where: { $0.id == id }) else { respond(false, nil, "Needs run and text."); return true }

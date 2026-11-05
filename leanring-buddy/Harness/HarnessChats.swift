@@ -130,8 +130,9 @@ enum HarnessChats {
         let query = "select id, title, time_updated from session where directory in (\(wanted)) and parent_id is null and time_archived is null order by time_updated desc limit \(maximumShown);"
         let found = HarnessChatFiles.openCodeRows(sqliteJSON: output(of: sqlite, ["-readonly", "-json", store.path, query]))
         if !found.isEmpty { return found }
-        // A database of another shape: its CLI still knows, in that folder.
-        guard let executable = HarnessCatalog.executable(for: "opencode"), let folder = paths.first else { return [] }
+        // No rows means no chats. Only a database of another shape needs its CLI, which can add a row of its own, so that's the last resort.
+        guard output(of: sqlite, ["-readonly", store.path, "select count(*) from session;"]).isEmpty,
+              let executable = HarnessCatalog.executable(for: "opencode"), let folder = paths.first else { return [] }
         let json = output(of: executable, ["session", "list", "--format", "json", "-n", "300"], in: folder)
         return paths.flatMap { HarnessChatFiles.openCodeSessions(json: json, folder: $0) }.uniqued
     }

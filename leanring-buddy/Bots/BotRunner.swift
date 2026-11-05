@@ -78,7 +78,7 @@ enum BotRunner {
 
     /// An engine's words for "that session doesn't exist".
     static func saysSessionIsLost(_ text: String) -> Bool {
-        text.range(of: #"(?i)no conversation found|session[^\n]{0,60}not found|no such session|unknown session|could not find (the )?session|no (saved )?session|invalid session|thread[^\n]{0,40}not found"#, options: .regularExpression) != nil
+        text.range(of: #"(?i)no conversation found|session[^\n]{0,60}not found|no such session|unknown session|could not find (the )?session|no (saved )?session|invalid session|valid session|thread[^\n]{0,40}not found"#, options: .regularExpression) != nil
     }
 
     /// Theo's MCP tools a bot may use on its own.

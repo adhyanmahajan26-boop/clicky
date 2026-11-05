@@ -77,9 +77,9 @@ struct BotProtocolTests {
         #expect(BotDMCardText.preview("**Use SQLite.**\nIt's simple") == "Use SQLite.")
         #expect(BotDMCardText.preview(String(repeating: "a", count: 200)).count == 90)
         let now = Date()
-        #expect(BotDMCardText.looksLive(lastAuthorIsTarget: false, lastAt: now, now: now))
-        #expect(!BotDMCardText.looksLive(lastAuthorIsTarget: true, lastAt: now, now: now))
-        #expect(!BotDMCardText.looksLive(lastAuthorIsTarget: false, lastAt: now.addingTimeInterval(-600), now: now))
+        #expect(BotDMCardText.looksLive(lastAuthorIsSender: true, lastAt: now, now: now))
+        #expect(!BotDMCardText.looksLive(lastAuthorIsSender: false, lastAt: now, now: now))
+        #expect(!BotDMCardText.looksLive(lastAuthorIsSender: true, lastAt: now.addingTimeInterval(-600), now: now))
     }
 
     // MARK: Mentions
@@ -239,7 +239,7 @@ struct BotProtocolTests {
                                                includesScreenHowTo: false, turnNote: BotProtocol.wrapUpNote(owner: "Addy"))
         let privately = [BotProtocol.privateThreadHowTo(partner: "Theo"),
                          BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: "Which database?", ownerAsked: "ask Coder", earlier: [], owner: "Addy")].joined(separator: "\n\n")
-        let carryOn = BotProtocol.repliesPrompt([("Coder", "SQLite")], notes: [], lastRoundWith: [], owner: "Addy")
+        let carryOn = BotProtocol.repliesPrompt([("Coder", "SQLite")], notes: [], lastRoundWith: [], reader: "Addy")
         return [shared, shared + "\n\n" + group, shared + "\n\n" + head, shared + "\n\n" + wrap, shared + "\n\n" + privately, shared + "\n\n" + carryOn]
     }
 
@@ -292,7 +292,7 @@ struct BotProtocolTests {
 
     @Test func aRepliesPromptHoldsAllOfTheAnswer() {
         let long = String(repeating: "word ", count: 2000)
-        let prompt = BotProtocol.repliesPrompt([("Coder", long)], notes: ["There's nobody called Bob."], lastRoundWith: ["Coder"], owner: "Addy")
+        let prompt = BotProtocol.repliesPrompt([("Coder", long)], notes: ["There's nobody called Bob."], lastRoundWith: ["Coder"], reader: "Addy")
         #expect(prompt.contains(long))
         #expect(prompt.contains("There's nobody called Bob."))
         #expect(prompt.contains("last message to Coder"))
@@ -534,6 +534,60 @@ struct BotProtocolTests {
         #expect(!ProjectWords.asksOnlyForFolder("make a folder called theo-test-1 and put hello.txt in it"))
         #expect(!ProjectWords.asksOnlyForFolder("make a new folder called moon and build a site in it"))
         #expect(ProjectWords.newFolderName(in: "make a folder called theo-test-1 and put hello.txt in it") == "theo-test-1")
+    }
+
+    @Test func aTellCanHoldBracketsAndRunOverSeveralLines() {
+        let brackets = ClickyOrder.extract(from: "ok [TELL: Coder: is arr[0] safe?] thanks")
+        #expect(brackets.text == "ok  thanks")
+        #expect(ClickyOrder.tellTarget(in: brackets.orders[0])?.message == "is arr[0] safe?")
+        let lines = ClickyOrder.extract(from: "[TELL: Coder: first line\n\nsecond line]")
+        #expect(ClickyOrder.tellTarget(in: lines.orders[0])?.message == "first line\n\nsecond line")
+        let long = String(repeating: "word ", count: 2000)
+        #expect(ClickyOrder.tellTarget(in: ClickyOrder.extract(from: "[TELL: Coder: \(long)]").orders[0])?.message == long.trimmingCharacters(in: .whitespaces))
+    }
+
+    @Test func aTellWithNoClosingBracketStillGoes() {
+        let open = ClickyOrder.extract(from: "Asking now. [TELL: Coder: which database\n\nAnything else.")
+        #expect(ClickyOrder.tellTarget(in: open.orders[0])?.message == "which database")
+        #expect(open.text.contains("Anything else."))
+    }
+
+    @Test func noTellIsDroppedOverACount() {
+        let many = (1...5).map { "[TELL: Bot\($0): hello]" }.joined(separator: "\n")
+        #expect(ClickyOrder.extract(from: many).orders.count == 5)
+        let clicky = (1...5).map { "[CLICKY: job \($0)]" }.joined(separator: "\n")
+        #expect(ClickyOrder.extract(from: clicky).orders.count == ClickyOrder.maximumPerReply)
+    }
+
+    @Test func aTagBeingTalkedAboutStaysInTheWords() {
+        let said = ClickyOrder.extract(from: "I won't use [TELL: name: what to do] for that.")
+        #expect(said.orders.isEmpty)
+        #expect(said.text.contains("[TELL: name: what to do]"))
+    }
+
+    @Test func aTagBeingWrittenStaysHiddenWhileItStreams() {
+        #expect(ClickyOrder.withoutTags(streaming: "Asking now. [TELL: Coder: is arr[0] saf") == "Asking now. ")
+        #expect(ClickyOrder.withoutTags(streaming: "Asking now. [TEL") == "Asking now. ")
+        #expect(ClickyOrder.withoutTags(streaming: "Done [TELL: Coder: hi] and more") == "Done  and more")
+    }
+
+    @Test func onlyCodeTalkCountsAsCarryingOnACodingChat() {
+        #expect(CodingIntent.mentionsCodeWork("continue that thread in the moon folder"))
+        #expect(CodingIntent.mentionsCodeWork("carry on the Codex chat"))
+        #expect(!CodingIntent.mentionsCodeWork("let's continue where we left off"))
+    }
+
+    @Test func theProjectsFolderIsSaidTheWayAnAgentsShellReadsIt() {
+        let usual = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Addy", thisMac: "Mac Studio", projects: ["moon"]))
+        #expect(usual.contains("(~/Projects: moon)"))
+        let elsewhere = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Addy", thisMac: "Mac Studio", projects: ["moon"], projectsFolder: "/tmp/test home/Projects"))
+        #expect(elsewhere.contains("(/tmp/test home/Projects: moon)"))
+        #expect(!elsewhere.contains("~/Projects"))
+    }
+
+    @Test func theFinalPromptNeverSendsTheAgentToAFolder() {
+        #expect(BotProtocol.mergeNote.contains("never tell the agent to create or go to a folder"))
+        #expect(BotProtocol.planNote(hasOthers: false).contains("never tell the agent to create or go to a folder"))
     }
 
     // MARK: Folders and memory
