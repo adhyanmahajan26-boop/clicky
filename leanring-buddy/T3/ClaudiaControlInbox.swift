@@ -313,6 +313,36 @@ final class ClaudiaControlInbox {
                                  headID: command["head"] as? String, memberIDs: command["members"] as? [String] ?? [])
             BotsStore.shared.save(group)
             reply(identifier, ok: true, result: ["saved": id], error: nil)
+        case "devTask":
+            // A coding task for the crew, as "@crew …" typed in a chat: {text, repo, title, room}. Answers when its run has started, been held or kept.
+            let store = BotsStore.shared
+            guard let text = command["text"] as? String, let repo = command["repo"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs text and repo."); return }
+            let room = command["room"] as? String ?? store.primary?.id ?? BotsStore.teamID
+            store.post(BotChatMessage(author: "user", text: "@crew " + text), to: room)
+            store.dispatchDevTask(text, title: command["title"] as? String, repo: URL(fileURLWithPath: repo, isDirectory: true), room: room) { outcome in
+                reply(identifier, ok: true, result: outcome.report, error: nil)
+            }
+        case "deciderSet":
+            // {engine: off|sonnet|prism|wity|wityThinking, kind?: one decision (all when left out), light?, strong?: "harness model"}
+            if let name = command["engine"] as? String {
+                guard let engine = DeciderEngine(rawValue: name) else { reply(identifier, ok: false, result: nil, error: "No engine \(name)."); return }
+                let kinds = (command["kind"] as? String).flatMap(DevDecisionKind.init(rawValue:)).map { [$0] } ?? DevDecisionKind.allCases
+                kinds.forEach { DevDecider.set(engine, for: $0) }
+            }
+            if let light = command["light"] as? String { UserDefaults.standard.set(light, forKey: DevDecider.lightRunnerKey) }
+            if let strong = command["strong"] as? String { UserDefaults.standard.set(strong, forKey: DevDecider.strongRunnerKey) }
+            if command["warm"] as? Bool == true {
+                PrismClient.warm()
+                WityClient.warm()
+            }
+            reply(identifier, ok: true, result: Dictionary(uniqueKeysWithValues: DevDecisionKind.allCases.map { ($0.rawValue, DevDecider.engine(for: $0).rawValue) }), error: nil)
+        case "deciderLog":
+            // The crew's recent decisions: engine, model, options, answer, confidence and time. Tasks by title only.
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let lines = DevDecider.recentLines.suffix(max(1, min(command["limit"] as? Int ?? 50, 500)))
+            let encoded = (try? encoder.encode(Array(lines))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            reply(identifier, ok: true, result: encoded ?? [], error: nil)
         case "fastDecisions":
             // What Prism decided lately: the choice and its time, never the words.
             reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)

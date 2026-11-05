@@ -182,8 +182,9 @@ enum HarnessCoding {
     }
 
     /// `onWaiting`: it has to wait for an earlier new run in the same folder to show its chat.
+    /// `place`: the crew's decision to share another run's worktree, or to start from another run's branch once it's done.
     static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil,
-                      onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
+                      place: RunPlace? = nil, onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
@@ -209,10 +210,18 @@ enum HarnessCoding {
             workdir = topLevel
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
             run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
+        } else if let repo = topLevel, let shared = place?.worktree, FileManager.default.fileExists(atPath: shared) {
+            // The crew put it in another run's worktree: both edits touch the same code, so they belong on one branch.
+            workdir = URL(fileURLWithPath: shared, isDirectory: true)
+            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: workdir).trimmingCharacters(in: .whitespacesAndNewlines)
+            run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: place?.branch, baseCommit: base)
+            run.worktree = shared
+            run.baseBranch = await BotsT3.currentBranch(in: repo)
+            gitFolder = repo.appendingPathComponent(".git").path
         } else if let repo = topLevel {
-            // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
+            // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched. After another run, it starts from that run's branch.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await BotsT3.shell(git, ["rev-parse", place?.base ?? "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
             let trees = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Theo/worktrees", isDirectory: true)
             try FileManager.default.createDirectory(at: trees, withIntermediateDirectories: true)
