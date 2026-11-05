@@ -116,7 +116,7 @@ python3 "$SCRATCH/theoui.py" start --tab bots
 ```bash
 env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/open -g -n /Applications/Theo.app --args --profile test-air
 sleep 3
-for pid in $(pgrep -x Clicky); do ps -o args= -p "$pid" | /usr/bin/grep -q -- '--profile test-air$' && echo "$pid" > "$SCRATCH/test-air.pid"; done
+for pid in $(pgrep -x Clicky); do ps -o args= -p "$pid" | /usr/bin/grep -qE -- '--profile test-air( |$)' && echo "$pid" > "$SCRATCH/test-air.pid"; done
 cat "$SCRATCH/test-air.pid"
 ```
 
