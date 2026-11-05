@@ -56,7 +56,7 @@ struct DevicesSettingsContent: View {
                     SettingRow(title: "No other Mac linked", detail: "Link one in Your other Mac to share the work between them.") { EmptyView() }
                 }
             }
-            TheoSection(title: "What runs where", hint: "Theo works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there, and waits if it's offline.") {
+            TheoSection(title: "What runs where", hint: "Theo works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there. If that Mac is offline, the chat says so at once and offers to run it here.") {
                 ForEach(Array(DeviceFeature.allCases.enumerated()), id: \.element.id) { index, feature in
                     if index > 0 { RowDivider() }
                     DeviceFeatureRow(feature: feature)
