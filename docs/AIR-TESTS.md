@@ -1,4 +1,4 @@
-# Air tests for Theo build 202611051740
+# Air tests for Theo build 202611051828
 
 For a separate Claude session working on the MacBook Air. Do these in order and report each row at the end as ✅, ⚠️ or ❌, with the evidence file. A ⚠️ is fine, a fake ✅ is not.
 
@@ -48,19 +48,19 @@ pgrep -P "$(pgrep -f "$MAIN")" -fl | cut -c1-60
 
 Both should print nothing that's Addy's work. Theo's `--mcp` children belong to Claude sessions and aren't work in progress. If Addy is busy, wait and check again later.
 
-Then use the app's own update path, the same one as Settings › Updates › Update now. These go through real Theo's control inbox: write `{"cmd":"updateCheck"}` and then `{"cmd":"updateInstall"}` as `~/.clicky/control-inbox/<any id>.json`, and read the reply from `~/.clicky/control-outbox/<same id>.json`. Theo quits and comes back by itself. Afterwards check the build is 202611051740.
+Then use the app's own update path, the same one as Settings › Updates › Update now. These go through real Theo's control inbox: write `{"cmd":"updateCheck"}` and then `{"cmd":"updateInstall"}` as `~/.clicky/control-inbox/<any id>.json`, and read the reply from `~/.clicky/control-outbox/<same id>.json`. Theo quits and comes back by itself. Afterwards check the build is 202611051828.
 
 If your permission system refuses this, don't route around it. Tell the coordinator, and Addy can press Update now. The tests below don't wait for it: run them from the release zip instead, with nothing changed in `/Applications`:
 
 ```bash
 mkdir -p "$SCRATCH/theo"
-gh release download build-202611051740 --repo adhyanmahajan26-boop/claudia-releases --pattern 'Theo-*.zip' --dir "$SCRATCH/theo"
-shasum -a 256 "$SCRATCH/theo/Theo-202611051740.zip"
-ditto -x -k "$SCRATCH/theo/Theo-202611051740.zip" "$SCRATCH/theo"
+gh release download build-202611051828 --repo adhyanmahajan26-boop/claudia-releases --pattern 'Theo-*.zip' --dir "$SCRATCH/theo"
+shasum -a 256 "$SCRATCH/theo/Theo-202611051828.zip"
+ditto -x -k "$SCRATCH/theo/Theo-202611051828.zip" "$SCRATCH/theo"
 export THEOUI_BINARY="$SCRATCH/theo/Theo.app/Contents/MacOS/Clicky"
 ```
 
-The sha256 must be `48e67320047f6e84a4ae2dc4d8d14e2428f42b43adaed611a4a9b34f6320d521`. Say in your report which of the two you tested.
+The sha256 must be `efcf4f5002f01a3684d4366b6e3880c140eeb1fedbc0f017a1c2d3f8fe890771`. Say in your report which of the two you tested.
 
 ## 2. Start a test profile
 
