@@ -325,7 +325,9 @@ enum HarnessDetector {
         case "grok":
             // `grok models` prints "You are logged in with grok.com." and the model list.
             let text = HarnessCatalog.output(of: executable, ["models"], timeout: 15)
-            if text.lowercased().contains("logged in") {
+            if text.lowercased().contains("not authenticated") {
+                status.loggedIn = false
+            } else if text.lowercased().contains("logged in") {
                 status.loggedIn = !text.lowercased().contains("not logged in")
                 if status.loggedIn == true {
                     status.account = text.split(separator: "\n").first { $0.lowercased().contains("logged in") }

@@ -238,6 +238,8 @@ enum BotsT3 {
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
         if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder) }
         guard let cli else { throw BotsT3Error.noCLI }
+        // Everything below talks to T3 Code's server, so it's opened first when it's closed. Its CLI with no server up writes into T3 Code's folder.
+        await openServerIfNeeded(cli: cli)
         var arguments = ["thread", "start"]
         var run: T3Run
         var plainFolder = false
@@ -319,9 +321,24 @@ enum BotsT3 {
         }
         guard let cli else { throw BotsT3Error.noCLI }
         // T3 Code's server has to be up for this, same as starting a thread.
+        await openServerIfNeeded(cli: cli)
         _ = try await startThread(cli: cli, arguments: ["thread", "send", chat.id, "-"], message: message)
         run.id = chat.id
         return run
+    }
+
+    /// Opens T3 Code hidden when its server isn't up, without taking focus, and waits for it a while.
+    private static func openServerIfNeeded(cli: URL) async {
+        guard !HarnessChats.isT3ServerUp, let app = app(forCLI: cli) else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.hides = true
+        let front = await MainActor.run { BackgroundInput.FrontmostSnapshot.capture() }
+        if let started = try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration) {
+            let identifier = started.processIdentifier
+            await MainActor.run { front.restore(ifStolenBy: [identifier]) }
+        }
+        for _ in 0..<20 where !HarnessChats.isT3ServerUp { try? await Task.sleep(nanoseconds: 1_500_000_000) }
     }
 
     /// `t3 thread start`, opening T3 Code first when its server isn't running: hidden and without taking focus, so

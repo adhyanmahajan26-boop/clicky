@@ -237,6 +237,12 @@ enum TheoUIDriver {
         let (window, point) = target(topWindow, at: topPoint)
         // A SwiftUI Picker or Menu is a popup button: reach its menu directly, since an inactive app can't track a popup.
         if !rightClick, let popup = popUpButton(in: window, at: point) {
+            // A SwiftUI Menu fills its items as it opens.
+            if let menu = popup.menu {
+                menu.delegate?.menuNeedsUpdate?(menu)
+                menu.delegate?.menuWillOpen?(menu)
+                menu.update()
+            }
             let titles = popup.itemTitles
             if let item, let index = titles.firstIndex(where: { $0.lowercased() == item.lowercased() }) {
                 popup.selectItem(at: index)
@@ -244,6 +250,33 @@ enum TheoUIDriver {
                 if let menuItem = popup.item(at: index), let action = menuItem.action, popup.action == nil {
                     NSApp.sendAction(action, to: menuItem.target, from: menuItem)
                 }
+            } else if let item, let found = popup.menu.flatMap({ Self.menuItem(named: item, in: $0) }), let action = found.action {
+                // In a submenu, like "All folders".
+                NSApp.sendAction(action, to: found.target, from: found)
+            }
+            if let menu = popup.menu { menu.delegate?.menuDidClose?(menu) }
+            if titles.isEmpty, let menu = popup.menu {
+                // Some only fill while they're really open: open it for a moment, read it, pick from it, close it.
+                var shown: [String] = []
+                let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: menu, queue: nil) { _ in
+                    shown = menu.items.map(\.title)
+                    RunLoop.main.perform(inModes: [.eventTracking, .common]) {
+                        MainActor.assumeIsolated {
+                            if let item {
+                                if let index = menu.items.firstIndex(where: { $0.title.lowercased() == item.lowercased() }) {
+                                    menu.performActionForItem(at: index)
+                                } else if let found = Self.menuItem(named: item, in: menu), let parent = found.menu, let index = parent.items.firstIndex(of: found) {
+                                    parent.performActionForItem(at: index)
+                                }
+                            }
+                            menu.cancelTracking()
+                        }
+                    }
+                }
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: popup.bounds.height), in: popup)
+                NotificationCenter.default.removeObserver(observer)
+                completion(shown)
+                return
             }
             completion(titles)
             return
@@ -273,6 +306,14 @@ enum TheoUIDriver {
         }
         if let observer { NotificationCenter.default.removeObserver(observer) }
         completion(titles)
+    }
+
+    private static func menuItem(named name: String, in menu: NSMenu) -> NSMenuItem? {
+        for item in menu.items {
+            if item.title.lowercased() == name.lowercased() { return item }
+            if let submenu = item.submenu, let found = menuItem(named: name, in: submenu) { return found }
+        }
+        return nil
     }
 
     private static func popUpButton(in window: NSWindow, at point: CGPoint) -> NSPopUpButton? {

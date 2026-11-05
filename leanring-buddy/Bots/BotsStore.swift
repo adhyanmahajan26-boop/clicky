@@ -1123,7 +1123,7 @@ final class BotsStore: ObservableObject {
         let text = CodingIntent.normalized(text)
         if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
         let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
-        let makeThing = #"(?i)\b(make|create|write|add|change|update|want|need)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo)\b"#
+        let makeThing = #"(?i)\b(make|create|write|add|change|update|want|need)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo|folder)\b"#
         return text.range(of: direct, options: .regularExpression) != nil || text.range(of: makeThing, options: .regularExpression) != nil
     }
 

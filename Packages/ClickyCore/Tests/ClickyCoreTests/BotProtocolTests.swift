@@ -394,6 +394,15 @@ struct BotProtocolTests {
         #expect(!CodingIntent.asksToContinueChat("continue"))
     }
 
+    @Test func aFolderWithMoreToDoIsntOnlyAFolder() {
+        #expect(ProjectWords.asksOnlyForFolder("make a new folder called moon-site"))
+        #expect(ProjectWords.asksOnlyForFolder("make a folder called theo-test-1 please"))
+        #expect(ProjectWords.asksOnlyForFolder("new folder called moon-site on this Mac"))
+        #expect(!ProjectWords.asksOnlyForFolder("make a folder called theo-test-1 and put hello.txt in it"))
+        #expect(!ProjectWords.asksOnlyForFolder("make a new folder called moon and build a site in it"))
+        #expect(ProjectWords.newFolderName(in: "make a folder called theo-test-1 and put hello.txt in it") == "theo-test-1")
+    }
+
     // MARK: Folders and memory
 
     @Test func theFolderMenuPutsRecentOnesFirst() {

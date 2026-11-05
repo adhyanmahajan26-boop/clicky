@@ -290,7 +290,7 @@ public enum BotProtocol {
     /// The head reads the owner's message first.
     public static func headOpensNote(owner: String) -> String {
         "You lead this group. Read \(owner)'s message. If you can answer it yourself, answer. Otherwise hand the parts out with @Name, in the order they should answer: " +
-            "they answer one at a time and each reads what the others said. Once they've all answered you'll write one wrap-up, so don't write it now."
+            "they answer one at a time and each reads what the others said. Just say who answers what, without describing how the turns work. Once they've all answered you'll write one wrap-up, so don't write it now."
     }
 
     /// A member's turn.

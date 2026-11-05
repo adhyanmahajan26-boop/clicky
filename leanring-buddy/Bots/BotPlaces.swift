@@ -199,7 +199,7 @@ enum BotMemory {
     }
 
     /// Once: memory moves here from ~/.t3/bots and its backup. The old files stay where they are, untouched: only T3 Code writes in ~/.t3.
-    /// Claude Code keeps a folder's sessions by folder, so the bots' chats there come along, or they'd have to start over.
+    /// Bots' engine sessions don't need moving: Claude Code finds a session by its id from any folder, and one that's lost starts over from the chat.
     static func migrateOnce() {
         let key = "v3.bots.memoryMoved"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
@@ -211,14 +211,6 @@ enum BotMemory {
             for id in (try? manager.contentsOfDirectory(atPath: folder.path)) ?? [] where !id.hasPrefix(".") {
                 if let text = try? String(contentsOf: folder.appendingPathComponent(id).appendingPathComponent("memory.md"), encoding: .utf8) { merge(text, botID: id) }
             }
-        }
-        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
-        let oldSessions = projects.appendingPathComponent(HarnessChatFiles.claudeFolderName(for: home.appendingPathComponent(".t3/bots").path), isDirectory: true)
-        let newSessions = projects.appendingPathComponent(HarnessChatFiles.claudeFolderName(for: root.path), isDirectory: true)
-        guard let files = try? manager.contentsOfDirectory(atPath: oldSessions.path) else { return }
-        try? manager.createDirectory(at: newSessions, withIntermediateDirectories: true)
-        for name in files where name.hasSuffix(".jsonl") {
-            try? manager.copyItem(at: oldSessions.appendingPathComponent(name), to: newSessions.appendingPathComponent(name))
         }
     }
 }

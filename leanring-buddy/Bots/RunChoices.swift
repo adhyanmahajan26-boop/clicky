@@ -33,7 +33,15 @@ struct T3HandoffButton: View {
     @State private var newFolderName = ""
     @State private var isMakingFolder = false
     @State private var problem: String?
+    /// Which of the card's choices is open.
+    @State private var openChoice: RunChoice?
     private var sent: Bool { sentHere || alreadySent }
+
+    private enum RunChoice { case mac, folder, chat }
+
+    private func isOpen(_ choice: RunChoice) -> Binding<Bool> {
+        Binding(get: { openChoice == choice }, set: { if !$0, openChoice == choice { openChoice = nil } })
+    }
 
     private var mac: String { pickedMac ?? BotsStore.shared.runMac(named: ProjectWords.labeled("Mac", in: text), room: room) }
     private var isHere: Bool { mac == TheoLink.localName }
@@ -90,17 +98,21 @@ struct T3HandoffButton: View {
     // MARK: The Mac
 
     private var macMenu: some View {
-        RunChoiceChip(symbol: "laptopcomputer", text: macLabel, help: "The Mac this runs on. Its folders and chats are the ones you can pick.")
-            .coverMenu(help: "The Mac this runs on") {
-                Button("This \(TheoLink.shortName(TheoLink.localName))") { choose(mac: TheoLink.localName) }
-                if let peer = link.peerName ?? link.knownPeerName {
-                    Button(TheoLink.shortName(peer) + (link.isConnected ? "" : " (not connected)")) { choose(mac: peer) }
+        RunChoiceChip(symbol: "laptopcomputer", text: macLabel, help: "The Mac this runs on. Its folders and chats are the ones you can pick.") { openChoice = .mac }
+            .popover(isPresented: isOpen(.mac), arrowEdge: .bottom) {
+                RunChoiceList {
+                    RunChoiceRow(title: "This \(TheoLink.shortName(TheoLink.localName))", isChosen: isHere) { choose(mac: TheoLink.localName) }
+                    if let peer = link.peerName ?? link.knownPeerName {
+                        RunChoiceRow(title: TheoLink.shortName(peer), detail: link.isConnected ? nil : "Not connected", isChosen: !isHere) { choose(mac: peer) }
+                    }
                 }
+                .frame(width: 240)
             }
     }
 
     /// Another Mac means another set of folders and chats: nothing picked for one carries over.
     private func choose(mac newMac: String) {
+        openChoice = nil
         guard newMac != mac else { return }
         pickedMac = newMac
         folder = nil
@@ -112,30 +124,49 @@ struct T3HandoffButton: View {
 
     private var folderMenu: some View {
         RunChoiceChip(symbol: "folder", text: isMakingFolder ? "Making it\u{2026}" : target?.lastPathComponent ?? "Choose a folder\u{2026}",
-                      help: target?.path ?? "A git repo gets its own branch and a draft PR. A plain folder is edited in place.")
-            .coverMenu(help: target?.path ?? "Where this runs. A git repo gets its own branch and a draft PR. A plain folder is edited in place.") {
+                      help: target?.path ?? "Where this runs. A git repo gets its own branch and a draft PR. A plain folder is edited in place.") { openChoice = .folder }
+            .popover(isPresented: isOpen(.folder), arrowEdge: .bottom) {
                 let sections = menu
-                if !sections.recent.isEmpty {
-                    Section("On \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac))") {
-                        ForEach(sections.recent) { project in Button(project.name) { pick(project) } }
+                RunChoiceList {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 1) {
+                            if sections.recent.isEmpty {
+                                RunChoiceNote(text: "No projects in ~/Projects on \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac)) yet.")
+                            } else {
+                                RunChoiceHeader(text: "On \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac))")
+                                ForEach(sections.recent) { project in
+                                    RunChoiceRow(title: project.name, isChosen: target?.path == project.path) { pick(project) }
+                                }
+                            }
+                            if !sections.others.isEmpty {
+                                RunChoiceHeader(text: "All folders")
+                                ForEach(sections.others) { project in
+                                    RunChoiceRow(title: project.name, isChosen: target?.path == project.path) { pick(project) }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 280)
+                    RowDivider().padding(.vertical, 4)
+                    RunChoiceRow(title: isHere ? "New folder\u{2026}" : "New folder on \(TheoLink.shortName(mac))\u{2026}", symbol: "folder.badge.plus") {
+                        openChoice = nil
+                        newFolderName = ""
+                        isNamingFolder = true
+                    }
+                    // A folder picked with the system's panel can only be on this Mac.
+                    if isHere {
+                        RunChoiceRow(title: "Choose a folder\u{2026}", symbol: "ellipsis.circle") {
+                            openChoice = nil
+                            DispatchQueue.main.async { chooseWithPanel() }
+                        }
                     }
                 }
-                if !sections.others.isEmpty {
-                    Menu("All folders") {
-                        ForEach(sections.others) { project in Button(project.name) { pick(project) } }
-                    }
-                }
-                Divider()
-                Button(isHere ? "New folder\u{2026}" : "New folder on \(TheoLink.shortName(mac))\u{2026}") {
-                    newFolderName = ""
-                    isNamingFolder = true
-                }
-                // A folder picked with the system's panel can only be on this Mac.
-                if isHere { Button("Choose a folder\u{2026}") { chooseWithPanel() } }
+                .frame(width: 280)
             }
     }
 
     private func pick(_ project: DeviceProject) {
+        openChoice = nil
         folder = URL(fileURLWithPath: project.path, isDirectory: true)
         chat = nil
         problem = nil
@@ -205,21 +236,35 @@ struct T3HandoffButton: View {
 
     private var chatMenu: some View {
         RunChoiceChip(symbol: "bubble.left.and.bubble.right", text: chat.map { "Continuing \($0.title)" } ?? (isLoadingChats ? "Looking for chats\u{2026}" : "New chat"),
-                      help: "Carry on a chat this harness already has in this folder, or start a new one.")
-            .frame(maxWidth: 240, alignment: .leading)
-            .coverMenu(help: "Carry on a chat this harness already has in this folder, or start a new one") {
-                Button("New chat") { chat = nil }
-                if target == nil {
-                    Text("Pick a folder to see its chats")
-                } else if chats.isEmpty {
-                    Text(isLoadingChats ? "Looking\u{2026}" : "No earlier chats in this folder")
-                } else {
-                    Section("In \(target?.lastPathComponent ?? "this folder")") {
-                        ForEach(chats) { found in
-                            Button("\(found.title) \u{00B7} \(HarnessChatText.age(of: found.updatedAt))") { chat = found }
+                      help: "Carry on a chat this harness already has in this folder, or start a new one.") { openChoice = .chat }
+            .frame(maxWidth: 260, alignment: .leading)
+            .popover(isPresented: isOpen(.chat), arrowEdge: .bottom) {
+                RunChoiceList {
+                    RunChoiceRow(title: "New chat", isChosen: chat == nil) {
+                        openChoice = nil
+                        chat = nil
+                    }
+                    RowDivider().padding(.vertical, 4)
+                    if target == nil {
+                        RunChoiceNote(text: "Pick a folder to see its chats.")
+                    } else if chats.isEmpty {
+                        RunChoiceNote(text: harness == "t3" && isHere && !HarnessChats.isT3ServerUp ? "Open T3 Code to see its threads." : isLoadingChats ? "Looking\u{2026}" : "No earlier \(HarnessCatalog.label(harness)) chats in this folder.")
+                    } else {
+                        RunChoiceHeader(text: "In \(target?.lastPathComponent ?? "this folder")")
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 1) {
+                                ForEach(chats) { found in
+                                    RunChoiceRow(title: found.title, detail: HarnessChatText.age(of: found.updatedAt), isChosen: chat?.id == found.id) {
+                                        openChoice = nil
+                                        chat = found
+                                    }
+                                }
+                            }
                         }
+                        .frame(maxHeight: 280)
                     }
                 }
+                .frame(width: 320)
             }
     }
 
@@ -261,20 +306,77 @@ struct RunChoiceChip: View {
     let symbol: String
     let text: String
     var help: String = ""
+    let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
-            Text(text).font(.system(size: 12)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                Text(text).font(.system(size: 12)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundColor(DS.Colors.textTertiary)
+            }
+            .padding(.horizontal, 9).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hovering ? DS.Colors.hover : DS.Colors.selected))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 9).frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hovering ? DS.Colors.hover : DS.Colors.selected))
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .pointerCursor()
         .help(help)
+    }
+}
+
+/// The list inside one of the card's choices.
+private struct RunChoiceList<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) { content }.padding(6)
+    }
+}
+
+private struct RunChoiceHeader: View {
+    let text: String
+
+    var body: some View {
+        Text(text).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 2)
+    }
+}
+
+private struct RunChoiceNote: View {
+    let text: String
+
+    var body: some View {
+        Text(text).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+    }
+}
+
+private struct RunChoiceRow: View {
+    let title: String
+    var detail: String? = nil
+    var symbol: String? = nil
+    var isChosen = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 11)).foregroundColor(DS.Colors.textSecondary).frame(width: 12)
+                } else {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).frame(width: 12).opacity(isChosen ? 1 : 0)
+                }
+                Text(title).font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                Spacer(minLength: 8)
+                if let detail { Text(detail).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1).fixedSize() }
+            }
+            .padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarButtonStyle(isSelected: false))
+        .pointerCursor()
     }
 }
 

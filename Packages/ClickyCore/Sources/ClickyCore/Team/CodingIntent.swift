@@ -100,7 +100,12 @@ public enum ProjectWords {
     /// Only a folder asked for, with nothing to build in it yet.
     public static func asksOnlyForFolder(_ text: String) -> Bool {
         guard let name = newFolderName(in: text) else { return false }
-        return CodingIntent.normalized(text).replacingOccurrences(of: name, with: "").range(of: #"(?i)\b(website|site|app|page|game|tool|script|dashboard|build|code|fix|write|add)\b"#, options: .regularExpression) == nil
+        let words = CodingIntent.normalized(text)
+        if words.replacingOccurrences(of: name, with: "").range(of: #"(?i)\b(website|site|app|page|game|tool|script|dashboard|build|code|fix|write|add)\b"#, options: .regularExpression) != nil { return false }
+        // "...called moon and put hello.txt in it" asks for more than the folder. Only polite words can follow its name.
+        guard let after = words.range(of: name, options: .caseInsensitive) else { return true }
+        let tail = words[after.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: "\"'`.,!? \n"))
+        return tail.isEmpty || tail.range(of: #"(?i)^(please|thanks|thank you|for me|now|here|in (my )?projects|on (this|the|my)( mac)?( \w+){0,2})$"#, options: .regularExpression) != nil
     }
 
     /// The project these words talk about, out of the ones there are: "changes in the planets quiz", "moon-phases-page project".

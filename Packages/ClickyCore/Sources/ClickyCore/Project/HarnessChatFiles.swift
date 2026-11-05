@@ -84,6 +84,13 @@ public enum HarnessChatFiles {
 
     // MARK: T3 Code
 
+    /// `<T3 home>/userdata/server-runtime.json`: the pid of the server that's up. Asking the CLI anything with no server up makes it write
+    /// a database and a signing key into its folder, and that folder belongs to T3 Code, so nothing asks without checking this first.
+    public static func t3ServerPID(runtimeJSON: String?) -> Int32? {
+        guard let runtimeJSON, let runtime = object(runtimeJSON), let pid = runtime["pid"] as? Int else { return nil }
+        return Int32(pid)
+    }
+
     /// `t3 thread list --project <folder> --json`: an array, or an object holding "threads".
     public static func t3Threads(json: String) -> [HarnessChat] {
         guard let start = json.firstIndex(where: { $0 == "[" || $0 == "{" }),
@@ -99,25 +106,35 @@ public enum HarnessChatFiles {
 
     // MARK: Claude Code
 
-    /// ~/.claude/projects/<this>: the folder's path with everything but letters and digits as "-".
+    /// ~/.claude/projects/<this>: the folder's path with everything but letters and digits as "-". A path over 200 characters is cut there,
+    /// with a hash after it, so `claudeFolderPrefix` finds that one. Different folders can share a name, so a session's own cwd decides.
     public static func claudeFolderName(for path: String) -> String {
         String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
-    /// A session file's lines: its given title if it has one, else its first real message from the owner.
-    public static func claudeSession(id: String, lines: [String], modifiedAt: Date) -> HarnessChat? {
-        var given: String?
+    public static let claudeFolderNameLimit = 200
+
+    /// A session file's lines, from its start and its end, for this folder. Its given title if it has one, else its first real message from the owner.
+    /// Nil for another folder's session, or one with nothing said in it.
+    public static func claudeSession(id: String, lines: [String], folders: Set<String>? = nil, modifiedAt: Date) -> HarnessChat? {
+        var custom: String?
+        var aiTitle: String?
+        var summary: String?
+        var lastPrompt: String?
         var firstAsked: String?
+        var cwd: String?
         var hasConversation = false
         for line in lines {
             guard let event = object(line), let type = event["type"] as? String else { continue }
+            if cwd == nil, let there = event["cwd"] as? String { cwd = (event["relocatedCwd"] as? String) ?? there }
             switch type {
-            case "custom-title": given = (event["customTitle"] as? String) ?? given
-            case "ai-title": given = given ?? (event["aiTitle"] as? String)
-            case "summary": given = given ?? (event["summary"] as? String)
+            case "custom-title": custom = (event["customTitle"] as? String) ?? custom
+            case "ai-title": aiTitle = (event["aiTitle"] as? String) ?? aiTitle
+            case "summary": summary = (event["summary"] as? String) ?? summary
+            case "last-prompt": lastPrompt = (event["lastPrompt"] as? String) ?? lastPrompt
             case "user":
                 hasConversation = true
-                if firstAsked == nil, event["isMeta"] as? Bool != true, let message = event["message"] as? [String: Any] {
+                if firstAsked == nil, event["isMeta"] as? Bool != true, event["isSidechain"] as? Bool != true, let message = event["message"] as? [String: Any] {
                     firstAsked = textOfClaudeContent(message["content"]).flatMap { HarnessChatText.title(from: $0) }
                 }
             case "assistant": hasConversation = true
@@ -125,7 +142,9 @@ public enum HarnessChatFiles {
             }
         }
         guard hasConversation else { return nil }
-        return HarnessChat(id: id, title: given.flatMap { HarnessChatText.title(from: $0) } ?? firstAsked ?? "Untitled chat", updatedAt: modifiedAt)
+        if let folders, let cwd, !folders.contains(cwd) { return nil }
+        let given = [custom, aiTitle, summary].compactMap { $0 }.first.flatMap { HarnessChatText.title(from: $0) }
+        return HarnessChat(id: id, title: given ?? firstAsked ?? lastPrompt.flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat", updatedAt: modifiedAt)
     }
 
     private static func textOfClaudeContent(_ content: Any?) -> String? {
@@ -159,9 +178,33 @@ public enum HarnessChatFiles {
             if event["type"] as? String == "event_msg", payload["type"] as? String == "user_message", let text = payload["message"] as? String {
                 return HarnessChatText.title(from: text)
             }
+            // The owner's own words, not the environment Codex describes first.
+            if event["type"] as? String == "response_item", payload["role"] as? String == "user",
+               let meta = payload["internal_chat_message_metadata_passthrough"] as? [String: Any], (meta["content_item_kinds"] as? [String])?.contains("user.text") == true,
+               let blocks = payload["content"] as? [[String: Any]], let text = blocks.compactMap({ $0["text"] as? String }).first {
+                return HarnessChatText.title(from: text)
+            }
         }
         return nil
     }
+
+    /// The rows of ~/.codex/state_*.sqlite's `threads`, as sqlite3's -json prints them. Codex's own list, and the quickest.
+    public static func codexThreads(sqliteJSON: String) -> [HarnessChat] {
+        rows(sqliteJSON).compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            let title = (row["title"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? (row["first_user_message"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat"
+            let updated = (row["updated_at_ms"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
+            return HarnessChat(id: id, title: title, updatedAt: updated)
+        }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func rows(_ json: String) -> [[String: Any]] {
+        guard let start = json.firstIndex(of: "[") else { return [] }
+        return ((try? JSONSerialization.jsonObject(with: Data(json[start...].utf8))) as? [[String: Any]]) ?? []
+    }
+
+    /// One quoted value for a sqlite3 command line, which has no bound parameters.
+    public static func sqliteQuoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "''") + "'" }
 
     // MARK: Cursor
 
@@ -170,15 +213,16 @@ public enum HarnessChatFiles {
         Insecure.MD5.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// A chat's meta.json. Nil for one with no conversation in it.
-    public static func cursorChat(id: String, metaJSON: String, modifiedAt: Date) -> HarnessChat? {
-        guard let meta = object(metaJSON), meta["hasConversation"] as? Bool != false else { return nil }
+    /// A chat's meta.json. Nil for one with no conversation in it. `firstPrompt`: from its prompt_history.json, for one with no title.
+    public static func cursorChat(id: String, metaJSON: String, firstPrompt: String? = nil, modifiedAt: Date) -> HarnessChat? {
+        guard let meta = object(metaJSON), meta["hasConversation"] as? Bool != false, meta["isSubagent"] as? Bool != true else { return nil }
         let updated = (meta["updatedAtMs"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? modifiedAt
-        let title = (meta["title"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat"
+        let title = (meta["title"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? firstPrompt.flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat"
         return HarnessChat(id: id, title: title, updatedAt: updated)
     }
 
-    /// Older chats have no meta.json: `store.db`'s meta row holds the same as hex-encoded JSON.
+    /// Older chats have no meta.json: `store.db`'s meta row holds the same as hex-encoded JSON. It also holds the chat's encryption key:
+    /// only the name is read from it, and nothing from it is ever logged.
     public static func cursorChat(id: String, storeMetaHex: String, modifiedAt: Date) -> HarnessChat? {
         let hex = storeMetaHex.trimmingCharacters(in: .whitespacesAndNewlines)
         guard hex.count % 2 == 0, !hex.isEmpty else { return nil }
@@ -199,42 +243,61 @@ public enum HarnessChatFiles {
 
     /// `opencode session list --format json`, which lists every folder's: only this one's come back.
     public static func openCodeSessions(json: String, folder: String) -> [HarnessChat] {
-        guard let start = json.firstIndex(of: "["), let items = (try? JSONSerialization.jsonObject(with: Data(json[start...].utf8))) as? [[String: Any]] else { return [] }
-        return items.compactMap { item in
+        rows(json).compactMap { item in
             guard let id = item["id"] as? String, item["directory"] as? String == folder else { return nil }
             let updated = ((item["updated"] ?? item["created"]) as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
             return HarnessChat(id: id, title: (item["title"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat", updatedAt: updated)
         }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    // MARK: Gemini
-
-    /// `gemini --list-sessions`, run in the folder: "  1. Fix the login bug (2 hours ago) [uuid]".
-    public static func geminiSessions(text: String, now: Date = Date()) -> [HarnessChat] {
-        guard let regex = try? NSRegularExpression(pattern: #"(?m)^\s*\d+\.\s+(.+?)\s+\(([^()]*)\)\s+\[([^\]\s]+)\]\s*$"#) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        return regex.matches(in: text, range: range).compactMap { match -> HarnessChat? in
-            guard let titleRange = Range(match.range(at: 1), in: text), let ageRange = Range(match.range(at: 2), in: text), let idRange = Range(match.range(at: 3), in: text) else { return nil }
-            return HarnessChat(id: String(text[idRange]), title: HarnessChatText.title(from: String(text[titleRange])) ?? "Untitled chat", updatedAt: now.addingTimeInterval(-agoSeconds(String(text[ageRange]))))
+    /// The rows of opencode.db's `session` for one folder, as sqlite3's -json prints them. Reading these writes nothing, unlike its CLI.
+    public static func openCodeRows(sqliteJSON: String) -> [HarnessChat] {
+        rows(sqliteJSON).compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            let updated = (row["time_updated"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
+            return HarnessChat(id: id, title: (row["title"] as? String).flatMap { HarnessChatText.title(from: $0) } ?? "Untitled chat", updatedAt: updated)
         }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// "2 hours ago", "Just now", "yesterday".
-    static func agoSeconds(_ words: String) -> TimeInterval {
-        let lower = words.lowercased()
-        if lower.contains("yesterday") { return 86400 }
-        guard let regex = try? NSRegularExpression(pattern: #"(\d+)\s*(second|sec|minute|min|hour|hr|day|week|month)"#),
-              let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
-              let numberRange = Range(match.range(at: 1), in: lower), let unitRange = Range(match.range(at: 2), in: lower),
-              let number = Double(lower[numberRange]) else { return 0 }
-        switch String(lower[unitRange]) {
-        case "second", "sec": return number
-        case "minute", "min": return number * 60
-        case "hour", "hr": return number * 3600
-        case "day": return number * 86400
-        case "week": return number * 604800
-        default: return number * 2592000
+    // MARK: Gemini
+
+    /// ~/.gemini/projects.json: the folder its chats are kept under, for this path. Nil when Gemini hasn't been used there.
+    public static func geminiSlug(projectsJSON: String?, folder: String) -> String? {
+        guard let projectsJSON, let top = object(projectsJSON), let projects = top["projects"] as? [String: String] else { return nil }
+        return projects[folder]
+    }
+
+    /// One chat file in ~/.gemini/tmp/<slug>/chats: JSON lines whose first holds the metadata, or an older single JSON object.
+    /// Its `sessionId` is what --resume takes. Gemini's own --list-sessions isn't used: it can spend a model call, and it writes.
+    public static func geminiChat(fileText: String, modifiedAt: Date) -> HarnessChat? {
+        var sessionID: String?
+        var summary: String?
+        var firstAsked: String?
+        var lastUpdated: Date?
+        var isSubagent = false
+        func read(_ event: [String: Any]) {
+            if sessionID == nil { sessionID = event["sessionId"] as? String }
+            if let said = event["summary"] as? String, !said.isEmpty { summary = said }
+            if let updated = date(event["lastUpdated"] as? String) { lastUpdated = updated }
+            if event["kind"] as? String == "subagent" { isSubagent = true }
+            if firstAsked == nil, event["type"] as? String == "user" { firstAsked = geminiText(event["content"]).flatMap { HarnessChatText.title(from: $0) } }
         }
+        if let whole = (try? JSONSerialization.jsonObject(with: Data(fileText.utf8))) as? [String: Any] {
+            read(whole)
+            for message in whole["messages"] as? [[String: Any]] ?? [] { read(message) }
+        } else {
+            for line in fileText.components(separatedBy: "\n") {
+                if let event = object(line) { read(event) }
+            }
+        }
+        guard let sessionID, !isSubagent, firstAsked != nil || summary != nil else { return nil }
+        let title = summary.flatMap { HarnessChatText.title(from: $0) } ?? firstAsked ?? "Untitled chat"
+        return HarnessChat(id: sessionID, title: title, updatedAt: lastUpdated ?? modifiedAt)
+    }
+
+    private static func geminiText(_ content: Any?) -> String? {
+        if let text = content as? String { return text }
+        return (content as? [[String: Any]])?.compactMap { $0["text"] as? String }.first
     }
 
     // MARK: Grok
@@ -249,6 +312,7 @@ public enum HarnessChatFiles {
     /// A session's summary.json. Its generated title, else the first thing asked in it.
     public static func grokChat(id: String, summaryJSON: String?, firstPrompt: String?, modifiedAt: Date) -> HarnessChat? {
         let summary = summaryJSON.flatMap(object)
+        if summary?["session_kind"] as? String == "subagent" { return nil }
         let given = (summary?["generated_title"] as? String) ?? (summary?["session_summary"] as? String)
         guard let title = given.flatMap({ HarnessChatText.title(from: $0) }) ?? firstPrompt.flatMap({ HarnessChatText.title(from: $0) }) else { return nil }
         let updated = date(summary?["last_active_at"] as? String) ?? date(summary?["updated_at"] as? String) ?? modifiedAt
