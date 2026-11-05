@@ -71,17 +71,18 @@ public enum CodingDeviceWords {
     }
 }
 
-/// A bot's memory on both Macs: lines joined, each once, and the order they first appeared in.
+/// A bot's memory on both Macs: each line once. A file stays exactly as it was, blank lines and all, and what only the other Mac has goes at its end.
 public enum BotMemoryMerge {
     public static func union(_ mine: String, _ theirs: String) -> String {
-        var seen = Set<String>()
-        var lines: [String] = []
-        for line in mine.components(separatedBy: "\n") + theirs.components(separatedBy: "\n") {
+        var seen = Set(mine.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+        if seen.isEmpty { return theirs }
+        var added: [String] = []
+        for line in theirs.components(separatedBy: "\n") {
             let key = line.trimmingCharacters(in: .whitespaces)
-            if key.isEmpty { continue }
-            if seen.insert(key).inserted { lines.append(line) }
+            if !key.isEmpty, seen.insert(key).inserted { added.append(line) }
         }
-        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        if added.isEmpty { return mine }
+        return mine + (mine.hasSuffix("\n") ? "" : "\n") + added.joined(separator: "\n") + "\n"
     }
 
     /// The same whatever order the lines are in, so two Macs holding the same lines don't keep asking each other.

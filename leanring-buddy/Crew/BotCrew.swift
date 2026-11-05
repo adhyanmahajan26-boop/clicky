@@ -83,7 +83,8 @@ extension BotsStore {
             let words = Self.firstLine(live)
             return words.isEmpty ? "Thinking…" : words
         }
-        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !$0.text.isEmpty }) else {
+        // An old message can be nothing but a tag, from before those were taken out as they arrive.
+        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !Self.firstLine($0.text).isEmpty }) else {
             return bot.description.isEmpty ? "Ready" : bot.description
         }
         return Self.firstLine(last.text) + " · " + Self.shortAge(since: last.at)
@@ -94,7 +95,11 @@ extension BotsStore {
 
     private static func firstLine(_ text: String) -> String {
         // A question's tag isn't words anyone should read.
-        let words = text.contains("[CHOOSE:") ? (BotCallPrompt.parse(text)?.remainingText ?? text) : text
+        var words = text.contains("[CHOOSE:") ? (BotCallPrompt.parse(text)?.remainingText ?? text) : text
+        // Nor are orders, which an old message can still hold.
+        if words.contains("[SCREEN") || words.contains("[CLICKY") || words.contains("[TELL") {
+            words = ClickyOrder.extract(from: BotScreenOrder.extract(from: words).text).text
+        }
         let line = words.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         return line.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "#", with: "")
             .trimmingCharacters(in: .whitespaces)

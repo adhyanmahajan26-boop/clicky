@@ -604,6 +604,12 @@ struct BotProtocolTests {
         let merged = BotMemoryMerge.union("likes tea\nuses Hinglish\n", "uses Hinglish\n  likes tea  \nprefers Haiku\n")
         #expect(merged == "likes tea\nuses Hinglish\nprefers Haiku\n")
         #expect(BotMemoryMerge.union("", "") == "")
+        // A file moved or merged keeps its layout: only what's new is added.
+        let notes = "# Notes\n\n- likes tea\n\n- uses Hinglish\n"
+        #expect(BotMemoryMerge.union("", notes) == notes)
+        #expect(BotMemoryMerge.union(notes, notes) == notes)
+        #expect(BotMemoryMerge.union(notes, "- prefers Haiku") == notes + "- prefers Haiku\n")
+        #expect(BotMemoryMerge.union("no newline", "- new") == "no newline\n- new\n")
         #expect(BotMemoryMerge.digest("a\nb\n") == BotMemoryMerge.digest("b\na"))
         #expect(BotMemoryMerge.digest("a\nb") != BotMemoryMerge.digest("a"))
     }
