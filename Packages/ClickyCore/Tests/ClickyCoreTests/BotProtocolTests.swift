@@ -590,6 +590,54 @@ struct BotProtocolTests {
         #expect(BotProtocol.planNote(hasOthers: false).contains("never tell the agent to create or go to a folder"))
     }
 
+    @Test func aTagInCodeIsNotAnOrder() {
+        let text = "Here's the prompt.\n\n```prompt\nMake Theo read [TELL: Coder: hello there] lines.\n```\n\n[TELL: Coder: a real one]"
+        let taken = ClickyOrder.extract(from: text)
+        #expect(taken.orders.count == 1)
+        #expect(ClickyOrder.tellTarget(in: taken.orders.first ?? "")?.message == "a real one")
+        #expect(taken.text.contains("[TELL: Coder: hello there]"))
+        // In backticks it's someone showing how the tag is written.
+        #expect(ClickyOrder.extract(from: "I write `[TELL: Coder: hello there]` to reach Coder.").orders.isEmpty)
+        #expect(ClickyOrder.extract(from: "```\n[CLICKY: point at the Save button]\n```").orders.isEmpty)
+        // The other tags the same.
+        #expect(BotScreenOrder.extract(from: "```\n[SCREEN: open the notes app]\n```").orders.isEmpty)
+        #expect(BotResearchOrder.extract(from: "```\n[RESEARCH: what year is it]\n```").questions.isEmpty)
+        #expect(BotScreenGift.extract(from: "```\n[GIVE SCREEN: Coder: own]\n```").gifts.isEmpty)
+        // And a fence never closed, still being written.
+        #expect(ClickyOrder.withoutTags(streaming: "```prompt\nread [TELL: Coder: hi] lines").contains("[TELL: Coder: hi]"))
+    }
+
+    @Test func oneOwnerMessageStartsAChatsLimitsOverOnce() {
+        var mark = OwnerMessageMark()
+        let asked = [("group", "theo#1"), ("group", "theo#1"), ("group", "theo#1"), ("other", "theo#1"), ("group", "theo#2")].map { mark.isNew(room: $0.0, message: $0.1) }
+        #expect(asked == [true, false, false, true, true])
+    }
+
+    @Test func catchUpLooksItsPlaceUpAmongEverything() {
+        // What it heard last was a card or a note, which aren't words to read.
+        let all = ["said here", "CARD", "said on the Air"]
+        func unheard(_ heard: String?) -> [String] {
+            BotCatchUp.unheard(messages: all, id: { $0 }, heard: heard, hasSession: true, isLinked: true, counts: { $0 != "CARD" })
+        }
+        #expect(unheard("CARD") == ["said on the Air"])
+        #expect(unheard("said here") == ["said on the Air"])
+        #expect(unheard(BotCatchUp.fromTheStart) == ["said here", "said on the Air"])
+        #expect(unheard("gone") == [])
+    }
+
+    @Test func aWaitingItemGoesStaleAfterADay() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        #expect(!DeviceRouting.hasWaitedTooLong(since: start, now: start.addingTimeInterval(DeviceRouting.maximumWaitSeconds)))
+        #expect(DeviceRouting.hasWaitedTooLong(since: start, now: start.addingTimeInterval(DeviceRouting.maximumWaitSeconds + 1)))
+    }
+
+    @Test func aFileThatHasEverythingStaysAsItIs() {
+        // The live file holds all of the backup's lines and more: it's taken as it is, in its own order, headings and all.
+        let older = "- likes tea\n"
+        let newer = "# Notes\n\n- likes tea\n\n# Work\n\n- uses Hinglish\n"
+        #expect(BotMemoryMerge.union(older, newer) == newer)
+    }
+
     // MARK: Folders and memory
 
     @Test func theFolderMenuPutsRecentOnesFirst() {
@@ -601,8 +649,8 @@ struct BotProtocolTests {
     }
 
     @Test func memoryJoinsWithNoDuplicates() {
-        let merged = BotMemoryMerge.union("likes tea\nuses Hinglish\n", "uses Hinglish\n  likes tea  \nprefers Haiku\n")
-        #expect(merged == "likes tea\nuses Hinglish\nprefers Haiku\n")
+        let merged = BotMemoryMerge.union("likes tea\nuses Hinglish\nnotes\n", "uses Hinglish\n  likes tea  \nprefers Haiku\n")
+        #expect(merged == "likes tea\nuses Hinglish\nnotes\nprefers Haiku\n")
         #expect(BotMemoryMerge.union("", "") == "")
         // A file moved or merged keeps its layout: only what's new is added.
         let notes = "# Notes\n\n- likes tea\n\n- uses Hinglish\n"

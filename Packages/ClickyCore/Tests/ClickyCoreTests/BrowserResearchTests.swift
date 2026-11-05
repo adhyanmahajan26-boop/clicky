@@ -398,6 +398,14 @@ final class DeviceRoutingTests: XCTestCase {
         }
     }
 
+    func testRoutinesFireOnOneMacWhateverAnySays() {
+        // The list is the same on both Macs, so "Any" can't mean both.
+        XCTAssertEqual(route(.routines, .any, on: .macStudio), .runHere)
+        XCTAssertEqual(route(.routines, .any, on: .macBookAir), .sendAcross)
+        XCTAssertEqual(route(.routines, .any, on: .macBookAir, online: false), .waitForOtherMac)
+        XCTAssertEqual(route(.routines, .any, on: .macBookAir, paired: false), .runHere)
+    }
+
     func testResearchFromTheAirGoesToTheStudio() {
         XCTAssertEqual(route(.researchBrowser, on: .macStudio), .runHere)
         XCTAssertEqual(route(.researchBrowser, on: .macBookAir), .sendAcross)

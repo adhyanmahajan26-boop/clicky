@@ -182,7 +182,12 @@ public enum HarnessChatFiles {
     /// ~/.claude/projects/<this>: the folder's path with everything but letters and digits as "-". A path over 200 characters is cut there,
     /// with a hash after it, so `claudeFolderPrefix` finds that one. Different folders can share a name, so a session's own cwd decides.
     public static func claudeFolderName(for path: String) -> String {
-        String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
+        // Each UTF-16 unit, as Claude Code does it: an emoji becomes two dashes.
+        let dash = UInt16(UInt8(ascii: "-"))
+        let units = path.utf16.map { unit -> UInt16 in
+            (48...57).contains(unit) || (65...90).contains(unit) || (97...122).contains(unit) ? unit : dash
+        }
+        return String(decoding: units, as: UTF16.self)
     }
 
     public static let claudeFolderNameLimit = 200

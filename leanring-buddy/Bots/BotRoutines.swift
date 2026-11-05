@@ -10,7 +10,59 @@
 //  ```routine block ({"when": "weekdays 08:00", "do": "…"}).
 //
 
+import ClickyCore
 import Foundation
+
+/// The same routines on both Macs, whichever one fires them, so the list, edits, Pause and Delete work on either.
+enum BotRoutineSync {
+    /// What the owner decides about a routine. When it ran and when it's next due are the firing Mac's doing, and aren't edits.
+    static func edits(of routines: [BotRoutine]) -> [BotRoutine] {
+        routines.map { routine in
+            var routine = routine
+            routine.runs = []
+            routine.nextRunAt = nil
+            return routine
+        }
+    }
+
+    /// The newest edit wins, and both Macs' runs are kept. A slot that passed while a routine was only on the other Mac is skipped: nothing fires just
+    /// for arriving. The same job on both Macs under two ids becomes one, or it would fire twice.
+    static func merged(local: [BotRoutine], localStamps: LinkMerge.Stamps, remote: [BotRoutine], remoteStamps: LinkMerge.Stamps, now: Date = Date()) -> (items: [BotRoutine], stamps: LinkMerge.Stamps) {
+        let result = LinkMerge.byID(local: local, localStamps: localStamps, remote: remote, remoteStamps: remoteStamps, id: \.id)
+        let mine = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let theirs = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var stamps = result.stamps
+        let items = result.items.map { routine -> BotRoutine in
+            var routine = routine
+            if let a = mine[routine.id], let b = theirs[routine.id] {
+                routine.runs = joinedRuns(a.runs, b.runs)
+                if a.schedule == b.schedule { routine.nextRunAt = [a.nextRunAt, b.nextRunAt].compactMap { $0 }.max() }
+            } else if mine[routine.id] == nil, (routine.nextRunAt ?? .distantPast) <= now {
+                routine.nextRunAt = routine.schedule.next(after: now)
+            }
+            return routine
+        }
+        // Whichever is running stays, and both Macs choose the same one.
+        var kept: [String: String] = [:]
+        for routine in items.sorted(by: { ($0.paused ? 1 : 0, $0.id) < ($1.paused ? 1 : 0, $1.id) }) {
+            let job = LinkCoding.digest([routine.target, routine.instruction]) + LinkCoding.digest(routine.schedule)
+            if kept[job] == nil { kept[job] = routine.id }
+        }
+        let keptIDs = Set(kept.values)
+        for routine in items where !keptIDs.contains(routine.id) {
+            stamps.gone[routine.id] = now
+            stamps.changed[routine.id] = nil
+        }
+        return (items.filter { keptIDs.contains($0.id) }, stamps)
+    }
+
+    /// A run on both Macs is one run, and a finished copy says more than a running one. The last 20 stay.
+    private static func joinedRuns(_ first: [BotRoutine.Run], _ second: [BotRoutine.Run]) -> [BotRoutine.Run] {
+        var byID: [String: BotRoutine.Run] = [:]
+        for run in first + second where byID[run.id]?.finishedAt == nil { byID[run.id] = run }
+        return Array(byID.values.sorted { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }.suffix(20))
+    }
+}
 
 struct BotRoutine: Codable, Identifiable, Equatable {
     var id: String = UUID().uuidString

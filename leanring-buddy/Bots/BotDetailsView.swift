@@ -146,6 +146,9 @@ struct RoutinesScreen: View {
                 Button { adding = true } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.theoSecondary)
             }
             .padding(.horizontal, 24).padding(.vertical, 18)
+            if let note = store.routinesElsewhereNote {
+                Text(note).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 24).padding(.bottom, 12)
+            }
             Divider().overlay(DS.Colors.hover)
             ScrollView {
                 if store.routines.isEmpty {

@@ -424,6 +424,21 @@ public enum BotProtocol {
 // MARK: - What an engine session hasn't seen
 
 /// Each Mac has its own engine session for a chat, and the chat also goes on from the other Mac. This says what a session still has to be told.
+/// Theo asking a group chat, or a turn run on the other Mac, on the owner's behalf. One message of the owner's starts that chat's limits over
+/// once, however many times it's asked. Never starting them over would leave a chat the owner only reaches through Theo with no messages left.
+public struct OwnerMessageMark: Equatable, Sendable {
+    private var lastSeen: [String: String] = [:]
+
+    public init() {}
+
+    /// True the first time this chat hears of that message of the owner's.
+    public mutating func isNew(room: String, message: String) -> Bool {
+        guard lastSeen[room] != message else { return false }
+        lastSeen[room] = message
+        return true
+    }
+}
+
 public enum BotCatchUp {
     public static let maximumMessages = 20
     public static let maximumCharactersEach = 1500
@@ -432,11 +447,12 @@ public enum BotCatchUp {
     public static let fromTheStart = ""
 
     /// The messages after the newest one this session has heard. With no session at all: the chat's latest, if another Mac could have written it.
-    public static func unheard<Message>(messages: [Message], id: (Message) -> String, heard: String?, hasSession: Bool, isLinked: Bool) -> [Message] {
-        guard hasSession else { return isLinked ? Array(messages.suffix(6)) : [] }
-        if heard == fromTheStart { return Array(messages.suffix(maximumMessages)) }
+    /// `messages`: all of them, since what it heard last can be a card or a note. `counts`: the ones that are words to read.
+    public static func unheard<Message>(messages: [Message], id: (Message) -> String, heard: String?, hasSession: Bool, isLinked: Bool, counts: (Message) -> Bool = { _ in true }) -> [Message] {
+        guard hasSession else { return isLinked ? Array(messages.filter(counts).suffix(6)) : [] }
+        if heard == fromTheStart { return Array(messages.filter(counts).suffix(maximumMessages)) }
         guard let heard, let index = messages.lastIndex(where: { id($0) == heard }) else { return [] }
-        return Array(messages[messages.index(after: index)...].suffix(maximumMessages))
+        return Array(messages[messages.index(after: index)...].filter(counts).suffix(maximumMessages))
     }
 
     /// Lines to read: each cut to a size, and the newest kept when there's too much.

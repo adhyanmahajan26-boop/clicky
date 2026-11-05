@@ -114,12 +114,18 @@ public enum DeviceRouting {
     /// A queued message or run this old isn't what the owner wants any more.
     public static let maximumWaitSeconds: TimeInterval = 24 * 60 * 60
 
+    public static func hasWaitedTooLong(since: Date, now: Date = Date()) -> Bool {
+        now.timeIntervalSince(since) > maximumWaitSeconds
+    }
+
     /// `paired` false: there's only this Mac, so it does everything it's able to.
     public static func route(_ feature: DeviceFeature, choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool) -> DeviceRoute {
         // Hidden screens exist only on a Mac Studio, whatever the setting says.
         if feature == .studioScreens, thisMac != .macStudio { return .notHere }
         let isHere: Bool
         switch choice {
+        // The list of routines is the same on both Macs and each fires once, so "Any" can't mean both.
+        case .any where feature == .routines && paired: isHere = thisMac == .macStudio
         case .any, .thisMac: isHere = true
         case .macStudio: isHere = thisMac == .macStudio
         case .macBookAir: isHere = thisMac == .macBookAir

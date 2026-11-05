@@ -65,6 +65,16 @@ public enum ClickyDuty: String, CaseIterable, Codable, Sendable {
 
 // MARK: - Theo's orders to Clicky
 
+/// Where code is in a reply: fenced blocks, one still being written, and `inline` spans. A tag there is being shown, not used:
+/// a ```prompt about Theo's own code can hold "[TELL: Coder: …]", and that's the prompt's text.
+enum CodeSpans {
+    private static let pattern = try! NSRegularExpression(pattern: "(?s)```.*?(?:```|$)|`[^`\\n]*`")
+
+    static func ranges(in text: String) -> [Range<String.Index>] {
+        pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range, in: text) }
+    }
+}
+
 public enum ClickyOrder {
     /// Words that open an order to Clicky without a comma ("clicky research this"); voice often drops the comma.
     private static let verbs = "research|point|remember|find|open|show|look|search|click|highlight|read|summari[sz]e|save|note|draw|check|tell|ask|run|start|fix|build|type|close|go"
@@ -129,9 +139,14 @@ public enum ClickyOrder {
     private static func tags(in text: String, isFinal: Bool) -> (found: [FoundTag], open: String.Index?) {
         var found: [FoundTag] = []
         var searchStart = text.startIndex
+        let code = CodeSpans.ranges(in: text)
         while searchStart < text.endIndex,
               let match = tagHead.firstMatch(in: text, range: NSRange(searchStart..<text.endIndex, in: text)),
               let whole = Range(match.range, in: text), let kind = Range(match.range(at: 1), in: text) {
+            if let span = code.first(where: { $0.contains(whole.lowerBound) }) {
+                searchStart = span.upperBound
+                continue
+            }
             let isTell = text[kind].uppercased() == "TELL"
             if let close = closingBracket(in: text, from: whole.upperBound) {
                 let body = text[whole.upperBound..<close].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -281,14 +296,8 @@ public enum BotScreenOrder {
     public static let maximumPerReply = 2
 
     public static func extract(from text: String) -> (text: String, orders: [String]) {
-        let range = NSRange(text.startIndex..., in: text)
-        let orders = tag.matches(in: text, range: range).compactMap { match in
-            Range(match.range(at: 1), in: text).map { String(text[$0]) }
-        }.filter(OrderWords.isRealOrder)
-        let left = tag.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (left, Array(orders.prefix(maximumPerReply)))
+        let taken = BotTagWords.take(tag, from: text)
+        return (taken.text, Array(taken.bodies.filter(OrderWords.isRealOrder).prefix(maximumPerReply)))
     }
 
     /// A reply still streaming, with one still being written hidden.

@@ -46,7 +46,7 @@ enum DeviceSnapshotBuilder {
         }
         for provider in ProviderKeys.shared.usableChatProviders { ready["api:\(provider.id)"] = true }
         return DeviceSnapshot(name: TheoLink.localName, projectsFolder: BotsT3.projectsFolder.path, projects: BotsT3.projects(), harnesses: ready,
-                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version)
+                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines))
     }
 }
 
@@ -72,7 +72,10 @@ extension BotsStore {
         let projects = forwarded != nil ? (peerDevice?.projects.map(\.name) ?? []) : hereProjects
         // Run on this Mac for the other one, its folders are the other Mac's. Only a test profile's folder isn't "~/Projects" there.
         let projectsFolder = forwarded != nil && TheoProfile.isTest ? (peerDevice?.projectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
-        return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac, whyHere: forwarded?.why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
+        // Bots & coding is set to this Mac, and the owner typed on the other: its folders and runs are this Mac's.
+        let typedOn = ownerMacs[room].map(TheoLink.shortName)
+        let why = forwarded?.why ?? typedOn.map { _ in "Bots & coding is set to this Mac" }
+        return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac ?? typedOn, whyHere: why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
                              otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? (DeviceRoles.thisMac != .macStudio)),
                              thisMacHasScreens: StudioController.isAvailable)
     }
@@ -93,12 +96,16 @@ extension BotsStore {
     }
 
     /// One bot's turn on the other Mac. It answers there, its words reach this chat through the link, and this Mac carries on from them.
-    func runTurnOnOtherMac(_ bot: NativeBot, across: (mac: String, why: String), in room: String, prompt: String, exchangeID: String?, fromOwner: Bool, then: @escaping (String?) -> Void) {
+    func runTurnOnOtherMac(_ bot: NativeBot, across: (mac: String, why: String), in room: String, prompt: String, privately: BotDMTurn?, fromOwner: Bool, then: @escaping (String?) -> Void) {
+        let exchangeID = privately?.exchangeID
         turnsOnOtherMac.insert(bot.id)
         post(BotChatMessage(author: Self.noteAuthor, text: "Answered on your \(TheoLink.shortName(across.mac)): \(across.why).", exchangeID: exchangeID), to: room)
         // While a group talks a build through, this Mac starts the run from the outcome: the other Mac mustn't start one too.
         var fields = ["bot": bot.id, "room": room, "prompt": prompt, "fromMac": TheoLink.localName, "why": across.why, "fromOwner": fromOwner && !isDiscussing(room) ? "1" : "0"]
-        if let exchangeID { fields["exchange"] = exchangeID }
+        if let privately {
+            let chain = "\(TheoLink.localName)#\(ownerTurns[privately.context.rootRoom] ?? 0)"
+            fields.merge(privately.linkFields(chain: chain)) { _, new in new }
+        }
         Task { [weak self] in
             let reply = await TheoLink.shared.ask("botTurn", fields, timeoutSeconds: BotRunner.turnLimitSeconds + 60)
             guard let self else { return }
@@ -136,8 +143,10 @@ extension BotsStore {
             while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard let self else { return }
             let session = self.conversation(room).sessions[botID]
-            let turn = fields["exchange"].map { BotDMTurn(exchangeID: $0, askerID: nil, context: BotDMContext(rootRoom: room, ownerWords: nil, fromOwner: false)) }
-            self.reply(bot: target, in: room, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: fields["fromOwner"] == "1", privately: turn) { [weak self] answer in
+            // Part of a private exchange: who asked, and the chat the owner spoke in, whose limits start over with each message of theirs.
+            let turn = BotDMTurn(linkFields: fields)
+            if let turn, let chain = fields["chain"], self.ownerMessageMarks.isNew(room: turn.context.rootRoom, message: chain) { self.ownerSpoke(in: turn.context.rootRoom) }
+            self.reply(bot: target, in: room, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: fields["fromOwner"] == "1", mayUseScreen: turn?.context.ownerWords != nil, privately: turn) { [weak self] answer in
                 guard let self else { return }
                 self.forwardedTurns[room] = nil
                 let message = self.conversation(room).messages.last { $0.author == botID }
@@ -211,6 +220,9 @@ enum BotMemory {
         return result
     }
 
+    /// Where memory used to be, oldest first, so a file ends up with its history first and what's newer after it.
+    nonisolated static let oldFolders = [".t3-backup-20261105/bots", ".t3/bots"]
+
     /// Once: memory moves here from ~/.t3/bots and its backup. The old files stay where they are, untouched: only T3 Code writes in ~/.t3.
     /// Bots' engine sessions don't need moving: Claude Code finds a session by its id from any folder, and one that's lost starts over from the chat.
     static func migrateOnce() {
@@ -219,7 +231,7 @@ enum BotMemory {
         UserDefaults.standard.set(true, forKey: key)
         let manager = FileManager.default
         let home = manager.homeDirectoryForCurrentUser
-        for old in [".t3/bots", ".t3-backup-20261105/bots"] {
+        for old in oldFolders {
             let folder = home.appendingPathComponent(old, isDirectory: true)
             for id in (try? manager.contentsOfDirectory(atPath: folder.path)) ?? [] where !id.hasPrefix(".") {
                 if let text = try? String(contentsOf: folder.appendingPathComponent(id).appendingPathComponent("memory.md"), encoding: .utf8) { merge(text, botID: id) }

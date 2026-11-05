@@ -529,8 +529,12 @@ extension BotsStore {
             let spoken = answer.components(separatedBy: "```prompt").first ?? answer
             onReport?("\(who) answered: \(spoken)")
         }
-        if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
-            // A round in a group counts as a message too, or Theo could keep asking the group forever.
+        if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil), onReport == nil {
+            // With any other messages from the same turn it goes through the same place, so he carries on once.
+            let context = BotDMContext(rootRoom: ceo.id, ownerWords: ownerWords, fromOwner: ownerWords != nil)
+            runPrivateMessages([(chat.name, message)], from: ceo, room: ceo.id, context: context) { _ in }
+        } else if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
+            // On a call the answer goes to the call. A round in a group counts as a message too, or Theo could keep asking the group forever.
             let verdict = (directMessageBudgets[ceo.id] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
             if let line = BotDMBudget.capLine(verdict, sender: ceo.name, target: chat.name) {
                 post(BotChatMessage(author: Self.noteAuthor, text: line), to: ceo.id)
@@ -540,12 +544,8 @@ extension BotsStore {
             directMessageBudgets[ceo.id, default: BotDMBudget()].noteSent()
             let words = withTeamWork(message, ownerWords: ownerWords)
             post(BotChatMessage(author: Self.noteAuthor, text: "\(ceo.name) asked \(chat.name) in their group chat."), to: ceo.id)
-            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { [weak self] answer in
-                guard let self else { return }
-                // On a call the answer goes to the call. In the chat Theo reads it and says what came of it: the group chat has the whole of it.
-                if onReport != nil { return report(chat.name, answer) }
-                let spoken = answer.components(separatedBy: "```prompt").first ?? answer
-                self.carryOn(ceo, room: ceo.id, replies: [(chat.name, spoken)], notes: [], lastRound: [], context: BotDMContext(rootRoom: ceo.id, ownerWords: ownerWords, fromOwner: ownerWords != nil), askerID: nil, exchangeID: nil) { _ in }
+            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { answer in
+                report(chat.name, answer)
             }
         } else if let target = bot ?? everyone.first(where: { BotsStore.searchName($0.name).contains(wanted) }), target.isOn {
             // Privately, like any bot's message. On a call the answer goes back to the call.

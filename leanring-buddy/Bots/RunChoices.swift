@@ -215,9 +215,11 @@ struct T3HandoffButton: View {
             defer { isMakingFolder = false }
             if onMac == TheoLink.localName {
                 switch await BotsT3.makeProject(named: name) {
-                case .made(let made), .alreadyThere(let made):
+                case .made(let made):
                     folder = made
                     chat = nil
+                case .alreadyThere(let existing):
+                    problem = "You already have \(existing.lastPathComponent) on this \(TheoLink.shortName(onMac)). Pick it from the list, or use another name."
                 case .failed(let reason):
                     problem = "Couldn't make that folder: \(reason)"
                 }
@@ -230,6 +232,8 @@ struct T3HandoffButton: View {
             if let path = answer["path"], !path.isEmpty {
                 folder = URL(fileURLWithPath: path, isDirectory: true)
                 chat = nil
+            } else if let existing = answer["exists"], !existing.isEmpty {
+                problem = "You already have \(existing) on your \(TheoLink.shortName(onMac)). Pick it from the list, or use another name."
             } else {
                 problem = "Couldn't make that folder: \(answer["problem"] ?? "no reason given")"
             }

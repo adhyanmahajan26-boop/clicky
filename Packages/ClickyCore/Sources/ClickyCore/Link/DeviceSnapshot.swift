@@ -31,14 +31,17 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
     public var harnesses: [String: Bool]
     public var hasScreens: Bool
     public var t3Version: String?
+    /// This Mac fires routines, by its own setting.
+    public var firesRoutines: Bool?
 
-    public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil) {
+    public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil, firesRoutines: Bool? = nil) {
         self.name = name
         self.projectsFolder = projectsFolder
         self.projects = projects
         self.harnesses = harnesses
         self.hasScreens = hasScreens
         self.t3Version = t3Version
+        self.firesRoutines = firesRoutines
     }
 }
 
@@ -74,8 +77,11 @@ public enum CodingDeviceWords {
 /// A bot's memory on both Macs: each line once. A file stays exactly as it was, blank lines and all, and what only the other Mac has goes at its end.
 public enum BotMemoryMerge {
     public static func union(_ mine: String, _ theirs: String) -> String {
-        var seen = Set(mine.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-        if seen.isEmpty { return theirs }
+        var seen = keys(of: mine)
+        let theirKeys = keys(of: theirs)
+        if seen == theirKeys { return mine }
+        // Everything here is there too, and more: that file is the fuller one, and stays as it is.
+        if seen.isSubset(of: theirKeys) { return theirs }
         var added: [String] = []
         for line in theirs.components(separatedBy: "\n") {
             let key = line.trimmingCharacters(in: .whitespaces)
@@ -85,9 +91,12 @@ public enum BotMemoryMerge {
         return mine + (mine.hasSuffix("\n") ? "" : "\n") + added.joined(separator: "\n") + "\n"
     }
 
+    private static func keys(of text: String) -> Set<String> {
+        Set(text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }
+
     /// The same whatever order the lines are in, so two Macs holding the same lines don't keep asking each other.
     public static func digest(_ text: String) -> String {
-        let lines = Set(text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-        return LinkCoding.digest(lines.sorted())
+        LinkCoding.digest(keys(of: text).sorted())
     }
 }

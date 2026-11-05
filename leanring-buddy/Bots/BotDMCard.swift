@@ -152,7 +152,9 @@ struct BotWaitingCard: View {
         if let waiting = link.waiting(id) {
             VStack(alignment: .leading, spacing: 8) {
                 ChatNote(text: text)
-                if waiting.canRunHere {
+                if waiting.isStale {
+                    ChatNote(text: "This waited over a day, so it won't go now. Send it again if you still want it.")
+                } else if waiting.canRunHere {
                     Button("Run it on this \(TheoLink.shortName(TheoLink.localName)) instead") { store.runWaitingHere(id) }
                         .buttonStyle(.theo(.secondary, .small))
                         .pointerCursor()

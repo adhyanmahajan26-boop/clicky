@@ -223,10 +223,8 @@ enum HarnessCoding {
             run.baseBranch = await BotsT3.currentBranch(in: repo)
             gitFolder = repo.appendingPathComponent(".git").path
         } else {
-            workdir = try BotsT3.newProjectFolder(title: newFolder ?? title)
+            workdir = try await BotsT3.newGitProject(title: newFolder ?? title)
             BotsT3.saveBrief(prompt, title: title, engine: HarnessCatalog.label(harness))
-            try await BotsT3.shell(git, ["init", "-q", "-b", "main"], in: workdir)
-            try await BotsT3.startEmpty(in: workdir)
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: workdir).trimmingCharacters(in: .whitespacesAndNewlines)
             run = T3Run(id: "", title: title, folder: workdir.path, baseCommit: base)
             isNewProject = true
@@ -868,9 +866,7 @@ enum HarnessCoding {
 
     // MARK: Transcripts
 
-    private static func mangled(_ path: String) -> String {
-        String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-    }
+    private static func mangled(_ path: String) -> String { HarnessChatFiles.claudeFolderName(for: path) }
 
     private static func newestFiles(in folder: URL, suffix: String, after date: Date, recursive: Bool = false) -> [URL] {
         let fm = FileManager.default
@@ -916,21 +912,19 @@ enum HarnessCoding {
         guard let harness = run.harness, run.chatUnknown != true else { return nil }
         let folder = run.worktree ?? run.folder
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let resolved = URL(fileURLWithPath: folder).resolvingSymlinksInPath().path
+        let spellings = HarnessChats.spellings(of: folder)
         switch harness {
         case "claude":
             // Its own session when it's known: another chat in the same folder has other words.
             if let session = run.sessionID {
-                for path in Set([folder, resolved]) {
+                for path in spellings {
                     let file = home.appendingPathComponent(".claude/projects/\(mangled(path))/\(session).jsonl")
                     guard FileManager.default.fileExists(atPath: file.path) else { continue }
-                    for event in jsonLines(file).reversed() where event["type"] as? String == "assistant" {
-                        if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
-                    }
+                    return lastClaudeAnswer(in: jsonLines(file), since: run.startedAt)
                 }
                 return nil
             }
-            for path in Set([folder, resolved]) {
+            for path in spellings {
                 let dir = home.appendingPathComponent(".claude/projects/\(mangled(path))", isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) {
                     for event in jsonLines(file).reversed() where event["type"] as? String == "assistant" {
@@ -948,8 +942,10 @@ enum HarnessCoding {
                 let dir = sessions.appendingPathComponent(String(format: "%04d/%02d/%02d", parts.year!, parts.month!, parts.day!), isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") && (run.sessionID.map { file.lastPathComponent.contains($0) } ?? true) {
                     guard let meta = jsonLines(file, keeping: 200_000_000).first?["payload"] as? [String: Any], let cwd = meta["cwd"] as? String,
-                          cwd == folder || cwd == resolved else { continue }
+                          spellings.contains(cwd) else { continue }
                     for event in jsonLines(file).reversed() {
+                        // A chat carried on holds its older answers: this run's start is as far back as its words go.
+                        if let at = eventDate(event), at < run.startedAt { break }
                         let payload = event["payload"] as? [String: Any]
                         if event["type"] as? String == "event_msg", payload?["type"] as? String == "task_complete",
                            let last = payload?["last_agent_message"] as? String, !last.isEmpty { return last }
@@ -959,15 +955,37 @@ enum HarnessCoding {
                 }
             }
         case "cursor":
-            for path in Set([folder, resolved]) {
+            for path in spellings {
                 let dir = home.appendingPathComponent(".cursor/projects/\(mangled(path).trimmingCharacters(in: CharacterSet(charactersIn: "-")))/agent-transcripts", isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt, recursive: true) where run.sessionID.map({ file.path.contains($0) }) ?? true {
-                    for event in jsonLines(file).reversed() where event["role"] as? String == "assistant" {
-                        if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
+                    // Its events have no times, but what's after the last thing it was told is its answer to that.
+                    for event in jsonLines(file).reversed() {
+                        if event["role"] as? String == "user" { break }
+                        if event["role"] as? String == "assistant", let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
                     }
                 }
             }
         default: break
+        }
+        return nil
+    }
+
+    /// When a transcript's event happened.
+    static func eventDate(_ event: [String: Any]) -> Date? {
+        guard let text = event["timestamp"] as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
+    }
+
+    /// Claude Code's last words since this run started. A chat carried on holds its older answers, and those aren't this run's: with its message
+    /// never gone in, there's nothing to report.
+    static func lastClaudeAnswer(in events: [[String: Any]], since: Date) -> String? {
+        for event in events.reversed() where event["type"] as? String == "assistant" {
+            if let at = eventDate(event), at < since { return nil }
+            if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
         }
         return nil
     }

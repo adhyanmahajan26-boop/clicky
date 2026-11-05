@@ -138,6 +138,9 @@ struct BotConversationRecord: Codable {
     /// The newest message each bot's engine session on this Mac has seen. What came after it gets told to the bot (it may
     /// have happened on the other Mac). Stays on this Mac, like the sessions.
     var heard: [String: String]?
+    /// In a group chat: the answers each bot's engine session wrote itself since it was last shown the chat. Only these are left out of
+    /// what it reads next. Anything else under its name (Theo's question, its words from the other Mac, a run's notice) is news to it.
+    var ownAnswers: [String: [String]]?
 }
 
 @MainActor
@@ -200,6 +203,14 @@ final class BotsStore: ObservableObject {
     var screenTurns: [String: Int] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
+    /// That folder's chats, for the head's next turn, when the owner asked to carry on earlier work.
+    private var groupChatNotes: [String: String] = [:]
+    /// Which message of the owner's has already started a chat's limits over.
+    var ownerMessageMarks = OwnerMessageMark()
+    /// The Mac the owner typed on when it isn't this one, by chat: Bots & coding is set to this Mac.
+    var ownerMacs: [String: String] = [:]
+    /// How many times Stop was pressed, by chat, so what's waiting from before it doesn't carry on after a new message.
+    var stopCounts: [String: Int] = [:]
     /// Who speaks next in each group chat with a round going on.
     private var groupRounds: [String: GroupRound] = [:]
     /// Theo Link: when things changed, and while the other Mac's copy is being applied.
@@ -209,6 +220,8 @@ final class BotsStore: ObservableObject {
     private var isApplyingLink = false
     private var linkSavedBots: [NativeBot] = []
     private var linkSavedGroups: [BotGroup] = []
+    private var linkRoutineStamps = LinkMerge.Stamps()
+    private var linkSavedRoutines: [BotRoutine] = []
     private var linkSavedLayout = BotsLayout()
     /// The conversation on screen, which collects no unread count.
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
@@ -252,6 +265,7 @@ final class BotsStore: ObservableObject {
         loadDelegations()
         backfillTeamWork()
         loadLinkStamps()
+        if !isHostingTests { stampRoutinesOnce() }
         // Which engines can run on this Mac, for the bots' prompts and for the other Mac.
         Task { @MainActor in HarnessCenter.shared.refresh() }
     }
@@ -422,6 +436,7 @@ final class BotsStore: ObservableObject {
     /// attached file doesn't start an agent.
     func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil, writtenAt: Date? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
+        if messageID == nil { ownerMacs[botID] = nil }
         if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command, engine: bot(botID)?.provider) { return }
         guard let bot = bot(botID) else { return }
         // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now and goes in when it's free.
@@ -579,7 +594,7 @@ final class BotsStore: ObservableObject {
     private func forwardToBotsMac(_ action: String, room: String, target: String, text: String, command: String?, engine: String?) -> Bool {
         let message = BotChatMessage(author: "user", text: text)
         // It keeps its time when it goes over, so it sits in the same place in the chat on both Macs.
-        let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id, "at": String(message.sortDate.timeIntervalSince1970)]
+        let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id, "at": String(message.sortDate.timeIntervalSince1970), "fromMac": TheoLink.localName]
         let problem = engine.flatMap { EngineReadiness.problem(with: $0) }
         switch DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected, engineHere: problem == nil, engineThere: true) {
         case .runHere, .engineOnOtherMac, .tryHere:
@@ -605,11 +620,23 @@ final class BotsStore: ObservableObject {
     func runWaitingHere(_ id: String) {
         guard let waiting = TheoLink.shared.takeWaiting(id) else { return }
         func field(_ key: String) -> String? { waiting.fields[key].flatMap { $0.isEmpty ? nil : $0 } }
+        if waiting.isStale {
+            if let room = waiting.room, let label = waiting.label {
+                post(BotChatMessage(author: Self.noteAuthor, text: "\(label) waited over a day, so it won't go now. Send it again if you still want it."), to: room)
+            }
+            return
+        }
         switch waiting.action {
         case "botSay":
-            if let target = field("target"), let text = field("text") { send(text, command: field("command"), to: target, messageID: field("id")) }
+            if let target = field("target"), let text = field("text") {
+                ownerMacs[target] = nil
+                send(text, command: field("command"), to: target, messageID: field("id"))
+            }
         case "groupSay":
-            if let target = field("target"), let text = field("text") { sendToGroup(text, command: field("command"), groupID: target, messageID: field("id")) }
+            if let target = field("target"), let text = field("text") {
+                if let room = group(target)?.roomID { ownerMacs[room] = nil }
+                sendToGroup(text, command: field("command"), groupID: target, messageID: field("id"))
+            }
         case "run":
             guard let prompt = field("prompt"), let title = field("title"), let room = field("room") else { return }
             let continued = field("chatID").map { HarnessChatChoice(idOrTitle: $0, title: field("chatTitle")) }
@@ -624,6 +651,7 @@ final class BotsStore: ObservableObject {
     func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil, writtenAt: Date? = nil) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
+        if messageID == nil { ownerMacs[room] = nil }
         if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command, engine: head.provider) { return }
         var record = conversation(room)
         let ownerMessageID = messageID ?? UUID().uuidString
@@ -656,7 +684,26 @@ final class BotsStore: ObservableObject {
             note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         }
         let first = groupBriefs[room] != nil ? [head.id] : (tagged.isEmpty ? [head.id] : tagged)
-        startRound(in: group, first: first, openingNote: note)
+        startGroupTurns(in: group, first: first, note: note, words: command ?? text)
+    }
+
+    /// Carrying on earlier work: the head gets that folder's chats to choose from, as a bot in its own chat does, which takes a moment to list.
+    private func startGroupTurns(in group: BotGroup, first: [String], note: String?, words: String) {
+        let room = group.roomID
+        guard CodingIntent.asksToContinueChat(words), latestRun(in: room) != nil || CodingIntent.mentionsCodeWork(words) else {
+            startRound(in: group, first: first, openingNote: note)
+            return
+        }
+        Task { [weak self] in
+            self?.groupChatNotes[room] = await self?.recentChatsNote(for: words, room: room)
+            self?.startRound(in: group, first: first, openingNote: note)
+        }
+    }
+
+    /// Whoever's waiting on this group chat hears it won't answer: a waiting turn would otherwise wait for good.
+    private func endGroupWaits(_ room: String, saying line: String) {
+        groupWaiters.removeValue(forKey: room)?(line)
+        groupBriefs.removeValue(forKey: room)?.reportsTo?(line)
     }
 
     private func otherMembers(of group: BotGroup) -> [NativeBot] { members(of: group).filter { $0.id != group.headID && $0.isOn } }
@@ -745,11 +792,17 @@ final class BotsStore: ObservableObject {
     var isTeamDiscussing: Bool { !groupBriefs.isEmpty }
 
     /// Theo posts to a group chat. The head's final answer comes to `then`.
-    func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, ownerWords: String?, then: @escaping (String) -> Void) {
-        guard let group = group(groupID), let head = head(of: group) else { return }
+    /// `rootRoom`: the chat the owner spoke in. Nil: Theo's own.
+    func sendToGroup(fromCEO text: String, ceo: NativeBot, groupID: String, ownerWords: String?, rootRoom: String? = nil, then: @escaping (String) -> Void) {
+        guard let group = self.group(groupID), let head = head(of: group) else {
+            then("\(self.group(groupID)?.name ?? "That group chat") has nobody to answer.")
+            return
+        }
         let room = group.roomID
         post(BotChatMessage(author: ceo.id, text: text), to: room)
-        ownerSpoke(in: room)
+        // A new message of the owner's starts the group's limits over, once. Theo asking again on the same message doesn't.
+        let asker = rootRoom ?? ceo.id
+        if ownerMessageMarks.isNew(room: room, message: "\(asker)#\(ownerTurns[asker] ?? 0)") { ownerSpoke(in: room) }
         // They're already talking it through: this joins the discussion rather than starting another.
         if groupBriefs[room] != nil {
             then("That's added to what they're already discussing.")
@@ -760,9 +813,10 @@ final class BotsStore: ObservableObject {
             groupBriefs[room] = groupRunBrief(ownerWords: ownerWords, message: text, reportsTo: then)
             note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         } else {
+            groupWaiters.removeValue(forKey: room)?("\(group.name) was asked something else before it answered this.")
             groupWaiters[room] = then
         }
-        startRound(in: group, first: [head.id], openingNote: note)
+        startGroupTurns(in: group, first: [head.id], note: note, words: ownerWords ?? text)
     }
 
     /// The discussion is over: its outcome goes to Theo's chat, and a final prompt the owner asked for starts its run.
@@ -772,16 +826,24 @@ final class BotsStore: ObservableObject {
         let owner = brief.ownerWords ?? ""
         // The owner's own last message decides, not an older one still in the window: `owner` holds what they said to the group, newest first.
         let room = brief.reportsTo == nil ? group.roomID : ceo.id
-        let mac = runMac(named: CodingDeviceWords.named(in: owner) ?? ProjectWords.labeled("Mac", in: answer), room: room)
-        let folder = projectChoice(ownerWords: owner, answer: answer, macName: mac)
+        let namedMac = CodingDeviceWords.named(in: owner) ?? ProjectWords.labeled("Mac", in: answer)
+        var mac = runMac(named: namedMac, room: room)
+        var folder = projectChoice(ownerWords: owner, answer: answer, macName: mac)
+        let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
+        if continued != nil, folder.repo == nil {
+            let place = continuedPlace(answer: answer, room: room, namedMac: namedMac, mac: mac)
+            folder = (place.repo, nil)
+            mac = place.mac
+        }
         let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner))
+        // This message of the owner's has its run now, so a prompt in Theo's words after hearing back doesn't start a second one.
+        if mayStart, let pitch = conversation(room).messages.last(where: { $0.author == "user" }) { submittedPitches.insert(pitch.id) }
         // The owner talking to the group reads its outcome right there, so it isn't copied to Theo's chat. Theo asking gets the answer back.
         brief.reportsTo?(answer)
         guard mayStart, let prompt else { return }
         let title = BotsT3.projectTitle(in: answer, prompt: prompt)
         // The run shows where it was asked for, and Theo hears how it went.
         let alsoRoom = brief.reportsTo == nil ? ceo.id : group.roomID
-        let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
         submitToT3(prompt: prompt, title: title, repo: folder.repo, room: room, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: alsoRoom, newFolder: folder.newFolder, macName: mac, continuing: continued) { [weak self] started, problem in
             guard let self else { return }
             if brief.reportsTo != nil {
@@ -839,11 +901,11 @@ final class BotsStore: ObservableObject {
         guard let group = group(round.groupID) else {
             // The group chat was deleted while they were talking.
             groupRounds[room] = nil
-            groupBriefs[room] = nil
-            groupWaiters[room] = nil
+            endGroupWaits(room, saying: "That group chat was deleted before it answered.")
             return
         }
-        guard case .speak(let botID, let isWrapUp) = step else {
+        // Decided before the owner spoke again, or finished since: nobody takes this turn, and the head reads the new message first.
+        guard case .speak(let botID, let isWrapUp) = step, !round.plan.isFinished else {
             let next = round.nextFirst
             let nextNote = round.nextNote
             groupRounds[room] = nil
@@ -867,6 +929,11 @@ final class BotsStore: ObservableObject {
             let deadline = Date().addingTimeInterval(isHead ? BotRunner.turnLimitSeconds + 60 : Self.memberWaitSeconds)
             while self?.replying[botID] != nil, Date() < deadline { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard let self, let current = self.groupRounds[room], current.id == roundID else { return }
+            // The owner spoke while it waited.
+            if current.plan.isFinished {
+                self.take(.finished, room: room, roundID: roundID)
+                return
+            }
             if self.replying[botID] != nil {
                 self.post(BotChatMessage(author: Self.noteAuthor, text: BotProtocol.busyMemberLine(name: speaker.name)), to: room)
                 self.turnEnded(by: botID, group: group, answer: nil, roundID: roundID, canHandOut: false)
@@ -904,12 +971,14 @@ final class BotsStore: ObservableObject {
         } else {
             turnNote = BotProtocol.memberTurnNote(name: speaker.name, headName: head?.name ?? "the head")
         }
+        if isHead, let chats = groupChatNotes.removeValue(forKey: room) { turnNote += "\n\n" + chats }
         var prompt = BotPrompts.teamMessage(bot: speaker, team: team, group: group, firstTime: record.sessions[speaker.id] == nil, newMessages: newMessages, turnNote: turnNote)
         if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if speaker.owner == nil, !speaker.primary { prompt = "(\(BotPrompts.reachNote(for: speaker)))\n\n" + prompt }
         if speaker.owner == nil { prompt = BotPrompts.awarenessNote(for: speaker, room: room) + prompt }
         var updated = record
         updated.seen[speaker.id] = record.messages.count
+        updated.ownAnswers?[speaker.id] = nil
         conversations[room] = updated
         reply(bot: speaker, in: room, prompt: prompt, session: record.sessions[speaker.id], handsOnWhenStopped: true) { [weak self] answer in
             guard let self else { return }
@@ -951,8 +1020,7 @@ final class BotsStore: ObservableObject {
         guard let head = head(of: group) else {
             // The group lost its head in the middle of it.
             groupRounds[room] = nil
-            groupBriefs[room] = nil
-            groupWaiters[room] = nil
+            endGroupWaits(room, saying: "\(group.name) has no head any more, so nothing has started.")
             post(BotChatMessage(author: Self.noteAuthor, text: "\(group.name) has no head any more, so the discussion stopped and nothing started."), to: room)
             return
         }
@@ -1012,8 +1080,7 @@ final class BotsStore: ObservableObject {
         guard let group = group(groupID) else { return }
         let room = group.roomID
         groupRounds[room] = nil
-        groupBriefs[room] = nil
-        groupWaiters[room] = nil
+        endGroupWaits(room, saying: "\(group.name) was stopped before it answered.")
         stopPrivateMessages(in: room)
         for bot in members(of: group) where replying[bot.id] != nil && replyingIn[bot.id] == room { stop(bot.id) }
     }
@@ -1030,11 +1097,13 @@ final class BotsStore: ObservableObject {
     func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true, mayUseScreen: Bool = false,
                privately: BotDMTurn? = nil, then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
+        // A new turn, not a carry-on from before: an earlier Stop in this chat isn't about it.
+        if privately == nil { stoppedExchangeRooms.remove(conversationID) }
         replying[bot.id] = ""
         replyingIn[bot.id] = conversationID
         // Its engine can't run on this Mac and the other one can: this one turn goes across, and the chat says so. Never silently.
         if let across = turnGoesAcross(bot) {
-            runTurnOnOtherMac(bot, across: across, in: conversationID, prompt: prompt, exchangeID: privately?.exchangeID, fromOwner: fromOwner, then: then)
+            runTurnOnOtherMac(bot, across: across, in: conversationID, prompt: prompt, privately: privately, fromOwner: fromOwner, then: then)
             return
         }
         Task { [weak self] in
@@ -1075,7 +1144,8 @@ final class BotsStore: ObservableObject {
                         if bot.primary { orders.append(order) }
                         continue
                     }
-                    if bot.primary, self.isOrderRatherThanMessage(tell.name) { orders.append(order) } else { directMessages.append(tell) }
+                    // A group chat is asked along with the bots, so everything one turn asks comes back to one carry-on.
+                    if bot.primary, self.isOrderRatherThanMessage(tell.name), self.groupTarget(named: tell.name) == nil { orders.append(order) } else { directMessages.append(tell) }
                 }
                 // Their answer goes back by itself, so a line back to whoever asked is just more of the answer: no messaging each other in circles.
                 if let partner = privately?.askerID.flatMap({ self.bot($0) }) {
@@ -1120,6 +1190,7 @@ final class BotsStore: ObservableObject {
                 let message = BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot), exchangeID: privately?.exchangeID)
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
+                if self.isRoom(conversationID) { record.ownAnswers = (record.ownAnswers ?? [:]).merging([bot.id: (record.ownAnswers?[bot.id] ?? []) + [message.id]]) { _, new in new } }
             } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
@@ -1201,13 +1272,15 @@ final class BotsStore: ObservableObject {
         guard BotsStore.ownerAskedToBuild(pitch.text) || (ProjectWords.chatToContinue(in: answer) != nil && CodingIntent.asksToContinueChat(pitch.text)) else { return nil }
         let ownerWords = recentOwnerWords(in: room) ?? pitch.text
         // The Mac the owner or the bot named, else the one this chat's coding goes on.
-        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords) ?? ProjectWords.labeled("Mac", in: answer), room: room)
+        let namedMac = CodingDeviceWords.named(in: ownerWords) ?? ProjectWords.labeled("Mac", in: answer)
+        var mac = runMac(named: namedMac, room: room)
         // Only a folder the owner spoke of: one a page the bot read mentions doesn't count. Carrying on a chat, it's the folder that chat is in.
         let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
         var folder = projectChoice(ownerWords: ownerWords, answer: answer, macName: mac)
         if continued != nil, folder.repo == nil {
-            let named = ProjectWords.labeled("Repo", in: answer).map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
-            folder = (named ?? latestRun(in: room).map { URL(fileURLWithPath: $0.folder, isDirectory: true) }, nil)
+            let place = continuedPlace(answer: answer, room: room, namedMac: namedMac, mac: mac)
+            folder = (place.repo, nil)
+            mac = place.mac
         }
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
         if folder.repo == nil && folder.newFolder == nil && BotsStore.isAboutExistingCode(pitch.text) { return nil }
@@ -1218,6 +1291,13 @@ final class BotsStore: ObservableObject {
         submitToT3(prompt: prompt, title: title, repo: folder.repo, room: room, harness: continued == nil ? choices.harness : continuingHarness(words: ownerWords, room: room), modelChoice: choices.model, effortChoice: choices.effort,
                    newFolder: folder.newFolder, macName: mac, continuing: continued)
         return title
+    }
+
+    /// Where a chat is carried on when the owner named no folder: the folder the bot wrote, else this chat's latest run, on the Mac that ran it.
+    private func continuedPlace(answer: String, room: String, namedMac: String?, mac: String) -> (repo: URL?, mac: String) {
+        if let named = ProjectWords.labeled("Repo", in: answer) { return (URL(fileURLWithPath: (named as NSString).expandingTildeInPath, isDirectory: true), mac) }
+        guard let latest = latestRun(in: room) else { return (nil, mac) }
+        return (URL(fileURLWithPath: latest.folder, isDirectory: true), namedMac == nil ? (latest.origin ?? mac) : mac)
     }
 
     /// The harness a chat is carried on in: the one named, else the one this chat's latest run was on, else the usual one.
@@ -1313,7 +1393,12 @@ final class BotsStore: ObservableObject {
             if peer.lowercased().replacingOccurrences(of: " ", with: "").contains(wanted) { return peer }
             if TheoLink.localName.lowercased().replacingOccurrences(of: " ", with: "").contains(wanted) { return TheoLink.localName }
         }
-        return forwardedTurns[room]?.fromMacFullName ?? TheoLink.localName
+        if let forwarded = forwardedTurns[room] { return forwarded.fromMacFullName }
+        // Bots & coding is set to the other Mac: that's whose folders the bot was given.
+        switch DeviceRoles.route(.bots) {
+        case .sendAcross, .waitForOtherMac: return TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? TheoLink.localName
+        case .runHere, .notHere: return TheoLink.localName
+        }
     }
 
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
@@ -1323,7 +1408,10 @@ final class BotsStore: ObservableObject {
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
                     modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, newFolder: String? = nil, macName: String? = nil, continuing: HarnessChatChoice? = nil,
                     started: ((Bool, String?) -> Void)? = nil) {
-        guard let theo = speaker(for: room) else { return }
+        guard let theo = speaker(for: room) else {
+            started?(false, "There's nobody in that chat to start it.")
+            return
+        }
         let target = harness ?? HarnessPrefs.codingTarget
         let mac = macName ?? runMac(named: nil, room: room)
         // It runs on the Mac chosen. Asked for from the other one, it goes over the link with its Mac named, and shows here as it runs.
@@ -1334,17 +1422,26 @@ final class BotsStore: ObservableObject {
                 fields["chatID"] = continuing.idOrTitle
                 fields["chatTitle"] = continuing.title ?? ""
             }
-            guard TheoLink.shared.request("run", fields) else {
+            guard TheoLink.shared.isConnected else {
                 // That Mac's away: it doesn't start anywhere yet, and the chat says so plainly. It can run here if this Mac has what it needs.
                 let harnessReady = target == CursorCloud.harnessID || HarnessCenter.shared.statuses[target]?.ready != false
                 let folderIsHere = repo.map { FileManager.default.fileExists(atPath: $0.path) } ?? true
-                let problem = !harnessReady ? "\(HarnessCatalog.label(target)) isn't ready here" : !folderIsHere ? "that folder isn't on this Mac" : nil
+                // A chat lives on the Mac it was made on, even when a folder of the same name is here.
+                let problem = continuing != nil ? "that chat is on your \(shortName)" : !harnessReady ? "\(HarnessCatalog.label(target)) isn't ready here" : !folderIsHere ? "that folder isn't on this Mac" : nil
                 waitForOtherMac("run", fields, room: room, label: "**\(title)**", canRunHere: problem == nil, problem: problem)
                 started?(false, "Your \(shortName) isn't reachable right now.")
                 return
             }
-            post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to your \(shortName). You can watch it here."), to: room)
-            started?(true, nil)
+            post(BotChatMessage(author: theo.id, text: "Sent **\(title)** to your \(shortName)."), to: room)
+            // That Mac checks the folder, harness and chat, so only its answer says whether it started.
+            Task {
+                let answer = await TheoLink.shared.ask("run", fields, timeoutSeconds: Self.remoteRunAnswerSeconds)
+                guard let answer else {
+                    started?(false, "Your \(shortName) didn't say whether **\(title)** started.")
+                    return
+                }
+                started?(answer["started"] == "1", answer["problem"].flatMap { $0.isEmpty ? nil : $0 })
+            }
             return
         }
         let here = TheoLink.shortName(TheoLink.localName)
@@ -1377,6 +1474,11 @@ final class BotsStore: ObservableObject {
                         (run.effort.flatMap { $0 == "default" ? nil : " at \($0) effort" } ?? "") + ". You can follow along here, and I'll post the result when it's done."), to: room)
                 }
                 self.track(run.id)
+                started?(true, nil)
+            } catch BotsT3Error.alreadyARun(let runID) {
+                // A thread Theo already follows: this goes on as a follow-up to that run, with its branch, pull request and report.
+                self?.submitting = false
+                self?.sendToCoder(prompt, room: room, runID: runID)
                 started?(true, nil)
             } catch {
                 self?.submitting = false
@@ -1787,10 +1889,10 @@ enum BotPrompts {
 
     /// What a bot hasn't read of a group chat yet, by how far it got. A bot new to the chat gets its recent history, not all of it.
     static func transcriptMessages(in record: BotConversationRecord, for bot: NativeBot) -> [BotChatMessage] {
-        // A session has its own words. With no session it gets them too, or it wouldn't know what it said.
-        let hasSession = record.sessions[bot.id] != nil
+        // A session has the answers it wrote itself. With no session it gets those too, or it wouldn't know what it said.
+        let own = record.sessions[bot.id] == nil ? [] : Set(record.ownAnswers?[bot.id] ?? [])
         let spoken = record.messages.dropFirst(min(record.seen[bot.id] ?? 0, record.messages.count))
-            .filter { !$0.text.isEmpty && $0.author != BotsStore.noteAuthor && !(hasSession && $0.author == bot.id) }
+            .filter { !$0.text.isEmpty && $0.author != BotsStore.noteAuthor && !own.contains($0.id) }
         return BotProtocol.trimmedTranscript(Array(spoken), isOwner: { $0.author == "user" }, length: { $0.text.count })
     }
 
@@ -1912,7 +2014,9 @@ extension BotsStore {
     }
 
     private func writeRoutines() {
+        noteLinkChanges()
         if let data = try? Self.encoder.encode(routines) { try? data.write(to: routinesFile, options: .atomic) }
+        TheoLink.shared.syncSoon()
     }
 
     func writeLayout() {
@@ -1947,6 +2051,9 @@ extension BotsStore {
         writeRoutines()
     }
 
+    /// How long the Mac asking waits to hear whether a run started on the other one. It can be behind another run that's starting.
+    nonisolated static let remoteRunAnswerSeconds: Double = 240
+
     func deleteRoutine(_ routineID: String) {
         routines.removeAll { $0.id == routineID }
         writeRoutines()
@@ -1958,12 +2065,24 @@ extension BotsStore {
         start(routine, scheduled: false)
     }
 
+    /// On the Mac that doesn't fire routines: where they do. The list is the same on both Macs. Nil when they fire here.
+    var routinesElsewhereNote: String? {
+        let mac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        switch DeviceRoles.route(.routines) {
+        case .sendAcross: return "These fire on your \(mac). What you change here reaches it straight away, and Run now runs on this Mac."
+        case .waitForOtherMac: return "These fire on your \(mac), which isn't reachable right now. What you change here reaches it when it's back, and Run now runs on this Mac."
+        case .runHere, .notHere: return nil
+        }
+    }
+
     private func runDueRoutines() {
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Each routine fires once, on the Mac Settings › Devices says.
         guard DeviceRoles.runsHere(.routines) else { return }
+        // Each Mac has its own setting. If both say themselves and they're linked, the Mac Studio does it.
+        if TheoLink.shared.isConnected, peerDevice?.firesRoutines == true, DeviceRoles.thisMac != .macStudio { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {
@@ -2043,26 +2162,21 @@ extension BotsStore {
 
     fileprivate func addRoutineFromChat(_ request: (name: String, when: String, schedule: BotRoutine.Schedule, instruction: String),
                                         target: String, conversationID: String, author: String) {
-        // Routines fire on one Mac (Settings › Devices), so one set up on the other goes there.
-        let routineFields = ["name": request.name, "target": target, "when": request.when, "do": request.instruction]
-        let routinesMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
-        switch DeviceRoles.route(.routines) {
-        case .sendAcross:
-            _ = TheoLink.shared.request("routineAdd", routineFields)
-            post(BotChatMessage(author: Self.noteAuthor, text: "\(request.name) is set up on your \(routinesMac), where routines fire."), to: conversationID)
-            return
-        case .waitForOtherMac:
-            _ = TheoLink.shared.queueForOtherMac("routineAdd", routineFields, room: conversationID, label: request.name, canRunHere: false)
-            post(BotChatMessage(author: Self.noteAuthor, text: "Routines fire on your \(routinesMac), which isn't reachable right now, so \(request.name) isn't set up yet. It will be as soon as that Mac is back."), to: conversationID)
-            return
-        case .runHere, .notHere:
-            break
-        }
         // The same routine asked twice (a repeated reply) isn't added twice.
         guard !routines.contains(where: { $0.target == target && $0.instruction == request.instruction && $0.schedule == request.schedule }) else { return }
         let routine = BotRoutine(name: request.name, target: target, instruction: request.instruction, schedule: request.schedule)
         // The reply's own card shows it, with Pause and Run now.
         save(routine)
+        // Routines fire on one Mac (Settings › Devices), and the list is the same on both.
+        let routinesMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        switch DeviceRoles.route(.routines) {
+        case .sendAcross:
+            post(BotChatMessage(author: Self.noteAuthor, text: "\(request.name) is set up. It fires on your \(routinesMac), where routines fire."), to: conversationID)
+        case .waitForOtherMac:
+            post(BotChatMessage(author: Self.noteAuthor, text: "\(request.name) is set up, but routines fire on your \(routinesMac), which isn't reachable right now. It won't fire until that Mac is back."), to: conversationID)
+        case .runHere, .notHere:
+            break
+        }
     }
 
     // MARK: Sidebar
@@ -2442,6 +2556,7 @@ extension BotsStore {
         var bots = LinkMerge.Stamps()
         var groups = LinkMerge.Stamps()
         var layout: Date?
+        var routines: LinkMerge.Stamps?
     }
 
     fileprivate func loadLinkStamps() {
@@ -2449,6 +2564,8 @@ extension BotsStore {
         linkBotStamps = saved.bots
         linkGroupStamps = saved.groups
         linkLayoutChangedAt = saved.layout
+        linkRoutineStamps = saved.routines ?? LinkMerge.Stamps()
+        linkSavedRoutines = routines
         linkSavedBots = bots
         linkSavedGroups = groups
         linkSavedLayout = layout
@@ -2459,6 +2576,9 @@ extension BotsStore {
         guard !isApplyingLink else { return }
         LinkMerge.noteChanges(from: linkSavedBots, to: bots, id: \.id, stamps: &linkBotStamps)
         LinkMerge.noteChanges(from: linkSavedGroups, to: groups, id: \.id, stamps: &linkGroupStamps)
+        // Only what the owner decides counts as a change: a run or the next due time isn't one.
+        LinkMerge.noteChanges(from: BotRoutineSync.edits(of: linkSavedRoutines), to: BotRoutineSync.edits(of: routines), id: \.id, stamps: &linkRoutineStamps)
+        linkSavedRoutines = routines
         if LinkCoding.digest(linkSavedLayout) != LinkCoding.digest(layout) { linkLayoutChangedAt = Date() }
         linkSavedBots = bots
         linkSavedGroups = groups
@@ -2467,8 +2587,19 @@ extension BotsStore {
     }
 
     private func writeLinkStamps() {
-        let saved = SavedStamps(bots: linkBotStamps, groups: linkGroupStamps, layout: linkLayoutChangedAt)
+        let saved = SavedStamps(bots: linkBotStamps, groups: linkGroupStamps, layout: linkLayoutChangedAt, routines: linkRoutineStamps)
         if let data = try? LinkCoding.encoder.encode(saved) { try? data.write(to: linkStampsFile, options: .atomic) }
+    }
+
+    /// Once: routines start syncing. A routine on both Macs with no edit on record: the copy on the Mac that fires it is the one that's been running.
+    fileprivate func stampRoutinesOnce() {
+        let flag = "v3.routines.syncStamped"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        UserDefaults.standard.set(true, forKey: flag)
+        guard DeviceRouting.route(.routines, choice: DeviceRoles.choice(.routines), thisMac: DeviceRoles.thisMac, paired: true, otherMacOnline: true) == .runHere else { return }
+        let now = Date()
+        for routine in routines { linkRoutineStamps.changed[routine.id] = now }
+        writeLinkStamps()
     }
 
     /// The chats both Macs should hold: every bot's and group chat's, Clicky's, and the private threads between bots.
@@ -2493,6 +2624,8 @@ extension BotsStore {
         var digests = [
             "bots": LinkCoding.digest(LinkListItem(items: bots, stamps: linkBotStamps)),
             "groups": LinkCoding.digest(LinkListItem(items: groups, stamps: linkGroupStamps)),
+            // By id: each Mac keeps its own order.
+            "routines": LinkCoding.digest(LinkListItem(items: routines.sorted { $0.id < $1.id }, stamps: linkRoutineStamps)),
             "layout": LinkCoding.digest(layout),
             "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
             "runs": LinkCoding.digest(linkRuns),
@@ -2519,6 +2652,7 @@ extension BotsStore {
         switch key {
         case "bots": return try? encoder.encode(LinkListItem(items: bots, stamps: linkBotStamps))
         case "groups": return try? encoder.encode(LinkListItem(items: groups, stamps: linkGroupStamps))
+        case "routines": return try? encoder.encode(LinkListItem(items: routines, stamps: linkRoutineStamps))
         case "layout": return try? encoder.encode(LinkLayoutItem(layout: layout, changedAt: linkLayoutChangedAt))
         case "delegations": return try? encoder.encode(delegations)
         case "runs": return try? encoder.encode(linkRuns)
@@ -2557,6 +2691,14 @@ extension BotsStore {
             linkSavedGroups = groups
             for group in groups where group.headID != nil && conversations[group.roomID] == nil { conversations[group.roomID] = BotConversationRecord() }
             writeGroups()
+            writeLinkStamps()
+        case "routines":
+            guard let theirs = try? decoder.decode(LinkListItem<BotRoutine>.self, from: data) else { return }
+            let merged = BotRoutineSync.merged(local: routines, localStamps: linkRoutineStamps, remote: theirs.items, remoteStamps: theirs.stamps)
+            linkRoutineStamps = merged.stamps
+            routines = merged.items
+            linkSavedRoutines = routines
+            if let saved = try? Self.encoder.encode(routines) { try? saved.write(to: routinesFile, options: .atomic) }
             writeLinkStamps()
         case "layout":
             guard let theirs = try? decoder.decode(LinkLayoutItem.self, from: data) else { return }
@@ -2666,9 +2808,11 @@ extension BotsStore {
             let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             func field(_ key: String) -> String? { fields[key].flatMap { $0.isEmpty ? nil : $0 } }
             let continued = field("chatID").map { HarnessChatChoice(idOrTitle: $0, title: field("chatTitle")) }
-            // Its Mac was named on the other side. This Mac checks the folder is here before anything starts (submitToT3).
+            // Its Mac was named on the other side. This Mac checks the folder is here before anything starts (submitToT3), and says how it went.
             submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"), newFolder: field("newFolder"),
-                       macName: TheoLink.localName, continuing: continued)
+                       macName: TheoLink.localName, continuing: continued) { started, problem in
+                if let replyID = fields["replyID"] { _ = TheoLink.shared.request("reply", ["replyID": replyID, "started": started ? "1" : "0", "problem": problem ?? ""]) }
+            }
         case "mkdir":
             // A new folder picked from the other Mac's menu: the answer says where it landed, so that menu can select it.
             guard let name = fields["name"], let replyID = fields["replyID"] else { return }
@@ -2676,7 +2820,8 @@ extension BotsStore {
                 let result = await BotsT3.makeProject(named: name)
                 var answer = ["replyID": replyID]
                 switch result {
-                case .made(let folder), .alreadyThere(let folder): answer["path"] = folder.path
+                case .made(let folder): answer["path"] = folder.path
+                case .alreadyThere(let folder): answer["exists"] = folder.lastPathComponent
                 case .failed(let problem): answer["problem"] = problem
                 }
                 _ = TheoLink.shared.request("reply", answer)
@@ -2719,8 +2864,10 @@ extension BotsStore {
             let command = fields["command"].flatMap { $0.isEmpty ? nil : $0 }
             let writtenAt = fields["at"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
             if action == "botSay" {
+                ownerMacs[target] = fields["fromMac"]
                 send(text, command: command, to: target, messageID: id, writtenAt: writtenAt)
             } else {
+                if let room = group(target)?.roomID { ownerMacs[room] = fields["fromMac"] }
                 sendToGroup(text, command: command, groupID: target, messageID: id, writtenAt: writtenAt)
             }
         case "botTurn":
@@ -2755,9 +2902,14 @@ extension BotsStore {
     /// What this bot's engine session hasn't seen of this chat: what happened on the other Mac, or anything since it last spoke on this one.
     /// Each Mac has its own session, so with no session here it gets the chat's latest to go on. `before`: the message this turn answers.
     func catchUp(_ id: String, bot: NativeBot, before messageID: String) -> String {
-        let record = conversation(id)
-        let earlier = Array(record.messages.prefix { $0.id != messageID }).filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }
-        let unheard = BotCatchUp.unheard(messages: earlier, id: \.id, heard: record.heard?[bot.id], hasSession: record.sessions[bot.id] != nil, isLinked: TheoLink.shared.isPaired)
+        catchUp(in: conversation(id), bot: bot, before: messageID)
+    }
+
+    func catchUp(in record: BotConversationRecord, bot: NativeBot, before messageID: String) -> String {
+        // All of them: what it heard last can be a card or a note.
+        let earlier = Array(record.messages.prefix { $0.id != messageID })
+        let unheard = BotCatchUp.unheard(messages: earlier, id: \.id, heard: record.heard?[bot.id], hasSession: record.sessions[bot.id] != nil, isLinked: TheoLink.shared.isPaired,
+                                         counts: { !$0.text.isEmpty && $0.author != Self.noteAuthor })
         guard !unheard.isEmpty else { return "" }
         let lines = BotCatchUp.lines(unheard.map { message in
             (message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author), message.text)

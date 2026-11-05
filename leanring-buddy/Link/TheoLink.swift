@@ -552,7 +552,7 @@ final class TheoLink: ObservableObject {
         waitingRequests.removeAll()
         saveWaiting()
         for item in waited {
-            let isStale = Date().timeIntervalSince(item.at) > DeviceRouting.maximumWaitSeconds
+            let isStale = item.isStale
             if !isStale { _ = request(item.action, item.fields) }
             guard let room = item.room, let label = item.label else { continue }
             BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: isStale
@@ -594,6 +594,8 @@ struct LinkWaitingRequest: Codable, Identifiable, Equatable {
     var label: String?
     var canRunHere: Bool
     var at = Date()
+    /// Waited so long it isn't what the owner wants any more.
+    var isStale: Bool { DeviceRouting.hasWaitedTooLong(since: at) }
 }
 
 struct ClickyMacItem: Codable {

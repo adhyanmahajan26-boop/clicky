@@ -22,8 +22,7 @@ enum HarnessChats {
 
     /// This runs off the main thread: harnesses' listings can take a second or two.
     private static func read(harness: String, folder: String) -> [HarnessChat] {
-        let resolved = URL(fileURLWithPath: folder).resolvingSymlinksInPath().path
-        let paths = Array(Set([folder, resolved]))
+        let paths = spellings(of: folder)
         switch harness {
         case "t3":
             guard let cli = BotsT3.cli, isT3ServerUp else { return [] }
@@ -36,6 +35,16 @@ enum HarnessChats {
         case "grok": return paths.flatMap(grok).uniqued
         default: return []
         }
+    }
+
+    /// The ways a folder's path can be spelled. Foundation's resolving leaves /private off /tmp, while the harnesses go by the real path.
+    static func spellings(of folder: String) -> [String] {
+        var paths = [folder, URL(fileURLWithPath: folder).resolvingSymlinksInPath().path]
+        if let real = realpath(folder, nil) {
+            paths.append(String(cString: real))
+            free(real)
+        }
+        return Array(Set(paths))
     }
 
     private static var home: URL { URL(fileURLWithPath: TheoProfile.realHome, isDirectory: true) }

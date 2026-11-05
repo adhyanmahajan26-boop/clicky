@@ -17,10 +17,13 @@ import Foundation
 enum BotsT3Error: LocalizedError {
     case noCLI
     case failed(String)
+    /// The thread asked for is already one of Theo's runs: that run's id.
+    case alreadyARun(String)
 
     var errorDescription: String? {
         switch self {
         case .noCLI: return "T3 Code's t3 command isn't installed on this Mac (open T3 Code once to install it)."
+        case .alreadyARun: return "That thread is already one of Theo's runs."
         case .failed(let message): return message
         }
     }
@@ -285,10 +288,8 @@ enum BotsT3 {
             run.baseBranch = await currentBranch(in: topLevel)
             subfolder = subfolderNote(repo, in: topLevel)
         } else {
-            let folder = try newProjectFolder(title: newFolder ?? title)
+            let folder = try await newGitProject(title: newFolder ?? title)
             saveBrief(prompt, title: title, engine: "T3 Code")
-            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
-            try await startEmpty(in: folder)
             let base = try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
             try await shell(cli, ["project", "add", folder.path, "--title", title])
             arguments += [folder.path, "-"]
@@ -341,6 +342,8 @@ enum BotsT3 {
         guard harness == "t3" else {
             return try await HarnessCoding.continueChat(chat.id, run: run, harness: harness, message: message, modelChoice: modelChoice, effortChoice: effortChoice)
         }
+        // A thread's id is its run's id. One Theo already follows carries on as that run: a second under the same id would wipe out its branch, pull request and report.
+        if await MainActor.run(body: { BotsStore.shared.t3Runs.contains { $0.id == chat.id } }) { throw BotsT3Error.alreadyARun(chat.id) }
         guard let cli else { throw BotsT3Error.noCLI }
         _ = try await startThread(cli: cli, arguments: ["thread", "send", chat.id, "-"], message: message)
         run.id = chat.id
@@ -470,7 +473,7 @@ enum BotsT3 {
 
     /// A first, empty commit, so the run's diff has something to start from.
     static func startEmpty(in folder: URL) async throws {
-        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
+        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
     }
 
     /// Whether a repo pushes anywhere.
@@ -507,12 +510,22 @@ enum BotsT3 {
         let exact = projectsFolder.appendingPathComponent(slug(name), isDirectory: true)
         if FileManager.default.fileExists(atPath: exact.path) { return .alreadyThere(exact) }
         do {
-            let folder = try newProjectFolder(title: name)
-            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
-            try await startEmpty(in: folder)
-            return .made(folder)
+            return .made(try await newGitProject(title: name))
         } catch {
             return .failed(error.localizedDescription)
+        }
+    }
+
+    /// A new project folder with git and an empty first commit. If git can't do that the folder goes again: one left behind with no git would get picked next time.
+    static func newGitProject(title: String) async throws -> URL {
+        let folder = try newProjectFolder(title: title)
+        do {
+            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
+            try await startEmpty(in: folder)
+            return folder
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
         }
     }
 

@@ -181,6 +181,15 @@ struct HarnessChatFilesTests {
     }
 }
 
+struct ClaudeFolderNameTests {
+    @Test func eachUTF16UnitBecomesOneDash() {
+        #expect(HarnessChatFiles.claudeFolderName(for: "/a/b c") == "-a-b-c")
+        // An emoji is two units, and a Devanagari syllable can be one character of two units.
+        #expect(HarnessChatFiles.claudeFolderName(for: "/a/😀b") == "-a---b")
+        #expect(HarnessChatFiles.claudeFolderName(for: "/a/मो") == "-a---")
+    }
+}
+
 struct HarnessChatGateTests {
     private let folder = HarnessChatGate.Key(harness: "codex", folder: "/p/moon")
     private let start = Date(timeIntervalSince1970: 1_000_000)

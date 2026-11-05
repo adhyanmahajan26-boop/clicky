@@ -146,13 +146,20 @@ public enum BotScreenGift {
 }
 
 public enum BotTagWords {
+    /// The tag's bodies and what's left without them. A tag in code stays in the words.
     static func take(_ tag: NSRegularExpression, from text: String) -> (text: String, bodies: [String]) {
-        let range = NSRange(text.startIndex..., in: text)
-        let bodies = tag.matches(in: text, range: range).compactMap { match in Range(match.range(at: 1), in: text).map { String(text[$0]) } }
-        let left = tag.stringByReplacingMatches(in: text, range: range, withTemplate: "")
-            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+        let code = CodeSpans.ranges(in: text)
+        var left = text
+        var bodies: [String] = []
+        // From the end, so earlier ranges stay right as the later ones come out.
+        for match in tag.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let whole = Range(match.range, in: text), !code.contains(where: { $0.contains(whole.lowerBound) }) else { continue }
+            if let body = Range(match.range(at: 1), in: text) { bodies.insert(String(text[body]), at: 0) }
+            left.replaceSubrange(whole, with: "")
+        }
+        let tidied = left.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (left, bodies)
+        return (tidied, bodies)
     }
 
     /// A reply still streaming, with these tags hidden, even half written.
