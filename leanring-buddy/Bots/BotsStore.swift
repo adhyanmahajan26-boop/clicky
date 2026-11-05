@@ -220,12 +220,17 @@ final class BotsStore: ObservableObject {
     let folder: URL
 
     private init() {
-        folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Theo/Bots", isDirectory: true)
-        Self.archiveForFreshStart(folder)
+        // Unit tests host the app with the owner's real home and preferences: they get a folder of their own, and no migrations.
+        let isHostingTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        folder = isHostingTests
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("theo-unit-tests-\(ProcessInfo.processInfo.processIdentifier)/Bots", isDirectory: true)
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Theo/Bots", isDirectory: true)
+        if !isHostingTests { Self.archiveForFreshStart(folder) }
         try? FileManager.default.createDirectory(at: folder.appendingPathComponent("chats"), withIntermediateDirectories: true)
-        BotMemory.migrateOnce()
-        DeviceRoles.migrateOnce()
+        if !isHostingTests {
+            BotMemory.migrateOnce()
+            DeviceRoles.migrateOnce()
+        }
         bots = loadBots()
         groups = loadGroups()
         writeGroups()
@@ -1868,6 +1873,7 @@ extension BotsStore {
     private func runDueRoutines() {
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Each routine fires once, on the Mac Settings › Devices says.
         guard DeviceRoles.runsHere(.routines) else { return }
         let now = Date()
