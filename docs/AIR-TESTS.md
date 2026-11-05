@@ -124,7 +124,16 @@ print(send({"cmd":"botUpdate","id":"theo","model":"claude-haiku-5-5"}))
 print(send({"cmd":"harnessSet","codingTarget":"claude","codingModel":"claude-haiku-5-5","codingEffort":"low"}))
 ```
 
-To see or click the window: `python3 "$SCRATCH/theoui.py" shot NAME` takes a screenshot of Theo's window only. `{"cmd":"uiWindows"}` lists its windows, popovers included, and `shot NAME <number>` takes one of them. `{"cmd":"uiClick","window":<number>,"x":..,"y":..}` clicks inside the app without moving the pointer, in window points, which are screenshot pixels divided by 2. `{"cmd":"uiType","text":".."}` types into the focused field of that window. `clicktext` needs an OCR tool that isn't on the Air, so read the screenshot yourself.
+To see or click the window: `python3 "$SCRATCH/theoui.py" shot NAME` takes a screenshot of Theo's window only, with any popover or sheet drawn on it. `{"cmd":"uiClick","window":<number>,"x":..,"y":..}` clicks inside the app without moving the pointer, in window points, which are screenshot pixels divided by 2. `clicktext` needs an OCR tool that isn't on the Air, so read the screenshot yourself.
+
+`{"cmd":"uiWindows"}` lists Theo's windows with their `number` and `frame` (`x`, `y`, `w`, `h`, with `y` counted from the bottom of the screen). The first is the main window. A popover or sheet is a window of its own, and a click on it has to use its number and its own points. For a point (X, Y) read from the screenshot, with `m` the main window's frame and `p` the popover's:
+
+```python
+x = m["x"] + X - p["x"]
+y = (p["y"] + p["h"]) - (m["y"] + m["h"] - Y)
+```
+
+`{"cmd":"uiType","text":"..","window":<number>}` types into the focused field of that window.
 
 ## 3. The rows
 
@@ -159,11 +168,11 @@ Poll `{"cmd":"botsState"}` until the run with that title has `phase` done or fai
 ### Row 4: the folder menu with New folder
 
 ```python
-send({"cmd":"botSay","bot":"theo","text":"Draft a coding prompt for one index.html that says hello. Only draft it: I'll choose the folder on the card and press Start myself."})
+send({"cmd":"botSay","bot":"theo","text":"Draft a coding prompt for one index.html that says hello, and write it as a prompt block so I get the card with its folder menu. Don't start it: I'll choose the folder and press Start myself."})
 wait_idle(send, 120)
 ```
 
-A card shows under the reply, with chips for the Mac, the folder and the chat. If Theo wrote no card, ask once more for a ```prompt block. On the card: click the folder chip, and take a screenshot of the popover through `uiWindows`. ✅ when it lists the projects in this profile's folder, plus "New folder…" and "Choose a folder…". Click "New folder…", type `air-new` with `uiType`, click Create. ✅ when `PROJECTS/air-new` exists with git and one empty commit, the chip now says `air-new`, and `~/Projects/air-new` doesn't exist. Don't press Start. Don't open "Choose a folder…", because that panel takes focus; mark that part ⚠️ not opened.
+A card shows under the reply, with chips for the harness, the Mac, the folder and the chat. If Theo wrote a plain code block and no card, say "Write that as a prompt block so I get the card with its folder menu. Don't start it." On the card, click the "Choose a folder…" chip and take a screenshot. ✅ when the popover lists the projects in this profile's folder, plus "New folder…" and "Choose a folder…". Click "New folder…" (its own window, see step 2), type `air-new` into the sheet with `uiType`, then click Create. ✅ when `PROJECTS/air-new` exists with git and one commit called Start, the chip now says `air-new`, the button says "Start run", and `~/Projects/air-new` doesn't exist. Don't press Start. Don't open "Choose a folder…", because that panel takes focus; mark that part ⚠️ not opened.
 
 Also read the Chat chip. It should say "New chat", with no chats listed for a new folder.
 

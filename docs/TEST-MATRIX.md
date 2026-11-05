@@ -35,7 +35,7 @@ Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor A
 | ✅ | Reconnect merge: no duplicates, no reordering, same-second messages, catch-up cap | `BotChatMergeTests`, `live/order-retest.txt` |
 | ✅ | Bot memory moved out of `~/.t3`, written with the bot's real permission, synced | `live/order-retest.txt` |
 | ✅ | Devices settings read right on both profiles | `shots/devices-settings-air.png`, `-studio.png` |
-| ✅ | Folder menu on a run's card: recent projects, New folder…, Choose a folder…; every harness | `live/click-test.txt` (22 of 22), `shots/folder-popover.png`, `new-folder-sheet.png` |
+| ✅ | Folder menu on a run's card: recent projects, New folder…, Choose a folder…; every harness | `live/click-test.txt`, `shots/folder-popover-final.png`, `card-final-new.png` |
 | ⚠️ | The macOS panel behind Choose a folder… wasn't opened, because it takes focus. `canCreateDirectories` is set in code | `RunChoices.swift` |
 | ✅ | PR run on theo-pr-sandbox: draft PR #15 | `live/pr-run.txt` |
 | ✅ | Continue a chat: Claude Code | `live/chats1.txt`, `shots/continued-run.png` |
