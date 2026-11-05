@@ -763,17 +763,21 @@ final class BotsStore: ObservableObject {
         let owner = brief.ownerWords ?? ""
         let folder = projectChoice(ownerWords: owner, answer: answer)
         let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner))
-        if let reportsTo = brief.reportsTo {
-            reportsTo(answer)
-        } else {
-            post(BotChatMessage(author: ceo.id, text: "**\(group.name):** \(answer)"), to: ceo.id)
-        }
+        // The owner talking to the group reads its outcome right there, so it isn't copied to Theo's chat. Theo asking gets the answer back.
+        brief.reportsTo?(answer)
         guard mayStart, let prompt else { return }
         let title = BotsT3.projectTitle(in: answer, prompt: prompt)
-        submitToT3(prompt: prompt, title: title, repo: folder.repo, room: ceo.id, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: group.roomID, newFolder: folder.newFolder) { [weak self] started, problem in
-            let line = started ? "Started **\(title)**. You can follow it in \(ceo.name)'s chat." : "**\(title)** didn't start: \(problem ?? "no reason given")."
-            self?.post(BotChatMessage(author: head.id, text: line), to: group.roomID)
-            self?.onCEOReport?(started ? "\(title) has started coding." : line)
+        // The run shows where it was asked for, and Theo hears how it went.
+        let room = brief.reportsTo == nil ? group.roomID : ceo.id
+        let alsoRoom = brief.reportsTo == nil ? ceo.id : group.roomID
+        let mac = runMac(named: CodingDeviceWords.named(in: owner) ?? ProjectWords.labeled("Mac", in: answer), room: room)
+        submitToT3(prompt: prompt, title: title, repo: folder.repo, room: room, harness: brief.harness, modelChoice: brief.model, effortChoice: brief.effort, alsoRoom: alsoRoom, newFolder: folder.newFolder, macName: mac) { [weak self] started, problem in
+            guard let self else { return }
+            if brief.reportsTo != nil {
+                let line = started ? "Started **\(title)**. You can follow it in \(ceo.name)'s chat." : "**\(title)** didn't start: \(problem ?? "no reason given")."
+                self.post(BotChatMessage(author: head.id, text: line), to: group.roomID)
+            }
+            self.onCEOReport?(started ? "\(title) has started coding." : "\(title) didn't start: \(problem ?? "no reason given").")
         }
     }
 
