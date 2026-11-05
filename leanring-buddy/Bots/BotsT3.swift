@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import ClickyCore
 import Foundation
 
 enum BotsT3Error: LocalizedError {
@@ -79,6 +80,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     var stoppedByOwner: Bool?
     /// What it was asked, so a failed run can try again on another harness.
     var prompt: String?
+    /// It carries on an existing chat of its harness: that chat's title.
+    var continuedChat: String?
+    /// The exact session of its harness, so a follow-up never lands in another one. (T3 Code's is `id`.)
+    var sessionID: String?
 }
 
 /// One file a run changed.
@@ -179,7 +184,8 @@ enum BotsT3 {
 
     /// What a follow-up ends with: a plain folder stays out of git, everything else commits.
     static func followupNote(for run: T3Run) -> String {
-        run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
+        if run.continuedChat != nil { return continuedNote }
+        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
     }
 
     /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
@@ -226,8 +232,9 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
+        if let continuing { return try await continueChat(continuing, prompt: prompt, title: title, folder: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice) }
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
         if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder) }
         guard let cli else { throw BotsT3Error.noCLI }
@@ -287,6 +294,33 @@ enum BotsT3 {
         run.id = threadID
         run.link = launched["link"] as? String
         // T3 Code isn't brought forward by itself, since that takes focus from whatever the owner is doing. "Watch" on the card opens it.
+        return run
+    }
+
+    /// What a continued chat ends with. It's the owner's chat in the owner's folder, so what happens to git is up to them.
+    static let continuedNote = "\n\n---\nWhen you're done, end with a short report: what you did, how to run it, the tests and their results, and anything left undone."
+
+    /// Carries on a chat the harness already has, in its own folder: no new branch or worktree, and its own session, by id.
+    static func continueChat(_ choice: HarnessChatChoice, prompt: String, title: String, folder: URL?, harness: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+        guard let folder else { throw BotsT3Error.failed("That needs the folder the chat is in. Pick a folder first.") }
+        let label = harness == "t3" ? "T3 Code" : HarnessCatalog.label(harness)
+        let chats = await HarnessChats.list(harness: harness, folder: folder.path)
+        guard let chat = choice.match(in: chats) ?? choice.title.map({ HarnessChat(id: choice.idOrTitle, title: $0, updatedAt: Date()) }) else {
+            throw BotsT3Error.failed("\(label) has no chat called \"\(choice.idOrTitle)\" in \(folder.lastPathComponent).")
+        }
+        var run = T3Run(id: "", title: title, folder: folder.path)
+        run.continuedChat = chat.title
+        run.sessionID = chat.id
+        run.prompt = prompt
+        run.baseCommit = (try? await shell(git, ["rev-parse", "HEAD"], in: folder))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = prompt + continuedNote
+        guard harness == "t3" else {
+            return try await HarnessCoding.continueChat(chat.id, run: run, harness: harness, message: message, modelChoice: modelChoice, effortChoice: effortChoice)
+        }
+        guard let cli else { throw BotsT3Error.noCLI }
+        // T3 Code's server has to be up for this, same as starting a thread.
+        _ = try await startThread(cli: cli, arguments: ["thread", "send", chat.id, "-"], message: message)
+        run.id = chat.id
         return run
     }
 
@@ -360,10 +394,11 @@ enum BotsT3 {
     }
 
     /// Brings the run's project up in the T3 Code app.
-    /// Stops a T3 Code thread as its Stop button does.
-    static func stopThread(_ run: T3Run) async {
-        guard let cli else { return }
-        _ = try? await shell(cli, ["thread", "stop", run.id])
+    /// Stops a T3 Code thread as its Stop button does. False when it couldn't: stock T3 Code has no such command.
+    @discardableResult
+    static func stopThread(_ run: T3Run) async -> Bool {
+        guard let cli else { return false }
+        return (try? await shell(cli, ["thread", "stop", run.id])) != nil
     }
 
     static func openInApp(_ run: T3Run) {
@@ -412,9 +447,36 @@ enum BotsT3 {
     }
 
     /// The owner's project folders.
-    static func projectNames() -> [String] {
-        let found = (try? FileManager.default.contentsOfDirectory(at: projectsFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-        return found.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }.map(\.lastPathComponent).sorted()
+    static func projectNames() -> [String] { projects().map(\.name).sorted() }
+
+    /// The owner's project folders on this Mac, newest first.
+    static func projects() -> [DeviceProject] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey]
+        let found = (try? FileManager.default.contentsOfDirectory(at: projectsFolder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+        return found.compactMap { url -> DeviceProject? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isDirectory == true else { return nil }
+            return DeviceProject(name: url.lastPathComponent, path: url.path, modifiedAt: values.contentModificationDate)
+        }.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+    }
+
+    enum MadeProject {
+        case made(URL)
+        case alreadyThere(URL)
+        case failed(String)
+    }
+
+    /// A new folder in ~/Projects on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
+    static func makeProject(named name: String) async -> MadeProject {
+        let exact = projectsFolder.appendingPathComponent(slug(name), isDirectory: true)
+        if FileManager.default.fileExists(atPath: exact.path) { return .alreadyThere(exact) }
+        do {
+            let folder = try newProjectFolder(title: name)
+            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
+            try await startEmpty(in: folder)
+            return .made(folder)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     static func newProjectFolder(title: String) throws -> URL {
@@ -476,7 +538,8 @@ enum BotsT3 {
         // named that's only safe in the run's own worktree, never the checkout they work in.
         var commitProblem: String?
         var leftOut: [String] = []
-        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
+        // A chat the owner picked to continue is theirs: its agent commits or not, as it always has, in the folder itself.
+        if run.continuedChat == nil, (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
             do {
                 leftOut = try await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
             } catch {
@@ -491,8 +554,9 @@ enum BotsT3 {
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
             : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
         if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-            // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card.
-            let first = summary.components(separatedBy: "\n\n").first ?? summary
+            // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card. A heading alone says nothing.
+            let paragraphs = summary.components(separatedBy: "\n\n")
+            let first = paragraphs.first { !$0.hasPrefix("#") } ?? paragraphs.first ?? summary
             lines.append(first.count > 500 ? String(first.prefix(500)) + "…" : first)
             run.fullReport = trimmedSummary(summary)
         }

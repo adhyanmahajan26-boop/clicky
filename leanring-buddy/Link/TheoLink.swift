@@ -21,14 +21,22 @@ import SwiftUI
 @MainActor
 final class TheoLink: ObservableObject {
     static let shared = TheoLink()
-    static let port: NWEndpoint.Port = 47331
+    /// A test profile can use a port of its own (`test.link.port`), beside the owner's real link.
+    static var port: NWEndpoint.Port {
+        if TheoProfile.isTest, let chosen = NWEndpoint.Port(rawValue: UInt16(UserDefaults.standard.integer(forKey: "test.link.port"))), chosen.rawValue != 0 { return chosen }
+        return 47331
+    }
     private static let serviceType = "_theolink._tcp"
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
     private static let clickyMacKey = "v3.clicky.mac"
     private static let clickyMacAtKey = "v3.clicky.macChangedAt"
     private static let knownPeerKey = "v3.link.knownPeer"
-    nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    /// A test profile can go by another name (`test.link.name`), to stand in for the other Mac.
+    nonisolated static let localName: String = {
+        if TheoProfile.isTest, let name = UserDefaults.standard.string(forKey: "test.link.name"), !name.isEmpty { return name }
+        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }()
 
     @Published private(set) var isPaired = false
     @Published private(set) var peerName: String?
@@ -46,6 +54,7 @@ final class TheoLink: ObservableObject {
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
     private var waitingOrders: [String: (String) -> Void] = [:]
+    private var waitingReplies: [String: ([String: String]?) -> Void] = [:]
     private var isSyncQueued = false
     private var waitingRequests: [(action: String, fields: [String: String])] = []
     private var connectionState = "none"
@@ -172,6 +181,21 @@ final class TheoLink: ObservableObject {
         if isPaired { startNetworking() }
     }
 
+    /// Test profile only: a link of its own. `dialHost` empty: it only listens.
+    func startForTest(code typed: String, port: Int, dialHost: String, dialPort: Int) -> Bool {
+        guard TheoProfile.isTest, LinkPairing.normalized(typed) != nil else { return false }
+        UserDefaults.standard.set(port, forKey: "test.link.port")
+        UserDefaults.standard.set(dialPort, forKey: "test.link.dialPort")
+        UserDefaults.standard.set(dialHost, forKey: Self.hostKey)
+        return pair(typed: typed)
+    }
+
+    /// Test profile only: the link goes down, or comes back.
+    func setLinkEnabledForTest(_ enabled: Bool) {
+        guard TheoProfile.isTest else { return }
+        enabled ? restart() : stopNetworking()
+    }
+
     /// A new code for this Mac, to type on the other one.
     func pairWithNewCode() { save(LinkPairing.newCode()) }
 
@@ -231,7 +255,8 @@ final class TheoLink: ObservableObject {
         let params = parameters(code: code)
         problem = nil
         if let listener = try? NWListener(using: params, on: Self.port) {
-            listener.service = NWListener.Service(name: localName, type: Self.serviceType)
+            // A test profile links by address only, so the owner's Macs never see it on the network.
+            if !TheoProfile.isTest { listener.service = NWListener.Service(name: localName, type: Self.serviceType) }
             listener.stateUpdateHandler = { [weak self] state in
                 if case .failed(let error) = state { Task { @MainActor in self?.problem = "Can't listen: \(error.localizedDescription)" } }
             }
@@ -242,6 +267,13 @@ final class TheoLink: ObservableObject {
             self.listener = listener
         } else {
             problem = "Port \(Self.port.rawValue) is taken on this Mac."
+        }
+        guard !TheoProfile.isTest else {
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.dialIfNeeded() }
+            }
+            dialIfNeeded()
+            return
         }
         let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: params)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
@@ -283,7 +315,9 @@ final class TheoLink: ObservableObject {
         guard connection == nil, let code else { return }
         let manual = host
         if !manual.isEmpty {
-            dial(.hostPort(host: NWEndpoint.Host(manual), port: Self.port), code: code)
+            // Two test profiles on one Mac listen on different ports: `test.link.dialPort` is the other one's.
+            let dialled = TheoProfile.isTest ? NWEndpoint.Port(rawValue: UInt16(UserDefaults.standard.integer(forKey: "test.link.dialPort"))).flatMap { $0.rawValue == 0 ? nil : $0 } : nil
+            dial(.hostPort(host: NWEndpoint.Host(manual), port: dialled ?? Self.port), code: code)
             return
         }
         for endpoint in foundPeers {
@@ -402,6 +436,7 @@ final class TheoLink: ObservableObject {
             }
             for waiting in waitingRequests { _ = request(waiting.action, waiting.fields) }
             waitingRequests.removeAll()
+            HarnessCenter.shared.refresh()
             if (envelope.build ?? 0) > localBuild {
                 // The other Mac is ahead: offer the update here too, so they don't drift.
                 Task { await CompanionManager.current?.updateController.check(quietly: true) }
@@ -444,6 +479,25 @@ final class TheoLink: ObservableObject {
         }
     }
 
+    /// Asks the other Mac something and waits for its answer. Nil when it isn't connected or doesn't answer in time.
+    func ask(_ action: String, _ fields: [String: String], timeoutSeconds: Double = 20) async -> [String: String]? {
+        let replyID = UUID().uuidString
+        var withReply = fields
+        withReply["replyID"] = replyID
+        guard request(action, withReply) else { return nil }
+        return await withCheckedContinuation { continuation in
+            waitingReplies[replyID] = { continuation.resume(returning: $0) }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                self?.waitingReplies.removeValue(forKey: replyID)?(nil)
+            }
+        }
+    }
+
+    func replyArrived(_ replyID: String, fields: [String: String]) {
+        waitingReplies.removeValue(forKey: replyID)?(fields)
+    }
+
     /// Asks the other Mac to do something. False when it isn't connected.
     func request(_ action: String, _ fields: [String: String]) -> Bool {
         guard isConnected, let payload = try? LinkCoding.encoder.encode(fields) else { return false }
@@ -469,9 +523,13 @@ final class TheoLink: ObservableObject {
     private func currentDigests() async -> [String: String] {
         var digests = BotsStore.shared.linkDigests
         let memory = BotsStore.shared.memoryStore
-        digests["memory"] = await Task.detached {
-            LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
+        let botIDs = BotsStore.shared.bots.map(\.id)
+        let fromDisk = await Task.detached { () -> [String: String] in
+            var found = BotMemory.digests(botIDs: botIDs)
+            found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
+            return found
         }.value
+        digests.merge(fromDisk) { _, new in new }
         return digests
     }
 }
@@ -573,7 +631,7 @@ struct LinkSettingsContent: View {
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            Text("Bots, group chats, chats, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
+            Text("Bots, group chats, chats, private messages between bots, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }

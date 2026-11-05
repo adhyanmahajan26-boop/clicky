@@ -128,7 +128,7 @@ struct BotRoutine: Codable, Identifiable, Equatable {
 
 extension BotsStore {
     /// The ```routine block a bot writes to set one up: {"when": "weekdays 08:00", "do": "…", "name": "…"}.
-    static func routineRequest(in text: String) -> (name: String, schedule: BotRoutine.Schedule, instruction: String)? {
+    static func routineRequest(in text: String) -> (name: String, when: String, schedule: BotRoutine.Schedule, instruction: String)? {
         guard let start = text.range(of: "```routine") else { return nil }
         let rest = text[start.upperBound...]
         guard let end = rest.range(of: "```"),
@@ -137,6 +137,6 @@ extension BotsStore {
               let instruction = (object["do"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty
         else { return nil }
         let name = (object["name"] as? String) ?? String(instruction.prefix(40))
-        return (name, schedule, instruction)
+        return (name, when, schedule, instruction)
     }
 }

@@ -21,10 +21,42 @@ enum CrewTestCommands {
         case "uiCrew": return crew(command, window: window)
         case "uiStudio": return studio(command)
         case "uiSeedDemo": return seed()
+        case "uiLink": return link(command)
+        case "uiBotPrompt": return botPrompt(command)
         default:
             if let key = command["key"] as? String { UserDefaults.standard.set(command["value"], forKey: key) }
             return [:] as [String: Any]
         }
+    }
+
+    /// {action: start, code, port, dialHost, dialPort}, {action: down}, {action: up}, {action: state}: a test profile's own link.
+    private static func link(_ command: [String: Any]) -> Any {
+        let link = TheoLink.shared
+        switch command["action"] as? String ?? "state" {
+        case "start":
+            let started = link.startForTest(code: command["code"] as? String ?? LinkPairing.newCode(), port: command["port"] as? Int ?? 47401,
+                                            dialHost: command["dialHost"] as? String ?? "", dialPort: command["dialPort"] as? Int ?? 0)
+            return ["started": started, "code": link.code ?? ""]
+        case "down": link.setLinkEnabledForTest(false)
+        case "up": link.setLinkEnabledForTest(true)
+        default: break
+        }
+        var state = link.statusReport
+        state["localName"] = TheoLink.localName
+        state["peerDevice"] = BotsStore.shared.peerDevice.map { ["name": $0.name, "projects": $0.projects.map(\.name), "harnesses": $0.harnesses, "hasScreens": $0.hasScreens] as [String: Any] } ?? NSNull()
+        state["thisMac"] = DeviceRoles.thisMac == .macStudio ? "macStudio" : "macBookAir"
+        state["botsRoute"] = "\(DeviceRoles.route(.bots))"
+        state["routinesRoute"] = "\(DeviceRoles.route(.routines))"
+        return state
+    }
+
+    /// {bot, room?}: everything a bot is told, as it would go out, so the assembled text can be checked.
+    private static func botPrompt(_ command: [String: Any]) -> Any {
+        let store = BotsStore.shared
+        guard let id = command["bot"] as? String, let bot = store.bot(id) else { return ["error": "No such bot."] }
+        let room = command["room"] as? String ?? id
+        return ["persona": BotPrompts.persona(bot: bot, team: store.bots), "awareness": BotPrompts.awarenessNote(for: bot, room: room), "reach": BotPrompts.reachNote(for: bot),
+                "ceoNote": store.ceoTurnNote(for: bot), "memory": bot.memoryPath, "workspace": BotRunner.workspace.path, "tools": BotRunner.claudeAllowedTools(for: bot)] as [String: Any]
     }
 
     private static func crew(_ command: [String: Any], window: NSWindow?) -> Any {

@@ -156,6 +156,7 @@ extension BotRunner {
         }
         if text.isEmpty {
             if let limit = usageLimitMessage(engine: "codex", output: seen + (failure ?? "") + exit.logTail) { throw BotRunnerError.usageLimit(limit) }
+            if session != nil, saysSessionIsLost((failure ?? "") + exit.logTail) { throw BotRunnerError.lostSession }
             if let failure { throw BotRunnerError.failed(failure) }
             throw BotRunnerError.failed("Codex stopped (exit \(exit.status)). Details are in ~/Library/Logs/Clicky/bots-codex.log.")
         }
@@ -215,6 +216,7 @@ extension BotRunner {
             if let limit = usageLimitMessage(engine: "cursor", output: seen + (failure ?? "") + exit.logTail) { throw BotRunnerError.usageLimit(limit) }
             if text.isEmpty {
                 let detail = failure ?? (exit.logTail.isEmpty ? seen : exit.logTail)
+                if session != nil, saysSessionIsLost(detail) { throw BotRunnerError.lostSession }
                 throw BotRunnerError.failed("Cursor Agent didn't answer (exit \(exit.status)): \(detail.suffix(200))")
             }
         }

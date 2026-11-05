@@ -18,6 +18,20 @@ enum DeviceRoles {
         UserDefaults.standard.string(forKey: key(feature)).flatMap(DeviceChoice.init(rawValue:)) ?? feature.defaultChoice
     }
 
+    /// Once: "Bots" used to mean bots, coding and routines, on the Mac Studio. That was the old default, so a setup still on it moves to
+    /// "the Mac you're using"; anything else it was set to is the owner's own choice, and stays for bots. Routines keep their Mac.
+    static func migrateOnce() {
+        let flag = "v3.devices.splitBotsAndRoutines"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: flag) else { return }
+        defaults.set(true, forKey: flag)
+        let botsKey = key(.bots)
+        guard let stored = defaults.string(forKey: botsKey) else { return }
+        // "Bots run on this Mac Studio" was also where its routines were: that stays what the Routines row says.
+        if defaults.string(forKey: key(.routines)) == nil { defaults.set(stored == DeviceChoice.any.rawValue ? DeviceChoice.macStudio.rawValue : stored, forKey: key(.routines)) }
+        if stored == DeviceChoice.macStudio.rawValue { defaults.removeObject(forKey: botsKey) }
+    }
+
     @MainActor static func route(_ feature: DeviceFeature) -> DeviceRoute {
         DeviceRouting.route(feature, choice: choice(feature), thisMac: thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected)
     }
@@ -45,7 +59,7 @@ struct DevicesSettingsContent: View {
                     SettingRow(title: "No other Mac linked", detail: "Link one in Your other Mac to share the work between them.") { EmptyView() }
                 }
             }
-            TheoSection(title: "What runs where", hint: "Bots always show on both Macs. If they're set to the other Mac, what you send them goes there, and waits if it's offline.") {
+            TheoSection(title: "What runs where", hint: "Theo works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there, and waits if it's offline.") {
                 ForEach(Array(DeviceFeature.allCases.enumerated()), id: \.element.id) { index, feature in
                     if index > 0 { RowDivider() }
                     DeviceFeatureRow(feature: feature)
@@ -96,9 +110,9 @@ private struct DeviceFeatureRow: View {
                 Text("Mac Studio only").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
             } else {
                 Picker(feature.title, selection: Binding(get: { stored }, set: { stored = $0; applied() })) {
-                    ForEach(DeviceChoice.allCases) { Text($0.title).tag($0.rawValue) }
+                    ForEach(DeviceChoice.allCases) { Text($0 == .any ? feature.anyChoiceTitle : $0.title).tag($0.rawValue) }
                 }
-                .labelsHidden().frame(width: 140)
+                .labelsHidden().frame(width: 170)
             }
         }
     }

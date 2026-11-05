@@ -19,6 +19,8 @@ enum BotRunnerError: LocalizedError {
     case freeLimit
     /// A subscription engine's usage limit (Codex / Cursor); the message says when it resets.
     case usageLimit(String)
+    /// The engine doesn't have this session any more (it's on the other Mac, or was cleaned up).
+    case lostSession
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +28,7 @@ enum BotRunnerError: LocalizedError {
         case .failed(let message): return message
         case .freeLimit: return "OpenCode's free models have hit their usage limit."
         case .usageLimit(let message): return message
+        case .lostSession: return "The engine has lost this chat's session."
         }
     }
 }
@@ -69,12 +72,13 @@ enum BotRunner {
     /// The longest one bot turn may take.
     static let turnLimitSeconds: Double = 420
 
-    /// Where bots run: the folder that holds their memory files (~/.t3/bots), so reading and keeping
-    /// memory never needs a permission nobody is there to give.
-    static var workspace: URL {
-        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".t3/bots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder
+    /// Where bots run: the folder that holds their memory files, so reading and keeping memory never needs a permission nobody is there to
+    /// give. Theo's own folder: ~/.t3 belongs to T3 Code.
+    static var workspace: URL { BotMemory.root }
+
+    /// An engine's words for "that session doesn't exist".
+    static func saysSessionIsLost(_ text: String) -> Bool {
+        text.range(of: #"(?i)no conversation found|session[^\n]{0,60}not found|no such session|unknown session|could not find (the )?session|no (saved )?session|invalid session|thread[^\n]{0,40}not found"#, options: .regularExpression) != nil
     }
 
     /// Theo's MCP tools a bot may use on its own.
@@ -83,7 +87,8 @@ enum BotRunner {
     /// The Claude tools a bot may use without asking: reading and the web, its memory file, and the
     /// connectors of its own apps.
     static func claudeAllowedTools(for bot: NativeBot) -> [String] {
-        let memoryFolder = "~/.t3/bots/\(bot.id)/**"
+        // Two slashes: an absolute path, in Claude Code's permission rules.
+        let memoryFolder = "/" + BotMemory.file(botID: bot.id).deletingLastPathComponent().path + "/**"
         var tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
         for connector in BotConnectors.known where bot.apps.contains(connector.id) {
             if connector.id == "theo" {
@@ -209,7 +214,7 @@ enum BotRunner {
             FileManager.default.createFile(atPath: errorLog.path, contents: nil)
         }
         let errorHandle = try? FileHandle(forWritingTo: errorLog)
-        errorHandle?.seekToEndOfFile()
+        let logStart = errorHandle?.seekToEndOfFile() ?? 0
         process.standardError = errorHandle ?? FileHandle.nullDevice
         try process.run()
         BotProcesses.shared.set(bot.id, process)
@@ -243,8 +248,16 @@ enum BotRunner {
         try? errorHandle?.close()
         if parser.text.isEmpty, await limitCheck.value { throw BotRunnerError.freeLimit }
         limitCheck.cancel()
-        if let error = parser.error, parser.text.isEmpty { throw BotRunnerError.failed(error) }
+        if let error = parser.error, parser.text.isEmpty {
+            if session != nil, saysSessionIsLost(error) { throw BotRunnerError.lostSession }
+            throw BotRunnerError.failed(error)
+        }
         if parser.text.isEmpty && process.terminationStatus != 0 {
+            if session != nil, let reader = try? FileHandle(forReadingFrom: errorLog) {
+                defer { try? reader.close() }
+                try? reader.seek(toOffset: logStart)
+                if saysSessionIsLost(String(decoding: reader.readDataToEndOfFile().suffix(4000), as: UTF8.self)) { throw BotRunnerError.lostSession }
+            }
             throw BotRunnerError.failed("\(provider.displayName) stopped (exit \(process.terminationStatus)). " +
                                         "Details are in ~/Library/Logs/Clicky/bots-\(provider.rawValue).log.")
         }
@@ -343,6 +356,10 @@ extension BotRunner {
             if event["type"] as? String == "result", event["is_error"] as? Bool != true { text = event["result"] as? String }
         }
         guard let text, !text.isEmpty else {
+            let output = String(decoding: data.suffix(4000), as: UTF8.self)
+            if session != nil, saysSessionIsLost(output) { throw BotRunnerError.lostSession }
+            // Its sign-in instructions aren't for the chat.
+            if output.contains("grok login") { throw BotRunnerError.failed("Grok isn't signed in on this Mac. Sign in from Settings › Harnesses.") }
             throw BotRunnerError.failed("Grok didn't answer: \(String(decoding: data.suffix(200), as: UTF8.self))")
         }
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), newSession)

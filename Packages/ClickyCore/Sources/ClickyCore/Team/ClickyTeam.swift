@@ -112,6 +112,8 @@ public enum ClickyOrder {
             guard let colon = body.firstIndex(of: ":") else { return nil }
             let name = body[..<colon].trimmingCharacters(in: .whitespaces)
             let message = body[body.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            // "[TELL: name: …]" in a sentence is someone talking about the tag.
+            guard OrderWords.isRealOrder(message), OrderWords.isRealName(name) else { return nil }
             return name.isEmpty || message.isEmpty ? nil : [tellMark, name, tellMark, message].joined()
         }
         let left = tag.stringByReplacingMatches(in: text, range: range, withTemplate: "")
@@ -193,11 +195,17 @@ public struct ClickyOrderStream: Sendable {
 // MARK: - Bots on the work screen
 
 enum OrderWords {
-    private static let placeholders = ["what to do", "what to do in plain words", "what to do, in plain words", "its exact name: what to do", "name: what to do", "task"]
+    private static let placeholders = ["what to do", "what to do in plain words", "what to do, in plain words", "its exact name: what to do", "name: what to do", "task",
+                                       "what you need", "message", "the message", "their exact name: what you need", "exact name: message"]
+    private static let placeholderNames = ["name", "bot", "exact name", "their exact name", "its exact name", "their name", "that harness", "bot name", "the bot"]
 
     static func isRealOrder(_ body: String) -> Bool {
         let words = body.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return words.contains { $0.isLetter || $0.isNumber } && !placeholders.contains(words)
+    }
+
+    static func isRealName(_ name: String) -> Bool {
+        !placeholderNames.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 }
 

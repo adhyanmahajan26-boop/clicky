@@ -78,6 +78,8 @@ extension BotsStore {
         if let call = openCall(of: bot.id) { return "Needs you · \(call.question)" }
         if bot.id == teamBot(.researcher)?.id, let check = BrowserResearcher.shared.checks.values.first { return "Needs you · \(check.host)" }
         if let live = replying[bot.id] {
+            // Answering another bot privately: who, not what.
+            if let room = replyingIn[bot.id], let partner = BotDMThread.partner(of: bot.id, in: room).flatMap({ self.bot($0) }) { return "Answering \(partner.name) privately" }
             let words = Self.firstLine(live)
             return words.isEmpty ? "Thinking…" : words
         }

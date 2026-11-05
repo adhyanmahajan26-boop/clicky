@@ -632,10 +632,16 @@ struct BotChatScreen: View {
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
     private var groupBots: [NativeBot] { group.map { store.members(of: $0) } ?? [] }
     private var isProjectRoom: Bool { groupID == BotGroup.projectID }
+    /// Who's writing in this chat right now. A bot answering a private message or another chat isn't: it doesn't show here.
     private var inProgress: [(NativeBot, String)] {
         let ids = bot.map { [$0.id] } ?? groupBots.map(\.id)
-        return ids.compactMap { id in store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } } }
+        return ids.compactMap { id in
+            guard store.replyingIn[id] == conversationID else { return nil }
+            return store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } }
+        }
     }
+    /// Stop has something to stop: a bot writing here, a group's round, or private messages this chat set off.
+    private var canStop: Bool { !inProgress.isEmpty || store.isBusy(conversationID) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -655,6 +661,10 @@ struct BotChatScreen: View {
                             if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
                                 // The pending card gives way to the finished one, which lands at the end of the chat.
                                 if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
+                            } else if let exchange = BotDMThread.parseCard(message.card) {
+                                BotDMCard(store: store, senderID: message.author, targetID: exchange.targetID, exchangeID: exchange.exchangeID, at: message.at)
+                            } else if message.author == BotsStore.noteAuthor {
+                                ChatNote(text: message.text)
                             } else if message.author == "user" {
                                 UserBubble(text: message.text)
                             } else if message.author == "routine" {
@@ -666,7 +676,7 @@ struct BotChatScreen: View {
                                     BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message.text, besides: author))
                                 } else if call?.remainingText.isEmpty != true {
                                     BotLine(bot: author, text: call?.remainingText ?? message.text,
-                                            showsName: index == 0 || record.messages[index - 1].author != message.author,
+                                            showsName: index == 0 || record.messages[index - 1].author != message.author || record.messages[index - 1].card != nil,
                                             namesAuthor: bot == nil,
                                             animatesIn: !settledIDs.contains(message.id), isLive: false)
                                 }
@@ -813,7 +823,7 @@ struct BotChatScreen: View {
                         store.clearConversation(conversationID)
                         settledIDs = []
                     } label: { Label("New chat", systemImage: "square.and.pencil") }
-                    .disabled(!inProgress.isEmpty)
+                    .disabled(canStop)
                     if bot != nil {
                         Divider()
                         Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: { Label("Settings for this chat", systemImage: "slider.horizontal.3") }
@@ -932,9 +942,14 @@ struct BotChatScreen: View {
                     }
                     .buttonStyle(.plain).help(dictationHelp)
                 }
-                if !inProgress.isEmpty && isEmpty {
+                if canStop && isEmpty {
                     Button {
-                        if let bot { store.stop(bot.id) } else if let groupID { store.stopGroup(groupID) }
+                        if let bot {
+                            if !inProgress.isEmpty { store.stop(bot.id) }
+                            store.stopPrivateMessages(in: conversationID)
+                        } else if let groupID {
+                            store.stopGroup(groupID)
+                        }
                     } label: {
                         HairlineIcon(name: "stop", size: 16, color: DS.Colors.textPrimary)
                             .frame(width: 32, height: 32).background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Colors.surface))
@@ -1499,76 +1514,6 @@ struct ConnectorsScreen: View {
     }
 }
 
-// MARK: - Hand-off to T3 Code
-
-/// A bot's finished build prompt, ready to go: which harness, which folder, and Start.
-struct T3HandoffButton: View {
-    let text: String
-    var room: String = BotsStore.teamID
-    let prominent: Bool
-    var alreadySent = false
-    /// The harness of the run this prompt started. Nil with a run means T3 Code.
-    var sentRunHarness: String? = nil
-    @ObservedObject private var center = HarnessCenter.shared
-    @ObservedObject private var keys = ProviderKeys.shared
-    @State private var sentHere = false
-    @State private var harness = HarnessPrefs.codingTarget
-    @State private var folder: URL?
-    private var sent: Bool { sentHere || alreadySent }
-
-    /// The folder from the message itself, when it names one.
-    private var namedFolder: URL? { BotsT3.targetRepo(answer: text, pitch: "") }
-
-    var body: some View {
-        let target = folder ?? namedFolder
-        VStack(alignment: .leading, spacing: 8) {
-            if sent {
-                Label("Sent to \(HarnessCatalog.label(SentEngine.resolve(hasMatchingRun: alreadySent && !sentHere, runHarness: sentRunHarness, chosen: harness)))", systemImage: "checkmark").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
-            } else {
-                HStack(spacing: 8) {
-                    BrandLogo(id: harness, name: HarnessCatalog.label(harness), size: 24)
-                    Picker("Run on", selection: $harness) {
-                        ForEach(HarnessCatalog.codingTargets, id: \.id) { info in
-                            let status = center.status(for: info.id)
-                            Text(info.label + (status.installed ? "" : " (not installed)")).tag(info.id)
-                        }
-                        if keys.hasKey(for: "cursor") { Text("Cursor cloud agent").tag(CursorCloud.harnessID) }
-                    }
-                    .labelsHidden().frame(width: 180)
-                    Button { chooseFolder() } label: {
-                        Label(target?.lastPathComponent ?? "Choose a folder…", systemImage: "folder").lineLimit(1)
-                    }
-                    .buttonStyle(.theo(.secondary, .small))
-                    .help(target?.path ?? "A git repo gets its own branch and a draft PR. A plain folder is edited in place.")
-                    Spacer(minLength: 0)
-                    Button { start(in: target) } label: { Label(target == nil ? "Start as a new project" : "Start run", systemImage: "play.fill") }
-                        .buttonStyle(.theo(.primary, .small))
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-            }
-        }
-        .padding(.leading, 38)
-        .onAppear { center.refresh() }
-    }
-
-    private func start(in target: URL?) {
-        let prompt = BotsT3.promptBlock(in: text) ?? text
-        BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), repo: target, room: room, harness: harness)
-        sentHere = true
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Use this folder"
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        folder = chosen
-    }
-}
-
 /// A coding run while it works, for someone who has never read a terminal: where it's got to in plain words, with the
 /// raw terminal one click away. Stop asks first.
 struct T3RunCard: View {
@@ -1595,7 +1540,10 @@ struct T3RunCard: View {
                 VStack(alignment: .leading, spacing: 1) {
                     (Text(bot?.name ?? engine).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                      + Text(" · \(run.title)").font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary)).lineLimit(1)
-                    Text(detailLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        RunMacChip(run: run)
+                        Text(detailLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -1680,7 +1628,7 @@ struct T3RunCard: View {
 
     private var detailLine: String {
         var parts = [engine]
-        if let model = run.model { parts.append(NativeBot.label(for: model)) }
+        if let chat = run.continuedChat { parts.append("Continuing \(chat)") } else if let model = run.model { parts.append(NativeBot.label(for: model)) }
         if let branch = run.branch { parts.append(branch) } else { parts.append(URL(fileURLWithPath: run.folder).lastPathComponent) }
         return parts.joined(separator: " · ")
     }

@@ -266,7 +266,15 @@ final class ClaudiaControlInbox {
             // The last messages of a chat: {id: bot id, "team" or "group-<id>", limit}
             let id = command["id"] as? String ?? BotsStore.teamID
             let limit = max(0, min(command["limit"] as? Int ?? 10, 200))
-            let messages = BotsStore.shared.conversation(id).messages.suffix(limit).map { ["author": $0.author, "text": $0.text] }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let messages = BotsStore.shared.conversation(id).messages.suffix(limit).map { message -> [String: Any] in
+                var entry: [String: Any] = ["author": message.author, "text": message.text, "at": formatter.string(from: message.at)]
+                if let card = message.card { entry["card"] = card }
+                if let exchange = message.exchangeID { entry["exchange"] = exchange }
+                if let run = message.runID { entry["run"] = run }
+                return entry
+            }
             reply(identifier, ok: true, result: Array(messages), error: nil)
         case "groupDelete":
             guard let id = command["id"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs id."); return }
@@ -310,9 +318,10 @@ final class ClaudiaControlInbox {
             reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)
         case "botsState":
             let store = BotsStore.shared
-            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder,
+            let runs = store.t3Runs.map { ["id": $0.id, "title": $0.title, "phase": $0.phase, "folder": $0.folder, "harness": $0.harness ?? "t3", "origin": $0.origin ?? NSNull(), "chat": $0.continuedChat ?? NSNull(), "session": $0.sessionID ?? NSNull(),
                                            "branch": $0.branch ?? NSNull(), "pullRequest": $0.pullRequest ?? NSNull()] as [String: Any] }
-            reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "runs": runs,
+            reply(identifier, ok: true, result: ["replying": Array(store.replying.keys), "replyingIn": store.replyingIn, "runs": runs, "exchanges": store.liveExchanges.map { ["id": $0.key, "from": $0.value.senderID, "to": $0.value.targetID, "room": $0.value.room, "replying": $0.value.isReplying] as [String: Any] },
+                                                 "threads": store.conversations.keys.filter(BotDMThread.isThread),
                                                  "bots": store.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model] },
                                                  "groups": store.groups.map { ["id": $0.id, "name": $0.name, "head": $0.headID ?? NSNull(),
                                                                                "members": $0.memberIDs] as [String: Any] }],

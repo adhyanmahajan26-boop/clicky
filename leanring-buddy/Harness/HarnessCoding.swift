@@ -34,16 +34,27 @@ enum HarnessCoding {
     /// for this run and may not be watching: Claude accepts edits, Codex writes the workspace and asks for
     /// anything beyond it, Cursor/OpenCode auto-approve, Grok and Gemini accept edits.
     /// `gitFolder`: the repo's own .git, which sits outside a worktree. Codex's sandbox has to be able to write there, or it can't commit.
-    /// `continues`: picks up the last conversation in that folder, for a follow-up after the terminal has gone.
-    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil, continues: Bool = false) -> [String] {
+    /// `resume`: carries on that exact chat. Every harness's own flag, checked with its --help.
+    /// `continues`: picks up the last conversation in that folder: only for an old run whose session was never recorded.
+    /// `newSessionID`: Claude Code can be told a new session's id up front, so a follow-up can name it.
+    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil, continues: Bool = false, resume: String? = nil, newSessionID: String? = nil) -> [String] {
         var args: [String] = []
-        if continues {
+        if let resume {
+            switch harness {
+            case "claude", "cursor", "gemini", "grok": args += ["--resume", resume]
+            case "codex": args += ["resume", resume]
+            case "opencode": args += ["--session", resume]
+            default: break
+            }
+        } else if continues {
             switch harness {
             case "claude", "cursor", "grok": args += ["--continue"]
             case "codex": args += ["resume", "--last"]
             case "gemini": args += ["--resume", "latest"]
             default: break
             }
+        } else if harness == "claude", let newSessionID {
+            args += ["--session-id", newSessionID]
         }
         switch harness {
         case "claude":
@@ -73,35 +84,48 @@ enum HarnessCoding {
         return args
     }
 
-    /// The headless (no tmux) command: the prompt is part of it.
-    static func headlessArguments(harness: String, model: String?, effort: String?, folder: String, prompt: String, outFile: String) -> [String] {
+    /// The headless (no tmux) command: the prompt is part of it. `resume`: carries on that exact chat.
+    static func headlessArguments(harness: String, model: String?, effort: String?, folder: String, prompt: String, outFile: String, resume: String? = nil) -> [String] {
         var args: [String] = []
         switch harness {
         case "claude":
             args = ["-p", "--output-format", "json", "--permission-mode", "auto"]
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             args += ["--", prompt]
         case "codex":
-            args = ["exec", "--json", "--skip-git-repo-check", "-C", folder]
-            if let model { args += ["-m", model] }
-            if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
-            args += ["-c", "check_for_update_on_startup=false", "-s", "workspace-write", "-o", outFile, "--", prompt]
+            // `exec resume` has no -C or -s: the folder is the process's, the sandbox a config override.
+            if let resume {
+                args = ["exec", "resume", "--json", "--skip-git-repo-check"]
+                if let model { args += ["-m", model] }
+                if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+                args += ["-c", "check_for_update_on_startup=false", "-c", "sandbox_mode=\"workspace-write\"", "-o", outFile, "--", resume, prompt]
+            } else {
+                args = ["exec", "--json", "--skip-git-repo-check", "-C", folder]
+                if let model { args += ["-m", model] }
+                if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+                args += ["-c", "check_for_update_on_startup=false", "-s", "workspace-write", "-o", outFile, "--", prompt]
+            }
         case "cursor":
             args = ["-p", "--output-format", "text", "--force", "--trust", "--workspace", folder]
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["--model", model] }
             args += [prompt]
         case "opencode":
             args = ["run", "--format", "json", "--dir", folder]
+            if let resume { args += ["--session", resume] }
             if let model { args += ["-m", model] }
             if let effort { args += ["--variant", effort] }
             args += [prompt]
         case "grok":
             args = ["-p", prompt, "--output-format", "streaming-messages-json", "--permission-mode", "auto"]
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["-m", model] }
             if let effort { args += ["--reasoning-effort", effort] }
         case "gemini":
             args = ["-p", prompt, "--output-format", "json", "--approval-mode", "auto_edit"]
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["-m", model] }
         default: break
         }
@@ -191,6 +215,9 @@ enum HarnessCoding {
         run.model = model ?? HarnessCatalog.label(harness)
         run.effort = effort ?? "default"
         run.prompt = prompt
+        // Claude Code takes its session's id up front. The others say what they made afterwards (HarnessChats.session).
+        let newSessionID = harness == "claude" ? UUID().uuidString.lowercased() : nil
+        run.sessionID = newSessionID
         var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
         if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
@@ -204,12 +231,12 @@ enum HarnessCoding {
             let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
             let command = (["env"] + unset + [executable.path] +
-                           interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path, gitFolder: gitFolder)).map(quoted).joined(separator: " ")
+                           interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path, gitFolder: gitFolder, newSessionID: newSessionID)).map(quoted).joined(separator: " ")
             try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", workdir.path, "-x", "180", "-y", "50", command])
             run.id = "tmux:\(session)"
             try await deliver(message, to: session, tmux: tmux)
             PaneWatch.reset(session)
-        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder) {
+        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder, newSessionID: newSessionID) {
             run.id = terminal.id
             await deliver(message, to: terminal, isFirstPrompt: true)
             PaneWatch.reset(terminal.id)
@@ -217,6 +244,41 @@ enum HarnessCoding {
         } else {
             run.id = "headless:\(UUID().uuidString.lowercased())"
             startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: workdir, prompt: message)
+        }
+        return run
+    }
+
+    /// Carries on a chat this harness already has, in its own folder and terminal. `run` already says which folder and chat.
+    static func continueChat(_ chatID: String, run original: T3Run, harness: String, message: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+        guard let executable = HarnessCatalog.executable(for: harness) else {
+            throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so that chat can't carry on here.")
+        }
+        var run = original
+        let isCodingTarget = harness == HarnessPrefs.codingTarget
+        // Its own model carries on with it unless one was asked for: a resumed chat doesn't need another.
+        let model = modelChoice ?? (isCodingTarget ? HarnessPrefs.codingModel : nil)
+        let effort = effortChoice ?? (isCodingTarget ? HarnessPrefs.codingEffort : nil)
+        let folder = URL(fileURLWithPath: run.folder, isDirectory: true)
+        run.harness = harness
+        run.model = model ?? HarnessCatalog.label(harness)
+        run.effort = effort ?? "default"
+        if useTmux, let tmux, HarnessCatalog.apiKeyEnvironment(for: harness).isEmpty {
+            let session = "theo-\(BotsT3.slug(run.title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
+            let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
+            let command = (["env"] + unset + [executable.path] +
+                           interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, resume: chatID)).map(quoted).joined(separator: " ")
+            try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", folder.path, "-x", "180", "-y", "50", command])
+            run.id = "tmux:\(session)"
+            try await deliver(message, to: session, tmux: tmux)
+            PaneWatch.reset(session)
+        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: nil, resume: chatID) {
+            run.id = terminal.id
+            await deliver(message, to: terminal, isFirstPrompt: true)
+            PaneWatch.reset(terminal.id)
+            PaneWatch.delivered(terminal.id)
+        } else {
+            run.id = "headless:\(UUID().uuidString.lowercased())"
+            startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, prompt: message, resume: chatID)
         }
         return run
     }
@@ -239,9 +301,9 @@ enum HarnessCoding {
     // MARK: In-app terminal
 
     @MainActor
-    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) async -> TerminalSession? {
+    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?, resume: String? = nil, newSessionID: String? = nil) async -> TerminalSession? {
         let id = "term:\(UUID().uuidString.lowercased())"
-        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder)
+        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, resume: resume, newSessionID: newSessionID)
         // No self-updates mid-run: OpenCode's update dialog swallowed the prompt.
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
@@ -252,12 +314,12 @@ enum HarnessCoding {
 
     /// A fresh terminal under an existing run's id.
     @MainActor
-    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) -> TerminalSession? {
+    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?, resume: String?) -> TerminalSession? {
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
-                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, continues: true),
+                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, continues: resume == nil, resume: resume),
                                              environment: environment, workingDirectory: folder.path)
     }
 
@@ -439,7 +501,10 @@ enum HarnessCoding {
             let model = run.model == HarnessCatalog.label(harness) ? (harness == "codex" ? codexPlanModel() : nil) : run.model
             let effort = run.effort == "default" ? nil : run.effort
             let gitFolder = run.repo.map { URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent(".git").path }
-            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder) else {
+            // That run's own session, by id. Only a run from before sessions were recorded falls back on the newest in the folder.
+            var session = run.sessionID
+            if session == nil { session = await HarnessChats.session(startedFor: run) }
+            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder, resume: session) else {
                 throw BotsT3Error.failed("The \(HarnessCatalog.label(harness)) terminal couldn't start.")
             }
             if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true)) {
@@ -810,7 +875,7 @@ enum HarnessCoding {
         runsFolder.appendingPathComponent(id.replacingOccurrences(of: "headless:", with: "") + ".json")
     }
 
-    private static func startHeadless(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, prompt: String) {
+    private static func startHeadless(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, prompt: String, resume: String? = nil) {
         activeLock.withLock { _ = active.insert(id) }
         let out = runsFolder.appendingPathComponent(id.replacingOccurrences(of: "headless:", with: "") + ".out")
         let reply = out.appendingPathExtension("reply")
@@ -818,7 +883,7 @@ enum HarnessCoding {
         DispatchQueue.global(qos: .utility).async {
             let process = Process()
             process.executableURL = executable
-            process.arguments = headlessArguments(harness: harness, model: model, effort: effort, folder: folder.path, prompt: prompt, outFile: reply.path)
+            process.arguments = headlessArguments(harness: harness, model: model, effort: effort, folder: folder.path, prompt: prompt, outFile: reply.path, resume: resume)
             process.currentDirectoryURL = folder
             var environment = HarnessCatalog.childEnvironment()
             environment["PWD"] = folder.path

@@ -55,6 +55,11 @@ public enum CodingIntent {
             || words.range(of: #"(?i)\b"# + things + #"\b.{0,30}\b(cancel|stop|kill|abort)\b"#, options: .regularExpression) != nil
     }
 
+    /// "Carry on that chat", "continue the earlier thread", "pick up where the agent left off": earlier harness work, not a new run.
+    public static func asksToContinueChat(_ text: String) -> Bool {
+        normalized(text).range(of: #"(?i)\b(continue|carry on|resume|pick up|go on with|keep going)\b.{0,50}\b(chat|thread|session|conversation|run|where|left off|earlier|existing|previous|last)\b"#, options: .regularExpression) != nil
+    }
+
     /// An idea or a build, which the group talks through before anyone acts on it.
     public static func wantsDiscussion(_ text: String) -> Bool {
         normalized(text).range(of: #"(?i)\b(idea|plan|critique|discuss|what do you think|build|make|create|website|app|game|feature|design|prompt)\b"#, options: .regularExpression) != nil
@@ -113,6 +118,15 @@ public enum ProjectWords {
 
     public static func asksToWork(_ text: String) -> Bool {
         CodingIntent.normalized(text).range(of: #"(?i)\b(change|changes|fix|update|edit|add|improve|continue|work|modify|redo|build|make)\b|बदल|ठीक"#, options: .regularExpression) != nil
+    }
+
+    /// "Continue: <chat id or title>" on a line of its own, next to a ```prompt block. An id can hold anything, colons too.
+    public static func chatToContinue(in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?im)^\s*\*{0,2}Continue:\*{0,2}\s*(.+?)\s*$"#),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let value = text[range].trimmingCharacters(in: CharacterSet(charactersIn: "`\"'* "))
+        return value.isEmpty ? nil : value
     }
 
     /// What a bot wrote, inline or on its own line: "Repo: ~/Projects/foo", "New folder: foo".

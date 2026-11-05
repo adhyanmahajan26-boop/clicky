@@ -60,7 +60,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
 
     var isProjectHandler: Bool { (category ?? BotImport.defaultCategory(id)) == "project" }
 
-    var memoryPath: String { "~/.t3/bots/\(id)/memory.md" }
+    /// Its memory file. Theo's own folder, never T3 Code's (~/.t3 belongs to T3 Code).
+    var memoryPath: String { BotMemory.file(botID: id).path }
 
     var modelLabel: String { Self.label(for: model) }
 
@@ -91,7 +92,10 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     /// A T3 Code run this message reports on (its result card shows under it).
     var runID: String?
     /// "settings": the bot's settings card shows under it. "delegation:<id>": this message is that job's card.
+    /// "dm:<exchange>:<bot>": a private exchange's card (BotDMCard).
     var card: String?
+    /// In a private thread: the exchange this message belongs to.
+    var exchangeID: String?
 }
 
 /// A group of bots with a head who leads its group chat: the head hands the work out with @Name and
@@ -123,6 +127,9 @@ struct BotConversationRecord: Codable {
     var seen: [String: Int] = [:]
     /// When it was last cleared, so a clear on one Mac sticks on the other.
     var clearedAt: Date?
+    /// The newest message each bot's engine session on this Mac has seen. What came after it gets told to the bot (it may
+    /// have happened on the other Mac). Stays on this Mac, like the sessions.
+    var heard: [String: String]?
 }
 
 @MainActor
@@ -133,6 +140,10 @@ final class BotsStore: ObservableObject {
     @Published private(set) var conversations: [String: BotConversationRecord] = [:]
     /// Bots with a reply in progress, and the reply text so far ("" while thinking).
     @Published private(set) var replying: [String: String] = [:]
+    /// The chat each reply in progress is being written in. A private message or a group chat never shows as typing in the bot's own chat.
+    @Published private(set) var replyingIn: [String: String] = [:]
+    /// Private exchanges going on right now, by exchange id.
+    @Published var liveExchanges: [String: BotDMLive] = [:]
     @Published private(set) var groups: [BotGroup] = []
     /// Scheduled jobs, like Grok Bot's routines.
     @Published private(set) var routines: [BotRoutine] = []
@@ -157,12 +168,22 @@ final class BotsStore: ObservableObject {
         var reportsTo: ((String) -> Void)?
     }
     private var groupBriefs: [String: GroupRunBrief] = [:]
-    /// Who a bot is answering, or has just heard back from, in a private exchange.
-    var directPartner: [String: String] = [:]
-    /// Private messages between bots since the owner last spoke, so they can't go on forever.
-    var directMessagesSent = 0
-    /// The folder list from the Mac where coding runs.
-    var peerProjects: [String] = []
+    /// How many private messages the bots have sent since the owner last spoke, by the chat the owner spoke in, so they can't go on forever.
+    var directMessageBudgets: [String: BotDMBudget] = [:]
+    /// Counts the owner's messages per chat, so an exchange belongs to one of them.
+    var ownerTurns: [String: Int] = [:]
+    /// Exchanges still open since the owner last spoke, by chat, sender and target, so another message back and forth continues the same card.
+    var openExchanges: [String: BotDMExchange] = [:]
+    /// Chats where the owner pressed Stop on the private messages going on.
+    var stoppedExchangeRooms: Set<String> = []
+    /// What the other Mac has: its folders, harnesses and screens.
+    var peerDevice: DeviceSnapshot?
+    /// Chats whose turn runs here while the owner types on the other Mac: where its coding goes, and why.
+    var forwardedTurns: [String: ForwardedTurn] = [:]
+    /// Bots whose turn is running on the other Mac right now.
+    var turnsOnOtherMac: Set<String> = []
+    /// The chat each private thread's newest exchange started from, for an answer that comes later.
+    var exchangeRooms: [String: (senderID: String, room: String, context: BotDMContext)] = [:]
     /// Team work already passed on, so the same brief doesn't go with every message.
     var passedOnWork: Set<String> = []
     /// Research waiting for the one in progress to end, so one job doesn't kill another.
@@ -171,6 +192,8 @@ final class BotsStore: ObservableObject {
     var screenTurns: [String: Int] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
+    /// Who speaks next in each group chat with a round going on.
+    private var groupRounds: [String: GroupRound] = [:]
     /// Theo Link: when things changed, and while the other Mac's copy is being applied.
     private var linkBotStamps = LinkMerge.Stamps()
     private var linkGroupStamps = LinkMerge.Stamps()
@@ -179,8 +202,6 @@ final class BotsStore: ObservableObject {
     private var linkSavedBots: [NativeBot] = []
     private var linkSavedGroups: [BotGroup] = []
     private var linkSavedLayout = BotsLayout()
-    /// Messages from the other Mac this Mac's engine session hasn't seen, by chat.
-    private var linkUnheard: [String: [BotChatMessage]] = [:]
     /// The conversation on screen, which collects no unread count.
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
     private var routineTimer: Timer?
@@ -195,11 +216,17 @@ final class BotsStore: ObservableObject {
             .appendingPathComponent("Theo/Bots", isDirectory: true)
         Self.archiveForFreshStart(folder)
         try? FileManager.default.createDirectory(at: folder.appendingPathComponent("chats"), withIntermediateDirectories: true)
+        BotMemory.migrateOnce()
+        DeviceRoles.migrateOnce()
         bots = loadBots()
         groups = loadGroups()
         writeGroups()
         for id in groups.filter { $0.headID != nil }.map(\.roomID) + bots.map(\.id) + [Self.clickyID] {
             conversations[id] = loadConversation(id)
+        }
+        // Private threads between bots: each one is a chat file of its own.
+        for file in (try? FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent("chats").path)) ?? [] where file.hasSuffix(".json") {
+            if let thread = BotDMThread.thread(fromFileName: String(file.dropLast(".json".count))) { conversations[thread] = loadConversation(thread) }
         }
         if let data = try? Data(contentsOf: runsFile), let runs = try? Self.decoder.decode([T3Run].self, from: data) {
             t3Runs = runs
@@ -212,6 +239,8 @@ final class BotsStore: ObservableObject {
         loadDelegations()
         backfillTeamWork()
         loadLinkStamps()
+        // Which engines can run on this Mac, for the bots' prompts and for the other Mac.
+        Task { @MainActor in HarnessCenter.shared.refresh() }
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -225,8 +254,17 @@ final class BotsStore: ObservableObject {
         writeLayout()
     }
 
+    /// A turn elsewhere has ended: nobody here is writing any more.
+    func endTurnHere(_ botID: String) {
+        replying[botID] = nil
+        replyingIn[botID] = nil
+    }
+
     /// Lights a team bot up, or down, for work that doesn't run through a reply of its own.
-    func setReplying(_ text: String?, _ botID: String) { replying[botID] = text }
+    func setReplying(_ text: String?, _ botID: String) {
+        replying[botID] = text
+        replyingIn[botID] = text == nil ? nil : botID
+    }
 
     /// Once, on the first launch of this version: the old bots, chats and groups move to
     /// Bots-archive-<date> and Theo starts fresh with only Theo and Clicky, for Addy to set up.
@@ -309,6 +347,12 @@ final class BotsStore: ObservableObject {
         conversations[id]?.sessions.values.forEach(APIChat.History.forget)
         conversations[id] = nil
         try? FileManager.default.removeItem(at: chatFile(id))
+        // Its private threads go with it.
+        for thread in privateThreads(of: id) {
+            conversations[thread.id]?.sessions.values.forEach(APIChat.History.forget)
+            conversations[thread.id] = nil
+            try? FileManager.default.removeItem(at: chatFile(thread.id))
+        }
         writeBots()
         writeGroups()
         forget(item: "bot:\(id)")
@@ -362,19 +406,31 @@ final class BotsStore: ObservableObject {
     /// attached file doesn't start an agent.
     func send(_ text: String, command: String? = nil, to botID: String, messageID: String? = nil) {
         if botID == Self.clickyID { return askClicky(text) }
-        if messageID == nil, forwardToWorkMac("botSay", room: botID, target: botID, text: text, command: command) { return }
-        guard let bot = bot(botID), replying[botID] == nil else { return }
+        if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command) { return }
+        guard let bot = bot(botID) else { return }
+        // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now and goes in when it's free.
+        if replying[botID] != nil {
+            let id = messageID ?? UUID().uuidString
+            if !conversation(botID).messages.contains(where: { $0.id == id }) { post(BotChatMessage(id: id, author: "user", text: text), to: botID) }
+            Task { [weak self] in
+                while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+                self?.send(text, command: command, to: botID, messageID: id)
+            }
+            return
+        }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
             post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
             return
         }
         var record = conversation(botID)
-        if !record.messages.contains(where: { $0.id == messageID }) {
-            record.messages.append(BotChatMessage(id: messageID ?? UUID().uuidString, author: "user", text: text))
+        let ownerMessageID = messageID ?? UUID().uuidString
+        if !record.messages.contains(where: { $0.id == ownerMessageID }) {
+            record.messages.append(BotChatMessage(id: ownerMessageID, author: "user", text: text))
         }
         conversations[botID] = record
         writeConversation(botID)
+        HarnessCenter.shared.refresh()
         if BotsStore.isCodingCommand(command ?? text) {
             // "@code …" goes straight to a coding agent, in any chat: a change for this chat's latest run,
             // or a new run when there's none or the message names a folder.
@@ -405,22 +461,43 @@ final class BotsStore: ObservableObject {
             answerWithSettings(intent, bot: bot)
             return
         }
+        // Carrying on earlier work: the bot gets that folder's chats to choose from, which takes a moment to list.
+        if bot.owner == nil, CodingIntent.asksToContinueChat(command ?? text) {
+            replying[botID] = ""
+            replyingIn[botID] = botID
+            Task { [weak self] in
+                let chats = await self?.recentChatsNote(for: command ?? text, room: botID)
+                self?.replying[botID] = nil
+                self?.replyingIn[botID] = nil
+                self?.startOwnTurn(bot, text: text, command: command, ownerMessageID: ownerMessageID, cancelNote: cancelNote, chatsNote: chats)
+            }
+            return
+        }
+        startOwnTurn(bot, text: text, command: command, ownerMessageID: ownerMessageID, cancelNote: cancelNote, chatsNote: nil)
+    }
+
+    /// A bot's turn in its own chat: everything it needs to know goes on top of the owner's words.
+    private func startOwnTurn(_ bot: NativeBot, text: String, command: String?, ownerMessageID: String, cancelNote: String?, chatsNote: String?) {
+        let botID = bot.id
+        let record = conversation(botID)
         let firstTurn = record.sessions[botID] == nil
         var prompt = firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text
         if !firstTurn && BotPrompts.asksForSchedule(text) { prompt += "\n\n(\(BotPrompts.routineHowTo))" }
         if !firstTurn && BotsStore.isAboutExistingCode(text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
-        prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + linkCatchUp(botID) + prompt
+        if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
+        if let chatsNote { prompt += "\n\n(\(chatsNote))" }
+        // The owner tagged a bot: in this chat that only means "bring them in", which this bot does itself.
+        let tagged = BotPrompts.mentioned(in: command ?? text, bots: reachable(from: bot))
+        if !tagged.isEmpty { prompt += "\n\n(Addy tagged \(tagged.map(\.name).joined(separator: " and ")): message them with a [TELL:] line.)" }
+        prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + catchUp(botID, bot: bot, before: ownerMessageID) + prompt
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
-        if bot.owner == nil { prompt = "(\(projectsNote))\n\n" + prompt }
-        if bot.owner == nil, !bot.primary { prompt = "(\(directMessageNote(for: bot)))\n\n" + prompt }
-        directMessagesSent = 0
-        if CodingHarnessWords.asksToSendToCode(command ?? text) { prompt += "\n\n(\(BotPrompts.codingHowTo))" }
+        if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.reachNote(for: bot)))\n\n" + prompt }
+        if bot.owner == nil { prompt = BotPrompts.awarenessNote(for: bot, room: botID) + prompt }
+        ownerSpoke(in: botID)
         screenTurns[botID] = 0
-        reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { [weak self] answer in
-            if let answer { self?.relayMentions(from: bot, answer: answer, in: botID, hop: 0) }
-        }
+        reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
     }
 
     /// "Switch to haiku", "what model are you on": no reply to read, a card to use. Applies what the message names first.
@@ -465,7 +542,7 @@ final class BotsStore: ObservableObject {
     func sendFollowup(_ text: String, on run: T3Run) {
         let room = run.room ?? Self.teamID
         post(BotChatMessage(author: "user", text: text), to: room)
-        sendToCoder(text, room: room)
+        sendToCoder(text, room: room, runID: run.id)
     }
 
     /// Posts to the Project room.
@@ -474,9 +551,9 @@ final class BotsStore: ObservableObject {
         else if let primary { send(text, to: primary.id) }
     }
 
-    /// On the other Mac, bots run on the Mac with the work screen, so there's one of each with one memory and one set of
-    /// sign-ins. The message shows here right away and the answer comes back through the chat. With that Mac away they run here.
-    private func forwardToWorkMac(_ action: String, room: String, target: String, text: String, command: String?) -> Bool {
+    /// Settings › Devices can put bots on one Mac by hand. Then what's typed on the other goes there: it shows here right away and the
+    /// answer comes back through the chat. By default a message is answered on the Mac it was typed on, and this does nothing.
+    private func forwardToBotsMac(_ action: String, room: String, target: String, text: String, command: String?) -> Bool {
         let message = BotChatMessage(author: "user", text: text)
         let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id]
         switch DeviceRoles.route(.bots) {
@@ -492,17 +569,19 @@ final class BotsStore: ObservableObject {
         return true
     }
 
-    /// Posts to a group chat; tagged bots answer, or the head when nobody is tagged.
+    /// Posts to a group chat. The head reads it first, or the bots tagged when someone is; then they take turns (`startRound`).
     func sendToGroup(_ text: String, command: String? = nil, groupID: String, messageID: String? = nil) {
         guard let group = group(groupID), let head = head(of: group) else { return }
         let room = group.roomID
-        if messageID == nil, forwardToWorkMac("groupSay", room: room, target: groupID, text: text, command: command) { return }
+        if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command) { return }
         var record = conversation(room)
-        if !record.messages.contains(where: { $0.id == messageID }) {
-            record.messages.append(BotChatMessage(id: messageID ?? UUID().uuidString, author: "user", text: text))
+        let ownerMessageID = messageID ?? UUID().uuidString
+        if !record.messages.contains(where: { $0.id == ownerMessageID }) {
+            record.messages.append(BotChatMessage(id: ownerMessageID, author: "user", text: text))
         }
         conversations[room] = record
         writeConversation(room)
+        HarnessCenter.shared.refresh()
         if BotsStore.isCodingCommand(command ?? text) {
             runCommand(text, room: room)
             return
@@ -512,19 +591,21 @@ final class BotsStore: ObservableObject {
             return
         }
         if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
-        directMessagesSent = 0
-        let tagged = BotPrompts.mentioned(in: text, bots: members(of: group))
+        ownerSpoke(in: room)
+        let tagged = BotMentions.ordered(in: text, bots: members(of: group).map { ($0.id, $0.name) })
         var note: String?
-        if tagged.isEmpty, CodingIntent.wantsDiscussion(command ?? text), groupBriefs[room] == nil {
+        if groupBriefs[room] != nil {
+            // More from the owner in the middle of a discussion: the head takes it in and plans again.
+            let earlierWords = groupBriefs[room]?.ownerWords ?? ""
+            groupBriefs[room]?.stage = .plan
+            groupBriefs[room]?.ownerWords = [text, earlierWords].joined(separator: "\n")
+            note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
+        } else if tagged.isEmpty, CodingIntent.wantsDiscussion(command ?? text) {
             groupBriefs[room] = groupRunBrief(ownerWords: text, message: text, reportsTo: nil)
             note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         }
-        // A bot busy in another chat answers when it's free: nothing said to a group goes unanswered.
-        let targets = tagged.isEmpty ? [head] : tagged
-        Task { [weak self] in
-            while let self, targets.contains(where: { self.replying[$0.id] != nil }) { try? await Task.sleep(nanoseconds: 500_000_000) }
-            self?.askTeam(targets, chain: 0, group: group, note: note)
-        }
+        let first = groupBriefs[room] != nil ? [head.id] : (tagged.isEmpty ? [head.id] : tagged)
+        startRound(in: group, first: first, openingNote: note)
     }
 
     private func otherMembers(of group: BotGroup) -> [NativeBot] { members(of: group).filter { $0.id != group.headID && $0.isOn } }
@@ -551,13 +632,17 @@ final class BotsStore: ObservableObject {
     }
 
     /// Which folder a run goes in, from the owner's words first and then what a bot wrote when they asked about a project.
-    func projectChoice(ownerWords: String?, answer: String?) -> (repo: URL?, newFolder: String?) {
+    /// `macName`: the Mac the run will go on (this one by default). A folder only counts if it's on that Mac.
+    func projectChoice(ownerWords: String?, answer: String?, macName: String? = nil) -> (repo: URL?, newFolder: String?) {
         let owner = ownerWords ?? ""
-        let known = knownProjects
-        func project(_ name: String) -> URL { BotsT3.projectsFolder.appendingPathComponent(name, isDirectory: true) }
+        let isHere = macName == nil || macName == TheoLink.localName
+        let known = isHere ? BotsT3.projectNames() : (peerDevice?.projects.map(\.name) ?? [])
+        let projectsRoot = isHere ? BotsT3.projectsFolder : (peerDevice.map { URL(fileURLWithPath: $0.projectsFolder, isDirectory: true) } ?? BotsT3.projectsFolder)
+        func project(_ name: String) -> URL { projectsRoot.appendingPathComponent(name, isDirectory: true) }
         // Their newest words first: a folder made a moment ago doesn't outrank the project they've just named.
         for said in owner.components(separatedBy: "\n") {
-            if let path = BotsT3.targetRepo(answer: "", pitch: said, mustExist: TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired) { return (path, nil) }
+            // A path they typed is checked on the Mac that has it.
+            if let path = BotsT3.targetRepo(answer: "", pitch: said, mustExist: isHere) { return (path, nil) }
             if let name = ProjectWords.namedProject(in: said, among: known) { return (project(name), nil) }
             if let name = ProjectWords.newFolderName(in: said) {
                 // Already made: "build it in there", not another one beside it.
@@ -574,37 +659,26 @@ final class BotsStore: ObservableObject {
         return (nil, nil)
     }
 
-    /// The owner's project folders: this Mac's, or what the work Mac last said.
-    var knownProjects: [String] { TheoLink.shared.isPaired && !TheoLink.shared.isWorkMac ? peerProjects : BotsT3.projectNames() }
+    /// The project folders this chat's coding goes to: on this Mac, or the other when this turn runs here for it.
+    var knownProjects: [String] { BotsT3.projectNames() }
 
     /// For a bot's turn: which folders there are and how to choose one.
     var projectsNote: String {
         let names = knownProjects.prefix(40).joined(separator: ", ")
-        return "Addy's project folders in ~/Projects: \(names). If they name one, however it's spelled, write \"Repo: ~/Projects/<that exact name>\" next to the prompt, and the run works in it. If they ask for a new folder with a name, write \"New folder: <name>\". Otherwise a new folder is made from the project's name."
+        return "Addy's project folders in ~/Projects on this Mac: \(names). If they name one, however it's spelled, write \"Repo: ~/Projects/<that exact name>\" next to the prompt, and the run works in it. If they ask for a new folder with a name, write \"New folder: <name>\". Otherwise a new folder is made from the project's name."
     }
 
-    /// Makes a folder the owner asked for, as a project of its own, on the Mac where coding runs.
+    /// Makes a folder the owner asked for, as a project of its own, on the Mac they typed it on.
     func makeProjectFolder(_ name: String, room: String) {
-        guard TheoLink.shared.isWorkMac || !TheoLink.shared.isPaired else {
-            if !TheoLink.shared.requestWhenConnected("mkdir", ["name": name, "room": room]), let speaker = speaker(for: room) {
-                post(BotChatMessage(author: speaker.id, text: "I'll make the \(name) folder as soon as your Mac Studio is back."), to: room)
-            }
-            return
-        }
         Task { [weak self] in
             guard let self, let speaker = self.speaker(for: room) else { return }
-            let exact = BotsT3.projectsFolder.appendingPathComponent(BotsT3.slug(name), isDirectory: true)
-            if FileManager.default.fileExists(atPath: exact.path) {
-                self.post(BotChatMessage(author: speaker.id, text: "You already have that folder: `~/Projects/\(exact.lastPathComponent)`. Tell me what to change in it."), to: room)
-                return
-            }
-            do {
-                let folder = try BotsT3.newProjectFolder(title: name)
-                try await BotsT3.shell(BotsT3.git, ["init", "-q", "-b", "main"], in: folder)
-                try await BotsT3.startEmpty(in: folder)
-                self.post(BotChatMessage(author: speaker.id, text: "Made `~/Projects/\(folder.lastPathComponent)`. Tell me what to build in it."), to: room)
-            } catch {
-                self.post(BotChatMessage(author: speaker.id, text: "Couldn't make that folder: \(error.localizedDescription)"), to: room)
+            switch await BotsT3.makeProject(named: name) {
+            case .made(let folder):
+                self.post(BotChatMessage(author: speaker.id, text: "Made `~/Projects/\(folder.lastPathComponent)` on this \(TheoLink.shortName(TheoLink.localName)). Tell me what to build in it."), to: room)
+            case .alreadyThere(let folder):
+                self.post(BotChatMessage(author: speaker.id, text: "You already have that folder on this \(TheoLink.shortName(TheoLink.localName)): `~/Projects/\(folder.lastPathComponent)`. Tell me what to change in it."), to: room)
+            case .failed(let problem):
+                self.post(BotChatMessage(author: speaker.id, text: "Couldn't make that folder: \(problem)"), to: room)
             }
         }
     }
@@ -636,36 +710,7 @@ final class BotsStore: ObservableObject {
         } else {
             groupWaiters[room] = then
         }
-        Task { [weak self] in
-            while self?.replying[head.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-            self?.askTeam([head], chain: 0, group: group, note: note)
-        }
-    }
-
-    /// Where a group's discussion goes next, once one of them has answered. True when it was part of one.
-    private func advanceBrief(_ room: String, group: BotGroup, head: NativeBot, isHead: Bool, answer: String?, chain: Int) -> Bool {
-        guard var brief = groupBriefs[room] else { return false }
-        let others = otherMembers(of: group)
-        if isHead {
-            guard let answer else {
-                groupBriefs[room] = nil
-                finishBrief(brief, group: group, head: head, answer: "\(head.name) stopped before answering.", hasFailed: true)
-                return true
-            }
-            if brief.stage == .merge || others.isEmpty {
-                groupBriefs[room] = nil
-                finishBrief(brief, group: group, head: head, answer: answer, hasFailed: false)
-            } else {
-                brief.stage = .critique
-                groupBriefs[room] = brief
-                askTeam(others, chain: chain + 1, group: group, note: BotPrompts.critiqueNote)
-            }
-        } else if others.allSatisfy({ replying[$0.id] == nil }) {
-            brief.stage = .merge
-            groupBriefs[room] = brief
-            askTeam([head], chain: chain + 1, group: group, note: BotPrompts.mergeNote)
-        }
-        return true
+        startRound(in: group, first: [head.id], openingNote: note)
     }
 
     /// The discussion is over: its outcome goes to Theo's chat, and a final prompt the owner asked for starts its run.
@@ -693,88 +738,234 @@ final class BotsStore: ObservableObject {
         groupWaiters.removeValue(forKey: room)?(answer)
     }
 
-    /// How many bot-to-bot hand-offs one message of yours can set off.
-    private static let maxChain = 8
+    // MARK: Group rounds
 
-    private func askTeam(_ targets: [NativeBot], chain: Int, group: BotGroup, note: String? = nil) {
+    /// One group chat's round: who speaks next, and what the speakers are told. Members answer one at a time and each reads everything
+    /// said so far; then the head writes one wrap-up and it stops.
+    private struct GroupRound {
+        var id = UUID()
+        var groupID: String
+        var plan: GroupTurnPlan
+        var openingNote: String?
+        /// The owner spoke again: once the bot writing now has finished, these go first, in a new round.
+        var nextFirst: [String]?
+        var nextNote: String?
+    }
+
+    /// A short beat between turns, so one message lands before the next bot starts writing.
+    private static let groupTurnBeatNanoseconds: UInt64 = 1_000_000_000
+    /// A member busy elsewhere for this long sits the round out. The head is waited for.
+    private static let memberWaitSeconds: TimeInterval = 180
+
+    /// Starts a round in a group chat. One already going stops after whoever's writing now, and this one takes over.
+    private func startRound(in group: BotGroup, first: [String], openingNote: String?) {
+        let room = group.roomID
+        if groupRounds[room] != nil {
+            groupRounds[room]?.plan.finish()
+            groupRounds[room]?.nextFirst = first
+            groupRounds[room]?.nextNote = openingNote
+            return
+        }
+        guard let headID = group.headID else { return }
+        var plan = GroupTurnPlan(headID: headID, first: first)
+        let step = plan.start()
+        let round = GroupRound(groupID: group.id, plan: plan, openingNote: openingNote)
+        groupRounds[room] = round
+        take(step, room: room, roundID: round.id)
+    }
+
+    /// The next step of a round. Everything that decides who speaks is `GroupTurnPlan`; this only carries it out.
+    private func take(_ step: GroupTurnPlan.Step, room: String, roundID: UUID) {
+        guard let round = groupRounds[room], round.id == roundID, let group = group(round.groupID) else { return }
+        guard case .speak(let botID, let isWrapUp) = step else {
+            let next = round.nextFirst
+            let nextNote = round.nextNote
+            groupRounds[room] = nil
+            if let next { startRound(in: group, first: next, openingNote: nextNote) }
+            return
+        }
+        guard let speaker = bot(botID), speaker.isOn else {
+            // Off or gone: it can't take its turn, so the next one does.
+            advance(from: botID, answer: nil, room: room, roundID: roundID, canHandOut: false)
+            return
+        }
+        Task { [weak self] in
+            // Busy in another chat or a private message: its turn waits, so two never write here at once.
+            let isHead = botID == group.headID
+            let deadline = Date().addingTimeInterval(isHead ? BotRunner.turnLimitSeconds + 60 : Self.memberWaitSeconds)
+            while self?.replying[botID] != nil, Date() < deadline { try? await Task.sleep(nanoseconds: 500_000_000) }
+            guard let self, let current = self.groupRounds[room], current.id == roundID else { return }
+            if self.replying[botID] != nil {
+                self.post(BotChatMessage(author: Self.noteAuthor, text: BotProtocol.busyMemberLine(name: speaker.name)), to: room)
+                self.advance(from: botID, answer: nil, room: room, roundID: roundID, canHandOut: false)
+                return
+            }
+            self.groupTurn(speaker, group: group, isWrapUp: isWrapUp, roundID: roundID)
+        }
+    }
+
+    /// One bot's turn in a round.
+    private func groupTurn(_ speaker: NativeBot, group: BotGroup, isWrapUp: Bool, roundID: UUID) {
         let room = group.roomID
         let team = members(of: group)
-        let headID = group.headID
-        for bot in targets where replying[bot.id] == nil && bot.isOn {
-            let record = conversation(room)
-            let seen = record.seen[bot.id] ?? 0
-            let newMessages = Array(record.messages.dropFirst(seen))
-            var prompt = BotPrompts.teamMessage(bot: bot, team: team, group: group, firstTime: record.sessions[bot.id] == nil,
-                                                newMessages: newMessages)
-            if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
-            if bot.owner == nil, !bot.primary { prompt = "(\(directMessageNote(for: bot)))\n\n" + prompt }
-            if let note { prompt += "\n\n(\(note)) (\(projectsNote))" }
-            var updated = record
-            updated.seen[bot.id] = record.messages.count
-            conversations[room] = updated
-            reply(bot: bot, in: room, prompt: prompt, session: record.sessions[bot.id]) { [weak self] answer in
-                guard let self, chain < Self.maxChain, let group = self.group(group.id), let head = self.head(of: group) else { return }
-                let team = self.members(of: group)
-                let isHead = bot.id == headID
-                if self.advanceBrief(room, group: group, head: head, isHead: isHead, answer: answer, chain: chain) { return }
-                guard let answer else {
-                    // A member that failed or timed out doesn't stall the room: the head merges what's there.
-                    if !isHead, team.allSatisfy({ self.replying[$0.id] == nil }) { self.askTeam([head], chain: chain + 1, group: group) }
-                    if isHead { self.groupAnswered(room, answer: "\(head.name) stopped before answering.") }
-                    return
-                }
-                // Only the head (or a lead/CEO) hands out work; members tagging each other would chat on and on.
-                let canDelegate = isHead || ["lead", "ceo"].contains(bot.authorityLevel)
-                let next = canDelegate ? BotPrompts.mentioned(in: answer, bots: team).filter { $0.id != bot.id && $0.id != head.id } : []
-                if isHead || !next.isEmpty {
-                    // The head hands the work out, and a planner can hand out the parts.
-                    if !next.isEmpty { self.askTeam(next, chain: chain + 1, group: group) }
-                    else { self.groupAnswered(room, answer: answer) }
-                } else if team.allSatisfy({ self.replying[$0.id] == nil }) {
-                    // The last member has answered: the head reads the whole round once and merges it.
-                    self.askTeam([head], chain: chain + 1, group: group)
-                }
+        let head = head(of: group)
+        let isHead = speaker.id == group.headID
+        let brief = groupBriefs[room]
+        let record = conversation(room)
+        let newMessages = BotPrompts.transcriptMessages(in: record, for: speaker)
+        // What this turn is. A build discussion has its own steps; otherwise the head opens, members answer and the head wraps up.
+        var turnNote: String
+        if let brief {
+            switch brief.stage {
+            case .plan where isHead:
+                turnNote = groupRounds[room]?.openingNote ?? BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
+            case .merge where isHead:
+                turnNote = BotPrompts.mergeNote
+            default:
+                turnNote = isHead ? BotPrompts.mergeNote : BotPrompts.critiqueNote + " " + BotProtocol.memberTurnNote(name: speaker.name, headName: head?.name ?? "the head")
+            }
+            turnNote += " (\(projectsNote))"
+        } else if isWrapUp {
+            turnNote = BotProtocol.wrapUpNote(owner: BotPrompts.ownerName)
+        } else if isHead {
+            turnNote = BotProtocol.headOpensNote(owner: BotPrompts.ownerName)
+        } else {
+            turnNote = BotProtocol.memberTurnNote(name: speaker.name, headName: head?.name ?? "the head")
+        }
+        var prompt = BotPrompts.teamMessage(bot: speaker, team: team, group: group, firstTime: record.sessions[speaker.id] == nil, newMessages: newMessages, turnNote: turnNote)
+        if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
+        if speaker.owner == nil, !speaker.primary { prompt = "(\(BotPrompts.reachNote(for: speaker)))\n\n" + prompt }
+        if speaker.owner == nil { prompt = BotPrompts.awarenessNote(for: speaker, room: room) + prompt }
+        var updated = record
+        updated.seen[speaker.id] = record.messages.count
+        conversations[room] = updated
+        reply(bot: speaker, in: room, prompt: prompt, session: record.sessions[speaker.id], handsOnWhenStopped: true) { [weak self] answer in
+            guard let self else { return }
+            // In a build discussion the steps decide who's next. Otherwise anyone can hand something on with @Name, except the wrap-up, which ends it.
+            if self.groupBriefs[room] != nil {
+                self.advanceDiscussion(speaker: speaker, group: group, answer: answer, roundID: roundID)
+            } else {
+                self.advance(from: speaker.id, answer: answer, room: room, roundID: roundID, canHandOut: !isWrapUp)
             }
         }
     }
 
+    /// A normal round: the plan says who's next, after a short beat.
+    private func advance(from botID: String, answer: String?, room: String, roundID: UUID, canHandOut: Bool) {
+        guard var round = groupRounds[room], round.id == roundID, let group = group(round.groupID) else { return }
+        let others = otherMembers(of: group).map(\.id)
+        let mentions = answer.map { BotMentions.ordered(in: $0, bots: members(of: group).map { ($0.id, $0.name) }) } ?? []
+        // A member that failed or timed out doesn't stall the room: the plan just moves on.
+        let step = round.plan.turnEnded(by: botID, mentions: mentions, canHandOut: canHandOut, others: others)
+        groupRounds[room] = round
+        // That was the last word of this round: Theo may be waiting on it.
+        if case .finished = step, round.nextFirst == nil {
+            groupAnswered(room, answer: answer ?? "\(self.bot(botID)?.name ?? "The head") stopped before answering.")
+        }
+        Task { [weak self] in
+            if case .speak = step { try? await Task.sleep(nanoseconds: Self.groupTurnBeatNanoseconds) }
+            self?.take(step, room: room, roundID: roundID)
+        }
+    }
+
+    /// A build discussion: the head plans, the others critique one at a time, the head merges, and the prompt it writes starts the run.
+    private func advanceDiscussion(speaker: NativeBot, group: BotGroup, answer: String?, roundID: UUID) {
+        let room = group.roomID
+        guard var round = groupRounds[room], round.id == roundID, var brief = groupBriefs[room], let head = head(of: group) else { return }
+        let others = otherMembers(of: group)
+        let isHead = speaker.id == group.headID
+        if isHead, answer == nil {
+            groupBriefs[room] = nil
+            finishBrief(brief, group: group, head: head, answer: "\(head.name) stopped before answering.", hasFailed: true)
+            round.plan.finish()
+            groupRounds[room] = round
+            take(.finished, room: room, roundID: roundID)
+            return
+        }
+        if isHead, brief.stage == .merge || others.isEmpty {
+            groupBriefs[room] = nil
+            finishBrief(brief, group: group, head: head, answer: answer ?? "", hasFailed: false)
+            round.plan.finish()
+            groupRounds[room] = round
+            take(.finished, room: room, roundID: roundID)
+            return
+        }
+        // The head's plan brings in everyone; a critique brings in nobody. The last one sends it back to the head to merge.
+        let step = round.plan.turnEnded(by: speaker.id, mentions: isHead ? others.map(\.id) : [], canHandOut: isHead, others: others.map(\.id))
+        brief.stage = round.plan.isWrappingUp ? .merge : .critique
+        groupBriefs[room] = brief
+        groupRounds[room] = round
+        Task { [weak self] in
+            if case .speak = step { try? await Task.sleep(nanoseconds: Self.groupTurnBeatNanoseconds) }
+            self?.take(step, room: room, roundID: roundID)
+        }
+    }
+
     /// Bots whose reply you stopped; their turn ends without handing on.
-    private var stopped: Set<String> = []
+    var stopped: Set<String> = []
 
     /// Stops a bot's reply in progress (and, in the Project room, the hand-offs it would set off).
     func stop(_ botID: String) {
         guard replying[botID] != nil else { return }
         stopped.insert(botID)
         BotProcesses.shared.stop(botID)
+        // Its turn may be on the other Mac.
+        if turnsOnOtherMac.contains(botID) { _ = TheoLink.shared.request("botTurnStop", ["bot": botID]) }
     }
 
-    /// Stops every reply in a group chat.
+    /// Stops all of a group chat at once: whoever's writing, whoever's waiting their turn, and the discussion.
     func stopGroup(_ groupID: String) {
         guard let group = group(groupID) else { return }
-        for bot in members(of: group) where replying[bot.id] != nil { stop(bot.id) }
+        let room = group.roomID
+        groupRounds[room] = nil
+        groupBriefs[room] = nil
+        groupWaiters[room] = nil
+        stopPrivateMessages(in: room)
+        for bot in members(of: group) where replying[bot.id] != nil && replyingIn[bot.id] == room { stop(bot.id) }
+    }
+
+    /// A group chat with a round going on, or a chat with private messages going on: what Stop stops.
+    func isBusy(_ conversationID: String) -> Bool {
+        groupRounds[conversationID] != nil || liveExchanges.values.contains { $0.room == conversationID }
     }
 
     /// `handsOnWhenStopped`: a stopped turn still calls `then`, for a roll-up that is waiting on it.
     /// `fromOwner`: false when Clicky's team set this off: its answer can't start a coding run or a routine by itself.
+    /// `privately`: this turn answers a private message: what it's part of, and who asked.
+    /// `then`: once the turn is over. If it messaged other bots, that's after they've answered and it has carried on, with its last words.
     func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true, mayUseScreen: Bool = false,
-               then: @escaping (String?) -> Void) {
+               privately: BotDMTurn? = nil, then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
         replying[bot.id] = ""
+        replyingIn[bot.id] = conversationID
+        // Its engine can't run on this Mac and the other one can: this one turn goes across, and the chat says so. Never silently.
+        if let across = turnGoesAcross(bot) {
+            runTurnOnOtherMac(bot, across: across, in: conversationID, prompt: prompt, exchangeID: privately?.exchangeID, fromOwner: fromOwner, then: then)
+            return
+        }
         Task { [weak self] in
             var answer: String?
             var newSession = session
             do {
                 let team = self?.bots ?? []
-                let result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team) { text in
+                let onText: @MainActor (String) -> Void = { text in
                     let shown = bot.owner == nil ? ClickyOrder.withoutTags(streaming: text) : text
                     self?.replying[bot.id] = BotTagWords.withoutTags(streaming: BotScreenOrder.withoutTags(streaming: shown))
                 }
+                let result: (text: String, session: String?)
+                do {
+                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+                } catch BotRunnerError.lostSession where session != nil {
+                    // The engine has lost this chat (it's on the other Mac, or was cleaned up). It starts again with what the chat says so far.
+                    let fresh = self?.startOverPrompt(bot: bot, in: conversationID, prompt: prompt) ?? prompt
+                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, onText: onText)
+                }
                 answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                newSession = result.session ?? session
+                newSession = result.session
             } catch {
                 answer = nil
                 if self?.stopped.contains(bot.id) != true {
-                    self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)"), to: conversationID)
+                    self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
                     if self?.isRoom(conversationID) == true, var record = self?.conversation(conversationID) {
                         // Its own error isn't news to the bot next time.
                         record.seen[bot.id] = record.messages.count
@@ -783,24 +974,24 @@ final class BotsStore: ObservableObject {
                 }
             }
             guard let self else { return }
-            // The CEO's orders to Clicky don't show in the chat: they turn into Clicky's cards.
+            // Orders in the reply don't show in the chat. The CEO's to Clicky, a group chat or a harness turn into their own cards;
+            // anyone's [TELL:] to another bot becomes a private exchange.
             var orders: [String] = []
-            if bot.primary, let said = answer {
-                let taken = ClickyOrder.extract(from: said)
-                answer = taken.text
-                orders = taken.orders
-            }
-            // Any other bot can message someone privately.
             var directMessages: [(name: String, message: String)] = []
-            if !bot.primary, bot.owner == nil, let said = answer {
+            if bot.owner == nil, let said = answer {
                 let taken = ClickyOrder.extract(from: said)
                 answer = taken.text
-                directMessages = taken.orders.compactMap { ClickyOrder.tellTarget(in: $0) }
-                // Their answer goes back by itself, and whoever got it just reports: no messaging each other in circles.
-                if let partner = directPartner[bot.id].flatMap({ self.bot($0) }) {
+                for order in taken.orders {
+                    guard let tell = ClickyOrder.tellTarget(in: order) else {
+                        if bot.primary { orders.append(order) }
+                        continue
+                    }
+                    if bot.primary, self.isOrderRatherThanMessage(tell.name) { orders.append(order) } else { directMessages.append(tell) }
+                }
+                // Their answer goes back by itself, so a line back to whoever asked is just more of the answer: no messaging each other in circles.
+                if let partner = privately?.askerID.flatMap({ self.bot($0) }) {
                     directMessages.removeAll { BotsStore.searchName($0.name) == BotsStore.searchName(partner.name) }
                 }
-                directPartner[bot.id] = nil
             }
             // A turn the owner set off can ask for the work screen, and so can a bot Theo asked on the owner's behalf. One set
             // off by a page or another bot's job can't, and says so: the tag never just sits in the chat looking like it ran.
@@ -822,23 +1013,28 @@ final class BotsStore: ObservableObject {
             }
             let streamed = self.replying[bot.id]
             self.replying[bot.id] = nil
+            self.replyingIn[bot.id] = nil
             if self.stopped.remove(bot.id) != nil {
                 // Keep what it had said so far, marked as stopped, and hand nothing on.
                 let partial = (answer ?? streamed ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                self.post(BotChatMessage(author: bot.id, text: partial.isEmpty ? "_(Stopped.)_" : partial + "\n\n_(Stopped.)_"), to: conversationID)
+                self.post(BotChatMessage(author: bot.id, text: partial.isEmpty ? "_(Stopped.)_" : partial + "\n\n_(Stopped.)_", exchangeID: privately?.exchangeID), to: conversationID)
                 if handsOnWhenStopped { then(nil) }
                 return
             }
             var record = self.conversation(conversationID)
             if let newSession { record.sessions[bot.id] = newSession }
             if let answer, !answer.isEmpty {
-                let message = BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot))
+                let message = BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot), exchangeID: privately?.exchangeID)
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.seen[bot.id] = record.messages.count }
             } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty {
-                record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)"))
+                record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
+            // Its engine session has now seen everything in this chat, on this Mac.
+            var heard = record.heard ?? [:]
+            heard[bot.id] = record.messages.last?.id
+            record.heard = heard
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
@@ -846,9 +1042,6 @@ final class BotsStore: ObservableObject {
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
             for gift in screenGifts { self.proposeScreen(gift, from: bot, room: conversationID) }
-            for direct in directMessages {
-                self.sendDirectMessage(from: bot, to: direct.name, message: direct.message, room: conversationID, ownerWords: fromOwner ? self.recentOwnerWords(in: conversationID) : nil)
-            }
             // Any bot in its own chat can start a run, and a group chat's head in that chat.
             if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
@@ -857,8 +1050,25 @@ final class BotsStore: ObservableObject {
                 let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
                 self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
             }
+            // The answers come back before this turn counts as over, so a group's next bot doesn't start writing on top of it.
+            if !directMessages.isEmpty {
+                let context = privately?.context ?? BotDMContext(rootRoom: conversationID, ownerWords: ownerSaid, fromOwner: fromOwner)
+                self.runPrivateMessages(directMessages, from: bot, room: conversationID, context: context, askerID: privately?.askerID, exchangeID: privately?.exchangeID) { final in
+                    then(final ?? answer)
+                }
+                return
+            }
             then(answer)
         }
+    }
+
+    /// What a bot is told when its engine lost the chat: the same prompt, with the chat so far.
+    private func startOverPrompt(bot: NativeBot, in conversationID: String, prompt: String) -> String {
+        let lines = conversation(conversationID).messages.filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }.suffix(8).map { message -> String in
+            "\(message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author)): \(message.text.prefix(1500))"
+        }
+        let history = lines.isEmpty ? "" : "(Your earlier session of this chat is gone, so here's the chat so far:\n\n\(lines.joined(separator: "\n"))\n\nUse it as context.)\n\n"
+        return BotPrompts.firstMessage(bot: bot, team: bots, text: history + prompt)
     }
 
     /// Pitches whose final prompt already went to T3 Code (by the pitch's message id).
@@ -882,15 +1092,19 @@ final class BotsStore: ObservableObject {
         // Agents run with full access, so only the owner's own words start one by themselves. Anything else gets the card
         // in the chat, whose Start button asks first.
         guard BotsStore.ownerAskedToBuild(pitch.text) else { return }
+        let ownerWords = recentOwnerWords(in: room) ?? pitch.text
+        // The Mac the owner or the bot named, else the one this chat's coding goes on.
+        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords) ?? ProjectWords.labeled("Mac", in: answer), room: room)
         // Only a folder the owner spoke of: one a page the bot read mentions doesn't count.
-        let folder = projectChoice(ownerWords: recentOwnerWords(in: room) ?? pitch.text, answer: answer)
+        let folder = projectChoice(ownerWords: ownerWords, answer: answer, macName: mac)
         // "Fix the login bug" with no folder: the card in the chat asks which one, rather than making a new project.
         if folder.repo == nil && folder.newFolder == nil && BotsStore.isAboutExistingCode(pitch.text) { return }
         submittedPitches.insert(pitch.id)
-        let choices = codingChoices(from: recentOwnerWords(in: room) ?? pitch.text)
+        let choices = codingChoices(from: ownerWords)
         if let problem = choices.problem { post(BotChatMessage(author: speaker(for: room)?.id ?? "theo", text: problem), to: room) }
+        let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
         submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: folder.repo, room: room,
-                   harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
+                   harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac, continuing: continued)
     }
 
     /// "@code …", "@t3 …" or "/run …": straight to a coding agent, no bot in between. As whole words, so @codemirror or
@@ -930,12 +1144,13 @@ final class BotsStore: ObservableObject {
             }
             return
         }
-        let folder = projectChoice(ownerWords: words, answer: nil)
+        let mac = runMac(named: CodingDeviceWords.named(in: words), room: room)
+        let folder = projectChoice(ownerWords: words, answer: nil, macName: mac)
         if folder.repo == nil, folder.newFolder == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
         } else {
             let choices = codingChoices(from: words)
-            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: folder.repo, room: room, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
+            submitToT3(prompt: words, title: BotsT3.shortTitle(from: words), repo: folder.repo, room: room, harness: choices.harness, modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac)
         }
     }
 
@@ -952,9 +1167,11 @@ final class BotsStore: ObservableObject {
         HarnessCoding.stop(run)
         if run.harness == CursorCloud.harnessID { Task { await CursorCloud.stop(run) } }
         Task { [weak self] in
-            if run.harness == nil { await BotsT3.stopThread(run) }
+            // Stock T3 Code has no stop command: the thread keeps going there, and the chat says so rather than claiming it stopped.
+            let reallyStopped = run.harness == nil ? await BotsT3.stopThread(run) : true
             let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
-            let report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
+            var report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
+            if !reallyStopped { report += "\n\nThis T3 Code can't stop a thread from outside, so its agent may still be working in T3 Code. Theo has stopped following it. Stop it in T3 Code if you need to." }
             run.phase = "failed"
             run.finishedAt = Date()
             self?.upsert(run)
@@ -968,62 +1185,90 @@ final class BotsStore: ObservableObject {
     /// The newest run started from a room (older runs have no room: the Project room's).
     func latestRun(in room: String) -> T3Run? { t3Runs.last { ($0.room ?? Self.teamID) == room } }
 
+    /// Which Mac a run goes on: the one named, else where this chat's coding goes (normally this Mac; the Mac the owner typed on, when
+    /// this turn only runs here because the bot's engine couldn't run there).
+    func runMac(named word: String?, room: String) -> String {
+        if let word, let peer = TheoLink.shared.knownPeerName {
+            let wanted = word.lowercased().replacingOccurrences(of: " ", with: "")
+            if peer.lowercased().replacingOccurrences(of: " ", with: "").contains(wanted) { return peer }
+            if TheoLink.localName.lowercased().replacingOccurrences(of: " ", with: "").contains(wanted) { return TheoLink.localName }
+        }
+        return forwardedTurns[room]?.fromMacFullName ?? TheoLink.localName
+    }
+
     /// Creates the T3 Code project (or a branch of `repo`), starts its thread, and follows it to the end.
     /// `started`: told once whether the run got going, for a job waiting on it.
+    /// `macName`: the Mac it runs on, and the folder, new folder and chat all belong to that Mac. Nil: this chat's usual one.
+    /// `continuing`: carry on an existing chat of that harness in that folder, instead of a new one.
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
-                    modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, newFolder: String? = nil, started: ((Bool, String?) -> Void)? = nil) {
+                    modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, newFolder: String? = nil, macName: String? = nil, continuing: HarnessChatChoice? = nil,
+                    started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else { return }
         let target = harness ?? HarnessPrefs.codingTarget
-        // Coding runs on the Mac with the work screen. From the other Mac it goes there, and shows here as it runs.
-        if TheoLink.shared.isPaired, !TheoLink.shared.isWorkMac {
-            let fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? "", "newFolder": newFolder ?? ""]
-            // It never runs here instead: if the Studio's away it goes as soon as it's back.
+        let mac = macName ?? runMac(named: nil, room: room)
+        // It runs on the Mac chosen. Asked for from the other one, it goes over the link with its Mac named, and shows here as it runs.
+        if mac != TheoLink.localName {
+            let shortName = TheoLink.shortName(mac)
+            var fields = ["prompt": prompt, "title": title, "repo": repo?.path ?? "", "room": room, "harness": harness ?? "", "model": modelChoice ?? "", "effort": effortChoice ?? "", "alsoRoom": alsoRoom ?? "", "newFolder": newFolder ?? "", "mac": mac]
+            if let continuing {
+                fields["chatID"] = continuing.idOrTitle
+                fields["chatTitle"] = continuing.title ?? ""
+            }
+            // It never runs here instead: if that Mac's away it goes as soon as it's back.
             let sentNow = TheoLink.shared.requestWhenConnected("run", fields)
-            post(BotChatMessage(author: theo.id, text: sentNow ? "Sent **\(title)** to \(TheoLink.shared.peerName ?? "your Mac Studio"). You can watch it here."
-                                : "**\(title)** is waiting for your Mac Studio, which isn't connected right now. It starts as soon as it's back."), to: room)
+            post(BotChatMessage(author: theo.id, text: sentNow ? "Sent **\(title)** to your \(shortName). You can watch it here."
+                                : "**\(title)** is waiting for your \(shortName), which isn't connected right now. It starts as soon as it's back."), to: room)
             started?(true, nil)
             return
         }
+        let here = TheoLink.shortName(TheoLink.localName)
         Task { [weak self] in
             if let repo, !FileManager.default.fileExists(atPath: repo.path) {
-                self?.post(BotChatMessage(author: theo.id, text: "There's no folder at `\(repo.path)` on this Mac, so **\(title)** didn't start. Tell me which folder you meant."), to: room)
-                started?(false, "There's no folder at \(repo.path).")
+                self?.post(BotChatMessage(author: theo.id, text: "There's no folder at `\(repo.path)` on this \(here), so **\(title)** didn't start. Tell me which folder you meant."), to: room)
+                started?(false, "There's no folder at \(repo.path) on this \(here).")
                 return
             }
             // One at a time: starting takes up to half a minute while the agent's screen settles.
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.submitting = true
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder)
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, continuing: continuing)
                 run.room = room
                 run.alsoRoom = alsoRoom
                 guard let self else { return }
                 self.submitting = false
                 self.upsert(run)
-                let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
-                    ?? (repo.map { "your folder \($0.lastPathComponent)" } ?? "a new project in ~/Projects/\(URL(fileURLWithPath: run.folder).lastPathComponent)")
-                self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is with \(run.harness.map(HarnessCatalog.label) ?? "T3 Code"), \(place). " +
-                    "It's coding on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
-                    (run.effort.flatMap { $0 == "default" ? nil : " at \($0) effort" } ?? "") + ". You can follow along here, and I'll post the result when it's done."), to: room)
+                let engine = run.harness.map(HarnessCatalog.label) ?? "T3 Code"
+                if let chatTitle = run.continuedChat {
+                    self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is continuing \"\(chatTitle)\" in \(engine), in your folder \(URL(fileURLWithPath: run.folder).lastPathComponent) on this \(here). You can follow along here, and I'll post the result when it's done."), to: room)
+                } else {
+                    let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
+                        ?? (repo.map { "your folder \($0.lastPathComponent)" } ?? "a new project in ~/Projects/\(URL(fileURLWithPath: run.folder).lastPathComponent)")
+                    self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is with \(engine), \(place), on this \(here). " +
+                        "It's coding on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +
+                        (run.effort.flatMap { $0 == "default" ? nil : " at \($0) effort" } ?? "") + ". You can follow along here, and I'll post the result when it's done."), to: room)
+                }
                 self.track(run.id)
                 started?(true, nil)
             } catch {
                 self?.submitting = false
-                self?.post(BotChatMessage(author: theo.id, text: "Couldn't start the run on \(HarnessCatalog.label(target)): \(error.localizedDescription)"), to: room)
+                self?.post(BotChatMessage(author: theo.id, text: "Couldn't start the run on \(HarnessCatalog.label(target)) on this \(here): \(error.localizedDescription)"), to: room)
                 started?(false, error.localizedDescription)
             }
         }
     }
 
-    /// Passes a change to the latest run's coding agent and follows the run again.
-    func sendToCoder(_ text: String, room: String = BotsStore.teamID) {
-        if latestRun(in: room)?.isRemote == true {
-            if !TheoLink.shared.request("followup", ["room": room, "text": text]), let theo = speaker(for: room) {
-                post(BotChatMessage(author: theo.id, text: "Your other Mac isn't connected, so that didn't reach the coding agent."), to: room)
+    /// Passes a change to a run's coding agent and follows the run again: the run named, or the chat's latest. Always that exact
+    /// thread or session, on the Mac it runs on.
+    func sendToCoder(_ text: String, room: String = BotsStore.teamID, runID: String? = nil) {
+        let named = runID.flatMap { id in t3Runs.first { $0.id == id } } ?? latestRun(in: room)
+        if let named, named.isRemote {
+            if !TheoLink.shared.request("followup", ["room": room, "text": text, "runID": named.id]), let theo = speaker(for: room) {
+                post(BotChatMessage(author: theo.id, text: "Your \(TheoLink.shortName(named.origin ?? "other Mac")) isn't connected, so that didn't reach the coding agent."), to: room)
             }
             return
         }
-        guard let theo = speaker(for: room), var run = latestRun(in: room) else {
+        guard let theo = speaker(for: room), var run = named else {
             if let theo = speaker(for: room) {
                 post(BotChatMessage(author: theo.id, text: "There's no coding run from this chat yet. Say what to do and where, like \"@code fix the failing test in ~/Projects/foo\"."), to: room)
             }
@@ -1162,7 +1407,7 @@ final class BotsStore: ObservableObject {
 
     private var botsFile: URL { folder.appendingPathComponent("bots.json") }
     private var runsFile: URL { folder.appendingPathComponent("t3runs.json") }
-    private func chatFile(_ id: String) -> URL { folder.appendingPathComponent("chats/\(id).json") }
+    private func chatFile(_ id: String) -> URL { folder.appendingPathComponent("chats/\(BotDMThread.fileName(forThread: id)).json") }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -1278,15 +1523,35 @@ enum BotImport {
 
 /// What each bot is told.
 enum BotPrompts {
-    /// Shown in the chat as a card with option tiles (BotCallCard).
-    static let askingStyle =
-        "When the user really has to choose between options, end your message with one line in exactly this form, " +
-        "and don't also list the options in your words: [CHOOSE: the question | First option: a few words on it | Second option: a few words on it]. " +
-        "Two to four options, the one you'd pick first. Most messages need none of this."
+    static var askingStyle: String { BotProtocol.askingStyle }
 
-    static let chatStyle =
-        "Reply like a chat message: talk directly to the user, keep it short unless they ask for depth, " +
-        "and don't start with your name or a heading."
+    /// Who the bots work for.
+    static let ownerName = "Addy"
+
+    static var chatStyle: String { BotProtocol.houseStyle(owner: ownerName) }
+
+    /// The one way to reach another bot, in the same words wherever it's said.
+    @MainActor
+    static func reachNote(for bot: NativeBot) -> String {
+        BotProtocol.reachHowTo(reachable: BotsStore.shared.reachable(from: bot).map { ($0.name, $0.description) }, owner: ownerName)
+    }
+
+    /// A bot's place on the team, in a few words, for whoever it's messaging.
+    @MainActor
+    static func roleLine(for bot: NativeBot) -> String? {
+        if bot.primary { return "the CEO" }
+        if let team = BotsStore.shared.categories(of: bot.id).first {
+            return team.leaderID == bot.id ? "manager of \(team.name)" : "on \(team.name)"
+        }
+        return bot.description.isEmpty ? nil : String(bot.description.prefix(70))
+    }
+
+    /// "Where you are" and "who you are", on every turn: a resumed engine session keeps following what it was told when it began.
+    @MainActor
+    static func awarenessNote(for bot: NativeBot, room: String) -> String {
+        let store = BotsStore.shared
+        return "(\(BotAwareness.whereYouAre(store.placeFacts(room: room, bot: bot))))\n\n(\(BotAwareness.whoYouAre(store.identityFacts(of: bot))))\n\n"
+    }
 
     /// Who a bot reports to, in its instructions. The CEO also gets the whole picture of its teams.
     @MainActor
@@ -1294,16 +1559,8 @@ enum BotPrompts {
         let ceo = store.primary?.name ?? "the CEO"
         var lines = store.categories(of: bot.id).map { team -> String in
             let mates = store.members(of: team).filter { $0.id != bot.id }.map(\.name)
-            var line = "Your team: \(team.name)" + (team.purpose.map { " (\($0))" } ?? "") +
-                (mates.isEmpty ? "" : ", with \(mates.joined(separator: ", "))") + ". "
-            if team.leaderID == bot.id {
-                line += "You are its manager: they send you their reports and messages. Hand work to them with @Name, roll their reports up, and report to @\(ceo), the CEO."
-            } else if let manager = team.leaderID.flatMap({ store.bot($0) }) {
-                line += "\(manager.name) is your manager: send your reports and messages to @\(manager.name), not to \(ceo). \(manager.name) passes on what matters."
-            } else {
-                line += "It has no manager, so you report straight to @\(ceo), the CEO, when something is worth knowing."
-            }
-            return line
+            let manager = team.leaderID == bot.id ? nil : team.leaderID.flatMap { store.bot($0) }?.name
+            return BotProtocol.reportingLine(.init(name: team.name, purpose: team.purpose, mates: mates, isManager: team.leaderID == bot.id, managerName: manager), ceoName: ceo)
         }
         if bot.primary {
             let teams = store.rootSections.filter { !store.members(of: $0).isEmpty }.map { team -> String in
@@ -1337,8 +1594,7 @@ enum BotPrompts {
         if bot.primary {
             let others = team.filter { $0.id != bot.id && $0.owner == nil }
             if !others.isEmpty {
-                parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") +
-                             ". Mention one with @Name in the team chat to bring them in.")
+                parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
             }
             parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name)))
             let roster = BotsStore.shared.rosterForCEO
@@ -1351,11 +1607,7 @@ enum BotPrompts {
             parts.append(BotPrompts.codingHowTo)
         }
         parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
-        let reachable = BotsStore.shared.reachable(from: bot)
-        if !reachable.isEmpty {
-            parts.append("Your authority: \(bot.authorityLevel). You may message these bots by writing @Name in your reply; " +
-                         "they answer you in the chat and you then carry on: " + reachable.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
-        }
+        if bot.owner == nil { parts.append(reachNote(for: bot)) }
         if bot.provider.hasPrefix("api:") {
             // No file tools on this engine: Theo reads the memory file in for it.
             parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
@@ -1371,42 +1623,12 @@ enum BotPrompts {
     }
 
     /// A group chat's discussion, step by step.
-    static func planNote(hasOthers: Bool) -> String {
-        hasOthers
-            ? "Lay out your plan for the group in a few lines, so they can pick it apart. No ```prompt block yet, and don't say anything has been sent or started."
-            : mergeNote
-    }
-
-    static let critiqueNote = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt."
-
-    static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs."
-
-    /// Bots' screen jobs run on the Mac Studio's hidden screens, through Clicky.
-    static let screenHowTo =
-        "Addy's Mac Studio has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
-        "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
-        "Clicky does it on a free tile without touching Addy's own monitors, then tells you what happened. Say a job happened only if " +
-        "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +
-        "To have Clicky's research agents look something up in Addy's browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
-        "If Addy asks for a bot to get a screen, put a line [GIVE SCREEN: bot name: screen name, own, shared or none]; Addy confirms it on a card. " +
-        "Writing or changing code doesn't go through this: use a ```prompt block."
-
-    /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
-    static let routineHowTo =
-        "Routines: when Addy asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
-        "cron or schedule tool or skill: Theo runs routines for you. Say what you'll do and when, then add a ```routine " +
-        "block with JSON {\"name\": short name, \"when\": \"daily 08:00\" | \"weekdays 08:30\" | \"weekly mon 09:00\" | " +
-        "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Theo then runs it on " +
-        "time, and Addy can pause, run or delete it."
-
-    /// How any bot starts a coding run. Bots don't edit code themselves: a harness does it in its own branch.
-    static var codingHowTo: String {
-        "Coding: when the owner asks to build, fix or change code, don't edit files yourself. Plan it in a sentence or two, then write: a line " +
-        "\"Project: <short name>\", a line \"Repo: <path>\" when they named an existing folder, and the full instructions for the coding agent " +
-        "in a ```prompt fenced block. Theo then runs it on \(HarnessCatalog.label(HarnessPrefs.codingTarget)): an existing git repo gets its own branch and " +
-        "worktree, and the result comes back with the changes, tests and a draft pull request. For a change to the run you already started, " +
-        "put it in a ```followup fenced block instead."
-    }
+    static func planNote(hasOthers: Bool) -> String { BotProtocol.planNote(hasOthers: hasOthers) }
+    static var critiqueNote: String { BotProtocol.critiqueNote }
+    static var mergeNote: String { BotProtocol.mergeNote }
+    static var screenHowTo: String { BotProtocol.screenHowTo }
+    static var routineHowTo: String { BotProtocol.routineHowTo }
+    static var codingHowTo: String { BotProtocol.codingHowTo(harnessLabel: HarnessCatalog.label(HarnessPrefs.codingTarget)) }
 
     /// Words that ask for something on a schedule, so the routine how-to rides along even in an older chat.
     static func asksForSchedule(_ text: String) -> Bool {
@@ -1420,38 +1642,33 @@ enum BotPrompts {
         bot.provider == "claude" || bot.provider.hasPrefix("api:") ? text : "\(persona(bot: bot, team: team))\n\n---\n\n\(text)"
     }
 
+    /// What a bot hasn't read of a group chat yet, by how far it got. A bot new to the chat gets its recent history, not all of it.
+    static func transcriptMessages(in record: BotConversationRecord, for bot: NativeBot) -> [BotChatMessage] {
+        let spoken = record.messages.dropFirst(min(record.seen[bot.id] ?? 0, record.messages.count)).filter { !$0.text.isEmpty && $0.author != BotsStore.noteAuthor }
+        return BotProtocol.trimmedTranscript(Array(spoken), isOwner: { $0.author == "user" }, length: { $0.text.count })
+    }
+
     static func teamMessage(bot: NativeBot, team: [NativeBot], group: BotGroup, firstTime: Bool,
-                            newMessages: [BotChatMessage]) -> String {
-        let nameOf: (String) -> String = { author in
-            author == "user" ? "Addy" : (team.first { $0.id == author }?.name ?? author)
-        }
-        let transcript = newMessages.map { "\(nameOf($0.author)): \($0.text)" }.joined(separator: "\n")
-        var parts: [String] = []
+                            newMessages: [BotChatMessage], turnNote: String) -> String {
+        var intro: [String] = []
         if firstTime {
             // Claude has the persona as its system prompt already; other engines get it here.
-            parts.append("You are \(bot.name) in Addy's \"\(group.name)\" group chat. " +
+            intro.append("You are \(bot.name) in \(ownerName)'s \"\(group.name)\" group chat. " +
                          (bot.provider == "claude" || bot.provider.hasPrefix("api:") ? bot.instructions : persona(bot: bot, team: team)))
             if group.headID == bot.id && !bot.primary {
                 // Theo's CEO instructions already say this; any other head gets it here.
-                parts.append("You lead this group. Hand the parts of Addy's request to the others with @Name, then, once " +
-                             "they've answered, merge it into one final answer. When Addy asks to build something, end " +
-                             "with a line \"Project: <short name>\" and the prompt for T3 Code's coding agent in a " +
-                             "```prompt fenced block.")
+                intro.append("You lead this group. When \(ownerName) asks to build something, end your final answer with a line \"Project: <short name>\" and the prompt for the coding agent in a ```prompt fenced block.")
             }
-            parts.append("The others here: " + team.filter { $0.id != bot.id }.map { "@\($0.name) (\($0.description))" }.joined(separator: ", ") + ".")
-            parts.append("Reply with only your chat message, in your own voice and role, usually 1-4 sentences, without " +
-                         "your name at the start. Tag someone with @Name only when you need them. In the Project " +
-                         "room, answer the question you're given once, in your role; Theo collects the round and merges it.")
         }
-        if bot.owner == nil { parts.append(screenHowTo) }
-        parts.append("New in the group chat:\n\(transcript)")
-        parts.append("Reply as \(bot.name).")
-        return parts.joined(separator: "\n\n")
+        let transcript = newMessages.map { message -> (speaker: String, text: String) in
+            (message.author == "user" ? ownerName : (team.first { $0.id == message.author }?.name ?? message.author), message.text)
+        }
+        return BotProtocol.groupTurnPrompt(botName: bot.name, groupName: group.name, owner: ownerName, others: team.filter { $0.id != bot.id }.map { ($0.name, $0.description) },
+                                           firstTimeIntro: intro, transcript: transcript, includesScreenHowTo: bot.owner == nil, turnNote: turnNote)
     }
 
     static func mentioned(in text: String, bots: [NativeBot]) -> [NativeBot] {
-        let lower = text.lowercased()
-        return bots.filter { lower.contains("@\($0.name.lowercased())") }
+        BotMentions.ordered(in: text, bots: bots.map { ($0.id, $0.name) }).compactMap { id in bots.first { $0.id == id } }
     }
 
     /// Drops a "**Name:**" or "Name here." opener a bot adds to its own message.
@@ -1598,7 +1815,8 @@ extension BotsStore {
     private func runDueRoutines() {
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
-        guard DeviceRoles.runsHere(.bots) else { return }
+        // Each routine fires once, on the Mac Settings › Devices says.
+        guard DeviceRoles.runsHere(.routines) else { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {
@@ -1648,10 +1866,11 @@ extension BotsStore {
         conversations[bot.id] = conversationRecord
         writeConversation(bot.id)
         let firstTurn = conversationRecord.sessions[bot.id] == nil
-        let prompt = (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
+        let prompt = (bot.owner == nil ? BotPrompts.awarenessNote(for: bot, room: bot.id) : "") +
+            (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
             "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly.)" +
-            (bot.owner == nil && !bot.primary ? "\n\n(\(directMessageNote(for: bot)))" : "")
-        directMessagesSent = 0
+            (bot.owner == nil && !bot.primary ? "\n\n(\(BotPrompts.reachNote(for: bot)))" : "")
+        ownerSpoke(in: bot.id)
         reply(bot: bot, in: bot.id, prompt: prompt, session: conversationRecord.sessions[bot.id]) { [weak self] answer in
             guard let self else { return }
             self.runningRoutines.remove(routine.id)
@@ -1675,8 +1894,16 @@ extension BotsStore {
         writeRoutines()
     }
 
-    fileprivate func addRoutineFromChat(_ request: (name: String, schedule: BotRoutine.Schedule, instruction: String),
+    fileprivate func addRoutineFromChat(_ request: (name: String, when: String, schedule: BotRoutine.Schedule, instruction: String),
                                         target: String, conversationID: String, author: String) {
+        // Routines fire on one Mac (Settings › Devices), so one set up on the other goes there.
+        switch DeviceRoles.route(.routines) {
+        case .sendAcross, .waitForOtherMac:
+            _ = TheoLink.shared.requestWhenConnected("routineAdd", ["name": request.name, "target": target, "when": request.when, "do": request.instruction])
+            return
+        case .runHere, .notHere:
+            break
+        }
         // The same routine asked twice (a repeated reply) isn't added twice.
         guard !routines.contains(where: { $0.target == target && $0.instruction == request.instruction && $0.schedule == request.schedule }) else { return }
         let routine = BotRoutine(name: request.name, target: target, instruction: request.instruction, schedule: request.schedule)
@@ -1740,7 +1967,8 @@ extension BotsStore {
     // MARK: Unread
 
     fileprivate func noteUnread(_ message: BotChatMessage, in conversationID: String) {
-        guard message.author != "user", conversationID != viewing else { return }
+        // Private messages between bots aren't the owner's mail: neither the threads nor their cards raise a badge.
+        guard message.author != "user", conversationID != viewing, !BotDMThread.isThread(conversationID), BotDMThread.parseCard(message.card) == nil else { return }
         unread[conversationID, default: 0] += 1
     }
 }
@@ -1803,47 +2031,6 @@ extension BotsStore {
         return others.filter { allowed.contains($0.id) }
     }
 
-    /// After a bot answers in its own chat: any bot it @mentions (and may reach) answers there, then the
-    /// first bot reads the answers and carries on. A few hops at most.
-    func relayMentions(from bot: NativeBot, answer: String, in conversationID: String, hop: Int) {
-        guard hop < 3 else { return }
-        var named = BotPrompts.mentioned(in: answer, bots: reachable(from: bot))
-        // A member of a managed team who names anyone else reaches its manager instead.
-        if named.isEmpty, let manager = manager(of: bot), !BotPrompts.mentioned(in: answer, bots: bots.filter { $0.id != bot.id }).isEmpty {
-            named = [manager]
-        }
-        // Clicky isn't a bot turn: it has a screen and a voice of its own, so it's reached through its orders.
-        let targets = named.filter { replying[$0.id] == nil && $0.id != Self.clickyID }
-        guard !targets.isEmpty else { return }
-        var answers: [String] = []
-        var remaining = targets.count
-        for target in targets {
-            let prompt = BotPrompts.persona(bot: target, team: bots) + "\n\n---\n\n\(bot.name) (\(bot.authorityLevel)) asks you, in " +
-                "Addy's chat with \(bot.name):\n\n\(answer)\n\nAnswer \(bot.name) directly and briefly."
-            relayTurn(target, prompt: prompt, in: conversationID) { [weak self] reply in
-                guard let self else { return }
-                if let reply { answers.append("\(target.name): \(reply)") }
-                remaining -= 1
-                guard remaining == 0, !answers.isEmpty, self.replying[bot.id] == nil else { return }
-                // The asking bot reads what came back and finishes the job.
-                let followUp = "Replies from the bots you asked:\n\n" + answers.joined(separator: "\n\n") +
-                    "\n\nCarry on for Addy with this."
-                let session = self.conversation(conversationID).sessions[bot.id]
-                self.relayTurn(bot, prompt: followUp, in: conversationID, session: session) { [weak self] final in
-                    if let final, let self { self.relayMentions(from: bot, answer: final, in: conversationID, hop: hop + 1) }
-                }
-            }
-        }
-    }
-}
-
-extension BotsStore {
-    /// One turn of a bot in someone else's chat (a bot it was messaged by), shown there under its own name.
-    fileprivate func relayTurn(_ bot: NativeBot, prompt: String, in conversationID: String, session: String? = nil,
-                               then: @escaping (String?) -> Void) {
-        let session = session ?? conversation(conversationID).sessions[bot.id]
-        reply(bot: bot, in: conversationID, prompt: prompt, session: session, then: then)
-    }
 }
 
 extension BotsStore {
@@ -2066,7 +2253,7 @@ extension BotsStore {
         var record = conversation(bot.id)
         let seen = record.seen[bot.id] ?? 0
         let waiting = record.messages.dropFirst(min(seen, record.messages.count)).filter { message in
-            !message.text.isEmpty && message.author != "user" && message.author != bot.id && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
+            !message.text.isEmpty && message.author != "user" && message.author != bot.id && message.author != Self.noteAuthor && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
         }.suffix(6)
         record.seen[bot.id] = record.messages.count
         conversations[bot.id] = record
@@ -2130,9 +2317,16 @@ extension BotsStore {
         if let data = try? LinkCoding.encoder.encode(saved) { try? data.write(to: linkStampsFile, options: .atomic) }
     }
 
-    /// The chats both Macs should hold: every bot's and group chat's, and Clicky's.
+    /// The chats both Macs should hold: every bot's and group chat's, Clicky's, and the private threads between bots.
     private var linkChatIDs: Set<String> {
-        Set(bots.map(\.id) + groups.filter { $0.headID != nil }.map(\.roomID) + [Self.clickyID])
+        Set(bots.map(\.id) + groups.filter { $0.headID != nil }.map(\.roomID) + [Self.clickyID] + conversations.keys.filter(BotDMThread.isThread))
+    }
+
+    /// A private thread from the other Mac is wanted when both its bots are known here.
+    private func isWantedChat(_ id: String) -> Bool {
+        if linkChatIDs.contains(id) { return true }
+        guard let pair = BotDMThread.members(of: id) else { return false }
+        return bot(pair.first) != nil && bot(pair.second) != nil
     }
 
     private func linkItem(forChat id: String) -> LinkChatItem {
@@ -2148,7 +2342,7 @@ extension BotsStore {
             "layout": LinkCoding.digest(layout),
             "delegations": LinkCoding.digest(delegations.map(\.id) + delegations.map { $0.finishedAt?.description ?? "" }),
             "runs": LinkCoding.digest(linkRuns),
-            "projects": LinkCoding.digest(knownProjects),
+            "device": LinkCoding.digest(DeviceSnapshotBuilder.current()),
             "clickyMac": LinkCoding.digest(TheoLink.shared.clickyMacItem),
         ]
         for id in linkChatIDs {
@@ -2159,8 +2353,11 @@ extension BotsStore {
     }
 
     func wantsLinkItem(_ key: String) -> Bool {
+        if key.hasPrefix("botMemory/") { return bot(String(key.dropFirst("botMemory/".count))) != nil }
+        // An older build's name for what "device" says now.
+        if key == "projects" { return false }
         guard key.hasPrefix("chat/") else { return true }
-        return linkChatIDs.contains(String(key.dropFirst("chat/".count)))
+        return isWantedChat(String(key.dropFirst("chat/".count)))
     }
 
     func linkPayload(_ key: String) -> Data? {
@@ -2171,10 +2368,11 @@ extension BotsStore {
         case "layout": return try? encoder.encode(LinkLayoutItem(layout: layout, changedAt: linkLayoutChangedAt))
         case "delegations": return try? encoder.encode(delegations)
         case "runs": return try? encoder.encode(linkRuns)
-        case "projects": return try? encoder.encode(knownProjects)
+        case "device": return try? encoder.encode(DeviceSnapshotBuilder.current())
         case "clickyMac": return try? encoder.encode(TheoLink.shared.clickyMacItem)
         case "memory": return try? encoder.encode(memoryStore.everything())
         default:
+            if key.hasPrefix("botMemory/") { return try? encoder.encode(BotMemory.read(botID: String(key.dropFirst("botMemory/".count)))) }
             guard key.hasPrefix("chat/") else { return nil }
             return try? encoder.encode(linkItem(forChat: String(key.dropFirst("chat/".count))))
         }
@@ -2227,8 +2425,8 @@ extension BotsStore {
             if let saved = try? LinkCoding.encoder.encode(delegations) { try? saved.write(to: folder.appendingPathComponent("delegations.json"), options: .atomic) }
         case "clickyMac":
             if let theirs = try? decoder.decode(ClickyMacItem.self, from: data) { TheoLink.shared.applyClickyMac(theirs) }
-        case "projects":
-            if !TheoLink.shared.isWorkMac, let theirs = try? decoder.decode([String].self, from: data) { peerProjects = theirs }
+        case "device":
+            if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) { peerDevice = theirs }
         case "runs":
             guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }
             // Each Mac is the only one writing its own runs.
@@ -2241,8 +2439,13 @@ extension BotsStore {
             guard let theirs = try? decoder.decode([ClickyMemoryEntry].self, from: data) else { return }
             memoryStore.merge(theirs)
         default:
+            if key.hasPrefix("botMemory/") {
+                let botID = String(key.dropFirst("botMemory/".count))
+                if bot(botID) != nil, let theirs = try? decoder.decode(String.self, from: data) { BotMemory.merge(theirs, botID: botID) }
+                return
+            }
             let id = String(key.dropFirst("chat/".count))
-            guard key.hasPrefix("chat/"), linkChatIDs.contains(id), let theirs = try? decoder.decode(LinkChatItem.self, from: data) else { return }
+            guard key.hasPrefix("chat/"), isWantedChat(id), let theirs = try? decoder.decode(LinkChatItem.self, from: data) else { return }
             var record = conversation(id)
             let known = Set(record.messages.map(\.id))
             let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
@@ -2252,11 +2455,7 @@ extension BotsStore {
             record.clearedAt = clearedAt
             conversations[id] = record
             writeConversation(id)
-            for message in arrived where !message.text.isEmpty {
-                noteUnread(message, in: id)
-                linkUnheard[id, default: []].append(message)
-            }
-            if let count = linkUnheard[id]?.count, count > 20 { linkUnheard[id]?.removeFirst(count - 20) }
+            for message in arrived where !message.text.isEmpty { noteUnread(message, in: id) }
         }
     }
 
@@ -2289,12 +2488,38 @@ extension BotsStore {
             guard let prompt = fields["prompt"], let title = fields["title"], let room = fields["room"] else { return }
             let repo = fields["repo"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             func field(_ key: String) -> String? { fields[key].flatMap { $0.isEmpty ? nil : $0 } }
-            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"), newFolder: field("newFolder"))
+            let continued = field("chatID").map { HarnessChatChoice(idOrTitle: $0, title: field("chatTitle")) }
+            // Its Mac was named on the other side. This Mac checks the folder is here before anything starts (submitToT3).
+            submitToT3(prompt: prompt, title: title, repo: repo, room: room, harness: field("harness"), modelChoice: field("model"), effortChoice: field("effort"), alsoRoom: field("alsoRoom"), newFolder: field("newFolder"),
+                       macName: TheoLink.localName, continuing: continued)
         case "mkdir":
-            if let name = fields["name"], let room = fields["room"] { makeProjectFolder(name, room: room) }
+            // A new folder picked from the other Mac's menu: the answer says where it landed, so that menu can select it.
+            guard let name = fields["name"], let replyID = fields["replyID"] else { return }
+            Task {
+                let result = await BotsT3.makeProject(named: name)
+                var answer = ["replyID": replyID]
+                switch result {
+                case .made(let folder), .alreadyThere(let folder): answer["path"] = folder.path
+                case .failed(let problem): answer["problem"] = problem
+                }
+                _ = TheoLink.shared.request("reply", answer)
+            }
+        case "listChats":
+            guard let harness = fields["harness"], let folder = fields["folder"], let replyID = fields["replyID"] else { return }
+            Task {
+                let chats = await HarnessChats.list(harness: harness, folder: folder)
+                let json = (try? LinkCoding.encoder.encode(chats)).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+                _ = TheoLink.shared.request("reply", ["replyID": replyID, "chats": json])
+            }
+        case "reply":
+            if let replyID = fields["replyID"] { TheoLink.shared.replyArrived(replyID, fields: fields) }
+        case "routineAdd":
+            guard let name = fields["name"], let target = fields["target"], let when = fields["when"], let instruction = fields["do"], let schedule = BotRoutine.Schedule.parse(when) else { return }
+            guard !routines.contains(where: { $0.target == target && $0.instruction == instruction && $0.schedule == schedule }) else { return }
+            save(BotRoutine(name: name, target: target, instruction: instruction, schedule: schedule))
         case "followup":
             guard let room = fields["room"], let text = fields["text"] else { return }
-            sendToCoder(text, room: room)
+            sendToCoder(text, room: room, runID: fields["runID"])
         case "stopRun":
             if let id = fields["id"] { stopRun(id) }
         case "clicky":
@@ -2315,15 +2540,15 @@ extension BotsStore {
         case "botSay", "groupSay":
             guard let target = fields["target"], let text = fields["text"], let id = fields["id"] else { return }
             let command = fields["command"].flatMap { $0.isEmpty ? nil : $0 }
-            Task { [weak self] in
-                // Sent while it was still answering something else: it waits its turn.
-                while action == "botSay", self?.replying[target] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-                if action == "botSay" {
-                    self?.send(text, command: command, to: target, messageID: id)
-                } else {
-                    self?.sendToGroup(text, command: command, groupID: target, messageID: id)
-                }
+            if action == "botSay" {
+                send(text, command: command, to: target, messageID: id)
+            } else {
+                sendToGroup(text, command: command, groupID: target, messageID: id)
             }
+        case "botTurn":
+            handleTurnFromOtherMac(fields)
+        case "botTurnStop":
+            if let botID = fields["bot"] { stop(botID) }
         case "clickyAnswer":
             guard let text = fields["text"] else { return }
             post(BotChatMessage(author: Self.clickyID, text: text), to: Self.clickyID)
@@ -2349,16 +2574,25 @@ extension BotsStore {
         }
     }
 
-    /// What happened in this chat on the other Mac, for the bot's next turn here: its engine session only knows this Mac.
-    /// Each Mac has its own session, so after a restart here this still has the chat's latest to go on.
-    fileprivate func linkCatchUp(_ id: String) -> String {
-        let unheard = linkUnheard.removeValue(forKey: id) ?? []
-        let heard = !unheard.isEmpty ? unheard : (TheoLink.shared.isPaired ? Array(conversation(id).messages.dropLast().filter { !$0.text.isEmpty }.suffix(6)) : [])
-        guard !heard.isEmpty else { return "" }
-        let lines = heard.map { message -> String in
-            let who = message.author == "user" ? "Addy" : (bot(message.author)?.name ?? message.author)
-            return "\(who): \(message.text.prefix(600))"
+    /// What this bot's engine session hasn't seen of this chat: what happened on the other Mac, or anything since it last spoke on this one.
+    /// Each Mac has its own session, so with no session here it gets the chat's latest to go on. `before`: the message this turn answers.
+    func catchUp(_ id: String, bot: NativeBot, before messageID: String) -> String {
+        let record = conversation(id)
+        let earlier = Array(record.messages.prefix { $0.id != messageID }).filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }
+        let unheard: [BotChatMessage]
+        if record.sessions[bot.id] == nil {
+            guard TheoLink.shared.isPaired else { return "" }
+            unheard = Array(earlier.suffix(6))
+        } else if let heard = record.heard?[bot.id], let index = earlier.lastIndex(where: { $0.id == heard }) {
+            unheard = Array(earlier[(index + 1)...].suffix(20))
+        } else {
+            unheard = []
+        }
+        guard !unheard.isEmpty else { return "" }
+        let lines = unheard.map { message -> String in
+            let who = message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author)
+            return "\(who): \(message.text.prefix(1500))"
         }.joined(separator: "\n")
-        return "(This chat also went on from Addy's other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
+        return "(This chat also went on while you weren't here, some of it maybe from Addy's other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
     }
 }

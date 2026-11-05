@@ -53,6 +53,7 @@ struct BotInspector: View {
                     }
                     apps(bot)
                     schedules(bot)
+                    BotPrivateThreadsList(store: store, botID: bot.id)
                     if !bot.primary {
                         if bot.owner == nil {
                             Button {

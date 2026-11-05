@@ -441,7 +441,7 @@ enum TheoUIDriver {
             default: break
             }
             settle { respond(true, state(), nil) }
-        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults":
+        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults", "uiLink", "uiBotPrompt":
             respond(true, CrewTestCommands.run(name, command, in: target), nil)
         case "uiHitMap": respond(true, hitMap(target!), nil)
         case "uiTree":
@@ -575,6 +575,20 @@ extension TheoUIDriver {
             guard let key = command["key"] as? String else { respond(false, nil, "Needs key."); return true }
             UserDefaults.standard.set(command["value"], forKey: key)
             respond(true, ["key": key], nil)
+        case "uiChatsList":
+            // {harness, folder}: the chats the Chat menu would offer.
+            guard let harness = command["harness"] as? String, let folder = command["folder"] as? String else { respond(false, nil, "Needs harness and folder."); return true }
+            Task { @MainActor in
+                let chats = await HarnessChats.list(harness: harness, folder: folder)
+                respond(true, chats.map { ["id": $0.id, "title": $0.title, "age": HarnessChatText.age(of: $0.updatedAt)] }, nil)
+            }
+        case "uiRunStart":
+            // {prompt, title, folder, harness, model, effort, room, mac, chat}: what Start on a run's card does, with the same choices.
+            guard let prompt = command["prompt"] as? String, let title = command["title"] as? String else { respond(false, nil, "Needs prompt and title."); return true }
+            let chat = (command["chat"] as? String).map { HarnessChatChoice(idOrTitle: $0) }
+            BotsStore.shared.submitToT3(prompt: prompt, title: title, repo: (command["folder"] as? String).map { URL(fileURLWithPath: $0, isDirectory: true) }, room: command["room"] as? String ?? BotsStore.teamID,
+                                        harness: command["harness"] as? String, modelChoice: command["model"] as? String, effortChoice: command["effort"] as? String, macName: command["mac"] as? String, continuing: chat)
+            respond(true, ["started": title], nil)
         case "uiPrismEval":
             guard let cases = command["cases"] as? String, let out = command["out"] as? String else { respond(false, nil, "Needs cases and out."); return true }
             Task { @MainActor in respond(true, await PrismEval.run(casesPath: cases, outPath: out), nil) }

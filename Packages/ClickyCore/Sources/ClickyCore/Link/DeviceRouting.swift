@@ -8,13 +8,14 @@
 import Foundation
 
 public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
-    case bots, studioScreens, researchBrowser, clicky, dictation, voice
+    case bots, routines, studioScreens, researchBrowser, clicky, dictation, voice
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .bots: return "Bots & routines"
+        case .bots: return "Bots & coding"
+        case .routines: return "Routines"
         case .studioScreens: return "Studio screens"
         case .researchBrowser: return "Research browser"
         case .clicky: return "Clicky"
@@ -25,7 +26,8 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
 
     public var detail: String {
         switch self {
-        case .bots: return "Where bots, coding runs and routines actually run. Other Macs still show them and their chats."
+        case .bots: return "Where a bot answers, and where its folders and coding runs are. Chats stay the same on both Macs."
+        case .routines: return "The Mac that fires your routines, so each one runs once. Best on a Mac that's always on."
         case .studioScreens: return "The hidden screens. Only a Mac Studio has them."
         case .researchBrowser: return "Where Researcher opens blocked pages in your Chrome."
         case .clicky: return "Seeing your screen, pointing, answering."
@@ -36,13 +38,16 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
 
     public var defaultChoice: DeviceChoice {
         switch self {
-        case .bots, .studioScreens, .researchBrowser: return .macStudio
-        case .clicky, .dictation, .voice: return .any
+        case .routines, .studioScreens, .researchBrowser: return .macStudio
+        case .bots, .clicky, .dictation, .voice: return .any
         }
     }
 
     /// Work the other Mac can be asked to do. The rest simply doesn't happen here.
-    public var canBeSentAcross: Bool { self == .bots || self == .researchBrowser }
+    public var canBeSentAcross: Bool { self == .bots || self == .routines || self == .researchBrowser }
+
+    /// What "Any" means for this feature, in the Settings picker.
+    public var anyChoiceTitle: String { self == .bots ? "The Mac you're using" : "Any" }
 }
 
 public enum DeviceChoice: String, CaseIterable, Identifiable, Sendable {

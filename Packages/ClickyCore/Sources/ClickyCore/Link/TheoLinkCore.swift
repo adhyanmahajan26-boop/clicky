@@ -90,13 +90,21 @@ public enum LinkMerge {
     public static func union<T>(local: [T], remote: [T], id: (T) -> String, at: (T) -> Date, clearedAt: Date? = nil,
                                 better: (T, T) -> T = { first, _ in first }) -> [T] {
         var byID: [String: T] = [:]
-        for item in local + remote {
+        // Dates only hold whole seconds once saved or sent, so things from the same second stay in the order they were written:
+        // this side's first. A reply must never land before the message it answers.
+        var position: [String: Int] = [:]
+        for (index, item) in (local + remote).enumerated() {
             let key = id(item)
             byID[key] = byID[key].map { better($0, item) } ?? item
+            if position[key] == nil { position[key] = index }
         }
+        func second(_ item: T) -> Int { Int(at(item).timeIntervalSince1970) }
         return byID.values
             .filter { item in clearedAt.map { at(item) > $0 } ?? true }
-            .sorted { at($0) != at($1) ? at($0) < at($1) : id($0) < id($1) }
+            .sorted { first, other in
+                if second(first) != second(other) { return second(first) < second(other) }
+                return (position[id(first)] ?? 0) < (position[id(other)] ?? 0)
+            }
     }
 
     /// When each thing last changed, and when things were removed.
