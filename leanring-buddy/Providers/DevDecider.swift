@@ -41,7 +41,16 @@ enum DevDecider {
         var totalMs: Int { logs.reduce(0) { $0 + $1.ms } }
     }
 
+    /// Lines calibrated per engine and decision (`v4.decider.lines`, JSON). Empty: the default rules.
+    static let linesKey = "v4.decider.lines"
+    static var lines: DevDecisionLines {
+        guard let text = UserDefaults.standard.string(forKey: linesKey), let data = text.data(using: .utf8),
+              let lines = try? JSONDecoder().decode(DevDecisionLines.self, from: data) else { return DevDecisionLines() }
+        return lines
+    }
+
     static func decide(_ kind: DevDecisionKind, task: String, question: FastDecisionQuestion,
+                       thin: @escaping (DevVerdict) -> Bool = { _ in false },
                        verdict: @escaping ([String: PrismAnswer]?, DeciderEngine) -> DevVerdict?) async -> Decision {
         let chosen = engine(for: kind)
         guard chosen != .off else { return Decision(verdict: nil, decidedBy: .off, logs: []) }
@@ -54,14 +63,16 @@ enum DevDecider {
             } else {
                 let started = Date()
                 var answers: [String: PrismAnswer]?
+                var usage: DevCallUsage?
                 var problem: String?
-                do { answers = try await askFast(question, engine: chosen) } catch { problem = error.localizedDescription }
+                do { (answers, usage) = try await askFast(question, engine: chosen) } catch { problem = error.localizedDescription }
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
-                let got = verdict(answers, chosen)
+                let base = verdict(answers, chosen)
+                let got = lines.apply(base, engine: chosen, kind: kind, thin: base.map(thin) ?? false)
                 let stands = got?.stands == true
                 logs.append(DevDecisionLog(kind: kind.rawValue, engine: chosen.rawValue, model: chosen == .prism ? PrismWire.model : "wity-1", task: String(task.prefix(80)),
                                            options: options, answer: got?.option ?? "none", confidence: got?.confidence, ms: ms,
-                                           handedTo: stands ? nil : DeciderEngine.sonnet.rawValue, note: problem.map { String($0.prefix(120)) }))
+                                           handedTo: stands ? nil : DeciderEngine.sonnet.rawValue, note: problem.map { String($0.prefix(120)) }, usage: usage))
                 if stands {
                     record(logs)
                     return Decision(verdict: got, decidedBy: chosen, logs: logs)
@@ -70,15 +81,29 @@ enum DevDecider {
         }
         // Sonnet decides: it was chosen, or the fast engine handed over.
         let started = Date()
-        let reply = await askSonnet(question)
+        let (reply, sonnetUsage) = await askSonnet(question)
         let ms = Int(Date().timeIntervalSince(started) * 1000)
         var got = verdict(reply.flatMap { DevDecisions.sonnetAnswers($0, question: question) }, .sonnet)
         if got != nil { got?.stands = true }
         logs.append(DevDecisionLog(kind: kind.rawValue, engine: chosen.rawValue, model: "sonnet", task: String(task.prefix(80)), options: options,
                                    answer: got?.option ?? "none", confidence: got?.confidence, ms: ms, handedTo: nil,
-                                   note: fastNote ?? (reply == nil ? "no answer from Sonnet" : nil)))
+                                   note: fastNote ?? (reply == nil ? "no answer from Sonnet" : nil), usage: sonnetUsage))
         record(logs)
         return Decision(verdict: got, decidedBy: .sonnet, logs: logs)
+    }
+
+    /// The fast engine's own answer to one question, with no line and no Sonnet: for calibrating lines on a warm-up set.
+    static func probe(_ kind: DevDecisionKind, engine: DeciderEngine, question: FastDecisionQuestion,
+                      verdict: ([String: PrismAnswer]?, DeciderEngine) -> DevVerdict?) async -> [String: Any] {
+        let started = Date()
+        do {
+            let (answers, usage) = try await askFast(question, engine: engine)
+            let v = verdict(answers, engine)
+            return ["answer": v?.option ?? "none", "confidence": v?.confidence ?? NSNull(), "ms": Int(Date().timeIntervalSince(started) * 1000),
+                    "inputTokens": usage?.inputTokens ?? NSNull(), "model": usage?.modelID ?? NSNull()]
+        } catch {
+            return ["error": error.localizedDescription, "ms": Int(Date().timeIntervalSince(started) * 1000)]
+        }
     }
 
     // MARK: Engines
@@ -88,16 +113,22 @@ enum DevDecider {
         var errorDescription: String? { message }
     }
 
-    static func askFast(_ question: FastDecisionQuestion, engine: DeciderEngine) async throws -> [String: PrismAnswer] {
-        if engine == .prism { return try await PrismClient.ask(question, timeout: 6).all }
+    static func askFast(_ question: FastDecisionQuestion, engine: DeciderEngine) async throws -> ([String: PrismAnswer], DevCallUsage?) {
+        if engine == .prism {
+            let outcome = try await PrismClient.ask(question, timeout: 6)
+            return (outcome.all, outcome.usage)
+        }
         return try await WityClient.ask(question, thinking: engine == .wityThinking, timeout: engine == .wityThinking ? 20 : 6)
     }
 
     /// One short Sonnet call with no tools, the way Theo's other quick checks ask it.
-    static func askSonnet(_ question: FastDecisionQuestion) async -> String? {
-        guard let claude = ClaudeCodeBridge.locateClaudeCodeExecutable() else { return nil }
-        return try? await BotsT3.shell(claude, ["-p", "--model", "sonnet", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"],
-                                       stdin: DevDecisions.sonnetPrompt(question), limit: 60)
+    /// Its reply, and the tokens and model Claude Code reports for the call.
+    static func askSonnet(_ question: FastDecisionQuestion) async -> (String?, DevCallUsage?) {
+        guard let claude = ClaudeCodeBridge.locateClaudeCodeExecutable() else { return (nil, nil) }
+        guard let output = try? await BotsT3.shell(claude, ["-p", "--model", "sonnet", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json"],
+                                                   stdin: DevDecisions.sonnetPrompt(question), limit: 60) else { return (nil, nil) }
+        guard let parsed = DevCallUsage.fromClaudeJSON(output) else { return (output, nil) }
+        return (parsed.result, parsed.usage)
     }
 
     // MARK: The log
@@ -155,7 +186,7 @@ enum WityClient {
         return ProviderKeychain.get("wity")
     }
 
-    static func ask(_ question: FastDecisionQuestion, thinking: Bool, timeout: TimeInterval) async throws -> [String: PrismAnswer] {
+    static func ask(_ question: FastDecisionQuestion, thinking: Bool, timeout: TimeInterval) async throws -> ([String: PrismAnswer], DevCallUsage?) {
         guard let key = await Task.detached(priority: .userInitiated, operation: { key() }).value else { throw DevDecider.Failure(message: "No Wity key") }
         var request = URLRequest(url: base, timeoutInterval: timeout)
         request.httpMethod = "POST"
@@ -166,7 +197,7 @@ enum WityClient {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw DevDecider.Failure(message: "Wity \(status)") }
         guard let answers = PrismWire.answers(from: data) else { throw DevDecider.Failure(message: "No answer in Wity's reply") }
-        return answers
+        return (answers, DevCallUsage.fromFastReply(data))
     }
 
     /// Opens the connection ahead of time, like Prism's warm-up.

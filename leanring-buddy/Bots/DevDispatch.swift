@@ -92,7 +92,8 @@ extension BotsStore {
             let cards = DevDecider.engine(for: .assign).isWity ? DevDecisions.shortlist(allCards, for: text, atMost: DevDecisionPolicy.wityOptionsAtMost - 1) : allCards
             var taker: NativeBot?
             if !cards.isEmpty {
-                let assign = await DevDecider.decide(.assign, task: title, question: DevDecisions.assign(task: text, lead: lead.name, cards: cards)) { DevDecisions.assignVerdict($0, cards: cards, engine: $1) }
+                let assign = await DevDecider.decide(.assign, task: title, question: DevDecisions.assign(task: text, lead: lead.name, cards: cards),
+                                                     thin: { verdict in cards.first { $0.id == verdict.option }?.isThin ?? false }) { DevDecisions.assignVerdict($0, cards: cards, engine: $1) }
                 outcome.decisions += assign.logs
                 if let pick = assign.verdict?.option, pick != DevDecisions.leadOption { taker = self.bot(pick) }
                 if assign.decidedBy == .off {

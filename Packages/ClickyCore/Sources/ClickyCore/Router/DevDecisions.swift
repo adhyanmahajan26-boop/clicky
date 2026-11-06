@@ -158,6 +158,44 @@ public struct DevVerdict: Equatable, Sendable {
     }
 }
 
+/// What one decision call used, as the provider reported it: tokens by kind, and the model that answered.
+public struct DevCallUsage: Codable, Equatable, Sendable {
+    public var modelID: String?
+    public var inputTokens: Int
+    public var outputTokens: Int
+    public var cacheReadTokens: Int
+    public var cacheWriteTokens: Int
+    /// Of the cache writes, those kept for an hour (priced higher than five-minute writes).
+    public var cacheWrite1hTokens: Int
+
+    public init(modelID: String?, inputTokens: Int, outputTokens: Int, cacheReadTokens: Int = 0, cacheWriteTokens: Int = 0, cacheWrite1hTokens: Int = 0) {
+        self.modelID = modelID
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cacheWrite1hTokens = cacheWrite1hTokens
+    }
+
+    /// The `usage` and `model` of a Prism or Wity reply.
+    public static func fromFastReply(_ data: Data) -> DevCallUsage? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let usage = object["usage"] as? [String: Any] else { return nil }
+        return DevCallUsage(modelID: object["model"] as? String, inputTokens: (usage["input_tokens"] as? NSNumber)?.intValue ?? 0,
+                            outputTokens: (usage["output_tokens"] as? NSNumber)?.intValue ?? 0)
+    }
+
+    /// The text and usage of `claude -p --output-format json`.
+    public static func fromClaudeJSON(_ text: String) -> (result: String, usage: DevCallUsage)? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any], let result = object["result"] as? String else { return nil }
+        let usage = object["usage"] as? [String: Any] ?? [:]
+        let int = { (key: String) in (usage[key] as? NSNumber)?.intValue ?? 0 }
+        let hour = ((usage["cache_creation"] as? [String: Any])?["ephemeral_1h_input_tokens"] as? NSNumber)?.intValue ?? 0
+        let model = (object["modelUsage"] as? [String: Any])?.keys.sorted().first
+        return (result, DevCallUsage(modelID: model, inputTokens: int("input_tokens"), outputTokens: int("output_tokens"),
+                                     cacheReadTokens: int("cache_read_input_tokens"), cacheWriteTokens: int("cache_creation_input_tokens"), cacheWrite1hTokens: hour))
+    }
+}
+
 /// A line of the decisions log: what was asked, of whom, what came back and how long it took. No keys, and the task by its title only.
 public struct DevDecisionLog: Codable, Equatable, Sendable {
     public var at: Date
@@ -173,9 +211,12 @@ public struct DevDecisionLog: Codable, Equatable, Sendable {
     /// Set when the fast engine wasn't sure, the bot card was thin, or it failed: who decided instead.
     public var handedTo: String?
     public var note: String?
+    /// Tokens and model for this call, as the provider reported them. Nil when it reported none.
+    public var usage: DevCallUsage?
 
     public init(at: Date = Date(), kind: String, engine: String, model: String, task: String, options: [String], answer: String,
-                confidence: Double?, ms: Int, handedTo: String? = nil, note: String? = nil) {
+                confidence: Double?, ms: Int, handedTo: String? = nil, note: String? = nil, usage: DevCallUsage? = nil) {
+        self.usage = usage
         self.at = at
         self.kind = kind
         self.engine = engine
@@ -374,6 +415,31 @@ public enum DevDecisions {
 
     public static func optionCount(_ question: FastDecisionQuestion) -> Int {
         question.questions.values.map { $0.kind == .noul ? 2 : $0.criteria.count }.max() ?? 0
+    }
+}
+
+/// Lines calibrated for each engine and decision before a race, the same way for every engine. Where one is set it replaces
+/// the default rule for that engine and decision: the answer stands when its confidence is at least the line, and a line above 1
+/// means that decision always goes to Sonnet. Whatever the line, a "hold" answer always stands, and a pick of a thin bot never does.
+public struct DevDecisionLines: Codable, Equatable, Sendable {
+    public var lines: [String: [String: Double]]
+
+    public init(_ lines: [String: [String: Double]] = [:]) {
+        self.lines = lines
+    }
+
+    public func line(_ engine: DeciderEngine, _ kind: DevDecisionKind) -> Double? {
+        lines[engine.rawValue]?[kind.rawValue]
+    }
+
+    public func apply(_ verdict: DevVerdict?, engine: DeciderEngine, kind: DevDecisionKind, thin: Bool = false) -> DevVerdict? {
+        guard var verdict, let line = line(engine, kind) else { return verdict }
+        if kind == .hold, verdict.option == "hold" {
+            verdict.stands = true
+        } else {
+            verdict.stands = !thin && verdict.confidence >= line
+        }
+        return verdict
     }
 }
 

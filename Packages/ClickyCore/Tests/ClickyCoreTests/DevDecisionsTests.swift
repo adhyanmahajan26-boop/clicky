@@ -194,4 +194,54 @@ struct DevDecisionsTests {
         let back = try JSONDecoder().decode(DevDecisionLog.self, from: JSONEncoder().encode(line))
         #expect(back == line)
     }
+
+    // MARK: Calibrated lines
+
+    @Test func calibratedLinesReplaceTheDefaultsPerEngine() {
+        let lines = DevDecisionLines(["prism": ["hold": 0.75, "runner": 0.6], "wity": ["hold": 0.97]])
+        let go = DevVerdict(option: "go", confidence: 0.8, stands: false)
+        #expect(lines.apply(go, engine: .prism, kind: .hold)?.stands == true)
+        #expect(lines.apply(go, engine: .wity, kind: .hold)?.stands == false)
+        // No line for this engine and decision: the default verdict is kept as it was.
+        #expect(lines.apply(go, engine: .wityThinking, kind: .hold) == go)
+        #expect(lines.apply(DevVerdict(option: "strong", confidence: 0.61, stands: false), engine: .prism, kind: .runner)?.stands == true)
+    }
+
+    @Test func aHoldAlwaysStandsAndAThinPickNever() {
+        let lines = DevDecisionLines(["prism": ["hold": 0.99, "assign": 0.5]])
+        #expect(lines.apply(DevVerdict(option: "hold", confidence: 0.55, stands: false), engine: .prism, kind: .hold)?.stands == true)
+        #expect(lines.apply(DevVerdict(option: "kadi", confidence: 0.99, stands: true), engine: .prism, kind: .assign, thin: true)?.stands == false)
+    }
+
+    @Test func aLineAboveOneAlwaysHandsOver() {
+        let lines = DevDecisionLines(["wity": ["place": 1.01]])
+        #expect(lines.apply(DevVerdict(option: "new", confidence: 1.0, stands: true), engine: .wity, kind: .place)?.stands == false)
+    }
+
+    @Test func linesRoundTripAsJSON() throws {
+        let lines = DevDecisionLines(["prism": ["hold": 0.75]])
+        #expect(try JSONDecoder().decode(DevDecisionLines.self, from: JSONEncoder().encode(lines)) == lines)
+    }
+
+    // MARK: Usage logging
+
+    @Test func fastRepliesCarryTheirUsage() throws {
+        let reply = #"{"model":"wity-1","answers":{"decision":{"type":"noul","noul":0.1}},"usage":{"input_tokens":252,"output_tokens":0}}"#
+        let usage = try #require(DevCallUsage.fromFastReply(Data(reply.utf8)))
+        #expect(usage == DevCallUsage(modelID: "wity-1", inputTokens: 252, outputTokens: 0))
+        #expect(DevCallUsage.fromFastReply(Data(#"{"answers":{}}"#.utf8)) == nil)
+    }
+
+    @Test func claudeJSONGivesTheTextUsageAndModel() throws {
+        let reply = #"{"type":"result","result":"{\"decision\": false, \"confidence\": 0.9}","usage":{"input_tokens":2,"output_tokens":19,"cache_read_input_tokens":649,"cache_creation_input_tokens":2726,"cache_creation":{"ephemeral_1h_input_tokens":2726,"ephemeral_5m_input_tokens":0}},"modelUsage":{"claude-sonnet-5-5":{}}}"#
+        let parsed = try #require(DevCallUsage.fromClaudeJSON(reply))
+        #expect(parsed.result.contains("decision"))
+        #expect(parsed.usage == DevCallUsage(modelID: "claude-sonnet-5-5", inputTokens: 2, outputTokens: 19, cacheReadTokens: 649, cacheWriteTokens: 2726, cacheWrite1hTokens: 2726))
+    }
+
+    @Test func oldLogLinesWithoutUsageStillRead() throws {
+        let old = #"{"at":0,"kind":"hold","engine":"prism","model":"sarvam-prism","task":"x","options":["false","true"],"answer":"go","confidence":0.9,"ms":200}"#
+        let line = try JSONDecoder().decode(DevDecisionLog.self, from: Data(old.utf8))
+        #expect(line.usage == nil)
+    }
 }
