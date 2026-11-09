@@ -46,6 +46,7 @@ struct CodingSettingsView: View {
                            model: Binding(get: { center.defaultModel(for: center.defaultHarness) ?? "" }, set: { center.setDefaultModel($0.isEmpty ? nil : $0, for: center.defaultHarness) }),
                            effort: Binding(get: { center.defaultEffort(for: center.defaultHarness) ?? "" }, set: { center.setDefaultEffort($0.isEmpty ? nil : $0, for: center.defaultHarness) }))
             }
+            CrewDecisionsSection()
         }
         .onAppear { center.refresh() }
         .sheet(item: $terminalTask) { task in
@@ -517,5 +518,49 @@ struct HarnessTerminalSheet: View {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+
+/// Settings › Harnesses › Crew decisions: who makes each decision when a coding task comes in. Off keeps today's path.
+struct CrewDecisionsSection: View {
+    @ObservedObject private var keys = ProviderKeys.shared
+    @State private var engines: [DevDecisionKind: DeciderEngine] = Dictionary(uniqueKeysWithValues: DevDecisionKind.allCases.map { ($0, DevDecider.engine(for: $0)) })
+    @AppStorage(DevDecider.lightRunnerKey) private var lightRunner = ""
+    @AppStorage(DevDecider.strongRunnerKey) private var strongRunner = ""
+
+    private func usable(_ engine: DeciderEngine) -> Bool {
+        switch engine {
+        case .prism: return keys.hasKey(for: "sarvam")
+        case .wity, .wityThinking: return WityClient.hasKey
+        default: return true
+        }
+    }
+
+    var body: some View {
+        TheoSection(title: "Crew decisions", hint: "For \"@crew …\" and build requests to your lead. Prism and Wity decide in a fraction of a second; when they aren't sure, or a bot's card says too little about it, Sonnet decides. Every decision is logged in ~/Library/Logs/Theo/decisions.jsonl.") {
+            ForEach(Array(DevDecisionKind.allCases.enumerated()), id: \.element) { index, kind in
+                if index > 0 { RowDivider() }
+                SettingRow(title: kind.label, detail: engines[kind] == .off ? "Today's path" : "Decided by \(engines[kind]?.label ?? "")") {
+                    Picker(kind.label, selection: Binding(get: { engines[kind] ?? .off }, set: { engine in
+                        engines[kind] = engine
+                        DevDecider.set(engine, for: kind)
+                    })) {
+                        ForEach(DeciderEngine.allCases, id: \.self) { engine in
+                            Text(engine.label + (usable(engine) ? "" : " (needs a key)")).tag(engine)
+                        }
+                    }
+                    .labelsHidden().frame(maxWidth: 180)
+                }
+            }
+            RowDivider()
+            SettingRow(title: "Light tier runs on", detail: "Harness, model and effort, like \"claude claude-haiku-5-5 low\". Empty: where builds go.") {
+                TextField("Where builds go", text: $lightRunner).theoField().frame(maxWidth: 260)
+            }
+            RowDivider()
+            SettingRow(title: "Strong tier runs on", detail: "For hard tasks. Empty: where builds go.") {
+                TextField("Where builds go", text: $strongRunner).theoField().frame(maxWidth: 260)
+            }
+        }
     }
 }

@@ -14,6 +14,13 @@ import AppKit
 import ClickyCore
 import Foundation
 
+/// Where a crew task's run goes: another run's worktree and branch, or a new worktree from another run's branch.
+struct RunPlace: Equatable, Sendable {
+    var worktree: String?
+    var branch: String?
+    var base: String?
+}
+
 enum BotsT3Error: LocalizedError {
     case noCLI
     case failed(String)
@@ -254,11 +261,11 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil, onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil, place: RunPlace? = nil, onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
         if let continuing { return try await continueChat(continuing, prompt: prompt, title: title, folder: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice) }
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
-        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, onWaiting: onWaiting) }
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, place: place, onWaiting: onWaiting) }
         guard let cli else { throw BotsT3Error.noCLI }
         // Everything below talks to T3 Code's server, so it's opened first when it's closed. Its CLI with no server up writes into T3 Code's folder.
         await openServerIfNeeded(cli: cli)
@@ -640,7 +647,19 @@ enum BotsT3 {
         }
         if !leftOut.isEmpty { problems.append("Left out of the commit, because they look like secrets: \(leftOut.joined(separator: ", ")).") }
         run.pullRequestProblem = problems.isEmpty ? nil : problems.joined(separator: " ")
+        // The status only says the agent stopped. With the run check on, its own report is read too.
+        if !failed, !stopped, let summary = state.lastMessage, !summary.isEmpty,
+           await reportSaysUnfinished(title: run.title, status: state.status, filesChanged: run.changedFiles?.count ?? 0, tests: run.tests, report: summary) {
+            lines[0] = "**\(run.title)** stopped in \(engine) after \(minutes) min, but its report says the work isn't finished."
+        }
         return lines.joined(separator: "\n\n")
+    }
+
+    /// The crew's run check (Settings › Bots › Crew decisions). Off, or no answer: false, and the run's status stands as it always did.
+    static func reportSaysUnfinished(title: String, status: String, filesChanged: Int, tests: String?, report: String) async -> Bool {
+        let question = DevDecisions.runDone(status: status, filesChanged: filesChanged, tests: tests, report: report)
+        let decision = await DevDecider.decide(.runDone, task: title, question: question) { answers, _ in DevDecisions.runDoneVerdict(answers) }
+        return decision.verdict?.option == "unfinished"
     }
 
     /// Files changed between two commits, from `git diff --numstat` ("12\t3\tpath"; binary files say "-").

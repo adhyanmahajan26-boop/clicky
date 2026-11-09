@@ -125,6 +125,9 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
         ProviderInfo(id: "cursor", label: "Cursor", blurb: "Runs Cursor Agent on a key, and Cursor's cloud agents", group: .models, kind: .other,
                      baseURL: "https://api.cursor.com", consoleURL: "https://cursor.com/dashboard?tab=integrations", keyHint: "key_…", modelsPath: nil, testPath: "/v0/me"),
 
+        ProviderInfo(id: "wity", label: "Wity", blurb: "Key only: fast fixed-choice decisions for the crew, beside Sarvam Prism", group: .models, kind: .other,
+                     baseURL: "https://api.wity.alphanimble.com", consoleURL: nil, keyHint: "Your Wity key", modelsPath: nil, testPath: "/health"),
+
         ProviderInfo(id: "elevenlabs", label: "ElevenLabs", blurb: "Natural voices for Clicky and Theo", group: .voice, kind: .other,
                      baseURL: "https://api.elevenlabs.io", consoleURL: "https://elevenlabs.io/app/settings/api-keys", keyHint: "sk_…", modelsPath: nil, testPath: "/v2/voices?page_size=1"),
         ProviderInfo(id: "deepgram", label: "Deepgram", blurb: "Hears what you say to Clicky", group: .voice, kind: .other,

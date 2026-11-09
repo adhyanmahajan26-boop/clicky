@@ -313,6 +313,68 @@ final class ClaudiaControlInbox {
                                  headID: command["head"] as? String, memberIDs: command["members"] as? [String] ?? [])
             BotsStore.shared.save(group)
             reply(identifier, ok: true, result: ["saved": id], error: nil)
+        case "devTask":
+            // A coding task for the crew, as "@crew …" typed in a chat: {text, repo, title, room}. Answers when its run has started, been held or kept.
+            let store = BotsStore.shared
+            guard let text = command["text"] as? String, let repo = command["repo"] as? String else { reply(identifier, ok: false, result: nil, error: "Needs text and repo."); return }
+            let room = command["room"] as? String ?? store.primary?.id ?? BotsStore.teamID
+            store.post(BotChatMessage(author: "user", text: "@crew " + text), to: room)
+            store.dispatchDevTask(text, title: command["title"] as? String, repo: URL(fileURLWithPath: repo, isDirectory: true), room: room) { outcome in
+                reply(identifier, ok: true, result: outcome.report, error: nil)
+            }
+        case "deciderSet":
+            // {engine: off|sonnet|prism|wity|wityThinking, kind?: one decision (all when left out), light?, strong?: "harness model"}
+            if let name = command["engine"] as? String {
+                guard let engine = DeciderEngine(rawValue: name) else { reply(identifier, ok: false, result: nil, error: "No engine \(name)."); return }
+                let kinds = (command["kind"] as? String).flatMap(DevDecisionKind.init(rawValue:)).map { [$0] } ?? DevDecisionKind.allCases
+                kinds.forEach { DevDecider.set(engine, for: $0) }
+            }
+            if let lines = command["lines"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: ["lines": lines]) {
+                UserDefaults.standard.set(String(decoding: data, as: UTF8.self), forKey: DevDecider.linesKey)
+            }
+            if let light = command["light"] as? String { UserDefaults.standard.set(light, forKey: DevDecider.lightRunnerKey) }
+            if let strong = command["strong"] as? String { UserDefaults.standard.set(strong, forKey: DevDecider.strongRunnerKey) }
+            if command["warm"] as? Bool == true {
+                PrismClient.warm()
+                WityClient.warm()
+            }
+            reply(identifier, ok: true, result: Dictionary(uniqueKeysWithValues: DevDecisionKind.allCases.map { ($0.rawValue, DevDecider.engine(for: $0).rawValue) }), error: nil)
+        case "deciderProbe":
+            // One question to one fast engine, no line and no Sonnet, for calibrating lines on a warm-up set:
+            // {kind: hold|assign|place|runner|runDone, engine: prism|wity|wityThinking, text, project, live: [{id, title, prompt, bot}], status, filesChanged, report}
+            guard let kind = (command["kind"] as? String).flatMap(DevDecisionKind.init(rawValue:)), let engine = (command["engine"] as? String).flatMap(DeciderEngine.init(rawValue:)), engine.isFast else {
+                reply(identifier, ok: false, result: nil, error: "Needs kind and a fast engine."); return
+            }
+            let text = command["text"] as? String ?? ""
+            let store = BotsStore.shared
+            let lead = store.primary?.name ?? "Theo"
+            let cards = store.devCards(excluding: store.primary?.id ?? "")
+            Task { @MainActor in
+                let result: [String: Any]
+                switch kind {
+                case .hold:
+                    result = await DevDecider.probe(kind, engine: engine, question: DevDecisions.hold(task: text, project: command["project"] as? String ?? "shelf")) { DevDecisions.holdVerdict($0, engine: $1) }
+                case .assign:
+                    result = await DevDecider.probe(kind, engine: engine, question: DevDecisions.assign(task: text, lead: lead, cards: cards)) { DevDecisions.assignVerdict($0, cards: cards, engine: $1) }
+                case .place:
+                    let live = (command["live"] as? [[String: String]] ?? []).map { DevLiveRun(id: $0["id"] ?? "", title: $0["title"] ?? "", prompt: $0["prompt"] ?? "", botName: $0["bot"] ?? "") }
+                    guard let question = DevDecisions.place(task: text, live: live) else { reply(identifier, ok: false, result: nil, error: "Needs live runs."); return }
+                    result = await DevDecider.probe(kind, engine: engine, question: question) { answers, _ in DevDecisions.placeVerdict(answers) }
+                case .runner:
+                    result = await DevDecider.probe(kind, engine: engine, question: DevDecisions.runner(task: text)) { answers, _ in DevDecisions.runnerVerdict(answers) }
+                case .runDone:
+                    let question = DevDecisions.runDone(status: command["status"] as? String ?? "completed", filesChanged: command["filesChanged"] as? Int ?? 1, tests: command["tests"] as? String, report: command["report"] as? String ?? "")
+                    result = await DevDecider.probe(kind, engine: engine, question: question) { answers, _ in DevDecisions.runDoneVerdict(answers) }
+                }
+                reply(identifier, ok: result["error"] == nil, result: result, error: result["error"] as? String)
+            }
+        case "deciderLog":
+            // The crew's recent decisions: engine, model, options, answer, confidence and time. Tasks by title only.
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let lines = DevDecider.recentLines.suffix(max(1, min(command["limit"] as? Int ?? 50, 500)))
+            let encoded = (try? encoder.encode(Array(lines))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            reply(identifier, ok: true, result: encoded ?? [], error: nil)
         case "fastDecisions":
             // What Prism decided lately: the choice and its time, never the words.
             reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)

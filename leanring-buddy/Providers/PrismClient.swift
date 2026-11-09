@@ -28,6 +28,7 @@ enum PrismClient {
         var answer: PrismAnswer
         var all: [String: PrismAnswer]
         var milliseconds: Int
+        var usage: DevCallUsage? = nil
     }
 
     /// Nil on no key, a failure or a timeout. The reason goes to `lastProblem`, never the key.
@@ -56,7 +57,7 @@ enum PrismClient {
         guard let all = PrismWire.answers(from: data), let answer = all[FastDecisionQuestion.id] else {
             throw PrismFailure(status: status, message: "No answer in the reply")
         }
-        return Outcome(answer: answer, all: all, milliseconds: Int(Date().timeIntervalSince(started) * 1000))
+        return Outcome(answer: answer, all: all, milliseconds: Int(Date().timeIntervalSince(started) * 1000), usage: DevCallUsage.fromFastReply(data))
     }
 
     /// Opens the connection ahead of time, so the first real decision isn't the slow one. The smallest real question, which costs a fraction of a paisa.

@@ -474,6 +474,16 @@ final class BotsStore: ObservableObject {
             runCommand(text, room: botID)
             return
         }
+        // "@crew …", or a build request to the lead with crew decisions on: the crew decides who, where and on what.
+        if let task = BotsStore.crewTask(in: command ?? text) {
+            handToCrew(task, room: botID)
+            return
+        }
+        if bot.primary, DevDecider.engine(for: .assign) != .off, BotsStore.ownerAskedToBuild(command ?? text),
+           let repo = projectChoice(ownerWords: command ?? text, answer: nil).repo {
+            dispatchDevTask(command ?? text, repo: repo, room: botID)
+            return
+        }
         // "Make a new folder called X" and nothing more: done, with no bot in between.
         if ProjectWords.asksOnlyForFolder(command ?? text), let name = ProjectWords.newFolderName(in: command ?? text) {
             makeProjectFolder(name, room: botID)
@@ -1419,7 +1429,7 @@ final class BotsStore: ObservableObject {
     /// `continuing`: carry on an existing chat of that harness in that folder, instead of a new one.
     func submitToT3(prompt: String, title: String, repo: URL? = nil, room: String = BotsStore.teamID, harness: String? = nil,
                     modelChoice: String? = nil, effortChoice: String? = nil, alsoRoom: String? = nil, newFolder: String? = nil, macName: String? = nil, continuing: HarnessChatChoice? = nil,
-                    started: ((Bool, String?) -> Void)? = nil) {
+                    place: RunPlace? = nil, started: ((Bool, String?) -> Void)? = nil) {
         guard let theo = speaker(for: room) else {
             started?(false, "There's nobody in that chat to start it.")
             return
@@ -1467,7 +1477,7 @@ final class BotsStore: ObservableObject {
             while self?.submitting == true { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.submitting = true
             do {
-                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, continuing: continuing) { [weak self] in
+                var run = try await BotsT3.submit(prompt: prompt, title: title, repo: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, continuing: continuing, place: place) { [weak self] in
                     self?.post(BotChatMessage(author: Self.noteAuthor, text: "Another \(HarnessCatalog.label(target)) run in this folder is still starting, so **\(title)** goes right after it. That keeps each run in its own chat."), to: room)
                 }
                 run.room = room
@@ -1630,7 +1640,7 @@ final class BotsStore: ObservableObject {
         TerminalSessions.shared.session(for: runID).map { String($0.screenText().suffix(6000)) }
     }
 
-    private func upsert(_ run: T3Run) {
+    func upsert(_ run: T3Run) {
         var run = run
         if run.origin == nil { run.origin = TheoLink.localName }
         if let index = t3Runs.firstIndex(where: { $0.id == run.id }) {
