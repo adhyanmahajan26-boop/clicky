@@ -53,6 +53,8 @@ final class BotsSelection: ObservableObject {
 struct BotsRootView: View {
     @ObservedObject var store: BotsStore
     @ObservedObject var selection: BotsSelection
+    /// Status lines show a streaming reply's first line; this changes only when that line does.
+    @ObservedObject private var headlines = BotLiveHeadline.shared
     /// Inside Theo's home window, Connectors is its own tab instead.
     var showsConnectors = true
 
@@ -620,6 +622,10 @@ struct BotChatScreen: View {
     @State private var settledIDs: Set<String> = []
     /// The text each bot last streamed here, so its finished message doesn't type out a second time.
     @State private var lastLive: [String: String] = [:]
+    /// Only the newest messages are drawn. The whole chat is one non-lazy stack, so every streamed word laid out all of it:
+    /// on Theo's 167-message chat that kept the main thread pegged for a whole reply. Older ones are a click away.
+    @State private var shownMessages = BotChatScreen.messagesPerPage
+    static let messagesPerPage = 40
     @State private var showsModelSettings = false
     @State private var showsDetails = false
     @State private var editsGroup = false
@@ -633,11 +639,11 @@ struct BotChatScreen: View {
     private var groupBots: [NativeBot] { group.map { store.members(of: $0) } ?? [] }
     private var isProjectRoom: Bool { groupID == BotGroup.projectID }
     /// Who's writing in this chat right now. A bot answering a private message or another chat isn't: it doesn't show here.
-    private var inProgress: [(NativeBot, String)] {
+    private var inProgress: [NativeBot] {
         let ids = bot.map { [$0.id] } ?? groupBots.map(\.id)
         return ids.compactMap { id in
-            guard store.replyingIn[id] == conversationID else { return nil }
-            return store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } }
+            guard store.replyingIn[id] == conversationID, store.replying[id] != nil else { return nil }
+            return store.bot(id)
         }
     }
     /// Stop has something to stop: a bot writing here, a group's round, or private messages this chat set off.
@@ -657,7 +663,13 @@ struct BotChatScreen: View {
                     // A plain VStack: a lazy one guesses the heights of long replies it hasn't drawn, and
                     // scrolling to the end then lands in empty space until something redraws.
                     VStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(record.messages.enumerated()), id: \.element.id) { index, message in
+                        if record.messages.count > shownMessages {
+                            Button("Show earlier messages (\(record.messages.count - shownMessages) more)") { shownMessages += Self.messagesPerPage }
+                                .buttonStyle(.theo(.ghost, .small))
+                                .pointerCursor()
+                                .frame(maxWidth: .infinity)
+                        }
+                        ForEach(Array(record.messages.enumerated()).suffix(shownMessages), id: \.element.id) { index, message in
                             if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
                                 // The pending card gives way to the finished one, which lands at the end of the chat.
                                 if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
@@ -705,12 +717,9 @@ struct BotChatScreen: View {
                         ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                             T3RunCard(run: run, bot: bot ?? store.primary)
                         }
-                        ForEach(inProgress, id: \.0.id) { pending in
-                            if pending.1.isEmpty {
-                                ThinkingLine(bot: pending.0, showsName: bot == nil)
-                            } else {
-                                BotLine(bot: pending.0, text: pending.1, showsName: record.messages.last?.author != pending.0.id, namesAuthor: bot == nil, animatesIn: true, isLive: true)
-                            }
+                        ForEach(inProgress, id: \.id) { pending in
+                            LiveReplyLine(bot: pending, showsName: record.messages.last?.author != pending.id, namesAuthor: bot == nil,
+                                          proxy: proxy, lastLive: $lastLive)
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
@@ -732,13 +741,6 @@ struct BotChatScreen: View {
                     for delay in [0.3, 1.2, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("end", anchor: .bottom) } }
                 }
                 .modifier(ChatRunScroll(proxy: proxy, runKeys: runKeys))
-                .onChange(of: inProgress.map { "\($0.0.id):\($0.1.count / 200)" }) { _, _ in
-                    for (bot, text) in inProgress where !text.isEmpty { lastLive[bot.id] = text }
-                }
-                .onChange(of: inProgress.map(\.1.count).reduce(0, +) / 240) { _, _ in
-                    // Follows a streaming reply every few lines rather than on every chunk.
-                    proxy.scrollTo("end", anchor: .bottom)
-                }
                 .onDisappear { if store.viewing == conversationID { store.viewing = nil } }
                 .onAppear {
                     store.viewing = conversationID
@@ -1953,4 +1955,31 @@ extension Notification.Name {
     static let theoScrollChatToEnd = Notification.Name("theoScrollChatToEnd")
     /// Home's "New group chat".
     static let theoNewGroupChat = Notification.Name("theoNewGroupChat")
+}
+
+/// One bot's reply while it streams. It's the only view that watches the words, so a chunk redraws this line and nothing else.
+private struct LiveReplyLine: View {
+    let bot: NativeBot
+    let showsName: Bool
+    let namesAuthor: Bool
+    let proxy: ScrollViewProxy
+    @Binding var lastLive: [String: String]
+    @ObservedObject private var live = BotLiveText.shared
+
+    private var text: String { live.text[bot.id] ?? "" }
+
+    var body: some View {
+        Group {
+            if text.isEmpty {
+                ThinkingLine(bot: bot, showsName: namesAuthor)
+            } else {
+                BotLine(bot: bot, text: text, showsName: showsName, namesAuthor: namesAuthor, animatesIn: true, isLive: true)
+            }
+        }
+        // Remembered so the finished message doesn't type out a second time.
+        .onChange(of: "\(text.isEmpty) \(text.count / 200)") { _, _ in if !text.isEmpty { lastLive[bot.id] = text } }
+        // Follows the reply every few lines rather than on every chunk.
+        .onChange(of: text.count / 240) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+        .onDisappear { if !text.isEmpty { lastLive[bot.id] = text } }
+    }
 }

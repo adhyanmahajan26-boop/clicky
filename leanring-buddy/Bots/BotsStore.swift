@@ -288,12 +288,15 @@ final class BotsStore: ObservableObject {
     func endTurnHere(_ botID: String) {
         replying[botID] = nil
         replyingIn[botID] = nil
+        BotLiveText.shared.set(nil, for: botID)
     }
 
     /// Lights a team bot up, or down, for work that doesn't run through a reply of its own.
     func setReplying(_ text: String?, _ botID: String) {
-        replying[botID] = text
-        replyingIn[botID] = text == nil ? nil : botID
+        // Who's working changes the store; the words themselves go to BotLiveText, so they don't redraw the window.
+        if (replying[botID] == nil) != (text == nil) { replying[botID] = text == nil ? nil : "" }
+        if replyingIn[botID] != (text == nil ? nil : botID) { replyingIn[botID] = text == nil ? nil : botID }
+        BotLiveText.shared.set(text, for: botID)
     }
 
     /// Once, on the first launch of this version: the old bots, chats and groups move to
@@ -1106,6 +1109,7 @@ final class BotsStore: ObservableObject {
         // A new turn, not a carry-on from before: an earlier Stop in this chat isn't about it.
         if privately == nil { stoppedExchangeRooms.remove(conversationID) }
         replying[bot.id] = ""
+        BotLiveText.shared.set("", for: bot.id)
         replyingIn[bot.id] = conversationID
         // Its engine can't run on this Mac and the other one can: this one turn goes across, and the chat says so. Never silently.
         if let across = turnGoesAcross(bot) {
@@ -1119,7 +1123,8 @@ final class BotsStore: ObservableObject {
                 let team = self?.bots ?? []
                 let onText: @MainActor (String) -> Void = { text in
                     let shown = bot.owner == nil ? ClickyOrder.withoutTags(streaming: text) : text
-                    self?.replying[bot.id] = BotTagWords.withoutTags(streaming: BotScreenOrder.withoutTags(streaming: shown))
+                    // Only the live bubble and status line redraw for each chunk, not everything watching the store.
+                    BotLiveText.shared.set(BotTagWords.withoutTags(streaming: BotScreenOrder.withoutTags(streaming: shown)), for: bot.id)
                 }
                 let result: (text: String, session: String?)
                 do {
@@ -1180,8 +1185,9 @@ final class BotsStore: ObservableObject {
                 }
                 if fromOwner { screenGifts = gifts.gifts }
             }
-            let streamed = self.replying[bot.id]
+            let streamed = BotLiveText.shared.text[bot.id]
             self.replying[bot.id] = nil
+            BotLiveText.shared.set(nil, for: bot.id)
             self.replyingIn[bot.id] = nil
             if self.stopped.remove(bot.id) != nil {
                 // Keep what it had said so far, marked as stopped, and hand nothing on.

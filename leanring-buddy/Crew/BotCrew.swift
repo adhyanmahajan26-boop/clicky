@@ -77,11 +77,11 @@ extension BotsStore {
         }
         if let call = openCall(of: bot.id) { return "Needs you · \(call.question)" }
         if bot.id == teamBot(.researcher)?.id, let check = BrowserResearcher.shared.checks.values.first { return "Needs you · \(check.host)" }
-        if let live = replying[bot.id] {
+        if replying[bot.id] != nil {
+            let live = BotLiveHeadline.shared.line[bot.id] ?? ""
             // Answering another bot privately: who, not what.
             if let room = replyingIn[bot.id], let partner = BotDMThread.partner(of: bot.id, in: room).flatMap({ self.bot($0) }) { return "Answering \(partner.name) privately" }
-            let words = Self.firstLine(live)
-            return words.isEmpty ? "Thinking…" : words
+            return live.isEmpty ? "Thinking…" : live
         }
         // An old message can be nothing but a tag, from before those were taken out as they arrive.
         guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !Self.firstLine($0.text).isEmpty }) else {
@@ -93,7 +93,7 @@ extension BotsStore {
     /// The bots working right now, out of everyone but the CEO.
     var workingCount: Int { bots.filter { !$0.primary && crewPose(of: $0).pose == .working }.count }
 
-    private static func firstLine(_ text: String) -> String {
+    static func firstLine(_ text: String) -> String {
         // A question's tag isn't words anyone should read.
         var words = text.contains("[CHOOSE:") ? (BotCallPrompt.parse(text)?.remainingText ?? text) : text
         // Nor are orders, which an old message can still hold.

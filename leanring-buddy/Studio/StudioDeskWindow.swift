@@ -26,6 +26,7 @@ enum StudioDeskWindow {
 }
 
 private struct StudioDeskView: View {
+    @ObservedObject private var liveText = BotLiveText.shared
     @ObservedObject var store: BotsStore
     let botID: String
     @State private var now = Date()
@@ -35,7 +36,7 @@ private struct StudioDeskView: View {
     private var bot: NativeBot? { store.bot(botID) }
     private var run: T3Run? { store.liveRun(of: botID) }
     private var lines: [String] {
-        let live = (store.replying[botID] ?? "").split(whereSeparator: \.isNewline).suffix(10).map(String.init)
+        let live = (store.replying[botID] == nil ? "" : liveText.text[botID] ?? "").split(whereSeparator: \.isNewline).suffix(10).map(String.init)
         return store.conversation(botID).messages.suffix(live.isEmpty ? 14 : 6).flatMap { message in
             message.text.split(whereSeparator: \.isNewline).prefix(4).map { (message.author == "user" ? "> " : "") + String($0) }
         } + live
