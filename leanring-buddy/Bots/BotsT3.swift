@@ -275,13 +275,13 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: repo.path)
         } else if let topLevel, !(await hasRemote(topLevel)) {
             // A project of the owner's that lives only here: changes go right in it, on its own history.
-            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-"]
             run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo, let topLevel {
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-", "--worktree", base, "--branch", branch]
             run = T3Run(id: "", title: title, folder: topLevel.path, repo: topLevel.path, branch: branch, baseCommit: base)
@@ -469,6 +469,16 @@ enum BotsT3 {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? "# \(title)\n\nThe prompt \(engine) received:\n\n\(prompt)\n"
             .write(to: folder.appendingPathComponent("\(slug(title)).md"), atomically: true, encoding: .utf8)
+    }
+
+    /// The commit a run starts from. A repo that has no commit yet (just `git init`) gets the same empty "Start" commit a new
+    /// folder gets, instead of failing with git's "ambiguous argument 'HEAD'".
+    static func headCommit(in folder: URL) async throws -> String {
+        if let head = try? await shell(git, ["rev-parse", "--verify", "-q", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty {
+            return head
+        }
+        try await startEmpty(in: folder)
+        return try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// A first, empty commit, so the run's diff has something to start from.

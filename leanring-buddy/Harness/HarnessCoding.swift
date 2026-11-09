@@ -207,12 +207,12 @@ enum HarnessCoding {
         } else if let topLevel, !(await BotsT3.hasRemote(topLevel)) {
             // A project of the owner's that lives only here: changes go right in it, on its own history.
             workdir = topLevel
-            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await BotsT3.headCommit(in: topLevel)
             run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo = topLevel {
             // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await BotsT3.headCommit(in: repo)
             let trees = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Theo/worktrees", isDirectory: true)
             try FileManager.default.createDirectory(at: trees, withIntermediateDirectories: true)
