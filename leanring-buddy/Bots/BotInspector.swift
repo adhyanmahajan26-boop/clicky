@@ -45,11 +45,17 @@ struct BotInspector: View {
                     InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "Screens live on the Mac Studio.") {
                         if StudioController.isAvailable { BotScreenPicker(botID: bot.id).labelsHidden() }
                     }
-                    InspectorSection("Instructions") {
+                    InspectorSection("Instructions", hint: "Your words come first. Every bot also learns Theo's harness guide: how to message, hand over, schedule and start code.") {
                         TextEditor(text: Binding(get: { draft?.instructions ?? "" }, set: { draft?.instructions = $0; saveSoon() }))
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)
                             .padding(8).frame(minHeight: 130)
                             .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
+                        Button { NSWorkspace.shared.open(BotMemory.guideFile) } label: {
+                            Label("Read the harness guide", systemImage: "book")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.theo(.ghost, .small))
+                        .pointerCursor()
                     }
                     apps(bot)
                     schedules(bot)

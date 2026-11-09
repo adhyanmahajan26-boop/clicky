@@ -198,6 +198,15 @@ enum BotMemory {
 
     static func file(botID: String) -> URL { root.appendingPathComponent(botID, isDirectory: true).appendingPathComponent("memory.md") }
 
+    /// The harness guide every bot can read (ClickyCore `HarnessGuide`), next to the memory files, where bots run.
+    static var guideFile: URL { root.appendingPathComponent(HarnessGuide.fileName) }
+
+    /// Written at launch, so it always matches this build's rules. Only rewritten when it changed.
+    static func writeGuide(owner: String) {
+        let text = HarnessGuide.markdown(owner: owner)
+        if (try? String(contentsOf: guideFile, encoding: .utf8)) != text { try? text.write(to: guideFile, atomically: true, encoding: .utf8) }
+    }
+
     static func read(botID: String) -> String { (try? String(contentsOf: file(botID: botID), encoding: .utf8)) ?? "" }
 
     /// What's on both Macs, each line once. Written only when a line is new.

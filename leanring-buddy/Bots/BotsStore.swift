@@ -268,6 +268,7 @@ final class BotsStore: ObservableObject {
         backfillTeamWork()
         loadLinkStamps()
         if !isHostingTests { stampRoutinesOnce() }
+        BotMemory.writeGuide(owner: BotPrompts.ownerName)
         // Which engines can run on this Mac, for the bots' prompts and for the other Mac.
         Task { @MainActor in HarnessCenter.shared.refresh() }
     }
@@ -1828,7 +1829,7 @@ enum BotPrompts {
     }
 
     static func persona(bot: NativeBot, team: [NativeBot]) -> String {
-        var parts = [bot.instructions, chatStyle, askingStyle]
+        var parts = [bot.instructions, chatStyle, askingStyle, HarnessGuide.pointer(path: BotMemory.guideFile.path)]
         let apps = BotConnectors.known.filter { bot.apps.contains($0.id) }
         if !apps.isEmpty {
             parts.append("Apps you can use: \(apps.map(\.name).joined(separator: ", ")). If one isn't available, " +
