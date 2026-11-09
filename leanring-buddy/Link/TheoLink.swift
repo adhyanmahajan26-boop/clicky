@@ -531,6 +531,17 @@ final class TheoLink: ObservableObject {
 
     func waiting(_ id: String) -> LinkWaitingRequest? { waitingRequests.first { $0.id == id } }
 
+    /// Start on a held run's card: it goes to the other Mac now. False when that Mac is away again (it stays held).
+    func sendHeld(_ id: String) -> Bool {
+        guard isConnected, let item = waiting(id), !item.isStale else { return false }
+        guard request(item.action, item.fields) else { return false }
+        _ = takeWaiting(id)
+        if let room = item.room, let label = item.label {
+            BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: "\(label) went to your \(TheoLink.shortName(peerName ?? knownPeerName ?? "other Mac"))."), to: room)
+        }
+        return true
+    }
+
     /// Takes something out of the queue, to run here instead.
     func takeWaiting(_ id: String) -> LinkWaitingRequest? {
         guard let index = waitingRequests.firstIndex(where: { $0.id == id }) else { return nil }
@@ -547,17 +558,32 @@ final class TheoLink: ObservableObject {
 
     /// The Macs have met again: what waited goes now, and the chat says so. Anything over a day old isn't what the owner wants any more, and the chat says that too.
     private func sendWhatWaited(to macName: String) {
-        guard !waitingRequests.isEmpty else { return }
-        let waited = waitingRequests
-        waitingRequests.removeAll()
+        // Runs already held for the owner stay held: only Start on their card sends them.
+        let fresh = waitingRequests.filter { $0.heldForOwner != true }
+        guard !fresh.isEmpty else { return }
+        let plan = DeviceRouting.planForReconnect(fresh.map { .init(id: $0.id, action: $0.action, title: $0.fields["title"], prompt: $0.fields["prompt"], at: $0.at) })
+        let askFirst = Set(plan.askFirst)
+        waitingRequests.removeAll { item in fresh.contains(where: { $0.id == item.id }) && !askFirst.contains(item.id) }
+        for index in waitingRequests.indices where askFirst.contains(waitingRequests[index].id) { waitingRequests[index].heldForOwner = true }
         saveWaiting()
-        for item in waited {
-            let isStale = item.isStale
-            if !isStale { _ = request(item.action, item.fields) }
+        for item in fresh {
+            guard !plan.duplicates.contains(item.id) else { continue }
+            let isStale = plan.stale.contains(item.id)
+            let isHeld = askFirst.contains(item.id)
+            if plan.send.contains(item.id) { _ = request(item.action, item.fields) }
             guard let room = item.room, let label = item.label else { continue }
-            BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: isStale
-                                                 ? "\(label) didn't go: your \(macName) was away for over a day. Send it again if you still want it."
-                                                 : "Your \(macName) is back, so \(label) went to it."), to: room)
+            let repeats = fresh.filter { plan.duplicates.contains($0.id) && $0.fields["title"] == item.fields["title"] && $0.fields["prompt"] == item.fields["prompt"] }.count
+            let once = repeats > 0 ? " You asked for it \(repeats + 1) times; it's here once." : ""
+            if isHeld {
+                let waited = DeviceRouting.waitedText(since: item.at)
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor,
+                                                     text: "Your \(macName) is back. \(label) waited \(waited), so it hasn't started: press Start if you still want it.\(once)",
+                                                     card: BotWaitingCard.card(id: item.id)), to: room)
+            } else {
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: isStale
+                                                     ? "\(label) didn't go: your \(macName) was away for over a day. Send it again if you still want it."
+                                                     : "Your \(macName) is back, so \(label) went to it.\(once)"), to: room)
+            }
         }
     }
 
@@ -594,6 +620,8 @@ struct LinkWaitingRequest: Codable, Identifiable, Equatable {
     var label: String?
     var canRunHere: Bool
     var at = Date()
+    /// A run that waited long enough that the owner says Start before it goes, now the other Mac is back.
+    var heldForOwner: Bool?
     /// Waited so long it isn't what the owner wants any more.
     var isStale: Bool { DeviceRouting.hasWaitedTooLong(since: at) }
 }

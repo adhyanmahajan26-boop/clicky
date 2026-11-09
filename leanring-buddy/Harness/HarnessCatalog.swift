@@ -320,7 +320,10 @@ enum HarnessDetector {
                 }
             } else {
                 let text = HarnessCatalog.output(of: executable, ["status"], timeout: 20).lowercased()
-                status.loggedIn = text.contains("logged in") && !text.contains("not logged in") && !text.contains("authentication required")
+                // Nothing back (a check that timed out while the Mac was busy) says nothing: the card was stuck on "signed out"
+                // for four days after the 5 Nov install. Unknown keeps runs going, and the next check settles it.
+                status.loggedIn = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil
+                    : text.contains("logged in") && !text.contains("not logged in") && !text.contains("authentication required")
             }
         case "grok":
             // `grok models` prints "You are logged in with grok.com." and the model list.

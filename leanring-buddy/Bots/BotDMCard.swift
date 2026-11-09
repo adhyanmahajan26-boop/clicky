@@ -154,6 +154,20 @@ struct BotWaitingCard: View {
                 ChatNote(text: text)
                 if waiting.isStale {
                     ChatNote(text: "This waited over a day, so it won't go now. Send it again if you still want it.")
+                } else if waiting.heldForOwner == true {
+                    HStack(spacing: 8) {
+                        Button("Start on your \(TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "other Mac"))") { _ = link.sendHeld(id) }
+                            .buttonStyle(.theo(.primary, .small))
+                            .disabled(!link.isConnected)
+                        if waiting.canRunHere {
+                            Button("Run it on this \(TheoLink.shortName(TheoLink.localName))") { store.runWaitingHere(id) }
+                                .buttonStyle(.theo(.secondary, .small))
+                        }
+                        Button("Don't start it") { _ = link.takeWaiting(id) }
+                            .buttonStyle(.theo(.secondary, .small))
+                    }
+                    .pointerCursor()
+                    .padding(.leading, 54)
                 } else if waiting.canRunHere {
                     Button("Run it on this \(TheoLink.shortName(TheoLink.localName)) instead") { store.runWaitingHere(id) }
                         .buttonStyle(.theo(.secondary, .small))

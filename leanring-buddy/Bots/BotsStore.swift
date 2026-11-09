@@ -1001,7 +1001,10 @@ final class BotsStore: ObservableObject {
     private func advance(from botID: String, answer: String?, room: String, roundID: UUID, canHandOut: Bool) {
         guard var round = groupRounds[room], round.id == roundID, let group = group(round.groupID) else { return }
         let others = otherMembers(of: group).map(\.id)
-        let mentions = answer.map { BotMentions.ordered(in: $0, bots: members(of: group).map { ($0.id, $0.name) }) } ?? []
+        // The head handing out turns often names members in words ("Backend first, then Frontend") and tags only the first, so
+        // its names count with or without the @. A member's only count with it, so mentioning someone in passing hands nothing on.
+        let team = members(of: group).map { ($0.id, $0.name) }
+        let mentions = answer.map { botID == group.headID ? BotMentions.named(in: $0, bots: team) : BotMentions.ordered(in: $0, bots: team) } ?? []
         // A member that failed or timed out doesn't stall the room: the plan just moves on.
         let step = round.plan.turnEnded(by: botID, mentions: mentions, canHandOut: canHandOut, others: others)
         groupRounds[room] = round

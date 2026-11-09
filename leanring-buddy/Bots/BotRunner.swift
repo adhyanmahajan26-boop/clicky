@@ -111,7 +111,16 @@ enum BotRunner {
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         do {
-            return try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+            let first = try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+            // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
+            let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
+            let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
+            guard !missing.isEmpty, !Task.isCancelled else { return first }
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled,
+                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, onText: onText),
+                  !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
+            return second
         } catch BotRunnerError.freeLimit {
             // OpenCode's free models are used up for now: this turn runs on Claude Haiku instead, so the
             // bot still answers. Its OpenCode session stays for when the free models are back.

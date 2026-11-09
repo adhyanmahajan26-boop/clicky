@@ -139,6 +139,30 @@ public enum BotMentions {
         }
         return found.sorted { $0.position < $1.position }.map(\.id)
     }
+
+    /// Like `ordered`, but a name counts with or without the @: what a head means when it says "Backend first, then Frontend".
+    /// Only the head's turns use this, so a member mentioning a name in passing doesn't hand on the turn.
+    public static func named(in text: String, bots: [(id: String, name: String)]) -> [String] {
+        let withoutCode = text.replacingOccurrences(of: "(?s)```.*?(```|$)", with: " ", options: .regularExpression)
+        let lower = withoutCode.lowercased()
+        func isWordCharacter(_ character: Character) -> Bool { character.isLetter || character.isNumber || character == "-" || character == "_" }
+        var taken: [Range<String.Index>] = []
+        var found: [(position: String.Index, id: String)] = []
+        for bot in bots.sorted(by: { $0.name.count > $1.name.count }) {
+            let needle = bot.name.lowercased()
+            guard !needle.isEmpty else { continue }
+            var searchFrom = lower.startIndex
+            while let range = lower.range(of: needle, range: searchFrom..<lower.endIndex) {
+                searchFrom = range.upperBound
+                let startsWord = range.lowerBound == lower.startIndex || !isWordCharacter(lower[lower.index(before: range.lowerBound)])
+                let endsWord = range.upperBound == lower.endIndex || !isWordCharacter(lower[range.upperBound])
+                guard startsWord, endsWord, !taken.contains(where: { $0.overlaps(range) }) else { continue }
+                taken.append(range)
+                if !found.contains(where: { $0.id == bot.id }) { found.append((range.lowerBound, bot.id)) }
+            }
+        }
+        return found.sorted { $0.position < $1.position }.map(\.id)
+    }
 }
 
 // MARK: - Who speaks next in a group chat

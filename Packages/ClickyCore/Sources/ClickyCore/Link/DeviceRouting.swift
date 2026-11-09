@@ -118,6 +118,56 @@ public enum DeviceRouting {
         now.timeIntervalSince(since) > maximumWaitSeconds
     }
 
+    /// A coding run that waited longer than this for the other Mac doesn't start by itself when that Mac is back: the owner says
+    /// Start first. On 5 Nov three runs queued on the Air over a morning all started at once on the Studio, hours later.
+    public static let runStartsByItselfSeconds: TimeInterval = 10 * 60
+
+    /// What happens to waiting items when the other Mac is back. Messages go. A run goes only if it's fresh; an older one waits for
+    /// the owner. The same run asked for more than once (same title and words) is kept once, the latest.
+    public struct WaitingItem: Equatable, Sendable {
+        public var id: String
+        public var action: String
+        public var title: String?
+        public var prompt: String?
+        public var at: Date
+        public init(id: String, action: String, title: String?, prompt: String?, at: Date) {
+            self.id = id; self.action = action; self.title = title; self.prompt = prompt; self.at = at
+        }
+    }
+
+    public struct WaitingPlan: Equatable, Sendable {
+        public var send: [String] = []
+        public var askFirst: [String] = []
+        public var stale: [String] = []
+        public var duplicates: [String] = []
+    }
+
+    /// "3 hours", "40 minutes": how long something waited, in a chat line.
+    public static func waitedText(since: Date, now: Date = Date()) -> String {
+        let minutes = max(1, Int(now.timeIntervalSince(since) / 60))
+        if minutes < 60 { return minutes == 1 ? "a minute" : "\(minutes) minutes" }
+        let hours = minutes / 60
+        return hours == 1 ? "an hour" : "\(hours) hours"
+    }
+
+    public static func planForReconnect(_ items: [WaitingItem], now: Date = Date()) -> WaitingPlan {
+        var plan = WaitingPlan()
+        var latestRun: [String: String] = [:]
+        for item in items where item.action == "run" {
+            let key = "\(item.title ?? "")\u{1F}\(item.prompt ?? "")"
+            if let earlier = latestRun[key], let previous = items.first(where: { $0.id == earlier }), previous.at > item.at { continue }
+            latestRun[key] = item.id
+        }
+        let keep = Set(latestRun.values)
+        for item in items {
+            if item.action == "run", !keep.contains(item.id) { plan.duplicates.append(item.id); continue }
+            if hasWaitedTooLong(since: item.at, now: now) { plan.stale.append(item.id); continue }
+            if item.action == "run", now.timeIntervalSince(item.at) > runStartsByItselfSeconds { plan.askFirst.append(item.id); continue }
+            plan.send.append(item.id)
+        }
+        return plan
+    }
+
     /// `paired` false: there's only this Mac, so it does everything it's able to.
     public static func route(_ feature: DeviceFeature, choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool) -> DeviceRoute {
         // Hidden screens exist only on a Mac Studio, whatever the setting says.

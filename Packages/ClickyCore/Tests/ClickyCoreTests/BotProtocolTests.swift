@@ -100,6 +100,16 @@ struct BotProtocolTests {
         #expect(BotMentions.ordered(in: "```\n@Coder\n```\nnobody", bots: team).isEmpty)
     }
 
+    // A live round on 9 Nov: the head named all three in words but tagged only the first, and the other two never spoke.
+    @Test func theHeadsHandOutCountsNamesWithoutTheAtSign() {
+        let team = [(id: "backend", name: "Backend"), (id: "frontend", name: "Frontend"), (id: "security", name: "Security"), (id: "pm", name: "project manager")]
+        let opening = "Backend goes first, then Frontend, then Security, each with one line on what a login page needs. @Backend, you're up."
+        #expect(BotMentions.named(in: opening, bots: team) == ["backend", "frontend", "security"])
+        #expect(BotMentions.named(in: "Ask the Project Manager, then @Security.", bots: team) == ["pm", "security"])
+        // Part of another word isn't a name, and code doesn't count.
+        #expect(BotMentions.named(in: "Backends and frontends differ.\n```\nSecurity\n```", bots: team).isEmpty)
+    }
+
     // MARK: Turn order
 
     @Test func theHeadGoesFirstThenMembersInTheOrderNamedThenOneWrapUp() {
@@ -623,6 +633,27 @@ struct BotProtocolTests {
         #expect(unheard("said here") == ["said on the Air"])
         #expect(unheard(BotCatchUp.fromTheStart) == ["said here", "said on the Air"])
         #expect(unheard("gone") == [])
+    }
+
+    @Test func runsThatWaitedLongAskFirstAndRepeatsCollapseWhenTheMacIsBack() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        func item(_ id: String, _ action: String, title: String? = nil, prompt: String? = nil, minutesAgo: Double) -> DeviceRouting.WaitingItem {
+            .init(id: id, action: action, title: title, prompt: prompt, at: now.addingTimeInterval(-minutesAgo * 60))
+        }
+        // 5 Nov: the same run asked for three times on the Air over a morning, plus a message, a fresh run and a two-day-old one.
+        let items = [item("r1", "run", title: "Black Hole Explainer", prompt: "p", minutesAgo: 240),
+                     item("r2", "run", title: "Black Hole Explainer", prompt: "p", minutesAgo: 120),
+                     item("r3", "run", title: "Black Hole Explainer", prompt: "p", minutesAgo: 60),
+                     item("m1", "botSay", minutesAgo: 60),
+                     item("r4", "run", title: "Moon page", prompt: "q", minutesAgo: 2),
+                     item("r5", "run", title: "Old", prompt: "z", minutesAgo: 2 * 24 * 60)]
+        let plan = DeviceRouting.planForReconnect(items, now: now)
+        #expect(plan.duplicates == ["r1", "r2"])
+        #expect(plan.askFirst == ["r3"])
+        #expect(plan.send == ["m1", "r4"])
+        #expect(plan.stale == ["r5"])
+        #expect(DeviceRouting.waitedText(since: now.addingTimeInterval(-3 * 3600 - 50), now: now) == "3 hours")
+        #expect(DeviceRouting.waitedText(since: now.addingTimeInterval(-40 * 60), now: now) == "40 minutes")
     }
 
     @Test func aWaitingItemGoesStaleAfterADay() {
