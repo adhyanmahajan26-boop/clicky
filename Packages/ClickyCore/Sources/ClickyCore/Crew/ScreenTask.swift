@@ -120,6 +120,27 @@ public enum BotResearchOrder {
     }
 }
 
+/// A bot asking Theo to make a PDF of a file it wrote in its memory folder: [PDF: file name].
+public enum BotPDFOrder {
+    private static let tag = try! NSRegularExpression(pattern: #"(?i)\[\s*PDF\s*:\s*([^\]\n]{1,200}?)\s*\]"#)
+    public static let maximumPerReply = 3
+
+    public static func extract(from text: String) -> (text: String, files: [String]) {
+        let taken = BotTagWords.take(tag, from: text)
+        return (taken.text, Array(taken.bodies.prefix(maximumPerReply)))
+    }
+
+    /// The file a tag names, only if it's inside `folder` (no way out with `..` or an absolute path elsewhere).
+    public static func file(named name: String, in folder: URL) -> URL? {
+        let cleaned = name.trimmingCharacters(in: CharacterSet(charactersIn: " `'\"")).replacingOccurrences(of: "~", with: "")
+        guard !cleaned.isEmpty else { return nil }
+        let candidate = cleaned.hasPrefix("/") ? URL(fileURLWithPath: cleaned) : folder.appendingPathComponent(cleaned)
+        let resolved = candidate.standardizedFileURL.resolvingSymlinksInPath().path
+        let root = folder.standardizedFileURL.resolvingSymlinksInPath().path
+        return resolved.hasPrefix(root + "/") ? URL(fileURLWithPath: resolved) : nil
+    }
+}
+
 /// A bot proposing a screen for someone: [GIVE SCREEN: bot name: screen name, "own", "shared" or "none"]. The owner confirms it on a card.
 public enum BotScreenGift {
     private static let tag = try! NSRegularExpression(pattern: #"(?i)\[\s*GIVE SCREEN\s*:\s*([^\]\n]{2,160}?)\s*\]"#)
@@ -164,8 +185,8 @@ public enum BotTagWords {
 
     /// A reply still streaming, with these tags hidden, even half written.
     public static func withoutTags(streaming text: String) -> String {
-        var left = BotScreenGift.extract(from: BotResearchOrder.extract(from: text).text).text
-        if let open = left.range(of: #"(?i)\[\s*(?:R|RE|RES|RESE|RESEA|RESEAR|RESEARC|RESEARCH|G|GI|GIV|GIVE|GIVE |GIVE S|GIVE SC|GIVE SCR|GIVE SCRE|GIVE SCREE|GIVE SCREEN)(?:\s*:[^\]]*)?$"#, options: .regularExpression) { left.removeSubrange(open) }
+        var left = BotPDFOrder.extract(from: BotScreenGift.extract(from: BotResearchOrder.extract(from: text).text).text).text
+        if let open = left.range(of: #"(?i)\[\s*(?:P|PD|PDF|R|RE|RES|RESE|RESEA|RESEAR|RESEARC|RESEARCH|G|GI|GIV|GIVE|GIVE |GIVE S|GIVE SC|GIVE SCR|GIVE SCRE|GIVE SCREE|GIVE SCREEN)(?:\s*:[^\]]*)?$"#, options: .regularExpression) { left.removeSubrange(open) }
         return left
     }
 }

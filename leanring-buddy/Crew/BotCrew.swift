@@ -100,7 +100,8 @@ extension BotsStore {
         if words.contains("[SCREEN") || words.contains("[CLICKY") || words.contains("[TELL") {
             words = ClickyOrder.extract(from: BotScreenOrder.extract(from: words).text).text
         }
-        let line = words.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        // Only the start is looked at: this runs on every streamed chunk, and a reply can be very long.
+        let line = words.prefix(2_000).split(maxSplits: 1, whereSeparator: \.isNewline).first.map { String($0.prefix(300)) } ?? ""
         return line.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "#", with: "")
             .trimmingCharacters(in: .whitespaces)
     }

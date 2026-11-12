@@ -341,6 +341,10 @@ public enum BotProtocol {
         "Two to four options, the one you'd pick first. Most messages need none of this."
 
     /// Bots' screen jobs run on the Mac Studio's hidden screens, through Clicky.
+    /// How a bot gets a PDF made: it writes the document, Theo renders it.
+    public static let pdfHowTo = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: " +
+        "Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so."
+
     public static let screenHowTo =
         "Addy's Mac Studio has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +

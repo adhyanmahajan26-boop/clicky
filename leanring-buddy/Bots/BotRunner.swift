@@ -11,6 +11,7 @@
 //
 
 import ClickyCore
+import Darwin
 import Foundation
 
 enum BotRunnerError: LocalizedError {
@@ -46,15 +47,71 @@ final class FallbackSessions: @unchecked Sendable {
 final class BotProcesses: @unchecked Sendable {
     static let shared = BotProcesses()
     private let lock = NSLock()
-    private var running: [String: Process] = [:]
+    private struct Running {
+        let token: ObjectIdentifier
+        let isRunning: () -> Bool
+        let stop: () -> Void
+    }
+    private var running: [String: Running] = [:]
     /// Replies running over the API have a task instead of a process.
     private var tasks: [String: Task<(text: String, session: String?), Error>] = [:]
 
     func setTask(_ botID: String, _ task: Task<(text: String, session: String?), Error>?) { lock.withLock { tasks[botID] = task } }
 
-    func set(_ botID: String, _ process: Process) { lock.withLock { running[botID] = process } }
-    func remove(_ botID: String, _ process: Process) {
-        lock.withLock { if running[botID] === process { running[botID] = nil } }
+    func set(_ botID: String, _ process: Process) {
+        lock.withLock { running[botID] = Running(token: ObjectIdentifier(process), isRunning: { process.isRunning }, stop: { process.terminate() }) }
+    }
+    /// An engine in its own process group: stopping it takes everything it started with it, even what ignores SIGTERM.
+    func set(_ botID: String, _ child: ChildProcess, executable: String) {
+        lock.withLock {
+            running[botID] = Running(token: ObjectIdentifier(child), isRunning: { !child.isFinished }, stop: { child.cancel() })
+            groups[ObjectIdentifier(child)] = (child.processGroupIdentifier, Self.startTime(of: child.processGroupIdentifier) ?? 0)
+            writeGroupsLocked()
+        }
+    }
+    func remove(_ botID: String, _ object: AnyObject) {
+        lock.withLock {
+            if running[botID]?.token == ObjectIdentifier(object) { running[botID] = nil }
+            if groups.removeValue(forKey: ObjectIdentifier(object)) != nil { writeGroupsLocked() }
+        }
+    }
+
+    // MARK: Engines left behind by a crash
+
+    /// The engine process groups running now, on disk, so the next launch can end any that a crash left behind
+    /// (they would otherwise run to the end of their task, using the owner's subscription with nobody listening).
+    private var groups: [ObjectIdentifier: (pgid: pid_t, started: UInt64)] = [:]
+    static var groupsFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Theo/engines-running.json")
+    }
+
+    private func writeGroupsLocked() {
+        let list = groups.values.map { ["pgid": Int($0.pgid), "started": $0.started] as [String: Any] }
+        if let data = try? JSONSerialization.data(withJSONObject: list) { try? data.write(to: Self.groupsFile, options: .atomic) }
+    }
+
+    /// When a process started (seconds since 1970), so a process id that's been reused since is never mistaken for it.
+    static func startTime(of pid: pid_t) -> UInt64? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info.pbi_start_tvsec
+    }
+
+    /// At launch: any engine group from before that's still running is ended. Only a process that started at the
+    /// recorded time is touched, never a later one that got the same id. Returns how many were ended.
+    @discardableResult static func endLeftovers() -> Int {
+        guard let data = try? Data(contentsOf: groupsFile),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return 0 }
+        var ended = 0
+        for entry in list {
+            guard let pgid = (entry["pgid"] as? Int).map(pid_t.init), pgid > 1,
+                  let started = (entry["started"] as? NSNumber)?.uint64Value, started > 0,
+                  startTime(of: pgid) == started else { continue }
+            if killpg(pgid, SIGKILL) == 0 { ended += 1 }
+        }
+        try? FileManager.default.removeItem(at: groupsFile)
+        return ended
     }
     /// Stops the bot's reply; false when nothing was running.
     @discardableResult func stop(_ botID: String) -> Bool {
@@ -62,15 +119,27 @@ final class BotProcesses: @unchecked Sendable {
             task.cancel()
             return true
         }
-        guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning else { return false }
-        process.terminate()
+        guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning() else { return false }
+        process.stop()
         return true
     }
 }
 
 enum BotRunner {
-    /// The longest one bot turn may take.
-    static let turnLimitSeconds: Double = 420
+    /// The longest one bot turn may take. A test profile can shorten it (`test.bots.turnLimit`) to test a stuck engine.
+    static var turnLimitSeconds: Double {
+        if TheoProfile.isTest, let limit = UserDefaults.standard.object(forKey: "test.bots.turnLimit") as? Double, limit > 0 { return limit }
+        return 420
+    }
+
+    /// The engine a bot runs. A test profile can swap in a stand-in program (`test.engine.claude` or `test.engine.opencode`) to test
+    /// an engine that crashes, hangs or talks nonsense, without touching the real one.
+    static func executable(for provider: BrainProvider) -> URL? {
+        if TheoProfile.isTest, let path = UserDefaults.standard.string(forKey: "test.engine.\(provider.rawValue)"), !path.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+        }
+        return BrainCLIRunner.locateExecutable(for: provider)
+    }
 
     /// Where bots run: the folder that holds their memory files, so reading and keeping memory never needs a permission nobody is there to
     /// give. Theo's own folder: ~/.t3 belongs to T3 Code.
@@ -170,7 +239,7 @@ enum BotRunner {
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
-        guard let executable = BrainCLIRunner.locateExecutable(for: provider) else {
+        guard let executable = executable(for: provider) else {
             throw BotRunnerError.notInstalled(provider.displayName)
         }
         var arguments: [String]
@@ -203,45 +272,42 @@ enum BotRunner {
             arguments += [prompt]
         }
 
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        process.currentDirectoryURL = workspace
         var environment = ProcessInfo.processInfo.environment
         scrubClaudeEnvironment(&environment)
         environment["NO_COLOR"] = "1"
         environment["PWD"] = workspace.path
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: bot.provider)) { _, new in new }
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardInput = FileHandle.nullDevice
         let errorLog = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Clicky/bots-\(provider.rawValue).log")
         try? FileManager.default.createDirectory(at: errorLog.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: errorLog.path) {
-            FileManager.default.createFile(atPath: errorLog.path, contents: nil)
+        // Its own process group, so a stop or the time limit takes down everything the engine started (tools, MCP servers),
+        // escalating to SIGKILL when something ignores SIGTERM, and nothing left over can hold the turn open.
+        let (lineStream, lineSink) = AsyncStream<String>.makeStream()
+        let child: ChildProcess
+        do {
+            child = try ChildProcess.launch(executable: executable.path, arguments: arguments, environment: environment,
+                                            workingDirectory: workspace.path, timeouts: .total(turnLimitSeconds)) { line in
+                lineSink.yield(String(decoding: line, as: UTF8.self))
+            }
+        } catch {
+            lineSink.finish()
+            throw BotRunnerError.failed("\(provider.displayName) couldn't start: \(error)")
         }
-        let errorHandle = try? FileHandle(forWritingTo: errorLog)
-        let logStart = errorHandle?.seekToEndOfFile() ?? 0
-        process.standardError = errorHandle ?? FileHandle.nullDevice
-        try process.run()
-        BotProcesses.shared.set(bot.id, process)
-        defer { BotProcesses.shared.remove(bot.id, process) }
-        // A turn that runs past the limit is stopped, so one stuck bot can't hold up the Project room.
-        let watchdog = Task.detached {
-            try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
-            if process.isRunning { process.terminate() }
+        BotProcesses.shared.set(bot.id, child, executable: executable.path)
+        defer { BotProcesses.shared.remove(bot.id, child) }
+        let finished = Task.detached { () -> ChildProcessResult in
+            let result = await child.waitForExit()
+            lineSink.finish()
+            return result
         }
-        defer { watchdog.cancel() }
         let started = Date()
         let limitCheck = Task.detached {
             guard !isClaude else { return false }
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                if !process.isRunning { return false }
+                if child.isFinished { return false }
                 if openCodeHitFreeLimit(since: started) {
-                    process.terminate()
+                    child.cancel()
                     return true
                 }
             }
@@ -249,25 +315,53 @@ enum BotRunner {
         }
 
         var parser = BotStreamParser(isClaude: isClaude)
-        for await line in lines(of: output.fileHandleForReading) where parser.consume(line) {
-            let text = parser.text
-            await onText(text)
+        // The live bubble redraws at most 20 times a second: an engine that floods text can't swamp the main thread,
+        // whose work per redraw grows with the length of the reply.
+        // The bubble shows at most the first 20,000 characters while it streams, so the cost of a redraw stays bounded too.
+        func live(_ text: String) -> String { text.utf8.count > 20_000 ? String(text.prefix(20_000)) : text }
+        var lastShown = Date.distantPast
+        var gap: TimeInterval = 0.05
+        var unshown = false
+        for await line in lineStream where parser.consume(line) {
+            guard Date().timeIntervalSince(lastShown) >= gap else { unshown = true; continue }
+            let began = Date()
+            unshown = false
+            await onText(live(parser.text))
+            lastShown = Date()
+            // Never more than a fifth of the time on redraws, however slow they get.
+            gap = max(0.05, lastShown.timeIntervalSince(began) * 4)
         }
-        process.waitUntilExit()
-        try? errorHandle?.close()
+        if unshown { await onText(live(parser.text)) }
+        let ended = await finished.value
+        let errorText = ended.standardErrorText
+        if !errorText.isEmpty {
+            if !FileManager.default.fileExists(atPath: errorLog.path) { FileManager.default.createFile(atPath: errorLog.path, contents: nil) }
+            if let handle = try? FileHandle(forWritingTo: errorLog) {
+                handle.seekToEndOfFile()
+                handle.write(Data(String(errorText.suffix(20_000)).utf8))
+                try? handle.close()
+            }
+        }
         if parser.text.isEmpty, await limitCheck.value { throw BotRunnerError.freeLimit }
         limitCheck.cancel()
-        if let error = parser.error, parser.text.isEmpty {
-            if session != nil, saysSessionIsLost(error) { throw BotRunnerError.lostSession }
-            throw BotRunnerError.failed(error)
-        }
-        if parser.text.isEmpty && process.terminationStatus != 0 {
-            if session != nil, let reader = try? FileHandle(forReadingFrom: errorLog) {
-                defer { try? reader.close() }
-                try? reader.seek(toOffset: logStart)
-                if saysSessionIsLost(String(decoding: reader.readDataToEndOfFile().suffix(4000), as: UTF8.self)) { throw BotRunnerError.lostSession }
+        if ended.endReason == .totalTimeout {
+            let minutes = Int((turnLimitSeconds / 60).rounded())
+            let limit = minutes >= 1 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : "\(Int(turnLimitSeconds)) seconds"
+            guard !parser.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw BotRunnerError.failed("\(provider.displayName) didn't finish within \(limit), so Theo stopped it.")
             }
-            throw BotRunnerError.failed("\(provider.displayName) stopped (exit \(process.terminationStatus)). " +
+            return (parser.text + "\n\n_(Cut off: this reply didn't finish within \(limit), so Theo stopped it.)_", parser.sessionID ?? newSessionID ?? session)
+        }
+        if let error = parser.error, parser.text.isEmpty {
+            // The engine's own words are often only on stderr ("--resume requires a valid session ID"), with a bare error result on stdout.
+            let lastError = errorText.split(whereSeparator: \.isNewline).last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+            if session != nil, saysSessionIsLost(error) || saysSessionIsLost(String(errorText.suffix(4000))) { throw BotRunnerError.lostSession }
+            throw BotRunnerError.failed(error == "Claude reported an error." && !lastError.isEmpty ? "Claude reported an error: \(lastError.prefix(300))" : error)
+        }
+        let status = ended.exitStatus ?? -1
+        if parser.text.isEmpty && status != 0 {
+            if session != nil, saysSessionIsLost(String(errorText.suffix(4000))) { throw BotRunnerError.lostSession }
+            throw BotRunnerError.failed("\(provider.displayName) stopped (\(ended.terminatingSignal.map { "signal \($0)" } ?? "exit \(status)")). " +
                                         "Details are in ~/Library/Logs/Clicky/bots-\(provider.rawValue).log.")
         }
         return (parser.text, parser.sessionID ?? newSessionID ?? session)

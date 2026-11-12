@@ -256,7 +256,7 @@ final class BotsStore: ObservableObject {
         for file in (try? FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent("chats").path)) ?? [] where file.hasSuffix(".json") {
             if let thread = BotDMThread.thread(fromFileName: String(file.dropLast(".json".count))) { conversations[thread] = loadConversation(thread) }
         }
-        if let data = try? Data(contentsOf: runsFile), let runs = try? Self.decoder.decode([T3Run].self, from: data) {
+        if let runs = BotsSavedFile.load([T3Run].self, from: runsFile, decoder: Self.decoder, what: "the list of coding runs") {
             t3Runs = runs
         }
         // A run that was wrapping up when Theo quit goes through its report again; pushing twice is harmless.
@@ -269,6 +269,18 @@ final class BotsStore: ObservableObject {
         loadLinkStamps()
         if !isHostingTests { stampRoutinesOnce() }
         BotMemory.writeGuide(owner: BotPrompts.ownerName)
+        if !isHostingTests {
+            // Engines a crash left running with nobody listening are ended before anything new starts.
+            let leftovers = BotProcesses.endLeftovers()
+            if leftovers > 0 { NSLog("Theo ended %d engine process group(s) left running before this launch", leftovers) }
+            // A file that couldn't be read is said plainly, once, where Addy will see it.
+            for problem in BotsSavedFile.takeProblems() { post(BotChatMessage(author: Self.noteAuthor, text: problem), to: primary?.id ?? "theo") }
+            // Turns Theo was in the middle of when it quit or crashed get answered, not silently dropped.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                self?.resumeInterruptedTurns()
+            }
+        }
         // Which engines can run on this Mac, for the bots' prompts and for the other Mac.
         Task { @MainActor in HarnessCenter.shared.refresh() }
     }
@@ -1134,7 +1146,7 @@ final class BotsStore: ObservableObject {
                     let fresh = self?.startOverPrompt(bot: bot, in: conversationID, prompt: prompt) ?? prompt
                     result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, onText: onText)
                 }
-                answer = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                answer = BotsStore.keepingLongReplyAside(result.text.trimmingCharacters(in: .whitespacesAndNewlines), bot: bot)
                 newSession = result.session
             } catch {
                 answer = nil
@@ -1169,6 +1181,13 @@ final class BotsStore: ObservableObject {
             }
             // A turn the owner set off can ask for the work screen, and so can a bot Theo asked on the owner's behalf. One set
             // off by a page or another bot's job can't, and says so: the tag never just sits in the chat looking like it ran.
+            // [PDF: file]: Theo renders a document the bot wrote in its own folder. Bots can't run commands, so this is how they make one.
+            var pdfFiles: [String] = []
+            if bot.owner == nil, let said = answer {
+                let taken = BotPDFOrder.extract(from: said)
+                answer = taken.text
+                pdfFiles = taken.files
+            }
             var screenOrders: [String] = []
             var researchOrders: [String] = []
             var screenGifts: [(bot: String, screen: String)] = []
@@ -1214,6 +1233,15 @@ final class BotsStore: ObservableObject {
             self.writeConversation(conversationID)
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
+            for name in pdfFiles {
+                let folder = BotMemory.file(botID: bot.id).deletingLastPathComponent()
+                do {
+                    let pdf = try BotPDF.make(named: name, in: folder)
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Theo made the PDF \(pdf.lastPathComponent) for \(bot.name): [\(pdf.lastPathComponent)](\(pdf.absoluteString))\n\(pdf.path)", exchangeID: privately?.exchangeID), to: conversationID)
+                } catch {
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Theo couldn't make a PDF for \(bot.name): \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
+                }
+            }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
             for gift in screenGifts { self.proposeScreen(gift, from: bot, room: conversationID) }
@@ -1679,7 +1707,7 @@ final class BotsStore: ObservableObject {
     }()
 
     private func loadBots() -> [NativeBot] {
-        let saved = (try? Data(contentsOf: botsFile)).flatMap { try? Self.decoder.decode([NativeBot].self, from: $0) }
+        let saved = BotsSavedFile.load([NativeBot].self, from: botsFile, decoder: Self.decoder, what: "the list of bots")
         let base = (saved?.isEmpty == false ? saved : nil) ?? []
         let offeredFile = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: offeredFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
@@ -1705,7 +1733,7 @@ final class BotsStore: ObservableObject {
 
     /// Saved group chats; a fresh setup has none until Addy makes them.
     private func loadGroups() -> [BotGroup] {
-        guard let data = try? Data(contentsOf: groupsFile), let saved = try? Self.decoder.decode([BotGroup].self, from: data) else { return [] }
+        guard let saved = BotsSavedFile.load([BotGroup].self, from: groupsFile, decoder: Self.decoder, what: "the group chats") else { return [] }
         return saved.filter { $0.headID == nil || bot($0.headID!) != nil }
     }
 
@@ -1721,8 +1749,7 @@ final class BotsStore: ObservableObject {
     }
 
     private func loadConversation(_ id: String) -> BotConversationRecord {
-        guard let data = try? Data(contentsOf: chatFile(id)) else { return BotConversationRecord() }
-        return (try? Self.decoder.decode(BotConversationRecord.self, from: data)) ?? BotConversationRecord()
+        BotsSavedFile.load(BotConversationRecord.self, from: chatFile(id), decoder: Self.decoder, what: "the chat \(id)") ?? BotConversationRecord()
     }
 
     func writeConversation(_ id: String) {
@@ -1862,6 +1889,7 @@ enum BotPrompts {
         if bot.owner == nil {
             parts.append(BotPrompts.routineHowTo)
             parts.append(BotPrompts.codingHowTo)
+            if !bot.provider.hasPrefix("api:") { parts.append(BotProtocol.pdfHowTo) }
         }
         parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
         if bot.owner == nil { parts.append(reachNote(for: bot)) }
@@ -1999,10 +2027,10 @@ extension BotsStore {
     private var layoutFile: URL { folder.appendingPathComponent("layout.json") }
 
     fileprivate func loadRoutinesAndLayout() {
-        if let data = try? Data(contentsOf: routinesFile), let saved = try? Self.decoder.decode([BotRoutine].self, from: data) {
+        if let saved = BotsSavedFile.load([BotRoutine].self, from: routinesFile, decoder: Self.decoder, what: "the routines") {
             routines = saved
         }
-        if let data = try? Data(contentsOf: layoutFile), let saved = try? Self.decoder.decode(BotsLayout.self, from: data) {
+        if let saved = BotsSavedFile.load(BotsLayout.self, from: layoutFile, decoder: Self.decoder, what: "the sidebar layout") {
             layout = saved
         } else {
             // First run: a group without a head (the old "Personal" list) becomes a sidebar section.
