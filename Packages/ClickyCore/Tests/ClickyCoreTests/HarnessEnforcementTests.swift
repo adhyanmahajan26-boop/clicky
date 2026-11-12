@@ -112,3 +112,30 @@ struct BotReadScopeTests {
         #expect(rules.contains("Grep(//Volumes/Work/x/**)"))
     }
 }
+
+struct LocalUIGateTests {
+    @Test func onlyLoopbackHostAtThePort() {
+        #expect(LocalUIGate.hostAllowed("127.0.0.1:47320", port: 47320))
+        #expect(LocalUIGate.hostAllowed("localhost:47320", port: 47320))
+        #expect(!LocalUIGate.hostAllowed("attacker.example:47320", port: 47320))
+        #expect(!LocalUIGate.hostAllowed("127.0.0.1", port: 47320))
+        #expect(!LocalUIGate.hostAllowed(nil, port: 47320))
+    }
+
+    @Test func t3CodeExactlyOnItsOrigin() {
+        #expect(LocalUIGate.isT3Code(origin: "http://127.0.0.1:3773", devServer: false))
+        #expect(LocalUIGate.isT3Code(origin: "t3code://app", devServer: false))
+        #expect(!LocalUIGate.isT3Code(origin: "http://127.0.0.1:37730", devServer: false))
+        #expect(!LocalUIGate.isT3Code(origin: "http://127.0.0.1:3773.attacker.example", devServer: false))
+        #expect(!LocalUIGate.isT3Code(origin: "null", devServer: false))
+        // A Referer only counts where it's allowed to (embedding), and then only its origin.
+        #expect(!LocalUIGate.isT3Code(origin: nil, referer: nil, devServer: false))
+        #expect(LocalUIGate.isT3Code(origin: nil, referer: "http://127.0.0.1:3773/settings/theo", devServer: false))
+        #expect(!LocalUIGate.isT3Code(origin: nil, referer: "http://127.0.0.1:3773.evil.example/", devServer: false))
+    }
+
+    @Test func devServerOnlyWhenSwitchedOn() {
+        #expect(!LocalUIGate.isT3Code(origin: "http://localhost:5733", devServer: false))
+        #expect(LocalUIGate.isT3Code(origin: "http://localhost:5733", devServer: true))
+    }
+}

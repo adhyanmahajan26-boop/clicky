@@ -190,7 +190,7 @@ enum BotRunner {
     static var secretReadRules: [String] {
         let home = ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gh/**", "~/.config/gcloud/**", "~/.azure/**", "~/.kube/**",
                     "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials", "~/.zsh_history", "~/.bash_history",
-                    "~/.claude.json", "~/.claude/.credentials.json", "~/.codex/auth.json", "~/.grok/**", "~/.gemini/**", "~/.cursor/**",
+                    "~/.claude.json", "~/.claude/.credentials.json", "~/.clicky/**", "~/.codex/auth.json", "~/.grok/**", "~/.gemini/**", "~/.cursor/**",
                     "~/.local/share/opencode/auth.json", "~/Library/Keychains/**", "~/Library/Cookies/**", "~/Library/Mail/**",
                     "~/Library/Messages/**", "~/Library/Application Support/Google/Chrome/**"]
         // Theo's own records sit beside the bots' memory folders: absolute paths, since a test profile keeps them under its own home.

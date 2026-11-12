@@ -19,7 +19,11 @@ import Network
 
 @MainActor
 final class ClaudiaUIServer {
-    static let port: UInt16 = 47320
+    /// A test profile runs it only when given a port of its own (`test.ui.port`), never on the owner's.
+    static var port: UInt16 {
+        if TheoProfile.isTest { return UInt16(clamping: UserDefaults.standard.integer(forKey: "test.ui.port")) }
+        return 47320
+    }
     static let tokenURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/ui-token")
 
     private let controlInbox: ClaudiaControlInbox
@@ -85,6 +89,10 @@ final class ClaudiaUIServer {
 
     private func respond(to request: HTTPRequest, on connection: NWConnection) {
         let path = request.path.split(separator: "?").first.map(String.init) ?? "/"
+        // Only this Mac's loopback name at this port: a page served under another name that resolves here (DNS rebinding) gets nothing.
+        guard LocalUIGate.hostAllowed(request.headers["host"], port: Self.port) else {
+            return send(connection, status: 403, type: "text/plain", body: Data("Wrong host.".utf8))
+        }
         let corsHeaders: [String: String] = Self.isT3Code(request) ? [
             "Access-Control-Allow-Origin": request.headers["origin"] ?? "*",
             "Access-Control-Allow-Headers": "Content-Type, X-Claudia-Token",
@@ -108,7 +116,7 @@ final class ClaudiaUIServer {
         }
         // Embedded in T3 Code (its own page at 127.0.0.1:3773): the token is filled in for that page only.
         if request.method == "GET" && path == "/t3" {
-            guard Self.isT3Code(request) else { return send(connection, status: 403, type: "text/plain", body: Data("Only T3 Code can embed Theo.".utf8)) }
+            guard Self.isT3Code(request, embedding: true) else { return send(connection, status: 403, type: "text/plain", body: Data("Only T3 Code can embed Theo.".utf8)) }
             let page = ClaudiaUIPage.html.replacingOccurrences(of: "/*CLAUDIA_TOKEN*/\"\"", with: "\"\(token)\"")
             return send(connection, status: 200, type: "text/html; charset=utf-8", body: Data(page.utf8))
         }
@@ -148,11 +156,11 @@ final class ClaudiaUIServer {
 
     /// T3 Code's web UI runs at 127.0.0.1:3773 (its server port; the dev web server uses 5733).
     /// T3 Code's packaged app loads its UI from t3code://app (t3code-dev:// in development).
-    static let t3CodeOrigins = ["t3code://app", "t3code-dev://app", "http://127.0.0.1:3783", "http://localhost:3783", "http://127.0.0.1:3773", "http://localhost:3773", "http://127.0.0.1:5733", "http://localhost:5733"]
-
-    static func isT3Code(_ request: HTTPRequest) -> Bool {
-        let source = request.headers["origin"] ?? request.headers["referer"] ?? ""
-        return t3CodeOrigins.contains { source == $0 || source.hasPrefix($0 + "/") }
+    /// T3 Code's own page, matched exactly on its Origin. A Referer stands in only for embedding the page (an iframe sends none),
+    /// and T3 Code's dev server only when `v3.t3.devServerOrigins` is on.
+    static func isT3Code(_ request: HTTPRequest, embedding: Bool = false) -> Bool {
+        LocalUIGate.isT3Code(origin: request.headers["origin"], referer: embedding ? request.headers["referer"] : nil,
+                             devServer: UserDefaults.standard.bool(forKey: "v3.t3.devServerOrigins"))
     }
 
     private func send(_ connection: NWConnection, status: Int, type: String, body: Data, extraHeaders: [String: String] = [:]) {

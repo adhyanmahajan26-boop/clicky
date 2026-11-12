@@ -131,11 +131,11 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         let inbox = ClaudiaControlInbox(companionManager: companionManager)
         inbox.start()
         controlInbox = inbox
-        if !TheoProfile.isTest {
+        if !TheoProfile.isTest || ClaudiaUIServer.port != 0 {
             uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
             uiServer?.start()
-            openAtLogin()
         }
+        if !TheoProfile.isTest { openAtLogin() }
 
         // The hidden screens come up when a bot first needs one. Making them moves a monitor, so not on every launch.
 
