@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Theo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="brand"><span class="tile graphite">T</span><span>Theo</span></div>
+    <button id="new-bot" class="row action">New bot</button>
+    <div class="section-label">Bots</div>
+    <nav id="bots"></nav>
+    <div class="section-label">Groups</div>
+    <nav id="groups"></nav>
+    <div class="footer">
+      <button class="row" data-pane="routines">Routines</button>
+      <button class="row" data-pane="usage">Usage</button>
+      <button class="row" data-pane="settings">Settings</button>
+    </div>
+  </aside>
+  <main id="main">
+    <header id="chat-header"><span id="chat-tile" class="tile"></span><div><div id="chat-name"></div><div id="chat-status"></div></div></header>
+    <section id="pane"></section>
+    <form id="composer" autocomplete="off">
+      <textarea id="input" rows="1" placeholder="Message"></textarea>
+      <button id="send" type="submit" aria-label="Send">&#8593;</button>
+    </form>
+  </main>
+  <dialog id="bot-dialog">
+    <form method="dialog" id="bot-form">
+      <h2>New bot</h2>
+      <label>Name <input name="name" required maxlength="40"></label>
+      <label>What it does <input name="description" maxlength="120"></label>
+      <label>Instructions <textarea name="instructions" rows="5"></textarea></label>
+      <label>Model
+        <select name="model">
+          <option value="claude-sonnet-5-5">Sonnet</option>
+          <option value="claude-haiku-5-5">Haiku</option>
+          <option value="claude-opus-5-5">Opus</option>
+        </select>
+      </label>
+      <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Create</button></menu>
+    </form>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>

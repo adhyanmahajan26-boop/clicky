@@ -1,0 +1,8 @@
+/target/
+/dist/
+/tests/work/
+/tests/results/
+/tests/__pycache__/
+/app/node_modules/
+/app/src-tauri/target/
+/app/src-tauri/gen/

@@ -1,0 +1,22 @@
+[package]
+name = "theo-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Theo: your team of bots, on Windows, Linux and Mac"
+license = "MIT"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+theo-core = { path = "../../crates/theo-core" }
+tauri = { version = "2", features = [] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,130 @@
+# Theo for Windows, Linux and Mac (crossplatform/): build, test on real Linux and Windows machines, and package installers.
+# Nothing here publishes a release: installers are uploaded as workflow artifacts only.
+name: Theo cross-platform
+
+on:
+  push:
+    paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
+  pull_request:
+    paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: crossplatform-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: crossplatform
+
+jobs:
+  engine:
+    name: Engine and suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crossplatform
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        run: cargo test --workspace
+      - name: Build theod
+        run: cargo build -p theod
+      - name: Linux install script against a stand-in GitHub
+        if: runner.os == 'Linux'
+        run: python3 tests/install_test.py
+      - name: Ported harness suite against theod
+        shell: bash
+        env:
+          THEO_TEST_ROOT: ${{ runner.temp }}/theo-suite/work
+          PYTHONUNBUFFERED: "1"
+        run: python tests/suite.py
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-results-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/theo-suite/results
+            ${{ runner.temp }}/theo-suite/work/theod.log
+
+  desktop:
+    name: Desktop app and installers (${{ matrix.os }})
+    needs: engine
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundles: appimage,deb
+            app: app/src-tauri/target/release/theo-desktop
+          - os: windows-2022
+            bundles: msi,nsis
+            app: app/src-tauri/target/release/theo-desktop.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crossplatform/app/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+      - name: Build the app and its installers
+        working-directory: crossplatform/app
+        run: |
+          npm ci
+          npx tauri build --bundles ${{ matrix.bundles }}
+      - name: Drive the real app with the suite (Linux, under a virtual display)
+        if: runner.os == 'Linux'
+        env:
+          THEOD_BIN: ${{ github.workspace }}/crossplatform/${{ matrix.app }}
+          THEO_TEST_ROOT: ${{ runner.temp }}/theo-app/work
+        run: xvfb-run -a python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24
+      - name: Drive the real app with the suite (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          THEOD_BIN: ${{ github.workspace }}/crossplatform/${{ matrix.app }}
+          THEO_TEST_ROOT: ${{ runner.temp }}/theo-app/work
+        run: python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24
+      - name: Name the installers and checksum them
+        shell: bash
+        run: python tools/collect_installers.py app/src-tauri/target/release/bundle dist "ci-${GITHUB_RUN_NUMBER}"
+      - name: Install, reinstall and remove with install.ps1 (the real NSIS installer, no admin)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python tests/install_ps_test.py dist/Theo-ci-${GITHUB_RUN_NUMBER}-windows-x64-setup.exe
+      - name: Install the .deb and start Theo from it
+        if: runner.os == 'Linux'
+        run: |
+          deb=dist/Theo-ci-${GITHUB_RUN_NUMBER}-linux-amd64.deb
+          pkg=$(dpkg-deb -f "$deb" Package)
+          sudo apt-get install -y "./$deb"
+          bin=$(dpkg -L "$pkg" | grep -E '^/usr/bin/' | head -1)
+          echo "package $pkg installs $bin"
+          THEOD_BIN="$bin" THEO_TEST_ROOT=${{ runner.temp }}/theo-deb/work xvfb-run -a python tests/suite.py T12 P_usage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: theo-installers-${{ matrix.os }}
+          path: crossplatform/dist
