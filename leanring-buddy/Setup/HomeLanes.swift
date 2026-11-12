@@ -16,6 +16,7 @@ struct HomeLanes: View {
     @ObservedObject var selection: BotsSelection
     @ObservedObject private var health = ConnectorHealth.shared
     @ObservedObject private var products = TheoProducts.shared
+    @ObservedObject private var folds = PixelCardFolds.shared
 
     private var team: [NativeBot] { store.bots.filter { !$0.primary && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) } }
 
@@ -26,6 +27,8 @@ struct HomeLanes: View {
         let working = team.filter { states[$0.id]?.lane == .working }
         let done = team.filter { states[$0.id] == .done }
         let asleep = team.filter { states[$0.id] == .idle }
+        // Cards answered in the last ten minutes stay as their folded lines, so the answer shows where it was given.
+        let justAnswered = folds.folds.filter { Date().timeIntervalSince($0.value.at) < 600 }.sorted { $0.value.at > $1.value.at }.prefix(4).map(\.key)
         let keyCard = products.isOn(.dictation) && products.dictationAccess == .needsKey
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
@@ -38,9 +41,10 @@ struct HomeLanes: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
                     laneTitle("Needs you", count: needing.count + (keyCard ? 1 : 0))
-                    if needing.isEmpty && !keyCard { quiet("Nothing needs you right now.") }
+                    if needing.isEmpty && !keyCard && justAnswered.isEmpty { quiet("Nothing needs you right now.") }
                     ForEach(needing) { bot in needsCard(bot) }
                     if keyCard { SarvamKeyCard() }
+                    ForEach(justAnswered, id: \.self) { card in folds.line(card) }
                     if !failed.isEmpty {
                         laneTitle("Failed", count: failed.count).padding(.top, 6)
                         ForEach(failed) { bot in FailedBotCard(bot: bot) }
@@ -74,6 +78,8 @@ struct HomeLanes: View {
     @ViewBuilder private func needsCard(_ bot: NativeBot) -> some View {
         if let connector = health.blockingConnector(of: bot.id) {
             AppSignInCard(bot: bot, connector: connector)
+        } else if let harness = store.signedOutEngine(of: bot), let failed = store.conversation(bot.id).messages.last(where: { $0.author == bot.id }) {
+            HarnessSignInCard(bot: bot, harness: harness, cardID: "failure:\(failed.id)")
         } else if let call = store.openCall(of: bot.id), let message = store.conversation(bot.id).messages.last {
             BotCallCard(call: call, author: bot, at: message.at, isOpen: true) { answer in store.send(answer, command: answer, to: bot.id) }
         } else if let run = store.liveRun(of: bot.id), run.phase == "waiting" {
@@ -173,11 +179,14 @@ struct FailedBotCard: View {
             let first = failure.firstSentence
             let rest = failure.reason.dropFirst(min(failure.reason.count, first.count)).trimmingCharacters(in: CharacterSet(charactersIn: ". \n"))
             PixelCard(tone: .failed, lead: .bot(bot, .failed), name: bot.name,
-                      context: (failure.step.map { "stopped at \($0) · " } ?? "") + BotsStore.shortAge(since: failure.at) + " ago",
+                      context: (failure.step.map { "stopped at \($0) · " } ?? "") + BotsStore.ago(failure.at),
                       question: Self.question(failure),
                       detail: first + "." + (rest.isEmpty ? "" : " " + rest + "."),
                       buttons: [
-                        PixelCardButton(title: "Try again", primary: true) { BotFailureCardActions.retry(bot: bot) },
+                        PixelCardButton(title: "Try again", primary: true) {
+                            PixelCardFolds.shared.fold("failure-home:\(bot.id):\(Int(failure.at.timeIntervalSince1970))", did: "You tried again", about: "\(bot.name) · " + first)
+                            BotFailureCardActions.retry(bot: bot)
+                        },
                         PixelCardButton(title: "See details") { BotsSelection.shared.pane = .bot(bot.id) },
                       ])
         }

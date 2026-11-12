@@ -93,6 +93,30 @@ enum PixelTestCommands {
             guard let bot = bot() else { return ["error": "No such bot."] }
             store.setUnreadForTest(bot.id, count: command["count"] as? Int ?? 1)
             return ["state": store.pixelState(of: bot).state.rawValue]
+        case "grokBot":
+            // A bot on Grok whose last reply failed because Grok was signed out, as BotRunner reports it.
+            let bot = store.bots.first { $0.name == "Grok Scout" }
+                ?? store.addBot(name: "Grok Scout", description: "Quick web lookups", instructions: "You are Grok Scout. Answer in one short line.", provider: "grok", model: "grok-4.7-build-fast", groupID: nil)
+            var item = BotChatMessage(author: "user", text: "Say hello in three words.")
+            item.at = Date().addingTimeInterval(-90)
+            var failed = BotChatMessage(author: bot.id, text: "Couldn't reply: Grok isn't signed in. Run grok login, then try again.")
+            failed.at = Date().addingTimeInterval(-80)
+            store.seedForTest(bot.id, messages: [item, failed])
+            store.recordFailure(of: bot.id, reason: "Grok isn't signed in. Run grok login, then try again.")
+            HarnessCenter.shared.refresh(force: true)
+            return ["bot": bot.id, "state": store.pixelState(of: bot).state.rawValue]
+        case "noteTurn":
+            // A bot's finished reply, through the same path BotsStore.reply uses after every turn.
+            guard let bot = bot(), let text = command["text"] as? String else { return ["error": "Needs bot and text."] }
+            var item = BotChatMessage(author: bot.id, text: text)
+            item.at = Date()
+            store.seedForTest(bot.id, messages: store.conversation(bot.id).messages + [item])
+            ConnectorHealth.shared.noteTurn(bot: bot, answer: text, room: bot.id)
+            return ["state": store.pixelState(of: bot).state.rawValue, "failure": store.bot(bot.id)?.lastFailure?.reason ?? NSNull(),
+                    "block": ConnectorHealth.shared.block(of: bot.id)?.connectorID ?? NSNull()] as [String: Any]
+        case "clearFolds":
+            for id in PixelCardFolds.shared.folds.keys { PixelCardFolds.shared.unfold(id) }
+            return ["ok": true]
         case "close":
             windows.values.forEach { $0.close() }
             windows = [:]
@@ -188,7 +212,7 @@ enum PixelTestCommands {
         // Failed.
         if let release = made["Release Mgr"] {
             store.seedForTest(release.id, messages: [
-                message("user", "Ship fix-login to GitHub as a draft PR.", 900),
+                message("user", "In one line, what does a release manager do? Don't run anything.", 900),
                 message(release.id, "Couldn't reply: Your GitHub sign-in has expired. The changes are saved on this Mac and nothing was lost.", 540),
             ])
             store.recordFailure(of: release.id, reason: "Your GitHub sign-in has expired. The changes are saved on this Mac and nothing was lost.", step: "Push")

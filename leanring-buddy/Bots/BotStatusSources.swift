@@ -90,6 +90,8 @@ final class ConnectorHealth: ObservableObject {
     @Published private(set) var lastConnected: [String: Date] = [:]
     /// Bots stuck on an app, by bot id.
     @Published private(set) var blocks: [String: Block] = [:]
+    /// The card of each bot's last block once it was answered (signed in, or "Not now"), so the chat keeps its folded line.
+    @Published private(set) var resolved: [String: String] = [:]
 
     struct Block: Codable, Equatable {
         var connectorID: String
@@ -156,10 +158,22 @@ final class ConnectorHealth: ObservableObject {
             lastConnected[connector.id] = Date()
         }
         save()
-        // An app that works again lets go of the bots that were waiting on it.
+        // An app that works again lets go of the bots that were waiting on it: the card folds and the bot picks the job back up.
         for (botID, block) in blocks {
             guard let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }) else { continue }
-            if [.connected, .claudeOnly, .othersOnly].contains(state(of: connector)) { clearBlock(of: botID) }
+            guard [.connected, .claudeOnly, .othersOnly].contains(state(of: connector)) else { continue }
+            let card = Self.cardID(botID: botID, block: block)
+            if block.failed == true {
+                PixelCardFolds.shared.fold(card, did: "\(connector.name) answers again", about: BotsStore.shared.bot(botID).map { "\($0.name) can carry on" })
+            } else {
+                PixelCardFolds.shared.fold(card, did: "Signed in to \(connector.name)", about: BotsStore.shared.bot(botID).map { "\($0.name) picked the job back up" })
+            }
+            resolve(botID, card: card)
+            if block.failed != true, BotsStore.shared.bot(botID) != nil {
+                // The bot's own chat may not hold the request (a fresh engine session), so it goes along.
+                let request = BotsStore.shared.conversation(botID).messages.last(where: { $0.author == "user" }).map { BotsStore.firstLine($0.text) }
+                BotsStore.shared.send("\(connector.name) is connected now. Carry on with what you were doing" + (request.map { ": \($0)" } ?? "."), to: botID)
+            }
         }
     }
 
@@ -256,6 +270,17 @@ final class ConnectorHealth: ObservableObject {
         blocks[botID] = nil
         save()
         BotsStore.shared.objectWillChange.send()
+    }
+
+    /// The block was answered: its card stays in the chat as a folded line.
+    func resolve(_ botID: String, card: String) {
+        resolved[botID] = card
+        clearBlock(of: botID)
+    }
+
+    /// One card per block, so a new block gets a new card.
+    static func cardID(botID: String, block: Block) -> String {
+        "signin:\(botID):\(block.connectorID):\(Int(block.at.timeIntervalSince1970))"
     }
 
     /// Words a reply uses when an app it reached for wasn't there for it.

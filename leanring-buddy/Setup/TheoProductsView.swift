@@ -191,6 +191,8 @@ struct SarvamKeyField: View {
         }
         saveFailed = false
         draft = ""
+        // The key card folds wherever it shows (Home, Setup, Products).
+        PixelCardFolds.shared.fold("key:sarvam", did: "Saved your Sarvam key", about: "Dictation is ready")
         Task { await keys.test(TheoProducts.dictationKeyProvider) }
     }
 }

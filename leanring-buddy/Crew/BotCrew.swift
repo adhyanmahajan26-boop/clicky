@@ -74,10 +74,19 @@ extension BotsStore {
     /// Bots waiting on the owner right now.
     var botsNeedingYou: [NativeBot] { bots.filter { pixelState(of: $0).state == .needs } }
 
+    /// The coding agent this bot runs on, when its last reply failed because that agent is signed out and it still is.
+    func signedOutEngine(of bot: NativeBot) -> HarnessInfo? {
+        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id }), last.text.hasPrefix("Couldn't reply: "),
+              let harness = BotFailureWords.signedOutHarness(in: last.text) else { return nil }
+        return HarnessCenter.shared.status(for: harness.id).loggedIn == true ? nil : harness
+    }
+
     // MARK: Which face
 
     /// What's true of this bot, for `PixelStatePriority`.
-    func pixelFacts(of bot: NativeBot, state: BotAvatarState = .idle) -> PixelStateFacts {
+    func pixelFacts(of passed: NativeBot, state: BotAvatarState = .idle) -> PixelStateFacts {
+        // A view can hold a copy from before a failure was recorded or cleared: the saved one is the truth.
+        let bot = self.bot(passed.id) ?? passed
         var facts = PixelStateFacts(isOn: bot.isOn)
         if bot.id == Self.clickyID {
             let voice = CompanionManager.current?.voiceState
@@ -92,6 +101,7 @@ extension BotsStore {
         facts.isWaitingOnOwner = run?.phase == "waiting" || openCall(of: bot.id) != nil
             || (BrowserResearcher.shared.needsOwner && bot.id == teamBot(.researcher)?.id)
             || ConnectorHealth.shared.blockingConnector(of: bot.id) != nil
+            || signedOutEngine(of: bot) != nil
         facts.hasUnseenFailure = bot.lastFailure != nil
         facts.isTyping = state == .typing
         if bot.primary, let call = TheoCallController.session, TheoCallController.isActive {
@@ -101,9 +111,11 @@ extension BotsStore {
         let streamed = !(BotLiveText.shared.text[bot.id] ?? "").isEmpty
         facts.isWorking = run != nil || (replying[bot.id] != nil && streamed)
         facts.isThinking = state == .thinking || (replying[bot.id] != nil && !streamed)
-        let last = conversation(bot.id).messages.last(where: { $0.author == bot.id })
+        // A reply that couldn't happen isn't a result.
+        let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !$0.text.hasPrefix("Couldn't reply: ") })
         let age = last.map { Date().timeIntervalSince($0.at) } ?? .infinity
-        facts.finishedRecently = age < Self.doneSeconds || ((unread[bot.id] ?? 0) > 0 && last != nil)
+        // A reply that said an app wasn't answering didn't finish anything.
+        facts.finishedRecently = (age < Self.doneSeconds || ((unread[bot.id] ?? 0) > 0 && last != nil)) && ConnectorHealth.shared.failedConnector(of: bot.id) == nil
         facts.isAwake = bot.primary || age < Self.dozeSeconds
         return facts
     }
@@ -122,7 +134,8 @@ extension BotsStore {
     }
 
     /// "Reading 6 sources", "Approved #41 · 2m", "Failed · GitHub sign-in expired": the line under a bot's name.
-    func liveStatus(of bot: NativeBot) -> String {
+    func liveStatus(of passed: NativeBot) -> String {
+        let bot = self.bot(passed.id) ?? passed
         guard bot.isOn else { return "Off" }
         if bot.id == Self.clickyID, isClickyBusy { return "Working" }
         if let run = liveRun(of: bot.id) {
@@ -133,6 +146,7 @@ extension BotsStore {
         if let call = openCall(of: bot.id) { return "Needs you · \(call.question)" }
         if bot.id == teamBot(.researcher)?.id, let check = BrowserResearcher.shared.checks.values.first { return "Needs you · \(check.host)" }
         if let connector = ConnectorHealth.shared.blockingConnector(of: bot.id) { return "Needs you · Sign in to \(connector.name)" }
+        if let harness = signedOutEngine(of: bot) { return "Needs you · Sign in to \(harness.label)" }
         if let failure = bot.lastFailure { return "Failed · \(failure.firstSentence)" }
         if replying[bot.id] != nil {
             let live = BotLiveHeadline.shared.line[bot.id] ?? ""
@@ -141,14 +155,15 @@ extension BotsStore {
             return live.isEmpty ? "Thinking…" : live
         }
         // An old message can be nothing but a tag, from before those were taken out as they arrive.
-        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !Self.firstLine($0.text).isEmpty }) else {
+        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !Self.firstLine($0.text).isEmpty && !$0.text.hasPrefix("Couldn't reply: ") }) else {
             return bot.description.isEmpty ? "Ready" : bot.description
         }
         return Self.firstLine(last.text) + " · " + Self.shortAge(since: last.at)
     }
 
     /// Since when the bot has been in its current state, for the time on the right of its row ("4m", "1:42").
-    func stateSince(of bot: NativeBot) -> Date? {
+    func stateSince(of passed: NativeBot) -> Date? {
+        let bot = self.bot(passed.id) ?? passed
         if let run = liveRun(of: bot.id) { return run.startedAt }
         if let failure = bot.lastFailure { return failure.at }
         if let block = ConnectorHealth.shared.block(of: bot.id) { return block.at }
@@ -170,6 +185,12 @@ extension BotsStore {
         let line = words.prefix(2_000).split(maxSplits: 1, whereSeparator: \.isNewline).first.map { String($0.prefix(300)) } ?? ""
         return line.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "#", with: "")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// "just now", "2m ago".
+    static func ago(_ date: Date) -> String {
+        let age = shortAge(since: date)
+        return age == "now" ? "just now" : age + " ago"
     }
 
     /// "now", "2m", "3h", "4d".

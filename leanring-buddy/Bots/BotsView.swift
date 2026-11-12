@@ -853,7 +853,7 @@ struct BotChatScreen: View {
                                 }
                             }
                         }
-                        if let bot { ChatStatusCards(bot: bot) }
+                        if let bot { ChatStatusCards(bot: store.bot(bot.id) ?? bot) }
                         ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                             T3RunCard(run: run, bot: bot ?? store.primary)
                         }
@@ -1023,6 +1023,8 @@ struct BotChatScreen: View {
                 BotAvatar(bot: bot, size: 84, state: .idle)
                 Text(bot.name).font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text(bot.description).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
+                // Off, or stuck on an app: the card says so even before the first message.
+                ChatStatusCards(bot: store.bot(bot.id) ?? bot).frame(maxWidth: 440).padding(.top, 8)
             } else if isProjectRoom {
                 Text("Group chat").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Text("Theo leads this group: the head hands your request to the others and merges their answers.")
@@ -1511,12 +1513,17 @@ struct BotAvatar: View {
     let size: CGFloat
     let state: BotAvatarState
     var badge = true
+    /// The face follows the bot's real state, so it watches what that state comes from.
+    @ObservedObject private var store = BotsStore.shared
+    @ObservedObject private var health = ConnectorHealth.shared
     /// The surface behind it, for the badge's ring.
     var ring: Color? = nil
 
     var body: some View {
-        let shown = BotsStore.shared.pixelState(of: bot, state: state)
-        CrewAvatar(look: bot.crewLook, size: size, pose: shown.state, poseUntil: shown.until, badge: badge, name: bot.name, ring: ring)
+        // The newest copy of the bot: a row can hold one from before its failure was recorded or cleared.
+        let current = store.bot(bot.id) ?? bot
+        let shown = store.pixelState(of: current, state: state)
+        CrewAvatar(look: current.crewLook, size: size, pose: shown.state, poseUntil: shown.until, badge: badge, name: bot.name, ring: ring)
     }
 }
 

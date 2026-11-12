@@ -23,7 +23,7 @@ struct AppSignInCard: View {
     @State private var note: String?
     @State private var checking = false
 
-    private var cardID: String { "signin:\(bot.id):\(connector.id):\(health.block(of: bot.id)?.at.timeIntervalSince1970 ?? 0)" }
+    private var cardID: String { health.block(of: bot.id).map { ConnectorHealth.cardID(botID: bot.id, block: $0) } ?? "signin:\(bot.id):\(connector.id)" }
 
     var body: some View {
         if let folded = folds.line(cardID) {
@@ -34,19 +34,13 @@ struct AppSignInCard: View {
                       buttons: [
                         PixelCardButton(title: checking ? "Checking…" : "Sign in to \(connector.name)", primary: true) { signIn() },
                         PixelCardButton(title: "Not now") {
-                            health.clearBlock(of: bot.id)
-                            folds.fold(cardID, did: "You said not now", about: "\(bot.name) won't use \(connector.name) for this", tone: .quiet)
+                            let card = cardID
+                            folds.fold(card, did: "You said not now", about: "\(bot.name) won't use \(connector.name) for this", tone: .quiet)
+                            health.resolve(bot.id, card: card)
                         },
                       ],
                       foot: note ?? "Opens \(connector.name)'s own sign-in page. Theo never sees your password.") {
                 PixelObjectRow(symbol: connector.symbol, name: connector.name, line: Self.scope(connector), pill: (.needs, "Needs sign-in"), badge: .needs)
-            }
-            .onChange(of: health.blockingConnector(of: bot.id)) { _, blocking in
-                // The app answers now: fold, and let the bot pick the job back up.
-                if blocking == nil, health.block(of: bot.id) == nil, folds.folds[cardID] == nil {
-                    folds.fold(cardID, did: "Signed in to \(connector.name)", about: "\(bot.name) picked the job back up")
-                    BotsStore.shared.send("\(connector.name) is connected now. Carry on with what you were doing.", to: bot.id)
-                }
             }
         }
     }
@@ -155,7 +149,7 @@ struct ReplyFailureCard: View {
             folded
         } else {
             let plain = BotFailureRecord(reason: raw)
-            PixelCard(tone: .failed, lead: .bot(bot, .failed), name: bot.name, context: "stopped · " + BotsStore.shortAge(since: message.at) + " ago",
+            PixelCard(tone: .failed, lead: .bot(bot, .failed), name: bot.name, context: "stopped · " + BotsStore.ago(message.at),
                       question: "\(bot.name) couldn't answer",
                       detail: plain.firstSentence + ". Your message is still here and nothing was lost.",
                       buttons: [
@@ -200,7 +194,11 @@ struct ConnectorFailedCard: View {
     @ObservedObject private var folds = PixelCardFolds.shared
     @State private var showsDetails = false
 
-    private var cardID: String { "connector-failed:\(connector.id):\(bot?.id ?? "")" }
+    /// The same id ConnectorHealth folds when the app answers again, so either way it folds once.
+    private var cardID: String {
+        if let bot, let block = health.block(of: bot.id) { return ConnectorHealth.cardID(botID: bot.id, block: block) }
+        return "connector-failed:\(connector.id):\(bot?.id ?? "")"
+    }
 
     var body: some View {
         if let folded = folds.line(cardID) {
@@ -208,15 +206,15 @@ struct ConnectorFailedCard: View {
         } else {
             let worked = health.lastConnected[connector.id].map { ConnectorListing.workedAgo($0) }
             PixelCard(tone: .failed, lead: bot.map { .bot($0, .failed) } ?? .connector(connector, .failed), name: bot?.name ?? connector.name,
-                      context: health.lastChecked.map { BotsStore.shortAge(since: $0) + " ago" },
+                      context: health.lastChecked.map { BotsStore.ago($0) },
                       question: "Can't reach \(connector.name)",
                       detail: ConnectorListing.plainReason(reason, app: connector.name) + (worked.map { " It \($0), so this is probably temporary." } ?? ""),
                       buttons: [
                         PixelCardButton(title: health.isChecking ? "Checking…" : "Try again", primary: true) {
                             Task {
                                 await health.refresh()
-                                if case .failed = health.state(of: connector) { return }
-                                folds.fold(cardID, did: "\(connector.name) answers again", about: bot.map { "\($0.name) can carry on" })
+                                guard [.connected, .claudeOnly, .othersOnly].contains(health.state(of: connector)) else { return }
+                                if folds.folds[cardID] == nil { folds.fold(cardID, did: "\(connector.name) answers again", about: bot.map { "\($0.name) can carry on" }) }
                                 if let bot { BotsStore.shared.clearFailure(of: bot.id) }
                             }
                         },
@@ -247,9 +245,6 @@ struct SarvamKeyCard: View {
                       question: "Dictation needs a Sarvam API key",
                       foot: "Keys stay in your Keychain.") {
                 SarvamKeyField()
-            }
-            .onChange(of: products.dictationAccess) { _, access in
-                if access == .ready { folds.fold(cardID, did: "Saved your Sarvam key", about: "Dictation is ready") }
             }
         }
     }
@@ -361,8 +356,11 @@ struct BotCallCard: View {
 struct ChatStatusCards: View {
     let bot: NativeBot
     @ObservedObject private var health = ConnectorHealth.shared
+    @ObservedObject private var folds = PixelCardFolds.shared
 
     var body: some View {
+        // The last answered sign-in stays as its folded line.
+        if health.block(of: bot.id) == nil, let card = health.resolved[bot.id], let line = folds.line(card) { line }
         if !bot.isOn {
             BotOffCard(bot: bot)
         } else if let connector = health.blockingConnector(of: bot.id) {
