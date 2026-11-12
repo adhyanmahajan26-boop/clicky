@@ -116,6 +116,10 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             companionManager.start()
             pill = NotchPanelController(companionManager: companionManager)
             pill?.start()
+        } else {
+            // Theo Link starts inside the companion. A test profile links by address only (no Bonjour), so it can come back up
+            // after a restart like the real one does, which is what the two-Mac tests need to see.
+            TheoLink.shared.start()
         }
         // The test tools' way in, only when asked for (it can run answers and actions).
         var startsDebugInbox = CommandLine.arguments.contains("--debug-inbox")
