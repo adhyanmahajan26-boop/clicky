@@ -135,6 +135,8 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         let inbox = ClaudiaControlInbox(companionManager: companionManager)
         inbox.start()
         controlInbox = inbox
+        // Theo's local API for scripts on this Mac, only when the owner turned it on.
+        TheoGateway.shared.apply()
         if !TheoProfile.isTest {
             uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
             uiServer?.start()

@@ -143,6 +143,19 @@ struct BotConversationRecord: Codable {
     var ownAnswers: [String: [String]]?
 }
 
+extension BotConversationRecord {
+    /// Anything missing reads as empty, so a chat file cut short in its messages (the keys after them gone) still reads.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messages = try container.decodeIfPresent([BotChatMessage].self, forKey: .messages) ?? []
+        sessions = try container.decodeIfPresent([String: String].self, forKey: .sessions) ?? [:]
+        seen = try container.decodeIfPresent([String: Int].self, forKey: .seen) ?? [:]
+        clearedAt = try container.decodeIfPresent(Date.self, forKey: .clearedAt)
+        heard = try container.decodeIfPresent([String: String].self, forKey: .heard)
+        ownAnswers = try container.decodeIfPresent([String: [String]].self, forKey: .ownAnswers)
+    }
+}
+
 @MainActor
 final class BotsStore: ObservableObject {
     static let shared = BotsStore()
@@ -270,7 +283,7 @@ final class BotsStore: ObservableObject {
         loadDelegations()
         backfillTeamWork()
         loadLinkStamps()
-        if !isHostingTests { stampRoutinesOnce() }
+        if !isHostingTests { stampRoutinesOnce(); settleStaleRoutineRuns() }
         BotMemory.writeGuide(owner: BotPrompts.ownerName)
         if !isHostingTests {
             // Engines a crash left running with nobody listening are ended before anything new starts.
@@ -1118,8 +1131,9 @@ final class BotsStore: ObservableObject {
     /// `fromOwner`: false when Clicky's team set this off: its answer can't start a coding run or a routine by itself.
     /// `privately`: this turn answers a private message: what it's part of, and who asked.
     /// `then`: once the turn is over. If it messaged other bots, that's after they've answered and it has carried on, with its last words.
+    /// `quietAllowed`: a routine run may answer [SILENT] (ClickyCore `RoutineQuiet`): nothing is posted, and `then` gets the marker.
     func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true, mayUseScreen: Bool = false,
-               privately: BotDMTurn? = nil, then: @escaping (String?) -> Void) {
+               privately: BotDMTurn? = nil, quietAllowed: Bool = false, then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
         // A new turn, not a carry-on from before: an earlier Stop in this chat isn't about it.
         if privately == nil { stoppedExchangeRooms.remove(conversationID) }
@@ -1220,6 +1234,13 @@ final class BotsStore: ObservableObject {
             }
             var record = self.conversation(conversationID)
             if let newSession { record.sessions[bot.id] = newSession }
+            if quietAllowed, RoutineQuiet.isQuiet(answer) {
+                // Nothing to report: the session has it, the chat doesn't.
+                self.conversations[conversationID] = record
+                self.writeConversation(conversationID)
+                then(RoutineQuiet.marker)
+                return
+            }
             if let answer, !answer.isEmpty {
                 let message = BotChatMessage(author: bot.id, text: BotPrompts.withoutNameHeading(answer, bot: bot), exchangeID: privately?.exchangeID)
                 self.noteUnread(message, in: conversationID)
@@ -1718,6 +1739,8 @@ final class BotsStore: ObservableObject {
     private var botsFile: URL { folder.appendingPathComponent("bots.json") }
     private var runsFile: URL { folder.appendingPathComponent("t3runs.json") }
     private func chatFile(_ id: String) -> URL { folder.appendingPathComponent("chats/\(BotDMThread.fileName(forThread: id)).json") }
+    /// Where a chat is saved, for a bot to look things up in.
+    func chatFilePath(_ id: String) -> String { chatFile(id).path }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -1923,11 +1946,15 @@ enum BotPrompts {
             parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
         } else if bot.owner != nil {
             // Clicky's team gets what it needs in each job.
-        } else if bot.provider == "grok" {
-            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists.")
         } else {
-            parts.append("Your memory is \(bot.memoryPath). Read it first if it exists, and add one short line when you " +
-                         "learn a lasting preference or fact. Don't store secrets.")
+            // What it remembers goes in the prompt itself, capped, so nothing depends on the bot choosing to read the file (Hermes's MEMORY.md).
+            parts.append(BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath))
+            // Its saved chat, for what came before this engine session (Hermes's session search, OpenClaw's sessions_search).
+            parts.append(BotRecallPrompt.section(chatFile: BotsStore.shared.chatFilePath(bot.id), owner: ownerName))
+            // Procedures it or another bot saved (Hermes's and OpenClaw's skills).
+            let names = Dictionary(team.filter { $0.owner == nil }.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            parts.append(BotSkillsPrompt.section(skills: BotSkills.all(names: names), ownFolder: BotSkills.folder(botID: bot.id).path,
+                                                 sharedFolder: BotSkills.sharedFolder.path, botName: bot.name, owner: ownerName))
         }
         return parts.joined(separator: "\n\n")
     }
@@ -2066,7 +2093,7 @@ extension BotsStore {
             writeGroups()
             writeLayout()
         }
-        // A routine whose time passed while Theo was closed runs once now (a catch-up), then keeps its schedule.
+        // A routine whose time passed while Theo was closed runs once now if it's within its catch-up window (`runDueRoutines`), then keeps its schedule.
         let now = Date()
         for index in routines.indices where routines[index].nextRunAt == nil {
             routines[index].nextRunAt = routines[index].schedule.next(after: now)
@@ -2140,7 +2167,28 @@ extension BotsStore {
         }
     }
 
+    /// The longest a routine's run can really be going: its turn, plus a second go for a connector that was still loading.
+    static var longestRoutineRun: TimeInterval { BotRunner.turnLimitSeconds * 2 + 120 }
+
+    /// A run still marked "running" long after any run could have finished was cut off (Theo quit or crashed in the
+    /// middle of it). It says so, instead of showing as running forever. On either Mac: by then it can't be running anywhere.
+    func settleStaleRoutineRuns(now: Date = Date()) {
+        var changed = false
+        for index in routines.indices {
+            for run in routines[index].runs.indices where routines[index].runs[run].status == "running"
+                && !runningRoutines.contains(routines[index].id)
+                && now.timeIntervalSince(routines[index].runs[run].startedAt) > Self.longestRoutineRun {
+                routines[index].runs[run].status = "failed"
+                routines[index].runs[run].finishedAt = now
+                routines[index].runs[run].summary = "Theo stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner."
+                changed = true
+            }
+        }
+        if changed { writeRoutines() }
+    }
+
     private func runDueRoutines() {
+        settleStaleRoutineRuns()
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
@@ -2150,12 +2198,28 @@ extension BotsStore {
         if TheoLink.shared.isConnected, peerDevice?.firesRoutines == true, DeviceRoles.thisMac != .macStudio { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
+            let due = routine.nextRunAt ?? now
             if let index = routines.firstIndex(where: { $0.id == routine.id }) {
                 routines[index].nextRunAt = routine.schedule.next(after: now)
+            }
+            // A slot missed while Theo was closed (or the Mac asleep) still runs if it's only a little late: within half the routine's
+            // period, 2 minutes to 2 hours. Older than that it's recorded as missed, so a 3-day-old morning brief doesn't land at midnight.
+            if RoutineCatchUp.decide(due: due, now: now, periodSeconds: routine.schedule.periodSeconds) == .missed {
+                let late = Self.lateness(now.timeIntervalSince(due))
+                record(routine.id, .init(startedAt: now, finishedAt: now, status: "missed",
+                                         summary: "Missed the \(due.formatted(date: .abbreviated, time: .shortened)) run: Theo wasn't running then, and \(late) late is too late to catch up."))
+                continue
             }
             start(routine, scheduled: true)
         }
         writeRoutines()
+    }
+
+    private static func lateness(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes < 120 { return "\(minutes) minutes" }
+        let hours = minutes / 60
+        return hours < 48 ? "\(hours) hours" : "\(hours / 24) days"
     }
 
     private func start(_ routine: BotRoutine, scheduled: Bool) {
@@ -2199,16 +2263,27 @@ extension BotsStore {
         let firstTurn = conversationRecord.sessions[bot.id] == nil
         let prompt = (bot.owner == nil ? BotPrompts.awarenessNote(for: bot, room: bot.id) : "") +
             (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
-            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly.)" +
+            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly. \(RoutineQuiet.howTo(owner: BotPrompts.ownerName)))" +
             (bot.owner == nil && !bot.primary ? "\n\n(\(BotPrompts.reachNote(for: bot)))" : "")
         ownerSpoke(in: bot.id)
-        reply(bot: bot, in: bot.id, prompt: prompt, session: conversationRecord.sessions[bot.id], handsOnWhenStopped: true) { [weak self] answer in
+        let routineMessageID = conversationRecord.messages.last?.id
+        reply(bot: bot, in: bot.id, prompt: prompt, session: conversationRecord.sessions[bot.id], handsOnWhenStopped: true, quietAllowed: true) { [weak self] answer in
             guard let self else { return }
             self.runningRoutines.remove(routine.id)
             var finished = run
             finished.finishedAt = Date()
-            finished.status = answer == nil ? "failed" : "done"
-            finished.summary = answer.map { String($0.prefix(140)) }
+            if RoutineQuiet.isQuiet(answer) {
+                // A check that found nothing: its run is in the routine's history, and the chat stays as it was.
+                finished.status = "quiet"
+                finished.summary = "Nothing to report."
+                var record = self.conversation(bot.id)
+                record.messages.removeAll { $0.id == routineMessageID }
+                self.conversations[bot.id] = record
+                self.writeConversation(bot.id)
+            } else {
+                finished.status = answer == nil ? "failed" : "done"
+                finished.summary = answer.map { String($0.prefix(140)) }
+            }
             self.record(routine.id, finished)
         }
     }

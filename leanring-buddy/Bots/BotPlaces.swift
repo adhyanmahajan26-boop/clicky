@@ -248,3 +248,30 @@ enum BotMemory {
         }
     }
 }
+
+/// Skills: step-by-step procedures saved as `skills/<name>/SKILL.md` (ClickyCore `BotSkill`). A bot writes its own in
+/// `memory/<bot>/skills/`, the only place it may write; the owner can drop shared ones (agentskills.io layout) in `memory/skills/`.
+/// Every bot sees all of them listed in its prompt and reads one before a task it matches.
+enum BotSkills {
+    static var sharedFolder: URL { BotMemory.root.appendingPathComponent("skills", isDirectory: true) }
+    static func folder(botID: String) -> URL { BotMemory.file(botID: botID).deletingLastPathComponent().appendingPathComponent("skills", isDirectory: true) }
+
+    /// Every skill on this Mac: the shared folder's, then each bot's. `names` maps a bot id to its name.
+    static func all(names: [String: String]) -> [BotSkill] {
+        var skills: [BotSkill] = []
+        func scan(_ folder: URL, author: String?) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+            for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let file = entry.appendingPathComponent("SKILL.md")
+                // Only the start: the front matter is all the list needs, and a huge file mustn't slow every turn.
+                guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+                let head = String(decoding: (try? handle.read(upToCount: 4096)) ?? Data(), as: UTF8.self)
+                try? handle.close()
+                if let skill = BotSkill.parse(head, path: file.path, author: author, folderName: entry.lastPathComponent) { skills.append(skill) }
+            }
+        }
+        scan(sharedFolder, author: nil)
+        for (id, name) in names.sorted(by: { $0.key < $1.key }) { scan(folder(botID: id), author: name) }
+        return skills
+    }
+}

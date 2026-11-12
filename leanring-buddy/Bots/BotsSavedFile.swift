@@ -29,12 +29,54 @@ enum BotsSavedFile {
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         let aside = file.deletingLastPathComponent().appendingPathComponent(file.lastPathComponent + ".unreadable-" + stamp)
         try? FileManager.default.moveItem(at: file, to: aside)
-        if let old = try? Data(contentsOf: lastGood(file)), let value = try? decoder.decode(T.self, from: old) {
-            try? old.write(to: file, options: .atomic)
+        // What can still be read of the damaged file: everything up to the last whole record. A file cut short keeps
+        // what came before the cut, which can be newer than the last good copy (that one is from this launch's start).
+        let rescued = readablePart(of: data, as: T.self, decoder: decoder)
+        let old = (try? Data(contentsOf: lastGood(file))).flatMap { data in (try? decoder.decode(T.self, from: data)).map { (data, $0) } }
+        if let rescued, rescued.data.count >= (old?.0.count ?? 0) {
+            try? rescued.data.write(to: file, options: .atomic)
+            note("Theo couldn't read all of \(what), so it kept everything that could still be read. The damaged file is kept as \(aside.lastPathComponent).")
+            return rescued.value
+        }
+        if let (good, value) = old {
+            try? good.write(to: file, options: .atomic)
             note("Theo couldn't read \(what), so it used the last copy that read fine. The unreadable file is kept as \(aside.lastPathComponent).")
             return value
         }
         note("Theo couldn't read \(what) and had no earlier copy to use. Nothing was deleted: the file is kept as \(aside.lastPathComponent).")
+        return nil
+    }
+
+    /// The longest start of damaged JSON that still decodes: cut after a whole record in a list, with every bracket
+    /// still open closed. Tries the latest cuts first, and only so many.
+    static func readablePart<T: Decodable>(of data: Data, as type: T.Type, decoder: JSONDecoder, attempts: Int = 64) -> (data: Data, value: T)? {
+        let bytes = [UInt8](data)
+        var stack: [UInt8] = []
+        var inString = false
+        var escaped = false
+        var cuts: [(end: Int, closers: [UInt8])] = []
+        for (index, byte) in bytes.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if byte == UInt8(ascii: "\\") { escaped = true } else if byte == UInt8(ascii: "\"") { inString = false }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""): inString = true
+            case UInt8(ascii: "["), UInt8(ascii: "{"): stack.append(byte)
+            case UInt8(ascii: "]"), UInt8(ascii: "}"):
+                guard !stack.isEmpty else { return nil }
+                stack.removeLast()
+                // A whole record that sits in a list: a place to cut.
+                if stack.last == UInt8(ascii: "[") {
+                    cuts.append((index + 1, stack.reversed().map { $0 == UInt8(ascii: "[") ? UInt8(ascii: "]") : UInt8(ascii: "}") }))
+                }
+            default: break
+            }
+        }
+        for cut in cuts.reversed().prefix(attempts) {
+            let candidate = Data(bytes[..<cut.end] + cut.closers)
+            if let value = try? decoder.decode(T.self, from: candidate) { return (candidate, value) }
+        }
         return nil
     }
 

@@ -71,4 +71,58 @@ struct HarnessDurabilityTests {
         #expect(aside.count == 1)
         #expect(BotsSavedFile.takeProblems().count == 1)
     }
+
+    // MARK: Faults and durability, round two
+
+    private func note(_ text: String) -> BotChatMessage { BotChatMessage(author: BotsStore.noteAuthor, text: text) }
+    private var retryNote: BotChatMessage { note("Theo stopped before Ledger answered your last message, so it's asking again now.") }
+
+    @Test func aRetryCutOffByASecondCrashIsStillUnanswered() {
+        // The first restart asked again, then Theo stopped again before any answer: still waiting, one retry used.
+        let afterOne = BotsStore.interrupted([owner("a"), bot("b"), owner("c"), retryNote])
+        #expect(afterOne.waiting.map(\.id) == ["c"])
+        #expect(afterOne.retries == 1)
+        let afterTwo = BotsStore.interrupted([owner("c"), retryNote, retryNote])
+        #expect(afterTwo.retries == 2)
+        // Answered after the retry: nothing waits.
+        #expect(BotsStore.unanswered([owner("c"), retryNote, bot("d")]).isEmpty)
+        // Told to send it again: nothing more happens by itself.
+        #expect(BotsStore.unanswered([owner("c"), retryNote, note("Theo stopped before Ledger answered this. Send it again if you still need it.")]).isEmpty)
+        // Any other note after the owner's message (a folder made, a routine set up) is an answer, as before.
+        #expect(BotsStore.unanswered([owner("c"), note("Made the folder.")]).isEmpty)
+    }
+
+    private struct Item: Codable, Equatable { var id: String; var tags: [String] }
+
+    @Test func aFileCutShortKeepsEveryWholeRecordBeforeTheCut() throws {
+        let items = (0..<6).map { Item(id: "bot-\($0)", tags: ["a", "b [x]", "{c}"]) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let full = try encoder.encode(items)
+        let cut = full.prefix(Int(Double(full.count) * 0.8))
+        let rescued = try #require(BotsSavedFile.readablePart(of: Data(cut), as: [Item].self, decoder: JSONDecoder()))
+        #expect(rescued.value == Array(items.prefix(rescued.value.count)))
+        #expect(rescued.value.count >= 4)
+        #expect(BotsSavedFile.readablePart(of: Data("{not json".utf8), as: [Item].self, decoder: JSONDecoder()) == nil)
+    }
+
+    @Test func aDamagedFileWithNoGoodCopyKeepsWhatCanStillBeRead() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("chat.json")
+        var record = BotConversationRecord()
+        record.messages = (0..<40).map { BotChatMessage(id: "m\($0)", author: $0 % 2 == 0 ? "user" : "bot-1", text: "line \($0)") }
+        record.sessions = ["bot-1": "s"]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let full = try encoder.encode(record)
+        try Data(full.prefix(Int(Double(full.count) * 0.9))).write(to: file)
+        _ = BotsSavedFile.takeProblems()
+        let loaded = try #require(BotsSavedFile.load(BotConversationRecord.self, from: file, decoder: JSONDecoder(), what: "test"))
+        #expect(loaded.messages.count >= 30)
+        #expect(loaded.messages.map(\.id) == record.messages.prefix(loaded.messages.count).map(\.id))
+        let aside = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("chat.json.unreadable-") }
+        #expect(aside.count == 1)
+        #expect(BotsSavedFile.takeProblems().count == 1)
+    }
 }

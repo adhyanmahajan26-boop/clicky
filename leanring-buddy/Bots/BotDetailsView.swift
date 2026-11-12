@@ -271,7 +271,7 @@ struct RoutineList: View {
     }
 
     private func statusDot(_ status: String) -> some View {
-        Circle().fill(status == "done" ? DS.Colors.success : status == "running" ? DS.Colors.blue : status == "failed" ? DS.Colors.destructiveText : DS.Colors.textTertiary)
+        Circle().fill(status == "done" || status == "quiet" ? DS.Colors.success : status == "running" ? DS.Colors.blue : status == "failed" ? DS.Colors.destructiveText : DS.Colors.textTertiary)
             .frame(width: 7, height: 7).padding(.top, 4)
     }
 
