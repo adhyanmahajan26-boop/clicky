@@ -3,6 +3,11 @@
 # as a GitHub release of the updates repo, which every installed Clicky picks
 # up from Setup › Updates or the panel's "Update now".
 #
+# The release also carries SHA256SUMS and install.sh, so a new Mac can install from Terminal with
+#   curl -fsSL https://github.com/<repo>/releases/latest/download/install.sh | bash
+# (no Apple Developer account or notarization needed; see docs/INSTALL.md), and the run writes a
+# Homebrew cask for this build next to the zip.
+#
 # Usage: Tools/release.sh "What changed (one or two lines)"
 # Env:   CLICKY_UPDATES_REPO (default adhyanmahajan26-boop/claudia-releases)
 #        CLICKY_RELEASE_DRY_RUN=1 builds and zips without publishing.
@@ -32,13 +37,21 @@ ZIP="$OUT/Theo-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+# Same format as `shasum -a 256`, which install.sh (and the Windows/Linux installers) read.
+SUMS="$STAGE/SHA256SUMS"
+printf '%s  %s\n' "$SHA" "$(basename "$ZIP")" > "$SUMS"
+INSTALLER="Tools/install/install.sh"
+bash -n "$INSTALLER"
+CASK="$OUT/theo-$BUILD.rb"
+Tools/install/make-cask.sh "$BUILD" "$SHA" "$REPO" > "$CASK"
 echo "Zip: $ZIP"
 echo "sha256: $SHA"
+echo "Cask: $CASK"
 
 if [[ "${CLICKY_RELEASE_DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run: not published."
   exit 0
 fi
-gh release create "build-$BUILD" "$ZIP" --repo "$REPO" --title "Theo build $BUILD" \
+gh release create "build-$BUILD" "$ZIP" "$SUMS" "$INSTALLER" --repo "$REPO" --title "Theo build $BUILD" \
   --notes "$(printf '%s\n\nsha256: %s\n' "$NOTES" "$SHA")"
 echo "Published build-$BUILD to $REPO"
