@@ -60,7 +60,8 @@ def fresh():
     FAKE_DIR.mkdir(parents=True)
 
 
-def start(wait=20):
+def start(wait=None):
+    wait = wait or float(os.environ.get("THEO_START_WAIT", "20"))
     global _proc
     env = dict(os.environ, THEO_FAKE_DIR=str(FAKE_DIR))
     log = open(ROOT / "theod.log", "a")
@@ -74,7 +75,11 @@ def start(wait=20):
     while time.time() - t0 < wait:
         if P({"cmd": "ping"}, timeout=2).get("ok"):
             return round(time.time() - t0, 2)
-    raise RuntimeError("theod didn't start")
+        if _proc.poll() is not None:
+            break
+    log.flush()
+    tail = (ROOT / "theod.log").read_text(encoding="utf-8", errors="replace")[-4000:]
+    raise RuntimeError("theod didn't start (exit %s). Its log ends:\n%s" % (_proc.poll(), tail))
 
 
 def pid():
