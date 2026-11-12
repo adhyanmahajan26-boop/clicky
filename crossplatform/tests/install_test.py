@@ -79,6 +79,12 @@ def main():
         data = pathlib.Path(home, ".local/share/theo-desktop"); data.mkdir(parents=True); (data / "keep").write_text("x")
         code, out = run(home, "--uninstall")
         results["uninstall_keeps_data"] = code == 0 and not opt.exists() and (data / "keep").exists()
+        # A --dir the owner also keeps other things in: uninstalling removes only Theo's own files.
+        shared = pathlib.Path(home, "Apps"); shared.mkdir(); (shared / "other-app").write_text("mine")
+        code, out = run(home, "--dir", str(shared), "--from", str(f), "--sha256", hashlib.sha256(APP).hexdigest())
+        code2, out2 = run(home, "--dir", str(shared), "--uninstall")
+        results["uninstall_from_a_shared_dir_keeps_other_files"] = (code == 0 and code2 == 0 and (shared / "other-app").read_text() == "mine"
+                                                               and not (shared / "Theo.AppImage").exists() and not (shared / "BUILD").exists())
         code, out = run(home, "--purge")
         results["purge_needs_a_yes"] = code != 0 and (data / "keep").exists()
         code, out = run(home, "--purge", "--yes")

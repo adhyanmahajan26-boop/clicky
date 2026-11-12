@@ -75,8 +75,12 @@ arch_name() {
 installed_build() { cat "$INSTALL_DIR/BUILD" 2>/dev/null || true; }
 
 uninstall() {
-  rm -f "$BIN_DIR/theo" "$APPS_DIR/theo.desktop"
-  rm -rf "$INSTALL_DIR"
+  # Only what install_file put there: a --dir or THEO_INSTALL_DIR that also holds other things (say --dir ~/Apps) keeps them,
+  # and a `theo` command or menu entry that isn't this install's is left alone.
+  if [ -L "$BIN_DIR/theo" ] && [ "$(readlink "$BIN_DIR/theo")" = "$INSTALL_DIR/Theo.AppImage" ]; then rm -f "$BIN_DIR/theo"; fi
+  if [ -f "$APPS_DIR/theo.desktop" ] && grep -qxF "Exec=$INSTALL_DIR/Theo.AppImage" "$APPS_DIR/theo.desktop"; then rm -f "$APPS_DIR/theo.desktop"; fi
+  rm -f "$INSTALL_DIR/Theo.AppImage" "$INSTALL_DIR/Theo.AppImage.new" "$INSTALL_DIR/BUILD"
+  rmdir "$INSTALL_DIR" 2>/dev/null || true
   say "Theo is removed. Its data is still in $DATA_DIR."
 }
 
