@@ -454,6 +454,20 @@ final class BotsStore: ObservableObject {
     }
 
     /// Test profile only: a run on a card, with nothing behind it.
+    /// Test profile: a bot shown as replying, with or without words so far (thinking vs working).
+    func setReplyingForTest(_ botID: String, text: String?) {
+        guard TheoProfile.isTest else { return }
+        replying[botID] = text
+        if text == nil { replyingIn[botID] = nil } else { replyingIn[botID] = botID }
+        BotLiveText.shared.set(text, for: botID)
+    }
+
+    /// Test profile: an unread result (the orange dot).
+    func setUnreadForTest(_ conversationID: String, count: Int) {
+        guard TheoProfile.isTest else { return }
+        unread[conversationID] = count > 0 ? count : nil
+    }
+
     func injectRunForTest(_ run: T3Run) {
         guard TheoProfile.isTest else { return }
         t3Runs.removeAll { $0.id == run.id }

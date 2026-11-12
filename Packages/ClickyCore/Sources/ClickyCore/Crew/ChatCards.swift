@@ -101,15 +101,22 @@ public struct BotCallPrompt: Equatable, Sendable {
 public enum RunSteps {
     public static let titles = ["Branch", "Code", "Tests", "Push", "PR"]
 
-    public enum Fill: Equatable, Sendable { case done, active, todo }
+    /// Finished steps are green, the current one half green, a step waiting on the owner yellow, the step that failed red.
+    public enum Fill: Equatable, Sendable { case done, active, todo, waiting, failed }
 
-    /// `phase` is the run's, `stage` what it's doing while it reports ("tests", "push", "pr").
-    public static func fills(phase: String, stage: String?) -> [Fill] {
+    /// `phase` is the run's, `stage` what it's doing while it reports ("tests", "push", "pr"). A stopped run shows how far it
+    /// got without calling anything failed.
+    public static func fills(phase: String, stage: String?, stopped: Bool = false) -> [Fill] {
+        let current = ["tests": 2, "push": 3, "pr": 4][stage ?? ""] ?? 1
         switch phase {
         case "done": return Array(repeating: .done, count: 5)
         case "reporting":
             let active = ["tests": 2, "push": 3, "pr": 4][stage ?? "tests"] ?? 2
             return (0..<5).map { $0 < active ? .done : $0 == active ? .active : .todo }
+        case "waiting":
+            return (0..<5).map { $0 < current ? .done : $0 == current ? .waiting : .todo }
+        case "failed":
+            return (0..<5).map { $0 < current ? .done : $0 == current ? (stopped ? .todo : .failed) : .todo }
         default:
             return [.done, .active, .todo, .todo, .todo]
         }

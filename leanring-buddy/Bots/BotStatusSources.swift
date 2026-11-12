@@ -96,6 +96,8 @@ final class ConnectorHealth: ObservableObject {
         var at: Date
         /// The chat it happened in.
         var room: String?
+        /// True when the app wasn't answering (the bot failed because of it) rather than wanting a sign-in.
+        var failed: Bool?
     }
 
     /// What a connector's row says, from both engines' listings.
@@ -221,11 +223,18 @@ final class ConnectorHealth: ObservableObject {
 
     /// The app this bot is waiting on, while that app still needs a sign-in.
     func blockingConnector(of botID: String) -> BotConnector? {
-        guard let block = blocks[botID], let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }) else { return nil }
+        guard let block = blocks[botID], block.failed != true, let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }) else { return nil }
         switch state(of: connector) {
         case .connected, .claudeOnly, .othersOnly: return nil
         default: return connector
         }
+    }
+
+    /// The app this bot reached for that wasn't answering, while it still isn't.
+    func failedConnector(of botID: String) -> (connector: BotConnector, reason: String)? {
+        guard let block = blocks[botID], block.failed == true, let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }),
+              case .failed(let reason) = state(of: connector) else { return nil }
+        return (connector, reason)
     }
 
     /// Bots waiting on this connector, for its row ("Researcher is waiting on this").
@@ -267,6 +276,8 @@ final class ConnectorHealth: ObservableObject {
             case .needsSignIn, .missing, .checking:
                 setBlock(bot.id, connectorID: connector.id, room: room)
             case .failed(let reason):
+                blocks[bot.id] = Block(connectorID: connector.id, at: Date(), room: room, failed: true)
+                save()
                 BotsStore.shared.recordFailure(of: bot.id, reason: "Can't reach \(connector.name). " + ConnectorListing.plainReason(reason, app: connector.name))
             default:
                 continue

@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import ClickyCore
 import SwiftUI
 
 enum BotBlock: Equatable {
@@ -372,9 +373,11 @@ struct T3ResultCard: View {
                     }
                 }
                 Spacer(minLength: 8)
-                StatusPill(text: isStopped ? "Stopped" : run.phase == "failed" ? "Failed" : run.pullRequest != nil ? "Draft PR" : "Done",
-                           tone: isStopped ? .neutral : run.phase == "failed" ? .bad : .good)
+                StatusPill(text: pillText, tone: isStopped ? .neutral : run.phase == "failed" ? .bad : .done)
             }
+            RunStepBar(fills: RunSteps.fills(phase: run.phase, stage: run.stage, stopped: isStopped), stopping: false)
+            Text(question).font(.system(size: 14.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).fixedSize(horizontal: false, vertical: true)
+            if let explanation { Text(explanation).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true) }
             if !isStopped, run.phase != "failed", run.branch != nil || run.pullRequest != nil { doneSteps }
             if !files.isEmpty { fileList }
             if let tests = run.tests {
@@ -416,6 +419,15 @@ struct T3ResultCard: View {
                 if run.repo == nil, let page = BotsT3.page(of: run) {
                     Button { NSWorkspace.shared.open(page) } label: { Label("Open page", systemImage: "safari") }.buttonStyle(.theo(.secondary, .small))
                 }
+                if run.phase == "failed", !isStopped, let prompt = run.prompt {
+                    // The one fix: run it again on the same harness.
+                    Button("Try again") {
+                        BotsStore.shared.submitToT3(prompt: prompt, title: run.title, repo: (run.repo ?? (run.baseCommit == nil ? run.folder : nil)).map { URL(fileURLWithPath: $0, isDirectory: true) },
+                                                    room: run.room ?? BotsStore.teamID, harness: run.harness, macName: run.origin)
+                        if let botID = run.room { BotsStore.shared.clearFailure(of: botID) }
+                    }
+                    .buttonStyle(.theo(.primary, .small))
+                }
                 Spacer(minLength: 0)
                 if run.phase == "failed", !isStopped, let prompt = run.prompt {
                     Menu {
@@ -451,9 +463,34 @@ struct T3ResultCard: View {
                 RunFollowupBox(run: run, placeholder: isStopped ? "Carry on, or ask for something else" : "Ask for a change")
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+        .padding(.top, 12).padding(.horizontal, 13).padding(.bottom, 13)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(run.phase == "failed" && !isStopped ? PixelTone.failed.cardBorder : DS.Colors.borderSubtle, lineWidth: 1))
+    }
+
+    /// "Done in 6 min", "Failed at Push", "Stopped".
+    private var pillText: String {
+        if isStopped { return "Stopped" }
+        if run.phase == "failed" { return BotFailureWords.step(of: run).map { "Failed at \($0)" } ?? "Failed" }
+        let minutes = max(1, Int(((run.finishedAt ?? Date()).timeIntervalSince(run.startedAt) / 60).rounded()))
+        return "Done in \(minutes) min"
+    }
+
+    /// One plain sentence: what's ready, or what couldn't happen.
+    private var question: String {
+        if isStopped { return "You stopped \(run.title)" }
+        if run.phase == "failed" { return BotFailureRecord(reason: BotFailureWords.run(run)).firstSentence }
+        if run.pullRequest != nil { return "Draft pull request is ready" }
+        return "\(run.title) is done"
+    }
+
+    /// For a failure, what is safe.
+    private var explanation: String? {
+        guard run.phase == "failed", !isStopped else { return nil }
+        let full = BotFailureWords.run(run)
+        let first = BotFailureRecord(reason: full).firstSentence
+        let rest = full.dropFirst(first.count).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return rest.isEmpty ? nil : rest + "."
     }
 
     /// What Theo did after the agent finished, at a glance.

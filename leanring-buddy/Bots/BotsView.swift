@@ -62,6 +62,10 @@ struct BotsRootView: View {
     @State private var showsInspector = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    /// The bot list sorts urgent first (needs you, failed, working, done, quiet) unless switched back to teams.
+    @AppStorage("theo.sidebar.sort") private var sortMode = "urgent"
+    /// A counter pill under Theo's row filters the list to that lane.
+    @State private var laneFilter: PixelState.Lane?
     @ObservedObject private var studio = StudioController.shared
     @ObservedObject private var dictation = ComposerDictation.shared
     /// Theo and Clicky are products of their own (Settings › Products): what's off leaves the sidebar.
@@ -121,6 +125,9 @@ struct BotsRootView: View {
         .modifier(TheoAppearanceRoot())
         .onChange(of: selection.pane) { _, _ in showsInspector = false }
         .onReceive(NotificationCenter.default.publisher(for: .theoNewGroupChat)) { _ in editingGroup = Self.blankGroup }
+        .onReceive(NotificationCenter.default.publisher(for: .theoOpenBot)) { note in
+            if let id = note.object as? String { selection.pane = id == BotsStore.clickyID ? .clicky : .bot(id) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .theoShowBotSettings)) { _ in
             if inspectorTarget != nil { withAnimation(DS.Motion.panel) { showsInspector = true } }
         }
@@ -142,6 +149,7 @@ struct BotsRootView: View {
             if products.isOn(.theo) {
                 workspaceRow
                     .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 8)
+                counterPills
             } else {
                 Color.clear.frame(height: 12)
             }
@@ -173,8 +181,13 @@ struct BotsRootView: View {
                                 sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                                 ForEach(pinned, id: \.self) { item in itemRow(item) }
                             }
-                            // Clicky's own team leaves with Clicky (Settings › Products).
-                            ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
+                            sortSwitch
+                            if sortMode == "urgent" {
+                                urgentList
+                            } else {
+                                // Clicky's own team leaves with Clicky (Settings › Products).
+                                ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
+                            }
                         }
                     }
                 }
@@ -300,35 +313,125 @@ struct BotsRootView: View {
         }
     }
 
-    /// A bot's row: a 32 pt figure, its name, one line of what it's doing, and a tiny view of its tile while it works.
+    /// A bot's row: its face at 36 pt with its badge, its name (an orange dot for an unread result), its state word in the
+    /// state's colour followed by what it's doing, and on the right how long it has been waiting or working.
     private func teamRow(_ pane: BotsPane, bot: NativeBot, unread: Int) -> some View {
-        let pose = store.pixelState(of: bot).state
-        let working = pose == .working
+        let state = store.pixelState(of: bot).state
+        let working = state.lane == .working
         return rowButton(pane) {
-            BotAvatar(bot: bot, size: 32, state: .idle)
+            BotAvatar(bot: bot, size: 36, state: .idle, ring: selection.pane == pane ? DS.Colors.selected : DS.Colors.sidebar)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(bot.name).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
                         .foregroundColor(bot.isOn ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
                     if store.layout.sections.contains(where: { $0.leaderID == bot.id }) {
                         Image(systemName: "crown.fill").font(.system(size: 8)).foregroundColor(DS.Colors.gold).help("Manager")
                     }
+                    if unread > 0 { Circle().fill(DS.Colors.accent).frame(width: 6, height: 6).help("Unread result") }
                 }
-                Text(store.liveStatus(of: bot)).font(.system(size: 11.5)).foregroundColor(working ? DS.Colors.textSecondary : DS.Colors.textTertiary).lineLimit(1)
+                stateLine(bot: bot, state: state)
             }
             Spacer(minLength: 0)
-            if StudioController.isAvailable, working || pose == .needs, let tile = studio.roster.tile(of: bot.id) {
+            if StudioController.isAvailable, working || state == .needs, let tile = studio.roster.tile(of: bot.id) {
                 StudioTileThumb(studio: studio, tile: tile).frame(width: 38, height: 24)
-            } else if unread > 0 {
-                Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6)
+            } else {
+                rowTime(bot: bot, state: state)
             }
+        }
+    }
+
+    /// "Needs you · Sign in to Notion": the word in the state's colour, then the detail.
+    private func stateLine(bot: NativeBot, state: PixelState) -> some View {
+        let status = store.liveStatus(of: bot)
+        let word = state.label
+        var detail = status
+        for prefix in ["Needs you · ", "Failed · ", "Off"] where detail.hasPrefix(prefix) { detail = String(detail.dropFirst(prefix.count)) }
+        if detail == word { detail = "" }
+        let tone = PixelTone(state: state)
+        let wordColor: Color = tone == .quiet ? DS.Colors.textSecondary : tone == .done ? DS.Colors.textPrimary : tone.text
+        return (Text(word).foregroundColor(wordColor) + Text(detail.isEmpty ? "" : " · " + detail).foregroundColor(DS.Colors.textTertiary))
+            .font(.system(size: 11.5)).lineLimit(1)
+    }
+
+    /// How long it has been waiting or working: "4m", or a run's live timer.
+    @ViewBuilder private func rowTime(bot: NativeBot, state: PixelState) -> some View {
+        if let run = store.liveRun(of: bot.id), run.phase != "waiting" {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(T3RunCard.elapsed(since: run.startedAt, now: context.date)).font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textTertiary)
+            }
+        } else if let since = store.stateSince(of: bot) ?? (state == .done ? store.conversation(bot.id).messages.last?.at : nil) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(BotsStore.shortAge(since: since, now: context.date)).font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+            }
+        }
+    }
+
+    /// "2 need you", "1 failed" under Theo's row; tapping one shows only those bots.
+    @ViewBuilder private var counterPills: some View {
+        let needing = store.bots.filter { $0.isOn && store.pixelState(of: $0).state == .needs }.count
+        let failed = store.bots.filter { store.pixelState(of: $0).state == .failed }.count
+        if needing + failed > 0 {
+            HStack(spacing: 6) {
+                if needing > 0 { counterPill(.needsYou, text: "\(needing) need\(needing == 1 ? "s" : "") you", tone: .warn) }
+                if failed > 0 { counterPill(.failed, text: "\(failed) failed", tone: .bad) }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.bottom, 10)
+        }
+    }
+
+    private func counterPill(_ lane: PixelState.Lane, text: String, tone: StatusPill.Tone) -> some View {
+        Button {
+            sortMode = "urgent"
+            laneFilter = laneFilter == lane ? nil : lane
+        } label: {
+            StatusPill(text: text, tone: tone)
+                .overlay(Capsule().strokeBorder(laneFilter == lane ? DS.Colors.textPrimary.opacity(0.6) : .clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain).pointerCursor().help(laneFilter == lane ? "Show every bot" : "Show only these")
+    }
+
+    /// Urgent first or by team, remembered.
+    private var sortSwitch: some View {
+        HStack {
+            Text("Sort").font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
+            Spacer()
+            HairlineSegments(options: [("urgent", "Urgent first"), ("teams", "Teams")], selection: Binding(get: { sortMode }, set: { sortMode = $0; laneFilter = nil }))
+        }
+        .padding(.horizontal, 20).padding(.top, 14)
+    }
+
+    /// Needs you, Failed, Working, Done, then Quiet (ready, asleep, off), each with a small mono heading and its count.
+    @ViewBuilder private var urgentList: some View {
+        let shown = store.bots.filter { !$0.primary && !store.isHidden("bot:\($0.id)") && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) }
+        let lanes = Dictionary(grouping: shown) { store.pixelState(of: $0).state.lane }
+        ForEach(PixelState.Lane.allCases.filter { laneFilter == nil || $0 == laneFilter }, id: \.self) { lane in
+            if let bots = lanes[lane], !bots.isEmpty {
+                HStack {
+                    Text(lane.title.uppercased()).font(.system(size: 10.5, weight: .medium, design: .monospaced)).tracking(1).foregroundColor(DS.Colors.textTertiary)
+                    Spacer()
+                    Text("\(bots.count)").font(.system(size: 10.5, design: .monospaced)).foregroundColor(DS.Colors.textTertiary)
+                }
+                .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
+                ForEach(sortedInLane(bots), id: \.id) { bot in itemRow("bot:\(bot.id)") }
+            }
+        }
+    }
+
+    /// Longest waiting first within a lane; quiet bots by name.
+    private func sortedInLane(_ bots: [NativeBot]) -> [NativeBot] {
+        bots.sorted { left, right in
+            let leftSince = store.stateSince(of: left) ?? .distantFuture
+            let rightSince = store.stateSince(of: right) ?? .distantFuture
+            if leftSince != rightSince { return leftSince < rightSince }
+            return left.name.localizedStandardCompare(right.name) == .orderedAscending
         }
     }
 
     private func rowButton<Content: View>(_ pane: BotsPane, @ViewBuilder content: () -> Content) -> some View {
         Button { selection.pane = pane } label: {
             HStack(spacing: 10) { content() }
-                .padding(.horizontal, 8).frame(height: 42)
+                .padding(.horizontal, 8).frame(height: 50)
                 .contentShape(Rectangle())
         }
         .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
@@ -722,6 +825,8 @@ struct BotChatScreen: View {
                                 let brief = BotMessageCards.brief(for: message)
                                 if let brief {
                                     BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message.text, besides: author))
+                                } else if message.text.hasPrefix("Couldn't reply: ") {
+                                    ReplyFailureCard(bot: author, message: message)
                                 } else if call?.remainingText.isEmpty != true {
                                     BotLine(bot: author, text: call?.remainingText ?? message.text,
                                             showsName: index == 0 || record.messages[index - 1].author != message.author || record.messages[index - 1].card != nil,
@@ -748,6 +853,7 @@ struct BotChatScreen: View {
                                 }
                             }
                         }
+                        if let bot { ChatStatusCards(bot: bot) }
                         ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
                             T3RunCard(run: run, bot: bot ?? store.primary)
                         }
@@ -806,9 +912,10 @@ struct BotChatScreen: View {
     private var header: some View {
         HStack(spacing: 12) {
             if let bot {
-                BotAvatar(bot: bot, size: 36, state: inProgress.isEmpty ? .idle : .thinking)
+                let shown = store.pixelState(of: bot, state: inProgress.isEmpty ? .idle : .thinking).state
+                BotAvatar(bot: bot, size: 44, state: inProgress.isEmpty ? .idle : .thinking)
                 Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
                             Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                             if bot.primary {
@@ -816,14 +923,10 @@ struct BotChatScreen: View {
                                     .padding(.horizontal, 6).padding(.vertical, 2)
                                     .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(DS.Colors.accentSoft))
                             }
+                            StatusPill(state: shown)
                         }
-                        HStack(spacing: 6) {
-                            if !bot.isOn {
-                                Circle().fill(DS.Colors.textDisabled).frame(width: 7, height: 7)
-                            } else {
-                                LiveDot()
-                            }
-                            Text(statusLine(for: bot)).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            Text(headerDetail(for: bot, state: shown, now: context.date)).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                         }
                     }
                 }
@@ -874,7 +977,33 @@ struct BotChatScreen: View {
         .ignoresSafeArea(.container, edges: .top)
     }
 
-    /// "Working · Claude Sonnet 5.5 · high · 2 routines" under the bot's name.
+    /// One line under the name: "Paused, waiting for you · 4 min", what it's doing, why it failed, or who it is.
+    private func headerDetail(for bot: NativeBot, state: PixelState, now: Date) -> String {
+        let since = store.stateSince(of: bot)
+        let age = since.map { " · " + Self.minutes(since: $0, now: now) } ?? ""
+        switch state {
+        case .needs:
+            if let connector = ConnectorHealth.shared.blockingConnector(of: bot.id) { return "Waiting for you to sign in to \(connector.name)" + age }
+            return "Paused, waiting for you" + age
+        case .failed:
+            return (bot.lastFailure?.firstSentence ?? "It stopped") + age
+        case .working, .thinking:
+            let live = store.liveStatus(of: bot)
+            return live + age
+        default:
+            return statusLine(for: bot)
+        }
+    }
+
+    /// "4 min", "1 h".
+    static func minutes(since date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        if seconds < 60 { return "just now" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) min" }
+        return "\(Int(seconds / 3600)) h"
+    }
+
+    /// "Online · Claude Sonnet 5.5 · high · 2 routines" under the bot's name.
     private func statusLine(for bot: NativeBot) -> String {
         var parts = [!bot.isOn ? "Off" : inProgress.isEmpty ? "Online" : "Working"]
         parts.append(bot.modelLabel.replacingOccurrences(of: "Claude ", with: ""))
@@ -1192,7 +1321,7 @@ struct ThinkingLine: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                BotAvatar(bot: bot, size: 26, state: .thinking)
+                BotAvatar(bot: bot, size: 28, state: .thinking, badge: false)
                 if showsName { Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary) }
                 TypingDots()
             }
@@ -1223,7 +1352,7 @@ struct BotLine: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             if showsName {
-                BotAvatar(bot: bot, size: 26, state: typing ? .typing : .idle)
+                BotAvatar(bot: bot, size: 28, state: typing ? .typing : .idle, badge: false)
             } else {
                 Color.clear.frame(width: 26, height: 1)
             }
@@ -1575,27 +1704,25 @@ struct T3RunCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
                 if let bot {
-                    CrewAvatar(look: bot.crewLook, size: 32, pose: run.phase == "waiting" ? .needs : .working, dimmed: !bot.isOn)
+                    CrewAvatar(look: bot.crewLook, size: 28, pose: run.phase == "waiting" ? .needs : .working, name: bot.name, ring: DS.Colors.surface1)
                 } else {
-                    BrandLogo(id: run.harness ?? "t3", name: engine, size: 32)
+                    BrandLogo(id: run.harness ?? "t3", name: engine, size: 28)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    (Text(bot?.name ?? engine).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                     + Text(" · \(run.title)").font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary)).lineLimit(1)
+                    (Text(bot?.name ?? engine).font(.system(size: 12.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                     + Text(" · \(run.title)").font(.system(size: 12.5)).foregroundColor(DS.Colors.textSecondary)).lineLimit(1)
                     HStack(spacing: 6) {
                         RunMacChip(run: run)
-                        Text(detailLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                        Text(detailLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 8)
+                // The pill carries the timer while working, "Waiting 2:10" when paused on the owner.
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    HStack(spacing: 6) {
-                        LiveDot(color: run.phase == "waiting" ? DS.Colors.warning : DS.Colors.accent)
-                        Text((run.phase == "waiting" ? "Waiting · " : run.phase == "reporting" ? "Finishing · " : "") + Self.elapsed(since: run.startedAt, now: context.date))
-                            .font(.system(size: 11.5, weight: .medium).monospacedDigit()).foregroundColor(run.phase == "waiting" ? DS.Colors.warningText : DS.Colors.accentText)
-                    }
-                    .padding(.horizontal, 9).frame(height: 22)
-                    .background(Capsule().fill(run.phase == "waiting" ? DS.Colors.warning.opacity(0.13) : DS.Colors.accentSoft))
+                    let time = Self.elapsed(since: run.startedAt, now: context.date)
+                    StatusPill(text: run.phase == "waiting" ? "Waiting \(time)" : run.phase == "reporting" ? "Finishing \(time)" : time,
+                               tone: run.phase == "waiting" ? .warn : .working)
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 }
             }
             RunStepBar(fills: RunSteps.fills(phase: run.phase, stage: run.stage), stopping: run.stoppedByOwner == true)
@@ -1649,9 +1776,9 @@ struct T3RunCard: View {
                     .padding(.top, 10)
             }
         }
-        .padding(14)
+        .padding(.top, 12).padding(.horizontal, 13).padding(.bottom, 13)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(run.phase == "waiting" ? PixelTone.needs.cardBorder : DS.Colors.borderSubtle, lineWidth: 1))
         .alert("Stop this run?", isPresented: $confirmsStop) {
             Button("Stop", role: .destructive) { BotsStore.shared.stopRun(run.id) }
             Button("Keep going", role: .cancel) {}
@@ -1684,7 +1811,8 @@ struct T3RunCard: View {
     }
 }
 
-/// Branch, Code, Tests, Push, PR: five segments and their names.
+/// Branch, Code, Tests, Push, PR: five segments and their names. Finished steps green, the current one half green, a step
+/// waiting on the owner yellow, the step that failed red.
 struct RunStepBar: View {
     let fills: [RunSteps.Fill]
     var stopping = false
@@ -1697,7 +1825,7 @@ struct RunStepBar: View {
                         ZStack(alignment: .leading) {
                             Capsule().fill(DS.Colors.borderStrong)
                             if fills[index] != .todo {
-                                Capsule().fill(stopping ? DS.Colors.warning : DS.Colors.accent).frame(width: fills[index] == .done ? box.size.width : box.size.width * 0.4)
+                                Capsule().fill(color(fills[index])).frame(width: fills[index] == .active ? box.size.width * 0.5 : box.size.width)
                             }
                         }
                     }
@@ -1706,10 +1834,22 @@ struct RunStepBar: View {
             }
             HStack(spacing: 4) {
                 ForEach(0..<5, id: \.self) { index in
-                    Text(RunSteps.titles[index]).font(.system(size: 10.5)).foregroundColor(fills[index] == .active ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                    Text(RunSteps.titles[index]).font(.system(size: 10.5))
+                        .foregroundColor(fills[index] == .failed ? PixelTone.failed.text : fills[index] == .waiting ? PixelTone.needs.text : fills[index] == .active ? DS.Colors.textPrimary : DS.Colors.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func color(_ fill: RunSteps.Fill) -> Color {
+        if stopping { return DS.Colors.textTertiary }
+        switch fill {
+        case .done, .active: return DS.Colors.success
+        case .waiting: return DS.Colors.warning
+        case .failed: return DS.Colors.destructive
+        case .todo: return .clear
         }
     }
 }
