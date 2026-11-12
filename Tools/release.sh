@@ -33,6 +33,24 @@ codesign --verify --deep --strict "$APP"
 # Signed with the Apple Development identity (never ad hoc), so macOS keeps Theo's permissions across updates.
 SIGNING="$(codesign -dv --verbose=2 "$APP" 2>&1)"   # Not piped: with pipefail, grep -q closing early fails the check.
 [[ "$SIGNING" == *"Authority=Apple Development"* ]] || { echo "Theo.app isn't signed with the Apple Development identity"; exit 1; }
+# macOS keeps a permission (Accessibility, Screen Recording, Microphone) against the app's designated
+# requirement. If this build doesn't satisfy the installed Theo's (a new certificate, a changed name or
+# Apple ID), every user would be asked for every permission again, so stop here. (Compared with the
+# installed copy rather than a file in the repo, so the certificate's name and email aren't committed.)
+PREVIOUS_APP="${CLICKY_RELEASE_PREVIOUS_APP:-/Applications/Theo.app}"
+if [[ -d "$PREVIOUS_APP" && "${CLICKY_ALLOW_NEW_SIGNER:-0}" != "1" ]]; then
+  PREVIOUS_DR="$(codesign -d -r- "$PREVIOUS_APP" 2>&1 | sed -n 's/^designated => //p')"
+  if ! codesign --verify -R "=$PREVIOUS_DR" "$APP" 2>/dev/null; then
+    echo "This build doesn't satisfy $PREVIOUS_APP's designated requirement, so every user's permissions would reset:"
+    echo "  installed: $PREVIOUS_DR"
+    echo "  new:       $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+    echo "If that's intended, rerun with CLICKY_ALLOW_NEW_SIGNER=1 (and update install.sh's signer)."
+    exit 1
+  fi
+fi
+# And install.sh must accept it.
+codesign --verify -R "=$(bash Tools/install/install.sh --print-signer-requirement)" "$APP" \
+  || { echo "install.sh's signer requirement doesn't accept this build"; exit 1; }
 ZIP="$OUT/Theo-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"

@@ -41,8 +41,13 @@ set -euo pipefail
 RELEASES_REPO="${THEO_RELEASES_REPO:-adhyanmahajan26-boop/claudia-releases}"
 GITHUB_API="${THEO_GITHUB_API:-https://api.github.com}"   # tests point this at a local fake
 BUNDLE_ID="com.personal.clicky"
-# Theo's signing team. A zip whose app is signed by anyone else is refused.
-EXPECTED_TEAM="${THEO_EXPECTED_TEAM:-9JAQUUW553}"
+# Who must have signed Theo, as a code requirement (the language macOS uses for permissions).
+# A zip whose app doesn't satisfy it is refused. Today: the Apple Development certificate of
+# team 9JAQUUW553. With a self-signed certificate it would be
+#   identifier "com.personal.clicky" and certificate leaf = H"<SHA-1 of the certificate>"
+# (docs/INSTALL.md, "Signing options").
+SIGNER_REQUIREMENT='identifier "com.personal.clicky" and anchor apple generic and certificate leaf[subject.OU] = "9JAQUUW553"'
+SIGNER_REQUIREMENT="${THEO_SIGNER_REQUIREMENT:-$SIGNER_REQUIREMENT}"
 APP_NAME="Theo.app"
 EXECUTABLE="Clicky"
 MIN_MACOS="14.2"
@@ -101,6 +106,7 @@ parse_args() {
       --purge) PURGE=1 ;;
       --yes|-y) ASSUME_YES=1 ;;
       -h|--help) usage; exit 0 ;;
+      --print-signer-requirement) printf '%s\n' "$SIGNER_REQUIREMENT"; exit 0 ;;   # for release.sh
       *) die "unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -242,7 +248,13 @@ verify_checksum() {
   step "Checksum OK ($actual)"
 }
 
-team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
+signer_of() { # "team X", "certificate <sha1>" or "ad hoc"
+  local info; info="$(codesign -dvv "$1" 2>&1)"
+  case "$info" in *"Signature=adhoc"*) echo "ad hoc"; return ;; esac
+  local team; team="$(printf '%s\n' "$info" | sed -n 's/^TeamIdentifier=//p')"
+  if [ -n "$team" ] && [ "$team" != "not set" ]; then echo "team $team"; return; fi
+  codesign -d -r- "$1" 2>&1 | sed -n 's/.*certificate leaf = H"\([0-9a-f]*\)".*/certificate \1/p' | grep . || echo "unknown signer"
+}
 bundle_id_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true; }
 build_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$1/Contents/Info.plist" 2>/dev/null || echo 0; }
 
@@ -256,9 +268,10 @@ unpack_and_verify() {
   xattr -dr com.apple.quarantine "$NEW_APP" 2>/dev/null || true
   codesign --verify --deep --strict "$NEW_APP" 2>/dev/null || die "the app's signature isn't valid. Nothing was installed."
   [ "$(bundle_id_of "$NEW_APP")" = "$BUNDLE_ID" ] || die "the zip doesn't contain Theo. Nothing was installed."
-  local team; team="$(team_of "$NEW_APP")"
-  [ "$team" = "$EXPECTED_TEAM" ] || die "the app is signed by team '${team:-none}', not Theo's ($EXPECTED_TEAM). Nothing was installed."
-  step "Signature OK (team $team, build $(build_of "$NEW_APP"))"
+  if ! codesign --verify -R "=$SIGNER_REQUIREMENT" "$NEW_APP" 2>/dev/null; then
+    die "the app is signed by '$(signer_of "$NEW_APP")', not Theo's signing identity. Nothing was installed."
+  fi
+  step "Signature OK ($(signer_of "$NEW_APP"), build $(build_of "$NEW_APP"))"
 }
 
 # ---------- install ----------

@@ -6,7 +6,7 @@
 //  every 6 hours, or from the Update button); when it's newer than this
 //  build, the panel and Setup offer "Update now". That downloads the zip,
 //  checks its SHA-256 against the release notes, unzips it, checks the new
-//  app is signed by the same team with the same bundle id, then quits and
+//  app satisfies this one's designated requirement (same signer, same bundle id), then quits and
 //  lets a small script swap the app in place and open the new one.
 //  Permissions survive: the signature identity doesn't change.
 //
@@ -185,24 +185,29 @@ final class UpdateController: ObservableObject {
         return nil
     }
 
-    /// Same bundle id, same signing team, a valid signature: nothing else replaces Clicky.
+    /// Same bundle id, a valid signature, and it satisfies this app's designated requirement: nothing else
+    /// replaces Clicky. The designated requirement is the rule macOS keeps permissions against, so an update
+    /// that passes keeps Accessibility, Screen Recording and the microphone. It works for the Apple Development
+    /// certificate (same team and certificate name) and for a self-signed certificate (same certificate), which
+    /// has no team id.
     private func verifySameIdentity(_ newAppURL: URL) throws {
         try runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", newAppURL.path])
         guard let newBundle = Bundle(url: newAppURL), newBundle.bundleIdentifier == Bundle.main.bundleIdentifier else {
             throw UpdateError(message: "the new app isn't Clicky")
         }
-        guard let newTeam = Self.teamIdentifier(of: newAppURL), newTeam == Self.teamIdentifier(of: Bundle.main.bundleURL) else {
-            throw UpdateError(message: "the new app isn't signed by the same developer")
+        guard Self.satisfiesDesignatedRequirement(of: Bundle.main.bundleURL, candidate: newAppURL) else {
+            throw UpdateError(message: "the new app isn't signed by the same developer, so macOS would ask for every permission again")
         }
     }
 
-    static func teamIdentifier(of appURL: URL) -> String? {
-        var staticCode: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(appURL as CFURL, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
-        var information: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
-              let dictionary = information as? [String: Any] else { return nil }
-        return dictionary[kSecCodeInfoTeamIdentifier as String] as? String
+    static func satisfiesDesignatedRequirement(of installedAppURL: URL, candidate candidateURL: URL) -> Bool {
+        var installedCode: SecStaticCode?
+        var candidateCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(installedAppURL as CFURL, [], &installedCode) == errSecSuccess, let installedCode,
+              SecStaticCodeCreateWithPath(candidateURL as CFURL, [], &candidateCode) == errSecSuccess, let candidateCode else { return false }
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(installedCode, [], &requirement) == errSecSuccess, let requirement else { return false }
+        return SecStaticCodeCheckValidity(candidateCode, SecCSFlags(rawValue: kSecCSCheckAllArchitectures), requirement) == errSecSuccess
     }
 
     private func relaunchInto(_ newAppURL: URL) throws {

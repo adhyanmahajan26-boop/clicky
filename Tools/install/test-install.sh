@@ -172,5 +172,25 @@ HOME="$ROOT/home" THEO_UNINSTALL_SKIP_SYSTEM=1 bash "$INSTALLER" --uninstall --p
 run --uninstall --dir "$ROOT/apps"
 [ $RC = 0 ] && has "isn't installed" && ok "uninstall with nothing installed is harmless" || bad "uninstall nothing" "$LOG"
 
+# ---- 16-18 (optional). A self-signed signer pinned by its certificate (docs/INSTALL.md, "Signing options").
+# Set THEO_TEST_SELFSIGNED_ZIP (signed with the pinned certificate), THEO_TEST_SELFSIGNED_OTHER_ZIP (same
+# certificate name, different key) and THEO_TEST_SELFSIGNED_REQ (the pinned requirement).
+if [ -n "${THEO_TEST_SELFSIGNED_ZIP:-}" ]; then
+  sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+  rm -rf "$APP"
+  N=$((N+1)); LOG="$ROOT/logs/$N.log"
+  THEO_SIGNER_REQUIREMENT="$THEO_TEST_SELFSIGNED_REQ" bash "$INSTALLER" --dir "$ROOT/apps" --no-launch \
+    --from "$THEO_TEST_SELFSIGNED_ZIP" --sha256 "$(sha "$THEO_TEST_SELFSIGNED_ZIP")" > "$LOG" 2>&1; RC=$?
+  [ $RC = 0 ] && has "Signature OK (certificate" && ok "self-signed build accepted when its certificate is pinned" || bad "self-signed pinned" "$LOG"
+  N=$((N+1)); LOG="$ROOT/logs/$N.log"
+  THEO_SIGNER_REQUIREMENT="$THEO_TEST_SELFSIGNED_REQ" bash "$INSTALLER" --dir "$ROOT/apps" --no-launch --force \
+    --from "$THEO_TEST_SELFSIGNED_OTHER_ZIP" --sha256 "$(sha "$THEO_TEST_SELFSIGNED_OTHER_ZIP")" > "$LOG" 2>&1; RC=$?
+  [ $RC != 0 ] && has "not Theo's" && ok "same certificate name with another key is refused" || bad "self-signed other key" "$LOG"
+  N=$((N+1)); LOG="$ROOT/logs/$N.log"
+  THEO_SIGNER_REQUIREMENT="$THEO_TEST_SELFSIGNED_REQ" bash "$INSTALLER" --dir "$ROOT/apps" --no-launch --force \
+    --from "$NEWZIP" --sha256 "$NEWSHA" > "$LOG" 2>&1; RC=$?
+  [ $RC != 0 ] && has "not Theo's" && ok "with a self-signed pin, an Apple Development build is refused" || bad "self-signed pin vs Apple build" "$LOG"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
