@@ -296,3 +296,41 @@ final class FailureTriageTests: XCTestCase {
         XCTAssertTrue(FailureTriage.marksUnseen(botID: "b", viewing: nil, isWatching: true, isSignIn: false))
     }
 }
+
+final class EngineSetupRulesTests: XCTestCase {
+    /// Gemini CLI 0.68.0, signed out, `gemini -p hi --output-format json` (captured 13 Nov 2026; session id removed).
+    private let signedOut = """
+    {
+      "error": {
+        "type": "Error",
+        "message": "Please set an Auth method in your ~/.gemini/settings.json or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA",
+        "code": 41
+      }
+    }
+    """
+
+    func testASignedOutGeminiIsASignInNotARawError() {
+        XCTAssertTrue(EngineSetupRules.geminiNeedsSignIn(exitStatus: 41, output: ""))
+        XCTAssertTrue(EngineSetupRules.geminiNeedsSignIn(exitStatus: 1, output: signedOut))
+        XCTAssertFalse(EngineSetupRules.geminiNeedsSignIn(exitStatus: 1, output: "{\"error\": {\"message\": \"quota exceeded\", \"code\": 429}}"))
+        // The words it turns into are what the sign-in card recognises.
+        XCTAssertEqual(FailureTriage.signInHarness(in: EngineSetupRules.geminiSignedOut, harnesses: [("gemini", "Gemini CLI"), ("grok", "Grok")]), "gemini")
+    }
+
+    func testGeminiSignInTurnsOffItsAutoUpdate() throws {
+        let object = try JSONSerialization.jsonObject(with: EngineSetupRules.geminiQuietSettingsData()) as? [String: Any]
+        let general = object?["general"] as? [String: Bool]
+        XCTAssertEqual(general?["enableAutoUpdate"], false)
+        XCTAssertEqual(general?["enableAutoUpdateNotification"], false)
+        XCTAssertEqual(EngineSetupRules.geminiSignInEnvironment["GEMINI_CLI_TRUST_WORKSPACE"], "true")
+    }
+
+    func testANewBotGetsAModelOfItsOwnEngine() {
+        XCTAssertEqual(EngineSetupRules.starterModel(for: "gemini", ownerDefault: nil, firstKnown: nil), "gemini-3-pro")
+        XCTAssertEqual(EngineSetupRules.starterModel(for: "grok", ownerDefault: nil, firstKnown: "grok-4.7"), "grok-4.7")
+        XCTAssertEqual(EngineSetupRules.starterModel(for: "codex", ownerDefault: "gpt-x", firstKnown: "gpt-y"), "gpt-x")
+        for (engine, model) in EngineSetupRules.starterModels where engine != "opencode" {
+            XCTAssertFalse(model.hasPrefix("opencode/"), engine)
+        }
+    }
+}

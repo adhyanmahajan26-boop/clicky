@@ -1585,6 +1585,8 @@ struct ConnectorsScreen: View {
     @ObservedObject private var store = BotsStore.shared
     @State private var note: String?
     @State private var working: String?
+    /// The row whose details are open.
+    @State private var openRow: String?
 
     private var connectors: [BotConnector] {
         BotConnectors.known.filter { $0.id != "calendar" }
@@ -1624,6 +1626,7 @@ struct ConnectorsScreen: View {
                 }
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                otherServersSection
             }
             .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
             .frame(maxWidth: 820, alignment: .leading)
@@ -1653,7 +1656,9 @@ struct ConnectorsScreen: View {
         let state = health.state(of: connector)
         let waiting = health.botsWaiting(on: connector.id).compactMap { store.bot($0) }
         let pill = state.pill
-        return HStack(alignment: .center, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: openRow == connector.id ? "chevron.down" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundColor(DS.Colors.textTertiary).frame(width: 10)
             AppLogo(connector: connector, size: 30)
             VStack(alignment: .leading, spacing: 3) {
                 Text(connector.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
@@ -1684,7 +1689,8 @@ struct ConnectorsScreen: View {
                     Button("Try again") { Task { await health.refresh() } }.buttonStyle(.theo(.secondary, .small)).disabled(health.isChecking)
                 case .missing, .claudeOnly, .othersOnly:
                     if canConnect(connector, state: state) {
-                        Button(working == connector.id ? "Signing in…" : "Connect") { connect(connector, state: state) }
+                        // Next to "Claude bots only", Connect would read as if it weren't connected at all: say what it adds.
+                        Button(working == connector.id ? "Signing in…" : state == .claudeOnly ? "Connect OpenCode" : "Connect") { connect(connector, state: state) }
                             .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
                     } else {
                         Color.clear
@@ -1693,9 +1699,73 @@ struct ConnectorsScreen: View {
                     Color.clear
                 }
             }
-            .frame(width: 92, height: 26, alignment: .trailing)
+            .frame(width: 128, height: 26, alignment: .trailing)
         }
         .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 56)
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(DS.Motion.hover) { openRow = openRow == connector.id ? nil : connector.id } }
+        .pointerCursor()
+        if openRow == connector.id { details(connector, state: state, users: users) }
+        }
+    }
+
+    /// What a row opens to: each engine's own answer, the reason if it isn't answering, when it last worked, who uses it.
+    private func details(_ connector: BotConnector, state: ConnectorHealth.RowState, users: [NativeBot]) -> some View {
+        let claudeSide = health.onClaude(connector)
+        let openCodeSide = health.onOpenCode(connector)
+        return VStack(alignment: .leading, spacing: 6) {
+            detailLine("Bots on Claude", connector.claudeServer == nil ? "Not available" : claudeSide.label)
+            detailLine("Bots on OpenCode and Grok", BotConnectors.bridged(connector) ? "Through Theo, on your Claude sign-in" : (connector.openCodeServer == nil ? "Not available" : openCodeSide.label))
+            if let reason = claudeSide.failureReason ?? openCodeSide.failureReason { detailLine("What it said", reason) }
+            detailLine("Last worked", health.lastConnected[connector.id].map { ConnectorListing.workedAgo($0).replacingOccurrences(of: "worked ", with: "") } ?? "Not seen connected yet")
+            detailLine("Used by", users.isEmpty ? "No bot yet" : users.map(\.name).joined(separator: ", "))
+            if let server = connector.claudeServer { detailLine("Name in Claude Code", server) }
+        }
+        .padding(.leading, 66).padding(.trailing, 14).padding(.bottom, 12)
+    }
+
+    private func detailLine(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).frame(width: 170, alignment: .leading)
+            Text(value).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Every other server the engines list (a claude.ai connector added on the web, a local MCP server), with its state.
+    @ViewBuilder private var otherServersSection: some View {
+        let others = health.otherServers()
+        if !others.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Other servers your engines see").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+                VStack(spacing: 0) {
+                    ForEach(Array(others.enumerated()), id: \.element.name) { index, server in
+                        if index > 0 { RowDivider() }
+                        HStack(spacing: 12) {
+                            AppTile(symbol: "server.rack", size: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ConnectorHealth.displayName(server.name)).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                                Text(server.state.failureReason.map { "On \(server.engine) · " + $0 } ?? "On \(server.engine)").font(TheoType.caption).foregroundColor(server.state.isFailed ? PixelTone.failed.text : DS.Colors.textTertiary).lineLimit(2)
+                            }
+                            Spacer(minLength: 12)
+                            StatusPill(text: server.state.label, tone: server.state == .connected ? .good : server.state == .needsSignIn ? .warn : server.state.isFailed ? .bad : .neutral)
+                            Group {
+                                if server.state == .needsSignIn, server.name.hasPrefix("claude.ai") {
+                                    Button("Sign in") { BotConnectors.openClaudeConnectors() }.buttonStyle(.theo(.primary, .small))
+                                } else if server.state.isFailed {
+                                    Button("Try again") { Task { await health.refresh() } }.buttonStyle(.theo(.secondary, .small))
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                            .frame(width: 128, height: 26, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 52)
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            }
+        }
     }
 
     /// "Researcher is waiting on this" in yellow, the reason and when it last worked in red, or what other engines can't do.

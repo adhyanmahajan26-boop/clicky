@@ -249,7 +249,8 @@ final class ClaudiaControlInbox {
             var bot = store.addBot(name: name, description: command["description"] as? String ?? "",
                                    instructions: command["instructions"] as? String ?? "You are \(name).",
                                    provider: provider,
-                                   model: command["model"] as? String ?? HarnessCenter.shared.resolvedModel(for: provider) ?? (provider == "claude" ? "claude-sonnet-5-5" : "opencode/deepseek-v4.1-flash-free"),
+                                   model: command["model"] as? String ?? EngineSetupRules.starterModel(for: provider, ownerDefault: HarnessPrefs.defaultModel(provider),
+                                                                                                       firstKnown: HarnessCenter.shared.models(for: provider).first?.id),
                                    groupID: command["group"] as? String)
             if let authority = command["authority"] as? String, ["member", "lead", "ceo"].contains(authority) { bot.authority = authority }
             if let canMessage = command["canMessage"] as? [String] { bot.canMessage = canMessage }

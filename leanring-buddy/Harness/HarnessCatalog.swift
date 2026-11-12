@@ -178,7 +178,7 @@ enum HarnessCatalog {
                       signIn: ["login"], signOut: ["logout"], signInHint: "Your browser opens to sign in with your xAI account.",
                       keyProvider: "xai", keyVariables: ["XAI_API_KEY"]),
         "gemini": Setup(install: "npm install -g @google/gemini-cli", installPage: "https://github.com/google-gemini/gemini-cli",
-                        signIn: [], signOut: nil, signInHint: "Choose \u{201C}Sign in with Google\u{201D} in the terminal. Free and Google AI Pro access moved to Antigravity CLI in June 2026; Gemini CLI now needs Code Assist or an API key.",
+                        signIn: [], signOut: nil, signInHint: "Choose \u{201C}Sign in with Google\u{201D} in the terminal. If Gemini asks whether to trust a folder, that's its folder-trust prompt: trust it only for folders you know. Free and Google AI Pro access moved to Antigravity CLI in June 2026; Gemini CLI now needs Code Assist or an API key.",
                         keyProvider: "gemini", keyVariables: ["GEMINI_API_KEY"]),
     ]
 
@@ -335,6 +335,8 @@ enum HarnessDetector {
                 if status.loggedIn == true {
                     status.account = text.split(separator: "\n").first { $0.lowercased().contains("logged in") }
                         .map { $0.replacingOccurrences(of: "You are logged in with ", with: "").trimmingCharacters(in: CharacterSet(charactersIn: ". ")) }
+                        // Grok only says where ("grok.com"), never who: say that in words rather than show a bare domain.
+                        .map { $0.contains("@") ? $0 : "Your \($0) account" }
                 }
             }
         case "opencode":
