@@ -209,22 +209,46 @@ enum BotMemory {
 
     static func read(botID: String) -> String { (try? String(contentsOf: file(botID: botID), encoding: .utf8)) ?? "" }
 
-    /// What's on both Macs, each line once. Written only when a line is new.
+    /// The copy last heard from the other Mac, per bot: what lets a line dropped or rewritten on either Mac stay that way
+    /// (`BotMemoryMerge.merged`). Beside the memory folder, not in it: bots run in there.
+    static func peerCopyFile(botID: String) -> URL {
+        root.deletingLastPathComponent().appendingPathComponent("link-memory", isDirectory: true).appendingPathComponent("\(botID).md")
+    }
+
+    private static func peerCopy(botID: String) -> String? { try? String(contentsOf: peerCopyFile(botID: botID), encoding: .utf8) }
+
+    private static func notePeerCopy(_ text: String, botID: String) {
+        let target = peerCopyFile(botID: botID)
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? text.write(to: target, atomically: true, encoding: .utf8)
+    }
+
+    /// The other Mac's copy came in: its additions are added, what it dropped is dropped, and what changed only here stays.
+    /// Written only when the lines change. The first time (or from a build before this) it's each line once.
     static func merge(_ theirs: String, botID: String) {
         let mine = read(botID: botID)
-        let merged = BotMemoryMerge.union(mine, theirs)
+        let merged = BotMemoryMerge.merged(mine: mine, theirs: theirs, lastTheirs: peerCopy(botID: botID))
+        notePeerCopy(theirs, botID: botID)
         guard BotMemoryMerge.digest(merged) != BotMemoryMerge.digest(mine) else { return }
         let target = file(botID: botID)
         try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? merged.write(to: target, atomically: true, encoding: .utf8)
     }
 
-    /// One fingerprint per bot that has memory.
+    /// Both Macs hold the same lines (the fingerprints matched): that's the other Mac's copy now. Without this, a copy this Mac
+    /// kept while the other one took it over would look, later, like something the other Mac added since.
+    static func agreed(botID: String) {
+        let mine = read(botID: botID)
+        guard peerCopy(botID: botID).map({ BotMemoryMerge.digest($0) != BotMemoryMerge.digest(mine) }) ?? true else { return }
+        notePeerCopy(mine, botID: botID)
+    }
+
+    /// One fingerprint per bot that has memory, or had some the other Mac heard: an emptied file says so, so it's emptied there too.
     static func digests(botIDs: [String]) -> [String: String] {
         var result: [String: String] = [:]
         for id in botIDs {
             let text = read(botID: id)
-            if !text.isEmpty { result["botMemory/\(id)"] = BotMemoryMerge.digest(text) }
+            if !text.isEmpty || peerCopy(botID: id) != nil { result["botMemory/\(id)"] = BotMemoryMerge.digest(text) }
         }
         return result
     }
@@ -274,4 +298,56 @@ enum BotSkills {
         for (id, name) in names.sorted(by: { $0.key < $1.key }) { scan(folder(botID: id), author: name) }
         return skills
     }
+
+    // MARK: Theo Link
+
+    /// Where a skill's SKILL.md sits, by its link key ("shared/<folder>" or "<bot id>/<folder>").
+    private static func file(forKey key: String) -> URL? {
+        let parts = key.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, BotSkillSync.key(owner: parts[0], folder: parts[1]) == key else { return nil }
+        let base = parts[0] == "shared" ? sharedFolder : folder(botID: parts[0])
+        return base.appendingPathComponent(parts[1], isDirectory: true).appendingPathComponent("SKILL.md")
+    }
+
+    /// Every SKILL.md on this Mac (the shared folder's and these bots'), as it travels. Only SKILL.md: anything else in a skill's folder stays on its Mac.
+    static func copies(botIDs: [String]) -> [String: SkillCopy] {
+        var result: [String: SkillCopy] = [:]
+        for owner in ["shared"] + botIDs {
+            let base = owner == "shared" ? sharedFolder : folder(botID: owner)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? [] {
+                guard let key = BotSkillSync.key(owner: owner, folder: name), let url = file(forKey: key),
+                      let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                      (attributes[.size] as? Int ?? 0) <= BotSkillSync.maximumBytes,
+                      let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                result[key] = SkillCopy(text: text, modifiedAt: (attributes[.modificationDate] as? Date) ?? .distantPast)
+            }
+        }
+        return result
+    }
+
+    private static var peerFile: URL { BotMemory.peerCopyFile(botID: "skills").deletingLastPathComponent().appendingPathComponent("skills-peer.json") }
+
+    private static func notePeer(_ keys: Set<String>) {
+        try? FileManager.default.createDirectory(at: peerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(keys.sorted()).write(to: peerFile, options: .atomic)
+    }
+
+    /// The other Mac's skills came in: new and newer ones are written, ones it dropped are dropped here (only their SKILL.md).
+    static func merge(_ theirs: [String: SkillCopy], botIDs: [String]) {
+        let last = (try? Data(contentsOf: peerFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) }.map(Set.init)
+        let known = Set(["shared"] + botIDs)
+        let wanted = theirs.filter { known.contains(String($0.key.split(separator: "/").first ?? "")) && $0.value.text.utf8.count <= BotSkillSync.maximumBytes }
+        let result = BotSkillSync.merged(mine: copies(botIDs: botIDs), theirs: wanted, lastTheirs: last)
+        for (key, copy) in result.write {
+            guard let url = file(forKey: key) else { continue }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? copy.text.write(to: url, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.modificationDate: copy.modifiedAt], ofItemAtPath: url.path)
+        }
+        for key in result.delete { if let url = file(forKey: key) { try? FileManager.default.removeItem(at: url) } }
+        notePeer(Set(theirs.keys))
+    }
+
+    /// Both Macs hold the same skills: that's the other Mac's set now.
+    static func agreed(botIDs: [String]) { notePeer(Set(copies(botIDs: botIDs).keys)) }
 }

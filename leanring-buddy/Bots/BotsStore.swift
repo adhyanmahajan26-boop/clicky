@@ -2800,6 +2800,7 @@ extension BotsStore {
         case "device": return try? encoder.encode(DeviceSnapshotBuilder.current())
         case "clickyMac": return try? encoder.encode(TheoLink.shared.clickyMacItem)
         case "memory": return try? encoder.encode(memoryStore.everything())
+        case "skills": return try? encoder.encode(BotSkills.copies(botIDs: bots.map(\.id)))
         default:
             if key.hasPrefix("botMemory/") { return try? encoder.encode(BotMemory.read(botID: String(key.dropFirst("botMemory/".count)))) }
             guard key.hasPrefix("chat/") else { return nil }
@@ -2875,6 +2876,9 @@ extension BotsStore {
         case "memory":
             guard let theirs = try? decoder.decode([ClickyMemoryEntry].self, from: data) else { return }
             memoryStore.merge(theirs)
+        case "skills":
+            guard let theirs = try? decoder.decode([String: SkillCopy].self, from: data) else { return }
+            BotSkills.merge(theirs, botIDs: bots.map(\.id))
         default:
             if key.hasPrefix("botMemory/") {
                 let botID = String(key.dropFirst("botMemory/".count))

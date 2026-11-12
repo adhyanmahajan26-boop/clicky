@@ -692,4 +692,47 @@ struct BotProtocolTests {
         #expect(BotMemoryMerge.digest("a\nb\n") == BotMemoryMerge.digest("b\na"))
         #expect(BotMemoryMerge.digest("a\nb") != BotMemoryMerge.digest("a"))
     }
+
+    @Test func skillsTravelAndDeletionsStick() {
+        let t0 = Date(timeIntervalSince1970: 1000), t1 = Date(timeIntervalSince1970: 2000)
+        let a = SkillCopy(text: "steps A", modifiedAt: t0), a2 = SkillCopy(text: "steps A, better", modifiedAt: t1), b = SkillCopy(text: "steps B", modifiedAt: t0)
+        // First time: whatever's new comes over.
+        var r = BotSkillSync.merged(mine: [:], theirs: ["ledger/invoice": a], lastTheirs: nil)
+        #expect(r.write == ["ledger/invoice": a] && r.delete.isEmpty)
+        // Edited there later: the newer one wins; edited here later: this one stays.
+        r = BotSkillSync.merged(mine: ["ledger/invoice": a], theirs: ["ledger/invoice": a2], lastTheirs: ["ledger/invoice"])
+        #expect(r.write == ["ledger/invoice": a2])
+        r = BotSkillSync.merged(mine: ["ledger/invoice": a2], theirs: ["ledger/invoice": a], lastTheirs: ["ledger/invoice"])
+        #expect(r.write.isEmpty)
+        // Dropped there: dropped here. Dropped here: not brought back. New here: kept.
+        r = BotSkillSync.merged(mine: ["ledger/invoice": a, "shared/b": b], theirs: [:], lastTheirs: ["ledger/invoice"])
+        #expect(r.delete == ["ledger/invoice"] && r.write.isEmpty)
+        r = BotSkillSync.merged(mine: [:], theirs: ["ledger/invoice": a], lastTheirs: ["ledger/invoice"])
+        #expect(r.write.isEmpty && r.delete.isEmpty)
+        #expect(BotSkillSync.key(owner: "ledger", folder: "../x") == nil)
+        #expect(BotSkillSync.key(owner: "shared", folder: "invoice") == "shared/invoice")
+        #expect(BotSkillSync.digest(["x/a": a, "x/b": b]) == BotSkillSync.digest(["x/b": b, "x/a": a]))
+    }
+
+    @Test func aTidyUpOnOneMacSticksOnBoth() {
+        let old = "# Notes\n- likes tea\n- likes tea a lot\n- uses Hinglish\n- temp: call bank\n"
+        let tidy = "# Notes\n- likes tea (a lot)\n- uses Hinglish\n"
+        // The Studio tidied; the Air still has the old file, which is what the Studio heard from it last.
+        let onStudio = BotMemoryMerge.merged(mine: tidy, theirs: old, lastTheirs: old)
+        #expect(onStudio == tidy)
+        let onAir = BotMemoryMerge.merged(mine: old, theirs: tidy, lastTheirs: old)
+        #expect(onAir == tidy)
+        // Meanwhile the Air learned something new: it stays, and the tidy-up still holds.
+        let airNew = old + "- prefers Haiku\n"
+        let airAfter = BotMemoryMerge.merged(mine: airNew, theirs: tidy, lastTheirs: old)
+        #expect(airAfter == "# Notes\n- uses Hinglish\n- prefers Haiku\n- likes tea (a lot)\n")
+        let studioAfter = BotMemoryMerge.merged(mine: tidy, theirs: airAfter, lastTheirs: old)
+        #expect(BotMemoryMerge.digest(studioAfter) == BotMemoryMerge.digest(airAfter))
+        // A line dropped here that the other Mac still has (and had before) stays dropped.
+        #expect(BotMemoryMerge.merged(mine: "a\nc\n", theirs: "a\nb\nc\n", lastTheirs: "a\nb\nc\n") == "a\nc\n")
+        // Emptied on one Mac: emptied on the other.
+        #expect(BotMemoryMerge.merged(mine: "a\nb\n", theirs: "", lastTheirs: "a\nb\n") == "")
+        // Never heard from that Mac: the union, as before.
+        #expect(BotMemoryMerge.merged(mine: "a\n", theirs: "b\n", lastTheirs: nil) == "a\nb\n")
+    }
 }
