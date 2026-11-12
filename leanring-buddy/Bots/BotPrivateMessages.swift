@@ -147,30 +147,41 @@ extension BotsStore {
         return candidates.first { Self.searchName($0.name) == wanted } ?? candidates.first { Self.searchName($0.name).contains(wanted) && !wanted.isEmpty }
     }
 
-    /// Sends a bot's [TELL:] lines one at a time, then lets it carry on with all the answers at once. `then` gets its last words.
-    /// Theo's can name a group chat too: it's asked in turn with the rest, so one turn wakes him once however many he asked.
+    /// How many bots answer one bot's [TELL:] lines at the same time (`v3.bots.parallelMessages`, 1 to 8, default 4), like Hermes's
+    /// parallel delegation and OpenClaw's sub-agent lanes. Lines to the same bot still go one after another.
+    static var parallelMessages: Int {
+        let saved = UserDefaults.standard.integer(forKey: "v3.bots.parallelMessages")
+        return saved == 0 ? 4 : min(8, max(1, saved))
+    }
+
+    /// Sends a bot's [TELL:] lines, then lets it carry on with all the answers at once. `then` gets its last words.
+    /// Different bots answer at the same time (up to `parallelMessages`); lines to the same bot, and group chats Theo asks, go in turn.
+    /// Every line is checked against the same caps before anything is sent, so running them together never lets more through.
     /// `askerID` and `exchangeID`: this bot is itself answering a private message, so it carries on there.
     func runPrivateMessages(_ tells: [(name: String, message: String)], from sender: NativeBot, room: String, context: BotDMContext,
                             askerID: String? = nil, exchangeID: String? = nil, then: @escaping (String?) -> Void) {
         Task { [weak self] in
             guard let self else { return then(nil) }
-            var replies: [(name: String, text: String)] = []
-            var notes: [String] = []
+            // Kept by the line's place, so answers and notes come back in the order they were asked.
+            var replyAt: [Int: (name: String, text: String)] = [:]
+            var noteAt: [Int: String] = [:]
             var lastRound: [String] = []
             let stopsBefore = self.stopCounts[context.rootRoom] ?? 0
             let wasStopped: @MainActor () -> Bool = { self.stoppedExchangeRooms.contains(context.rootRoom) || (self.stopCounts[context.rootRoom] ?? 0) != stopsBefore }
-            for tell in tells {
+            struct Job { let index: Int; let target: NativeBot; let exchange: BotDMExchange; let words: String }
+            var jobs: [Job] = []
+            for (index, tell) in tells.enumerated() {
                 if wasStopped() { break }
                 if sender.primary, let chat = self.groupTarget(named: tell.name) {
                     guard chat.roomID != room else {
-                        notes.append("You're already talking in \(chat.name), so there's nothing to ask them separately.")
+                        noteAt[index] = "You're already talking in \(chat.name), so there's nothing to ask them separately."
                         continue
                     }
                     // A round in a group counts as a message too, or Theo could keep asking the group forever.
                     let verdict = (self.directMessageBudgets[context.rootRoom] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
                     if let line = BotDMBudget.capLine(verdict, sender: sender.name, target: chat.name) {
                         self.post(BotChatMessage(author: Self.noteAuthor, text: line), to: room)
-                        notes.append(line)
+                        noteAt[index] = line
                         continue
                     }
                     self.directMessageBudgets[context.rootRoom, default: BotDMBudget()].noteSent()
@@ -179,12 +190,12 @@ extension BotsStore {
                     let answer = await self.answer(of: chat, to: words, from: sender, ownerWords: context.ownerWords, rootRoom: context.rootRoom)
                     if wasStopped() { break }
                     // The group chat has the whole of it, a final prompt included.
-                    replies.append((chat.name, answer.components(separatedBy: "```prompt").first ?? answer))
+                    replyAt[index] = (chat.name, answer.components(separatedBy: "```prompt").first ?? answer)
                     continue
                 }
                 guard let target = self.directMessageTarget(named: tell.name, from: sender) else {
                     let names = (sender.primary ? self.bots.filter { $0.id != sender.id && $0.isOn } : self.reachable(from: sender)).map(\.name).joined(separator: ", ")
-                    notes.append("There's nobody called \(tell.name) you can message. Who you can reach: \(names).")
+                    noteAt[index] = "There's nobody called \(tell.name) you can message. Who you can reach: \(names)."
                     continue
                 }
                 let key = [room, sender.id, target.id].joined(separator: "|")
@@ -195,7 +206,7 @@ extension BotsStore {
                 if let line = BotDMBudget.capLine(verdict, sender: sender.name, target: target.name) {
                     // Said plainly in the chat, and the sender knows not to wait for it.
                     self.post(BotChatMessage(author: Self.noteAuthor, text: line, exchangeID: exchangeID), to: room)
-                    notes.append(line)
+                    noteAt[index] = line
                     continue
                 }
                 self.directMessageBudgets[context.rootRoom, default: BotDMBudget()].noteSent()
@@ -208,17 +219,45 @@ extension BotsStore {
                 self.exchangeRooms[exchange.threadID] = (sender.id, room, context)
                 let words = sender.primary ? self.withTeamWork(tell.message, ownerWords: context.ownerWords) : tell.message
                 self.post(BotChatMessage(author: sender.id, text: words, exchangeID: exchange.id), to: exchange.threadID)
-                let answer = await self.privateTurn(of: target, from: sender, message: words, exchange: exchange, context: context)
-                self.liveExchanges[exchange.id] = nil
-                if wasStopped() { break }
-                guard let answer, !answer.isEmpty else {
-                    notes.append("\(target.name) didn't answer.")
-                    continue
+                jobs.append(Job(index: index, target: target, exchange: exchange, words: words))
+            }
+            // Each bot's lines in order; different bots at once, a few at a time.
+            var queues: [[Job]] = []
+            for job in jobs {
+                if let at = queues.firstIndex(where: { $0.first?.target.id == job.target.id }) { queues[at].append(job) } else { queues.append([job]) }
+            }
+            let lanes = Self.parallelMessages
+            await withTaskGroup(of: [(Int, String, String?, Bool)].self) { group in
+                var next = 0
+                func addLane() {
+                    guard next < queues.count else { return }
+                    let queue = queues[next]
+                    next += 1
+                    group.addTask { @MainActor in
+                        var results: [(Int, String, String?, Bool)] = []
+                        for job in queue {
+                            if wasStopped() { break }
+                            let answer = await self.privateTurn(of: job.target, from: sender, message: job.words, exchange: job.exchange, context: context)
+                            self.liveExchanges[job.exchange.id] = nil
+                            if wasStopped() { break }
+                            let text = answer.flatMap { $0.isEmpty ? nil : self.startRunIfAsked($0, target: job.target, context: context) }
+                            results.append((job.index, job.target.name, text, job.exchange.roundTrips >= BotDMBudget.maximumRoundTrips))
+                        }
+                        return results
+                    }
                 }
-                replies.append((target.name, self.startRunIfAsked(answer, target: target, context: context)))
-                if exchange.roundTrips >= BotDMBudget.maximumRoundTrips { lastRound.append(target.name) }
+                for _ in 0..<lanes { addLane() }
+                for await results in group {
+                    for (index, name, text, last) in results {
+                        if let text { replyAt[index] = (name, text) } else { noteAt[index] = "\(name) didn't answer." }
+                        if last, text != nil, !lastRound.contains(name) { lastRound.append(name) }
+                    }
+                    addLane()
+                }
             }
             if wasStopped() { return then(nil) }
+            let replies = replyAt.keys.sorted().compactMap { replyAt[$0] }
+            let notes = noteAt.keys.sorted().compactMap { noteAt[$0] }
             guard !replies.isEmpty || !notes.isEmpty else { return then(nil) }
             // On a call nobody carries on in a chat: the answers go to the call, which says them.
             if let onReport = context.onReport {

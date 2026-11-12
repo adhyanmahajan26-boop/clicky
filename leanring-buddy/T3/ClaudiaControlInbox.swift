@@ -141,6 +141,20 @@ final class ClaudiaControlInbox {
         case "clickyMac":
             let changed = TheoLink.shared.setClickyMac(word: (command["word"] as? String ?? "").lowercased())
             reply(identifier, ok: changed, result: TheoLink.shared.statusReport, error: changed ? nil : "no Mac by that name")
+        case "botsUsage":
+            // {days}: every bot's turns, tokens and cost over the last days (default 7).
+            let days = command["days"] as? Int ?? 7
+            let names = Dictionary(BotsStore.shared.bots.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            reply(identifier, ok: true, result: ["days": days, "bots": BotUsage.shared.report(days: days, names: names)], error: nil)
+        case "botFresh":
+            // {id}: the bot's next reply starts a new engine session, like typing /new in its chat.
+            guard let id = command["id"] as? String, BotsStore.shared.bot(id) != nil else { reply(identifier, ok: false, result: nil, error: "No such bot."); return }
+            BotsStore.shared.startFreshSession(id)
+            reply(identifier, ok: true, result: ["id": id], error: nil)
+        case "doctor":
+            let findings = BotsStore.shared.doctorFindings()
+            reply(identifier, ok: true, result: ["findings": findings.map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail] },
+                                                 "text": TheoDoctor.markdown(findings)], error: nil)
         case "gateway":
             // Theo's local API: {action: state | on | off | token}. The token is only handed out in a test profile; the owner copies it in Settings › Devices.
             let gateway = TheoGateway.shared

@@ -14,6 +14,8 @@
 //    POST /v1/bots/<id>/messages      {"text", "source", "wait", "timeout"} → {"id", "status", "reply"}
 //    GET  /v1/routines                the routines
 //    POST /v1/routines/<id>/run       fires one now (a webhook trigger)
+//    GET  /v1/usage?days=7            each bot's turns, tokens and cost
+//    GET  /v1/doctor                  the health check
 //
 
 import ClickyCore
@@ -194,6 +196,12 @@ final class TheoGateway {
             } else {
                 send(connection, status: 504, ["id": messageID, "status": "still working", "error": "No answer within \(Int(body.timeout)) s; it will appear in the chat"])
             }
+        case .usage:
+            let days = Int(request.query["days"] ?? "") ?? 7
+            let names = Dictionary(store.bots.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            send(connection, status: 200, ["days": days, "bots": BotUsage.shared.report(days: min(400, max(1, days)), names: names)])
+        case .doctor:
+            send(connection, status: 200, ["findings": store.doctorFindings().map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail] }])
         case .notFound:
             send(connection, status: 404, ["error": "Not found"])
         case .methodNotAllowed:
@@ -216,6 +224,7 @@ extension BotsStore {
         guard let bot = bot(botID), bot.isOn, bot.owner == nil else { return nil }
         let message = BotChatMessage(author: "routine", text: TheoGatewayHTTP.chatLine(source: source, text: text))
         post(message, to: botID)
+        TheoHooks.fire(.gatewayMessage, ["bot": botID, "source": source, "text": text])
         Task { [weak self] in
             while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
             self?.startGatewayTurn(botID: botID, text: text, source: source)

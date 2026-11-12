@@ -81,6 +81,15 @@ final class HarnessParityTests: XCTestCase {
         XCTAssertLessThan(text.count, 1_100)
     }
 
+    func testRecallNamesOtherConversations() {
+        let plain = BotRecallPrompt.section(chatFile: "/c/pip.json", owner: "Addy")
+        XCTAssertTrue(plain.contains("/c/pip.json"))
+        let more = BotRecallPrompt.section(chatFile: "/c/pip.json", owner: "Addy", others: (0..<14).map { ("thread \($0)", "/c/dm-\($0).json") })
+        XCTAssertTrue(more.contains("thread 0 in /c/dm-0.json"))
+        XCTAssertFalse(more.contains("/c/dm-12.json"))
+        XCTAssertTrue(more.contains("2 more"))
+    }
+
     // MARK: Routines
 
     func testQuietMarker() {
@@ -102,5 +111,70 @@ final class HarnessParityTests: XCTestCase {
         XCTAssertEqual(RoutineCatchUp.decide(due: due, now: due.addingTimeInterval(3 * 86_400), periodSeconds: 86_400), .missed)
         XCTAssertEqual(RoutineCatchUp.decide(due: due, now: due.addingTimeInterval(1_799), periodSeconds: 3_600), .fire)
         XCTAssertEqual(RoutineCatchUp.decide(due: due, now: due.addingTimeInterval(1_801), periodSeconds: 3_600), .missed)
+    }
+}
+
+final class HarnessParityRoundTwoTests: XCTestCase {
+    func testUsageFromClaudeAndOpenCode() {
+        let claude: [String: Any] = ["type": "result", "total_cost_usd": 0.0123,
+                                     "usage": ["input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40]]
+        XCTAssertEqual(BotTurnUsage.fromClaudeResult(claude), BotTurnUsage(inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 40, costUSD: 0.0123))
+        XCTAssertNil(BotTurnUsage.fromClaudeResult(["type": "result"]))
+        let step: [String: Any] = ["type": "step_finish", "part": ["cost": 0.5, "tokens": ["input": 1, "output": 2, "reasoning": 3, "cache": ["read": 4, "write": 5]]]]
+        XCTAssertEqual(BotTurnUsage.fromOpenCodeStep(step), BotTurnUsage(inputTokens: 1, outputTokens: 5, cacheReadTokens: 4, cacheWriteTokens: 5, costUSD: 0.5))
+        XCTAssertEqual((BotTurnUsage(outputTokens: 1) + BotTurnUsage(outputTokens: 2, costUSD: 1)).costUSD, 1)
+        XCTAssertNil((BotTurnUsage(outputTokens: 1) + BotTurnUsage(outputTokens: 2)).costUSD)
+    }
+
+    func testLedgerTotalsByDayAndWindow() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var ledger = BotUsageLedger()
+        ledger.record(botID: "pip", usage: BotTurnUsage(outputTokens: 100, costUSD: 0.10), at: now, calendar: calendar)
+        ledger.record(botID: "pip", usage: BotTurnUsage(outputTokens: 50), at: now, calendar: calendar)
+        ledger.record(botID: "pip", usage: BotTurnUsage(outputTokens: 1000, costUSD: 1), at: now.addingTimeInterval(-10 * 86_400), calendar: calendar)
+        let week = ledger.total(botID: "pip", days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(week.turns, 2)
+        XCTAssertEqual(week.usage.outputTokens, 150)
+        XCTAssertEqual(week.usage.costUSD, 0.10)
+        XCTAssertEqual(week.turnsWithoutCost, 1)
+        XCTAssertEqual(ledger.total(botID: "pip", days: 30, now: now, calendar: calendar).turns, 3)
+        XCTAssertEqual(BotUsageLedger.line(week, period: "this week"), "2 turns, 150 tokens, $0.10 this week (1 without a cost from the engine).")
+        XCTAssertEqual(BotUsageLedger.line(.init(), period: "this week"), "No turns this week.")
+        ledger.record(botID: "pip", usage: BotTurnUsage(), at: now.addingTimeInterval(500 * 86_400), calendar: calendar)
+        XCTAssertEqual(ledger.days["pip"]?.count, 1)
+    }
+
+    func testHookFilesMustBeOwnedExecutableAndNotWritableByOthers() {
+        XCTAssertTrue(TheoHookFiles.runs(name: "notify.sh", isRegularFile: true, permissions: 0o700, ownerID: 501, userID: 501))
+        XCTAssertTrue(TheoHookFiles.runs(name: "notify", isRegularFile: true, permissions: 0o755, ownerID: 501, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: "notify.sh", isRegularFile: true, permissions: 0o600, ownerID: 501, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: "notify.sh", isRegularFile: true, permissions: 0o777, ownerID: 501, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: "notify.sh", isRegularFile: true, permissions: 0o720, ownerID: 501, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: "notify.sh", isRegularFile: true, permissions: 0o700, ownerID: 0, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: ".hidden", isRegularFile: true, permissions: 0o700, ownerID: 501, userID: 501))
+        XCTAssertFalse(TheoHookFiles.runs(name: "link", isRegularFile: false, permissions: 0o700, ownerID: 501, userID: 501))
+        let payload = TheoHookFiles.payload(event: .turnFinished, at: Date(timeIntervalSince1970: 0), fields: ["reply": String(repeating: "x", count: 5000), "ok": true])
+        let object = try! JSONSerialization.jsonObject(with: payload) as! [String: Any]
+        XCTAssertEqual(object["event"] as? String, "turn-finished")
+        XCTAssertEqual((object["reply"] as? String)?.count, 4000)
+        XCTAssertEqual(object["ok"] as? Bool, true)
+    }
+
+    func testDoctorMarkdownPutsProblemsFirst() {
+        let text = TheoDoctor.markdown([.init(.ok, "Disk", "500 GB free."), .init(.fail, "Claude Code", "Not signed in."), .init(.warn, "Skills", "One has no description.")])
+        XCTAssertTrue(text.hasPrefix("Theo's health check: 1 problem and 1 warning out of 3 checks."))
+        XCTAssertLessThan(text.range(of: "Claude Code")!.lowerBound, text.range(of: "Skills")!.lowerBound)
+        XCTAssertLessThan(text.range(of: "Skills")!.lowerBound, text.range(of: "Disk")!.lowerBound)
+        XCTAssertEqual(TheoDoctor.markdown([.init(.ok, "Disk", "fine")]).components(separatedBy: "\n").first, "Theo's health check: all 1 checks pass.")
+        XCTAssertTrue(TheoDoctor.asksForDoctor(" /doctor "))
+        XCTAssertFalse(TheoDoctor.asksForDoctor("doctor who?"))
+    }
+
+    func testGatewayHasUsageAndDoctorRoutes() {
+        XCTAssertEqual(TheoGatewayHTTP.route(method: "GET", path: "/v1/usage"), .usage)
+        XCTAssertEqual(TheoGatewayHTTP.route(method: "GET", path: "/v1/doctor"), .doctor)
+        XCTAssertEqual(TheoGatewayHTTP.route(method: "POST", path: "/v1/doctor"), .methodNotAllowed)
     }
 }

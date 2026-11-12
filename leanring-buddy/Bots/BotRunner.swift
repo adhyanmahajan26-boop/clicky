@@ -22,6 +22,8 @@ enum BotRunnerError: LocalizedError {
     case usageLimit(String)
     /// The engine doesn't have this session any more (it's on the other Mac, or was cleaned up).
     case lostSession
+    /// A non-Claude engine kept failing the way that passes: the turn goes to Claude Code instead (`BotFailover`).
+    case engineDown(String)
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +32,7 @@ enum BotRunnerError: LocalizedError {
         case .freeLimit: return "OpenCode's free models have hit their usage limit."
         case .usageLimit(let message): return message
         case .lostSession: return "The engine has lost this chat's session."
+        case .engineDown(let message): return message
         }
     }
 }
@@ -225,12 +228,18 @@ enum BotRunner {
                   let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, onText: onText),
                   !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
             return second
-        } catch BotRunnerError.freeLimit {
-            // OpenCode's free models are used up for now: this turn runs on Claude Haiku instead, so the
-            // bot still answers. Its OpenCode session stays for when the free models are back.
+        } catch let error as BotRunnerError {
+            // OpenCode's free models are used up for now, or a non-Claude engine kept failing (overloaded, rate-limited, down):
+            // this turn runs on Claude Code instead, so the bot still answers. Its own session stays for when that engine is back.
+            let why: String
+            switch error {
+            case .freeLimit: why = "OpenCode's free models hit their usage limit"
+            case .engineDown(let message): why = "\(HarnessCatalog.label(bot.provider)) kept failing (\(message.prefix(80)))"
+            default: throw error
+            }
             var standIn = bot
             standIn.provider = "claude"
-            standIn.model = fallbackModel
+            standIn.model = standInModel
             standIn.effort = nil
             standIn.thinking = nil
             standIn.fast = nil
@@ -244,11 +253,16 @@ enum BotRunner {
             let standInSession = FallbackSessions.shared.get(key)
             let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, onText: onText)
             if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
-            return (result.text + "\n\n_(OpenCode's free models hit their usage limit, so this reply came from Claude Haiku.)_", session)
+            return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInModel, on: "claude")).)_", session)
         }
     }
 
     static let fallbackModel = "claude-haiku-5-5"
+    /// The Claude model that stands in for another engine: the first of the fallback chain when one is set, else Haiku.
+    static var standInModel: String {
+        guard let first = configuredFallbacks?.first, first != "off", !first.isEmpty else { return fallbackModel }
+        return first
+    }
 
     /// OpenCode logs "Free usage limit reached" and keeps retrying without printing anything, so a turn
     /// would sit there until the time limit. This checks its log for that error since `start`.
@@ -371,6 +385,9 @@ enum BotRunner {
         }
         if unshown { await onText(live(parser.text)) }
         let ended = await finished.value
+        // Every turn the engine reported on counts, a failed one too: it was paid for.
+        let used = parser.usage
+        await MainActor.run { BotUsage.shared.record(botID: bot.id, usage: used) }
         let errorText = ended.standardErrorText
         if !errorText.isEmpty {
             if !FileManager.default.fileExists(atPath: errorLog.path) { FileManager.default.createFile(atPath: errorLog.path, contents: nil) }
@@ -552,6 +569,8 @@ struct BotStreamParser {
     private(set) var text = ""
     private(set) var sessionID: String?
     private(set) var error: String?
+    /// What the turn used, when the engine said (ClickyCore `BotTurnUsage`).
+    private(set) var usage: BotTurnUsage?
     /// A Claude reply can span several assistant messages around tool calls.
     private var messageHasText = false
 
@@ -582,6 +601,7 @@ struct BotStreamParser {
             text += chunk
             return true
         case "result":
+            if let used = BotTurnUsage.fromClaudeResult(event) { usage = used }
             if event["is_error"] as? Bool == true {
                 error = event["result"] as? String ?? "Claude reported an error."
                 return false
@@ -610,6 +630,9 @@ struct BotStreamParser {
                 ($0["data"] as? [String: Any])?["message"] as? String ?? $0["message"] as? String
             }
             error = detail ?? "OpenCode reported an error."
+            return false
+        case "step_finish":
+            if let step = BotTurnUsage.fromOpenCodeStep(event) { usage = (usage ?? BotTurnUsage()) + step }
             return false
         default:
             return false
