@@ -80,7 +80,8 @@ struct BotRoutine: Codable, Identifiable, Equatable {
         var id: String = UUID().uuidString
         var startedAt: Date
         var finishedAt: Date?
-        /// "running", "done", "failed" or "skipped" (the bot was busy).
+        /// "running", "done", "failed", "skipped" (the bot was off), "quiet" (a check that found nothing, so nothing was posted)
+        /// or "missed" (Theo wasn't running at the time, and it was too late to catch up).
         var status: String
         /// The reply's first words.
         var summary: String?
@@ -106,6 +107,16 @@ struct BotRoutine: Codable, Identifiable, Equatable {
             case .hourly: return "Every hour at :\(String(format: "%02d", minute))"
             case .every:
                 return intervalMinutes % 60 == 0 ? "Every \(intervalMinutes / 60) h" : "Every \(intervalMinutes) min"
+            }
+        }
+
+        /// How far apart its runs are, for the catch-up window.
+        var periodSeconds: Double {
+            switch kind {
+            case .every: return Double(max(5, intervalMinutes) * 60)
+            case .hourly: return 3_600
+            case .daily, .weekdays: return 86_400
+            case .weekly: return 604_800
             }
         }
 

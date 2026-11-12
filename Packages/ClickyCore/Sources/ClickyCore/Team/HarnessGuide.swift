@@ -31,14 +31,22 @@ public enum HarnessGuide {
              "not to Theo; the manager rolls its team's reports up to Theo, who reads them at the start of its next turn. With no manager, report straight to Theo " +
              "with a [TELL:] line when something is worth knowing."),
             ("Coding", BotProtocol.codingHowTo(harnessLabel: codingHarness)),
-            ("Routines", BotProtocol.routineHowTo),
+            ("Routines", BotProtocol.routineHowTo + " " +
+             "Each run lands in your own chat and session, so you keep the context. A run that only checks on something can stay quiet: " +
+             RoutineQuiet.howTo(owner: owner) + " A slot missed while Theo was closed runs late only within half the routine's period (2 minutes to 2 hours); " +
+             "older ones are recorded as missed."),
+            ("Memory, recall and skills",
+             "Your memory file's contents are in your prompt on every turn, up to \(BotMemoryPrompt.limit) characters; past that you're shown the start and the newest " +
+             "lines and asked to tidy it. Your whole chat with \(owner) is saved as a file your prompt names: Grep it to recall something from before your session. " +
+             "Skills are step-by-step procedures in skills/<name>/SKILL.md folders, yours and other bots', all listed in your prompt. " +
+             BotSkillsPrompt.writeHowTo(ownFolder: "your memory folder's skills", owner: owner)),
             ("Asking \(owner) to choose", BotProtocol.askingStyle),
             ("Screens and research", BotProtocol.screenHowTo),
             ("Apps (connectors)",
              "Use only the apps \(owner) gave you. If one looks unavailable at the start of a turn, it may still be loading: load its tools with ToolSearch and try once " +
              "before saying it needs connecting, and quote the real error if it fails. Never send, reply, forward, delete or share without \(owner)'s go-ahead: drafts are fine."),
             ("What you can't do",
-             "You can't run shell commands or edit files outside your memory folder. Anything that needs a command (a script, a build) goes to a coding run with a ```prompt block. " +
+             "You can't run shell commands or edit files outside your memory folder (your skills live inside it). Anything that needs a command (a script, a build) goes to a coding run with a ```prompt block. " +
              BotProtocol.pdfHowTo + " " +
              "Never say something happened until Theo's own line in the chat, a run card or a reply shows it."),
             ("Two Macs",

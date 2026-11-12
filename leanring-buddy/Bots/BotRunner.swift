@@ -144,7 +144,12 @@ final class BotProcesses: @unchecked Sendable {
         return ended
     }
     /// Stops the bot's reply; false when nothing was running.
+    /// When Stop was last pressed for each bot, so a turn waiting to retry doesn't start again after it.
+    private var stoppedAt: [String: Date] = [:]
+    func wasStopped(_ botID: String, since: Date) -> Bool { lock.withLock { (stoppedAt[botID] ?? .distantPast) >= since } }
+
     @discardableResult func stop(_ botID: String) -> Bool {
+        lock.withLock { stoppedAt[botID] = Date() }
         if let task = lock.withLock({ tasks.removeValue(forKey: botID) }) {
             task.cancel()
             return true
@@ -210,7 +215,7 @@ enum BotRunner {
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         do {
-            let first = try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
             // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
             let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
             let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
@@ -262,7 +267,7 @@ enum BotRunner {
         }
     }
 
-    private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
         if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
