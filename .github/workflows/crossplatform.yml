@@ -7,6 +7,10 @@ on:
     paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
   workflow_dispatch:
 
+# Builds and tests only: the job token can read the code and nothing else.
+permissions:
+  contents: read
+
 concurrency:
   group: crossplatform-${{ github.ref }}
   cancel-in-progress: true
