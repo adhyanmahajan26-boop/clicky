@@ -194,6 +194,18 @@ final class BotsStore: ObservableObject {
     private var groupBriefs: [String: GroupRunBrief] = [:]
     /// How many private messages the bots have sent since the owner last spoke, by the chat the owner spoke in, so they can't go on forever.
     var directMessageBudgets: [String: BotDMBudget] = [:]
+    /// A group chat asked on behalf of another chat (Theo asking it about the owner's message) spends that chat's budget, not a fresh one
+    /// of its own, so one message from the owner sets off at most twelve private messages however many group chats it fans out to.
+    /// Group room -> the chat whose budget it spends, until the owner speaks in the group chat itself.
+    var budgetRoots: [String: String] = [:]
+
+    /// The chat whose private-message budget a chat spends.
+    func budgetKey(_ room: String) -> String {
+        var key = room
+        var seen: Set<String> = []
+        while let next = budgetRoots[key], seen.insert(key).inserted { key = next }
+        return key
+    }
     /// Counts the owner's messages per chat, so an exchange belongs to one of them.
     var ownerTurns: [String: Int] = [:]
     /// Exchanges still open since the owner last spoke, by chat, sender and target, so another message back and forth continues the same card.
@@ -735,6 +747,8 @@ final class BotsStore: ObservableObject {
             return
         }
         if CodingIntent.asksToCancelRun(command ?? text), let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) { stopRun(live.id) }
+        // The owner talking to the group chat itself: it has its own budget again.
+        budgetRoots[room] = nil
         ownerSpoke(in: room)
         let tagged = BotMentions.ordered(in: text, bots: members(of: group).map { ($0.id, $0.name) })
         var note: String?
@@ -847,6 +861,14 @@ final class BotsStore: ObservableObject {
     }
 
     /// What the owner said in a chat in the last while, newest first, for what they asked of a run.
+    /// What the owner typed that set this turn off: their newest message in the chat, if nothing a routine posted came after it and it's
+    /// from the last 20 minutes. Nil for a routine's run.
+    func ownerWordsBehindTurn(in room: String) -> String? {
+        guard let last = conversation(room).messages.last(where: { $0.author == "user" || $0.author == "routine" }),
+              last.author == "user", !RoutineIntent.isRoutineRun(last.text), last.at >= Date().addingTimeInterval(-20 * 60) else { return nil }
+        return last.text
+    }
+
     func recentOwnerWords(in room: String) -> String? {
         let since = Date().addingTimeInterval(-20 * 60)
         let said = conversation(room).messages.filter { $0.author == "user" && $0.at >= since }.suffix(3).reversed().map(\.text)
@@ -868,6 +890,8 @@ final class BotsStore: ObservableObject {
         // A new message of the owner's starts the group's limits over, once. Theo asking again on the same message doesn't.
         let asker = rootRoom ?? ceo.id
         if ownerMessageMarks.isNew(room: room, message: "\(asker)#\(ownerTurns[asker] ?? 0)") { ownerSpoke(in: room) }
+        // Its members' private messages count against the chat that asked.
+        if budgetKey(asker) != room { budgetRoots[room] = asker }
         // They're already talking it through: this joins the discussion rather than starting another.
         if groupBriefs[room] != nil {
             then("That's added to what they're already discussing.")
@@ -900,7 +924,7 @@ final class BotsStore: ObservableObject {
             folder = (place.repo, nil)
             mac = place.mac
         }
-        let mayStart = prompt != nil && BotsStore.ownerAskedToBuild(owner) && (folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner))
+        let mayStart = prompt != nil && !RoutineIntent.isRoutineRun(owner) && BotsStore.ownerAskedToBuild(owner) && (folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner))
         // This message of the owner's has its run now, so a prompt in Theo's words after hearing back doesn't start a second one.
         if mayStart, let pitch = conversation(room).messages.last(where: { $0.author == "user" }) { submittedPitches.insert(pitch.id) }
         // The owner talking to the group reads its outcome right there, so it isn't copied to Theo's chat. Theo asking gets the answer back.
@@ -1195,6 +1219,13 @@ final class BotsStore: ObservableObject {
             runTurnOnOtherMac(bot, across: across, in: conversationID, prompt: prompt, privately: privately, fromOwner: fromOwner, then: then)
             return
         }
+        // Files and folders the owner's own words named (typed or attached) are readable on this turn, and nothing else beyond the bot's
+        // own folder and the project folders. A bot asked on the owner's behalf gets the same; one set off by another bot alone gets none.
+        let ownerText = fromOwner ? recentOwnerWords(in: conversationID) : privately?.context.ownerWords
+        let readable = ownerText.map { BotReadScope.paths(in: $0, home: TheoProfile.realHome) } ?? []
+        // Its own saved chats, which its prompt tells it to search (recall): its chat with the owner, the group chats it's in and its
+        // private threads. Every other saved chat stays unreadable.
+        let recall = bot.owner == nil ? [chatFilePath(bot.id)] + recallFiles(for: bot).map(\.path) : []
         Task { [weak self] in
             var answer: String?
             var newSession = session
@@ -1207,11 +1238,11 @@ final class BotsStore: ObservableObject {
                 }
                 let result: (text: String, session: String?)
                 do {
-                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
                 } catch BotRunnerError.lostSession where session != nil {
                     // The engine has lost this chat (it's on the other Mac, or was cleaned up). It starts again with what the chat says so far.
                     let fresh = self?.startOverPrompt(bot: bot, in: conversationID, prompt: prompt) ?? prompt
-                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, readable: readable, recall: recall, onText: onText)
                 }
                 answer = BotsStore.keepingLongReplyAside(result.text.trimmingCharacters(in: .whitespacesAndNewlines), bot: bot)
                 newSession = result.session
@@ -1325,9 +1356,16 @@ final class BotsStore: ObservableObject {
             if fromOwner, let answer, self.group(forRoom: conversationID)?.headID == bot.id || conversationID == bot.id {
                 self.submitIfFinal(answer, room: conversationID)
             }
+            // A routine runs the bot again and again with nobody watching: only the owner's own words asking for something on a
+            // schedule let a bot's ```routine block set one up. A block the bot wrote anyway (a page or memory file told it to, or a
+            // routine's own run) is said in the chat and dropped.
             if fromOwner, let answer, let request = Self.routineRequest(in: answer) {
-                let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
-                self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
+                if let words = self.ownerWordsBehindTurn(in: conversationID), RoutineIntent.ownerAsked(words) {
+                    let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
+                    self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
+                } else {
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "\(bot.name) wrote a routine (\(request.name), \(request.when)), but you didn't ask for one, so Theo didn't set it up. Ask for it in your own words if you want it."), to: conversationID)
+                }
             }
             // The answers come back before this turn counts as over, so a group's next bot doesn't start writing on top of it.
             if !directMessages.isEmpty {
@@ -1363,7 +1401,7 @@ final class BotsStore: ObservableObject {
     /// Once per pitch. A ```followup block goes to the latest run's agent instead.
     private func submitIfFinal(_ answer: String, room: String) {
         guard let pitch = conversation(room).messages.last(where: { $0.author == "user" }),
-              !submittedPitches.contains(pitch.id) else { return }
+              !submittedPitches.contains(pitch.id), !RoutineIntent.isRoutineRun(pitch.text) else { return }
         if let followup = BotsT3.followupBlock(in: answer), latestRun(in: room) != nil {
             submittedPitches.insert(pitch.id)
             sendToCoder(followup, room: room)
@@ -1385,6 +1423,8 @@ final class BotsStore: ObservableObject {
     private func startFinalPrompt(_ prompt: String, answer: String, pitch: BotChatMessage, room: String) -> String? {
         // Agents run with full access, so only the owner's own words start one by themselves. Anything else gets the card
         // in the chat, whose Start button asks first.
+        // A routine's run posted in a group chat stands in the owner's place there, but they didn't type it: it gets the card, not a start.
+        guard !RoutineIntent.isRoutineRun(pitch.text) else { return nil }
         guard BotsStore.ownerAskedToBuild(pitch.text) || (ProjectWords.chatToContinue(in: answer) != nil && CodingIntent.asksToContinueChat(pitch.text)) else { return nil }
         let ownerWords = recentOwnerWords(in: room) ?? pitch.text
         // The Mac the owner or the bot named, else the one this chat's coding goes on.
@@ -1436,9 +1476,9 @@ final class BotsStore: ObservableObject {
         if ProjectWords.asksToWork(text), ProjectWords.namedProject(in: text, among: BotsStore.shared.knownProjects) != nil { return true }
         let text = CodingIntent.normalized(text)
         if text.range(of: #"(?i)\bprompt\b"#, options: .regularExpression) != nil { return false }
-        let direct = #"(?i)\b(build|ship|refactor|fix|pull request|pr)\b"#
-        let makeThing = #"(?i)\b(make|create|write|add|change|update|want|need)\b(?!\s+me\s+(on|about|with)\b).*\b(app|site|website|page|game|tool|project|script|cli|api|dashboard|feature|function|test|tests|code|repo|folder)\b"#
-        return text.range(of: direct, options: .regularExpression) != nil || text.range(of: makeThing, options: .regularExpression) != nil
+        // A word like "build" or "fix" alone isn't enough: the run's agent has full access, and a bot's answer to "what's the fix for a
+        // squeaky door?" can carry a prompt block. The words have to be about code (BuildAsk).
+        return BuildAsk.matches(text)
     }
 
     /// Asks to change something that already exists, rather than make something new.
@@ -1997,7 +2037,7 @@ enum BotPrompts {
             parts.append(BotRecallPrompt.section(chatFile: BotsStore.shared.chatFilePath(bot.id), owner: ownerName, others: BotsStore.shared.recallFiles(for: bot)))
             // Procedures it or another bot saved (Hermes's and OpenClaw's skills).
             let names = Dictionary(team.filter { $0.owner == nil }.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-            parts.append(BotSkillsPrompt.section(skills: BotSkills.all(names: names), ownFolder: BotSkills.folder(botID: bot.id).path,
+            parts.append(BotSkillsPrompt.section(skills: BotSkills.all(names: names, reader: bot.id), ownFolder: BotSkills.folder(botID: bot.id).path,
                                                  sharedFolder: BotSkills.sharedFolder.path, botName: bot.name, owner: ownerName))
         }
         return parts.joined(separator: "\n\n")
@@ -2268,7 +2308,7 @@ extension BotsStore {
 
     private func start(_ routine: BotRoutine, scheduled: Bool) {
         guard !runningRoutines.contains(routine.id) else { return }
-        let text = "⏰ Routine \"\(routine.name)\": \(routine.instruction)"
+        let text = "\(RoutineIntent.runPrefix) \"\(routine.name)\": \(routine.instruction)"
         if routine.target.hasPrefix("report:") {
             let sectionID = String(routine.target.dropFirst(7))
             guard layout.sections.contains(where: { $0.id == sectionID }) else {

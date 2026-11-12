@@ -256,10 +256,15 @@ enum BotSkills {
     static var sharedFolder: URL { BotMemory.root.appendingPathComponent("skills", isDirectory: true) }
     static func folder(botID: String) -> URL { BotMemory.file(botID: botID).deletingLastPathComponent().appendingPathComponent("skills", isDirectory: true) }
 
+    /// Where other bots' skills are copied for reading. A bot may read only its own memory folder (the others are denied), so a
+    /// skill another bot wrote is read from this copy, which holds only the skill folders, never the rest of that bot's memory.
+    static var copiesFolder: URL { sharedFolder.appendingPathComponent(".from-bots", isDirectory: true) }
+
     /// Every skill on this Mac: the shared folder's, then each bot's. `names` maps a bot id to its name.
-    static func all(names: [String: String]) -> [BotSkill] {
+    /// `reader`: the bot the list is for. Its own skills keep their path (it edits them there); other bots' point at their copies.
+    static func all(names: [String: String], reader: String? = nil) -> [BotSkill] {
         var skills: [BotSkill] = []
-        func scan(_ folder: URL, author: String?) {
+        func scan(_ folder: URL, author: String?, authorID: String? = nil) {
             guard let entries = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
             for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 let file = entry.appendingPathComponent("SKILL.md")
@@ -267,11 +272,50 @@ enum BotSkills {
                 guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
                 let head = String(decoding: (try? handle.read(upToCount: 4096)) ?? Data(), as: UTF8.self)
                 try? handle.close()
-                if let skill = BotSkill.parse(head, path: file.path, author: author, folderName: entry.lastPathComponent) { skills.append(skill) }
+                var path = file.path
+                if let reader, let authorID, authorID != reader {
+                    guard let copy = copy(entry, of: authorID) else { continue }
+                    path = copy.appendingPathComponent("SKILL.md").path
+                }
+                if let skill = BotSkill.parse(head, path: path, author: author, folderName: entry.lastPathComponent) { skills.append(skill) }
             }
         }
         scan(sharedFolder, author: nil)
-        for (id, name) in names.sorted(by: { $0.key < $1.key }) { scan(folder(botID: id), author: name) }
+        for (id, name) in names.sorted(by: { $0.key < $1.key }) { scan(folder(botID: id), author: name, authorID: id) }
         return skills
+    }
+
+    /// Copies one skill folder of `botID` beside the shared skills: plain files only (no links that could point into a private
+    /// folder), at most 40 files of 512 KB each. Files already copied and unchanged aren't copied again. Nil when it can't be copied.
+    static func copy(_ skill: URL, of botID: String, into copies: URL = copiesFolder) -> URL? {
+        let fileManager = FileManager.default
+        let target = copies.appendingPathComponent(botID, isDirectory: true).appendingPathComponent(skill.lastPathComponent, isDirectory: true)
+        guard let walker = fileManager.enumerator(at: skill, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
+                                                  options: [.skipsHiddenFiles]) else { return nil }
+        var wanted: Set<String> = []
+        var count = 0
+        for case let source as URL in walker {
+            let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
+            guard values?.isSymbolicLink != true, values?.isRegularFile == true, (values?.fileSize ?? 0) <= 512 * 1024 else { continue }
+            count += 1
+            guard count <= 40 else { break }
+            let relative = String(source.standardizedFileURL.path.dropFirst(skill.standardizedFileURL.path.count + 1))
+            guard !relative.isEmpty, !relative.contains("..") else { continue }
+            wanted.insert(relative)
+            let destination = target.appendingPathComponent(relative)
+            let copied = try? destination.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            if let copied, copied.fileSize == values?.fileSize, let made = copied.contentModificationDate, let changed = values?.contentModificationDate, made >= changed { continue }
+            try? fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fileManager.removeItem(at: destination)
+            try? fileManager.copyItem(at: source, to: destination)
+        }
+        // What the author has since deleted goes from the copy too.
+        if let old = fileManager.enumerator(at: target, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let copied as URL in old where (try? copied.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                let relative = String(copied.standardizedFileURL.path.dropFirst(target.standardizedFileURL.path.count + 1))
+                if !wanted.contains(relative) { try? fileManager.removeItem(at: copied) }
+            }
+        }
+        return fileManager.fileExists(atPath: target.appendingPathComponent("SKILL.md").path) ? target : nil
     }
 }

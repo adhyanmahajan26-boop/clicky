@@ -535,13 +535,13 @@ extension BotsStore {
             runPrivateMessages([(chat.name, message)], from: ceo, room: ceo.id, context: context) { _ in }
         } else if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
             // On a call the answer goes to the call. A round in a group counts as a message too, or Theo could keep asking the group forever.
-            let verdict = (directMessageBudgets[ceo.id] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
+            let verdict = (directMessageBudgets[budgetKey(ceo.id)] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
             if let line = BotDMBudget.capLine(verdict, sender: ceo.name, target: chat.name) {
                 post(BotChatMessage(author: Self.noteAuthor, text: line), to: ceo.id)
                 onReport?(line)
                 return
             }
-            directMessageBudgets[ceo.id, default: BotDMBudget()].noteSent()
+            directMessageBudgets[budgetKey(ceo.id), default: BotDMBudget()].noteSent()
             let words = withTeamWork(message, ownerWords: ownerWords)
             post(BotChatMessage(author: Self.noteAuthor, text: "\(ceo.name) asked \(chat.name) in their group chat."), to: ceo.id)
             sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { answer in

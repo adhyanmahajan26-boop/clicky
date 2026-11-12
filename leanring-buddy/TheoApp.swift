@@ -134,11 +134,11 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         // Theo's local API for scripts on this Mac, only when the owner turned it on.
         TheoGateway.shared.apply()
         TheoHooks.fire(.appStarted, ["bots": BotsStore.shared.bots.count, "profile": TheoProfile.isTest ? "test" : "real"])
-        if !TheoProfile.isTest {
+        if !TheoProfile.isTest || ClaudiaUIServer.port != 0 {
             uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
             uiServer?.start()
-            openAtLogin()
         }
+        if !TheoProfile.isTest { openAtLogin() }
 
         // The hidden screens come up when a bot first needs one. Making them moves a monitor, so not on every launch.
 

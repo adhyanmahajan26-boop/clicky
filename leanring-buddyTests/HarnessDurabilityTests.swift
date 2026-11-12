@@ -125,4 +125,52 @@ struct HarnessDurabilityTests {
         #expect(aside.count == 1)
         #expect(BotsSavedFile.takeProblems().count == 1)
     }
+
+    // MARK: Recall and skills under the read rule
+
+    @Test func aBotMaySearchItsOwnChatsAndNoOneElses() throws {
+        let bot = BotImport.starters[0]
+        let chats = BotMemory.root.deletingLastPathComponent().appendingPathComponent("chats").path
+        let mine = chats + "/\(bot.id).json"
+        let allowed = BotRunner.claudeAllowedTools(for: bot, recall: [mine])
+        #expect(allowed.contains("Read(/\(mine))"))
+        #expect(allowed.contains("Grep(/\(mine))"))
+        #expect(!allowed.contains { $0.hasPrefix("Edit(/\(chats)") || $0.hasPrefix("Write(/\(chats)") })
+        let denied = BotRunner.secretReadRules(recall: [mine])
+        // Its own file is never denied (a deny wins over any allow), the folder as a whole isn't either, and the other records stay denied.
+        #expect(!denied.contains("Read(/\(mine))"))
+        #expect(!denied.contains("Read(/\(chats)/**)"))
+        #expect(denied.contains { $0.hasSuffix("/*.json)") })
+        // With nothing to recall, the whole chats folder is denied, as before.
+        #expect(BotRunner.secretReadRules().contains("Read(/\(chats)/**)"))
+    }
+
+    @Test func otherBotsFoldersAreDeniedButTheSharedSkillsAreNot() {
+        let denied = BotRunner.otherBotsFolders(than: "nobody-has-this-id")
+        #expect(!denied.contains("Read(/\(BotSkills.sharedFolder.path)/**)"))
+    }
+
+    @Test func anotherBotsSkillIsCopiedWithoutTheRestOfItsFolder() throws {
+        let dir = try folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let skill = dir.appendingPathComponent("author/skills/release", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data("---\nname: release\ndescription: cut a release\n---\n1. dry run".utf8).write(to: skill.appendingPathComponent("SKILL.md"))
+        try Data("checklist".utf8).write(to: skill.appendingPathComponent("notes/check.md"))
+        let secret = dir.appendingPathComponent("author/memory.md")
+        try Data("private".utf8).write(to: secret)
+        try FileManager.default.createSymbolicLink(at: skill.appendingPathComponent("leak.md"), withDestinationURL: secret)
+        let copies = dir.appendingPathComponent("copies", isDirectory: true)
+        let copied = try #require(BotSkills.copy(skill, of: "author", into: copies))
+        #expect(try String(contentsOf: copied.appendingPathComponent("SKILL.md"), encoding: .utf8).hasSuffix("1. dry run"))
+        #expect(FileManager.default.fileExists(atPath: copied.appendingPathComponent("notes/check.md").path))
+        // A link to the author's private memory is never followed into the copy.
+        #expect(!FileManager.default.fileExists(atPath: copied.appendingPathComponent("leak.md").path))
+        // An edit by the author reaches the copy; a file it deleted goes from the copy.
+        try FileManager.default.removeItem(at: skill.appendingPathComponent("notes/check.md"))
+        try Data("---\nname: release\ndescription: cut a release\n---\n1. dry run\n2. back up".utf8).write(to: skill.appendingPathComponent("SKILL.md"))
+        _ = BotSkills.copy(skill, of: "author", into: copies)
+        #expect(try String(contentsOf: copied.appendingPathComponent("SKILL.md"), encoding: .utf8).hasSuffix("2. back up"))
+        #expect(!FileManager.default.fileExists(atPath: copied.appendingPathComponent("notes/check.md").path))
+    }
 }
