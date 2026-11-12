@@ -112,9 +112,14 @@ pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona:
     args
 }
 
-/// Paths the owner's own words named this turn ("read ~/notes/plan.md"), which the bot may read too.
+/// Paths the owner's own words named this turn ("read ~/notes/plan.md"), which the bot may read too. Too-broad ones (the whole
+/// disk, the whole home, a system folder) and any with `..` are left out, as in the Swift `BotReadScope.isNarrowEnough`: a stray
+/// "/" or "~/" in a message must not open the whole disk to a bot that can also send requests anywhere.
 pub fn paths_in_words(words: &str) -> Vec<PathBuf> {
-    let home = crate::paths::home();
+    paths_in_words_with_home(words, &crate::paths::home())
+}
+
+fn paths_in_words_with_home(words: &str, home: &Path) -> Vec<PathBuf> {
     let mut out = vec![];
     for raw in words.split_whitespace() {
         let token = raw.trim_matches(|c: char| "\"'`()[]{}<>,;!?".contains(c)).trim_end_matches('.');
@@ -125,14 +130,96 @@ pub fn paths_in_words(words: &str) -> Vec<PathBuf> {
         } else {
             continue;
         };
-        if path.exists() && !is_sensitive(&path) {
+        if is_narrow_enough(&path, home) && path.exists() && !is_sensitive(&path) && !out.contains(&path) {
             out.push(path);
         }
     }
     out
 }
 
+/// Folders at the top of a disk that are the system's own, on macOS, Linux and Windows (compared without case).
+const SYSTEM_FOLDERS: [&str; 20] = [
+    "system", "library", "private", "etc", "var", "usr", "bin", "sbin", "dev", "cores", "proc", "sys", "boot", "root", "lib", "lib64",
+    "run", "windows", "program files", "programdata",
+];
+
+/// The whole disk, the whole home, a top-level system folder or anything with `..` would open far more than the owner meant.
+fn is_narrow_enough(path: &Path, home: &Path) -> bool {
+    use std::path::Component;
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    // Windows also splits on '/', but a path typed with '/' on Linux must still be read with '/'.
+    let names: Vec<String> = path
+        .components()
+        .filter_map(|c| match c { Component::Normal(name) => Some(name.to_string_lossy().to_string()), _ => None })
+        .collect();
+    if names.len() < 2 {
+        return false;
+    }
+    // Compared part by part, and on Windows without case ("c:/users/me" is the home "C:\\Users\\Me").
+    let parts = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().replace('\\', "/"))
+            .map(|c| if cfg!(windows) { c.to_lowercase() } else { c })
+            .collect()
+    };
+    let (path_parts, home_parts) = (parts(path), parts(home));
+    if path_parts.starts_with(&home_parts) {
+        return path_parts.len() > home_parts.len();
+    }
+    let top = names[0].to_lowercase();
+    !SYSTEM_FOLDERS.contains(&top.as_str()) && !top.starts_with("program files")
+}
+
 fn is_sensitive(path: &Path) -> bool {
     let text = path.to_string_lossy();
     [".ssh", ".aws", ".gnupg", "Keychains", ".env", "credentials"].iter().any(|s| text.contains(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broad_paths_in_words_are_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home").join("me");
+        std::fs::create_dir_all(home.join("notes")).unwrap();
+        std::fs::write(home.join("notes").join("plan.md"), "x").unwrap();
+        let plan = home.join("notes").join("plan.md");
+        // A stray slash, the home itself, and climbing out are never taken.
+        assert!(paths_in_words_with_home("yes / no, and ~/ and ~", &home).is_empty());
+        assert!(paths_in_words_with_home(&format!("read {}", home.display()), &home).is_empty());
+        assert!(paths_in_words_with_home("look at ~/notes/../../..", &home).is_empty());
+        assert!(paths_in_words_with_home("check /etc/hosts and /usr/bin", &home).is_empty());
+        // A real file the owner named is.
+        assert_eq!(paths_in_words_with_home("read ~/notes/plan.md.", &home), vec![plan.clone()]);
+        assert_eq!(paths_in_words_with_home(&format!("read `{}`", plan.display()), &home), vec![plan]);
+    }
+
+    #[test]
+    fn narrow_enough_matches_the_swift_rule() {
+        let home = Path::new("/home/me");
+        assert!(!is_narrow_enough(Path::new("/"), home));
+        assert!(!is_narrow_enough(Path::new("/home"), home));
+        assert!(!is_narrow_enough(Path::new("/home/me"), home));
+        assert!(is_narrow_enough(Path::new("/home/me/x"), home));
+        assert!(!is_narrow_enough(Path::new("/etc/ssh"), home));
+        assert!(is_narrow_enough(Path::new("/opt/thing"), home));
+        assert!(!is_narrow_enough(Path::new("/opt"), home));
+        assert!(!is_narrow_enough(Path::new("/home/me/a/../../.."), home));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn narrow_enough_on_windows() {
+        let home = Path::new("C:\\Users\\Me");
+        assert!(!is_narrow_enough(Path::new("C:\\"), home));
+        assert!(!is_narrow_enough(Path::new("c:/users/me"), home));
+        assert!(is_narrow_enough(Path::new("c:/users/me/notes"), home));
+        assert!(!is_narrow_enough(Path::new("C:\\Windows\\System32"), home));
+        assert!(!is_narrow_enough(Path::new("C:\\Program Files (x86)\\Thing"), home));
+        assert!(is_narrow_enough(Path::new("D:\\Work\\proj"), home));
+    }
 }
