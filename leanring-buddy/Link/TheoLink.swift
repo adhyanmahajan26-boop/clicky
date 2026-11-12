@@ -259,20 +259,7 @@ final class TheoLink: ObservableObject {
         guard let code else { return }
         let params = parameters(code: code)
         problem = nil
-        if let listener = try? NWListener(using: params, on: Self.port) {
-            // A test profile links by address only, so the owner's Macs never see it on the network.
-            if !TheoProfile.isTest { listener.service = NWListener.Service(name: localName, type: Self.serviceType) }
-            listener.stateUpdateHandler = { [weak self] state in
-                if case .failed(let error) = state { Task { @MainActor in self?.problem = "Can't listen: \(error.localizedDescription)" } }
-            }
-            listener.newConnectionHandler = { [weak self] incoming in
-                Task { @MainActor in self?.accept(incoming) }
-            }
-            listener.start(queue: queue)
-            self.listener = listener
-        } else {
-            problem = "Port \(Self.port.rawValue) is taken on this Mac."
-        }
+        listen(params)
         guard !TheoProfile.isTest else {
             retryTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.dialIfNeeded() }
@@ -299,7 +286,55 @@ final class TheoLink: ObservableObject {
         dialIfNeeded()
     }
 
+    /// Bumped whenever networking stops, so a listener retry from before never comes back to life after it.
+    private var networkingGeneration = 0
+
+    /// Listens for the other Mac. A listener can fail to start or fail later (the port not yet let go after a restart, a network
+    /// change, waking from sleep): it tries again every few seconds instead of leaving this Mac unreachable until Theo restarts.
+    private func listen(_ params: NWParameters, attempt: Int = 0) {
+        let generation = networkingGeneration
+        let retry: @MainActor (String) -> Void = { [weak self] why in
+            guard let self, self.networkingGeneration == generation else { return }
+            self.problem = why
+            self.listener?.cancel()
+            self.listener = nil
+            guard attempt < 120 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(min(30, 1 + attempt * 2)) * 1_000_000_000)
+                guard let self, self.networkingGeneration == generation, self.listener == nil else { return }
+                self.listen(params, attempt: attempt + 1)
+            }
+        }
+        guard let listener = try? NWListener(using: params, on: Self.port) else {
+            retry("Port \(Self.port.rawValue) is taken on this Mac.")
+            return
+        }
+        // A test profile links by address only, so the owner's Macs never see it on the network.
+        if !TheoProfile.isTest { listener.service = NWListener.Service(name: localName, type: Self.serviceType) }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            switch state {
+            case .failed(let error):
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    retry("Can't listen: \(error.localizedDescription)")
+                }
+            case .ready:
+                Task { @MainActor in
+                    guard let self, self.listener === listener, self.problem?.hasPrefix("Can't listen") == true || self.problem?.hasPrefix("Port ") == true else { return }
+                    self.problem = nil
+                }
+            default: break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] incoming in
+            Task { @MainActor in self?.accept(incoming) }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
+    }
+
     private func stopNetworking() {
+        networkingGeneration += 1
         failWaitingReplies()
         retryTimer?.invalidate()
         retryTimer = nil

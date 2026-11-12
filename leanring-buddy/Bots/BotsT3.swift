@@ -83,6 +83,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var stoppedByOwner: Bool?
     /// What it was asked, so a failed run can try again on another harness.
     var prompt: String?
+    /// What was typed to the agent after the first prompt, so its report never quotes them back as its own words.
+    var followups: [String]?
     /// It carries on an existing chat of its harness: that chat's title.
     var continuedChat: String?
     /// The exact session of its harness, so a follow-up never lands in another one. (T3 Code's is `id`.)
@@ -773,6 +775,10 @@ enum BotsT3 {
         guard let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder), remote.contains("github.com") else {
             return (nil, "This repo has no GitHub remote, so the work stays on the local branch.")
         }
+        // GitHub is the truth: a pull request this branch already has (opened by an earlier try whose answer got lost, a slow
+        // network, a restart) is used again rather than opening a second one or refusing to push.
+        var existing = existing
+        if existing == nil { existing = await openPullRequest(for: branch, in: folder) }
         // The branch was cut from wherever the owner was. Commits of theirs that aren't on GitHub yet would go up with it.
         if existing == nil, let base,
            let count = try? await shell(git, ["rev-list", "--count", base, "--not", "--remotes=origin"], in: folder),
@@ -796,8 +802,17 @@ enum BotsT3 {
             let output = try await shell(gh, arguments, in: folder, limit: 60)
             return (output.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init), nil)
         } catch {
+            // It may have been made anyway (gh timed out after GitHub said yes).
+            if let made = await openPullRequest(for: branch, in: folder) { return (made, nil) }
             return (nil, "The branch is pushed, but the pull request failed: \(error.localizedDescription.suffix(200))")
         }
+    }
+
+    /// The open pull request for this branch on GitHub, if there is one.
+    private static func openPullRequest(for branch: String, in folder: URL) async -> String? {
+        guard let gh, let output = try? await shell(gh, ["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url"], in: folder, limit: 30) else { return nil }
+        let url = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.hasPrefix("https://") ? url : nil
     }
 
     // MARK: Processes

@@ -767,7 +767,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         guard terminal.isRunning else {
-            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane, prompt: run.prompt)
+            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane, prompt: run.prompt, followups: run.followups ?? [])
             return BotsT3.ThreadState(status: terminal.exitCode == 0 ? "completed" : "failed", busy: false, waitingForAnswer: false,
                                       lastMessage: summary.isEmpty ? "The \(HarnessCatalog.label(run.harness ?? "")) session ended without a report." : summary,
                                       worktree: run.worktree, pullRequest: nil)
@@ -809,7 +809,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         if settled {
-            let summary = transcriptSummary(for: run) ?? paneSummary(pane, prompt: run.prompt)
+            let summary = transcriptSummary(for: run) ?? paneSummary(pane, prompt: run.prompt, followups: run.followups ?? [])
             return BotsT3.ThreadState(status: "completed", busy: false, waitingForAnswer: false, lastMessage: summary,
                                       worktree: run.worktree, pullRequest: nil)
         }
@@ -849,16 +849,22 @@ enum HarnessCoding {
         return now != base
     }
 
-    private static func paneSummary(_ pane: String, prompt: String? = nil) -> String {
+    private static func paneSummary(_ pane: String, prompt: String? = nil, followups: [String] = []) -> String {
         // The agent's words, without the TUI's frames, status bars and hints, and without the prompt it was given showing back.
         let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$|^(❯|›)\s|^cursor agent$|^v\d{4}\.\d|^tip: |run everything$"#
         let promptStart = prompt.map { String($0.prefix(40)) }
+        // What Theo typed shows back wrapped across lines (the prompt, a follow-up, the delivery note): a line that's a piece of it isn't the agent's.
+        let squeeze: (String) -> String = { $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+        let typed = squeeze(([prompt ?? ""] + followups + [BotsT3.deliveryNote, BotsT3.plainFolderNote, BotsT3.newFolderReminder]).joined(separator: " "))
         let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map { line in
             line.trimmingCharacters(in: CharacterSet(charactersIn: "│┃╹▀╭╮╰╯─ ")).trimmingCharacters(in: .whitespaces)
         }
         .filter { line in
             guard line.range(of: chrome, options: .regularExpression) == nil else { return false }
-            guard let promptStart, !line.isEmpty else { return true }
+            guard !line.isEmpty else { return true }
+            let squeezed = squeeze(line)
+            if squeezed.count >= 16, typed.contains(squeezed) { return false }
+            guard let promptStart else { return true }
             return !line.hasPrefix(promptStart)
         }
         return lines.suffix(40).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1556,6 +1556,7 @@ final class BotsStore: ObservableObject {
                 let cloudRun = try await BotsT3.sendFollowup(text, to: run)
                 guard let self else { return }
                 run.cloudRunID = cloudRun ?? run.cloudRunID
+                run.followups = Array(((run.followups ?? []) + [text]).suffix(10))
                 run.stoppedByOwner = nil
                 run.phase = "running"
                 run.startedAt = Date()
