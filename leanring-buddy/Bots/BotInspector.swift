@@ -406,7 +406,8 @@ struct LookButton: View {
     var body: some View {
         Button { open = true } label: {
             BotAvatar(bot: bot, size: 52, state: .idle)
-                .overlay(alignment: .bottomTrailing) {
+                // Top corner: the bottom one is the status badge's.
+                .overlay(alignment: .topTrailing) {
                     Image(systemName: "paintbrush.pointed.fill").font(.system(size: 8)).foregroundColor(.white)
                         .padding(4).background(Circle().fill(Color.black.opacity(0.7)))
                 }

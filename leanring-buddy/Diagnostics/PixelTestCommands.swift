@@ -114,12 +114,40 @@ enum PixelTestCommands {
             ConnectorHealth.shared.noteTurn(bot: bot, answer: text, room: bot.id)
             return ["state": store.pixelState(of: bot).state.rawValue, "failure": store.bot(bot.id)?.lastFailure?.reason ?? NSNull(),
                     "block": ConnectorHealth.shared.block(of: bot.id)?.connectorID ?? NSNull()] as [String: Any]
+        case "makeYourBot":
+            let target = bot() ?? store.bots.first { $0.name == "Builder" } ?? store.primary
+            guard let target else { return ["error": "No bot."] }
+            var look = target.crewLook
+            if let shell = command["shell"] as? String { look.shell = shell }
+            if let hat = (command["hat"] as? String).flatMap(CrewLook.Hat.init(rawValue:)) { look.hat = hat; look.antenna = .none }
+            if let extra = (command["extra"] as? String).flatMap(CrewLook.Extra.init(rawValue:)) { look.extra = extra }
+            if let eyes = (command["eyes"] as? String).flatMap(CrewLook.Eyes.init(rawValue:)) { look.eyes = eyes }
+            let view = MakeYourBotSheet(name: target.name, look: look, isClicky: false) { saved in
+                if let saved { store.setLook(saved, for: target.id) }
+                windows["make"]?.close()
+            }
+            return show(id: "make", title: "Make your bot", size: NSSize(width: 1000, height: 640), view: view, theme: command["theme"] as? String)
+        case "setup":
+            guard let manager = CompanionManager.current else { return ["error": "No companion."] }
+            let names: [String: SetupStep] = Dictionary(uniqueKeysWithValues: SetupStep.allCases.map { ("\($0)", $0) })
+            let step = (command["step"] as? String).flatMap { names[$0] } ?? .welcome
+            SetupGuideWindowController.show(companionManager: manager, step: step, activates: false)
+            let window = NSApp.windows.first { $0.title == "Set up Theo" }
+            return ["window": window?.windowNumber ?? 0, "step": "\(step)"]
+        case "products":
+            for (name, on) in command["on"] as? [String: Bool] ?? [:] {
+                if let product = TheoProduct(rawValue: name) { TheoProducts.shared.set(product, on: on) }
+            }
+            return ["picked": TheoProducts.shared.picked.map(\.rawValue)]
         case "clearFolds":
             for id in PixelCardFolds.shared.folds.keys { PixelCardFolds.shared.unfold(id) }
             return ["ok": true]
+        case "facesKey":
+            return show(id: "faces", title: "What the faces mean", size: NSSize(width: 460, height: 470), view: FacesKeyView().environment(\.colorScheme, .dark), theme: nil)
         case "close":
             windows.values.forEach { $0.close() }
             windows = [:]
+            SetupGuideWindowController.close()
             return ["ok": true]
         default:
             return ["error": "Unknown action."]
