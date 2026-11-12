@@ -62,6 +62,7 @@ struct DevicesSettingsContent: View {
                     DeviceFeatureRow(feature: feature)
                 }
             }
+            LocalAPISection()
         }
     }
 
@@ -118,5 +119,34 @@ private struct DeviceFeatureRow: View {
     private func applied() {
         if feature == .studioScreens { StudioController.shared.followDeviceSetting() }
         if feature == .clicky { TheoLink.shared.objectWillChange.send() }
+    }
+}
+
+/// Theo's local API (`TheoGateway`): off by default. Scripts on this Mac message a bot or fire a routine with the token, which stays in the Keychain.
+private struct LocalAPISection: View {
+    @State private var enabled = TheoGateway.isEnabled
+    @State private var copied = false
+
+    var body: some View {
+        TheoSection(title: "Local API", hint: "Lets scripts, cron jobs and webhook relays on this Mac message a bot or run a routine, over http://127.0.0.1:\(TheoGateway.port). Nothing off this Mac can reach it. What comes in this way shows in the chat as from that program and is never taken as your own words: it can't start coding runs or routines.") {
+            SettingRow(title: "Turn on the local API", detail: enabled ? "Listening on 127.0.0.1:\(TheoGateway.port)." : "Off.") {
+                Toggle("", isOn: Binding(get: { enabled }, set: { enabled = $0; TheoGateway.shared.setEnabled($0) })).labelsHidden().toggleStyle(.switch)
+            }
+            if enabled {
+                RowDivider()
+                SettingRow(title: "Token", detail: "Send it as Authorization: Bearer <token>. A new token stops the old one at once.") {
+                    HStack(spacing: 8) {
+                        Button(copied ? "Copied" : "Copy token") {
+                            if let token = TheoGatewayToken.read() {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(token, forType: .string)
+                                copied = true
+                            }
+                        }.buttonStyle(.theoSecondary)
+                        Button("New token") { TheoGatewayToken.renew(); copied = false }.buttonStyle(.theoSecondary)
+                    }
+                }
+            }
+        }
     }
 }

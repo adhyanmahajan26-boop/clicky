@@ -141,6 +141,18 @@ final class ClaudiaControlInbox {
         case "clickyMac":
             let changed = TheoLink.shared.setClickyMac(word: (command["word"] as? String ?? "").lowercased())
             reply(identifier, ok: changed, result: TheoLink.shared.statusReport, error: changed ? nil : "no Mac by that name")
+        case "gateway":
+            // Theo's local API: {action: state | on | off | token}. The token is only handed out in a test profile; the owner copies it in Settings › Devices.
+            let gateway = TheoGateway.shared
+            switch command["action"] as? String ?? "state" {
+            case "on": gateway.setEnabled(true)
+            case "off": gateway.setEnabled(false)
+            case "token":
+                guard TheoProfile.isTest else { reply(identifier, ok: false, result: nil, error: "Copy the token in Settings › Devices."); return }
+                reply(identifier, ok: true, result: ["token": (TheoGatewayToken.read() as Any?) ?? NSNull()], error: nil); return
+            default: break
+            }
+            reply(identifier, ok: true, result: gateway.report, error: nil)
         case "linkStatus":
             reply(identifier, ok: true, result: TheoLink.shared.statusReport, error: nil)
         case "botSay":
