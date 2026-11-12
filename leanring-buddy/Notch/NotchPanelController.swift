@@ -80,6 +80,8 @@ final class NotchPanelController: NSObject {
     // MARK: - Lifecycle
 
     func start() {
+        // Started once; Clicky switched off and on again (Settings › Products) calls this again.
+        guard refreshTimer == nil else { return }
         bindState()
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         for notificationName in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {

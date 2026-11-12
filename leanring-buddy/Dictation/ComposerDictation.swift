@@ -133,6 +133,11 @@ final class ComposerDictation: ObservableObject {
               let manager = CompanionManager.current else { return }
         noteTimer?.cancel()
         ownerID = id
+        // No Sarvam key, no dictation: the note under the box says so and leads to where the key goes.
+        if TheoProducts.dictationAccessNow == .needsKey {
+            refuse(.needsKey)
+            return
+        }
         if manager.dictationController.isBlocked() || manager.dictationController.isCapturing {
             refuse(.busy)
             return
@@ -258,6 +263,10 @@ final class ComposerDictation: ObservableObject {
 
     /// The note's link: System Settings if macOS has already asked, else Theo's own page, which can ask.
     func openPermissionSettings() {
+        if case .problem(let problem) = phase, problem.opensKeySettings {
+            BotsSelection.shared.openSettings(.dictation)
+            return
+        }
         guard case .problem(let problem) = phase, problem.needsPermission else { return }
         if problem.isUndecided {
             BotsSelection.shared.openSettings(.permissions)
@@ -574,11 +583,11 @@ struct ComposerDictationNote: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            HairlineIcon(name: problem.needsPermission ? "lock" : "mic", size: 15, color: DS.Colors.textSecondary)
+            HairlineIcon(name: problem.needsPermission ? "lock" : problem.opensKeySettings ? "key" : "mic", size: 15, color: DS.Colors.textSecondary)
             Text(problem.message).font(.system(size: 12.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
-            if problem.needsPermission {
+            if problem.needsPermission || problem.opensKeySettings {
                 Button(action: onOpenSettings) {
-                    Text("Open Settings").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.accentText).contentShape(Rectangle())
+                    Text(problem.opensKeySettings ? "Add key" : "Open Settings").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.accentText).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

@@ -55,6 +55,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     private var controlInbox: ClaudiaControlInbox?
     private var uiServer: ClaudiaUIServer?
     private var debugCommandInbox: DebugCommandInbox?
+    private var productsObserver: NSObjectProtocol?
 
     /// Unit tests host the app; then nothing starts (no overlay, mic, event tap or servers).
     static var isHostingUnitTests: Bool {
@@ -114,8 +115,15 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         // The test profile is only the windows: no mic, key tap, spark overlay or pill alongside the real Theo.
         if !TheoProfile.isTest {
             companionManager.start()
+            // The pill is Clicky's: it comes and goes with Clicky (Settings › Products).
             pill = NotchPanelController(companionManager: companionManager)
-            pill?.start()
+            if TheoProducts.isOn(.clicky) { pill?.start() }
+            productsObserver = NotificationCenter.default.addObserver(forName: .theoProductsChanged, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let pill = self?.pill else { return }
+                    if TheoProducts.isOn(.clicky) { pill.start() } else { pill.stop() }
+                }
+            }
         } else {
             // Theo Link starts inside the companion. A test profile links by address only (no Bonjour), so it can come back up
             // after a restart like the real one does, which is what the two-Mac tests need to see.

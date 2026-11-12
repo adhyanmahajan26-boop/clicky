@@ -415,7 +415,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func putSparkOnScreens(greeting: Bool) {
-        guard TheoLink.shared.clickyRunsHere else { return }
+        guard TheoProducts.isOn(.clicky), TheoLink.shared.clickyRunsHere else { return }
         if !greeting { sparkOverlay.hasShownOverlayBefore = true }
         sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
@@ -486,9 +486,26 @@ final class CompanionManager: ObservableObject {
         showSparkIfReady()
     }
 
+    static let clickyOffLine = "Clicky is turned off. Turn it on in Settings \u{203A} Products."
+
+    /// A product was switched (Settings › Products): Clicky's spark and wake word, and dictation's keys, follow at once.
+    func applyProducts() {
+        dictationController.refresh(accessibilityGranted: hasAccessibilityPermission)
+        // The test profile never starts the mic, the spark or the wake listener.
+        guard !TheoProfile.isTest else { return }
+        if TheoProducts.isOn(.clicky) {
+            if DeviceRoles.runsHere(.voice) { wakeWordController.start() }
+            showSparkIfReady()
+        } else {
+            wakeWordController.stop()
+            if isHandsFreeSessionActive { endHandsFreeSession() }
+            if isOverlayVisible { takeSparkOffScreens() }
+        }
+    }
+
     /// Once everything is allowed the spark appears; the very first time it says hello.
     func showSparkIfReady() {
-        guard allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible, TheoLink.shared.clickyRunsHere else { return }
+        guard TheoProducts.isOn(.clicky), allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible, TheoLink.shared.clickyRunsHere else { return }
         let isFirstTime = !hasCompletedOnboarding
         hasCompletedOnboarding = true
         putSparkOnScreens(greeting: isFirstTime)
@@ -683,6 +700,8 @@ final class CompanionManager: ObservableObject {
     }
 
     private func handleShortcutTransition(_ transition: PushToTalkTransition) {
+        // Control + Option is Clicky's: with Clicky off (Settings › Products) the keys do nothing.
+        guard TheoProducts.isOn(.clicky) else { return }
         switch transition {
         case .pressed: pushToTalkPressed()
         case .released: pushToTalkReleased()
@@ -927,6 +946,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func startHandsFreeSession() {
+        guard TheoProducts.isOn(.clicky) else { return }
         guard !isHandsFreeSessionActive else { return }
 
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -1587,6 +1607,13 @@ final class CompanionManager: ObservableObject {
         // Built here rather than as a default argument, which Swift would
         // evaluate off the main actor.
         var turnOptions = requestedTurnOptions ?? TurnOptions()
+        // Clicky turned off (Settings › Products): nothing is seen, said or sent anywhere else.
+        guard TheoProducts.isOn(.clicky) else {
+            showHandsFreeStatusMessage(Self.clickyOffLine)
+            voiceState = .idle
+            turnOptions.onTurnFinished?(nil, NSError(domain: "Theo.Products", code: 1, userInfo: [NSLocalizedDescriptionKey: Self.clickyOffLine]))
+            return
+        }
         // "Clicky, work on the Air": the switch, wherever it's said.
         if !turnOptions.cameFromOtherMac, turnOptions.theoOrder == nil, let word = ClickyMachineWords.choice(in: transcript), TheoLink.shared.setClickyMac(word: word) {
             let line = "Okay, I'll work on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."

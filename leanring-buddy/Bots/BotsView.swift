@@ -64,6 +64,8 @@ struct BotsRootView: View {
     @FocusState private var searchFocused: Bool
     @ObservedObject private var studio = StudioController.shared
     @ObservedObject private var dictation = ComposerDictation.shared
+    /// Theo and Clicky are products of their own (Settings › Products): what's off leaves the sidebar.
+    @ObservedObject private var products = TheoProducts.shared
 
     private var showsStudioPanel: Bool {
         guard StudioController.hasPanel, studio.panelVisible else { return false }
@@ -137,8 +139,12 @@ struct BotsRootView: View {
     /// team live on Home and in the ⌘K search.
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            workspaceRow
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 8)
+            if products.isOn(.theo) {
+                workspaceRow
+                    .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 8)
+            } else {
+                Color.clear.frame(height: 12)
+            }
             searchField
                 .padding(.horizontal, 10).padding(.bottom, 10)
             ScrollView {
@@ -156,21 +162,28 @@ struct BotsRootView: View {
                                 withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() }
                             }
                         }
-                        hairlineRow("routines", "Routines", trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)",
-                                    isSelected: selection.pane == .routines) { selection.pane = .routines }
-                        hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
-                        let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) && !isCEO($0) }
-                        if !pinned.isEmpty {
-                            sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
-                            ForEach(pinned, id: \.self) { item in itemRow(item) }
+                        if products.isOn(.theo) {
+                            hairlineRow("routines", "Routines", trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)",
+                                        isSelected: selection.pane == .routines) { selection.pane = .routines }
                         }
-                        ForEach(store.rootSections) { section in teamSection(section, depth: 0) }
+                        hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
+                        if products.isOn(.theo) {
+                            let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) && !isCEO($0) }
+                            if !pinned.isEmpty {
+                                sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
+                                ForEach(pinned, id: \.self) { item in itemRow(item) }
+                            }
+                            // Clicky's own team leaves with Clicky (Settings › Products).
+                            ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
+                        }
                     }
                 }
                 .padding(.bottom, 10)
             }
-            clickyPill
-                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 6)
+            if products.isOn(.clicky) {
+                clickyPill
+                    .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 6)
+            }
             HStack(spacing: 2) {
                 hairlineRow("connectors", "Connectors", isSelected: selection.pane == .connectors, inset: 0) { selection.pane = .connectors }
                 hairlineRow("settings", "Settings", isSelected: false, inset: 0) { selection.openSettings(.look) }
@@ -568,7 +581,27 @@ struct BotsRootView: View {
         }
     }
 
+    /// The panes that belong to Theo the product: chats, teams, routines and activity.
+    private var paneIsTheos: Bool {
+        switch selection.pane {
+        case .team, .category, .group, .bot, .routines, .activity: return true
+        default: return false
+        }
+    }
+
     @ViewBuilder private var detail: some View {
+        if paneIsTheos && !products.isOn(.theo) {
+            ProductOffView(product: .theo)
+        } else if selection.pane == .clicky && !products.isOn(.clicky) {
+            ProductOffView(product: .clicky)
+        } else if selection.pane == .home && !products.isOn(.theo) {
+            ProductsHomeView()
+        } else {
+            paneDetail
+        }
+    }
+
+    @ViewBuilder private var paneDetail: some View {
         switch selection.pane {
         case .home:
             TodayView(store: store, selection: selection)
@@ -633,6 +666,7 @@ struct BotChatScreen: View {
     @ObservedObject private var studio = StudioController.shared
     @ObservedObject private var dictation = ComposerDictation.shared
     @AppStorage(ComposerDictationSettings.enabledKey) private var dictationEnabled = true
+    @ObservedObject private var products = TheoProducts.shared
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
@@ -939,7 +973,7 @@ struct BotChatScreen: View {
                     EffortChip(store: store, bot: bot)
                 }
                 Spacer()
-                if dictationEnabled {
+                if dictationEnabled && products.isOn(.dictation) {
                     Button { dictation.toggle(conversationID) } label: {
                         HairlineIcon(name: "mic", size: 18, color: DS.Colors.textSecondary)
                             .frame(width: 30, height: 30).contentShape(Rectangle())
@@ -991,6 +1025,7 @@ struct BotChatScreen: View {
     }
 
     private var dictationHelp: String {
+        if products.dictationAccess == .needsKey { return "Dictation needs a Sarvam API key" }
         switch ComposerDictationSettings.shortcut {
         case .optionSpace: return "Dictate (⌥Space or ⌘⇧D)"
         case .commandShiftD: return "Dictate (⌘⇧D)"

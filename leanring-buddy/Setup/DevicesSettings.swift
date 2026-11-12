@@ -30,7 +30,9 @@ enum DeviceRoles {
     }
 
     @MainActor static func route(_ feature: DeviceFeature) -> DeviceRoute {
-        DeviceRouting.route(feature, choice: choice(feature), thisMac: thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected)
+        // A product that's off (Settings › Products) doesn't run here, whichever Mac it's set to.
+        if let product = TheoProduct.owning(feature), !TheoProducts.isOn(product) { return .notHere }
+        return DeviceRouting.route(feature, choice: choice(feature), thisMac: thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected)
     }
 
     @MainActor static func runsHere(_ feature: DeviceFeature) -> Bool { route(feature) == .runHere }

@@ -361,6 +361,11 @@ final class DictationController: ObservableObject {
 
     private func keysPressed() {
         guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
+        // Dictation needs a Sarvam key (Settings › Products): the press says so instead of listening.
+        if TheoProducts.dictationAccessNow == .needsKey {
+            showFailure("Add a Sarvam API key to dictate")
+            return
+        }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             showFailure("Theo needs the microphone")
             return
@@ -681,6 +686,7 @@ final class DictationController: ObservableObject {
         var report = lastReport
         report["phase"] = String(describing: phase)
         report["enabled"] = DictationSettings.isEnabled
+        report["access"] = "\(TheoProducts.dictationAccessNow)"
         report["shortcut"] = DictationSettings.shortcut.rawValue
         report["usesSarvam"] = DictationSettings.usesSarvam
         report["usesCleanup"] = DictationSettings.usesCleanup

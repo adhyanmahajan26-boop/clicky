@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case products, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: Studio is on a Mac Studio only.
@@ -35,6 +35,7 @@ enum SettingsTab {
         /// Its Hairline icon.
         var icon: String {
             switch self {
+            case .products: return "team"
             case .look: return "paint"
             case .devices: return "screen"
             case .studio: return "studio"
@@ -53,6 +54,7 @@ enum SettingsTab {
 
         var title: String {
             switch self {
+            case .products: return "Products"
             case .look: return "Look"
             case .devices: return "Devices"
             case .studio: return "Studio"
@@ -71,6 +73,7 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
+            case .products: return "Theo, Clicky and Dictation are separate. Turn on the ones you want."
             case .look: return "How Theo looks and moves. Click one and it changes right away."
             case .devices: return "Choose which Mac does what."
             case .studio: return "Hidden screens your bots work on, with small live views inside Theo."
@@ -89,6 +92,7 @@ enum SettingsTab {
 
         var symbol: String {
             switch self {
+            case .products: return "square.grid.2x2.fill"
             case .look: return "paintbrush.pointed.fill"
             case .devices: return "laptopcomputer.and.iphone"
             case .studio: return "rectangle.split.2x1"
@@ -107,6 +111,7 @@ enum SettingsTab {
 
         var colors: [Color] {
             switch self {
+            case .products: return TileColors.indigo
             case .look: return TileColors.violet
             case .devices: return TileColors.teal
             case .studio: return TileColors.graphite
@@ -185,6 +190,7 @@ struct SettingsPage: View {
 
     @ViewBuilder private var content: some View {
         switch section {
+        case .products: ProductsSettingsContent()
         case .look: LookSettingsContent()
         case .devices: DevicesSettingsContent()
         case .studio: StudioSettingsContent()

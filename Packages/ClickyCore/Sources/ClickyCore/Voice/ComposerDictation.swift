@@ -107,6 +107,8 @@ public enum DictationMicError: Error, Equatable, Sendable {
 public enum ComposerDictationProblem: Equatable, Sendable {
     case microphoneDenied, microphoneUndecided, speechDenied, speechUndecided
     case microphoneFailed, noUsableMicrophone, noRecognizer, nothingHeard, busy
+    /// No Sarvam key is saved: dictation is blocked until one is (TheoProducts.swift).
+    case needsKey
 
     /// What to tell the owner when the microphone wouldn't open.
     public init(micStartError error: Error) {
@@ -122,6 +124,7 @@ public enum ComposerDictationProblem: Equatable, Sendable {
         case .noRecognizer: return "This Mac has no recognizer for that language."
         case .nothingHeard: return "Didn't catch that."
         case .busy: return "The microphone is in use by a call or by Clicky."
+        case .needsKey: return "Dictation needs a Sarvam API key."
         }
     }
 
@@ -135,6 +138,9 @@ public enum ComposerDictationProblem: Equatable, Sendable {
 
     /// True when macOS has never asked. System Settings doesn't list the app until it has.
     public var isUndecided: Bool { self == .microphoneUndecided || self == .speechUndecided }
+
+    /// The note offers a way to Settings › Dictation, where the key goes.
+    public var opensKeySettings: Bool { self == .needsKey }
 
     /// Goes away by itself after a moment. A missing permission stays until it's dealt with.
     public var isBrief: Bool { self == .nothingHeard || self == .busy || self == .microphoneFailed }

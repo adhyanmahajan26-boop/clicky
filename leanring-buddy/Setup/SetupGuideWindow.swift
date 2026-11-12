@@ -3,8 +3,9 @@
 //  leanring-buddy
 //
 //  The first-run Setup guide: one step at a time, like an installer, with a step list on the left and Back / Continue
-//  at the bottom. Welcome → Permissions → Harnesses (install, sign in, connect T3 Code) → API keys (optional) → Voice →
-//  Done. Everything here is also in Settings.
+//  at the bottom. Welcome → Pick products (Theo, Clicky, Dictation, each with a demo) → Permissions → Harnesses →
+//  API keys → Voice → Done. Harnesses and Voice only show for Theo or Clicky (ClickyCore `SetupStep.shown`). Everything
+//  here is also in Settings.
 //
 
 import AVFoundation
@@ -15,19 +16,7 @@ import SwiftUI
 
 @MainActor
 final class SetupGuideModel: ObservableObject {
-    enum Step: Int, CaseIterable {
-        case welcome, permissions, harnesses, keys, voice, done
-        var title: String {
-            switch self {
-            case .welcome: return "Welcome"
-            case .permissions: return "Permissions"
-            case .harnesses: return "Harnesses"
-            case .keys: return "API keys"
-            case .voice: return "Voice"
-            case .done: return "Done"
-            }
-        }
-    }
+    typealias Step = SetupStep
 
     @Published var step: Step = Step(rawValue: ClickySettings.setupGuideStep) ?? .welcome {
         didSet { ClickySettings.setupGuideStep = step.rawValue }
@@ -40,15 +29,26 @@ final class SetupGuideModel: ObservableObject {
         self.setup = setup
     }
 
+    var picked: Set<TheoProduct> { TheoProducts.shared.picked }
+
+    /// Continue on the products step needs something picked.
+    var canContinue: Bool { step != .products || TheoProductChoice.canFinish(picked) }
+
     func next() {
-        if let following = Step(rawValue: step.rawValue + 1) { step = following }
+        if let following = Step.next(after: step, products: picked) { step = following }
     }
 
     func back() {
-        if let previous = Step(rawValue: step.rawValue - 1) { step = previous }
+        if let previous = Step.previous(before: step, products: picked) { step = previous }
     }
 
     func finish() {
+        // Nothing picked: back to the products, since a Theo with nothing on would do nothing.
+        guard TheoProductChoice.canFinish(picked) else {
+            step = .products
+            return
+        }
+        TheoProducts.shared.saveChoices()
         ClickySettings.isSetupCompleted = true
         ClickySettings.setupGuideStep = 0
         SetupGuideWindowController.close()
@@ -65,7 +65,9 @@ enum SetupGuideWindowController {
     static var isNeededAtLaunch: Bool {
         let provider = BrainModel(setting: ClickyModels.main).provider
         // An API model has no command-line tool to look for.
-        return !ClickySettings.isSetupCompleted || (provider != .api && BrainCLIRunner.locateExecutable(for: provider) == nil)
+        // Dictation alone needs no brain, so a missing one only matters with Theo or Clicky on.
+        let needsBrain = TheoProducts.isOn(.clicky) || TheoProducts.isOn(.theo)
+        return !ClickySettings.isSetupCompleted || (needsBrain && provider != .api && BrainCLIRunner.locateExecutable(for: provider) == nil)
     }
 
     /// `activates` false opens it without taking focus (a launch in the background).
@@ -112,6 +114,7 @@ private struct TheoMark: View {
 struct SetupGuideView: View {
     @ObservedObject var model: SetupGuideModel
     @ObservedObject var companionManager: CompanionManager
+    @ObservedObject private var products = TheoProducts.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -144,7 +147,8 @@ struct SetupGuideView: View {
                 }
             }
             .padding(.bottom, 22)
-            ForEach(SetupGuideModel.Step.allCases, id: \.self) { step in
+            let steps = SetupStep.shown(for: products.picked)
+            ForEach(Array(steps.enumerated()), id: \.element) { number, step in
                 let isCurrent = step == model.step
                 let isDone = step.rawValue < model.step.rawValue
                 Button { model.step = step } label: {
@@ -154,7 +158,7 @@ struct SetupGuideView: View {
                             if isDone {
                                 Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
                             } else {
-                                Text("\(step.rawValue + 1)").font(.system(size: 11, weight: .bold)).foregroundColor(isCurrent ? .white : DS.Colors.textTertiary)
+                                Text("\(number + 1)").font(.system(size: 11, weight: .bold)).foregroundColor(isCurrent ? .white : DS.Colors.textTertiary)
                             }
                         }
                         .frame(width: 22, height: 22)
@@ -191,7 +195,11 @@ struct SetupGuideView: View {
             if model.step == .done {
                 Button("Open Theo") { model.finish() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
             } else {
+                if model.step == .products && !model.canContinue {
+                    Text("Pick at least one").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                }
                 Button(model.step == .welcome ? "Get started" : "Continue") { model.next() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
+                    .disabled(!model.canContinue)
             }
         }
         .padding(.horizontal, 24).frame(height: 56)
@@ -200,6 +208,11 @@ struct SetupGuideView: View {
     @ViewBuilder private var content: some View {
         switch model.step {
         case .welcome: WelcomeStep()
+        case .products:
+            VStack(alignment: .leading, spacing: 18) {
+                StepHeader(title: "Pick what you want", subtitle: "Theo, Clicky and Dictation are separate products. Watch each demo and turn on only the ones you want; you can change this any time in Settings \u{203A} Products.")
+                TheoProductsList(demoWidth: 250)
+            }
         case .permissions:
             VStack(alignment: .leading, spacing: 18) {
                 StepHeader(title: "Let Theo hear and see", subtitle: "Allow what you want. Theo still runs without any of these and tells you what it can't do yet, so you can come back to this any time in Settings.")
@@ -207,15 +220,32 @@ struct SetupGuideView: View {
             }
         case .harnesses:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "Your coding agents", subtitle: "Install and sign in right here. T3 Code is the default for builds; any other harness runs in a live terminal inside Theo.")
-                CodingSettingsView()
-                TheoSection(title: "Clicky thinks with", hint: "Clicky is your screen companion. Claude Sonnet 5.5 is a good start, and any agent or API key works.") {
-                    SetupBrainRow(companionManager: companionManager)
+                if products.isOn(.theo) {
+                    StepHeader(title: "Your coding agents", subtitle: "Install and sign in right here. T3 Code is the default for builds; any other harness runs in a live terminal inside Theo.")
+                    CodingSettingsView()
+                } else {
+                    StepHeader(title: "Clicky's brain", subtitle: "The model Clicky answers with. Your Claude subscription works, and so does any API key.")
+                }
+                if products.isOn(.clicky) {
+                    TheoSection(title: "Clicky thinks with", hint: "Clicky is your screen companion. Claude Sonnet 5.5 is a good start, and any agent or API key works.") {
+                        SetupBrainRow(companionManager: companionManager)
+                    }
                 }
             }
         case .keys:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "API keys (optional)", subtitle: "Bring a key for any provider and use it for bots, Theo, Clicky and voices. You can skip this and add them later.")
+                if products.isOn(.dictation) {
+                    StepHeader(title: "API keys", subtitle: "Dictation needs a Sarvam key; everything else here is optional. Keys stay in your Keychain.")
+                    TheoSection(title: "Dictation's Sarvam key", hint: products.dictationAccess == .ready ? "Saved. Dictation is ready." : "Dictation stays blocked until this is saved. You can skip it now and add it later in Settings \u{203A} Dictation.") {
+                        if products.dictationAccess == .ready {
+                            SettingRow(title: "Sarvam AI", detail: "Key saved") { StatusPill(text: "Ready", tone: .good) }
+                        } else {
+                            SarvamKeyField().padding(12)
+                        }
+                    }
+                } else {
+                    StepHeader(title: "API keys (optional)", subtitle: "Bring a key for any provider and use it for bots, Theo, Clicky and voices. You can skip this and add them later.")
+                }
                 ProviderKeysView()
             }
         case .voice:
@@ -223,7 +253,7 @@ struct SetupGuideView: View {
                 StepHeader(title: "How should Theo sound?", subtitle: "Theo always listens for \u{201C}hey Theo\u{201D}. Answers can be spoken or shown as captions.")
                 VoiceSettingsContent()
             }
-        case .done: DoneStep(setup: model.setup)
+        case .done: DoneStep(setup: model.setup, products: products)
         }
     }
 }
@@ -257,13 +287,12 @@ private struct WelcomeStep: View {
         VStack(alignment: .leading, spacing: 18) {
             TheoMark(size: 72)
             Text("Hi, I'm Theo").font(.system(size: 30, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
-            Text("Your Mac's team: Clicky on your screen, bots you make yourself, and any coding agent you already use. Setup takes about two minutes.")
+            Text("Three products, one app. Next you'll see a short demo of each and turn on only the ones you want. Setup takes about two minutes.")
                 .font(.system(size: 15)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 12) {
-                feature("cursorarrow.rays", TileColors.ember, "Clicky sees your screen, points at things, draws boards and researches links")
-                feature("person.2.fill", TileColors.indigo, "Bots you make from stencils, with teams, schedules and their own settings")
-                feature("terminal.fill", TileColors.graphite, "Hand any fix to T3 Code, Claude Code, Codex, Cursor, OpenCode, Grok or Gemini")
-                feature("arrow.triangle.pull", TileColors.lime, "Runs come back with a branch, a draft PR and a report")
+                ForEach(TheoProduct.allCases.reversed()) { product in
+                    feature(product.symbol, product.colors, "\(product.title): \(product.tagline)")
+                }
             }
             .padding(.top, 6)
             VStack(alignment: .leading, spacing: 8) {
@@ -284,18 +313,26 @@ private struct WelcomeStep: View {
 
 private struct DoneStep: View {
     @ObservedObject var setup: SetupModel
+    @ObservedObject var products: TheoProducts
     @ObservedObject private var look = LookSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             IconTile(symbol: "checkmark", colors: TileColors.lime, size: 56)
             Text("You're all set").font(.system(size: 28, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+            if products.picked.isEmpty {
+                Text("Nothing is on yet. Go back to Pick products and turn on at least one.").font(TheoType.body).foregroundColor(DS.Colors.warningText)
+            }
             TheoSection(title: "Try one of these", hint: nil) {
-                tip("\u{201C}Hey Theo, what's on my screen?\u{201D}")
-                RowDivider()
-                tip("\u{201C}Hey Theo, draw me a flowchart of my signup flow.\u{201D}")
-                RowDivider()
-                tip("Make a bot, then tell it \u{201C}fix the failing test in ~/Projects/foo\u{201D}.")
+                ForEach(Array(tips.enumerated()), id: \.offset) { index, line in
+                    if index > 0 { RowDivider() }
+                    tip(line)
+                }
+            }
+            if products.dictationAccess == .needsKey {
+                TheoSection(title: "Dictation is waiting for its key", hint: "It stays blocked until a Sarvam key is saved. Add it here or later in Settings \u{203A} Dictation.") {
+                    SarvamKeyField().padding(12)
+                }
             }
             TheoSection(title: "Theo's screen", hint: "Theo opens its windows here and leaves your main screen alone.") {
                 SettingRow(title: "Monitor") {
@@ -306,8 +343,22 @@ private struct DoneStep: View {
                     .labelsHidden().frame(width: 260)
                 }
             }
-            Button("Test the spark") { setup.testSpark() }.buttonStyle(.theoSecondary).disabled(TheoProfile.isTest)
+            if products.isOn(.clicky) {
+                Button("Test the spark") { setup.testSpark() }.buttonStyle(.theoSecondary).disabled(TheoProfile.isTest)
+            }
         }
+    }
+
+    /// Something to try with each product that's on.
+    private var tips: [String] {
+        var lines: [String] = []
+        if products.isOn(.clicky) {
+            lines.append("\u{201C}Hey Theo, what's on my screen?\u{201D} (Clicky answers)")
+            lines.append("\u{201C}Hey Theo, draw me a flowchart of my signup flow.\u{201D}")
+        }
+        if products.isOn(.theo) { lines.append("Make a bot, then tell it \u{201C}fix the failing test in ~/Projects/foo\u{201D}.") }
+        if products.isOn(.dictation) { lines.append("Hold Control + Fn in any app, say a sentence, and let go.") }
+        return lines
     }
 
     private func tip(_ text: String) -> some View {
