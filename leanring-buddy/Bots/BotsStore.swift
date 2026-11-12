@@ -260,7 +260,10 @@ final class BotsStore: ObservableObject {
             t3Runs = runs
         }
         // A run that was wrapping up when Theo quit goes through its report again; pushing twice is harmless.
-        for index in t3Runs.indices where t3Runs[index].phase == "reporting" { t3Runs[index].phase = "running" }
+        for index in t3Runs.indices where t3Runs[index].phase == "reporting" {
+            t3Runs[index].phase = "running"
+            wrappingUp.insert(t3Runs[index].id)
+        }
         for run in t3Runs where !run.isRemote && (run.phase == "running" || run.phase == "waiting") { track(run.id) }
         loadRoutinesAndLayout()
         provisionClickyTeam()
@@ -1282,6 +1285,8 @@ final class BotsStore: ObservableObject {
     /// Coding runs Theo started in T3 Code, newest last.
     @Published private(set) var t3Runs: [T3Run] = []
     private var trackedRuns: Set<String> = []
+    /// Runs Theo quit in the middle of wrapping up (tests, commit, push, pull request, or a stop's report). Their agent had finished.
+    private var wrappingUp: Set<String> = []
 
     /// When Theo writes the final prompt for a pitch that asked to build it, it goes to T3 Code by itself.
     /// Once per pitch. A ```followup block goes to the latest run's agent instead.
@@ -1551,15 +1556,22 @@ final class BotsStore: ObservableObject {
         Task { [weak self] in
             do {
                 let worktree = await BotsT3.state(of: run)?.worktree
-                // A plain folder has no base to move: the agent works outside git there.
-                if run.baseCommit != nil, let head = await BotsT3.currentHead(of: run, worktree: worktree) { run.baseCommit = head }
+                // A plain folder has no base to move: the agent works outside git there. Where the branch was cut from stays, so the
+                // run's own commits that never went up (a stopped run, a failed push) aren't taken for the owner's and block the pull request.
+                if run.baseCommit != nil, let head = await BotsT3.currentHead(of: run, worktree: worktree) {
+                    if run.forkCommit == nil { run.forkCommit = run.baseCommit }
+                    run.baseCommit = head
+                }
+                // The follow-up starts when it's sent: a quick agent can answer before the paste is confirmed, and an answer from before
+                // the start counts as an older one, so the report would quote the screen instead.
+                let sentAt = Date()
                 let cloudRun = try await BotsT3.sendFollowup(text, to: run)
                 guard let self else { return }
                 run.cloudRunID = cloudRun ?? run.cloudRunID
                 run.followups = Array(((run.followups ?? []) + [text]).suffix(10))
                 run.stoppedByOwner = nil
                 run.phase = "running"
-                run.startedAt = Date()
+                run.startedAt = sentAt
                 run.finishedAt = nil
                 self.upsert(run)
                 self.post(BotChatMessage(author: theo.id, text: "Passed to \(run.harness.map(HarnessCatalog.label) ?? "T3 Code") on **\(run.title)**. I'll report back when it's done."), to: room)
@@ -1589,8 +1601,19 @@ final class BotsStore: ObservableObject {
             // A run that hasn't started its agent yet reads as idle, so give it a moment first.
             try? await Task.sleep(nanoseconds: 12_000_000_000)
             while let self, var run = self.t3Runs.first(where: { $0.id == runID }), run.phase == "running" || run.phase == "waiting" {
-                if run.stoppedByOwner == true { break }
-                guard let state = await BotsT3.state(of: run) else {
+                // Theo quit while this one was wrapping up, so its agent had finished (or was stopped). A terminal or headless agent
+                // went with Theo, which would read as cut off: the wrap-up is done again from what the agent left instead, so a pull
+                // request GitHub already made gets recorded and a finished run isn't called failed. A stopped one finishes its stop.
+                var resumed: BotsT3.ThreadState?
+                if self.wrappingUp.remove(runID) != nil, run.stoppedByOwner == true || run.id.hasPrefix("term:") || run.id.hasPrefix("headless:") {
+                    let stopped = run.stoppedByOwner == true
+                    resumed = BotsT3.ThreadState(status: stopped ? "cancelled" : "completed", busy: false, waitingForAnswer: false,
+                                                 lastMessage: stopped ? nil : (HarnessCoding.transcriptSummary(for: run) ?? run.fullReport ?? run.activity),
+                                                 worktree: run.worktree, pullRequest: nil)
+                } else if run.stoppedByOwner == true { break }
+                var polled = resumed
+                if polled == nil { polled = await BotsT3.state(of: run) }
+                guard let state = polled else {
                     misses += 1
                     if misses >= 40 {
                         // T3 Code has been unreachable for ten minutes: stop and say so instead of spinning.
@@ -1605,7 +1628,7 @@ final class BotsStore: ObservableObject {
                 }
                 misses = 0
                 // Stop or a follow-up may have landed while that was being asked.
-                guard let current = self.t3Runs.first(where: { $0.id == runID }), current.stoppedByOwner != true else { break }
+                guard let current = self.t3Runs.first(where: { $0.id == runID }), current.stoppedByOwner != true || resumed != nil else { break }
                 run = current
                 run.paneTail = Self.paneTail(runID)
                 run.activity = state.lastMessage.map { String($0.split(separator: "\n").first ?? "").prefix(140) }.map(String.init)
@@ -1625,7 +1648,8 @@ final class BotsStore: ObservableObject {
                     run.phase = ["failed", "interrupted", "cancelled", "rolled_back"].contains(state.status) ? "failed" : "done"
                     run.finishedAt = Date()
                     self.upsert(run)
-                    if run.stoppedByOwner != true { self.postFromTheo(report, runID: run.id) }
+                    // Stop posts its own report, unless Theo quit before it could.
+                    if run.stoppedByOwner != true || resumed != nil { self.postFromTheo(report, runID: run.id) }
                     self.teamRunFinished(run, report: report)
                     self.releaseOldTerminals()
                     break
