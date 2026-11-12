@@ -278,3 +278,68 @@ pub fn start_time(_pid: i32) -> Option<u64> { None }
 fn boot_id() -> String { String::new() }
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 pub fn group_members(_pgid: i32) -> Vec<i32> { vec![] }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn python() -> &'static str { if cfg!(windows) { "python" } else { "python3" } }
+
+    /// A process that starts a grandchild and prints its id, then both sleep.
+    async fn family() -> (tokio::process::Child, ProcessTree, u32) {
+        let code = "import subprocess,sys,time\np=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\nprint(p.pid, flush=True)\ntime.sleep(60)";
+        let mut cmd = tokio::process::Command::new(python());
+        cmd.args(["-c", code]).stdout(std::process::Stdio::piped());
+        configure(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let tree = ProcessTree::attach(&child).unwrap();
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let grandchild: u32 = lines.next_line().await.unwrap().unwrap().trim().parse().unwrap();
+        (child, tree, grandchild)
+    }
+
+    fn running(pid: u32) -> bool {
+        #[cfg(unix)]
+        unsafe {
+            if libc::kill(pid as i32, 0) != 0 { return false; }
+            // A zombie still answers kill(0); ask ps.
+            let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+            let s = String::from_utf8_lossy(&out.stdout);
+            !s.trim().is_empty() && !s.trim().starts_with('Z')
+        }
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::Threading::*;
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() { return false; }
+            let mut code = 0u32;
+            GetExitCodeProcess(h, &mut code);
+            windows_sys::Win32::Foundation::CloseHandle(h);
+            code == 259
+        }
+    }
+
+    #[tokio::test]
+    async fn kill_ends_the_whole_tree() {
+        let (mut child, tree, grandchild) = family().await;
+        assert!(tree.alive());
+        assert!(running(grandchild));
+        tree.kill();
+        tokio::time::timeout(Duration::from_secs(10), child.wait()).await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!running(grandchild), "the grandchild outlived the kill");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn closing_the_job_ends_the_tree() {
+        // What happens when Theo itself dies: its handle to the job closes.
+        let (mut child, tree, grandchild) = family().await;
+        drop(tree);
+        tokio::time::timeout(Duration::from_secs(10), child.wait()).await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!running(grandchild), "the grandchild outlived the job");
+    }
+}

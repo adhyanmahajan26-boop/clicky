@@ -3,7 +3,7 @@
 
 Behaviour comes from files in $THEO_FAKE_DIR: `fake-mode` (the mode), `fake-reply` (a fixed reply), `fake-script.json`
 (rules: the first whose `system` and `prompt` regexes match decides the reply), `fake-flaky` (a counter), `fake-down-model`.
-Every call is logged to calls.jsonl with its arguments, process ids and what it was told.
+Every call is logged to its own file in calls/ with its arguments, process ids and what it was told.
 """
 import json, os, re, signal, subprocess, sys, time
 
@@ -44,8 +44,14 @@ def log(extra=None):
              "opencode": is_opencode, "cwd": os.getcwd(), "args": args, "system": system, "prompt": prompt}
     if extra:
         entry.update(extra)
-    with open(os.path.join(D, "calls.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    # One file per call: appends from engines running at once can interleave on Windows.
+    folder = os.path.join(D, "calls")
+    os.makedirs(folder, exist_ok=True)
+    name = "%020d-%d-%s.json" % (time.time_ns(), os.getpid(), "x" if extra else "a")
+    tmp = os.path.join(folder, name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(entry))
+    os.replace(tmp, os.path.join(folder, name))
 
 
 def out(obj):

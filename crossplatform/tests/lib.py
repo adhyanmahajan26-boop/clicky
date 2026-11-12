@@ -110,14 +110,14 @@ def P(obj, timeout=30):
     outbox.mkdir(parents=True, exist_ok=True)
     ident = uuid.uuid4().hex
     tmp = inbox / (ident + ".tmp")
-    tmp.write_text(json.dumps(obj))
+    tmp.write_text(json.dumps(obj), encoding="utf-8")
     os.replace(tmp, inbox / (ident + ".json"))
     reply = outbox / (ident + ".json")
     deadline = time.time() + timeout
     while time.time() < deadline:
         if reply.exists():
             try:
-                t = reply.read_text()
+                t = reply.read_text(encoding="utf-8")
                 reply.unlink()
                 return json.loads(t)
             except (OSError, ValueError):
@@ -141,7 +141,7 @@ def chat(cid, limit=200):
 def disk_chat(cid):
     f = BOTS / "chats" / (cid.replace(":", "-") + ".json")
     try:
-        return json.loads(f.read_text()).get("messages", [])
+        return json.loads(f.read_text(encoding="utf-8")).get("messages", [])
     except (OSError, ValueError):
         return []
 
@@ -179,35 +179,41 @@ def wait_until(fn, seconds=30, poll=0.2):
 
 
 def bot_id(name):
-    for b in json.loads((BOTS / "bots.json").read_text()):
+    for b in json.loads((BOTS / "bots.json").read_text(encoding="utf-8")):
         if b.get("name") == name:
             return b["id"]
     return None
 
 
 def fake(mode):
-    (FAKE_DIR / "fake-mode").write_text(mode)
+    (FAKE_DIR / "fake-mode").write_text(mode, encoding="utf-8")
 
 
 def fake_reply(text):
-    (FAKE_DIR / "fake-reply").write_text(text)
+    (FAKE_DIR / "fake-reply").write_text(text, encoding="utf-8")
 
 
 def fake_script(rules):
-    (FAKE_DIR / "fake-script.json").write_text(json.dumps(rules))
+    (FAKE_DIR / "fake-script.json").write_text(json.dumps(rules), encoding="utf-8")
     fake("script")
 
 
 def calls(since=0):
-    f = FAKE_DIR / "calls.jsonl"
-    if not f.exists():
+    folder = FAKE_DIR / "calls"
+    if not folder.exists():
         return []
-    lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
-    return [json.loads(l) for l in lines[since:] if l.strip()]
+    out = []
+    for f in sorted(folder.glob("*.json"))[since:]:
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            out.append({"pid": None, "args": [], "system": "", "prompt": "", "resume": False, "coding": False, "opencode": False, "model": "", "t": 0, "cwd": ""})
+    return out
 
 
 def calls_mark():
-    return len(calls())
+    folder = FAKE_DIR / "calls"
+    return len(list(folder.glob("*.json"))) if folder.exists() else 0
 
 
 def engine_pids():

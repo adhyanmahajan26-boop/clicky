@@ -15,6 +15,10 @@ defaults:
   run:
     working-directory: crossplatform
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
   engine:
     name: Engine and suite (${{ matrix.os }})
@@ -46,6 +50,10 @@ jobs:
           THEO_TEST_ROOT: ${{ runner.temp }}/theo-suite/work
           PYTHONUNBUFFERED: "1"
         run: python tests/suite.py
+      - name: Processes left running (Windows, when something failed)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -or $_.Name -like 'theod*' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400
       - name: Keep the results
         if: always()
         uses: actions/upload-artifact@v4
