@@ -21,7 +21,11 @@ fn slug(text: &str) -> String {
 fn new_folder_name(owner_words: &str, answer: &str) -> Option<String> {
     let re = regex::Regex::new(r#"(?i)\bnew folder (?:called|named)\s+[`"']?([A-Za-z0-9._-]+)"#).unwrap();
     if let Some(c) = re.captures(owner_words) {
-        return Some(c[1].trim_end_matches('.').to_string());
+        let name = c[1].trim_end_matches('.').to_string();
+        // "." or ".." would put a full-access coding agent in the projects folder itself or in Theo's own data folder.
+        if !name.is_empty() && !name.chars().all(|ch| ch == '.') {
+            return Some(name);
+        }
     }
     protocol::labeled("New folder", answer).map(|n| slug(&n))
 }
@@ -233,4 +237,14 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
     let mut note = ChatMessage::note(format!("\"{}\" is done{}.\n\n{}\n\n{}", run.title, if follow_up { " with the follow-up" } else { "" }, said.trim(), lines.join(" ")));
     note.run_id = Some(run.id.clone());
     h.post(note, &run.room);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_new_folder_is_never_dots() {
+        assert_eq!(super::new_folder_name("make it in a new folder called liar-1.", ""), Some("liar-1".to_string()));
+        assert_eq!(super::new_folder_name("put it in a new folder called ..", "New folder: tidy"), Some("tidy".to_string()));
+        assert_eq!(super::new_folder_name("a new folder named .", ""), None);
+    }
 }
