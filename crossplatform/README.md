@@ -8,11 +8,11 @@ now; [docs/PLATFORMS.md](docs/PLATFORMS.md) says what each would take elsewhere.
 crossplatform/
   crates/theo-core/   the engine: bots, chats, turns, limits, routines, recovery, local API, hooks, usage, doctor, coding runs
   crates/theod/       the engine as a background program, driven through a control inbox (for servers and tests)
-  app/                the desktop app: Tauri 2, a plain HTML/JS window in Theo's hairline style, the same engine inside
+  app/                the desktop app: Tauri 2, a plain HTML/JS window on the Theo Pixel kit (app/ui/kit), the same engine inside
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests
   install/            one-line installers: install-linux.sh, install.ps1
   tools/              naming installers for a release and writing SHA256SUMS
-  docs/               PLATFORMS.md (what runs where), DISTRIBUTION.md (installing, releases, signing)
+  docs/               PLATFORMS.md (what runs where), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
 ```
 
 ## Why Rust and Tauri

@@ -41,6 +41,59 @@ pub struct Bot {
     pub can_message: Option<Vec<String>>,
     #[serde(default)]
     pub apps: Vec<String>,
+    /// How its Pixel face looks; None draws one picked from its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<Look>,
+    /// Its most recent turn or run that failed, until the owner has seen it or it worked since. Kept with the bot so the
+    /// red face survives a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<LastFailure>,
+}
+
+/// A Pixel face: finish (shell colour), trim, eye style, what's on top (an antenna or a hat) and an extra.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Look {
+    pub fin: String,
+    pub trim: String,
+    pub eye: String,
+    pub top: String,
+    pub extra: String,
+}
+
+impl Look {
+    const FINS: [&'static str; 9] = ["bone", "graphite", "onyx", "sand", "sky", "lilac", "blush", "slate", "cocoa"];
+    const TRIMS: [&'static str; 7] = ["#FF7A45", "#F06FB0", "#45C8E6", "#5B8DEF", "#9B7BF0", "#F4F4F5", "#F4D7C4"];
+    const EYES: [&'static str; 5] = ["block", "round", "tall", "wide", "heart"];
+    const TOPS: [&'static str; 14] = ["none", "ball", "twin", "handle", "dish", "flag", "bolt", "hardhat", "cap", "beanie", "beret", "tophat", "crown", "headset"];
+    const EXTRAS: [&'static str; 7] = ["none", "bowtie", "tie", "scarf", "bezel", "pencil", "star"];
+
+    /// Theo's own face, and a stable one for any other bot from its id. No finish or trim is a status colour.
+    pub fn for_bot(id: &str) -> Look {
+        if id == "theo" {
+            return Look { fin: "onyx".into(), trim: "#FF7A45".into(), eye: "block".into(), top: "ball".into(), extra: "tie".into() };
+        }
+        let mut h: u64 = 1469598103934665603;
+        for b in id.bytes() {
+            h = (h ^ b as u64).wrapping_mul(1099511628211);
+        }
+        let pick = |n: usize, shift: u32| ((h >> shift) as usize) % n;
+        Look {
+            fin: Self::FINS[pick(9, 0)].into(),
+            trim: Self::TRIMS[pick(7, 8)].into(),
+            eye: Self::EYES[pick(5, 16)].into(),
+            top: Self::TOPS[pick(14, 24)].into(),
+            extra: Self::EXTRAS[pick(7, 32)].into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LastFailure {
+    /// "signin" (the engine is signed out or missing: yellow, the owner can fix it) or "failed" (red).
+    pub kind: String,
+    pub reason: String,
+    pub at: DateTime<Utc>,
 }
 
 fn default_provider() -> String { "claude".into() }
@@ -63,6 +116,8 @@ impl Bot {
             authority: None,
             can_message: None,
             apps: vec![],
+            look: None,
+            last_failure: None,
         }
     }
     pub fn theo() -> Self {

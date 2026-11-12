@@ -1183,6 +1183,119 @@ def t27():
 
 
 
+# ---------------------------------------------------------------- Pixel faces, cards and connectors (spec sections 3, 6, 7)
+
+def fresh_bot(name):
+    """A new bot for one test, so cards and failures other tests left behind don't count."""
+    n = "%s %s" % (name, T.nonce()[:4])
+    return P({"cmd": "botCreate", "name": n, "instructions": "You are %s." % n, "model": MODEL})["result"]["id"]
+
+
+def face_of(bid_):
+    return next((f for f in T.state().get("faces", []) if f["id"] == bid_), {})
+
+
+@test("S01", "Faces: off, working, thinking, done and asleep follow what the bot is doing", "faces")
+def s01():
+    b = fresh_bot("Facey")
+    seen = {}
+    P({"cmd": "botUpdate", "id": b, "enabled": False}); seen["off"] = face_of(b).get("state")
+    P({"cmd": "botUpdate", "id": b, "enabled": True})
+    T.fake_script([{"system": r"You are", "reply": "streaming words", "hold": 4}])
+    T.say(b, "start"); T.wait_until(lambda: face_of(b).get("state") == "working", 10); seen["working"] = face_of(b).get("state")
+    T.wait_idle(); seen["after"] = face_of(b).get("state"); seen["unread"] = face_of(b).get("unread")
+    P({"cmd": "chatSeen", "id": b}); seen["seen_unread"] = face_of(b).get("unread")
+    T.fake("slow"); T.say(b, "think"); T.wait_until(lambda: face_of(b).get("state") in ("thinking", "working"), 5)
+    seen["first"] = face_of(b).get("state")
+    T.wait_idle(); T.fake("ok")
+    ok = seen["off"] == "off" and seen["working"] == "working" and seen["after"] == "done" and seen["unread"] and not seen["seen_unread"] and seen["first"] in ("thinking", "working")
+    return ok, seen
+
+
+@test("S02", "A failed turn turns the bot red with the reason; opening its chat clears it", "faces")
+def s02():
+    T.fake("crash"); b = fresh_bot("Crashy")
+    T.say(b, "go"); T.wait_idle()
+    f1 = face_of(b)
+    counts = T.state()["counts"]
+    P({"cmd": "chatSeen", "id": b}); f2 = face_of(b)
+    T.fake("ok")
+    return f1.get("state") == "failed" and "exit 3" in f1.get("detail", "") and counts["failed"] >= 1 and f2.get("state") != "failed", {"before": f1.get("state"), "detail": f1.get("detail"), "after_open": f2.get("state")}
+
+
+@test("S03", "Signed out is yellow, not red, stays after opening the chat, and Try again answers once it's fixed", "faces")
+def s03():
+    T.fake("autherr"); b = fresh_bot("Signy")
+    T.say(b, "status please"); T.wait_idle()
+    f1 = face_of(b); P({"cmd": "chatSeen", "id": b}); f2 = face_of(b)
+    T.fake("ok"); P({"cmd": "botRetry", "id": b}); T.wait_idle()
+    f3 = face_of(b); last = T.chat(b, 1)[-1]
+    owner_copies = sum(1 for m in T.chat(b, 50) if m["text"] == "status please")
+    ok = f1.get("state") == "needs" and "Sign in" in f1.get("detail", "") and f2.get("state") == "needs" and f3.get("state") != "needs" and last["author"] == b and owner_copies == 1
+    return ok, {"signed_out": f1.get("state"), "detail": f1.get("detail"), "after_open": f2.get("state"), "after_retry": f3.get("state"), "message_not_duplicated": owner_copies == 1}
+
+
+@test("S04", "A routine nobody asked for becomes a yes/no card: yellow until answered; yes sets it up once, the card folds", "cards")
+def s04():
+    n = T.nonce(); b = fresh_bot("Cardy")
+    T.fake_reply("Done.\n```routine\n{\"name\": \"card-%s\", \"when\": \"every 2 hours\", \"do\": \"Sweep\"}\n```" % n); T.fake("reply")
+    T.say(b, "What's on today?"); T.wait_idle()
+    card = next((m for m in T.chat(b, 20) if (m.get("card") or "").startswith("ask:")), None)
+    st1 = face_of(b).get("state")
+    made_before = any(r["name"] == "card-" + n for r in P({"cmd": "routines"})["result"])
+    r = P({"cmd": "answerCard", "chat": b, "message": card["id"], "choice": "yes"}) if card else {}
+    again = P({"cmd": "answerCard", "chat": b, "message": card["id"], "choice": "yes"}) if card else {}
+    made = sum(1 for r2 in P({"cmd": "routines"})["result"] if r2["name"] == "card-" + n)
+    folded = next((m.get("card", "") for m in T.chat(b, 20) if card and m["id"] == card["id"]), "")
+    st2 = face_of(b).get("state")
+    T.fake("ok")
+    ok = card is not None and st1 == "needs" and not made_before and r.get("ok") and not again.get("ok") and made == 1 and folded.startswith("answered:") and st2 != "needs"
+    return ok, {"card": bool(card), "state_with_card": st1, "made_before_yes": made_before, "routines_after_yes": made, "second_answer_refused": not again.get("ok"), "state_after": st2}
+
+
+@test("S05", "A coding prompt the owner didn't ask for: nothing starts; Don't declines, Start it runs it", "cards")
+def s05():
+    n = T.nonce(); b = fresh_bot("Planny")
+    T.fake_reply("Here's a plan.\nProject: card %s\nNew folder: card-%s\n```prompt\nIn the current folder create c.txt containing card %s. Nothing else.\n```" % (n, n, n)); T.fake("reply")
+    runs0 = len(T.state()["runs"])
+    T.say(b, "What would you change about our onboarding?"); T.wait_idle()
+    cards = [m for m in T.chat(b, 20) if (m.get("card") or "").startswith("ask:") and '"kind":"run"' in m["card"]]
+    started_by_itself = len(T.state()["runs"]) > runs0
+    P({"cmd": "answerCard", "chat": b, "message": cards[-1]["id"], "choice": "no"}) if cards else None
+    after_no = len(T.state()["runs"]) > runs0
+    T.say(b, "And what about the pricing page?"); T.wait_idle()
+    cards2 = [m for m in T.chat(b, 20) if (m.get("card") or "").startswith("ask:") and '"kind":"run"' in m["card"]]
+    if cards2:
+        P({"cmd": "answerCard", "chat": b, "message": cards2[-1]["id"], "choice": "yes"})
+    runs = wait_runs(lambda r: n in r["title"], 60)
+    T.fake("ok")
+    ok = bool(cards) and not started_by_itself and not after_no and len(runs) == 1 and runs[0]["phase"] == "done"
+    return ok, {"card": bool(cards), "started_by_itself": started_by_itself, "after_dont": after_no, "runs_after_start_it": [(r["title"], r["phase"]) for r in runs]}
+
+
+@test("S06", "Connectors from claude mcp list: connected, needs sign-in and can't connect, with when each last worked", "connectors")
+def s06():
+    (T.FAKE_DIR / "fake-mcp").write_text("Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\nclaude.ai Linear: https://mcp.linear.app/mcp - ! Needs authentication\nsentry: npx @sentry/mcp-server - \u2718 Failed to connect\n", encoding="utf-8")
+    r1 = P({"cmd": "connectors", "refresh": True}, timeout=60)["result"]["connectors"]
+    (T.FAKE_DIR / "fake-mcp").write_text("claude.ai Notion: https://mcp.notion.com/mcp - \u2718 Failed to connect\n", encoding="utf-8")
+    r2 = P({"cmd": "connectors", "refresh": True}, timeout=60)["result"]["connectors"]
+    by = {c["name"]: c for c in r1}
+    ok = (by.get("Notion", {}).get("status") == "connected" and by.get("Linear", {}).get("status") == "needsSignIn" and by.get("sentry", {}).get("status") == "failed"
+          and r2[0]["status"] == "failed" and r2[0].get("lastConnected"))
+    return ok, {"first": [(c["name"], c["status"]) for c in r1], "notion_later": r2[0]}
+
+
+@test("S07", "A [CHOOSE:] question is yellow until the owner answers", "cards")
+def s07():
+    b = fresh_bot("Choosy")
+    T.fake_reply("Two ways. [CHOOSE: Which first? | Speed: ship Friday | Polish: ship Monday]"); T.fake("reply")
+    T.say(b, "What should we do?"); T.wait_idle()
+    st1 = face_of(b).get("state")
+    T.fake("ok"); T.say(b, "Speed"); T.wait_idle()
+    st2 = face_of(b).get("state")
+    return st1 == "needs" and st2 != "needs", {"asking": st1, "after_answer": st2}
+
+
 # ---------------------------------------------------------------- Real model (opt-in: THEO_REAL=1, needs Claude Code signed in)
 
 def real_engine():

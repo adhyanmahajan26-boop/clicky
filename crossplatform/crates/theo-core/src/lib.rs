@@ -23,5 +23,7 @@ pub mod secrets;
 pub mod harness;
 pub mod control;
 pub mod coding;
+pub mod faces;
+pub mod connectors;
 
 pub use harness::Harness;

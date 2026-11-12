@@ -86,6 +86,39 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             h.stop_group(&id);
             ok(json!({"stopped": id}))
         }
+        "chatSeen" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            h.chat_seen(&id);
+            ok(json!({"seen": id}))
+        }
+        "botRetry" => {
+            let Some(id) = s(cmd, "id").filter(|id| h.bot(id).is_some()) else { return err("No such bot.") };
+            ok(json!({"retried": h.retry(&id)}))
+        }
+        "answerCard" => {
+            let (Some(room), Some(message), Some(choice)) = (s(cmd, "chat"), s(cmd, "message"), s(cmd, "choice")) else { return err("Needs chat, message and choice.") };
+            match h.answer_card(&room, &message, &choice) {
+                Ok(done) => ok(json!({"done": done})),
+                Err(e) => err(&e),
+            }
+        }
+        "connectors" => {
+            let stale = h.with(|s| s.connectors_checked.map(|t| (chrono::Utc::now() - t).num_seconds() > 300).unwrap_or(true));
+            if cmd.get("refresh").and_then(|r| r.as_bool()).unwrap_or(false) || stale {
+                if let Err(e) = h.refresh_connectors().await {
+                    return err(&e);
+                }
+            }
+            let (list, at) = h.with(|s| (s.connectors.clone(), s.connectors_checked));
+            ok(json!({"connectors": list, "checked": at.map(|t| t.to_rfc3339())}))
+        }
+        "botLook" => {
+            let Some(mut bot) = s(cmd, "id").and_then(|id| h.bot(&id)) else { return err("No such bot.") };
+            let Ok(look) = serde_json::from_value::<Look>(cmd.get("look").cloned().unwrap_or_default()) else { return err("Needs a look.") };
+            bot.look = Some(look);
+            h.save_bot(bot);
+            ok(json!({"saved": true}))
+        }
         "botFresh" => {
             let Some(id) = s(cmd, "id").filter(|id| h.bot(id).is_some()) else { return err("No such bot.") };
             h.start_fresh_session(&id);

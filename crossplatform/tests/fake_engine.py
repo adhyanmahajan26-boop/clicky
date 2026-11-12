@@ -114,11 +114,18 @@ def script_reply():
                 time.sleep(rule["sleep"])
             if rule.get("error"):
                 fail(rule["error"])
+            if rule.get("hold"):
+                # Says it, then keeps the turn open: a bot that is still working.
+                init(); say(rule.get("reply", "")); time.sleep(rule["hold"]); done(); sys.exit(0)
             return rule.get("reply", "")
     return "fake engine ok"
 
 
 log()
+
+if args[:2] == ["mcp", "list"]:
+    sys.stdout.write(read("fake-mcp", "Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\n"))
+    sys.exit(0)
 
 if coding and mode in ("ok", "script", "reply", "slow"):
     coding_agent()

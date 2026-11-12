@@ -106,6 +106,11 @@ pub struct State {
     queues: HashMap<String, VecDeque<u64>>,
     next_ticket: u64,
     pub submitted_pitches: HashSet<String>,
+    /// When the owner last looked at each chat.
+    pub seen: HashMap<String, DateTime<Utc>>,
+    pub replying_since: HashMap<String, DateTime<Utc>>,
+    pub connectors: Vec<crate::connectors::Connector>,
+    pub connectors_checked: Option<DateTime<Utc>>,
     pub gateway_recent: Vec<(DateTime<Utc>, String, String)>,
 }
 
@@ -449,6 +454,7 @@ impl Harness {
             }
             s.replying.insert(bot.into(), String::new());
             s.replying_in.insert(bot.into(), room.into());
+            s.replying_since.insert(bot.into(), Utc::now());
             true
         })
     }
@@ -491,6 +497,7 @@ impl Harness {
             let taken = self.with(|s| {
                 let front = s.queues.get(bot).and_then(|q| q.front().copied());
                 if front == Some(ticket) && !s.replying.contains_key(bot) {
+                    s.replying_since.insert(bot.into(), Utc::now());
                     s.queues.get_mut(bot).unwrap().pop_front();
                     s.replying.insert(bot.into(), String::new());
                     s.replying_in.insert(bot.into(), room.into());
@@ -554,6 +561,11 @@ impl Harness {
         }
         if !already {
             self.post(message, bot_id);
+        }
+        // New work: the owner has seen the chat, and an old failure no longer stands.
+        self.with(|s| s.seen.insert(bot_id.into(), Utc::now()));
+        if bot.last_failure.as_ref().map(|f| f.kind == "failed").unwrap_or(false) {
+            self.set_failure(bot_id, None);
         }
         let me = self.clone();
         let text = text.to_string();
@@ -730,18 +742,31 @@ impl Harness {
             };
             let mut answer: Option<String> = None;
             let mut new_session = session.clone();
-            let mut failure: Option<String> = None;
+            let mut failure: Option<(String, &'static str)> = None;
             match result {
                 Ok((text, s)) => {
                     answer = Some(me.keeping_long_reply_aside(text.trim(), &bot));
                     new_session = s;
                 }
-                Err(e) => failure = Some(e.to_string()),
+                Err(e) => {
+                    // Signed out or not installed is something the owner fixes: yellow. Anything else is a failure: red.
+                    let kind = match &e {
+                        RunError::NotInstalled(_) => "signin",
+                        RunError::Failed(m) | RunError::EngineDown(m) if failover::classify(m) == Failure::Auth => "signin",
+                        _ => "failed",
+                    };
+                    failure = Some((e.to_string(), kind));
+                }
             }
             let exchange = opts.privately.as_ref().and_then(|p| p.exchange_id.clone());
             let was_stopped = me.with(|s| s.stopped.remove(&bot.id));
-            if let Some(f) = failure.filter(|_| !was_stopped) {
-                me.post(ChatMessage::new(&bot.id, format!("Couldn't reply: {f}")).with_exchange(exchange.clone()), &conversation_id);
+            match (&failure, was_stopped) {
+                (Some((f, kind)), false) => {
+                    me.post(ChatMessage::new(&bot.id, format!("Couldn't reply: {f}")).with_exchange(exchange.clone()), &conversation_id);
+                    me.set_failure(&bot.id, Some(LastFailure { kind: kind.to_string(), reason: f.clone(), at: Utc::now() }));
+                }
+                (None, false) => me.set_failure(&bot.id, None),
+                _ => {}
             }
             // Orders don't show in the chat; [TELL:] lines become private messages.
             let mut tells: Vec<(String, String)> = vec![];
@@ -823,13 +848,17 @@ impl Harness {
                             let target = me.group_for_room(&conversation_id).map(|g| format!("group:{}", g.id)).unwrap_or(bot.id.clone());
                             me.add_routine_from_chat(&request, &target);
                         } else {
-                            me.post(ChatMessage::note(format!("{} wrote a routine ({}, {}), but you didn't ask for one, so Theo didn't set it up. Ask for it in your own words if you want it.", bot.name, request.name, request.when)), &conversation_id);
+                            let target = me.group_for_room(&conversation_id).map(|g| format!("group:{}", g.id)).unwrap_or(bot.id.clone());
+                            me.ask_routine(&bot, &request, &target, &conversation_id);
                         }
                     }
                 }
             } else if let Some(a) = answer.as_deref() {
                 if let Some(request) = protocol::routine_request(a) {
-                    me.post(ChatMessage::note(format!("{} wrote a routine ({}, {}), but you didn't ask for one, so Theo didn't set it up. Ask for it in your own words if you want it.", bot.name, request.name, request.when)), &conversation_id);
+                    let target = if dm::is_thread(&conversation_id) { bot.id.clone() } else { me.group_for_room(&conversation_id).map(|g| format!("group:{}", g.id)).unwrap_or(bot.id.clone()) };
+                    // In a private thread nobody's there to answer: the card goes to the bot's own chat.
+                    let room = if dm::is_thread(&conversation_id) { bot.id.clone() } else { conversation_id.clone() };
+                    me.ask_routine(&bot, &request, &target, &room);
                 }
             }
             if !tells.is_empty() {
@@ -1645,7 +1674,11 @@ impl Harness {
         };
         // The agent has full access: only the owner's own words asking to build start one.
         if !protocol::owner_asked_to_build(&pitch.text) {
-            self.post(ChatMessage::note(format!("{} wrote a coding prompt, but your message didn't ask to build or change code, so nothing started. Ask in your own words to start it.", bot.name)), room);
+            // Nothing starts by itself; the owner can start it from the card.
+            self.with(|s| s.submitted_pitches.insert(pitch.id.clone()));
+            let title = protocol::labeled("Project", answer).unwrap_or_else(|| prompt.split_whitespace().take(6).collect::<Vec<_>>().join(" "));
+            self.post_ask(bot, room, &format!("{} wrote a coding prompt, but you didn't ask to build or change code, so nothing started. Start \"{title}\"?", bot.name),
+                json!({"kind": "run", "bot": bot.id, "prompt": prompt, "answer": answer, "words": pitch.text, "pitch": pitch.id, "title": title}));
             return;
         }
         self.with(|s| s.submitted_pitches.insert(pitch.id.clone()));
@@ -1662,6 +1695,189 @@ impl Harness {
         let title = crate::coding::start_from_answer(self, &prompt, answer, owner_words, &ctx.root_room, &pitch.id);
         let words = answer.split("```prompt").next().unwrap_or("").trim().to_string();
         format!("{}({}'s prompt has started the run \"{}\", so don't start it again. It shows on its card in this chat.)", if words.is_empty() { String::new() } else { words + "\n\n" }, target.name, title)
+    }
+
+    // MARK: Faces, cards and failures
+
+    pub fn set_failure(&self, bot_id: &str, failure: Option<LastFailure>) {
+        let changed = self.with(|s| match s.bots.iter_mut().find(|b| b.id == bot_id) {
+            Some(b) if b.last_failure != failure => {
+                b.last_failure = failure;
+                true
+            }
+            _ => false,
+        });
+        if changed {
+            self.write_bots();
+        }
+    }
+
+    /// A card that waits for the owner. Its question is the text; what to do on yes is in the card.
+    fn post_ask(&self, bot: &Bot, room: &str, question: &str, payload: Value) {
+        let mut m = ChatMessage::note(question);
+        let mut payload = payload;
+        payload["bot"] = bot.id.clone().into();
+        m.card = Some(format!("ask:{}", payload));
+        self.post(m, room);
+    }
+
+    fn ask_routine(&self, bot: &Bot, request: &protocol::RoutineRequest, target: &str, room: &str) {
+        let label = schedule::label(&request.schedule);
+        self.post_ask(bot, room, &format!("{} wrote a routine (\"{}\", {}), but you didn't ask for one, so Theo didn't set it up. Set it up?", bot.name, request.name, label),
+            json!({"kind": "routine", "name": request.name, "when": request.when, "do": request.instruction, "target": target}));
+    }
+
+    /// The owner answered a card: "yes" does what it asked, anything else declines. The card folds to one line.
+    pub fn answer_card(self: &Arc<Self>, room: &str, message_id: &str, choice: &str) -> Result<String, String> {
+        let card = self.with(|s| s.conversations.get(room).and_then(|c| c.messages.iter().find(|m| m.id == message_id)).and_then(|m| m.card.clone()));
+        let Some(card) = card else { return Err("No such card.".into()) };
+        let Some(raw) = card.strip_prefix("ask:") else { return Err("That card was already answered.".into()) };
+        let payload: Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+        let yes = choice == "yes";
+        let mut done = if yes { "Set up" } else { "Declined" }.to_string();
+        if yes {
+            match payload["kind"].as_str() {
+                Some("routine") => {
+                    let when = payload["when"].as_str().unwrap_or_default();
+                    let schedule = schedule::parse(when).ok_or("Can't read when.")?;
+                    let name = payload["name"].as_str().unwrap_or("Routine");
+                    let instruction = payload["do"].as_str().unwrap_or_default();
+                    let target = payload["target"].as_str().unwrap_or_default();
+                    if !self.with(|s| s.routines.iter().any(|r| r.target == target && r.instruction == instruction && r.schedule == schedule)) {
+                        self.save_routine(Routine::new(name, target, instruction, schedule));
+                    }
+                }
+                Some("run") => {
+                    let title = crate::coding::start_from_answer(self, payload["prompt"].as_str().unwrap_or_default(), payload["answer"].as_str().unwrap_or_default(),
+                        payload["words"].as_str().unwrap_or_default(), room, &format!("card-{message_id}"));
+                    done = format!("Started \"{title}\"");
+                }
+                _ => return Err("Unknown card.".into()),
+            }
+        }
+        let folded = format!("answered:{}", json!({"choice": choice, "what": done, "kind": payload["kind"], "bot": payload["bot"], "at": Utc::now().to_rfc3339()}));
+        let s = &mut *self.state.lock().unwrap();
+        if let Some(m) = s.conversations.get_mut(room).and_then(|c| c.messages.iter_mut().find(|m| m.id == message_id)) {
+            m.card = Some(folded);
+        }
+        self.write_conversation_locked(s, room);
+        Ok(done)
+    }
+
+    /// The owner opened a chat: what's new there is seen, and a failure shown there is cleared (a sign-in problem stays until
+    /// it's fixed).
+    pub fn chat_seen(&self, room: &str) {
+        self.with(|s| s.seen.insert(room.into(), Utc::now()));
+        if self.bot(room).and_then(|b| b.last_failure).map(|f| f.kind == "failed").unwrap_or(false) {
+            self.set_failure(room, None);
+        }
+    }
+
+    /// Retry: the owner's last message to this bot is asked again.
+    pub fn retry(self: &Arc<Self>, bot_id: &str) -> bool {
+        self.set_failure(bot_id, None);
+        let last = self.with(|s| s.conversations.get(bot_id).and_then(|c| c.messages.iter().rev().find(|m| m.author == OWNER_AUTHOR).cloned()));
+        match last {
+            Some(m) => {
+                self.send_with_id(&m.text, bot_id, Some(m.id), Some(m.at));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Each bot's face: its state, the word for it, one line of detail and since when.
+    pub fn faces(&self) -> Vec<Value> {
+        let now = Utc::now();
+        self.with(|s| {
+            s.bots.iter().map(|b| {
+                let chat = s.conversations.get(&b.id);
+                let messages: &[ChatMessage] = chat.map(|c| c.messages.as_slice()).unwrap_or(&[]);
+                // A failure line isn't an answer: it's the failure record's to show.
+                let last_bot = messages.iter().rev().find(|m| m.author == b.id && !m.text.is_empty() && !m.text.starts_with("Couldn't reply:"));
+                let last_owner = messages.iter().rev().find(|m| m.author == OWNER_AUTHOR);
+                let seen = s.seen.get(&b.id).copied().or(last_owner.map(|m| m.at));
+                let unread = match (last_bot, seen) {
+                    (Some(m), Some(seen)) => m.at > seen,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
+                let ask = messages.iter().rev().find(|m| m.card.as_deref().map(|c| c.starts_with("ask:")).unwrap_or(false))
+                    .or_else(|| s.conversations.iter().filter(|(k, _)| k.starts_with("group-")).flat_map(|(_, c)| c.messages.iter())
+                        .find(|m| m.card.as_deref().map(|c| c.starts_with("ask:") && c.contains(&format!("\"bot\":\"{}\"", b.id))).unwrap_or(false)));
+                let choose = messages.last().filter(|m| m.author == b.id && m.text.contains("[CHOOSE:"));
+                let run_live = s.runs.iter().find(|r| r.room == b.id && r.phase == "running");
+                let live = s.replying.get(&b.id);
+                let facts = crate::faces::Facts {
+                    enabled: b.is_on(),
+                    primary: b.primary,
+                    failure: b.last_failure.as_ref().map(|f| f.kind.clone()),
+                    asks: ask.is_some() || choose.is_some(),
+                    replying: live.is_some(),
+                    streamed: live.map(|t| !t.trim().is_empty()).unwrap_or(false),
+                    queued: s.queues.get(&b.id).map(|q| !q.is_empty()).unwrap_or(false),
+                    run_live: run_live.is_some(),
+                    unread,
+                    answered_ago: last_bot.map(|m| (now - m.at).num_seconds()),
+                    active_ago: messages.last().map(|m| (now - m.at).num_seconds()),
+                };
+                let state = crate::faces::state(&facts);
+                let first_sentence = |t: &str| -> String {
+                    let t = t.split("```").next().unwrap_or("");
+                    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let t = t.trim();
+                    let end = t.find(". ").map(|i| i + 1).unwrap_or(t.len());
+                    t[..end].chars().take(140).collect()
+                };
+                let (detail, since): (String, Option<DateTime<Utc>>) = match state {
+                    "needs" if b.last_failure.as_ref().map(|f| f.kind == "signin").unwrap_or(false) => {
+                        let f = b.last_failure.as_ref().unwrap();
+                        (if f.reason.contains("isn't installed") { "Install Claude Code".into() } else { "Sign in to Claude Code".into() }, Some(f.at))
+                    }
+                    "needs" => match (ask, choose) {
+                        (Some(m), _) => (if m.card.as_deref().unwrap_or("").contains("\"kind\":\"run\"") { "Start a coding run?".into() } else { "Set up a routine?".into() }, Some(m.at)),
+                        (_, Some(m)) => ("Wants you to choose".into(), Some(m.at)),
+                        _ => (String::new(), None),
+                    },
+                    "failed" => {
+                        let f = b.last_failure.as_ref().unwrap();
+                        (first_sentence(&f.reason), Some(f.at))
+                    }
+                    "working" => (run_live.map(|r| format!("Coding run \"{}\"", r.title)).unwrap_or_else(|| "Writing a reply".into()), s.replying_since.get(&b.id).copied().or(run_live.map(|r| r.started_at))),
+                    "thinking" => ("Reading".into(), s.replying_since.get(&b.id).copied()),
+                    "done" => (last_bot.map(|m| first_sentence(&m.text)).unwrap_or_default(), last_bot.map(|m| m.at)),
+                    "off" => ("Turned off".into(), None),
+                    _ => (String::new(), messages.last().map(|m| m.at)),
+                };
+                json!({"id": b.id, "state": state, "word": crate::faces::word(state), "detail": detail, "since": since.map(|d| d.to_rfc3339()),
+                       "unread": unread, "look": b.look.clone().unwrap_or_else(|| Look::for_bot(&b.id))})
+            }).collect()
+        })
+    }
+
+    /// Claude Code's connectors, from `claude mcp list` (it checks each server, so it can take a while).
+    pub async fn refresh_connectors(&self) -> Result<(), String> {
+        let program = self.executable("claude").ok_or("Claude Code isn't installed.")?;
+        let (program, mut args) = engine::command_for(&program);
+        args.extend(["mcp".to_string(), "list".to_string()]);
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        let out = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await.map_err(|_| "Claude Code took too long to list connectors.".to_string())?.map_err(|e| e.to_string())?;
+        let mut list = crate::connectors::parse(&String::from_utf8_lossy(&out.stdout));
+        let now = Utc::now();
+        let mut seen: HashMap<String, String> = std::fs::read(self.paths.root.join("connectors-seen.json")).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
+        for c in list.iter_mut() {
+            if c.status == "connected" {
+                seen.insert(c.name.clone(), now.to_rfc3339());
+            }
+            c.last_connected = seen.get(&c.name).cloned();
+        }
+        let _ = write_atomic(&self.paths.root.join("connectors-seen.json"), &serde_json::to_vec(&seen).unwrap_or_default());
+        self.with(|s| {
+            s.connectors = list;
+            s.connectors_checked = Some(now);
+        });
+        Ok(())
     }
 
     // MARK: Hooks, usage, doctor
@@ -1801,13 +2017,13 @@ impl Harness {
     // MARK: State for the UI and tests
 
     pub fn state_report(&self) -> Value {
-        self.with(|s| {
+        let report = self.with(|s| {
             let threads: Vec<&String> = s.conversations.keys().filter(|k| dm::is_thread(k)).collect();
             json!({
                 "replying": s.replying.keys().collect::<Vec<_>>(),
                 "replyingIn": s.replying_in,
                 "live": s.replying,
-                "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
+                "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
                 "exchanges": s.live_exchanges.iter().map(|(id, e)| json!({"id": id, "from": e.sender, "to": e.target, "room": e.room, "replying": e.replying})).collect::<Vec<_>>(),
                 "threads": threads,
                 "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description})).collect::<Vec<_>>(),
@@ -1815,7 +2031,13 @@ impl Harness {
                 "rounds": s.rounds.keys().collect::<Vec<_>>(),
                 "queued": s.queues.iter().filter(|(_, q)| !q.is_empty()).map(|(k, q)| (k.clone(), q.len())).collect::<HashMap<_, _>>(),
             })
-        })
+        });
+        let faces = self.faces();
+        let count = |st: &str| faces.iter().filter(|f| f["state"] == st).count();
+        let mut report = report;
+        report["counts"] = json!({"needs": count("needs"), "failed": count("failed"), "working": count("working") + count("thinking"), "done": count("done")});
+        report["faces"] = Value::Array(faces);
+        report
     }
 
     pub fn is_busy(&self) -> bool {

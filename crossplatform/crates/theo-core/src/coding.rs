@@ -115,6 +115,14 @@ pub fn stop_run(h: &Arc<Harness>, run_id: &str) -> bool {
 }
 
 fn set_phase(h: &Harness, id: &str, phase: &str, summary: Option<String>) {
+    // A run that fails turns the bot of its chat red until the owner has seen it.
+    if phase == "failed" {
+        if let Some(room) = h.with(|s| s.runs.iter().find(|r| r.id == id).map(|r| r.room.clone())) {
+            if h.bot(&room).is_some() {
+                h.set_failure(&room, Some(crate::model::LastFailure { kind: "failed".into(), reason: format!("A coding run failed: {}", summary.clone().unwrap_or_default()), at: chrono::Utc::now() }));
+            }
+        }
+    }
     h.with(|s| {
         if let Some(r) = s.runs.iter_mut().find(|r| r.id == id) {
             // A stopped run stays stopped.
