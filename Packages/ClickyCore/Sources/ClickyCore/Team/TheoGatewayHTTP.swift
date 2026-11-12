@@ -93,6 +93,8 @@ public enum TheoGatewayHTTP {
         case message(botID: String)
         case listRoutines
         case runRoutine(id: String)
+        case usage
+        case doctor
         case notFound
         case methodNotAllowed
     }
@@ -106,6 +108,8 @@ public enum TheoGatewayHTTP {
         case 1 where rest[0] == "health": return only("GET", .health)
         case 1 where rest[0] == "bots": return only("GET", .listBots)
         case 1 where rest[0] == "routines": return only("GET", .listRoutines)
+        case 1 where rest[0] == "usage": return only("GET", .usage)
+        case 1 where rest[0] == "doctor": return only("GET", .doctor)
         case 3 where rest[0] == "bots" && rest[2] == "messages" && isID(rest[1]): return only("POST", .message(botID: rest[1]))
         case 3 where rest[0] == "routines" && rest[2] == "run" && isID(rest[1]): return only("POST", .runRoutine(id: rest[1]))
         default: return .notFound

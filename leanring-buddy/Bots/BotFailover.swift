@@ -51,6 +51,12 @@ extension BotRunner {
                 let failure = EngineFailure.classify(message)
                 guard !Task.isCancelled, !BotProcesses.shared.wasStopped(bot.id, since: began),
                       let next = plan.next(after: failure, model: current.model, attempt: attempt, fallbackIndex: fallbackIndex) else {
+                    // Another engine that's still failing after its retries: Claude Code stands in for this turn, if it's here.
+                    if bot.provider != "claude", failure == .transient || failure == .modelUnavailable, configuredFallbacks != ["off"],
+                       !Task.isCancelled, !BotProcesses.shared.wasStopped(bot.id, since: began), executable(for: .claude) != nil {
+                        log("bot \(bot.id): \(bot.provider) still failing; Claude Code stands in")
+                        throw BotRunnerError.engineDown(String(message.prefix(300)))
+                    }
                     throw BotRunnerError.failed(message)
                 }
                 if firstFailure == nil { firstFailure = failure }

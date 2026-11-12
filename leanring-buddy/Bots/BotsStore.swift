@@ -242,6 +242,8 @@ final class BotsStore: ObservableObject {
     var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
     private var routineTimer: Timer?
     private var runningRoutines: Set<String> = []
+    /// A group routine run waiting on the head's opening turn, by room: it may come back [SILENT].
+    private var quietGroupRoutines: [String: (routineID: String, run: BotRoutine.Run, messageID: String)] = [:]
 
     static let teamID = "team"
 
@@ -483,6 +485,18 @@ final class BotsStore: ObservableObject {
             }
             return
         }
+        // "/doctor": the health check, as a note, with no bot turn.
+        if TheoDoctor.asksForDoctor(text) {
+            post(ownerMessage(id: messageID ?? UUID().uuidString, text: text, writtenAt: writtenAt), to: botID)
+            post(BotChatMessage(author: Self.noteAuthor, text: TheoDoctor.markdown(doctorFindings())), to: botID)
+            return
+        }
+        // "/new" or "/reset" (Hermes and OpenClaw's words): the next reply starts a fresh engine session.
+        if BotsStore.asksForFreshSession(text) {
+            post(ownerMessage(id: messageID ?? UUID().uuidString, text: text, writtenAt: writtenAt), to: botID)
+            startFreshSession(botID)
+            return
+        }
         guard bot.isOn else {
             post(BotChatMessage(author: "user", text: text), to: botID)
             post(BotChatMessage(author: bot.id, text: "_(\(bot.name) is turned off. Turn it on in its settings to chat.)_"), to: botID)
@@ -563,6 +577,26 @@ final class BotsStore: ObservableObject {
         ownerSpoke(in: botID)
         screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
+    }
+
+    static func asksForFreshSession(_ text: String) -> Bool {
+        ["/new", "/reset", "/fresh"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// Its own chat's engine session is dropped, so the next reply starts a new one: a clean, short context. The chat, the memory file,
+    /// skills and the saved chat it can Grep all stay; the new session starts clean.
+    func startFreshSession(_ botID: String) {
+        guard let bot = bot(botID) else { return }
+        if replying[botID] != nil { stop(botID) }
+        var record = conversation(botID)
+        record.sessions[botID] = nil
+        // Everything so far counts as heard, so the new session isn't handed the whole chat as "what you missed".
+        var heard = record.heard ?? [:]
+        heard[botID] = record.messages.last?.id
+        record.heard = heard
+        conversations[botID] = record
+        writeConversation(botID)
+        post(BotChatMessage(author: Self.noteAuthor, text: "\(bot.name) starts a fresh session from its next reply. Its memory, skills and this chat are kept."), to: botID)
     }
 
     /// The owner's message. `writtenAt`: when they wrote it on the other Mac, so it holds its place in the chat on both.
@@ -1006,6 +1040,9 @@ final class BotsStore: ObservableObject {
             turnNote = BotProtocol.memberTurnNote(name: speaker.name, headName: head?.name ?? "the head")
         }
         if isHead, let chats = groupChatNotes.removeValue(forKey: room) { turnNote += "\n\n" + chats }
+        // A group routine's run: the head may find nothing to report.
+        let quietRun = isHead && !isWrapUp && brief == nil ? quietGroupRoutines.removeValue(forKey: room) : nil
+        if quietRun != nil { turnNote += " " + RoutineQuiet.howTo(owner: BotPrompts.ownerName) }
         var prompt = BotPrompts.teamMessage(bot: speaker, team: team, group: group, firstTime: record.sessions[speaker.id] == nil, newMessages: newMessages, turnNote: turnNote)
         if !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if speaker.owner == nil, !speaker.primary { prompt = "(\(BotPrompts.reachNote(for: speaker)))\n\n" + prompt }
@@ -1014,8 +1051,24 @@ final class BotsStore: ObservableObject {
         updated.seen[speaker.id] = record.messages.count
         updated.ownAnswers?[speaker.id] = nil
         conversations[room] = updated
-        reply(bot: speaker, in: room, prompt: prompt, session: record.sessions[speaker.id], handsOnWhenStopped: true) { [weak self] answer in
+        reply(bot: speaker, in: room, prompt: prompt, session: record.sessions[speaker.id], handsOnWhenStopped: true, quietAllowed: quietRun != nil) { [weak self] answer in
             guard let self else { return }
+            if let quietRun {
+                var finished = quietRun.run
+                finished.finishedAt = Date()
+                if RoutineQuiet.isQuiet(answer) {
+                    finished.status = "quiet"
+                    finished.summary = "Nothing to report."
+                    var record = self.conversation(room)
+                    record.messages.removeAll { $0.id == quietRun.messageID }
+                    self.conversations[room] = record
+                    self.writeConversation(room)
+                } else {
+                    finished.status = answer == nil ? "failed" : "done"
+                    finished.summary = answer.map { String($0.prefix(140)) } ?? "The head didn't answer."
+                }
+                self.record(quietRun.routineID, finished)
+            }
             self.turnEnded(by: speaker.id, group: group, answer: answer, roundID: roundID, canHandOut: !isWrapUp)
         }
     }
@@ -1255,6 +1308,8 @@ final class BotsStore: ObservableObject {
             record.heard = heard
             self.conversations[conversationID] = record
             self.writeConversation(conversationID)
+            TheoHooks.fire(.turnFinished, ["bot": bot.id, "botName": bot.name, "chat": conversationID, "fromOwner": fromOwner,
+                                           "privately": privately != nil, "ok": answer != nil, "reply": answer ?? ""])
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
             for name in pdfFiles {
@@ -1742,6 +1797,19 @@ final class BotsStore: ObservableObject {
     /// Where a chat is saved, for a bot to look things up in.
     func chatFilePath(_ id: String) -> String { chatFile(id).path }
 
+    /// The group chats a bot is in and its private threads that have been saved, newest first, for it to search.
+    func recallFiles(for bot: NativeBot) -> [(label: String, path: String)] {
+        let fileManager = FileManager.default
+        let rooms = groups.filter { $0.headID != nil && $0.allIDs.contains(bot.id) }.map { ("the \"\($0.name)\" group chat", $0.roomID) }
+        let threads = privateThreads(of: bot.id).compactMap { thread -> (String, String)? in
+            self.bot(thread.partnerID).map { ("your private thread with \($0.name)", thread.id) }
+        }
+        return (rooms + threads).compactMap { label, id in
+            let path = chatFile(id).path
+            return fileManager.fileExists(atPath: path) ? (label, path) : nil
+        }
+    }
+
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1950,7 +2018,7 @@ enum BotPrompts {
             // What it remembers goes in the prompt itself, capped, so nothing depends on the bot choosing to read the file (Hermes's MEMORY.md).
             parts.append(BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath))
             // Its saved chat, for what came before this engine session (Hermes's session search, OpenClaw's sessions_search).
-            parts.append(BotRecallPrompt.section(chatFile: BotsStore.shared.chatFilePath(bot.id), owner: ownerName))
+            parts.append(BotRecallPrompt.section(chatFile: BotsStore.shared.chatFilePath(bot.id), owner: ownerName, others: BotsStore.shared.recallFiles(for: bot)))
             // Procedures it or another bot saved (Hermes's and OpenClaw's skills).
             let names = Dictionary(team.filter { $0.owner == nil }.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             parts.append(BotSkillsPrompt.section(skills: BotSkills.all(names: names), ownFolder: BotSkills.folder(botID: bot.id).path,
@@ -2235,9 +2303,14 @@ extension BotsStore {
         }
         if routine.target.hasPrefix("group:") {
             let groupID = String(routine.target.dropFirst(6))
-            guard group(groupID) != nil else { return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The group is gone.")) }
-            sendToGroup(text, groupID: groupID)
-            return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "done", summary: "Posted to the group chat."))
+            guard let chat = group(groupID) else { return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The group is gone.")) }
+            // The head's opening turn may answer [SILENT], as a bot's routine run may: then nothing stays in the group chat.
+            let messageID = UUID().uuidString
+            let run = BotRoutine.Run(startedAt: Date(), status: "running")
+            quietGroupRoutines[chat.roomID] = (routine.id, run, messageID)
+            record(routine.id, run)
+            sendToGroup(text, groupID: groupID, messageID: messageID)
+            return
         }
         guard let bot = bot(routine.target) else {
             return record(routine.id, .init(startedAt: Date(), finishedAt: Date(), status: "failed", summary: "The bot is gone."))
@@ -2291,6 +2364,10 @@ extension BotsStore {
     /// Adds or updates a run in the routine's history (the last 20 are kept).
     private func record(_ routineID: String, _ run: BotRoutine.Run) {
         guard let index = routines.firstIndex(where: { $0.id == routineID }) else { return }
+        if run.finishedAt != nil {
+            let routine = routines[index]
+            TheoHooks.fire(.routineFinished, ["routine": routine.id, "name": routine.name, "target": routine.target, "status": run.status, "summary": run.summary ?? ""])
+        }
         if let existing = routines[index].runs.firstIndex(where: { $0.id == run.id }) {
             routines[index].runs[existing] = run
         } else {

@@ -1,0 +1,15 @@
+{
+ "probe": "fresh_session",
+ "verdict": "PASS",
+ "seconds": 8.9,
+ "evidence": {
+  "second_turn_resumed": true,
+  "session_after_reset": null,
+  "third_turn": {
+   "resume": null,
+   "session-id": "e4ff8234-d3d7-4162-8f68-83cb7ad273f6"
+  },
+  "note": "fake engine ok"
+ },
+ "at": "2026-11-12T21:33:23"
+}

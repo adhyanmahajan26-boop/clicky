@@ -1,0 +1,11 @@
+{
+ "probe": "nonclaude_fallback",
+ "verdict": "PASS",
+ "seconds": 22.7,
+ "evidence": {
+  "opencode_calls": 3,
+  "claude_calls": 1,
+  "reply": "stand-in answered on claude-haiku-5-5\n\n_(OpenCode kept failing (529 Overloaded: the provider is overloaded), so this reply came from Claude Haiku 5.5.)_"
+ },
+ "at": "2026-11-12T21:33:46"
+}

@@ -521,6 +521,8 @@ final class HarnessCenter: ObservableObject {
     // MARK: Reading
 
     func status(for harness: String) -> HarnessStatus { statuses[harness] ?? HarnessStatus(id: harness) }
+    /// Whether that harness has been checked yet since Theo started.
+    func hasStatus(for harness: String) -> Bool { statuses[harness] != nil }
     func models(for harness: String) -> [HarnessModel] { models[harness] ?? [] }
     /// Harnesses that are installed and not signed out.
     var readyHarnesses: [HarnessInfo] { HarnessCatalog.all.filter { status(for: $0.id).ready } }

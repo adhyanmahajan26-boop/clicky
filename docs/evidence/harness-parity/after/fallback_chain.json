@@ -1,7 +1,7 @@
 {
  "probe": "fallback_chain",
  "verdict": "PASS",
- "seconds": 8.7,
+ "seconds": 8.8,
  "evidence": {
   "calls": 4,
   "models": [
@@ -12,5 +12,5 @@
   ],
   "reply": "answered on claude-sonnet-5-5\n\n_(Claude Haiku 5.5 kept failing (overloaded or rate-limited), so this reply came from Claude Sonnet 5.5.)_"
  },
- "at": "2026-11-12T21:10:34"
+ "at": "2026-11-12T21:30:00"
 }

@@ -1,0 +1,15 @@
+{
+ "probe": "fresh_session",
+ "verdict": "FAIL",
+ "seconds": 8.9,
+ "evidence": {
+  "second_turn_resumed": true,
+  "session_after_reset": "fake-88254",
+  "third_turn": {
+   "resume": "fake-88254",
+   "session-id": null
+  },
+  "note": "fake engine ok"
+ },
+ "at": "2026-11-12T21:36:36"
+}

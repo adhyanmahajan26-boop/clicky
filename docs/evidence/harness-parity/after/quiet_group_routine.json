@@ -1,0 +1,21 @@
+{
+ "probe": "quiet_group_routine",
+ "verdict": "PASS",
+ "seconds": 15.2,
+ "evidence": {
+  "messages_before": 2,
+  "messages_after": 2,
+  "run": {
+   "finishedAt": "2026-11-12T16:05:55Z",
+   "id": "D71B4363-F274-484B-B738-35206F87AD02",
+   "startedAt": "2026-11-12T16:05:50Z",
+   "status": "quiet",
+   "summary": "Nothing to report."
+  },
+  "last": [
+   "For the record: the new staging password hint is PERIWINKLE-77.",
+   "fake engine ok"
+  ]
+ },
+ "at": "2026-11-12T21:36:03"
+}

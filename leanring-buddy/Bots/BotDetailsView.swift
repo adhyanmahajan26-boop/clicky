@@ -16,6 +16,7 @@ import SwiftUI
 
 struct BotDetailsSheet: View {
     @ObservedObject var store: BotsStore
+    @ObservedObject private var usage = BotUsage.shared
     let botID: String
     let onDone: () -> Void
     @State private var tab = 0
@@ -103,6 +104,15 @@ struct BotDetailsSheet: View {
                         if FileManager.default.fileExists(atPath: path) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
                     }
                     .buttonStyle(.link)
+                    Button("Start a fresh session") { store.startFreshSession(botID) }
+                        .buttonStyle(.link)
+                        .help("Its next reply starts a new engine session. Its memory, skills and saved chat carry over.")
+                }
+                field("Usage") {
+                    Text(BotUsageLedger.line(usage.total(botID: botID, days: 7), period: "in the last 7 days"))
+                        .font(.system(size: 12.5)).foregroundColor(.secondary)
+                    Text(BotUsageLedger.line(usage.total(botID: botID, days: 30), period: "in the last 30 days"))
+                        .font(.system(size: 12.5)).foregroundColor(.secondary)
                 }
                 if !binding.wrappedValue.primary {
                     Divider()

@@ -1,0 +1,9 @@
+{
+ "probe": "doctor",
+ "verdict": "PASS",
+ "seconds": 10.3,
+ "evidence": {
+  "note": "Theo's health check: 0 problems and 4 warnings out of 12 checks.\n\n! **Routine \"offwatch\"**: Watch is turned off, so each run is skipped.\n! **Pip's memory**: 370927 characters, over the 4000 that go in its prompt. It's asked to tidy it each turn; you can edit it in its settings.\n! **Skills**: 1 SKILL.md file has no description, so no bot sees it: /Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/quill/skills/no-description/SKILL.md.\n! **Hooks**: Not run: turn-finished/loose.sh, turn-finished/linked.sh. A hook must be an executable file you own that nobody else can write to (chmod 700).\n\u2713 **Claude Code**: Installed; 6 bots use it.\n\u2713 **OpenCode**: Installed; 1 bot uses it.\n\u2713 **bots.json**: Reads back cleanly.\n\u2713 **groups.json**: Reads back cleanly.\n\u2713 **routines.json**: Reads back cleanly.\n\u2713 **Routines**: 1 routine, 0 paused.\n\u2713 **Local API**: Listening on 127.0.0.1:47391.\n\u2713 **Disk**: 64 GB free."
+ },
+ "at": "2026-11-12T21:34:12"
+}

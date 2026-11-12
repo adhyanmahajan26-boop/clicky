@@ -297,6 +297,142 @@ def skill_reads(phrase):
 
 PROBES["owner_routine_control"] = p_owner_routine_control
 
+# ---- Round two ----
+
+def private_calls():
+    return [c for c in calls() if c["args"] and "This is a private thread between you and" in c["args"][-1]]
+
+def p_parallel_delegation():
+    """A bot that messages two others gets both answers at once: their private turns start together, not one after the other."""
+    use_fake(True); fake("tell-par", "Asking both.\n[TELL: Quill: what's on your list?]\n[TELL: Watch: anything changed?]"); clear_calls()
+    t0 = time.time(); say("pip", "Ask Quill and Watch what they're up to."); wait_idle(120); took = round(time.time() - t0, 1)
+    pc = private_calls(); starts = sorted(c["t"] for c in pc)
+    gap = round(starts[1] - starts[0], 2) if len(starts) == 2 else None
+    reply = last_text("pip", "pip"); fake("ok")
+    return ("PASS" if gap is not None and gap < 2.5 and reply == "all done" else "FAIL"), {"private_turns": len(pc), "start_gap_s": gap, "whole_turn_s": took, "pip_reply": reply}
+
+def p_parallel_caps():
+    """Run side by side, the caps still hold: 6 lines each to two bots get at most 3 round trips per bot, and it all ends."""
+    use_fake(True)
+    fake("tell-par", "\n".join([f"[TELL: Quill: q{i}]" for i in range(6)] + [f"[TELL: Watch: w{i}]" for i in range(6)])); clear_calls()
+    say("pip", "Ask them lots."); idle = wait_idle(300)
+    pc = private_calls()
+    per = {"quill": sum(1 for c in pc if "You are Quill" in json.dumps(c["args"]) or "Quill" in (arg(c, "--append-system-prompt") or "")[:200]),
+           "watch": sum(1 for c in pc if "Watch" in (arg(c, "--append-system-prompt") or "")[:200])}
+    fake("ok")
+    return ("PASS" if idle and len(pc) <= 6 else "FAIL"), {"settled": idle, "private_turns": len(pc), "by_bot": per, "engine_calls": len(calls())}
+
+def p_usage():
+    """Each turn's tokens and cost are kept per bot and day, readable from the control inbox and the local API."""
+    use_fake(True); fake("usage")
+    before = next((b for b in send({"cmd": "botsUsage", "days": 1}).get("result", {}).get("bots", []) if b["bot"] == "quill"), {"turns": 0, "outputTokens": 0})
+    say("quill", "one"); wait_idle(30, quiet=2); say("quill", "two"); wait_idle(30, quiet=2)
+    after = next((b for b in send({"cmd": "botsUsage", "days": 1}).get("result", {}).get("bots", []) if b["bot"] == "quill"), {})
+    tok = gw_on(); code, api = req("GET", "/v1/usage?days=1", token=tok)
+    fake("ok")
+    ok = after.get("turns", 0) - before["turns"] == 2 and after.get("outputTokens", 0) - before["outputTokens"] == 80 and abs((after.get("costUSD") or 0) - (before.get("costUSD") or 0) - 0.025) < 1e-6 \
+        and code == 200 and any(b["bot"] == "quill" for b in api.get("bots", []))
+    return ("PASS" if ok else "FAIL"), {"before": before, "after": after, "api_status": code}
+
+HOOKS = HOME / "Library/Application Support/Theo/Hooks"
+
+def p_hooks():
+    """Owner hooks run on events with the details as JSON; a hook anyone can write to, or a link, doesn't run; the doctor names it."""
+    stop(); time.sleep(1)
+    import shutil, os as _os
+    shutil.rmtree(HOOKS, ignore_errors=True)
+    out = HERE / "hook-out"; shutil.rmtree(out, ignore_errors=True); out.mkdir()
+    for event in ["turn-finished", "app-started"]:
+        d = HOOKS / event; d.mkdir(parents=True)
+        good = d / "record.sh"; good.write_text(f'#!/bin/sh\ncp "$1" "{out}/{event}-$$.json"\n'); good.chmod(0o700)
+    bad = HOOKS / "turn-finished/loose.sh"; bad.write_text(f'#!/bin/sh\ntouch "{out}/LOOSE-RAN"\n'); bad.chmod(0o777)
+    target = HERE / "outside-hook.sh"; target.write_text(f'#!/bin/sh\ntouch "{out}/LINK-RAN"\n'); target.chmod(0o700)
+    (HOOKS / "turn-finished/linked.sh").symlink_to(target)
+    start(); use_fake(True); fake("reply", "hook me")
+    say("pip", "hello hooks"); wait_idle(60); time.sleep(3)
+    files = sorted(p.name for p in out.iterdir())
+    turn = [json.loads(p.read_text()) for p in out.glob("turn-finished-*.json")]
+    doc = send({"cmd": "doctor"}).get("result", {}).get("text", "")
+    fake("ok")
+    ok = any(t.get("bot") == "pip" and t.get("reply") == "hook me" for t in turn) and any(f.startswith("app-started") for f in files) \
+        and "LOOSE-RAN" not in files and "LINK-RAN" not in files and "loose.sh" in doc and "linked.sh" in doc
+    return ("PASS" if ok else "FAIL"), {"files": files, "turn_payload": turn[-1] if turn else None, "doctor_hooks_line": [l for l in doc.splitlines() if "Hooks" in l]}
+
+def p_fresh_session():
+    """/new drops the bot's engine session: the next turn starts a new one instead of resuming."""
+    use_fake(True); fake("ok")
+    say("quill", "first"); wait_idle(30, quiet=2)
+    say("quill", "second"); wait_idle(30, quiet=2)
+    resumed = arg(calls()[-1], "--resume") is not None
+    say("quill", "/new"); time.sleep(2)
+    session_after_reset = json.loads((DATA / "chats/quill.json").read_text()).get("sessions", {}).get("quill")
+    clear_calls(); say("quill", "third"); wait_idle(30, quiet=2)
+    c = calls()[-1]
+    ok = resumed and session_after_reset is None and arg(c, "--resume") is None and arg(c, "--session-id") is not None
+    return ("PASS" if ok else "FAIL"), {"second_turn_resumed": resumed, "session_after_reset": session_after_reset,
+                                        "third_turn": {"resume": arg(c, "--resume"), "session-id": arg(c, "--session-id")}, "note": last_text("quill")}
+
+def p_doctor():
+    """/doctor in a chat posts the health check; it flags a routine whose bot is off and a skill nobody can see."""
+    use_fake(True); fake("ok")
+    bad = DATA / "memory/quill/skills/no-description"; bad.mkdir(parents=True, exist_ok=True); (bad / "SKILL.md").write_text("# no front matter\n")
+    send({"cmd": "botUpdate", "id": "watch", "enabled": False})
+    stop(); time.sleep(1)
+    write_routines([make_routine("watch", "offwatch", "Check.", {"kind": "daily", "hour": 9, "minute": 0, "weekday": 2, "intervalMinutes": 60}, NOW() + datetime.timedelta(hours=5))])
+    start()
+    say("pip", "/doctor"); time.sleep(2)
+    note = last_text("pip")
+    send({"cmd": "botUpdate", "id": "watch", "enabled": True})
+    import shutil; shutil.rmtree(bad, ignore_errors=True)
+    ok = note.startswith("Theo's health check") and "offwatch" in note and "no-description" in note and "Watch is turned off" in note
+    return ("PASS" if ok else "FAIL"), {"note": note[:1500]}
+
+def p_recall_groups():
+    """A fact said in a group chat can be found later from the bot's own chat, with a fresh session."""
+    use_fake(True); fake("ok")
+    send({"cmd": "groupSave", "id": "ops", "name": "Ops Room", "head": "pip", "members": ["quill"]})
+    say("group:ops", "For the record: the new staging password hint is PERIWINKLE-77."); wait_idle(90)
+    say("pip", "/new"); time.sleep(1)
+    use_fake(False)
+    say("pip", "What was the staging password hint we noted in the Ops Room group chat?"); wait_idle(240)
+    reply = last_text("pip", "pip"); use_fake(True)
+    # How it found it: its own search of the group chat's file, or by asking another bot (Theo sees group chats).
+    d = pathlib.Path.home() / (".claude/projects/" + str(DATA / "memory").replace("/", "-").replace(" ", "-"))
+    searched, asked = False, "[TELL:" in json.dumps(chat("pip")[-6:])
+    for f in d.glob("*.jsonl"):
+        t = f.read_text()
+        if "staging password hint we noted" in t and '"name": "Grep"' in t.replace('"name":"Grep"', '"name": "Grep"') and "group-ops.json" in t: searched = True
+    return ("PASS" if "PERIWINKLE-77" in reply and searched else "FAIL"), {"reply": reply[:400], "searched_group_file_itself": searched, "asked_another_bot": asked}
+
+def p_quiet_group_routine():
+    """A group routine whose head finds nothing answers [SILENT]: the group chat is unchanged and the run is quiet."""
+    stop(); time.sleep(1)
+    write_routines([make_routine("group:ops", "opscheck", "Check the deploy queue. If nothing changed, answer exactly [SILENT].",
+                                 {"kind": "every", "hour": 9, "minute": 0, "weekday": 2, "intervalMinutes": 60}, NOW() - datetime.timedelta(seconds=30))])
+    before = len(json.loads((DATA / "chats/group-ops.json").read_text()).get("messages", [])) if (DATA / "chats/group-ops.json").exists() else 0
+    defaults("test.routines.run", True); defaults("test.engine.claude", str(FAKE)); fake("reply", "[SILENT]")
+    start(); time.sleep(8); wait_idle(90)
+    after = json.loads((DATA / "chats/group-ops.json").read_text()).get("messages", [])
+    r = routines()[0]; defaults("test.routines.run", False); fake("ok")
+    run = r["runs"][-1] if r["runs"] else None
+    return ("PASS" if run and run["status"] == "quiet" and len(after) == before else "FAIL"), {"messages_before": before, "messages_after": len(after),
+                                                                                             "run": run, "last": [m.get("text", "")[:80] for m in after[-2:]]}
+
+def p_nonclaude_fallback():
+    """A bot on another engine (OpenCode) that's overloaded: retried, then Claude Code stands in for the turn and says so."""
+    use_fake(True); setd("test.engine.opencode", str(FAKE)); fake("oc-overloaded"); clear_calls()
+    r = send({"cmd": "botCreate", "name": "Oaky", "description": "OpenCode bot", "instructions": "You are Oaky.", "provider": "opencode", "model": "opencode/test-model"})
+    oid = r.get("result", {}).get("id")
+    say(oid, "status?"); wait_idle(120)
+    cs = calls(); oc = [c for c in cs if c["args"][:1] == ["run"]]; cl = [c for c in cs if c["args"][:1] == ["-p"]]
+    reply = last_text(oid, oid); fake("ok")
+    return ("PASS" if len(oc) == 3 and len(cl) == 1 and "stand-in answered" in reply and "kept failing" in reply else "FAIL"), \
+        {"opencode_calls": len(oc), "claude_calls": len(cl), "reply": reply[:300]}
+
+PROBES.update({"parallel_delegation": p_parallel_delegation, "parallel_caps": p_parallel_caps, "usage": p_usage, "hooks": p_hooks,
+               "fresh_session": p_fresh_session, "doctor": p_doctor, "recall_groups": p_recall_groups, "quiet_group_routine": p_quiet_group_routine,
+               "nonclaude_fallback": p_nonclaude_fallback})
+
 if __name__ == "__main__":
     names = sys.argv[1:] or list(PROBES)
     for n in names:

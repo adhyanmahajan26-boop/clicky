@@ -1,20 +1,20 @@
 {
  "probe": "gateway_message",
  "verdict": "PASS",
- "seconds": 2.0,
+ "seconds": 2.1,
  "evidence": {
   "status": 200,
   "body": {
-   "id": "204C5F91-1420-46E6-AF78-A64323B96FAF",
+   "id": "8D3F021B-D9B0-4A02-9353-C830BFC47176",
    "reply": "Build 512 is green.",
    "status": "answered"
   },
   "shown_as": {
-   "text": "\ud83d\udce8 From ci, through Theo's local API: Is the nightly build green?",
-   "at": "2026-11-12T15:41:26.027Z",
-   "author": "routine"
+   "at": "2026-11-12T16:00:52.974Z",
+   "author": "routine",
+   "text": "\ud83d\udce8 From ci, through Theo's local API: Is the nightly build green?"
   },
   "told_not_owner": true
  },
- "at": "2026-11-12T21:11:26"
+ "at": "2026-11-12T21:30:53"
 }

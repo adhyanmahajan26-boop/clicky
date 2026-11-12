@@ -1,0 +1,26 @@
+{
+ "probe": "hooks",
+ "verdict": "PASS",
+ "seconds": 15.4,
+ "evidence": {
+  "files": [
+   "app-started-87030.json",
+   "turn-finished-87146.json"
+  ],
+  "turn_payload": {
+   "at": "2026-11-12T16:03:54Z",
+   "bot": "pip",
+   "botName": "Pip",
+   "chat": "pip",
+   "event": "turn-finished",
+   "fromOwner": true,
+   "ok": true,
+   "privately": false,
+   "reply": "hook me"
+  },
+  "doctor_hooks_line": [
+   "! **Hooks**: Not run: turn-finished/loose.sh, turn-finished/linked.sh. A hook must be an executable file you own that nobody else can write to (chmod 700)."
+  ]
+ },
+ "at": "2026-11-12T21:34:01"
+}
