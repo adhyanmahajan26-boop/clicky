@@ -58,6 +58,10 @@ runs. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
 
 ## Status
 
-See the draft pull request for the latest test results on each platform. In short: the engine and the suite pass on the
-Mac Studio and on GitHub's Linux and Windows runners; the desktop app and installers are built and smoke-tested on those
-runners; nothing has been run on a Windows PC or a Linux desktop with a real Claude Code login yet.
+| Where | Result |
+|---|---|
+| Mac Studio | full suite 71/71; the built app 12/12; real Claude Code red-team and memory tests pass |
+| GitHub Ubuntu 24.04 / Windows Server 2022 | unit tests and full suite, 71/71 each |
+| GitHub Ubuntu 22.04 / Windows Server 2022 | app and installers built; the real app passes 12/12; `.deb` install, and `install.ps1` install and removal without admin |
+
+Not yet run on a Windows 10/11 PC or a Linux desktop with a real Claude Code login.
