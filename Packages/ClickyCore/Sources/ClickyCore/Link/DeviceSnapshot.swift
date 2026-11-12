@@ -91,6 +91,38 @@ public enum BotMemoryMerge {
         return mine + (mine.hasSuffix("\n") ? "" : "\n") + added.joined(separator: "\n") + "\n"
     }
 
+    /// The memory after hearing the other Mac's copy, when the copy heard from it last time (`lastTheirs`) is known: what that Mac
+    /// dropped since is dropped here too, what it added since is added at the end, and what only this Mac has, or dropped, stays so.
+    /// A tidy-up or a rewrite on either Mac then sticks, where a union would bring every old line back. Never heard before: the union.
+    public static func merged(mine: String, theirs: String, lastTheirs: String?) -> String {
+        guard let lastTheirs else { return union(mine, theirs) }
+        let mineKeys = keys(of: mine), theirKeys = keys(of: theirs), lastKeys = keys(of: lastTheirs)
+        if mineKeys == theirKeys { return mine }
+        // Nothing changed here since that Mac's last copy: only it changed, and its file is taken as it is, layout and all.
+        if mineKeys == lastKeys { return theirs }
+        let dropped = lastKeys.subtracting(theirKeys)
+        var seen = Set<String>()
+        var kept: [String] = []
+        for line in mine.components(separatedBy: "\n") {
+            let key = line.trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty, dropped.contains(key) { continue }
+            if !key.isEmpty { seen.insert(key) }
+            kept.append(line)
+        }
+        var added: [String] = []
+        for line in theirs.components(separatedBy: "\n") {
+            let key = line.trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty, !lastKeys.contains(key), seen.insert(key).inserted { added.append(line) }
+        }
+        var text = kept.joined(separator: "\n")
+        // Lines taken out can leave blank runs behind: two blank lines at most, and none at the start.
+        while text.contains("\n\n\n") { text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
+        while text.hasPrefix("\n") { text.removeFirst() }
+        if keys(of: text).isEmpty { text = "" }
+        guard !added.isEmpty else { return text }
+        return text + (text.isEmpty || text.hasSuffix("\n") ? "" : "\n") + added.joined(separator: "\n") + "\n"
+    }
+
     private static func keys(of text: String) -> Set<String> {
         Set(text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }
@@ -98,5 +130,49 @@ public enum BotMemoryMerge {
     /// The same whatever order the lines are in, so two Macs holding the same lines don't keep asking each other.
     public static func digest(_ text: String) -> String {
         LinkCoding.digest(keys(of: text).sorted())
+    }
+}
+
+/// One skill's SKILL.md as it travels over Theo Link. The key is "shared/<folder>" or "<bot id>/<folder>".
+public struct SkillCopy: Codable, Equatable, Sendable {
+    public var text: String
+    public var modifiedAt: Date
+    public init(text: String, modifiedAt: Date) {
+        self.text = text
+        self.modifiedAt = modifiedAt
+    }
+}
+
+/// Skills on both Macs. `lastTheirs` is the set of skills the other Mac had when last heard from: one it has dropped since
+/// is dropped here, one dropped here stays dropped, a new one on either side is kept, and an edit on both keeps the newer.
+public enum BotSkillSync {
+    /// The largest SKILL.md that travels: a skill is a page of steps, and the link carries everything in one message.
+    public static let maximumBytes = 64_000
+
+    /// A skill's key, or nil for a name that could reach outside its folder.
+    public static func key(owner: String, folder: String) -> String? {
+        let ok: (String) -> Bool = { !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") && !$0.contains("\\") && !$0.hasPrefix(".") }
+        return ok(owner) && ok(folder) ? "\(owner)/\(folder)" : nil
+    }
+
+    public static func merged(mine: [String: SkillCopy], theirs: [String: SkillCopy], lastTheirs: Set<String>?) -> (write: [String: SkillCopy], delete: [String]) {
+        let last = lastTheirs ?? []
+        var write: [String: SkillCopy] = [:]
+        var delete: [String] = []
+        for (key, copy) in theirs {
+            if let here = mine[key] {
+                if here.text != copy.text, copy.modifiedAt > here.modifiedAt { write[key] = copy }
+            } else if !last.contains(key) || lastTheirs == nil {
+                // New there. (Had there before and gone here means it was dropped here: it stays dropped.)
+                write[key] = copy
+            }
+        }
+        for key in mine.keys where theirs[key] == nil && last.contains(key) { delete.append(key) }
+        return (write, delete.sorted())
+    }
+
+    /// The same for the same skills and words, whatever order they were read in.
+    public static func digest(_ skills: [String: SkillCopy]) -> String {
+        LinkCoding.digest(skills.keys.sorted().map { "\($0)\n\(skills[$0]!.text)" })
     }
 }

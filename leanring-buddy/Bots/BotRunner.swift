@@ -244,7 +244,9 @@ enum BotRunner {
         let others = ((try? FileManager.default.contentsOfDirectory(at: chats, includingPropertiesForKeys: nil)) ?? [])
             .map(\.standardizedFileURL.path).filter { !mine.contains($0) }
         let records = (mine.isEmpty ? ["/\(theo)/chats/**"] : others.flatMap { ["/\($0)", "/\($0)/**"] }) +
-            ["/\(theo)/*.json", "/\(theo)/*.json.*", "/\(theo)/*.lastgood"]
+            ["/\(theo)/*.json", "/\(theo)/*.json.*", "/\(theo)/*.lastgood",
+             // The other Mac's copies of every bot's memory, kept for the three-way merge.
+             "/\(theo)/link-memory/**"]
         let anywhere = ["//**/.env", "//**/.env.*"]
         return (home + records + anywhere).map { "Read(\($0))" }
     }

@@ -504,6 +504,9 @@ final class TheoLink: ObservableObject {
                 // Each Mac describes itself, so what to compare the other's description with is the copy of it held here.
                 mine["device"] = store.peerDevice.map { LinkCoding.digest($0) }
                 let wanted = theirs.filter { mine[$0.key] != $0.value && store.wantsLinkItem($0.key) }.map(\.key)
+                // A bot's memory that's the same on both: that's the other Mac's copy now, for the next merge.
+                for (key, value) in theirs where key.hasPrefix("botMemory/") && mine[key] == value { BotMemory.agreed(botID: String(key.dropFirst("botMemory/".count))) }
+                if let skills = theirs["skills"], mine["skills"] == skills { BotSkills.agreed(botIDs: store.bots.map(\.id)) }
                 if wanted.isEmpty {
                     if mine == theirs || Set(theirs.keys).isSubset(of: Set(mine.keys)) { self.lastSync = Date() }
                 } else {
@@ -518,6 +521,9 @@ final class TheoLink: ObservableObject {
             guard let key = envelope.key, let payload = envelope.payload else { return }
             BotsStore.shared.applyLinkPayload(key, payload)
             lastSync = Date()
+            // A bot's memory or the skills just merged here: fingerprints go back at once, so both Macs record the other's copy
+            // (BotMemory.agreed) before anyone edits again. A tidy-up made before that would meet a Mac with no copy to compare.
+            if key.hasPrefix("botMemory/") || key == "skills" { syncSoon() }
         case .request:
             guard let action = envelope.key, let payload = envelope.payload,
                   let fields = try? LinkCoding.decoder.decode([String: String].self, from: payload) else { return }
@@ -643,6 +649,7 @@ final class TheoLink: ObservableObject {
         let botIDs = BotsStore.shared.bots.map(\.id)
         let fromDisk = await Task.detached { () -> [String: String] in
             var found = BotMemory.digests(botIDs: botIDs)
+            found["skills"] = BotSkillSync.digest(BotSkills.copies(botIDs: botIDs))
             found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
             return found
         }.value

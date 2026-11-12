@@ -42,8 +42,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     /// The repo Addy named, when the work goes on a branch of it.
     var repo: String?
     var branch: String?
-    /// The commit the run started from, for the diff.
+    /// The commit the run started from, for the diff. A follow-up moves it on, so its report says what that follow-up changed.
     var baseCommit: String?
+    /// Where the branch was cut from, which never moves: what's past it on the branch is the run's own work, not the owner's.
+    var forkCommit: String?
     var link: String?
     /// "running", "waiting" (the agent asked something), "done" or "failed".
     var phase: String = "running"
@@ -643,7 +645,7 @@ enum BotsT3 {
                     problems.append("Theo didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
                 } else {
                     onStage?("push")
-                    let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.baseCommit, baseBranch: run.baseBranch,
+                    let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.forkCommit ?? run.baseCommit, baseBranch: run.baseBranch,
                                                 body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel, onStage: onStage)
                     run.pullRequest = outcome.url ?? run.pullRequest
                     if let problem = outcome.problem { problems.append(problem) }

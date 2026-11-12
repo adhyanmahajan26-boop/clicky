@@ -141,6 +141,8 @@ struct HarnessDurabilityTests {
         #expect(!denied.contains("Read(/\(mine))"))
         #expect(!denied.contains("Read(/\(chats)/**)"))
         #expect(denied.contains { $0.hasSuffix("/*.json)") })
+        // The other Mac's copies of every bot's memory are never readable.
+        #expect(denied.contains { $0.hasSuffix("/link-memory/**)") })
         // With nothing to recall, the whole chats folder is denied, as before.
         #expect(BotRunner.secretReadRules().contains("Read(/\(chats)/**)"))
     }
