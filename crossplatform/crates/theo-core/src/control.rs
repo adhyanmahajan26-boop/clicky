@@ -185,6 +185,9 @@ pub async fn serve_inbox(h: Arc<Harness>) {
     let outbox = h.paths.control_outbox();
     let _ = std::fs::create_dir_all(&inbox);
     let _ = std::fs::create_dir_all(&outbox);
+    // Whatever is dropped in the inbox runs as the owner, and answers carry chats: this user's alone (the Swift inbox is 0700 too).
+    crate::paths::make_private(&inbox);
+    crate::paths::make_private(&outbox);
     loop {
         if let Ok(dir) = std::fs::read_dir(&inbox) {
             let mut files: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().map(|e| e == "json").unwrap_or(false)).collect();

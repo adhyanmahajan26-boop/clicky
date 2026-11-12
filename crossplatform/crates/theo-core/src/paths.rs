@@ -84,8 +84,21 @@ impl Paths {
         for dir in [self.bots_dir(), self.chats_dir(), self.memory_root(), self.shared_skills_dir(), self.projects_dir(), self.hooks_dir(), self.logs_dir()] {
             std::fs::create_dir_all(dir)?;
         }
+        // Chats, bots, memory, the token file and the control inbox live here: only this user may read or write them, as
+        // in the Swift app's Application Support folder. (On Linux a home folder is often readable by every account.)
+        make_private(&self.root);
         Ok(())
     }
+}
+
+/// Only this user may list, read or write `dir` (Unix). Windows' per-user AppData already is.
+pub fn make_private(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = dir;
 }
 
 /// A path written the way Claude Code's permission rules want an absolute path: two slashes in front, forward slashes,
@@ -107,5 +120,18 @@ mod tests {
     fn rule_paths() {
         assert_eq!(rule_path(Path::new("/Users/a/x")), "//Users/a/x");
         assert_eq!(rule_path(Path::new("C:\\Users\\a\\x")), "//c/Users/a/x");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod private_tests {
+    #[test]
+    fn theos_folder_is_only_this_users() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("theo");
+        let paths = super::Paths { root: root.clone() };
+        paths.ensure().unwrap();
+        assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

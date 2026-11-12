@@ -38,11 +38,41 @@ pub fn write(token_file: &Path, is_test: bool, token: &str) -> std::io::Result<(
             return entry.set_password(token).map_err(std::io::Error::other);
         }
     }
-    crate::store::write_atomic(token_file, token.as_bytes())?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(token_file, std::fs::Permissions::from_mode(0o600))?;
+        // Created only-this-user from the start: writing it with the usual permissions and tightening them after would leave a
+        // moment in which another account on the machine could read the token.
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Some(parent) = token_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temporary = token_file.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+        file.write_all(token.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        return std::fs::rename(&temporary, token_file);
     }
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        crate::store::write_atomic(token_file, token.as_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn the_token_file_is_only_this_users() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("theo").join("gateway-token");
+        super::write(&file, true, "first").unwrap();
+        super::write(&file, true, "second").unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(super::read(&file, true).as_deref(), Some("second"));
+        // No temporary copies are left beside it.
+        assert_eq!(std::fs::read_dir(file.parent().unwrap()).unwrap().count(), 1);
+    }
 }
