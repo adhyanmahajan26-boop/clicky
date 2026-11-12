@@ -1,0 +1,15 @@
+{
+ "probe": "gateway_not_owner",
+ "verdict": "PASS",
+ "seconds": 12.7,
+ "evidence": {
+  "status": 200,
+  "routines_before_after": [
+   2,
+   2
+  ],
+  "t3runs": [],
+  "folder_made": false
+ },
+ "at": "2026-11-12T21:11:44"
+}

@@ -1,0 +1,18 @@
+{
+ "probe": "gateway_default_off",
+ "verdict": "PASS",
+ "seconds": 0.7,
+ "evidence": {
+  "state": {
+   "hasToken": true,
+   "enabled": false,
+   "received": 0,
+   "port": 47380,
+   "problem": null,
+   "listening": null
+  },
+  "status": null,
+  "listening": []
+ },
+ "at": "2026-11-12T21:10:11"
+}

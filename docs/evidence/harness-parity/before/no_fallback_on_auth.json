@@ -1,0 +1,10 @@
+{
+ "probe": "no_fallback_on_auth",
+ "verdict": "PASS",
+ "seconds": 3.4,
+ "evidence": {
+  "calls": 1,
+  "reply": "Couldn't reply: Invalid API key \u00b7 Please run /login"
+ },
+ "at": "2026-11-12T20:52:35"
+}

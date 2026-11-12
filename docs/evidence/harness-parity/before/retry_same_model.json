@@ -1,0 +1,13 @@
+{
+ "probe": "retry_same_model",
+ "verdict": "FAIL",
+ "seconds": 3.4,
+ "evidence": {
+  "calls": 1,
+  "models": [
+   "claude-haiku-5-5"
+  ],
+  "reply": "Couldn't reply: API Error: 529 Overloaded"
+ },
+ "at": "2026-11-12T20:52:27"
+}

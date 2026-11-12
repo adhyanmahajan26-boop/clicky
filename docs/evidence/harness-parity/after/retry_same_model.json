@@ -1,0 +1,14 @@
+{
+ "probe": "retry_same_model",
+ "verdict": "PASS",
+ "seconds": 5.6,
+ "evidence": {
+  "calls": 2,
+  "models": [
+   "claude-haiku-5-5",
+   "claude-haiku-5-5"
+  ],
+  "reply": "answered after retry on claude-haiku-5-5"
+ },
+ "at": "2026-11-12T21:10:25"
+}

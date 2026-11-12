@@ -1,0 +1,19 @@
+{
+ "probe": "catchup_stale",
+ "verdict": "PASS",
+ "seconds": 15.2,
+ "evidence": {
+  "engine_calls": 0,
+  "runs": [
+   {
+    "finishedAt": "2026-11-12T15:40:55Z",
+    "id": "D4379BB5-1845-4CAD-AD38-1CDCA60386B9",
+    "startedAt": "2026-11-12T15:40:55Z",
+    "status": "missed",
+    "summary": "Missed the 9 Nov 2026 at 9:10\u202fPM run: Theo wasn't running then, and 3 days late is too late to catch up."
+   }
+  ],
+  "nextRunAt": "2026-11-13T02:30:00Z"
+ },
+ "at": "2026-11-12T21:11:08"
+}

@@ -1,0 +1,16 @@
+{
+ "probe": "memory_in_prompt",
+ "verdict": "PASS",
+ "seconds": 4.4,
+ "evidence": {
+  "in_system_prompt": true,
+  "anywhere": true,
+  "memory_lines_in_prompt": [
+   "The full guide to how Theo works for bots is at /Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/HARNESS-GUIDE.md. Read it once before your first answer, and again whenever you're unsure how to message, hand over, schedule or start code.",
+   "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so.",
+   "Your memory (/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/memory.md, 36/4000 characters, 1% full), as it is now:",
+   "<memory>"
+  ]
+ },
+ "at": "2026-11-12T21:10:15"
+}

@@ -1,0 +1,9 @@
+{
+ "probe": "recall",
+ "verdict": "FAIL",
+ "seconds": 52.9,
+ "evidence": {
+  "reply": "I couldn't find the autumn launch codename. Theo doesn't have it either, and I can't see our earlier chat from here. If you tell me the codename, I'll note it down, or Theo can ask Clicky's Memory team to search your notes for it."
+ },
+ "at": "2026-11-12T20:54:50"
+}

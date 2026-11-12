@@ -1,0 +1,19 @@
+{
+ "probe": "catchup_stale",
+ "verdict": "FAIL",
+ "seconds": 15.2,
+ "evidence": {
+  "engine_calls": 1,
+  "runs": [
+   {
+    "finishedAt": "2026-11-12T15:23:12Z",
+    "id": "B491309E-5C38-4193-A74D-B4C83B22D498",
+    "startedAt": "2026-11-12T15:23:07Z",
+    "status": "done",
+    "summary": "fake engine ok"
+   }
+  ],
+  "nextRunAt": "2026-11-13T02:30:00Z"
+ },
+ "at": "2026-11-12T20:53:20"
+}

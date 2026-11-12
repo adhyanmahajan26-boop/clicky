@@ -1,0 +1,25 @@
+{
+ "probe": "skills_reuse",
+ "verdict": "PASS",
+ "seconds": 12.0,
+ "evidence": {
+  "reply": "Here are the steps from Pip's release procedure, in order:\n\n1. Run the unit tests. Stop if they fail and report the output.\n2. Bump the build number to today's date and time, in the same format as the previous build. If that format isn't clear, I'll ask you.\n3. Run `Tools/release.sh` with `CLICKY_RELEASE_DRY_RUN=1` first, and check the dry run output before a real release.\n4. Back up `/Applications/Theo.app` before anything is replaced.\n5. Install only when nothing is playing (no audio or video).\n\nI can't run shell commands, so steps 1 to 5 would go to a coding run on the Mac where Theo is ins",
+  "steps_matched": [
+   "dry",
+   "back",
+   "nothing is playing",
+   "build number",
+   "unit test"
+  ],
+  "skill": [
+   "memory/pip/skills/theo-release/SKILL.md"
+  ],
+  "engine_read_skill_files": [
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md"
+  ]
+ },
+ "at": "2026-11-12T21:13:44"
+}
