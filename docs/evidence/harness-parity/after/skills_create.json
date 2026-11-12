@@ -1,0 +1,14 @@
+{
+ "probe": "skills_create",
+ "verdict": "PASS",
+ "seconds": 18.4,
+ "evidence": {
+  "new_skill_files": [
+   "memory/pip/skills/theo-release/SKILL.md"
+  ],
+  "skill_head": "---\nname: theo-release\ndescription: Use when cutting or installing a new Theo release (Theo.app build). Follow these steps in order every time.\n---\n\n# Cutting a Theo release\n\nSteps, in order (from Addy):\n\n1. Run the unit tests. Stop if they fail and report the output.\n2. Bump the build number to tod",
+  "memory_md": "- Addy's dog is called Biscuit-7731.\n- Addy wants a Theo release done the same way every time: see skill theo-release (skills/theo-release/SKILL.md).\n- Build 512 was reported green (Addy, earlier chat). Check current build status before relying on it.\n- Coding runs go on the Mac Studio unless Addy names the other Mac.\n- Memory was cleaned up on 2026-11-12: old filler entries removed.\n",
+  "reply": "I saved the release steps as the `theo-release` skill, so the other bots can follow them next time. I also trimmed my memory file to under 4,000 characters, dropping the filler entries and keeping your dog's name. I can't run the release myself, so it would go to a coding run on the Mac Studio when you ask for one."
+ },
+ "at": "2026-11-12T21:13:32"
+}

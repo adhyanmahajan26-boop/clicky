@@ -1,0 +1,22 @@
+{
+ "probe": "gateway_routine",
+ "verdict": "PASS",
+ "seconds": 15.9,
+ "evidence": {
+  "status": 202,
+  "body": {
+   "ok": true,
+   "routine": "hooked"
+  },
+  "runs": [
+   {
+    "finishedAt": "2026-11-12T15:43:08Z",
+    "id": "0A282E38-4649-4E89-B3BE-5EAE26892F97",
+    "startedAt": "2026-11-12T15:43:08Z",
+    "status": "done",
+    "summary": "fake engine ok"
+   }
+  ]
+ },
+ "at": "2026-11-12T21:13:14"
+}

@@ -1,0 +1,9 @@
+{
+ "probe": "gateway_off",
+ "verdict": "PASS",
+ "seconds": 0.1,
+ "evidence": {
+  "listening": []
+ },
+ "at": "2026-11-12T21:10:10"
+}

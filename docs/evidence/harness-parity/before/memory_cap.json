@@ -1,0 +1,11 @@
+{
+ "probe": "memory_cap",
+ "verdict": "FAIL",
+ "seconds": 4.5,
+ "evidence": {
+  "prompt_args_chars": 7805,
+  "memory_file_chars": 370927,
+  "keeps_first_fact": false
+ },
+ "at": "2026-11-12T20:52:23"
+}

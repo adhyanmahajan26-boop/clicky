@@ -1,0 +1,9 @@
+{
+ "probe": "skills_reuse",
+ "verdict": "FAIL",
+ "seconds": 0.1,
+ "evidence": {
+  "why": "no theo-release skill to reuse"
+ },
+ "at": "2026-11-12T20:53:58"
+}

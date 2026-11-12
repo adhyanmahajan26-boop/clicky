@@ -1,0 +1,21 @@
+{
+ "probe": "quiet_routine",
+ "verdict": "FAIL",
+ "seconds": 15.3,
+ "evidence": {
+  "bot_messages": [
+   "[SILENT]"
+  ],
+  "run": {
+   "finishedAt": "2026-11-12T15:22:56Z",
+   "id": "77387DE7-D51C-4DE8-B0B5-2719622B2646",
+   "startedAt": "2026-11-12T15:22:51Z",
+   "status": "done",
+   "summary": "[SILENT]"
+  },
+  "routine_message_shown": [
+   "\u23f0 Routine \"quietwatch\": Check the build queue. If nothing changed, answer exactl"
+  ]
+ },
+ "at": "2026-11-12T20:53:05"
+}

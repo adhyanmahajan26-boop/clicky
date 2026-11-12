@@ -1,0 +1,17 @@
+{
+ "probe": "quiet_routine",
+ "verdict": "PASS",
+ "seconds": 15.3,
+ "evidence": {
+  "bot_messages": [],
+  "run": {
+   "finishedAt": "2026-11-12T15:40:44Z",
+   "id": "DF7C94BA-7CB0-498C-BF48-B38185A0B995",
+   "startedAt": "2026-11-12T15:40:39Z",
+   "status": "quiet",
+   "summary": "Nothing to report."
+  },
+  "routine_message_shown": []
+ },
+ "at": "2026-11-12T21:10:53"
+}
