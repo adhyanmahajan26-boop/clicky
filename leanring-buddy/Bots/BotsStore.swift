@@ -143,6 +143,19 @@ struct BotConversationRecord: Codable {
     var ownAnswers: [String: [String]]?
 }
 
+extension BotConversationRecord {
+    /// Anything missing reads as empty, so a chat file cut short in its messages (the keys after them gone) still reads.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messages = try container.decodeIfPresent([BotChatMessage].self, forKey: .messages) ?? []
+        sessions = try container.decodeIfPresent([String: String].self, forKey: .sessions) ?? [:]
+        seen = try container.decodeIfPresent([String: Int].self, forKey: .seen) ?? [:]
+        clearedAt = try container.decodeIfPresent(Date.self, forKey: .clearedAt)
+        heard = try container.decodeIfPresent([String: String].self, forKey: .heard)
+        ownAnswers = try container.decodeIfPresent([String: [String]].self, forKey: .ownAnswers)
+    }
+}
+
 @MainActor
 final class BotsStore: ObservableObject {
     static let shared = BotsStore()
@@ -267,7 +280,7 @@ final class BotsStore: ObservableObject {
         loadDelegations()
         backfillTeamWork()
         loadLinkStamps()
-        if !isHostingTests { stampRoutinesOnce() }
+        if !isHostingTests { stampRoutinesOnce(); settleStaleRoutineRuns() }
         BotMemory.writeGuide(owner: BotPrompts.ownerName)
         if !isHostingTests {
             // Engines a crash left running with nobody listening are ended before anything new starts.
@@ -2116,7 +2129,28 @@ extension BotsStore {
         }
     }
 
+    /// The longest a routine's run can really be going: its turn, plus a second go for a connector that was still loading.
+    static var longestRoutineRun: TimeInterval { BotRunner.turnLimitSeconds * 2 + 120 }
+
+    /// A run still marked "running" long after any run could have finished was cut off (Theo quit or crashed in the
+    /// middle of it). It says so, instead of showing as running forever. On either Mac: by then it can't be running anywhere.
+    func settleStaleRoutineRuns(now: Date = Date()) {
+        var changed = false
+        for index in routines.indices {
+            for run in routines[index].runs.indices where routines[index].runs[run].status == "running"
+                && !runningRoutines.contains(routines[index].id)
+                && now.timeIntervalSince(routines[index].runs[run].startedAt) > Self.longestRoutineRun {
+                routines[index].runs[run].status = "failed"
+                routines[index].runs[run].finishedAt = now
+                routines[index].runs[run].summary = "Theo stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner."
+                changed = true
+            }
+        }
+        if changed { writeRoutines() }
+    }
+
     private func runDueRoutines() {
+        settleStaleRoutineRuns()
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }

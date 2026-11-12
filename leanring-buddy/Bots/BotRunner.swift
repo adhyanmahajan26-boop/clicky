@@ -86,8 +86,26 @@ final class BotProcesses: @unchecked Sendable {
     }
 
     private func writeGroupsLocked() {
-        let list = groups.values.map { ["pgid": Int($0.pgid), "started": $0.started] as [String: Any] }
+        let boot = Self.bootTime
+        let list = groups.values.map { ["pgid": Int($0.pgid), "started": $0.started, "boot": boot] as [String: Any] }
         if let data = try? JSONSerialization.data(withJSONObject: list) { try? data.write(to: Self.groupsFile, options: .atomic) }
+    }
+
+    /// When the Mac last started up (seconds since 1970). Process ids from before a restart mean nothing after it.
+    static var bootTime: UInt64 {
+        var boot = timeval()
+        var size = MemoryLayout<timeval>.size
+        var name: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        guard sysctl(&name, 2, &boot, &size, nil, 0) == 0 else { return 0 }
+        return UInt64(boot.tv_sec)
+    }
+
+    /// The processes in a process group right now.
+    static func members(ofGroup pgid: pid_t) -> [pid_t] {
+        var pids = [pid_t](repeating: 0, count: 512)
+        let bytes = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pgid), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard bytes > 0 else { return [] }
+        return Array(pids.prefix(Int(bytes) / MemoryLayout<pid_t>.size)).filter { $0 > 0 }
     }
 
     /// When a process started (seconds since 1970), so a process id that's been reused since is never mistaken for it.
@@ -104,10 +122,22 @@ final class BotProcesses: @unchecked Sendable {
         guard let data = try? Data(contentsOf: groupsFile),
               let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return 0 }
         var ended = 0
+        let boot = bootTime
         for entry in list {
             guard let pgid = (entry["pgid"] as? Int).map(pid_t.init), pgid > 1,
-                  let started = (entry["started"] as? NSNumber)?.uint64Value, started > 0,
-                  startTime(of: pgid) == started else { continue }
+                  let started = (entry["started"] as? NSNumber)?.uint64Value, started > 0 else { continue }
+            // After a restart of the Mac every id in the file belongs to something else.
+            if let recordedBoot = (entry["boot"] as? NSNumber)?.uint64Value, recordedBoot != boot { continue }
+            if let leaderStarted = startTime(of: pgid) {
+                // The engine itself is still running: only if it's the same process, never a later one with that id.
+                guard leaderStarted == started else { continue }
+            } else {
+                // The engine is gone (a CLI exits when Theo's end of its output pipe closes) but what it started can live on
+                // in its group: tools, servers. While any of them is alive macOS gives no new process that id, so the
+                // group is still the engine's. Only processes that started after the engine are counted.
+                guard entry["boot"] != nil,
+                      members(ofGroup: pgid).contains(where: { (startTime(of: $0) ?? 0) >= started }) else { continue }
+            }
             if killpg(pgid, SIGKILL) == 0 { ended += 1 }
         }
         try? FileManager.default.removeItem(at: groupsFile)
