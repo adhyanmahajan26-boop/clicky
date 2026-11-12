@@ -87,7 +87,9 @@ enum BotPDF {
 /// Just enough Markdown for a document a bot writes: headings, paragraphs, lists, tables, rules, and bold, italics, code and links inline.
 enum MarkdownHTML {
     static func escape(_ text: String) -> String {
+        // Quotes too: a bot's link target lands inside an attribute, and a quote there would let it add attributes (style, and with it url()).
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "'", with: "&#39;")
     }
 
     static func inline(_ text: String) -> String {
@@ -98,7 +100,8 @@ enum MarkdownHTML {
             (#"__([^_]+)__"#, "<b>$1</b>"),
             (#"(?<![*\w])\*([^*\n]+)\*(?!\*)"#, "<i>$1</i>"),
             (#"(?<![\w])_([^_\n]+)_(?![\w])"#, "<i>$1</i>"),
-            (#"\[([^\]]+)\]\(([^)\s]+)\)"#, "<a href=\"$2\">$1</a>")
+            // Only web and mail links: a file: or javascript: link in a PDF is a trap for whoever clicks it.
+            (#"\[([^\]]+)\]\(((?:https?://|mailto:)[^)\s]+)\)"#, "<a href=\"$2\">$1</a>")
         ]
         for (pattern, template) in rules { out = out.replacingOccurrences(of: pattern, with: template, options: .regularExpression) }
         return out

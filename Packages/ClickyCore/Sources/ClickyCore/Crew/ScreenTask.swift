@@ -151,8 +151,8 @@ public enum BotPDFOrder {
             (#"(?is)<\s*(script|iframe|object|embed|applet|svg|video|audio|picture|noscript|template|frameset)\b.*?<\s*/\s*\1\s*>"#, ""),
             // Any of those tags left on their own (self-closing, unclosed, or stray end tags).
             ("(?is)<\\s*/?\\s*(?:\(loaders))\\b[^>]*>", ""),
-            // Attributes that load something, on whatever tag is left.
-            (#"(?i)\s(?:src|srcset|lowsrc|dynsrc|background|poster|data|action|formaction|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, ""),
+            // Attributes that load something, on whatever tag is left. HTML lets a "/" stand between attributes (`<table/background=…>`).
+            (#"(?i)[\s/](?:src|srcset|lowsrc|dynsrc|background|poster|data|action|formaction|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, " "),
             // CSS that loads something.
             (#"(?i)@import\b[^;]*;?"#, ""),
             (#"(?i)\burl\s*\("#, "blocked(")
@@ -160,12 +160,69 @@ public enum BotPDFOrder {
         // Again until nothing changes, so a tag split around another (`<scr<img>ipt>`) can't put itself back together.
         for _ in 0..<8 {
             let before = out
+            out = withoutRiskyCSS(out)
             for (pattern, template) in rules {
                 out = out.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
             }
             if out == before { break }
         }
         return out
+    }
+
+    /// Style that could load something goes, whole: a <style> element or style attribute that, once its character references and CSS
+    /// comments are undone, holds a backslash escape (`u\72l(`), url(, image-set(, @import, a src: or anything else that fetches.
+    /// A plain filter on the raw text can't see `url&#40;…` or `u\72l(…`, which the renderer reads as url(.
+    static func withoutRiskyCSS(_ html: String) -> String {
+        let element = try! NSRegularExpression(pattern: #"(?is)<\s*style\b[^>]*>(.*?)(<\s*/\s*style\s*>|$)"#)
+        let attribute = try! NSRegularExpression(pattern: #"(?is)[\s/]style\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#)
+        var out = html
+        for (regex, keep) in [(element, ""), (attribute, " ")] {
+            let text = out
+            var result = ""
+            var last = text.startIndex
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let whole = Range(match.range, in: text) else { continue }
+                let css = (1..<match.numberOfRanges).compactMap { Range(match.range(at: $0), in: text).map { String(text[$0]) } }.first ?? ""
+                result += text[last..<whole.lowerBound]
+                result += isRiskyCSS(css) ? keep : String(text[whole])
+                last = whole.upperBound
+            }
+            result += text[last...]
+            out = result
+        }
+        return out
+    }
+
+    static func isRiskyCSS(_ css: String) -> Bool {
+        var plain = decodedReferences(css)
+        plain = plain.replacingOccurrences(of: #"(?s)/\*.*?(\*/|$)"#, with: "", options: .regularExpression)
+        if plain.contains("\\") { return true }
+        let lower = plain.lowercased()
+        return lower.range(of: #"url\s*\(|image-set|image\s*\(|cross-fade|element\s*\(|@import|@font-face|\bsrc\s*:|expression\s*\(|behavio(u)?r\s*:|-moz-binding|blocked\("#,
+                           options: .regularExpression) != nil
+    }
+
+    /// `&#40;`, `&#x28;`, `&lpar;` and the like, as the HTML parser reads them before CSS sees the text.
+    static func decodedReferences(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        let named = ["lpar": "(", "rpar": ")", "colon": ":", "sol": "/", "bsol": "\\", "quot": "\"", "apos": "'", "amp": "&", "lt": "<",
+                     "gt": ">", "newline": "\n", "tab": "\t", "semi": ";", "num": "#", "excl": "!", "comma": ",", "period": "."]
+        let regex = try! NSRegularExpression(pattern: #"(?i)&(#x[0-9a-f]+|#[0-9]+|[a-z]+);?"#)
+        var result = ""
+        var last = text.startIndex
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let whole = Range(match.range, in: text), let bodyRange = Range(match.range(at: 1), in: text) else { continue }
+            let body = text[bodyRange].lowercased()
+            var decoded: String?
+            if body.hasPrefix("#x"), let code = UInt32(body.dropFirst(2), radix: 16), let scalar = Unicode.Scalar(code) { decoded = String(Character(scalar)) }
+            else if body.hasPrefix("#"), let code = UInt32(body.dropFirst()), let scalar = Unicode.Scalar(code) { decoded = String(Character(scalar)) }
+            else { decoded = named[body] }
+            result += text[last..<whole.lowerBound]
+            result += decoded ?? String(text[whole])
+            last = whole.upperBound
+        }
+        result += text[last...]
+        return result
     }
 }
 

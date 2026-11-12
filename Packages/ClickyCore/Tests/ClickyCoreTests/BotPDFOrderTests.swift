@@ -56,13 +56,12 @@ struct BotPDFOrderTests {
         #expect(!inert.contains("url("))
         #expect(!inert.contains("src="))
         #expect(!inert.contains("background=\""))
-        // The only file path left is inside CSS that no longer loads anything.
-        #expect(inert.components(separatedBy: "file:///").count == 2)
-        #expect(inert.contains("blocked(file:///"))
+        // A style block that tried to load something goes whole, so no file path is left at all.
+        #expect(!inert.contains("file:///"))
         // The document itself is still there.
         #expect(inert.contains("<h1>invoice</h1>"))
         #expect(inert.contains("<td>$360</td>"))
         #expect(inert.contains("<a href=\"https://example.com/pay\">pay here</a>"))
-        #expect(inert.contains("color: #333"))
+        #expect(!inert.contains("color: #333"))
     }
 }

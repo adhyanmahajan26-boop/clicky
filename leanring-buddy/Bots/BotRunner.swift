@@ -155,10 +155,16 @@ enum BotRunner {
 
     /// The Claude tools a bot may use without asking: reading and the web, its memory file, and the
     /// connectors of its own apps.
-    static func claudeAllowedTools(for bot: NativeBot) -> [String] {
+    /// Reading is confined the way writing is: its own memory folder, the project folders coding runs use, and whatever the owner's own
+    /// words named this turn (`readable`, from BotReadScope). The shared guide beside the memory folders is in the engine's working folder,
+    /// which it may always read; the other bots' folders there are denied (`otherBotsFolders`).
+    static func claudeAllowedTools(for bot: NativeBot, readable: [String] = []) -> [String] {
         // Two slashes: an absolute path, in Claude Code's permission rules.
         let memoryFolder = "/" + BotMemory.file(botID: bot.id).deletingLastPathComponent().path + "/**"
-        var tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
+        let projects = "/" + BotsT3.projectsFolder.path + "/**"
+        var tools = ["WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
+        for place in [memoryFolder, projects] { tools += ["Read(\(place))", "Grep(\(place))", "Glob(\(place))"] }
+        tools += BotReadScope.readRules(for: readable)
         for connector in BotConnectors.known where bot.apps.contains(connector.id) {
             if connector.id == "theo" {
                 // Research, notes and the app bridge; never the screen or Theo's voice, with nobody watching.
@@ -170,24 +176,50 @@ enum BotRunner {
         return tools
     }
 
+    /// Files no bot reads, whatever a page or another bot talks it into: sign-ins and keys, shell history, the browser's and Mail's
+    /// stores, and Theo's own records of every chat (bots, chats, routines, groups). A bot can read the web and send requests to any
+    /// address (WebFetch), so anything it can read it could send out. Deny rules win over the allowed Read.
+    /// Every other bot's memory folder: the engine's working folder holds them all, and a working folder is readable without a rule.
+    static func otherBotsFolders(than botID: String) -> [String] {
+        let root = BotMemory.root
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        return folders.filter { $0.lastPathComponent != botID && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .map { "Read(/\($0.path)/**)" }
+    }
+
+    static var secretReadRules: [String] {
+        let home = ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gh/**", "~/.config/gcloud/**", "~/.azure/**", "~/.kube/**",
+                    "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials", "~/.zsh_history", "~/.bash_history",
+                    "~/.claude.json", "~/.claude/.credentials.json", "~/.codex/auth.json", "~/.grok/**", "~/.gemini/**", "~/.cursor/**",
+                    "~/.local/share/opencode/auth.json", "~/Library/Keychains/**", "~/Library/Cookies/**", "~/Library/Mail/**",
+                    "~/Library/Messages/**", "~/Library/Application Support/Google/Chrome/**"]
+        // Theo's own records sit beside the bots' memory folders: absolute paths, since a test profile keeps them under its own home.
+        let theo = BotMemory.root.deletingLastPathComponent().path
+        let records = ["/\(theo)/chats/**", "/\(theo)/*.json", "/\(theo)/*.json.*", "/\(theo)/*.lastgood"]
+        let anywhere = ["//**/.env", "//**/.env.*"]
+        return (home + records + anywhere).map { "Read(\($0))" }
+    }
+
     /// Connector tools a bot never runs on its own, since nobody is there to say yes: sending, replying,
     /// forwarding, deleting, sharing, spam and cancelling. Drafts and new pages are fine.
     static let irreversibleTools = ConnectorBridge.writeTools.filter { name in
         ["send", "reply", "forward", "trash", "delete", "spam", "share", "cancel", "clear"].contains { name.contains($0) }
-    } + ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill"]
+    } + ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill",
+         // Helpers inside a turn: they run under the same rules, but nothing counts them, so one turn could start any number.
+         "Agent", "Task"]
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
-    static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         do {
-            let first = try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
+            let first = try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, readable: readable, onText: onText)
             // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
             let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
             let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
             guard !missing.isEmpty, !Task.isCancelled else { return first }
             try? await Task.sleep(nanoseconds: 20_000_000_000)
             guard !Task.isCancelled,
-                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, onText: onText),
+                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, onText: onText),
                   !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
             return second
         } catch BotRunnerError.freeLimit {
@@ -207,7 +239,7 @@ enum BotRunner {
             // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
             let key = "\(bot.id)#\(session ?? "new")"
             let standInSession = FallbackSessions.shared.get(key)
-            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, onText: onText)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, onText: onText)
             if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
             return (result.text + "\n\n_(OpenCode's free models hit their usage limit, so this reply came from Claude Haiku.)_", session)
         }
@@ -232,7 +264,7 @@ enum BotRunner {
         }
     }
 
-    private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
         if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
@@ -250,7 +282,9 @@ enum BotRunner {
                          // Only the allowed tools run: the user's own permission mode (auto) mustn't widen it.
                          "--permission-mode", "dontAsk",
                          "--append-system-prompt", BotPrompts.persona(bot: bot, team: team),
-                         "--allowedTools"] + claudeAllowedTools(for: bot) + ["--disallowedTools"] + irreversibleTools
+                         "--allowedTools"] + claudeAllowedTools(for: bot, readable: readable) + ["--disallowedTools"] + irreversibleTools + secretReadRules +
+                         // Bash outright: Claude Code lets read-only commands (ls, cat, grep) run in the working folder without a rule.
+                         ["Bash"] + otherBotsFolders(than: bot.id)
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
             var settings: [String: Bool] = [:]
             if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }

@@ -167,13 +167,13 @@ extension BotsStore {
                         continue
                     }
                     // A round in a group counts as a message too, or Theo could keep asking the group forever.
-                    let verdict = (self.directMessageBudgets[context.rootRoom] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
+                    let verdict = (self.directMessageBudgets[self.budgetKey(context.rootRoom)] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
                     if let line = BotDMBudget.capLine(verdict, sender: sender.name, target: chat.name) {
                         self.post(BotChatMessage(author: Self.noteAuthor, text: line), to: room)
                         notes.append(line)
                         continue
                     }
-                    self.directMessageBudgets[context.rootRoom, default: BotDMBudget()].noteSent()
+                    self.directMessageBudgets[self.budgetKey(context.rootRoom), default: BotDMBudget()].noteSent()
                     self.post(BotChatMessage(author: Self.noteAuthor, text: "\(sender.name) asked \(chat.name) in their group chat."), to: room)
                     let words = self.withTeamWork(tell.message, ownerWords: context.ownerWords)
                     let answer = await self.answer(of: chat, to: words, from: sender, ownerWords: context.ownerWords, rootRoom: context.rootRoom)
@@ -191,14 +191,14 @@ extension BotsStore {
                 let turn = self.ownerTurns[context.rootRoom] ?? 0
                 var exchange = self.openExchanges[key].flatMap { $0.ownerTurn == turn ? $0 : nil }
                     ?? BotDMExchange(threadID: BotDMThread.id(sender.id, target.id), senderID: sender.id, targetID: target.id, room: room, rootRoom: context.rootRoom, ownerTurn: turn)
-                let verdict = (self.directMessageBudgets[context.rootRoom] ?? BotDMBudget()).verdict(roundTripsSoFar: exchange.roundTrips)
+                let verdict = (self.directMessageBudgets[self.budgetKey(context.rootRoom)] ?? BotDMBudget()).verdict(roundTripsSoFar: exchange.roundTrips)
                 if let line = BotDMBudget.capLine(verdict, sender: sender.name, target: target.name) {
                     // Said plainly in the chat, and the sender knows not to wait for it.
                     self.post(BotChatMessage(author: Self.noteAuthor, text: line, exchangeID: exchangeID), to: room)
                     notes.append(line)
                     continue
                 }
-                self.directMessageBudgets[context.rootRoom, default: BotDMBudget()].noteSent()
+                self.directMessageBudgets[self.budgetKey(context.rootRoom), default: BotDMBudget()].noteSent()
                 if exchange.roundTrips == 0 {
                     // The card goes in the chat it started from. In a private thread it belongs to that exchange's messages.
                     self.post(BotChatMessage(author: sender.id, text: "", card: BotDMThread.card(exchangeID: exchange.id, targetID: target.id), exchangeID: exchangeID), to: room)
