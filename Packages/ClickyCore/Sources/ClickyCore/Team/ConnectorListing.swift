@@ -46,9 +46,11 @@ public enum ConnectorListing {
         var statuses: [String: ConnectorState] = [:]
         for raw in stripANSI(listing).split(separator: "\n") {
             let line = String(raw)
-            guard let colon = line.range(of: ": "), let dash = line.range(of: " - ", options: .backwards), dash.lowerBound > colon.lowerBound else { continue }
+            // The status starts at " - " followed by its mark; a failure reason after it can contain " - " of its own.
+            let marked = line.range(of: #" - [✔✘!⏸]"#, options: .regularExpression)
+            guard let colon = line.range(of: ": "), let dash = marked ?? line.range(of: " - ", options: .backwards), dash.lowerBound > colon.lowerBound else { continue }
             let name = String(line[..<colon.lowerBound]).trimmingCharacters(in: .whitespaces)
-            let status = line[dash.upperBound...].trimmingCharacters(in: .whitespaces)
+            let status = line[line.index(dash.lowerBound, offsetBy: 3)...].trimmingCharacters(in: .whitespaces)
             if status.hasPrefix("✔") || status.lowercased().hasPrefix("connected") {
                 statuses[name] = .connected
             } else if status.localizedCaseInsensitiveContains("needs authentication") {

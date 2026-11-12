@@ -49,9 +49,8 @@ enum BotFailureWords {
 
     /// The sign-in message a coding agent's failure carries, if that's what it was ("Grok isn't signed in").
     static func signedOutHarness(in reason: String) -> HarnessInfo? {
-        let lower = reason.lowercased()
-        guard lower.contains("signed in") || lower.contains("signed out") || lower.contains("log in") || lower.contains("login") || lower.contains("authenticat") else { return nil }
-        return HarnessCatalog.all.first { lower.contains($0.label.lowercased()) || lower.contains($0.id) }
+        let id = FailureTriage.signInHarness(in: reason, harnesses: HarnessCatalog.all.map { ($0.id, $0.label) })
+        return id.flatMap { id in HarnessCatalog.all.first { $0.id == id } }
     }
 }
 

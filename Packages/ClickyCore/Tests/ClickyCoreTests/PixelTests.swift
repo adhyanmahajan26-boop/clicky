@@ -254,6 +254,8 @@ final class ConnectorListingTests: XCTestCase {
         XCTAssertEqual(statuses["broken-stdio"], .failed("CONNECTION_CLOSED: Connection closed"))
         XCTAssertTrue(statuses["missing-binary"]?.isFailed ?? false)
         XCTAssertEqual(statuses["needs-auth-http"], .needsSignIn)
+        // A reason with " - " of its own still parses: the status is anchored on its mark.
+        XCTAssertEqual(statuses["flaky-http"], .failed("Upstream error - server - closed the stream"))
         XCTAssertEqual(ConnectorListing.parseClaude("x: y - ⏸ Pending approval (run `claude` to approve)")["x"], .missing)
     }
 
@@ -273,5 +275,24 @@ final class ConnectorListingTests: XCTestCase {
         XCTAssertEqual(ConnectorListing.plainReason("ENOENT: no such file", app: "Studio"), "Studio's program isn't on this Mac any more.")
         XCTAssertEqual(ConnectorState.failed("x").label, "Can't connect")
         XCTAssertEqual(ConnectorListing.workedAgo(Date(timeIntervalSinceNow: -7200)), "worked 2 h ago")
+    }
+}
+
+final class FailureTriageTests: XCTestCase {
+    private let harnesses: [(id: String, label: String)] = [("claude", "Claude Code"), ("grok", "Grok"), ("codex", "Codex (ChatGPT)")]
+
+    func testASignedOutAgentIsASignInNotAFailure() {
+        XCTAssertEqual(FailureTriage.signInHarness(in: "Grok isn't signed in. Run grok login, then try again.", harnesses: harnesses), "grok")
+        XCTAssertEqual(FailureTriage.signInHarness(in: "Claude Code is signed out", harnesses: harnesses), "claude")
+        XCTAssertNil(FailureTriage.signInHarness(in: "Your GitHub sign-in has expired.", harnesses: harnesses))
+        XCTAssertNil(FailureTriage.signInHarness(in: "Grok hit its usage limit.", harnesses: harnesses))
+        XCTAssertFalse(FailureTriage.marksUnseen(botID: "b", viewing: nil, isWatching: false, isSignIn: true))
+    }
+
+    func testAFailureInTheChatBeingWatchedIsSeen() {
+        XCTAssertFalse(FailureTriage.marksUnseen(botID: "b", viewing: "b", isWatching: true, isSignIn: false))
+        XCTAssertTrue(FailureTriage.marksUnseen(botID: "b", viewing: "b", isWatching: false, isSignIn: false))
+        XCTAssertTrue(FailureTriage.marksUnseen(botID: "b", viewing: "other", isWatching: true, isSignIn: false))
+        XCTAssertTrue(FailureTriage.marksUnseen(botID: "b", viewing: nil, isWatching: true, isSignIn: false))
     }
 }

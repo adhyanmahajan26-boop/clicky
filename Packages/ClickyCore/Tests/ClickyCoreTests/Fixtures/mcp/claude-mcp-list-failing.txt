@@ -5,3 +5,4 @@ missing-binary: /nonexistent/mcp-server  - ✘ Failed to connect — ENOENT: no 
 broken-http: http://127.0.0.1:9/mcp (HTTP) - ✘ Failed to connect — ECONNREFUSED: Unable to connect. Is the computer able to access the url?
 needs-auth-http: https://mcp.notion.com/mcp (HTTP) - ! Needs authentication
 ok-stdio: ~/.local/bin/uv --version - ✘ Failed to connect — CONNECTION_CLOSED: Connection closed
+flaky-http: https://example.invalid/mcp (HTTP) - ✘ Failed to connect — Upstream error - server - closed the stream

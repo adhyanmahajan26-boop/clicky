@@ -195,3 +195,23 @@ public struct BotFailureRecord: Codable, Equatable, Sendable {
         return line.hasSuffix(".") ? String(line.dropLast()) : line
     }
 }
+
+/// Which failures count. A coding agent that is signed out is something the owner does (needs you), not a failure; and a
+/// failure that happens in the chat the owner is looking at has been seen.
+public enum FailureTriage {
+    /// The harness a sign-in error names ("Grok isn't signed in", "Claude Code is signed out"), by id, if that's what it is.
+    public static func signInHarness(in reason: String, harnesses: [(id: String, label: String)]) -> String? {
+        let lower = reason.lowercased()
+        let saysSignIn = ["not signed in", "isn't signed in", "is not signed in", "signed out", "not logged in", "log in", "login", "not authenticated", "authentication required"]
+            .contains(where: lower.contains)
+        guard saysSignIn else { return nil }
+        return harnesses.first { lower.contains($0.label.lowercased()) || lower.contains($0.id.lowercased()) }?.id
+    }
+
+    /// Whether a failure turns the bot red until the owner sees it.
+    public static func marksUnseen(botID: String, viewing: String?, isWatching: Bool, isSignIn: Bool) -> Bool {
+        if isSignIn { return false }
+        if isWatching, viewing == botID { return false }
+        return true
+    }
+}

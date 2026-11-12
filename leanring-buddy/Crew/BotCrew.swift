@@ -7,6 +7,7 @@
 //  (`NativeBot.lastFailure`) until the owner opens its chat, retries, or gives it new work, so it survives a relaunch.
 //
 
+import AppKit
 import ClickyCore
 import Combine
 import Foundation
@@ -57,6 +58,14 @@ extension BotsStore {
     /// A run or reply of this bot ended in failure. Plain words only; raw output stays behind See details.
     func recordFailure(of botID: String, reason: String, step: String? = nil, runID: String? = nil) {
         guard botID != Self.clickyID, var bot = bot(botID) else { return }
+        // A signed-out coding agent is something the owner does, not a failure: its card asks for the sign-in (needs you).
+        let signIn = BotFailureWords.signedOutHarness(in: reason)
+        // A failure that happens in the chat the owner is looking at has been seen.
+        let watching = NSApp.windows.contains { $0.isVisible && !$0.isMiniaturized && $0.title == "Theo" }
+        guard FailureTriage.marksUnseen(botID: botID, viewing: viewing, isWatching: watching, isSignIn: signIn != nil) else {
+            if let signIn, viewing != botID || !watching { BotAlerts.shared.needs(bot: bot, line: "Sign in to \(signIn.label)") }
+            return
+        }
         bot.lastFailure = BotFailureRecord(reason: reason, at: Date(), step: step, runID: runID)
         save(bot)
         BotAlerts.shared.failed(bot: bot, reason: reason)
