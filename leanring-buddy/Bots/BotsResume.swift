@@ -13,10 +13,14 @@ extension BotsStore {
     static let resumeWindow: TimeInterval = 6 * 60 * 60
 
     /// The owner's messages at the end of a chat with nothing after them: what was cut off.
-    nonisolated static func unanswered(_ messages: [BotChatMessage]) -> [BotChatMessage] {
+    /// `heard`: the last message each bot's finished turn took in (`BotConversationRecord.heard`). A turn that finished
+    /// without posting anything (its reply was only [TELL:] lines or an order) did answer: what it heard isn't asked again,
+    /// or a restart would carry out the same orders twice.
+    nonisolated static func unanswered(_ messages: [BotChatMessage], heard: [String: String]? = nil) -> [BotChatMessage] {
+        let heardIDs = Set((heard ?? [:]).values)
         var trailing: [BotChatMessage] = []
         for message in messages.reversed() {
-            guard message.author == "user" else { break }
+            guard message.author == "user", !heardIDs.contains(message.id) else { break }
             trailing.insert(message, at: 0)
         }
         return trailing
@@ -24,7 +28,8 @@ extension BotsStore {
 
     func resumeInterruptedTurns(now: Date = Date()) {
         for bot in bots where bot.owner == nil && bot.isOn && replying[bot.id] == nil {
-            let waiting = Self.unanswered(conversation(bot.id).messages)
+            let record = conversation(bot.id)
+            let waiting = Self.unanswered(record.messages, heard: record.heard)
             guard !waiting.isEmpty else { continue }
             let recent = waiting.filter { now.timeIntervalSince($0.at) < Self.resumeWindow }
             if recent.isEmpty {
@@ -37,7 +42,8 @@ extension BotsStore {
         }
         for group in groups where group.headID != nil {
             let room = group.roomID
-            guard !isBusy(room), let last = Self.unanswered(conversation(room).messages).last else { continue }
+            let record = conversation(room)
+            guard !isBusy(room), let last = Self.unanswered(record.messages, heard: record.heard).last else { continue }
             guard now.timeIntervalSince(last.at) < Self.resumeWindow else {
                 post(BotChatMessage(author: Self.noteAuthor, text: "Theo stopped before \(group.name) answered this. Send it again if you still need it."), to: room)
                 continue

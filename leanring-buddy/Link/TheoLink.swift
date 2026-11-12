@@ -288,21 +288,25 @@ final class TheoLink: ObservableObject {
 
     /// Bumped whenever networking stops, so a listener retry from before never comes back to life after it.
     private var networkingGeneration = 0
+    /// Listener failures in a row. Back to 0 once one is listening, so a failure days later gets the full set of retries.
+    private var listenFailures = 0
 
     /// Listens for the other Mac. A listener can fail to start or fail later (the port not yet let go after a restart, a network
     /// change, waking from sleep): it tries again every few seconds instead of leaving this Mac unreachable until Theo restarts.
-    private func listen(_ params: NWParameters, attempt: Int = 0) {
+    private func listen(_ params: NWParameters) {
         let generation = networkingGeneration
         let retry: @MainActor (String) -> Void = { [weak self] why in
             guard let self, self.networkingGeneration == generation else { return }
             self.problem = why
             self.listener?.cancel()
             self.listener = nil
+            let attempt = self.listenFailures
+            self.listenFailures += 1
             guard attempt < 120 else { return }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(min(30, 1 + attempt * 2)) * 1_000_000_000)
                 guard let self, self.networkingGeneration == generation, self.listener == nil else { return }
-                self.listen(params, attempt: attempt + 1)
+                self.listen(params)
             }
         }
         guard let listener = try? NWListener(using: params, on: Self.port) else {
@@ -320,7 +324,9 @@ final class TheoLink: ObservableObject {
                 }
             case .ready:
                 Task { @MainActor in
-                    guard let self, self.listener === listener, self.problem?.hasPrefix("Can't listen") == true || self.problem?.hasPrefix("Port ") == true else { return }
+                    guard let self, self.listener === listener else { return }
+                    self.listenFailures = 0
+                    guard self.problem?.hasPrefix("Can't listen") == true || self.problem?.hasPrefix("Port ") == true else { return }
                     self.problem = nil
                 }
             default: break
@@ -335,6 +341,7 @@ final class TheoLink: ObservableObject {
 
     private func stopNetworking() {
         networkingGeneration += 1
+        listenFailures = 0
         failWaitingReplies()
         retryTimer?.invalidate()
         retryTimer = nil

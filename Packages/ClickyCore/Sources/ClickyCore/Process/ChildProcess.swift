@@ -78,6 +78,7 @@ public final class ChildProcess: @unchecked Sendable {
     public var processGroupIdentifier: pid_t { processIdentifier }
 
     private let timeouts: ChildProcessTimeouts
+    private let captureLimit: Int?
     private let onStdoutLine: (@Sendable (Data) -> Void)?
     private let standardOutputDescriptor: Int32
     private let standardErrorDescriptor: Int32
@@ -129,12 +130,15 @@ public final class ChildProcess: @unchecked Sendable {
     /// Starts the child and returns at once. `executable` must be an absolute
     /// path (see ExecutablePath.which); `arguments` excludes argv[0].
     /// `onStdoutLine` is called on a background thread, one call per line.
+    /// `captureLimit`: keep only the last this-many bytes of stdout and of stderr in the result (lines still all reach
+    /// `onStdoutLine`), so a child that floods for minutes can't grow memory without bound. `nil` keeps everything.
     public static func launch(
         executable: String,
         arguments: [String],
         environment: [String: String],
         workingDirectory: String? = nil,
         timeouts: ChildProcessTimeouts = .none,
+        captureLimit: Int? = nil,
         onStdoutLine: (@Sendable (Data) -> Void)? = nil
     ) throws -> ChildProcess {
         _ = ignoreBrokenPipeSignalOnce
@@ -161,7 +165,7 @@ public final class ChildProcess: @unchecked Sendable {
             close(standardOutputPipe.read); close(standardErrorPipe.read)
             throw ChildProcessError.spawnFailed(executable: executable, errno: spawnErrno)
         case .success(let processIdentifier):
-            let childProcess = ChildProcess(processIdentifier: processIdentifier, timeouts: timeouts, onStdoutLine: onStdoutLine,
+            let childProcess = ChildProcess(processIdentifier: processIdentifier, timeouts: timeouts, captureLimit: captureLimit, onStdoutLine: onStdoutLine,
                                             standardOutputDescriptor: standardOutputPipe.read,
                                             standardErrorDescriptor: standardErrorPipe.read)
             childProcess.start()
@@ -169,10 +173,11 @@ public final class ChildProcess: @unchecked Sendable {
         }
     }
 
-    private init(processIdentifier: pid_t, timeouts: ChildProcessTimeouts, onStdoutLine: (@Sendable (Data) -> Void)?,
+    private init(processIdentifier: pid_t, timeouts: ChildProcessTimeouts, captureLimit: Int?, onStdoutLine: (@Sendable (Data) -> Void)?,
                  standardOutputDescriptor: Int32, standardErrorDescriptor: Int32) {
         self.processIdentifier = processIdentifier
         self.timeouts = timeouts
+        self.captureLimit = captureLimit.map { max(1, $0) }
         self.onStdoutLine = onStdoutLine
         self.standardOutputDescriptor = standardOutputDescriptor
         self.standardErrorDescriptor = standardErrorDescriptor
@@ -346,8 +351,8 @@ public final class ChildProcess: @unchecked Sendable {
             exitStatus: exitStatus,
             terminatingSignal: terminatingSignal,
             endReason: endReason ?? .exited,
-            standardOutput: capturedStandardOutput,
-            standardError: capturedStandardError,
+            standardOutput: captureLimit.map { Data(capturedStandardOutput.suffix($0)) } ?? capturedStandardOutput,
+            standardError: captureLimit.map { Data(capturedStandardError.suffix($0)) } ?? capturedStandardError,
             droppedOversizedLineCount: stdoutLineReader.droppedOversizedLineCount
         )
         finishedResult = result
@@ -389,6 +394,7 @@ public final class ChildProcess: @unchecked Sendable {
                         handleStandardOutput(chunk)
                     } else {
                         capturedStandardError.append(chunk)
+                        keepTail(of: &capturedStandardError)
                     }
                 } else if byteCount == 0 || (errno != EINTR && errno != EAGAIN) {
                     if pollDescriptor.fd == standardOutputDescriptor { isStandardOutputOpen = false } else { isStandardErrorOpen = false }
@@ -404,8 +410,15 @@ public final class ChildProcess: @unchecked Sendable {
         drainFinished.signal()
     }
 
+    /// Trims captured output to its last `captureLimit` bytes, in batches so the cost stays linear.
+    private func keepTail(of data: inout Data) {
+        guard let captureLimit, data.count > captureLimit * 2 else { return }
+        data = Data(data.suffix(captureLimit))
+    }
+
     private func handleStandardOutput(_ chunk: Data) {
         capturedStandardOutput.append(chunk)
+        keepTail(of: &capturedStandardOutput)
         let completedLines = stdoutLineReader.append(chunk)
         guard !completedLines.isEmpty else { return }
         stateLock.lock()

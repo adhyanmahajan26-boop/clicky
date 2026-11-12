@@ -286,7 +286,10 @@ enum BotRunner {
         let child: ChildProcess
         do {
             child = try ChildProcess.launch(executable: executable.path, arguments: arguments, environment: environment,
-                                            workingDirectory: workspace.path, timeouts: .total(turnLimitSeconds)) { line in
+                                            workingDirectory: workspace.path, timeouts: .total(turnLimitSeconds),
+                                            // The reply is built from the lines; only stderr's tail is read afterwards. An engine that
+                                            // floods for the whole turn limit mustn't also pile up its output in memory a second time.
+                                            captureLimit: 256 * 1024) { line in
                 lineSink.yield(String(decoding: line, as: UTF8.self))
             }
         } catch {

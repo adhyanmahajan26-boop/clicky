@@ -139,6 +139,34 @@ public enum BotPDFOrder {
         let root = folder.standardizedFileURL.resolvingSymlinksInPath().path
         return resolved.hasPrefix(root + "/") ? URL(fileURLWithPath: resolved) : nil
     }
+
+    /// A bot's HTML with everything that would make the renderer fetch something taken out: images, frames, scripts,
+    /// stylesheets, `url(...)` and `@import`. AppKit's HTML import loads those as it renders, so without this a document
+    /// a bot was talked into writing could pull in any file on the Mac or call out to any address. Links stay links.
+    public static func inertHTML(_ html: String) -> String {
+        let loaders = "script|iframe|frame|frameset|object|embed|applet|param|link|meta|base|img|image|picture|source|video|audio|track|svg|input|form|noscript|template"
+        var out = html
+        let rules: [(String, String)] = [
+            // Whole elements whose contents are code or more loaders.
+            (#"(?is)<\s*(script|iframe|object|embed|applet|svg|video|audio|picture|noscript|template|frameset)\b.*?<\s*/\s*\1\s*>"#, ""),
+            // Any of those tags left on their own (self-closing, unclosed, or stray end tags).
+            ("(?is)<\\s*/?\\s*(?:\(loaders))\\b[^>]*>", ""),
+            // Attributes that load something, on whatever tag is left.
+            (#"(?i)\s(?:src|srcset|lowsrc|dynsrc|background|poster|data|action|formaction|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, ""),
+            // CSS that loads something.
+            (#"(?i)@import\b[^;]*;?"#, ""),
+            (#"(?i)\burl\s*\("#, "blocked(")
+        ]
+        // Again until nothing changes, so a tag split around another (`<scr<img>ipt>`) can't put itself back together.
+        for _ in 0..<8 {
+            let before = out
+            for (pattern, template) in rules {
+                out = out.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+            }
+            if out == before { break }
+        }
+        return out
+    }
 }
 
 /// A bot proposing a screen for someone: [GIVE SCREEN: bot name: screen name, "own", "shared" or "none"]. The owner confirms it on a card.

@@ -1222,7 +1222,7 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.ownAnswers = (record.ownAnswers ?? [:]).merging([bot.id: (record.ownAnswers?[bot.id] ?? []) + [message.id]]) { _, new in new } }
-            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
             // Its engine session has now seen everything in this chat, on this Mac.

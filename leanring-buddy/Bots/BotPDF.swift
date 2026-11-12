@@ -58,7 +58,8 @@ enum BotPDF {
     private static func attributed(_ text: String, kind: String) -> NSAttributedString {
         let html: String
         switch kind {
-        case "html", "htm": html = text
+        // Nothing in a bot's HTML may make the renderer load a file or call out: images, frames, stylesheets and url() are taken out.
+        case "html", "htm": html = BotPDFOrder.inertHTML(text)
         case "md", "markdown", "txt", "": html = page(MarkdownHTML.body(text))
         default: html = page("<pre>" + MarkdownHTML.escape(text) + "</pre>")
         }

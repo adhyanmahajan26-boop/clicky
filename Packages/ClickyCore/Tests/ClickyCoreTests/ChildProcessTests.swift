@@ -87,6 +87,29 @@ struct ChildProcessTests {
         #expect(!groupExists(result.processIdentifier))
     }
 
+    @Test func captureLimitKeepsOnlyTheTailButEveryLineArrives() async throws {
+        // 40,000 lines on stdout and 2 MB on stderr: the result keeps the last 4 KB of each, the lines all reach the callback.
+        let script = try HelperScript("""
+        head -c 2097152 /dev/zero | tr '\\000' 'e' >&2 &
+        i=0; while [ $i -lt 40000 ]; do echo "line $i"; i=$((i+1)); done
+        wait
+        printf 'last-err' >&2
+        """)
+        defer { script.cleanUp() }
+        let collector = LineCollector()
+        let child = try ChildProcess.launch(executable: "/bin/sh", arguments: [script.scriptPath], environment: testEnvironment,
+                                            timeouts: .total(20), captureLimit: 4096, onStdoutLine: { collector.append($0) })
+        let result = await child.waitForExit()
+        #expect(result.endReason == .exited)
+        #expect(collector.lines.count == 40_000)
+        #expect(collector.texts.last == "line 39999")
+        #expect(result.standardOutput.count == 4096)
+        #expect(result.standardOutputText.hasSuffix("line 39999\n"))
+        #expect(result.standardError.count == 4096)
+        #expect(result.standardErrorText.hasSuffix("last-err"))
+        #expect(!groupExists(result.processIdentifier))
+    }
+
     @Test func stdoutLinesSplitOnlyOnNewline() async throws {
         let collector = LineCollector()
         let result = try await ChildProcess.run(
