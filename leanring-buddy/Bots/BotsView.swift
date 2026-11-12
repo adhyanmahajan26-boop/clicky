@@ -835,7 +835,7 @@ struct BotChatScreen: View {
                                 }
                                 if let call {
                                     BotCallCard(call: call, author: author, at: message.at,
-                                                   isOpen: !record.messages[(index + 1)...].contains { $0.author == "user" }) { answer in
+                                                   isOpen: !record.messages[(index + 1)...].contains { $0.author == "user" }, autoPicks: true) { answer in
                                         if let bot { store.send(answer, command: answer, to: bot.id) } else if let groupID { store.sendToGroup(answer, command: answer, groupID: groupID) }
                                     }
                                 }

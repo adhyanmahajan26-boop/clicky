@@ -298,6 +298,8 @@ struct BotCallCard: View {
     let at: Date
     /// False once the owner has replied after it.
     let isOpen: Bool
+    /// Only the chat itself picks by itself after ten minutes; Home and the menu bar wait for the owner.
+    var autoPicks = false
     let onAnswer: (String) -> Void
     @State private var picked = 0
     @ObservedObject private var folds = PixelCardFolds.shared
@@ -329,6 +331,7 @@ struct BotCallCard: View {
                 }
             }
             .task(id: isOpen) {
+                guard autoPicks else { return }
                 let wait = deadline.timeIntervalSinceNow
                 // An old card reopened hours later doesn't decide anything by itself.
                 guard wait > -3600 else { return }
@@ -346,6 +349,7 @@ struct BotCallCard: View {
     }
 
     private func countdown(now: Date) -> String {
+        guard autoPicks else { return "\(author.name) waits for you. Your other bots keep working." }
         let minutes = Int((deadline.timeIntervalSince(now) / 60).rounded(.up))
         return minutes > 0 ? "\(author.name) picks the first one in \(minutes) min if you don't. Your other bots keep working." : "\(author.name) waits here. Your other bots keep working."
     }

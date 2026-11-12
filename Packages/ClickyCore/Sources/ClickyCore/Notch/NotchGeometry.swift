@@ -167,9 +167,14 @@ public enum NotchGeometry {
 
     /// The expanded panel including its flares: header, optional caption,
     /// agent rows (at most 4, plus a "+N more" line), the actions row.
-    public static func expandedSize(layout: NotchLayout, agentRowCount: Int, hasMoreAgentsLine: Bool, hasCaption: Bool, actionStepLineCount: Int = 0) -> CGSize {
+    /// A bot's line: face, title, one line and one button.
+    public static let botLineHeight: CGFloat = 50
+
+    public static func expandedSize(layout: NotchLayout, agentRowCount: Int, hasMoreAgentsLine: Bool, hasCaption: Bool, actionStepLineCount: Int = 0,
+                                    hasBotLine: Bool = false) -> CGSize {
         let bodyWidth = max(expandedBodyWidth, collapsedBodySize(layout: layout).width)
         var height = layout.headerHeight + expandedTopPadding
+        if hasBotLine { height += botLineHeight + sectionSpacing }
         if hasCaption { height += captionHeight + sectionSpacing }
         if actionStepLineCount > 0 { height += actionStepsHeight(lineCount: actionStepLineCount) + sectionSpacing }
         height += agentsSectionHeight(agentRowCount: agentRowCount, hasMoreAgentsLine: hasMoreAgentsLine)

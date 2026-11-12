@@ -138,7 +138,9 @@ final class NotchPanelController: NSObject {
             companionManager.wakeWordController.$state.map { _ in () }.eraseToAnyPublisher(),
             // P8: "listening…" in the follow-up window, and the last fast-path action for a few seconds.
             companionManager.wakeWordController.$isFollowUpListening.map { _ in () }.eraseToAnyPublisher(),
-            companionManager.voiceCommandController.$notchStatusText.map { _ in () }.eraseToAnyPublisher()
+            companionManager.voiceCommandController.$notchStatusText.map { _ in () }.eraseToAnyPublisher(),
+            // A bot that needs the owner, failed or is done shows its line (debounced: replies stream).
+            BotsStore.shared.objectWillChange.debounce(for: .milliseconds(400), scheduler: RunLoop.main).map { _ in () }.eraseToAnyPublisher()
         ]
         Publishers.MergeMany(triggers)
             .receive(on: DispatchQueue.main)
@@ -157,7 +159,7 @@ final class NotchPanelController: NSObject {
         if let selectedAgentID, agentsCenter.store[selectedAgentID]?.status.isActive != true {
             self.selectedAgentID = nil
         }
-        let newContent = NotchStatus.content(
+        var newContent = NotchStatus.content(
             phase: phase,
             store: agentsCenter.store,
             captionText: NotchStatus.captionText(companionManager.captionState),
@@ -171,6 +173,9 @@ final class NotchPanelController: NSObject {
             canCancel: { agentsCenter.canCancel($0) },
             canOpenReview: { record in record.kind == .codeTask && codeModeController.activeReviewAgentID == record.id }
         )
+        newContent.botLine = Self.botLine(store: BotsStore.shared)
+        // With nothing else to say, the collapsed pill names the bot that needs you.
+        if newContent.statusText.isEmpty, newContent.phase == .idle, let line = newContent.botLine, line.state != "done" { newContent.statusText = line.title }
         let sizeChanged = NotchView.pillSize(content: newContent, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
             != NotchView.pillSize(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
         if newContent != viewModel.content { viewModel.content = newContent }
@@ -416,8 +421,29 @@ final class NotchPanelController: NSObject {
         applyPanelFrame()
     }
 
+    /// The most urgent bot line: needs you, then failed, then a bot that just finished.
+    static func botLine(store: BotsStore) -> NotchBotLine? {
+        let bots = store.bots.filter(\.isOn)
+        let states = bots.map { ($0, store.pixelState(of: $0).state) }
+        if let (bot, _) = states.first(where: { $0.1 == .needs }) {
+            if let connector = ConnectorHealth.shared.blockingConnector(of: bot.id) {
+                return NotchBotLine(botID: bot.id, state: "needs", title: "\(bot.name) needs you", line: "Sign in to \(connector.name)", button: "Sign in")
+            }
+            return NotchBotLine(botID: bot.id, state: "needs", title: "\(bot.name) needs you",
+                                line: store.liveStatus(of: bot).replacingOccurrences(of: "Needs you · ", with: ""), button: "Open")
+        }
+        if let (bot, _) = states.first(where: { $0.1 == .failed }) {
+            return NotchBotLine(botID: bot.id, state: "failed", title: "\(bot.name) failed", line: bot.lastFailure?.firstSentence ?? "It stopped", button: "Fix")
+        }
+        if let (bot, _) = states.first(where: { $0.1 == .done }) {
+            let last = store.conversation(bot.id).messages.last(where: { $0.author == bot.id }).map { BotsStore.firstLine($0.text) } ?? "Finished"
+            return NotchBotLine(botID: bot.id, state: "done", title: "\(bot.name) is done", line: last, button: "Open")
+        }
+        return nil
+    }
+
     private func makeActions() -> NotchActions {
-        NotchActions(
+        var actions = NotchActions(
             expand: { [weak self] in
                 guard let self else { return }
                 self.presentationStateMachine.clicked()
@@ -443,6 +469,22 @@ final class NotchPanelController: NSObject {
                 self?.companionManager.codeModeController.setEnabled(isEnabled)
             }
         )
+        actions.botFace = { botID, state in
+            guard let bot = BotsStore.shared.bot(botID) else { return AnyView(EmptyView()) }
+            return AnyView(CrewAvatar(look: bot.crewLook, size: 28, pose: PixelState(rawValue: state) ?? .awake, interactive: false, name: bot.name, ring: .black)
+                .environment(\.colorScheme, .dark))
+        }
+        actions.botLineAction = { [weak self] botID in
+            guard let self else { return }
+            let store = BotsStore.shared
+            if let bot = store.bot(botID), let connector = ConnectorHealth.shared.blockingConnector(of: botID) {
+                Task { _ = await ConnectorHealth.shared.signIn(connector, forBot: bot) }
+                return
+            }
+            TheoHomeWindowController.show(companionManager: self.companionManager)
+            NotificationCenter.default.post(name: .theoOpenBot, object: botID)
+        }
+        return actions
     }
 }
 

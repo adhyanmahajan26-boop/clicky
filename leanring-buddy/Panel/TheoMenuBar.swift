@@ -34,6 +34,7 @@ final class MenuBarPanelManager: NSObject {
     private var outsideClickMonitor: Any?
     private var dismissObserver: NSObjectProtocol?
     private var showObserver: NSObjectProtocol?
+    private var faceUpdater: MenuBarFaceUpdater?
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -52,13 +53,12 @@ final class MenuBarPanelManager: NSObject {
     }
 
     private func makeStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Theo")
-            image?.isTemplate = true
-            button.image = image
+            // The micro face of the most urgent state, and how many bots are in it.
             button.target = self
             button.action = #selector(toggle)
+            faceUpdater = MenuBarFaceUpdater(button: button)
         }
         statusItem = item
     }
@@ -153,6 +153,7 @@ struct TheoPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            MenuBarUrgentRows(close: close)
             if !companionManager.allPermissionsGranted || !speechAllowed { permissionsBanner }
             ClickyMacSwitch()
             tiles
@@ -187,16 +188,11 @@ struct TheoPanelView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isBusy)) { timeline in
-                let spin = isBusy ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2 * 360 : 0
-                ZStack {
-                    Circle().fill(LinearGradient(colors: [Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.93, green: 0.27, blue: 0.45)],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .shadow(color: DS.Colors.accent.opacity(isBusy ? 0.8 : 0.25), radius: isBusy ? 10 : 4)
-                    CompanionIconShape(style: ClickySettings.sparkStyle).fill(Color.white).frame(width: 15, height: 15).rotationEffect(.degrees(spin))
-                }
+            // Theo's own face, in the most urgent state of the team (the same face the menu bar shows).
+            if let theo = BotsStore.shared.primary {
+                CrewAvatar(look: theo.crewLook, size: 30, pose: isBusy ? .listening : MenuBarFace.summary().state, interactive: false, name: theo.name, ring: DS.Colors.background)
+                    .frame(width: 30, height: 30)
             }
-            .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(ClickySettings.assistantName).font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 HStack(spacing: 5) {
@@ -213,23 +209,44 @@ struct TheoPanelView: View {
 
     // MARK: Permissions
 
-    private var missing: [(String, () -> Void)] {
-        var items: [(String, () -> Void)] = []
-        if !companionManager.hasMicrophonePermission { items.append(("Microphone", { AVCaptureDevice.requestAccess(for: .audio) { _ in } })) }
-        if !speechAllowed { items.append(("Speech", { SFSpeechRecognizer.requestAuthorization { _ in } })) }
-        if !companionManager.hasAccessibilityPermission { items.append(("Accessibility", { TheoPermissions.askForAccessibility() })) }
-        if !companionManager.hasScreenRecordingPermission { items.append(("Screen recording", { TheoPermissions.askForScreenRecording() })) }
-        if !companionManager.hasScreenContentPermission { items.append(("Screen access", { companionManager.requestScreenContentPermission() })) }
+    /// A permission Theo doesn't have: its name, its symbol, whether macOS has asked yet, and what the one button does.
+    private var missing: [(name: String, symbol: String, asked: Bool, action: () -> Void)] {
+        var items: [(name: String, symbol: String, asked: Bool, action: () -> Void)] = []
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        if !companionManager.hasMicrophonePermission {
+            items.append(("Microphone", "mic.fill", micStatus != .notDetermined, { AVCaptureDevice.requestAccess(for: .audio) { _ in } }))
+        }
+        if !speechAllowed {
+            items.append(("Speech", "waveform", SFSpeechRecognizer.authorizationStatus() != .notDetermined, { SFSpeechRecognizer.requestAuthorization { _ in } }))
+        }
+        if !companionManager.hasAccessibilityPermission { items.append(("Accessibility", "accessibility", true, { _ = TheoPermissions.askForAccessibility() })) }
+        if !companionManager.hasScreenRecordingPermission { items.append(("Screen recording", "rectangle.dashed.badge.record", true, { _ = TheoPermissions.askForScreenRecording() })) }
+        if !companionManager.hasScreenContentPermission { items.append(("Screen access", "macwindow", true, { companionManager.requestScreenContentPermission() })) }
         return items
     }
 
+    /// The Mac permissions Theo still needs, as rows: app tile, name, pill, one button. Only the owner can flip these.
     private var permissionsBanner: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("\(ClickySettings.assistantName) needs a couple of things", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .semibold)).foregroundColor(DS.Colors.warning)
-            FlowRow(missing.map(\.0)) { title in
-                Button(title) { missing.first { $0.0 == title }?.1() }
-                    .font(.system(size: 11, weight: .medium)).buttonStyle(.borderedProminent).tint(DS.Colors.warning).controlSize(.small)
+            HStack {
+                Text("Mac permissions").font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
+                Spacer()
+                Text("\(missing.count)").font(.system(size: 12, weight: .semibold)).foregroundColor(PixelTone.needs.text)
+            }
+            ForEach(missing, id: \.name) { item in
+                HStack(spacing: 10) {
+                    AppTile(symbol: item.symbol, size: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        StatusPill(text: item.asked ? "Needs you" : "Not asked", tone: item.asked ? .warn : .neutral)
+                    }
+                    Spacer(minLength: 4)
+                    Button(item.asked ? "Open Settings" : "Allow") {
+                        // A test never asks for a permission: it records what the button would do.
+                        if TheoProfile.isTest { TheoOpen.record("permission \(item.name)") } else { item.action() }
+                    }
+                    .buttonStyle(.theo(.secondary, .small))
+                }
             }
             if TheoPermissions.askedForScreenRecordingThisLaunch && !companionManager.hasScreenRecordingPermission {
                 Button("Allowed screen recording? Restart \(ClickySettings.assistantName)") { TheoPermissions.relaunch() }
@@ -238,7 +255,8 @@ struct TheoPanelView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.warning.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PixelTone.needs.cardBorder, lineWidth: 1))
     }
 
     // MARK: Tiles
@@ -492,5 +510,141 @@ struct PulsingDot: View {
             }
             .frame(width: 12, height: 12)
         }
+    }
+}
+
+// MARK: - The menu bar face
+
+/// What the menu bar icon shows: calm is Theo's `awake` micro face with no count; otherwise the most urgent of failed,
+/// needs you and working, with how many bots are in it.
+enum MenuBarFace {
+    struct Summary: Equatable {
+        let state: PixelState
+        let count: Int
+    }
+
+    @MainActor
+    static func summary(store: BotsStore = .shared) -> Summary {
+        let states = (store.bots + [store.clickyBot]).filter(\.isOn).map { store.pixelState(of: $0).state }
+        for urgent in [PixelState.failed, .needs] {
+            let count = states.filter { $0 == urgent }.count
+            if count > 0 { return Summary(state: urgent, count: count) }
+        }
+        let working = states.filter { $0.lane == .working }.count
+        if working > 0 { return Summary(state: .working, count: working) }
+        return Summary(state: .awake, count: 0)
+    }
+
+    /// The micro face as a menu bar image: a bone shell on a dark menu bar, onyx on a light one.
+    static func image(for state: PixelState, darkMenuBar: Bool) -> NSImage {
+        let look = PixelLook(finish: darkMenuBar ? "bone" : "onyx", trim: 0xFF7A45, eye: "block", top: "none", extra: "none")
+        let image = PixelDrawing.faceImage(look: look, state: state, size: 18, isDark: darkMenuBar, scale: 3)
+        image.isTemplate = false
+        image.accessibilityDescription = "Theo: \(state.label)"
+        return image
+    }
+}
+
+/// Keeps the status item's face and count in step with the bots, without redrawing on every streamed word.
+@MainActor
+final class MenuBarFaceUpdater {
+    private weak var button: NSStatusBarButton?
+    private var cancellables: Set<AnyCancellable> = []
+    private var shown: (MenuBarFace.Summary, Bool)?
+
+    init(button: NSStatusBarButton) {
+        self.button = button
+        BotsStore.shared.objectWillChange
+            .merge(with: ConnectorHealth.shared.objectWillChange)
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.update() }
+            .store(in: &cancellables)
+        Timer.publish(every: 20, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.update() }.store(in: &cancellables)
+        update()
+    }
+
+    func update() {
+        guard let button else { return }
+        let summary = MenuBarFace.summary()
+        let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if let shown, shown.0 == summary, shown.1 == dark { return }
+        shown = (summary, dark)
+        button.image = MenuBarFace.image(for: summary.state, darkMenuBar: dark)
+        button.imagePosition = .imageLeading
+        button.title = summary.count > 0 ? " \(summary.count)" : ""
+        button.toolTip = summary.count > 0 ? "\(summary.count) \(summary.state == .working ? "working" : summary.state.label.lowercased())" : "Theo"
+    }
+}
+
+/// Needs you and Failed, at the top of the panel: the bot, one line, one button.
+struct MenuBarUrgentRows: View {
+    @ObservedObject private var store = BotsStore.shared
+    @ObservedObject private var health = ConnectorHealth.shared
+    let close: () -> Void
+
+    var body: some View {
+        let needing = store.bots.filter { $0.isOn && store.pixelState(of: $0).state == .needs }
+        let failed = store.bots.filter { store.pixelState(of: $0).state == .failed }
+        let working = store.bots.filter { store.pixelState(of: $0).state.lane == .working }
+        if !needing.isEmpty || !failed.isEmpty || !working.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                if !needing.isEmpty {
+                    heading("Needs you", count: needing.count, color: PixelTone.needs.text)
+                    ForEach(needing) { bot in row(bot, state: .needs, line: line(bot), button: buttonTitle(bot)) }
+                }
+                if !failed.isEmpty {
+                    heading("Failed", count: failed.count, color: PixelTone.failed.text)
+                    ForEach(failed) { bot in row(bot, state: .failed, line: bot.lastFailure?.firstSentence ?? "It stopped", button: "Fix") }
+                }
+                if !working.isEmpty {
+                    Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1).padding(.vertical, 2)
+                    ForEach(working.prefix(3)) { bot in row(bot, state: store.pixelState(of: bot).state, line: store.liveStatus(of: bot), button: nil) }
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface))
+        }
+    }
+
+    private func line(_ bot: NativeBot) -> String {
+        if let connector = health.blockingConnector(of: bot.id) { return "Sign in to \(connector.name)" }
+        return store.liveStatus(of: bot).replacingOccurrences(of: "Needs you · ", with: "")
+    }
+
+    private func buttonTitle(_ bot: NativeBot) -> String {
+        health.blockingConnector(of: bot.id) != nil ? "Sign in" : "Open"
+    }
+
+    private func heading(_ title: String, count: Int, color: Color) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
+            Spacer()
+            Text("\(count)").font(.system(size: 12, weight: .semibold)).foregroundColor(color)
+        }
+    }
+
+    private func row(_ bot: NativeBot, state: PixelState, line: String, button: String?) -> some View {
+        HStack(spacing: 10) {
+            CrewAvatar(look: bot.crewLook, size: 30, pose: state, interactive: false, name: bot.name, ring: DS.Colors.surface)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                Text(line).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            if let button {
+                Button(button) { act(bot, button: button) }
+                    .buttonStyle(.theo(button == "Sign in" ? .primary : .secondary, .small))
+            }
+        }
+    }
+
+    private func act(_ bot: NativeBot, button: String) {
+        if button == "Sign in", let connector = health.blockingConnector(of: bot.id) {
+            Task { _ = await health.signIn(connector, forBot: bot) }
+            return
+        }
+        close()
+        if let manager = CompanionManager.current { TheoHomeWindowController.show(companionManager: manager) }
+        NotificationCenter.default.post(name: .theoOpenBot, object: bot.id)
     }
 }

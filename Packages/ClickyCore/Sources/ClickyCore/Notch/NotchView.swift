@@ -29,6 +29,10 @@ public struct NotchActions {
     public var openReview: (String) -> Void
     public var showAgentsWindow: () -> Void
     public var setCodeModeEnabled: (Bool) -> Void
+    /// The bot's face for its line: (bot id, PixelState name). Drawn by the app, which owns the faces.
+    public var botFace: ((String, String) -> AnyView)? = nil
+    /// The bot line's button.
+    public var botLineAction: (String) -> Void = { _ in }
 
     public init(expand: @escaping () -> Void, selectAgent: @escaping (String) -> Void, cancelAgent: @escaping (String) -> Void,
                 openReview: @escaping (String) -> Void, showAgentsWindow: @escaping () -> Void, setCodeModeEnabled: @escaping (Bool) -> Void) {
@@ -131,7 +135,8 @@ public struct NotchView: View {
     public static func pillSize(content: NotchContent, layout: NotchLayout, isExpanded: Bool) -> CGSize {
         guard isExpanded else { return NotchGeometry.collapsedSize(layout: layout, isIdle: isIdle(content)) }
         return NotchGeometry.expandedSize(layout: layout, agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0,
-                                          hasCaption: content.captionText != nil, actionStepLineCount: content.actionStepLines.count)
+                                          hasCaption: content.captionText != nil, actionStepLineCount: content.actionStepLines.count,
+                                          hasBotLine: content.botLine != nil)
     }
 
     /// Nothing to show beside the logo: no status, no helpers orbiting it.
@@ -257,6 +262,10 @@ public struct NotchView: View {
         VStack(spacing: 0) {
             header.frame(height: layout.headerHeight)
             Spacer().frame(height: NotchGeometry.expandedTopPadding)
+            if let botLine = content.botLine {
+                botLineRow(botLine).frame(height: NotchGeometry.botLineHeight)
+                Spacer().frame(height: NotchGeometry.sectionSpacing)
+            }
             if let captionText = content.captionText {
                 captionCard(captionText).frame(height: NotchGeometry.captionHeight)
                 Spacer().frame(height: NotchGeometry.sectionSpacing)
@@ -299,6 +308,29 @@ public struct NotchView: View {
                 runningSummaryLabel
             }
         }
+    }
+
+    /// "Researcher needs you / Sign in to Notion / [Sign in]": the face at 28 pt, a title, one line, one button.
+    private func botLineRow(_ botLine: NotchBotLine) -> some View {
+        HStack(spacing: 10) {
+            if let face = actions.botFace { face(botLine.botID, botLine.state).frame(width: 28, height: 28) }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(botLine.title).font(.system(size: 13, weight: .semibold)).foregroundColor(.white).lineLimit(1)
+                Text(botLine.line).font(.system(size: 11.5)).foregroundColor(.white.opacity(0.6)).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let button = botLine.button {
+                Button(button) { actions.botLineAction(botLine.botID) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(botLine.button == "Sign in" || botLine.button == "Fix" ? .black : .white)
+                    .padding(.horizontal, 11).frame(height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(botLine.button == "Sign in" || botLine.button == "Fix" ? Color(cgColor: CompanionIconStyle.color(style.accentHex)) : Color.white.opacity(0.12)))
+            }
+        }
+        .padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
     }
 
     private func headerTitle(_ title: String, isPrimary: Bool) -> some View {

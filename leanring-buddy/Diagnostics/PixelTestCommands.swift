@@ -66,6 +66,23 @@ enum PixelTestCommands {
             return ["opened": TheoOpen.recorded]
         case "alert":
             return showAlert()
+        case "menubar":
+            let summary = MenuBarFace.summary()
+            let view = MenuBarPreview(current: summary).environment(\.colorScheme, .dark)
+            var result = show(id: "menubar", title: "Menu bar", size: NSSize(width: 720, height: 300), view: view, theme: nil) as? [String: Any] ?? [:]
+            result["state"] = summary.state.rawValue
+            result["count"] = summary.count
+            return result
+        case "notch":
+            let view = NotchPreview().environment(\.colorScheme, .dark)
+            return show(id: "notch", title: "Notch", size: NSSize(width: 620, height: 560), view: view, theme: nil)
+        case "notchLine":
+            let line = NotchPanelController.botLine(store: store)
+            return ["title": line?.title as Any? ?? NSNull(), "line": line?.line as Any? ?? NSNull(), "button": line?.button as Any? ?? NSNull()] as [String: Any]
+        case "panel":
+            guard let manager = CompanionManager.current else { return ["error": "No companion."] }
+            let view = TheoPanelView(companionManager: manager, close: {}).padding(16).background(Color.black)
+            return show(id: "panel", title: "Menu bar panel", size: NSSize(width: 360, height: 820), view: view, theme: nil)
         case "alerts":
             return ["alerts": BotAlerts.shared.recent.map { ["bot": $0.botID, "state": $0.state.rawValue, "title": $0.title, "line": $0.line] }]
         case "reply":
@@ -165,7 +182,7 @@ enum PixelTestCommands {
         if let inbox = made["Inbox Triage"] {
             store.seedForTest(inbox.id, messages: [
                 message("user", "Go through this morning's mail.", 800),
-                message(inbox.id, "3 emails want a reply from you. I drafted all three.\n\n[CHOOSE: Send the drafts? | Review drafts: Open each one first | Later: Keep them as drafts]", 720),
+                message(inbox.id, "3 emails want a reply from you. I drafted all three.\n\n[CHOOSE: Send the drafts? | Review drafts | Later]", 60),
             ])
         }
         // Failed.
@@ -212,6 +229,69 @@ enum PixelTestCommands {
             store.save(accountant)
         }
         return ["bots": made.mapValues { store.pixelState(of: $0).state.rawValue }]
+    }
+}
+
+/// The notch as it draws a bot's line: the most urgent bot right now (from the store), Listening, and a bot that is done.
+struct NotchPreview: View {
+    var body: some View {
+        let layout = NotchLayout.sample(hasPhysicalNotch: false)
+        var actions = NotchActions.inert
+        actions.botFace = { botID, state in
+            guard let bot = BotsStore.shared.bot(botID) else { return AnyView(EmptyView()) }
+            return AnyView(CrewAvatar(look: bot.crewLook, size: 28, pose: PixelState(rawValue: state) ?? .awake, interactive: false, name: bot.name, ring: .black))
+        }
+        let live = NotchPanelController.botLine(store: BotsStore.shared)
+        let builder = BotsStore.shared.bots.first { $0.name == "Builder" }
+        let examples: [NotchContent] = [
+            NotchContent(statusText: live?.title ?? "", botLine: live),
+            NotchContent(phase: .listening, statusText: "Listening…", captionText: "\u{201C}Hey Theo, what's Builder doing?\u{201D}"),
+            NotchContent(botLine: builder.map { NotchBotLine(botID: $0.id, state: "done", title: "Builder is done", line: "Draft pull request is ready", button: "Open") }),
+        ]
+        return VStack(spacing: 14) {
+            ForEach(Array(examples.enumerated()), id: \.offset) { _, content in
+                NotchView(content: content, layout: layout, isExpanded: true, actions: actions, fixedAnimationDate: Date(timeIntervalSinceReferenceDate: 0))
+                    .frame(height: NotchView.pillSize(content: content, layout: layout, isExpanded: true).height)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(white: 0.16))
+    }
+}
+
+/// The menu bar icon as it is drawn, on a dark and a light menu bar: calm, working, needs you, failed, and what it shows now.
+struct MenuBarPreview: View {
+    let current: MenuBarFace.Summary
+    private let samples: [(String, PixelState, Int)] = [("Calm", .awake, 0), ("Working", .working, 2), ("Needs you", .needs, 2), ("Failed", .failed, 1)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach([true, false], id: \.self) { dark in
+                HStack(spacing: 34) {
+                    ForEach(samples, id: \.0) { sample in item(sample.1, count: sample.2, dark: dark, label: sample.0) }
+                }
+                .padding(.horizontal, 18).frame(height: 54)
+                .background(RoundedRectangle(cornerRadius: 10).fill(dark ? Color(white: 0.12) : Color(white: 0.93)))
+            }
+            HStack(spacing: 10) {
+                Text("Now:").font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
+                item(current.state, count: current.count, dark: true, label: current.count > 0 ? "\(current.count) \(current.state.label.lowercased())" : "Calm")
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(DS.Colors.background)
+    }
+
+    private func item(_ state: PixelState, count: Int, dark: Bool, label: String) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 3) {
+                Image(nsImage: MenuBarFace.image(for: state, darkMenuBar: dark)).frame(width: 18, height: 18)
+                if count > 0 { Text("\(count)").font(.system(size: 13, weight: .medium)).foregroundColor(dark ? .white : .black) }
+            }
+            Text(label).font(.system(size: 10)).foregroundColor(dark ? Color(white: 0.6) : Color(white: 0.35))
+        }
     }
 }
 

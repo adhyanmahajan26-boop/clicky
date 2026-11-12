@@ -28,8 +28,8 @@ struct TodayView: View {
                                 Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
                                 Text("Call \(store.primary?.name ?? "Theo")").font(.system(size: 13, weight: .semibold))
                             }
-                            .foregroundColor(.white).padding(.horizontal, 14).frame(height: 34)
-                            .background(Capsule().fill(Color(hex: 0x2FA36B)))
+                            .foregroundColor(DS.Colors.textOnAccent).padding(.horizontal, 14).frame(height: 34)
+                            .background(Capsule().fill(DS.Colors.accent))
                             .contentShape(Capsule())
                         }
                         .buttonStyle(.plain).help("Start a voice call")
@@ -37,6 +37,8 @@ struct TodayView: View {
                     Text(products.isOn(.clicky) ? "Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left." : "Open a bot on the left. Clicky is off; turn it on in Settings \u{203A} Products.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
+                // What needs you and what failed come first, as cards you can answer right here.
+                HomeLanes(store: store, selection: selection)
                 section("Your team") {
                     OrgChart(store: store, selection: selection) {
                         let count = store.layout.sections.count
@@ -133,7 +135,9 @@ struct TodayView: View {
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
-        return hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
+        let words = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
+        let first = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
+        return first.isEmpty ? words : "\(words), \(first)"
     }
 
     private func section<Content: View>(_ title: String, trailing: (title: String, action: () -> Void)? = nil, @ViewBuilder content: () -> Content) -> some View {

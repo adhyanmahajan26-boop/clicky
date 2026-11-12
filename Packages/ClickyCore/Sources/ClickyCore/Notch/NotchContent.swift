@@ -54,6 +54,24 @@ public struct NotchAgentRow: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One bot that wants the owner, or just finished: "Researcher needs you / Sign in to Notion / [Sign in]".
+public struct NotchBotLine: Equatable, Sendable {
+    public var botID: String
+    /// A PixelState name, for the face.
+    public var state: String
+    public var title: String
+    public var line: String
+    public var button: String?
+
+    public init(botID: String, state: String, title: String, line: String, button: String?) {
+        self.botID = botID
+        self.state = state
+        self.title = title
+        self.line = line
+        self.button = button
+    }
+}
+
 public struct NotchContent: Equatable, Sendable {
     public var phase: NotchCompanionPhase
     /// The collapsed pill's short status ("" shows the logo alone).
@@ -77,11 +95,14 @@ public struct NotchContent: Equatable, Sendable {
     public var wakeIndicator: NotchWakeIndicator
     /// P7: the running action task's newest step lines (at most NotchGeometry.maximumActionStepLines).
     public var actionStepLines: [String]
+    /// A bot that needs the owner, failed, or is done.
+    public var botLine: NotchBotLine?
 
     public init(phase: NotchCompanionPhase = .idle, statusText: String = "", orbitingAgentIDs: [String] = [], agentRows: [NotchAgentRow] = [],
                 hiddenAgentCount: Int = 0, agentRowsAreRecent: Bool = false, captionText: String? = nil, isCodeModeOn: Bool = false,
                 selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil,
-                wakeIndicator: NotchWakeIndicator = .hidden, actionStepLines: [String] = []) {
+                wakeIndicator: NotchWakeIndicator = .hidden, actionStepLines: [String] = [], botLine: NotchBotLine? = nil) {
+        self.botLine = botLine
         self.phase = phase
         self.statusText = statusText
         self.orbitingAgentIDs = orbitingAgentIDs
