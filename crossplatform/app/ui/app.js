@@ -20,7 +20,7 @@ const theme = () => document.documentElement.classList.toggle("on-light", light.
 light.addEventListener("change", theme); theme();
 
 function face(id) { return state.faces.find((f) => f.id === id) || { id, state: "awake", word: "Ready", detail: "", look: null }; }
-function lookOf(id) { const f = face(id); const b = state.bots.find((x) => x.id === id) || {}; return Object.assign({ name: b.name || id }, f.look || TP.CREW.builder); }
+function lookOf(id) { const f = face(id); const b = state.bots.find((x) => x.id === id) || {}; return Object.assign({ name: esc(b.name || id) }, f.look || TP.CREW.builder); }
 function botHTML(id, size, opts = {}) { const f = face(id); return TP.bot(lookOf(id), opts.state || f.state, size, opts); }
 function nameOf(id) { return (state.bots.find((b) => b.id === id) || {}).name || id; }
 function ago(iso) {

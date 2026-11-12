@@ -111,6 +111,8 @@ pub struct State {
     pub replying_since: HashMap<String, DateTime<Utc>>,
     pub connectors: Vec<crate::connectors::Connector>,
     pub connectors_checked: Option<DateTime<Utc>>,
+    /// A `claude mcp list` is running. It starts every MCP server to check it, so only one runs at a time.
+    pub connectors_refreshing: bool,
     pub gateway_recent: Vec<(DateTime<Utc>, String, String)>,
 }
 
@@ -1857,6 +1859,34 @@ impl Harness {
 
     /// Claude Code's connectors, from `claude mcp list` (it checks each server, so it can take a while).
     pub async fn refresh_connectors(&self) -> Result<(), String> {
+        let started_here = self.with(|s| {
+            if s.connectors_refreshing {
+                false
+            } else {
+                s.connectors_refreshing = true;
+                true
+            }
+        });
+        if !started_here {
+            // Another caller's check is running: wait for its result instead of starting every server again.
+            let deadline = Instant::now() + Duration::from_secs(95);
+            while self.with(|s| s.connectors_refreshing) && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            return Ok(());
+        }
+        // Cleared however this ends, even if the caller stops waiting.
+        struct ClearWhenDone<'a>(&'a Harness);
+        impl Drop for ClearWhenDone<'_> {
+            fn drop(&mut self) {
+                self.0.with(|s| s.connectors_refreshing = false);
+            }
+        }
+        let _clear = ClearWhenDone(self);
+        self.list_connectors_now().await
+    }
+
+    async fn list_connectors_now(&self) -> Result<(), String> {
         let program = self.executable("claude").ok_or("Claude Code isn't installed.")?;
         let (program, mut args) = engine::command_for(&program);
         args.extend(["mcp".to_string(), "list".to_string()]);
