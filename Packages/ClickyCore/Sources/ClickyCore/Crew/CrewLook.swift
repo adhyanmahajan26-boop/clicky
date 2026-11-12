@@ -17,7 +17,7 @@ public struct CrewLook: Codable, Equatable, Sendable {
     public enum Hat: String, CaseIterable, Codable, Sendable { case none, hardhat, beret, cap, beanie, tophat, crown, headset }
     /// `cursor` is Clicky's alone: `pickable` leaves it out.
     public enum Antenna: String, CaseIterable, Codable, Sendable {
-        case none, ball, twin, dish, flag, bolt, heart, cursor
+        case none, ball, twin, dish, flag, bolt, heart, cursor, handle
         public static let pickable = allCases.filter { $0 != .cursor }
     }
     public enum Eyes: String, CaseIterable, Codable, Sendable { case pill, round, pixel, visor, hearts }
@@ -46,11 +46,16 @@ public struct CrewLook: Codable, Equatable, Sendable {
 
     // MARK: Palettes (body, screen glow, hat)
 
-    public static let shellOrder = ["white", "graphite", "black", "cream", "sky", "mint", "blush"]
+    /// The nine Pixel finishes, by the names a look saves them under (the old names where a finish had one before).
+    public static let shellOrder = ["white", "graphite", "black", "cream", "sky", "lilac", "blush", "slate", "cocoa"]
+    /// Every body a saved look may name. Mint stays readable for old looks; it draws as slate.
     public static let shells: [String: UInt32] = ["white": 0xECECEE, "graphite": 0x3B3B40, "black": 0x161616, "cream": 0xEFE5D3,
-                                                  "sky": 0xCFE1FF, "mint": 0xCDEEDD, "blush": 0xF6D2DB]
-    public static let glows = ["#ff7a45", "#f5b03c", "#ff6f9f", "#a3e635", "#34d3e6", "#60a5fa", "#a78bfa", "#f87171", "#f4f4f5"]
-    public static let hatColors = ["#f5b03c", "#ff6f9f", "#a3e635", "#60a5fa", "#a78bfa", "#f87171", "#1c1c1c", "#f4f4f5"]
+                                                  "sky": 0xCFE1FF, "mint": 0xCDEEDD, "blush": 0xF6D2DB,
+                                                  "lilac": 0xCDBFF2, "slate": 0xA8B4C0, "cocoa": 0x8A6656,
+                                                  "bone": 0xECECEE, "onyx": 0x161616, "sand": 0xEFE5D3]
+    /// The seven Pixel trims. Older looks may hold any of the old glows; `pixel` maps those across.
+    public static let glows = ["#ff7a45", "#f06fb0", "#45c8e6", "#5b8def", "#9b7bf0", "#f4f4f5", "#f4d7c4"]
+    public static let hatColors = glows
 
     public var isDarkShell: Bool { shell == "black" || shell == "graphite" }
     public var shellHex: UInt32 { Self.shells[shell] ?? 0xECECEE }
@@ -73,17 +78,19 @@ public struct CrewLook: Codable, Equatable, Sendable {
 
     // MARK: Presets
 
-    public static let theo = CrewLook(shell: "black", glow: "#ff7a45", hat: .none, hatColor: "#ff7a45", antenna: .ball, eyes: .pill, extra: .tie)
+    // The Pixel crew (pixel-faces.json, "crew"). Eyes and extras keep their old names: pill is tall, pixel is block, visor
+    // is wide, glasses is the bezel and badge is the star.
+    public static let theo = CrewLook(shell: "black", glow: "#ff7a45", hat: .none, hatColor: "#ff7a45", antenna: .ball, eyes: .pixel, extra: .tie)
     public static let clicky = CrewLook(shell: "white", glow: "#ff9a5c", hat: .none, hatColor: "#ff9a5c", antenna: .cursor, eyes: .round, extra: .none)
-    public static let manager = CrewLook(shell: "graphite", glow: "#f5b03c", hat: .tophat, hatColor: "#f5b03c", extra: .tie)
-    public static let accountant = CrewLook(glow: "#a3e635", eyes: .round, extra: .glasses)
-    public static let builder = CrewLook(glow: "#f5b03c", hat: .hardhat, hatColor: "#f5b03c")
-    public static let designer = CrewLook(glow: "#ff6f9f", hat: .beret, hatColor: "#ff6f9f", eyes: .round, extra: .scarf)
-    public static let researcher = CrewLook(glow: "#34d3e6", hatColor: "#34d3e6", antenna: .dish, eyes: .round, extra: .glasses)
-    public static let inbox = CrewLook(glow: "#a3e635", hat: .headset, hatColor: "#a3e635", eyes: .pixel)
-    public static let copyEditor = CrewLook(glow: "#60a5fa", hat: .beanie, hatColor: "#60a5fa", extra: .pencil)
-    public static let release = CrewLook(glow: "#f87171", hatColor: "#f87171", antenna: .flag)
-    public static let reviewer = CrewLook(glow: "#a78bfa", hatColor: "#a78bfa", antenna: .twin, eyes: .visor, extra: .badge)
+    public static let manager = CrewLook(shell: "graphite", glow: "#f4d7c4", hat: .tophat, hatColor: "#f4d7c4", eyes: .pill, extra: .bowtie)
+    public static let accountant = CrewLook(shell: "white", glow: "#45c8e6", hatColor: "#45c8e6", eyes: .round, extra: .glasses)
+    public static let builder = CrewLook(shell: "white", glow: "#5b8def", hatColor: "#5b8def", antenna: .handle, eyes: .visor)
+    public static let designer = CrewLook(shell: "lilac", glow: "#f06fb0", hat: .beret, hatColor: "#f06fb0", eyes: .pill)
+    public static let researcher = CrewLook(shell: "sky", glow: "#f4f4f5", hatColor: "#f4f4f5", antenna: .twin, eyes: .round)
+    public static let inbox = CrewLook(shell: "cream", glow: "#45c8e6", hat: .headset, hatColor: "#45c8e6", eyes: .round)
+    public static let copyEditor = CrewLook(shell: "slate", glow: "#f4f4f5", hatColor: "#f4f4f5", antenna: .handle, eyes: .pill, extra: .pencil)
+    public static let release = CrewLook(shell: "cocoa", glow: "#f4d7c4", hatColor: "#f4d7c4", antenna: .flag, eyes: .visor)
+    public static let reviewer = CrewLook(shell: "graphite", glow: "#9b7bf0", hatColor: "#9b7bf0", antenna: .twin, eyes: .pixel, extra: .badge)
 
     /// The look a bot wears until someone dresses it: the gear of its job when its name says what that is, otherwise one
     /// picked from its id, so it never changes between launches.
@@ -113,16 +120,16 @@ public struct CrewLook: Codable, Equatable, Sendable {
         return jobs.first(where: { $0.needles.contains { words.contains($0) } })?.look
     }
 
-    /// A random tasteful figure: mostly light bodies, one colour family, and only one thing on its head most of the time.
+    /// A random tasteful figure: any finish, one trim, and one thing on its head (an antenna or a hat, never both).
     public static func shuffled<G: RandomNumberGenerator>(using generator: inout G) -> CrewLook {
-        let shell = ["white", "white", "white", "white", "graphite", "cream", "sky", "mint", "blush"].randomElement(using: &generator) ?? "white"
-        let glow = glows.dropLast().randomElement(using: &generator) ?? "#f5b03c"
-        let hat = Hat.allCases.randomElement(using: &generator) ?? .none
-        let antenna: Antenna = hat == .none ? (Antenna.pickable.dropFirst().randomElement(using: &generator) ?? .ball) : .none
-        // The hat matches the glow when that colour is in the hat row, and is a neighbour otherwise.
-        let hatColor = hatColors.contains(glow) ? glow : (hatColors.dropLast(2).randomElement(using: &generator) ?? "#f5b03c")
-        return CrewLook(shell: shell, glow: glow, hat: hat, hatColor: hatColor, antenna: antenna,
-                        eyes: Eyes.allCases.dropLast().randomElement(using: &generator) ?? .pill,
+        let shell = shellOrder.randomElement(using: &generator) ?? "white"
+        let trim = glows.randomElement(using: &generator) ?? "#ff7a45"
+        // About a third of bots wear a hat.
+        let wearsHat = Int.random(in: 0..<3, using: &generator) == 0
+        let hat: Hat = wearsHat ? (Hat.allCases.dropFirst().randomElement(using: &generator) ?? .cap) : .none
+        let antenna: Antenna = wearsHat ? .none : (Antenna.pickable.randomElement(using: &generator) ?? .ball)
+        return CrewLook(shell: shell, glow: trim, hat: hat, hatColor: trim, antenna: antenna,
+                        eyes: Eyes.allCases.randomElement(using: &generator) ?? .pixel,
                         extra: Extra.allCases.randomElement(using: &generator) ?? .none)
     }
 

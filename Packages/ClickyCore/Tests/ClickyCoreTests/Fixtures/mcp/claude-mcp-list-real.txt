@@ -1,0 +1,14 @@
+Checking MCP server health…
+
+claude.ai Claude Docs: <url> - ✔ Connected
+claude.ai Google Slides: <url> - ✔ Connected
+claude.ai Google Docs: <url> - ✔ Connected
+claude.ai Google Sheets: <url> - ✔ Connected
+claude.ai Gmail: <url> - ✔ Connected
+claude.ai Notion: <url> - ✔ Connected
+claude.ai Google Drive: <url> - ✔ Connected
+claude.ai Hostinger Connector: <url> - ✔ Connected
+claude.ai Runway (runway.team): <url> - ! Needs authentication
+plugin:theo:theo: /Users/adhyanmahajan/Library/Application Support/Theo/t3-extension/plugins/theo/bin/theo-mcp  - ✔ Connected
+Spline: <url> - ✔ Connected
+content-studio: <url> - ✔ Connected

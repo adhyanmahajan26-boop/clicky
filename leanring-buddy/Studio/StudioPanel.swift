@@ -134,7 +134,7 @@ struct StudioPanel: View {
                     Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
                 } else if let bot {
                     VStack(spacing: 6) {
-                        CrewAvatar(look: bot.crewLook, size: 64, pose: store.crewPose(of: bot).pose, interactive: false)
+                        CrewAvatar(look: bot.crewLook, size: 64, pose: store.pixelState(of: bot).state, interactive: false)
                         Text(studio.liveCapture ? "Waiting for a picture" : "Turn on Live capture in Settings to see other apps here").font(.system(size: 11)).foregroundColor(.white.opacity(0.65)).multilineTextAlignment(.center).padding(.horizontal, 12)
                     }
                 }
@@ -168,7 +168,7 @@ struct StudioPanel: View {
             } else if let page = studio.tilePages[tile] {
                 StudioPageCard(page: page)
             } else if let bot {
-                CrewAvatar(look: bot.crewLook, size: 54, pose: store.crewPose(of: bot).pose, interactive: false)
+                CrewAvatar(look: bot.crewLook, size: 54, pose: store.pixelState(of: bot).state, interactive: false)
             }
             if image != nil, studio.liveViewPaused {
                 Color.black.opacity(0.45)
@@ -187,7 +187,7 @@ struct StudioPanel: View {
             }
             if let bot {
                 HStack(spacing: 6) {
-                    CrewAvatar(look: bot.crewLook, size: 20, pose: store.crewPose(of: bot).pose, moves: false, interactive: false)
+                    CrewAvatar(look: bot.crewLook, size: 20, pose: store.pixelState(of: bot).state, moves: false, interactive: false)
                     let heading = StudioRemoteView.headline(note: studio.tileNotes[tile], fallback: bot.name)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(heading.title).font(.system(size: 11, weight: .medium)).foregroundColor(.white).lineLimit(1)
@@ -204,7 +204,7 @@ struct StudioPanel: View {
                 if let owner = studio.owner(ofScreen: tile.screen).flatMap({ store.bot($0) }) {
                     // Nothing here right now: its owner, asleep.
                     VStack(spacing: 4) {
-                        CrewAvatar(look: owner.crewLook, size: 44, pose: .sleep, moves: false, interactive: false)
+                        CrewAvatar(look: owner.crewLook, size: 44, pose: .idle, moves: false, interactive: false)
                         Text(owner.name).font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
                     }
                 } else {
@@ -251,7 +251,7 @@ struct StudioPanel: View {
 
     /// Bots at work with no tile of their own.
     private var queue: some View {
-        let waiting = store.bots.filter { store.crewPose(of: $0).pose == .working && studio.roster.tile(of: $0.id) == nil }
+        let waiting = store.bots.filter { store.pixelState(of: $0).state.lane == .working && studio.roster.tile(of: $0.id) == nil }
         return Group {
             if !waiting.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -387,7 +387,7 @@ struct RemoteStudioPanel: View {
             } else if let page = item?.page {
                 StudioPageCard(page: page)
             } else if let bot {
-                CrewAvatar(look: bot.crewLook, size: 44, pose: .sleep, moves: false, interactive: false)
+                CrewAvatar(look: bot.crewLook, size: 44, pose: .idle, moves: false, interactive: false)
             }
             if let item, let bot {
                 let heading = StudioRemoteView.headline(note: item.note, fallback: bot.name)

@@ -302,7 +302,7 @@ struct BotsRootView: View {
 
     /// A bot's row: a 32 pt figure, its name, one line of what it's doing, and a tiny view of its tile while it works.
     private func teamRow(_ pane: BotsPane, bot: NativeBot, unread: Int) -> some View {
-        let pose = store.crewPose(of: bot).pose
+        let pose = store.pixelState(of: bot).state
         let working = pose == .working
         return rowButton(pane) {
             BotAvatar(bot: bot, size: 32, state: .idle)
@@ -1381,10 +1381,13 @@ struct BotAvatar: View {
     let bot: NativeBot
     let size: CGFloat
     let state: BotAvatarState
+    var badge = true
+    /// The surface behind it, for the badge's ring.
+    var ring: Color? = nil
 
     var body: some View {
-        let shown = BotsStore.shared.crewPose(of: bot, state: state)
-        CrewAvatar(look: bot.crewLook, size: size, pose: shown.pose, poseUntil: shown.until, dimmed: !bot.isOn)
+        let shown = BotsStore.shared.pixelState(of: bot, state: state)
+        CrewAvatar(look: bot.crewLook, size: size, pose: shown.state, poseUntil: shown.until, badge: badge, name: bot.name, ring: ring)
     }
 }
 
@@ -1990,6 +1993,8 @@ extension Notification.Name {
     static let theoScrollChatToEnd = Notification.Name("theoScrollChatToEnd")
     /// Home's "New group chat".
     static let theoNewGroupChat = Notification.Name("theoNewGroupChat")
+    /// Opens a bot's chat (the object is its id): an alert's or the menu bar's button.
+    static let theoOpenBot = Notification.Name("theoOpenBot")
 }
 
 /// One bot's reply while it streams. It's the only view that watches the words, so a chunk redraws this line and nothing else.

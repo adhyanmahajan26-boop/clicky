@@ -161,44 +161,7 @@ struct BrandLogo: View {
 
 // MARK: - Status
 
-struct StatusPill: View {
-    enum Tone { case good, warn, bad, neutral, info }
-    let text: String
-    var tone: Tone = .neutral
-    var busy = false
-
-    private var color: Color {
-        switch tone {
-        case .good: return DS.Colors.success
-        case .warn: return DS.Colors.warning
-        case .bad: return DS.Colors.destructiveText
-        case .info: return DS.Colors.blue
-        case .neutral: return DS.Colors.textTertiary
-        }
-    }
-
-    private var textColor: Color {
-        switch tone {
-        case .good: return DS.Colors.successText
-        case .warn: return DS.Colors.warningText
-        case .neutral: return DS.Colors.textSecondary
-        default: return color
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if busy {
-                ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 8, height: 8)
-            } else {
-                Circle().fill(color).frame(width: 6, height: 6)
-            }
-            Text(text).font(.system(size: 11, weight: .medium)).foregroundColor(textColor).lineLimit(1)
-        }
-        .padding(.horizontal, 8).frame(height: 22)
-        .background(Capsule().fill(color.opacity(0.12)))
-    }
-}
+// StatusPill is in PixelComponents.swift: a badge shape and the word, in the Pixel status colours.
 
 // MARK: - Layout
 
