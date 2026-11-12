@@ -1,0 +1,9 @@
+{
+ "probe": "hooks",
+ "verdict": "ERROR",
+ "seconds": 14.7,
+ "evidence": {
+  "exc": "Traceback (most recent call last):\n  File \"/Users/adhyanmahajan/jstest/theo-parity/parity/probes.py\", line 435, in <module>\n    try: v, ev = PROBES[n]()\n  File \"/Users/adhyanmahajan/jstest/theo-parity/parity/probes.py\", line 355, in p_hooks\n    doc = send({\"cmd\": \"doctor\"}).get(\"result\", {}).get(\"text\", \"\")\nAttributeError: 'NoneType' object has no attribute 'get'\n"
+ },
+ "at": "2026-11-12T21:36:59"
+}

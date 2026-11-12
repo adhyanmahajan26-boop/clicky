@@ -1,9 +1,9 @@
 {
  "probe": "skills_reuse",
  "verdict": "PASS",
- "seconds": 12.0,
+ "seconds": 16.2,
  "evidence": {
-  "reply": "Here are the steps from Pip's release procedure, in order:\n\n1. Run the unit tests. Stop if they fail and report the output.\n2. Bump the build number to today's date and time, in the same format as the previous build. If that format isn't clear, I'll ask you.\n3. Run `Tools/release.sh` with `CLICKY_RELEASE_DRY_RUN=1` first, and check the dry run output before a real release.\n4. Back up `/Applications/Theo.app` before anything is replaced.\n5. Install only when nothing is playing (no audio or video).\n\nI can't run shell commands, so steps 1 to 5 would go to a coding run on the Mac where Theo is ins",
+  "reply": "Here's the release order, from Addy's theo-release skill. Stop at the first failure and report it.\n\n1. Run the unit tests. If any fail, stop.\n2. Bump the build number to today's date and time, in the project's existing format. Don't commit unless asked.\n3. Do a dry run: `CLICKY_RELEASE_DRY_RUN=1 Tools/release.sh`. Continue only if it finishes without errors.\n4. Run the real release with `Tools/release.sh`.\n5. Back up `/Applications/Theo.app` to a dated folder before installing.\n6. Install only when nothing is playing audio.\n\nI can't run shell commands myself, so this would go to a coding run o",
   "steps_matched": [
    "dry",
    "back",
@@ -18,8 +18,10 @@
    "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
    "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
    "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
    "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md"
   ]
  },
- "at": "2026-11-12T21:13:44"
+ "at": "2026-11-12T21:34:55"
 }

@@ -1,9 +1,9 @@
 {
  "probe": "recall",
  "verdict": "PASS",
- "seconds": 38.1,
+ "seconds": 37.6,
  "evidence": {
-  "reply": "The autumn launch codename is **HAZELNUT-42**. You asked me to remember it earlier in this chat."
+  "reply": "The autumn launch codename is **HAZELNUT-42**. You gave it to me earlier in this chat and asked me to just say ok."
  },
- "at": "2026-11-12T21:14:22"
+ "at": "2026-11-12T21:35:32"
 }

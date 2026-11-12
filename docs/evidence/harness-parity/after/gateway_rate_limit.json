@@ -1,7 +1,7 @@
 {
  "probe": "gateway_rate_limit",
  "verdict": "PASS",
- "seconds": 7.9,
+ "seconds": 5.8,
  "evidence": {
   "codes": [
    202,
@@ -37,5 +37,5 @@
    429
   ]
  },
- "at": "2026-11-12T21:11:51"
+ "at": "2026-11-12T21:31:16"
 }

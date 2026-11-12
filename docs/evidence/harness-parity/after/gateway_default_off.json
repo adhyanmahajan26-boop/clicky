@@ -5,14 +5,14 @@
  "evidence": {
   "state": {
    "hasToken": true,
-   "enabled": false,
    "received": 0,
-   "port": 47380,
    "problem": null,
-   "listening": null
+   "listening": null,
+   "port": 47380,
+   "enabled": false
   },
   "status": null,
   "listening": []
  },
- "at": "2026-11-12T21:10:11"
+ "at": "2026-11-12T21:29:36"
 }

@@ -1,0 +1,11 @@
+{
+ "probe": "nonclaude_fallback",
+ "verdict": "FAIL",
+ "seconds": 8.9,
+ "evidence": {
+  "opencode_calls": 1,
+  "claude_calls": 0,
+  "reply": "Couldn't reply: 529 Overloaded: the provider is overloaded"
+ },
+ "at": "2026-11-12T21:36:45"
+}

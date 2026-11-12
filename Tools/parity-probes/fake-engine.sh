@@ -17,5 +17,14 @@ case "$MODE" in
   flaky) n=$(cat $D/fake-flaky 2>/dev/null || echo 0); if (( n > 0 )); then echo $((n-1)) > $D/fake-flaky; printf '{"type":"result","is_error":true,"result":"API Error: 529 Overloaded"}\n'; exit 1; else init; say "answered after retry on $model"; printf '{"type":"result","is_error":false}\n'; fi;;
   autherr) printf '{"type":"result","is_error":true,"result":"Invalid API key · Please run /login"}\n'; exit 1;;
   slow) init; for i in {1..10}; do say "w$i "; sleep 1; done; printf '{"type":"result","is_error":false}\n';;
+  # Parallel delegation: the first turn tells two bots; each private answer takes 5 s; the carry-on says done.
+  tell-par) last="${@[-1]}"; init
+    if [[ "$last" == *"This is a private thread between you and"* ]]; then sleep 5; say "answered after 5 s"
+    elif [[ "$last" == *"answered you privately"* ]]; then say "all done"
+    else say "$(cat $D/fake-reply)"; fi
+    printf '{"type":"result","is_error":false}\n';;
+  usage) init; say "counted"; printf '{"type":"result","is_error":false,"total_cost_usd":0.0125,"usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10}}\n';;
+  # A non-Claude engine (OpenCode: first argument "run") that's overloaded; Claude answers.
+  oc-overloaded) if [[ "$1" == "run" ]]; then printf '{"type":"error","error":{"name":"APIError","data":{"message":"529 Overloaded: the provider is overloaded"}}}\n'; exit 1; else init; say "stand-in answered on $model"; printf '{"type":"result","is_error":false}\n'; fi;;
   *) echo "unknown mode" >&2; exit 64;;
 esac

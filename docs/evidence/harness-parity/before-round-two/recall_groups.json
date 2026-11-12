@@ -1,0 +1,9 @@
+{
+ "probe": "recall_groups",
+ "verdict": "PASS",
+ "seconds": 27.2,
+ "evidence": {
+  "reply": "The latest note in Ops Room says the staging password hint is **PERIWINKLE-77**. Theo can only see that one line, so if an older hint was replaced, Quill is in the group and can check the full history for you."
+ },
+ "at": "2026-11-12T21:37:36"
+}

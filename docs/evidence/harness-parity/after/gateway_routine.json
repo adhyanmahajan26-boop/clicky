@@ -1,7 +1,7 @@
 {
  "probe": "gateway_routine",
  "verdict": "PASS",
- "seconds": 15.9,
+ "seconds": 17.3,
  "evidence": {
   "status": 202,
   "body": {
@@ -10,13 +10,13 @@
   },
   "runs": [
    {
-    "finishedAt": "2026-11-12T15:43:08Z",
-    "id": "0A282E38-4649-4E89-B3BE-5EAE26892F97",
-    "startedAt": "2026-11-12T15:43:08Z",
+    "finishedAt": "2026-11-12T16:02:34Z",
+    "id": "5C637C51-9364-4828-98F6-B8D27F023B6B",
+    "startedAt": "2026-11-12T16:02:34Z",
     "status": "done",
     "summary": "fake engine ok"
    }
   ]
  },
- "at": "2026-11-12T21:13:14"
+ "at": "2026-11-12T21:32:40"
 }
