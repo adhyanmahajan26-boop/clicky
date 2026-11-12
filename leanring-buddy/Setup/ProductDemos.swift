@@ -299,10 +299,10 @@ private struct TheoDemoStage: View {
         DemoWindow(title: "Theo") {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 6) {
-                    member("Theo", TileColors.indigo, selected: true)
-                    member("Builder", TileColors.lime)
-                    member("Researcher", TileColors.sky)
-                    member("Clicky", TileColors.ember)
+                    member("Theo", .theo, state: time > 1.2 && time < 2.0 ? .thinking : .awake, selected: true)
+                    member("Builder", .builder, state: time >= 6.4 ? .done : time > 2.8 ? .working : .idle)
+                    member("Researcher", .researcher, state: .idle)
+                    member("Clicky", .clicky, state: .awake)
                     Spacer()
                 }
                 .padding(6).frame(width: 74).background(DS.Colors.sidebar)
@@ -313,10 +313,10 @@ private struct TheoDemoStage: View {
         .frame(width: 290, height: 176)
     }
 
-    private func member(_ name: String, _ colors: [Color], selected: Bool = false) -> some View {
+    /// A team member as a Pixel micro face, in the state the demo has it in.
+    private func member(_ name: String, _ look: CrewLook, state: PixelState, selected: Bool = false) -> some View {
         HStack(spacing: 4) {
-            Circle().fill(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)).frame(width: 11, height: 11)
-                .overlay(Text(String(name.prefix(1))).font(.system(size: 6, weight: .bold)).foregroundColor(.white))
+            CrewAvatar(look: look, size: 12, pose: state, moves: false, interactive: false, badge: false)
             Text(name).font(.system(size: 7, weight: selected ? .semibold : .regular)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
         }
         .padding(.horizontal, 3).frame(height: 15, alignment: .leading)
@@ -370,7 +370,7 @@ private struct TheoDemoStage: View {
                     GeometryReader { box in
                         ZStack(alignment: .leading) {
                             Capsule().fill(DS.Colors.borderStrong)
-                            Capsule().fill(done ? DS.Colors.success : DS.Colors.accent).frame(width: box.size.width * fill)
+                            Capsule().fill(DS.Colors.success).frame(width: box.size.width * fill)
                         }
                     }
                     .frame(height: 2.5)

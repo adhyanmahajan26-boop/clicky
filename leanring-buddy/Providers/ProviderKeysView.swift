@@ -167,6 +167,11 @@ private struct ProviderKeyRow: View {
             StatusPill(text: "Saved", tone: .good)
         } else if provider.keyless {
             StatusPill(text: "Local", tone: .neutral)
+        } else if provider.id == TheoProducts.dictationKeyProvider && TheoProducts.shared.isOn(.dictation) {
+            // Dictation can't run without this one.
+            StatusPill(text: "Needs a key", tone: .warn)
+        } else {
+            StatusPill(text: "Not added", tone: .neutral)
         }
     }
 

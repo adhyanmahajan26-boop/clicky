@@ -15,6 +15,9 @@ struct TodayView: View {
     @ObservedObject var selection: BotsSelection
     @State private var notes: [ClaudiaLibrary.Item] = []
     @ObservedObject private var products = TheoProducts.shared
+    /// The faces key shows once, the first time Home opens after setup.
+    @AppStorage(FacesKeyView.shownKey) private var facesKeyShown = false
+    @State private var showsFacesKey = false
 
     var body: some View {
         ScrollView {
@@ -131,6 +134,13 @@ struct TodayView: View {
         }
         .background(DS.Colors.background)
         .task { notes = await Task.detached { ClaudiaLibrary.items() }.value }
+        .onAppear { if !facesKeyShown && !TheoProfile.isTest && ClickySettings.isSetupCompleted { showsFacesKey = true } }
+        .sheet(isPresented: $showsFacesKey) {
+            FacesKeyView {
+                facesKeyShown = true
+                showsFacesKey = false
+            }
+        }
     }
 
     private var greeting: String {

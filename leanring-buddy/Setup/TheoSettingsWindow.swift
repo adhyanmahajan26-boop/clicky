@@ -696,13 +696,17 @@ struct PermissionsSettingsContent: View {
 
     var body: some View {
         TheoSection(title: "", hint: "Theo checks every second, so this page updates by itself. Without a permission Theo still runs: it just can't do that one thing, and tells you so.") {
-            row("Microphone", "Hears \u{201C}hey Theo\u{201D} and push-to-talk", "mic.fill", microphone == .authorized) { AVCaptureDevice.requestAccess(for: .audio) { _ in } }
+            row("Microphone", "Hears \u{201C}hey Theo\u{201D} and push-to-talk", "mic.fill", microphone == .authorized, asked: microphone != .notDetermined,
+                ask: { AVCaptureDevice.requestAccess(for: .audio) { _ in } }, open: { TheoPermissions.openSettingsPane("Privacy_Microphone") })
             RowDivider(inset: 50)
-            row("Speech recognition", "Turns what you say into words, on this Mac", "waveform", speech == .authorized) { SFSpeechRecognizer.requestAuthorization { _ in } }
+            row("Speech recognition", "Turns what you say into words, on this Mac", "waveform", speech == .authorized, asked: speech != .notDetermined,
+                ask: { SFSpeechRecognizer.requestAuthorization { _ in } }, open: { TheoPermissions.openSettingsPane("Privacy_SpeechRecognition") })
             RowDivider(inset: 50)
-            row("Accessibility", "Points at and clicks the right things", "accessibility", accessibility) { _ = TheoPermissions.askForAccessibility() }
+            row("Accessibility", "Points at and clicks the right things", "accessibility", accessibility, asked: true,
+                ask: { _ = TheoPermissions.askForAccessibility() }, open: { TheoPermissions.openAccessibilitySettings() })
             RowDivider(inset: 50)
-            row("Screen recording", "Sees your screens when you ask", "rectangle.dashed.badge.record", screen) { _ = TheoPermissions.askForScreenRecording() }
+            row("Screen recording", "Sees your screens when you ask", "rectangle.dashed.badge.record", screen, asked: TheoPermissions.askedForScreenRecordingThisLaunch || !screen,
+                ask: { _ = TheoPermissions.askForScreenRecording() }, open: { TheoPermissions.openSettingsPane("Privacy_ScreenCapture") })
         }
         .onReceive(ticker) { _ in
             speech = SFSpeechRecognizer.authorizationStatus()
@@ -713,9 +717,10 @@ struct PermissionsSettingsContent: View {
         }
     }
 
-    private func row(_ title: String, _ detail: String, _ symbol: String, _ granted: Bool, ask: @escaping () -> Void) -> some View {
+    /// App tile, name, one line, pill, one button: Allowed / Needs you (Open Settings) / Not asked (Allow).
+    private func row(_ title: String, _ detail: String, _ symbol: String, _ granted: Bool, asked: Bool, ask: @escaping () -> Void, open: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            IconTile(symbol: symbol, colors: TileColors.graphite, size: 28)
+            AppTile(symbol: symbol, size: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 Text(detail).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
@@ -723,11 +728,20 @@ struct PermissionsSettingsContent: View {
             Spacer()
             if granted {
                 StatusPill(text: "Allowed", tone: .good)
+            } else if asked {
+                StatusPill(text: "Needs you", tone: .warn)
+                Button("Open Settings") { Self.act(title, open) }.buttonStyle(.theo(.primary, .small))
             } else {
-                Button("Allow…", action: ask).buttonStyle(.theoSecondary)
+                StatusPill(text: "Not asked", tone: .neutral)
+                Button("Allow") { Self.act(title, ask) }.buttonStyle(.theo(.secondary, .small))
             }
         }
         .padding(.horizontal, 12).frame(height: 54)
+    }
+
+    /// A test never asks for a permission or opens System Settings: it records what the button would do.
+    private static func act(_ title: String, _ action: () -> Void) {
+        if TheoProfile.isTest { TheoOpen.record("permission \(title)") } else { action() }
     }
 }
 
@@ -771,6 +785,7 @@ private struct UpdatesRows: View {
 
 struct AboutSettingsContent: View {
     @State private var showsInDock = ClickySettings.showsInDock
+    @State private var showsFacesKey = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -781,6 +796,10 @@ struct AboutSettingsContent: View {
                             ClickySettings.showsInDock = value
                             if !TheoProfile.isTest { NSApp.setActivationPolicy(value ? .regular : .accessory) }
                         }
+                }
+                RowDivider()
+                SettingRow(title: "What the faces mean", detail: "Working, needs you, failed, done and asleep, at a glance.") {
+                    Button("Show") { showsFacesKey = true }.buttonStyle(.theoSecondary)
                 }
                 RowDivider()
                 SettingRow(title: "Setup guide", detail: "Permissions, harnesses, keys and voice, one step at a time.") {
@@ -800,6 +819,7 @@ struct AboutSettingsContent: View {
                 shortcut("Talk to Clicky", "⌃⌥ hold")
             }
         }
+        .sheet(isPresented: $showsFacesKey) { FacesKeyView { showsFacesKey = false } }
     }
 
     private func shortcut(_ title: String, _ keys: String) -> some View {

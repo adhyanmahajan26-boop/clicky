@@ -113,23 +113,17 @@ struct TheoProductCard: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(isOn ? DS.Colors.accent.opacity(0.7) : DS.Colors.borderSubtle, lineWidth: isOn ? 1.5 : 1))
     }
 
+    /// The requirement line as a pill: "Needs a Sarvam API key" in yellow with the field under it, "On" in green, "Off" in grey.
     @ViewBuilder private var status: some View {
-        if product == .dictation {
-            switch products.dictationAccess {
-            case .ready:
-                StatusPill(text: "On · Sarvam key saved", tone: .good)
-            case .needsKey:
-                VStack(alignment: .leading, spacing: 6) {
-                    StatusPill(text: "Blocked until you add a Sarvam API key", tone: .warn)
-                    SarvamKeyField()
-                }
-            case .off:
-                if let requirement = product.requirement { StatusPill(text: requirement, tone: .neutral) }
+        if product == .dictation, products.dictationAccess == .needsKey {
+            VStack(alignment: .leading, spacing: 6) {
+                StatusPill(text: "Needs a Sarvam API key", tone: .warn)
+                SarvamKeyField()
             }
         } else if isOn {
             StatusPill(text: "On", tone: .good)
-        } else if let requirement = product.requirement {
-            StatusPill(text: requirement, tone: .neutral)
+        } else {
+            StatusPill(text: "Off", tone: .neutral)
         }
     }
 }

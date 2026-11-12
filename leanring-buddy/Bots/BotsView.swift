@@ -1574,30 +1574,42 @@ struct CometCaret: View {
 
 struct ConnectorsScreen: View {
     let bots: [NativeBot]
-    @State private var claude: [String: BotConnectors.Status] = [:]
-    @State private var openCode: [String: BotConnectors.Status] = [:]
-    @State private var checking = true
+    @ObservedObject private var health = ConnectorHealth.shared
+    @ObservedObject private var store = BotsStore.shared
     @State private var note: String?
     @State private var working: String?
 
+    private var connectors: [BotConnector] {
+        BotConnectors.known.filter { $0.id != "calendar" }
+            .enumerated()
+            .sorted { left, right in
+                let leftOrder = health.state(of: left.element).sortOrder
+                let rightOrder = health.state(of: right.element).sortOrder
+                return leftOrder != rightOrder ? leftOrder < rightOrder : left.offset < right.offset
+            }
+            .map(\.element)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Connectors").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
-                        Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only.")
-                            .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    }
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Connectors").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
+                    Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only.")
+                        .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    summaryPills
                     Spacer(minLength: 16)
-                    Button(checking ? "Checking…" : "Refresh") { Task { await refresh() } }
-                        .disabled(checking).buttonStyle(.theo(.secondary, .small))
+                    Button { Task { await health.refresh() } } label: {
+                        Label(health.isChecking ? "Checking…" : "Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(health.isChecking).buttonStyle(.theo(.secondary, .small))
                 }
                 if let note {
-                    Text(note).font(TheoType.caption).foregroundColor(DS.Colors.accentText)
+                    Text(note).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                 }
                 VStack(spacing: 0) {
-                    let connectors = BotConnectors.known.filter { $0.id != "calendar" }
                     ForEach(Array(connectors.enumerated()), id: \.element.id) { index, connector in
                         if index > 0 { RowDivider() }
                         row(connector)
@@ -1607,81 +1619,124 @@ struct ConnectorsScreen: View {
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
             }
             .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .task { await refresh() }
+        .task { await health.refresh() }
     }
 
-    /// One line per connector: what it is, who uses it, one status, and the one thing to do about it.
+    /// "6 connected", "1 needs sign-in", "1 can't connect".
+    @ViewBuilder private var summaryPills: some View {
+        let states = BotConnectors.known.filter { $0.id != "calendar" && !$0.isSkill }.map { health.state(of: $0) }
+        let connected = states.filter { [.connected, .claudeOnly, .othersOnly].contains($0) }.count
+        let signIn = states.filter { $0 == .needsSignIn }.count
+        let failed = states.filter { if case .failed = $0 { return true }; return false }.count
+        if health.lastChecked == nil, health.isChecking {
+            StatusPill(text: "Checking", tone: .checking)
+        } else {
+            if connected > 0 { StatusPill(text: "\(connected) connected", tone: .good) }
+            if signIn > 0 { StatusPill(text: "\(signIn) need\(signIn == 1 ? "s" : "") sign-in", tone: .warn) }
+            if failed > 0 { StatusPill(text: "\(failed) can't connect", tone: .bad) }
+        }
+    }
+
+    /// One row per connector: its tile, who uses it (each bot's micro face, then the names), one status pill and one button.
     private func row(_ connector: BotConnector) -> some View {
         let users = bots.filter { $0.apps.contains(connector.id) || (connector.id == "notion" && $0.apps.contains("calendar")) }
-        let onClaude = status(claude, connector.claudeServer)
-        let onOpenCode = status(openCode, connector.openCodeServer)
-        let bridged = BotConnectors.bridged(connector)
-        let othersReach = onOpenCode == .connected || (bridged && onClaude == .connected)
-        let canConnectClaude = !checking && onClaude != .connected && connector.claudeServer?.hasPrefix("claude.ai") == true
-        let canConnectOthers = !checking && !bridged && onOpenCode != .connected && connector.openCodeURL != nil
-        return HStack(spacing: 12) {
+        let state = health.state(of: connector)
+        let waiting = health.botsWaiting(on: connector.id).compactMap { store.bot($0) }
+        let pill = state.pill
+        return HStack(alignment: .center, spacing: 12) {
             AppLogo(connector: connector, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(connector.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
-                Text((users.isEmpty ? "No bot uses it yet" : "Used by " + users.map(\.name).joined(separator: ", ")) + (connector.id == "notion" ? ". Includes Notion Calendar." : ""))
-                    .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                HStack(spacing: 5) {
+                    if users.isEmpty {
+                        Text("No bot uses it yet").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                    } else {
+                        HStack(spacing: -3) {
+                            ForEach(users.prefix(4)) { bot in
+                                CrewAvatar(look: bot.crewLook, size: 16, pose: store.pixelState(of: bot).state, moves: false, interactive: false, badge: false, name: bot.name)
+                            }
+                        }
+                        Text(users.map(\.name).joined(separator: ", ")).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                    }
+                }
+                if let extra = extraLine(connector, state: state, waiting: waiting) {
+                    Text(extra.text).font(TheoType.caption).foregroundColor(extra.color).lineLimit(2)
+                }
             }
             Spacer(minLength: 12)
-            if connector.isSkill {
-                StatusPill(text: "Skills", tone: .neutral)
-            } else if checking && claude.isEmpty {
-                StatusPill(text: "Checking", tone: .neutral, busy: true)
-            } else if onClaude == .connected && othersReach {
-                StatusPill(text: "Connected", tone: .good)
-            } else if onClaude == .connected {
-                StatusPill(text: "Claude only", tone: .good)
-            } else if othersReach {
-                StatusPill(text: "OpenCode and Grok only", tone: .good)
-            } else if onClaude == .needsSignIn {
-                StatusPill(text: "Needs sign-in", tone: .warn)
-            } else {
-                StatusPill(text: "Not connected", tone: .neutral)
-            }
+            StatusPill(text: pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
             Group {
-                if canConnectClaude {
-                    Button("Connect") { BotConnectors.openClaudeConnectors() }.buttonStyle(.theo(.secondary, .small))
-                } else if canConnectOthers {
-                    Button(working == connector.id ? "Signing in…" : "Connect") {
-                        working = connector.id
-                        Task {
-                            note = await BotConnectors.addToOpenCode(connector)
-                            working = nil
-                            await refresh()
-                        }
+                switch state {
+                case .needsSignIn:
+                    Button(working == connector.id ? "Signing in…" : "Sign in") { signIn(connector, bot: waiting.first) }
+                        .buttonStyle(.theo(.primary, .small)).disabled(working != nil)
+                case .failed:
+                    Button("Try again") { Task { await health.refresh() } }.buttonStyle(.theo(.secondary, .small)).disabled(health.isChecking)
+                case .missing, .claudeOnly, .othersOnly:
+                    if canConnect(connector, state: state) {
+                        Button(working == connector.id ? "Signing in…" : "Connect") { connect(connector, state: state) }
+                            .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
+                    } else {
+                        Color.clear
                     }
-                    .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
-                } else {
+                default:
                     Color.clear
                 }
             }
-            .frame(width: 84, height: 24, alignment: .trailing)
+            .frame(width: 92, height: 26, alignment: .trailing)
         }
-        .padding(.horizontal, 14).frame(minHeight: 52)
+        .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 56)
     }
 
-    private func status(_ map: [String: BotConnectors.Status], _ name: String?) -> BotConnectors.Status {
-        guard let name else { return .missing }
-        if checking && map.isEmpty { return .unknown }
-        return map[name] ?? .missing
+    /// "Researcher is waiting on this" in yellow, the reason and when it last worked in red, or what other engines can't do.
+    private func extraLine(_ connector: BotConnector, state: ConnectorHealth.RowState, waiting: [NativeBot]) -> (text: String, color: Color)? {
+        switch state {
+        case .needsSignIn where !waiting.isEmpty:
+            return (BotChatScreen.list(waiting.map(\.name)) + (waiting.count == 1 ? " is" : " are") + " waiting on this", PixelTone.needs.text)
+        case .failed(let reason):
+            let worked = health.lastConnected[connector.id].map { " · " + ConnectorListing.workedAgo($0) } ?? ""
+            return (ConnectorListing.plainReason(reason, app: connector.name) + worked, PixelTone.failed.text)
+        case .claudeOnly:
+            return ("Bots on OpenCode and Grok can't use it yet", DS.Colors.textTertiary)
+        default:
+            return connector.id == "notion" ? ("Includes Notion Calendar", DS.Colors.textTertiary) : nil
+        }
     }
 
+    private func canConnect(_ connector: BotConnector, state: ConnectorHealth.RowState) -> Bool {
+        if state == .claudeOnly { return !BotConnectors.bridged(connector) && connector.openCodeURL != nil }
+        return connector.claudeServer?.hasPrefix("claude.ai") == true || connector.openCodeURL != nil
+    }
 
-    private func refresh() async {
-        checking = true
-        async let claudeListing = BotConnectors.listing(.claude)
-        async let openCodeListing = BotConnectors.listing(.opencode)
-        let (claudeText, openCodeText) = await (claudeListing, openCodeListing)
-        claude = BotConnectors.parseClaude(claudeText)
-        openCode = BotConnectors.parseOpenCode(openCodeText)
-        checking = false
+    private func connect(_ connector: BotConnector, state: ConnectorHealth.RowState) {
+        if state == .missing, connector.claudeServer?.hasPrefix("claude.ai") == true {
+            BotConnectors.openClaudeConnectors()
+            note = "claude.ai's connector page is open. Add \(connector.name) there; Theo checks again when you press Refresh."
+            return
+        }
+        working = connector.id
+        Task {
+            if TheoProfile.isTest {
+                TheoOpen.record("opencode mcp add+auth \(connector.openCodeServer ?? connector.id)")
+                note = "Adding \(connector.name) to OpenCode (recorded in the test profile)."
+            } else {
+                note = await BotConnectors.addToOpenCode(connector)
+            }
+            working = nil
+            await health.refresh()
+        }
+    }
+
+    private func signIn(_ connector: BotConnector, bot: NativeBot?) {
+        working = connector.id
+        Task {
+            note = await health.signIn(connector, forBot: bot)
+            working = nil
+            await health.refresh()
+        }
     }
 }
 
