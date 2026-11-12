@@ -17,19 +17,36 @@ PY = sys.executable
 _proc = None
 
 
-def alive(pid):
+_STARTED = {}
+
+
+def alive(pid, started=None):
+    """Whether this process is running. `started` (seconds since 1970, from the engine's own log): a process with the same id
+    that started at another time is a different process (Windows reuses ids quickly)."""
     if not pid:
         return False
+    started = started or _STARTED.get(pid)
     if WIN:
         import ctypes
+        from ctypes import wintypes
         k = ctypes.windll.kernel32
+        k.OpenProcess.restype = wintypes.HANDLE
         h = k.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
             return False
-        code = ctypes.c_ulong()
+        code = wintypes.DWORD()
         k.GetExitCodeProcess(h, ctypes.byref(code))
+        times = [wintypes.FILETIME() for _ in range(4)]
+        k.GetProcessTimes(h, *[ctypes.byref(x) for x in times])
         k.CloseHandle(h)
-        return code.value == 259  # STILL_ACTIVE
+        if code.value != 259:  # STILL_ACTIVE
+            return False
+        if started:
+            ft = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            created = ft / 1e7 - 11644473600
+            if abs(created - started) > 10:
+                return False
+        return True
     try:
         os.kill(pid, 0)
     except OSError:
@@ -227,8 +244,10 @@ def engine_pids():
     groups = set()
     for c in calls():
         for k in ("pid", "child"):
-            if c.get(k) and alive(c[k]):
-                out.add(c[k])
+            if c.get(k):
+                _STARTED[c[k]] = c.get("t")
+                if alive(c[k]):
+                    out.add(c[k])
         if c.get("pgid"):
             groups.add(c["pgid"])
     if not WIN:
