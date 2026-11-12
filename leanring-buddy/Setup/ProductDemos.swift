@@ -16,6 +16,9 @@ struct ProductDemoView: View {
     /// Its width; the height follows (the demos are drawn on a 320 × 200 stage).
     var width: CGFloat = 320
     @State private var startedAt = Date()
+    /// Inactive while Theo isn't the app in front: the demos stop redrawing then. With Theo off, Home is three of them,
+    /// which would otherwise redraw at 30 frames a second for as long as the window stays open behind other apps.
+    @Environment(\.controlActiveState) private var windowActiveState
 
     static let stage = CGSize(width: 320, height: 200)
 
@@ -27,7 +30,7 @@ struct ProductDemoView: View {
 
     var body: some View {
         let scale = width / Self.stage.width
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: windowActiveState == .inactive)) { context in
             let clock = ProductDemoClock(product)
             let time = frozenTime ?? clock.moment(elapsed: context.date.timeIntervalSince(startedAt))
             stage(time: time)
