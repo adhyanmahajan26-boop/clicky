@@ -293,12 +293,20 @@ final class ConnectorHealth: ObservableObject {
     func noteTurn(bot: NativeBot, answer: String, room: String) {
         let lower = answer.lowercased()
         guard Self.stuckWords.contains(where: lower.contains) else { return }
+        // Nothing is known about the apps yet: find out first, then decide. Never block a bot on a guess.
+        if lastChecked == nil {
+            Task { [weak self] in
+                await self?.refresh()
+                if self?.lastChecked != nil { self?.noteTurn(bot: bot, answer: answer, room: room) }
+            }
+            return
+        }
         let apps = Set(bot.apps + (bot.apps.contains("calendar") ? ["notion"] : []))
         for connector in BotConnectors.known where apps.contains(connector.id) && !connector.isSkill {
             let names = [connector.name.lowercased(), connector.id] + (connector.id == "drive" ? ["drive"] : [])
             guard names.contains(where: lower.contains) else { continue }
             switch state(of: connector) {
-            case .needsSignIn, .missing, .checking:
+            case .needsSignIn, .missing:
                 setBlock(bot.id, connectorID: connector.id, room: room)
             case .failed(let reason):
                 blocks[bot.id] = Block(connectorID: connector.id, at: Date(), room: room, failed: true)
