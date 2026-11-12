@@ -5,8 +5,6 @@ name: Theo cross-platform
 on:
   push:
     paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
-  pull_request:
-    paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
   workflow_dispatch:
 
 concurrency:

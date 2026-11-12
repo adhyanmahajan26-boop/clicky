@@ -209,7 +209,9 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
                     if existing.is_none() {
                         let gh = h.settings.string("test.engine.gh").map(PathBuf::from).or_else(|| engine::locate("gh"));
                         if let Some(gh) = gh {
-                            let out = tokio::process::Command::new(gh).args(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Theo's coding run.", "--head", branch]).current_dir(&folder).output().await;
+                            let (program, mut pre) = engine::command_for(&gh);
+                            pre.extend(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Theo's coding run.", "--head", branch].iter().map(|s| s.to_string()));
+                            let out = tokio::process::Command::new(program).args(pre).current_dir(&folder).output().await;
                             match out {
                                 Ok(o) if o.status.success() => {
                                     let url = String::from_utf8_lossy(&o.stdout).trim().lines().last().unwrap_or("").to_string();
