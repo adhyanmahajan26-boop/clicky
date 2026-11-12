@@ -429,7 +429,7 @@ impl Harness {
         let recall: Vec<(String, String)> = self.recall_files(&bot.id).into_iter().map(|(l, p)| (l, p.to_string_lossy().to_string())).collect();
         parts.push(prompts::recall_section(&self.chat_file_path(&bot.id).to_string_lossy(), &owner, &recall));
         let names: HashMap<String, String> = team.iter().map(|b| (b.id.clone(), b.name.clone())).collect();
-        let skills = prompts::all_skills(&self.paths, &names);
+        let skills = prompts::all_skills(&self.paths, &names, Some(&bot.id));
         parts.push(prompts::skills_section(&skills, &self.paths.skills_dir(&bot.id).to_string_lossy(), &self.paths.shared_skills_dir().to_string_lossy(), &bot.name, &owner));
         parts.join("\n\n")
     }

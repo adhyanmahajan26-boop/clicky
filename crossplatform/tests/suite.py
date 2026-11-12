@@ -481,8 +481,16 @@ def f08():
         p.unlink()
     (T.BOTS / "bots.json").write_text(raw[: int(len(raw) * 0.6)])
     names = [b["name"] for b in json.loads(raw)]
-    T.start(); time.sleep(1)
-    after_names = [b["name"] for b in json.loads((T.BOTS / "bots.json").read_text(encoding="utf-8"))]
+    T.start()
+    # Wait for the recovery to finish (the damaged copy kept aside and the owner told) rather than a fixed second, which raced.
+    T.wait_until(lambda: list(T.BOTS.glob("bots.json.unreadable-*")) and any("couldn't read" in n.lower() for n in notes("theo")), 15)
+
+    def readable_names():
+        try:
+            return [b["name"] for b in json.loads((T.BOTS / "bots.json").read_text(encoding="utf-8"))]
+        except ValueError:
+            return []
+    after_names = readable_names()
     kept = list(T.BOTS.glob("bots.json.unreadable-*"))
     rescued = len(set(names) & set(after_names))
     told = any("couldn't read" in n.lower() for n in notes("theo"))
@@ -705,9 +713,16 @@ def p_skills():
     T.fake("ok"); mark = T.calls_mark()
     T.say(bid("Ledger"), "check this invoice"); T.wait_idle()
     c = last_call("Ledger", mark)
-    listed = c is not None and "invoice-check (by Scout)" in c["system"] and str(s / "SKILL.md") in c["system"]
-    readable = c is not None and any("Read(" in a and "skills" in a for a in c["args"]) or True
-    return listed, {"listed_with_path": listed}
+    # Ledger may not read Scout's memory folder, so the list must point at the copy beside the shared skills, which it can read.
+    copy = T.BOTS / "memory" / "skills" / ".from-bots" / bid("Scout") / "invoice-check" / "SKILL.md"
+    listed = c is not None and "invoice-check (by Scout)" in c["system"] and str(copy) in c["system"]
+    not_private_path = c is not None and str(s / "SKILL.md") not in c["system"]
+    copied = copy.is_file() and copy.read_text() == (s / "SKILL.md").read_text()
+    scout_denied = c is not None and any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / bid("Scout"))) for a in c["args"][c["args"].index("--disallowedTools"):])
+    copy_not_denied = c is not None and not any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / "skills")) for a in c["args"][c["args"].index("--disallowedTools"):])
+    ok = listed and not_private_path and copied and scout_denied and copy_not_denied
+    return ok, {"listed_with_copy_path": listed, "private_path_not_shown": not_private_path, "copy_matches": copied,
+                "authors_folder_denied": scout_denied, "copy_readable": copy_not_denied}
 
 
 @test("P_recall", "A bot is told where its saved chat is and may Grep it, and only its own", "parity")

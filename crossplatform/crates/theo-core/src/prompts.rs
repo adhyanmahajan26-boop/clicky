@@ -3,7 +3,7 @@
 
 use crate::model::Bot;
 use crate::paths::Paths;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn house_style(owner: &str) -> String {
     format!("How you write: talk to whoever you're answering. Keep it short, 1 to 4 sentences unless asked for depth. No name or heading at the start. Refer to what the other person actually said. Never claim something happened that hasn't. When you're waiting on someone, say who and for what. Don't talk about your tools, sessions or sandbox: say in plain words what you can and can't do. Talking to {owner}, say you. Talking about {owner} to anyone else, say they, never he or she.")
@@ -153,27 +153,103 @@ pub fn parse_skill(text: &str, path: &str, author: Option<String>, folder_name: 
     Some(Skill { name: name.unwrap_or_else(|| folder_name.to_string()).chars().take(64).collect(), description: description.chars().take(240).collect(), path: path.to_string(), author })
 }
 
-/// Every skill: the shared folder's and each bot's own.
-pub fn all_skills(paths: &Paths, names: &std::collections::HashMap<String, String>) -> Vec<Skill> {
+/// Every skill: the shared folder's and each bot's own. `reader`: the bot the list is for. Its own skills keep their path (it
+/// edits them there); other bots' point at copies beside the shared skills, because a bot may not read another bot's memory
+/// folder (`policy::other_bots_folders`). Same as the Swift `BotSkills.all(names:reader:)`.
+pub fn all_skills(paths: &Paths, names: &std::collections::HashMap<String, String>, reader: Option<&str>) -> Vec<Skill> {
     let mut out = vec![];
-    let mut scan = |dir: &Path, author: Option<String>| {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let file = e.path().join("SKILL.md");
-                if let Ok(text) = std::fs::read_to_string(&file) {
-                    let folder = e.file_name().to_string_lossy().to_string();
-                    if let Some(skill) = parse_skill(&text, &file.to_string_lossy(), author.clone(), &folder) {
-                        out.push(skill);
-                    }
+    let mut scan = |dir: &Path, author: Option<String>, author_id: Option<&str>| {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let folder = e.file_name().to_string_lossy().to_string();
+            if folder.starts_with('.') { continue; }
+            let file = e.path().join("SKILL.md");
+            // Only the start: the front matter is all the list needs, and a huge file mustn't slow every turn.
+            let Some(head) = read_head(&file, 4096) else { continue };
+            let mut shown_path = file.to_string_lossy().to_string();
+            if let (Some(reader), Some(author_id)) = (reader, author_id) {
+                if author_id != reader {
+                    let Some(copy) = copy_skill(&e.path(), author_id, &skill_copies_dir(paths)) else { continue };
+                    shown_path = copy.join("SKILL.md").to_string_lossy().to_string();
                 }
+            }
+            if let Some(skill) = parse_skill(&head, &shown_path, author.clone(), &folder) {
+                out.push(skill);
             }
         }
     };
-    scan(&paths.shared_skills_dir(), None);
-    for (id, name) in names {
-        scan(&paths.skills_dir(id), Some(name.clone()));
+    scan(&paths.shared_skills_dir(), None, None);
+    let mut sorted: Vec<(&String, &String)> = names.iter().collect();
+    sorted.sort();
+    for (id, name) in sorted {
+        scan(&paths.skills_dir(id), Some(name.clone()), Some(id));
     }
     out
+}
+
+fn read_head(file: &Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = vec![];
+    std::fs::File::open(file).ok()?.take(limit).read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Where other bots' skills are copied for reading: inside the shared skills folder, which every bot may read.
+pub fn skill_copies_dir(paths: &Paths) -> PathBuf { paths.shared_skills_dir().join(".from-bots") }
+
+pub const SKILL_COPY_MAX_FILES: usize = 40;
+pub const SKILL_COPY_MAX_BYTES: u64 = 512 * 1024;
+
+/// Copies one skill folder of `bot_id` into `copies`: plain files only (no links, which could point into a private folder), no
+/// hidden files, at most 40 files of 512 KB each. Unchanged files aren't copied again, and files the author deleted go from the
+/// copy too. None when nothing could be copied.
+pub fn copy_skill(skill: &Path, bot_id: &str, copies: &Path) -> Option<PathBuf> {
+    let name = skill.file_name()?.to_string_lossy().to_string();
+    let target = copies.join(bot_id).join(&name);
+    let mut wanted: Vec<PathBuf> = vec![];
+    let mut stack = vec![PathBuf::new()];
+    'walk: while let Some(relative_dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(skill.join(&relative_dir)) else { continue };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            if e.file_name().to_string_lossy().starts_with('.') { continue; }
+            // symlink_metadata: a link is seen as a link, never followed.
+            let Ok(meta) = std::fs::symlink_metadata(e.path()) else { continue };
+            let relative = relative_dir.join(e.file_name());
+            if meta.is_dir() {
+                stack.push(relative);
+                continue;
+            }
+            if !meta.is_file() || meta.len() > SKILL_COPY_MAX_BYTES { continue; }
+            if wanted.len() >= SKILL_COPY_MAX_FILES { break 'walk; }
+            wanted.push(relative.clone());
+            let destination = target.join(&relative);
+            let unchanged = std::fs::metadata(&destination).ok().map(|copied| {
+                copied.len() == meta.len() && matches!((copied.modified(), meta.modified()), (Ok(made), Ok(changed)) if made >= changed)
+            });
+            if unchanged == Some(true) { continue; }
+            if let Some(parent) = destination.parent() { let _ = std::fs::create_dir_all(parent); }
+            let _ = std::fs::remove_file(&destination);
+            let _ = std::fs::copy(e.path(), &destination);
+        }
+    }
+    // What the author has since deleted goes from the copy too.
+    let mut old = vec![PathBuf::new()];
+    while let Some(relative_dir) = old.pop() {
+        let Ok(entries) = std::fs::read_dir(target.join(&relative_dir)) else { continue };
+        for e in entries.flatten() {
+            let relative = relative_dir.join(e.file_name());
+            match std::fs::symlink_metadata(e.path()) {
+                Ok(m) if m.is_dir() => old.push(relative),
+                Ok(_) if !wanted.contains(&relative) => { let _ = std::fs::remove_file(e.path()); }
+                _ => {}
+            }
+        }
+    }
+    if target.join("SKILL.md").is_file() { Some(target) } else { None }
 }
 
 pub const SKILLS_LISTED: usize = 40;
@@ -211,4 +287,35 @@ pub fn awareness_note(bot: &Bot, room: &str, room_label: &str, os: &str) -> Stri
 
 pub fn os_name() -> &'static str {
     if cfg!(target_os = "macos") { "a Mac" } else if cfg!(windows) { "a Windows PC" } else { "a Linux computer" }
+}
+
+#[cfg(test)]
+mod skill_copy_tests {
+    use super::*;
+
+    #[test]
+    fn another_bots_skill_is_read_from_a_copy_without_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("scout").join("skills").join("invoice-check");
+        std::fs::create_dir_all(skill.join("notes")).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: invoice-check\ndescription: Check an invoice\n---\n1. Open it.\n").unwrap();
+        std::fs::write(skill.join("notes").join("tips.md"), "tip").unwrap();
+        std::fs::write(skill.join(".hidden"), "no").unwrap();
+        std::fs::write(skill.join("big.bin"), vec![0u8; (SKILL_COPY_MAX_BYTES + 1) as usize]).unwrap();
+        let private = dir.path().join("scout").join("memory.md");
+        std::fs::write(&private, "secret").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&private, skill.join("memory-link.md")).unwrap();
+        let copies = dir.path().join("shared").join(".from-bots");
+        let copy = copy_skill(&skill, "scout", &copies).unwrap();
+        assert!(copy.join("SKILL.md").is_file());
+        assert!(copy.join("notes").join("tips.md").is_file());
+        assert!(!copy.join(".hidden").exists());
+        assert!(!copy.join("big.bin").exists());
+        assert!(!copy.join("memory-link.md").exists());
+        // A file the author deleted leaves the copy on the next pass.
+        std::fs::remove_file(skill.join("notes").join("tips.md")).unwrap();
+        copy_skill(&skill, "scout", &copies).unwrap();
+        assert!(!copy.join("notes").join("tips.md").exists());
+    }
 }
