@@ -522,7 +522,16 @@ final class HarnessCenter: ObservableObject {
 
     // MARK: Reading
 
-    func status(for harness: String) -> HarnessStatus { statuses[harness] ?? HarnessStatus(id: harness) }
+    func status(for harness: String) -> HarnessStatus {
+        var status = statuses[harness] ?? HarnessStatus(id: harness)
+        // A test profile's `test.engines.missing` makes the engine count as signed out everywhere a real sign-out shows
+        // (the bot's Needs you, the sign-in card's pill, Settings), not only in the turn that fails.
+        if TheoProfile.isTest, status.installed, UserDefaults.standard.stringArray(forKey: "test.engines.missing")?.contains(harness) == true {
+            status.loggedIn = false
+            status.account = nil
+        }
+        return status
+    }
     /// Whether that harness has been checked yet since Theo started.
     func hasStatus(for harness: String) -> Bool { statuses[harness] != nil }
     func models(for harness: String) -> [HarnessModel] { models[harness] ?? [] }

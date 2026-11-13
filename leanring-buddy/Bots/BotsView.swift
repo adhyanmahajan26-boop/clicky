@@ -1692,6 +1692,8 @@ struct ConnectorsScreen: View {
                         // Next to "Claude bots only", Connect would read as if it weren't connected at all: say what it adds.
                         Button(working == connector.id ? "Signing in…" : state == .claudeOnly ? "Connect OpenCode" : "Connect") { connect(connector, state: state) }
                             .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
+                            // Its own width: in the fixed slot "Connect OpenCode" was cut to "Connect OpenC…".
+                            .fixedSize()
                     } else {
                         Color.clear
                     }
@@ -1699,7 +1701,10 @@ struct ConnectorsScreen: View {
                     Color.clear
                 }
             }
-            .frame(width: 128, height: 26, alignment: .trailing)
+            // At least the old slot (so pills line up), wider only for a longer button; fixedSize keeps an empty slot from
+            // stretching and pushing the pill left.
+            .frame(minWidth: 128, minHeight: 26, maxHeight: 26, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 56)
         .contentShape(Rectangle())
