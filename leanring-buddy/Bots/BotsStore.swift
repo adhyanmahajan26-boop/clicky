@@ -312,7 +312,7 @@ final class BotsStore: ObservableObject {
             // Engines a crash left running with nobody listening are ended before anything new starts.
             let leftovers = BotProcesses.endLeftovers()
             if leftovers > 0 { NSLog("Theo ended %d engine process group(s) left running before this launch", leftovers) }
-            // A file that couldn't be read is said plainly, once, where Addy will see it.
+            // A file that couldn't be read is said plainly, once, where the owner will see it.
             for problem in BotsSavedFile.takeProblems() { post(BotChatMessage(author: Self.noteAuthor, text: problem), to: primary?.id ?? "theo") }
             // Turns Theo was in the middle of when it quit or crashed get answered, not silently dropped.
             Task { @MainActor [weak self] in
@@ -351,7 +351,7 @@ final class BotsStore: ObservableObject {
     }
 
     /// Once, on the first launch of this version: the old bots, chats and groups move to
-    /// Bots-archive-<date> and Theo starts fresh with only Theo and Clicky, for Addy to set up.
+    /// Bots-archive-<date> and Theo starts fresh with only Theo and Clicky, for the owner to set up.
     private static func archiveForFreshStart(_ folder: URL) {
         let key = "v3.bots.freshStart"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
@@ -561,9 +561,9 @@ final class BotsStore: ObservableObject {
         if CodingIntent.asksToCancelRun(command ?? text) {
             if let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) {
                 stopRun(live.id)
-                cancelNote = "Theo has already stopped \"\(live.title)\" as Addy asked, and it's really stopped. Just confirm it."
+                cancelNote = "Theo has already stopped \"\(live.title)\" as \(BotPrompts.ownerName) asked, and it's really stopped. Just confirm it."
             } else {
-                cancelNote = "Addy asked to cancel a run, but no coding run is going on right now, so there's nothing to stop. Say so plainly."
+                cancelNote = "\(OwnerName.startingSentence(BotPrompts.ownerName)) asked to cancel a run, but no coding run is going on right now, so there's nothing to stop. Say so plainly."
             }
         }
         // "Clicky, research X" to the CEO: straight to Clicky, who reports back here.
@@ -602,7 +602,7 @@ final class BotsStore: ObservableObject {
         if let chatsNote { prompt += "\n\n(\(chatsNote))" }
         // The owner tagged a bot: in this chat that only means "bring them in", which this bot does itself.
         let tagged = BotPrompts.mentioned(in: command ?? text, bots: reachable(from: bot))
-        if !tagged.isEmpty { prompt += "\n\n(Addy tagged \(tagged.map(\.name).joined(separator: " and ")): message them with a [TELL:] line.)" }
+        if !tagged.isEmpty { prompt += "\n\n(\(OwnerName.startingSentence(BotPrompts.ownerName)) tagged \(tagged.map(\.name).joined(separator: " and ")): message them with a [TELL:] line.)" }
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + catchUp(botID, bot: bot, before: ownerMessageID) + prompt
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
@@ -871,7 +871,7 @@ final class BotsStore: ObservableObject {
     /// For a bot's turn: which folders there are and how to choose one.
     var projectsNote: String {
         let names = knownProjects.prefix(40).joined(separator: ", ")
-        return "Addy's project folders in \(BotsT3.projectsWords) on this Mac: \(names). If they name one, however it's spelled, write \"Repo: \(BotsT3.projectsWords)/<that exact name>\" next to the prompt, and the run works in it. If they ask for a new folder with a name, write \"New folder: <name>\". Otherwise a new folder is made from the project's name."
+        return "\(OwnerName.startingSentence(BotPrompts.ownerName))'s project folders in \(BotsT3.projectsWords) on this Mac: \(names). If they name one, however it's spelled, write \"Repo: \(BotsT3.projectsWords)/<that exact name>\" next to the prompt, and the run works in it. If they ask for a new folder with a name, write \"New folder: <name>\". Otherwise a new folder is made from the project's name."
     }
 
     /// Makes a folder the owner asked for, as a project of its own, on the Mac they typed it on.
@@ -1338,7 +1338,7 @@ final class BotsStore: ObservableObject {
                     screenOrders = taken.orders
                     researchOrders = research.questions
                 } else if !taken.orders.isEmpty || !research.questions.isEmpty {
-                    answer = gifts.text + "\n\n_(I can't use the screen or research on this turn, because Addy didn't ask for it. Nothing was done.)_"
+                    answer = gifts.text + "\n\n_(I can't use the screen or research on this turn, because \(BotPrompts.ownerName) didn't ask for it. Nothing was done.)_"
                 }
                 if fromOwner { screenGifts = gifts.gifts }
             }
@@ -1930,7 +1930,7 @@ final class BotsStore: ObservableObject {
 
     private var groupsFile: URL { folder.appendingPathComponent("groups.json") }
 
-    /// Saved group chats; a fresh setup has none until Addy makes them.
+    /// Saved group chats; a fresh setup has none until the owner makes them.
     private func loadGroups() -> [BotGroup] {
         guard let saved = BotsSavedFile.load([BotGroup].self, from: groupsFile, decoder: Self.decoder, what: "the group chats") else { return [] }
         return saved.filter { $0.headID == nil || bot($0.headID!) != nil }
@@ -1964,13 +1964,19 @@ enum BotImport {
         ["gmail-reader", "researcher"].contains(id) ? "personal" : "project"
     }
 
-    /// Theo, the primary bot: Addy's own helper, the head of any group chat Addy makes him head of, and the
-    /// one who hands builds to T3 Code.
+    /// Theo, the primary bot: the owner's own helper, the head of any group chat the owner makes him head of, and the
+    /// one who hands builds to T3 Code. It's saved with the bot, so it doesn't name the owner: every turn's "who you are"
+    /// note does that, and follows a change of name in Settings.
     static let primaryInstructions =
-        "You are Theo, Addy's primary bot. Help directly with anything Addy asks. " +
+        "You are Theo, the owner's primary bot. Help directly with anything they ask. " +
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
-    /// A fresh setup starts with Theo and the Clicky team (BotImport.addClickyTeam); Addy adds every other bot.
+    /// The same instructions as saved by versions that had the owner's name built in, so a demoted bot loses them too.
+    static let primaryInstructionsBeforeOwnerNameSetting =
+        "You are Theo, \(OwnerName.nameBeforeItWasASetting)'s primary bot. Help directly with anything \(OwnerName.nameBeforeItWasASetting) asks. " +
+        "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
+
+    /// A fresh setup starts with Theo and the Clicky team (BotImport.addClickyTeam); the owner adds every other bot.
     static let starters: [NativeBot] = [
         NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to T3 Code.",
                   instructions: primaryInstructions,
@@ -1978,7 +1984,7 @@ enum BotImport {
                   apps: ["theo"], category: "project"),
     ]
 
-    /// Makes sure Theo is there (and primary) and moves an older Code Improver off Big Pickle. Bots Addy
+    /// Makes sure Theo is there (and primary) and moves an older Code Improver off Big Pickle. Bots the owner
     /// removed stay removed.
     static func upgrade(_ bots: [NativeBot], offered: inout Set<String>) -> [NativeBot] {
         var result = bots.map { bot -> NativeBot in
@@ -2008,8 +2014,8 @@ enum BotImport {
 enum BotPrompts {
     static var askingStyle: String { BotProtocol.askingStyle }
 
-    /// Who the bots work for.
-    static let ownerName = "Addy"
+    /// Who the bots work for: the name from Setup or Settings › General, or "the owner" until one is given.
+    static var ownerName: String { ClickySettings.ownerName }
 
     static var chatStyle: String { BotProtocol.houseStyle(owner: ownerName) }
 
@@ -2079,7 +2085,7 @@ enum BotPrompts {
             if !others.isEmpty {
                 parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
             }
-            parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name)))
+            parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name), owner: ownerName))
             let roster = BotsStore.shared.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
             let work = BotsStore.shared.memoryStore.teamWorkContext()
@@ -2117,11 +2123,11 @@ enum BotPrompts {
     }
 
     /// A group chat's discussion, step by step.
-    static func planNote(hasOthers: Bool) -> String { BotProtocol.planNote(hasOthers: hasOthers) }
+    static func planNote(hasOthers: Bool) -> String { BotProtocol.planNote(hasOthers: hasOthers, owner: ownerName) }
     static var critiqueNote: String { BotProtocol.critiqueNote }
-    static var mergeNote: String { BotProtocol.mergeNote }
-    static var screenHowTo: String { BotProtocol.screenHowTo }
-    static var routineHowTo: String { BotProtocol.routineHowTo }
+    static var mergeNote: String { BotProtocol.mergeNote(owner: ownerName) }
+    static var screenHowTo: String { BotProtocol.screenHowTo(owner: ownerName) }
+    static var routineHowTo: String { BotProtocol.routineHowTo(owner: ownerName) }
     static var codingHowTo: String { BotProtocol.codingHowTo(harnessLabel: HarnessCatalog.label(HarnessPrefs.codingTarget)) }
 
     /// Words that ask for something on a schedule, so the routine how-to rides along even in an older chat.
@@ -2433,7 +2439,7 @@ extension BotsStore {
         let firstTurn = conversationRecord.sessions[bot.id] == nil
         let prompt = (bot.owner == nil ? BotPrompts.awarenessNote(for: bot, room: bot.id) : "") +
             (firstTurn ? BotPrompts.firstMessage(bot: bot, team: bots, text: text) : text) +
-            "\n\n(This is a scheduled run of a routine Addy set up; do the job now and report briefly. \(RoutineQuiet.howTo(owner: BotPrompts.ownerName)))" +
+            "\n\n(This is a scheduled run of a routine \(BotPrompts.ownerName) set up; do the job now and report briefly. \(RoutineQuiet.howTo(owner: BotPrompts.ownerName)))" +
             (bot.owner == nil && !bot.primary ? "\n\n(\(BotPrompts.reachNote(for: bot)))" : "")
         ownerSpoke(in: bot.id)
         let routineMessageID = conversationRecord.messages.last?.id
@@ -2591,7 +2597,7 @@ extension BotsStore {
     func reachable(from bot: NativeBot) -> [NativeBot] {
         // Clicky's team gets its jobs from Clicky.
         let others = bots.filter { $0.id != bot.id && $0.isOn && ($0.owner == nil || bot.id == Self.clickyID) }
-        // Anyone can message anyone, unless Addy has picked who this one may reach.
+        // Anyone can message anyone, unless the owner has picked who this one may reach.
         guard bot.canMessage != nil else { return others }
         var allowed = Set(bot.canMessage ?? [])
         switch bot.authorityLevel {
@@ -2626,6 +2632,7 @@ extension BotsStore {
         if demoted.authority == nil || demoted.authority == "ceo" { demoted.authority = "lead" }
         // The primary's added duties leave with the role (Theo's own instructions are the duties themselves).
         demoted.instructions = demoted.instructions.replacingOccurrences(of: "\n\n" + BotImport.primaryInstructions, with: "")
+            .replacingOccurrences(of: "\n\n" + BotImport.primaryInstructionsBeforeOwnerNameSetting, with: "")
         new.primary = true
         new.enabled = true
         new.authority = "ceo"
@@ -2734,7 +2741,7 @@ extension BotsStore {
     private func recentWork(of bot: NativeBot) -> String {
         let messages = conversation(bot.id).messages.filter { !$0.text.isEmpty }.suffix(8)
         var lines = messages.map { message -> String in
-            let who = message.author == "user" ? "Addy" : message.author == "routine" ? "Routine" : self.bot(message.author)?.name ?? bot.name
+            let who = message.author == "user" ? OwnerName.startingSentence(BotPrompts.ownerName) : message.author == "routine" ? "Routine" : self.bot(message.author)?.name ?? bot.name
             return "- \(who): " + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(280))
         }
         for routine in routines where routine.target == bot.id {
@@ -2776,7 +2783,7 @@ extension BotsStore {
     private func reportPrompt(_ reporter: NativeBot, to reader: NativeBot, role: String, section: BotsLayout.Section, activity: String) -> String {
         BotPrompts.persona(bot: reporter, team: bots) + "\n\n---\n\n\(role)" +
             (section.purpose.map { ", whose job is: \($0)" } ?? "") + ". Write \(reader.name) a short report: " +
-            "what got done, what's in progress, anything blocked or needing Addy. Plain sentences or a few bullets, no preamble.\n\n" +
+            "what got done, what's in progress, anything blocked or needing \(BotPrompts.ownerName). Plain sentences or a few bullets, no preamble.\n\n" +
             "Recent activity:\n\n\(activity)"
     }
 
@@ -2837,7 +2844,7 @@ extension BotsStore {
     func recordCall(_ lines: [(isOwner: Bool, text: String)], startedAt: Date) {
         guard let ceo = primary, !lines.isEmpty else { return }
         let minutes = max(1, Int(Date().timeIntervalSince(startedAt) / 60 + 0.5))
-        let transcript = lines.map { "**\($0.isOwner ? "Addy" : ceo.name):** \($0.text)" }.joined(separator: "\n\n")
+        let transcript = lines.map { "**\($0.isOwner ? OwnerName.startingSentence(BotPrompts.ownerName) : ceo.name):** \($0.text)" }.joined(separator: "\n\n")
         post(BotChatMessage(author: "routine", text: "\(Self.callMark) Call with \(ceo.name), \(minutes) min\n\n\(transcript)"), to: ceo.id)
     }
 
@@ -2856,7 +2863,7 @@ extension BotsStore {
         conversations[bot.id] = record
         guard !waiting.isEmpty else { return "" }
         let lines = waiting.map { $0.author == "routine" ? $0.text : "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
-        return "(What came in since you last spoke, reports from your teams and any voice call with Addy:\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
+        return "(What came in since you last spoke, reports from your teams and any voice call with \(BotPrompts.ownerName):\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
     }
 }
 
@@ -3252,6 +3259,6 @@ extension BotsStore {
         let lines = BotCatchUp.lines(unheard.map { message in
             (message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author), message.text)
         }).joined(separator: "\n")
-        return "(This chat also went on while you weren't here, some of it maybe from Addy's other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
+        return "(This chat also went on while you weren't here, some of it maybe from \(BotPrompts.ownerName)'s other Mac:\n\n\(lines)\n\nUse this as context.)\n\n"
     }
 }

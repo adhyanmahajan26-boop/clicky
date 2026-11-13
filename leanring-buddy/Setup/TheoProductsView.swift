@@ -4,7 +4,7 @@
 //
 //  Theo, Clicky and Dictation as three products a person turns on one by one (rules in ClickyCore `TheoProducts`):
 //  the saved choice, what changes when one is switched, the product cards with their demos (Setup › Pick products,
-//  Settings › Products), and the page a product shows while it's off. Dictation stays blocked until a Sarvam key is saved.
+//  Settings › Products), and the page a product shows while it's off. Dictation runs on Apple's recognizer until a Sarvam key is saved.
 //
 
 import ClickyCore
@@ -52,7 +52,7 @@ final class TheoProducts: ObservableObject {
         revision += 1
     }
 
-    /// Whether dictation can run: the product on, and a Sarvam key saved.
+    /// Whether dictation runs, and on what: off, Apple's recognizer, or Sarvam once its key is saved.
     var dictationAccess: DictationAccess {
         DictationAccess.of(productOn: isOn(.dictation), hasSarvamKey: ProviderKeys.shared.hasKey(for: Self.dictationKeyProvider))
     }
@@ -113,11 +113,11 @@ struct TheoProductCard: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(isOn ? DS.Colors.accent.opacity(0.7) : DS.Colors.borderSubtle, lineWidth: isOn ? 1.5 : 1))
     }
 
-    /// The requirement line as a pill: "Needs a Sarvam API key" in yellow with the field under it, "On" in green, "Off" in grey.
+    /// The status as a pill: "On, with Apple's dictation" with the optional Sarvam key field under it, "On" in green, "Off" in grey.
     @ViewBuilder private var status: some View {
-        if product == .dictation, products.dictationAccess == .needsKey {
+        if product == .dictation, products.dictationAccess == .appleOnly {
             VStack(alignment: .leading, spacing: 6) {
-                StatusPill(text: "Needs a Sarvam API key", tone: .warn)
+                StatusPill(text: "On, with Apple's dictation", tone: .good)
                 SarvamKeyField()
             }
         } else if isOn {

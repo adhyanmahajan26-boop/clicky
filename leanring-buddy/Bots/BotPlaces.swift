@@ -182,14 +182,14 @@ extension BotsStore {
         let harness = continuingHarness(words: words, room: room)
         let named = projectChoice(ownerWords: words, answer: nil).repo?.path
         guard let folder = named ?? latestRun(in: room).flatMap({ $0.isRemote ? nil : $0.folder }) else {
-            return "Addy wants to carry on earlier work but no folder is clear yet: ask which folder, in one short question."
+            return "\(OwnerName.startingSentence(BotPrompts.ownerName)) wants to carry on earlier work but no folder is clear yet: ask which folder, in one short question."
         }
         let chats = await HarnessChats.list(harness: harness, folder: folder)
         let label = HarnessCatalog.label(harness)
         if chats.isEmpty, harness == "t3", !HarnessChats.isT3ServerUp {
-            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If Addy names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
+            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If \(BotPrompts.ownerName) names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
         }
-        guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if Addy asked to continue one." }
+        guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if \(BotPrompts.ownerName) asked to continue one." }
         let lines = chats.prefix(8).map { "- \($0.title) (\(HarnessChatText.age(of: $0.updatedAt)) ago): \($0.id)" }.joined(separator: "\n")
         return "Earlier \(label) chats in \(folder), newest first:\n\(lines)\nTo continue one, write a line \"Continue: <its id>\" next to the ```prompt block, with \"Repo: \(folder)\"."
     }

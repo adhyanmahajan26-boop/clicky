@@ -3,8 +3,8 @@
 //  ClickyCore
 //
 //  Theo comes as three products a new user picks from: Theo (bots, teams, routines and coding runs), Clicky (the screen
-//  companion) and Dictation (talk, and the words are typed). Each is on or off by itself. Dictation also needs a Sarvam
-//  API key: with none saved it stays blocked and says so, instead of quietly falling back to something else.
+//  companion) and Dictation (talk, and the words are typed). Each is on or off by itself. A Sarvam API key makes Dictation
+//  better (Sarvam's words, Indian languages); with none saved it uses Apple's dictation on this Mac.
 //
 //  This file is the rules only (what each product owns, the default for an install from before the choice existed,
 //  which Setup steps a choice needs, what blocks dictation). The app keeps the choice in UserDefaults and applies it.
@@ -58,7 +58,7 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
     /// What it needs before it works, shown on its card. Nil: nothing beyond the usual permissions.
     public var requirement: String? {
         switch self {
-        case .dictation: return "Needs a Sarvam API key"
+        case .dictation: return "Works with Apple's dictation; a Sarvam API key makes it better"
         case .clicky: return "Uses your Claude subscription or any API key"
         case .theo: return nil
         }
@@ -90,23 +90,22 @@ public enum TheoProductChoice {
     public static func canFinish(_ products: Set<TheoProduct>) -> Bool { !products.isEmpty }
 }
 
-/// Whether dictation can run now, and what to say when it can't.
+/// Whether dictation can run now, and on what. Without a Sarvam key it still works, on Apple's dictation.
 public enum DictationAccess: Equatable, Sendable {
-    case off, needsKey, ready
+    /// `appleOnly`: on, with no Sarvam key, so Apple's recognizer on this Mac does the listening. `ready`: on, with Sarvam.
+    case off, appleOnly, ready
 
     public static func of(productOn: Bool, hasSarvamKey: Bool) -> DictationAccess {
         guard productOn else { return .off }
-        return hasSarvamKey ? .ready : .needsKey
+        return hasSarvamKey ? .ready : .appleOnly
     }
 
-    /// The key gate is part of the product: the shortcut is listened for, so a press can say what's missing.
     public var listensForShortcut: Bool { self != .off }
 
     public var message: String? {
         switch self {
         case .off: return "Dictation is off. Turn it on in Settings \u{203A} Products."
-        case .needsKey: return "Dictation needs a Sarvam API key"
-        case .ready: return nil
+        case .appleOnly, .ready: return nil
         }
     }
 }
@@ -128,7 +127,7 @@ public enum SetupStep: Int, CaseIterable, Sendable {
     }
 
     /// Harnesses are for Theo's coding runs and Clicky's brain; Voice is how Theo and Clicky sound. Dictation needs
-    /// neither, only its key. Before anything is picked, every step shows, so the list doesn't jump about.
+    /// neither; its optional Sarvam key is on the keys step. Before anything is picked, every step shows, so the list doesn't jump about.
     public static func shown(for products: Set<TheoProduct>) -> [SetupStep] {
         guard !products.isEmpty else { return allCases }
         let talks = products.contains(.theo) || products.contains(.clicky)

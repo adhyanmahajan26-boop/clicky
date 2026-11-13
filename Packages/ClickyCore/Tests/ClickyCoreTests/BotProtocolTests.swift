@@ -294,35 +294,35 @@ struct BotProtocolTests {
 
     private var roles: [Role] {
         [
-            Role(name: "CEO", identity: BotIdentityFacts(name: "Theo", owner: "Addy", job: "Your primary bot", isCEO: true, ceoName: "Theo"), reporting: []),
-            Role(name: "manager", identity: BotIdentityFacts(name: "Mira", owner: "Addy", job: "Runs the IT guys", teams: ["IT guys"], managesTeams: ["IT guys"], ceoName: "Theo"),
+            Role(name: "CEO", identity: BotIdentityFacts(name: "Theo", owner: "Sam", job: "Your primary bot", isCEO: true, ceoName: "Theo"), reporting: []),
+            Role(name: "manager", identity: BotIdentityFacts(name: "Mira", owner: "Sam", job: "Runs the IT guys", teams: ["IT guys"], managesTeams: ["IT guys"], ceoName: "Theo"),
                  reporting: [.init(name: "IT guys", purpose: "Keep it running", mates: ["Coder", "Ops"], isManager: true)]),
-            Role(name: "member", identity: BotIdentityFacts(name: "Coder", owner: "Addy", job: "Writes code", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]),
+            Role(name: "member", identity: BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]),
                  reporting: [.init(name: "IT guys", mates: ["Mira", "Ops"], managerName: "Mira")]),
-            Role(name: "no-manager member", identity: BotIdentityFacts(name: "Ops", owner: "Addy", job: "Runs servers", teams: ["Ops"], ceoName: "Theo"),
+            Role(name: "no-manager member", identity: BotIdentityFacts(name: "Ops", owner: "Sam", job: "Runs servers", teams: ["Ops"], ceoName: "Theo"),
                  reporting: [.init(name: "Ops")]),
         ]
     }
 
-    private let place = BotPlaceFacts(owner: "Addy", thisMac: "MacBook Air", projects: ["a", "b"], ready: ["Claude Code (signed in)", "T3 Code 0.1.7"], otherMac: "Mac Studio", otherMacConnected: true, otherMacHasScreens: true)
+    private let place = BotPlaceFacts(owner: "Sam", thisMac: "MacBook Air", projects: ["a", "b"], ready: ["Claude Code (signed in)", "T3 Code 0.1.7"], otherMac: "Mac Studio", otherMacConnected: true, otherMacHasScreens: true)
     private let reachable: [(name: String, description: String)] = [("Coder", "Writes code"), ("Ops", "Runs servers")]
 
     /// Everything a bot can be told, in any kind of chat.
     private func allPrompts(_ role: Role) -> [String] {
         let identity = BotAwareness.whoYouAre(role.identity)
         let whereNow = BotAwareness.whereYouAre(place)
-        let reach = BotProtocol.reachHowTo(reachable: reachable, owner: "Addy")
+        let reach = BotProtocol.reachHowTo(reachable: reachable, owner: "Sam")
         let reporting = role.reporting.map { BotProtocol.reportingLine($0, ceoName: "Theo") }.joined(separator: "\n")
-        let shared = [identity, whereNow, reach, reporting, BotProtocol.houseStyle(owner: "Addy"), BotProtocol.routineHowTo, BotProtocol.codingHowTo(harnessLabel: "Claude Code"), BotProtocol.screenHowTo, BotProtocol.askingStyle].joined(separator: "\n\n")
-        let group = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Addy", others: reachable, firstTimeIntro: [], transcript: [("Addy", "hi"), ("Coder", "hello")],
+        let shared = [identity, whereNow, reach, reporting, BotProtocol.houseStyle(owner: "Sam"), BotProtocol.routineHowTo(owner: "Sam"), BotProtocol.codingHowTo(harnessLabel: "Claude Code"), BotProtocol.screenHowTo(owner: "Sam"), BotProtocol.askingStyle].joined(separator: "\n\n")
+        let group = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [], transcript: [("Sam", "hi"), ("Coder", "hello")],
                                                 includesScreenHowTo: true, turnNote: BotProtocol.memberTurnNote(name: role.identity.name, headName: "Mira"))
-        let head = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Addy", others: reachable, firstTimeIntro: [], transcript: [("Addy", "hi")],
-                                               includesScreenHowTo: true, turnNote: BotProtocol.headOpensNote(owner: "Addy"))
-        let wrap = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Addy", others: reachable, firstTimeIntro: [], transcript: [("Coder", "done")],
-                                               includesScreenHowTo: false, turnNote: BotProtocol.wrapUpNote(owner: "Addy"))
+        let head = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [], transcript: [("Sam", "hi")],
+                                               includesScreenHowTo: true, turnNote: BotProtocol.headOpensNote(owner: "Sam"))
+        let wrap = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [], transcript: [("Coder", "done")],
+                                               includesScreenHowTo: false, turnNote: BotProtocol.wrapUpNote(owner: "Sam"))
         let privately = [BotProtocol.privateThreadHowTo(partner: "Theo"),
-                         BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: "Which database?", ownerAsked: "ask Coder", earlier: [], owner: "Addy")].joined(separator: "\n\n")
-        let carryOn = BotProtocol.repliesPrompt([("Coder", "SQLite")], notes: [], lastRoundWith: [], reader: "Addy")
+                         BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: "Which database?", ownerAsked: "ask Coder", earlier: [], owner: "Sam")].joined(separator: "\n\n")
+        let carryOn = BotProtocol.repliesPrompt([("Coder", "SQLite")], notes: [], lastRoundWith: [], reader: "Sam")
         return [shared, shared + "\n\n" + group, shared + "\n\n" + head, shared + "\n\n" + wrap, shared + "\n\n" + privately, shared + "\n\n" + carryOn]
     }
 
@@ -355,8 +355,8 @@ struct BotProtocolTests {
     }
 
     @Test func aMembersPromptHoldsWhatTheMemberBeforeItSaid() {
-        let prompt = BotProtocol.groupTurnPrompt(botName: "Ops", groupName: "IT guys", owner: "Addy", others: reachable, firstTimeIntro: [],
-                                                 transcript: [("Addy", "which database?"), ("Mira", "@Coder @Ops your take?"), ("Coder", "Postgres, because of the joins")],
+        let prompt = BotProtocol.groupTurnPrompt(botName: "Ops", groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [],
+                                                 transcript: [("Sam", "which database?"), ("Mira", "@Coder @Ops your take?"), ("Coder", "Postgres, because of the joins")],
                                                  includesScreenHowTo: false, turnNote: BotProtocol.memberTurnNote(name: "Ops", headName: "Mira"))
         #expect(prompt.contains("Coder: Postgres, because of the joins"))
         #expect(prompt.contains("Don't repeat a point already made"))
@@ -365,7 +365,7 @@ struct BotProtocolTests {
 
     @Test func aPrivateMessageHoldsAllOfItWhoSentItAndWhy() {
         let long = String(repeating: "word ", count: 2000)
-        let prompt = BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: long, ownerAsked: "ask Coder which database", earlier: ["Coder: Earlier we said SQLite"], owner: "Addy")
+        let prompt = BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: long, ownerAsked: "ask Coder which database", earlier: ["Coder: Earlier we said SQLite"], owner: "Sam")
         #expect(prompt.contains(long))
         #expect(prompt.contains("Private message from Theo (the CEO)"))
         #expect(prompt.contains("ask Coder which database"))
@@ -375,7 +375,7 @@ struct BotProtocolTests {
 
     @Test func aRepliesPromptHoldsAllOfTheAnswer() {
         let long = String(repeating: "word ", count: 2000)
-        let prompt = BotProtocol.repliesPrompt([("Coder", long)], notes: ["There's nobody called Bob."], lastRoundWith: ["Coder"], reader: "Addy")
+        let prompt = BotProtocol.repliesPrompt([("Coder", long)], notes: ["There's nobody called Bob."], lastRoundWith: ["Coder"], reader: "Sam")
         #expect(prompt.contains(long))
         #expect(prompt.contains("There's nobody called Bob."))
         #expect(prompt.contains("last message to Coder"))
@@ -385,7 +385,7 @@ struct BotProtocolTests {
 
     @Test func whereYouAreNamesBothMacsAndWhereCodeGoes() {
         let text = BotAwareness.whereYouAre(place)
-        #expect(text.contains("running on Addy's MacBook Air, the Mac Addy is using"))
+        #expect(text.contains("running on Sam's MacBook Air, the Mac Sam is using"))
         #expect(text.contains("Folders and coding runs from this chat are on the MacBook Air"))
         #expect(text.contains("Mac Studio, is connected"))
         #expect(text.contains("hidden screens"))
@@ -396,8 +396,8 @@ struct BotProtocolTests {
     /// the owner to "allow Glob", which no setting does. It's now told what it may read, and the way to reach anything else.
     @Test func whereYouAreSaysWhatTheBotMayRead() {
         let text = BotAwareness.whereYouAre(place)
-        #expect(text.contains("You can read only your memory folder, ~/Projects and files or folders Addy names in the message"))
-        #expect(text.contains("ask Addy to name its path"))
+        #expect(text.contains("You can read only your memory folder, ~/Projects and files or folders Sam names in the message"))
+        #expect(text.contains("ask Sam to name its path"))
         var noTools = place
         noTools.canReadFiles = false
         #expect(!BotAwareness.whereYouAre(noTools).contains("You can read only"))
@@ -410,7 +410,7 @@ struct BotProtocolTests {
         facts.whyHere = "Grok isn't signed in on this MacBook Air"
         facts.codingMac = "MacBook Air"
         let text = BotAwareness.whereYouAre(facts)
-        #expect(text.contains("running on Addy's Mac Studio"))
+        #expect(text.contains("running on Sam's Mac Studio"))
         #expect(text.contains("typing on their MacBook Air"))
         #expect(text.contains("Grok isn't signed in"))
         #expect(text.contains("coding runs from this chat are on the MacBook Air"))
@@ -426,19 +426,19 @@ struct BotProtocolTests {
     }
 
     @Test func noOtherMacIsSaidPlainly() {
-        let text = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Addy", thisMac: "Mac Studio", thisMacHasScreens: true))
+        let text = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Sam", thisMac: "Mac Studio", thisMacHasScreens: true))
         #expect(text.contains("no other Mac linked"))
         #expect(text.contains("hidden screens"))
     }
 
     @Test func whoYouAreIsBuiltFromTheBot() {
-        let text = BotAwareness.whoYouAre(BotIdentityFacts(name: "Coder", owner: "Addy", job: "Writes code.", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]))
-        #expect(text.contains("you're Coder, Addy's bot"))
+        let text = BotAwareness.whoYouAre(BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code.", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]))
+        #expect(text.contains("you're Coder, Sam's bot"))
         #expect(text.contains("Your job: Writes code."))
         #expect(text.contains("on the IT guys team; your manager is Mira"))
         #expect(text.contains("use Gmail"))
         #expect(text.contains("say who on the team fits"))
-        #expect(text.contains("Work out what Addy actually wants"))
+        #expect(text.contains("Work out what Sam actually wants"))
     }
 
     @Test func theTwoBlocksStayShort() {
@@ -606,7 +606,7 @@ struct BotProtocolTests {
         #expect(!words.contains("  "))
         #expect(BotAwareness.shortJob("Short job.") == "Short job.")        // Said in the "who you are" block without a full stop after the ellipsis.
         let ceo = "CEO for Adhyan. Manages department heads (COM, COP, CTO, HEAD MANAGMENT, and ops leads) and delivers a morning brief covering stock/invoices, pricing, websites, mail, and overall ops."
-        let block = BotAwareness.whoYouAre(BotIdentityFacts(name: "CEO", owner: "Addy", job: BotAwareness.shortJob(ceo)))
+        let block = BotAwareness.whoYouAre(BotIdentityFacts(name: "CEO", owner: "Sam", job: BotAwareness.shortJob(ceo)))
         #expect(block.contains("…") && !block.contains("…."))
     }
 
@@ -716,16 +716,16 @@ struct BotProtocolTests {
     }
 
     @Test func theProjectsFolderIsSaidTheWayAnAgentsShellReadsIt() {
-        let usual = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Addy", thisMac: "Mac Studio", projects: ["moon"]))
+        let usual = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Sam", thisMac: "Mac Studio", projects: ["moon"]))
         #expect(usual.contains("(~/Projects: moon)"))
-        let elsewhere = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Addy", thisMac: "Mac Studio", projects: ["moon"], projectsFolder: "/tmp/test home/Projects"))
+        let elsewhere = BotAwareness.whereYouAre(BotPlaceFacts(owner: "Sam", thisMac: "Mac Studio", projects: ["moon"], projectsFolder: "/tmp/test home/Projects"))
         #expect(elsewhere.contains("(/tmp/test home/Projects: moon)"))
         #expect(!elsewhere.contains("~/Projects"))
     }
 
     @Test func theFinalPromptNeverSendsTheAgentToAFolder() {
-        #expect(BotProtocol.mergeNote.contains("never tell the agent to create or go to a folder"))
-        #expect(BotProtocol.planNote(hasOthers: false).contains("never tell the agent to create or go to a folder"))
+        #expect(BotProtocol.mergeNote(owner: "Sam").contains("never tell the agent to create or go to a folder"))
+        #expect(BotProtocol.planNote(hasOthers: false, owner: "Sam").contains("never tell the agent to create or go to a folder"))
     }
 
     @Test func aTagInCodeIsNotAnOrder() {

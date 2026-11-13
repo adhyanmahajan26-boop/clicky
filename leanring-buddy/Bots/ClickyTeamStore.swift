@@ -57,7 +57,7 @@ extension BotsStore {
         let brain = BrainModel(setting: ClickyModels.main)
         var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
-                         instructions: "You are Clicky, Addy's screen companion. You manage a small team and report to the CEO.",
+                         instructions: "You are Clicky, \(BotPrompts.ownerName)'s screen companion. You manage a small team and report to the CEO.",
                          hue: 20, accentHue: 40, primary: false, provider: "claude",
                          model: brain.isClaude ? brain.modelIdentifier : ClickyModels.sonnet, effort: nil, apps: [], category: "personal")
         clicky.look = Self.savedClickyLook
@@ -94,7 +94,7 @@ extension BotsStore {
 
     // MARK: Setting up
 
-    /// Once: the team joins this setup, new or old. Bots Addy later removes stay removed.
+    /// Once: the team joins this setup, new or old. Bots the owner later removes stay removed.
     func provisionClickyTeam() {
         let file = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
@@ -221,7 +221,7 @@ extension BotsStore {
             } else {
                 do {
                     let turn = try await ClaudeCodeBridge(model: ClickyModels.helper).runTurn(
-                        systemPromptFileName: "clicky-\(duty.rawValue)-helper-prompt.md", systemPrompt: duty.instructions, contentBlocks: [.text(plan.prompt)])
+                        systemPromptFileName: "clicky-\(duty.rawValue)-helper-prompt.md", systemPrompt: duty.instructions(owner: BotPrompts.ownerName), contentBlocks: [.text(plan.prompt)])
                     self.jobAnswered(job.id, duty: duty, answer: turn.text.trimmingCharacters(in: .whitespacesAndNewlines), ownerWords: ownerWords,
                                      memoryKind: plan.memoryKind, room: Self.clickyID)
                 } catch {
@@ -239,11 +239,11 @@ extension BotsStore {
             switch kind {
             case .remember(let text):
                 memoryStore.append(text, kind: .remembered)
-                return (ClickyTeamPrompts.rememberPrompt(text), kind)
+                return (ClickyTeamPrompts.rememberPrompt(text, owner: BotPrompts.ownerName), kind)
             case .find(let query):
                 return (ClickyTeamPrompts.findPrompt(query: query, hits: memoryStore.search(query)), kind)
             case .summarise:
-                return (ClickyTeamPrompts.summarisePrompt(entries: memoryStore.unsummarised()), kind)
+                return (ClickyTeamPrompts.summarisePrompt(entries: memoryStore.unsummarised(), owner: BotPrompts.ownerName), kind)
             }
         case .runner:
             let targets = bots.filter { $0.owner == nil && $0.isOn }.map { (name: $0.name, description: $0.description) }
@@ -595,7 +595,7 @@ extension BotsStore {
             return
         }
         guard let ownerWords, BotsStore.ownerAskedToBuild(ownerWords) else {
-            onReport?("That needs Addy's own go-ahead: they have to say to send it to code.")
+            onReport?("That needs \(BotPrompts.ownerName)'s own go-ahead: they have to say to send it to code.")
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
@@ -631,7 +631,7 @@ extension BotsStore {
             guard await studio.wakeForWork() else {
                 let said = studio.isEnabled
                     ? "The hidden screens are asleep while something's playing, because waking them can interrupt it. Nothing was done, so ask again when it's stopped."
-                    : "I can't do that: the hidden screens are off, so nothing was done. Addy can turn them on in Settings › Studio."
+                    : "I can't do that: the hidden screens are off, so nothing was done. \(OwnerName.startingSentence(BotPrompts.ownerName)) can turn them on in Settings › Studio."
                 if let onReport { onReport(said) } else { self.post(BotChatMessage(author: bot.id, text: said), to: room) }
                 return
             }
@@ -792,7 +792,7 @@ extension BotsStore {
         guard bot.primary, !rosterForCEO.isEmpty else { return "" }
         let work = memoryStore.teamWorkContext()
         return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n\(projectsNote)\n" +
-            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply. Between bots it's private: Addy sees a small card, their answer comes back to you here, and you tell Addy what came of it. Just do it: don't explain to Addy how you reach them, and don't ask how." +
+            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply. Between bots it's private: \(BotPrompts.ownerName) sees a small card, their answer comes back to you here, and you tell \(BotPrompts.ownerName) what came of it. Just do it: don't explain to \(BotPrompts.ownerName) how you reach them, and don't ask how." +
             (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
     }
 
@@ -821,7 +821,7 @@ extension BotImport {
     /// Safe to run on any setup: other bots and categories stay as they are.
     static func addClickyTeam(to bots: inout [NativeBot], layout: inout BotsLayout) {
         for duty in ClickyDuty.allCases where !bots.contains(where: { $0.id == duty.botID }) {
-            var bot = NativeBot(id: duty.botID, name: duty.defaultName, description: duty.blurb, instructions: duty.instructions,
+            var bot = NativeBot(id: duty.botID, name: duty.defaultName, description: duty.blurb, instructions: duty.instructions(owner: BotPrompts.ownerName),
                                 hue: 30, accentHue: 60, primary: false, provider: "claude", model: ClickyDuty.model, effort: nil,
                                 apps: [], category: "personal")
             bot.owner = BotsStore.clickyID

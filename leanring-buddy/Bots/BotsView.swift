@@ -1211,7 +1211,6 @@ struct BotChatScreen: View {
     }
 
     private var dictationHelp: String {
-        if products.dictationAccess == .needsKey { return "Dictation needs a Sarvam API key" }
         switch ComposerDictationSettings.shortcut {
         case .optionSpace: return "Dictate (⌥Space or ⌘⇧D)"
         case .commandShiftD: return "Dictate (⌘⇧D)"

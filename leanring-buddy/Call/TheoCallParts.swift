@@ -681,10 +681,13 @@ final class AppleCallVoice: CallVoice {
         }
     }
 
-    /// The right voice for the script: Devanagari goes to a Hindi voice, the rest to Indian English when it's there.
+    /// The right voice for the script: Devanagari goes to a Hindi voice. The rest goes to Indian English when the call
+    /// is in Hinglish, else to the computer's own language, when there's a voice for it.
     static func voice(for text: String) -> AVSpeechSynthesisVoice? {
         if DictationCleanup.containsDevanagari(text), let hindi = best(language: "hi") { return hindi }
-        return best(language: "en-IN") ?? SystemVoiceTTSClient.automaticallyChosenVoice()
+        let callLanguage = CallSettings.language
+        let spokenLocale = callLanguage.meansHinglish ? "en-IN" : callLanguage.appleLocale
+        return best(language: spokenLocale) ?? best(language: "en-IN") ?? SystemVoiceTTSClient.automaticallyChosenVoice()
     }
 
     private static func best(language: String) -> AVSpeechSynthesisVoice? {
