@@ -8,6 +8,18 @@ How to read the evidence: screenshots are of Theo's own window, in `docs/evidenc
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
 
+## Round 5 (2026-11-14): the stranger test
+
+Theo as a brand new user meets it: a fresh profile, its own home folder, no coding agent, nothing of the original developer's (theo-fix-plan package 11). Mac: `Tools/tests/stranger_mac.py`; Windows and Linux: `crossplatform/tests/stranger.py` (see `AGENTS.md`). Run on branch `integration/any-user-all`. GitHub Actions started no job that night (billing), so the Mac and Windows columns wait for CI.
+
+| | What | Linux | Windows | Mac |
+|---|---|---|---|---|
+| ⚠️ | First run finishes with only an API key, and Theo answers on it | waits for package 10 | not run | not run |
+| ✅ | The owner's name from setup is in bots' prompts; "Addy" is in no prompt and no file | ✅ | not run | not run |
+| ✅ | The echo app added in Connectors, given to a bot, used in a turn, with no Claude Code | ✅ | not run | not run |
+| ✅ | A project folder outside the default place, and a coding run there with a stand-in harness | ✅ | not run | not run |
+| ⚠️ | Two linked laptops: exactly one fires routines | Mac only | Mac only | not run (unit-tested in `BrowserResearchTests`) |
+
 ## Round 4 (2026-11-05): the bot harness
 
 Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor Auto. "Two profiles" means two linked test profiles on one Mac Studio, one of them standing in for the Air. The real Air is a separate pass: `AIR-TESTS.md` in the evidence folder. Evidence is under `~/jstest/theo-ui/harness-core/` (`evidence/live/`, `shots/`).
