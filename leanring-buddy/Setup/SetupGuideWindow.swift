@@ -125,7 +125,6 @@ struct SetupGuideView: View {
         if model.step == .done { return .done }
         if voicePreview.playing != nil { return .talking }
         if model.step == .products && !model.canContinue { return .needs }
-        if model.step == .keys && products.isOn(.dictation) && products.dictationAccess == .needsKey { return .needs }
         return .awake
     }
 
@@ -203,18 +202,9 @@ struct SetupGuideView: View {
         case .products:
             if !model.canContinue {
                 StatusPill(text: "Pick at least one", tone: .warn)
-            } else if products.isOn(.dictation) && products.dictationAccess == .needsKey {
-                HStack(spacing: 8) {
-                    StatusPill(text: "Dictation still needs its key", tone: .warn)
-                    Text("You can add it later.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-                }
             }
         case .keys:
-            if products.isOn(.dictation) && products.dictationAccess == .needsKey {
-                StatusPill(text: "Dictation needs a key", tone: .warn)
-            } else {
-                Text("You can skip this").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-            }
+            Text("You can skip this").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
         default:
             EmptyView()
         }
@@ -271,8 +261,8 @@ struct SetupGuideView: View {
         case .keys:
             VStack(alignment: .leading, spacing: 18) {
                 if products.isOn(.dictation) {
-                    StepHeader(title: "API keys", subtitle: "Dictation needs a Sarvam key; everything else here is optional. Keys stay in your Keychain.")
-                    TheoSection(title: "Dictation's Sarvam key", hint: products.dictationAccess == .ready ? "Saved. Dictation is ready." : "Dictation stays blocked until this is saved. You can skip it now and add it later in Settings \u{203A} Dictation.") {
+                    StepHeader(title: "API keys (optional)", subtitle: "Dictation works with Apple's dictation on this Mac; a Sarvam key makes it better. Every key here is optional and stays in your Keychain.")
+                    TheoSection(title: "Dictation's Sarvam key", hint: products.dictationAccess == .ready ? "Saved. Dictation uses Sarvam." : "Optional: Sarvam adds Indian languages and Hinglish. Without it Apple's dictation does the listening. You can add it later in Settings \u{203A} Dictation.") {
                         if products.dictationAccess == .ready {
                             SettingRow(title: "Sarvam AI", detail: "Key saved") { StatusPill(text: "Ready", tone: .good) }
                         } else {
@@ -332,6 +322,11 @@ private struct WelcomeStep: View {
             }
             .padding(.top, 6)
             VStack(alignment: .leading, spacing: 8) {
+                Text("What should your bots call you?").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                OwnerNameField(suggestsComputerName: true).frame(width: 260)
+            }
+            .padding(.top, 8)
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Pick your look").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 HairlineSegments(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance).frame(width: 260)
             }
@@ -344,6 +339,33 @@ private struct WelcomeStep: View {
             IconTile(symbol: symbol, colors: colors, size: 26)
             Text(text).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
         }
+    }
+}
+
+/// The owner's name, as the bots will call them (ClickySettings.ownerName). Saved as it's typed, and Theo's bot guide is
+/// rewritten so a bot reading it sees the new name. In setup an empty field starts with the computer's first name, saved
+/// straight away so what's shown is what the bots are told.
+struct OwnerNameField: View {
+    var suggestsComputerName = false
+    @State private var draft = ClickySettings.savedOwnerName
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Your first name", text: $draft)
+            .focused($focused).theoField(focused: focused)
+            .onAppear {
+                guard suggestsComputerName, draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                let suggestion = OwnerName.suggestion(fullUserName: NSFullUserName(), accountName: NSUserName())
+                guard !suggestion.isEmpty else { return }
+                draft = suggestion
+                save(suggestion)
+            }
+            .onChange(of: draft) { _, newName in save(newName) }
+    }
+
+    private func save(_ newName: String) {
+        ClickySettings.ownerName = String(newName.prefix(OwnerName.maximumLength))
+        BotMemory.writeGuide(owner: BotPrompts.ownerName)
     }
 }
 
@@ -366,11 +388,6 @@ private struct DoneStep: View {
                     if index > 0 { RowDivider() }
                     tip(line)
                 }
-            }
-            // Anything still missing, as a folded line with its button: it never blocks starting.
-            if products.dictationAccess == .needsKey {
-                PixelFoldedLine(tone: .needs, did: "Dictation is waiting for its key", about: "add it any time",
-                                undo: ("Add it", { BotsSelection.shared.openSettings(.keys); model.finish() }))
             }
             TheoSection(title: "Theo's screen", hint: "Theo opens its windows here and leaves your main screen alone.") {
                 SettingRow(title: "Monitor") {

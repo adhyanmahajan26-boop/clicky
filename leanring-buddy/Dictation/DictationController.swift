@@ -361,11 +361,7 @@ final class DictationController: ObservableObject {
 
     private func keysPressed() {
         guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
-        // Dictation needs a Sarvam key (Settings › Products): the press says so instead of listening.
-        if TheoProducts.dictationAccessNow == .needsKey {
-            showFailure("Add a Sarvam API key to dictate")
-            return
-        }
+        // No Sarvam key is fine: Apple's recognizer on this Mac does the listening (DictationSettings.usesSarvam).
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             showFailure("Theo needs the microphone")
             return

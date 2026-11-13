@@ -50,7 +50,7 @@ final class StudioScreenTask {
                 return
             }
             guard StudioController.shared.config.choice(for: bot.id) != .none else {
-                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that: I'm set to have no screen. Addy can change that in my settings. Nothing was done."))
+                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that: I'm set to have no screen. \(OwnerName.startingSentence(BotPrompts.ownerName)) can change that in my settings. Nothing was done."))
                 return
             }
             guard let tile = await claimTile(for: bot) else {
@@ -238,7 +238,7 @@ final class StudioScreenTask {
     private func readWindows(_ job: Job) -> String {
         job.elements = []
         guard job.app != nil else { return "No app is open yet." }
-        guard !job.moved.isEmpty else { return "No window of this app is on the hidden screen. Its other windows are Addy's and can't be used. Make a new one from the menus, or say cant." }
+        guard !job.moved.isEmpty else { return "No window of this app is on the hidden screen. Its other windows are \(BotPrompts.ownerName)'s and can't be used. Make a new one from the menus, or say cant." }
         var lines: [String] = []
         for (window, _) in job.moved.reversed() { walk(window, depth: 0, job: job, lines: &lines) }
         return lines.isEmpty ? "The window shows no controls." : lines.joined(separator: "\n")

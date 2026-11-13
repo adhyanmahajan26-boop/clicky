@@ -229,27 +229,6 @@ struct ConnectorFailedCard: View {
     }
 }
 
-// MARK: - API key
-
-/// Dictation needs a Sarvam key. Saving it here unblocks Dictation everywhere, and the card folds.
-struct SarvamKeyCard: View {
-    @ObservedObject private var products = TheoProducts.shared
-    @ObservedObject private var folds = PixelCardFolds.shared
-    private let cardID = "key:sarvam"
-
-    var body: some View {
-        if products.dictationAccess == .ready {
-            folds.line(cardID) ?? PixelFoldedLine(tone: .ok, did: "Sarvam key saved", about: "Dictation is ready")
-        } else {
-            PixelCard(tone: .needs, lead: .app(symbol: "mic.fill", state: .needs), name: "Dictation", context: "blocked",
-                      question: "Dictation needs a Sarvam API key",
-                      foot: "Keys stay in your Keychain.") {
-                SarvamKeyField()
-            }
-        }
-    }
-}
-
 // MARK: - A Mac permission
 
 /// A permission Theo needs and doesn't have. Only the owner can flip the switch in System Settings.

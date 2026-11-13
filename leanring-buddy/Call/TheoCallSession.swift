@@ -7,7 +7,7 @@
 //    mic → voice gate → ears (Sarvam or Apple) → Theo's brain on Sonnet, streaming → voice (Sarvam or Apple) → speaker
 //
 //  Theo's reply goes to the voice clause by clause as it's written (CallSpeechChunker), so the first sound comes well before the sentence is
-//  finished. When Addy talks over it the voice stops at once, the brain's turn is interrupted and what was heard counts as
+//  finished. When the owner talks over it the voice stops at once, the brain's turn is interrupted and what was heard counts as
 //  the next turn. Hindi, English and Hinglish: the ears work out which, and Theo answers in kind. The transcript lands in
 //  Theo's chat when the call ends, so the chat knows what was said.
 //
@@ -35,8 +35,28 @@ enum CallSettings {
             case .hindi: return "Hindi"
             }
         }
+        /// The computer's first preferred language ("en-US", "en-GB", "hi-IN"…): where "auto" starts.
+        static var computerLanguage: String? { Locale.preferredLanguages.first }
+
+        /// "Auto" on a Mac set to Hindi or an Indian region is the Hindi / English / Hinglish mix; elsewhere it's the
+        /// computer's own language.
+        var meansHinglish: Bool {
+            switch self {
+            case .hinglish: return true
+            case .auto: return ComputerLanguage.isIndian(preferredLanguage: Self.computerLanguage)
+            case .english, .hindi: return false
+            }
+        }
+
         /// What Apple's recognizer should expect.
-        var appleLocale: String { self == .hindi ? "hi-IN" : "en-IN" }
+        var appleLocale: String {
+            switch self {
+            case .hindi: return "hi-IN"
+            case .hinglish: return "en-IN"
+            case .english: return ComputerLanguage.englishLocale(preferredLanguage: Self.computerLanguage)
+            case .auto: return meansHinglish ? "en-IN" : ComputerLanguage.recognizerLocale(preferredLanguage: Self.computerLanguage)
+            }
+        }
         var sarvamListening: String {
             switch self {
             case .auto, .hinglish: return "auto"
@@ -47,7 +67,8 @@ enum CallSettings {
         /// (language code, v2.voice.sarvam.language value) for Sarvam's voice.
         var sarvamVoice: (code: String, setting: String) {
             switch self {
-            case .auto, .hinglish: return ("hi-IN", "hinglish")
+            case .hinglish: return ("hi-IN", "hinglish")
+            case .auto: return meansHinglish ? ("hi-IN", "hinglish") : ("en-IN", "en-IN")
             case .english: return ("en-IN", "en-IN")
             case .hindi: return ("hi-IN", "hi-IN")
             }
@@ -55,6 +76,15 @@ enum CallSettings {
     }
 
     static var language: Language { UserDefaults.standard.string(forKey: languageKey).flatMap(Language.init(rawValue:)) ?? .auto }
+
+    /// Once, at launch: "auto" used to mean Hinglish everywhere, so a Mac that finished setup before it followed the computer's
+    /// language keeps Hinglish. A new install starts on "auto", the computer's language.
+    static func migrateLanguageIfNeeded() {
+        let savedValueExists = UserDefaults.standard.object(forKey: languageKey) != nil
+        if let migrated = ComputerLanguage.migratedCallLanguage(savedValueExists: savedValueExists, setupCompleted: ClickySettings.isSetupCompleted) {
+            UserDefaults.standard.set(migrated, forKey: languageKey)
+        }
+    }
 }
 
 /// What Theo is told for a call.
@@ -64,19 +94,22 @@ enum CallPrompt {
     @MainActor
     static func system(store: BotsStore, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
         let theo = store.primary
+        let owner = BotPrompts.ownerName
         var parts = [theo?.instructions ?? "You are Theo."]
         var rules = """
-        You are on a live voice call with Addy right now. Everything you write is read aloud at once by a voice.
+        You are on a live voice call with \(owner) right now. Everything you write is read aloud at once by a voice.
         Talk the way you would on the phone: usually one to three short sentences, in plain words. Start with the answer; your first sentence should be short, because it's spoken while you're still writing the rest.
         No markdown, lists, headings, code, emoji or stage directions. Spell out what's awkward to read aloud. Numbers are fine.
-        Addy may cut in at any time. If a message starts where your last answer was cut off, just carry on with what they said.
+        \(OwnerName.startingSentence(owner)) may cut in at any time. If a message starts where your last answer was cut off, just carry on with what they said.
         """
-        rules += "\n" + ClickyTeamPrompts.callHowTo
+        rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner)
         switch language {
+        case .auto where !language.meansHinglish:
+            rules += "\nAnswer in the language \(owner) just used."
         case .auto, .hinglish:
             rules += usesSarvamVoice
-                ? "\nAnswer in the language Addy just used: English in English, Hindi in Hindi written in Devanagari, Hinglish as Hinglish with the Hindi in Devanagari and the English in Latin letters."
-                : "\nAnswer in the language Addy just used: English in English, Hindi or Hinglish in Roman letters, the way people text it, since this voice reads Roman letters best."
+                ? "\nAnswer in the language \(owner) just used: English in English, Hindi in Hindi written in Devanagari, Hinglish as Hinglish with the Hindi in Devanagari and the English in Latin letters."
+                : "\nAnswer in the language \(owner) just used: English in English, Hindi or Hinglish in Roman letters, the way people text it, since this voice reads Roman letters best."
         case .english: rules += "\nAnswer in English."
         case .hindi: rules += usesSarvamVoice ? "\nAnswer in Hindi, in Devanagari." : "\nAnswer in Hindi, in Devanagari, keeping it simple."
         }
@@ -91,10 +124,10 @@ enum CallPrompt {
             parts.append(store.projectsNote + " On this call, put those words inside the [TELL: …] line. To just make a new empty folder, say it's for your chat afterward.")
             let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
                 guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
-                let who = message.author == "user" ? "Addy: " : message.author == theo.id ? "Theo: " : "Clicky: "
+                let who = message.author == "user" ? "\(OwnerName.startingSentence(owner)): " : message.author == theo.id ? "Theo: " : "Clicky: "
                 return who + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
             }
-            if !recent.isEmpty { parts.append("The end of your text chat with Addy, before this call:\n" + recent.joined(separator: "\n")) }
+            if !recent.isEmpty { parts.append("The end of your text chat with \(owner), before this call:\n" + recent.joined(separator: "\n")) }
         }
         return parts.joined(separator: "\n\n")
     }
@@ -123,7 +156,7 @@ final class TheoCallSession: ObservableObject {
         var wasCut = false
     }
 
-    /// One turn's timings, from the moment Addy's voice stopped.
+    /// One turn's timings, from the moment the owner's voice stopped.
     struct TurnTiming {
         var heard: TimeInterval?
         var firstText: TimeInterval?
@@ -200,9 +233,12 @@ final class TheoCallSession: ObservableObject {
             problem = error.localizedDescription
         }
         state = .listening
-        // Theo says hello: it's what a call does, and it warms up the brain and the voice, so Addy's first question gets
+        // Theo says hello: it's what a call does, and it warms up the brain and the voice, so the owner's first question gets
         // the same quick answer as the rest.
-        ask("(The call just connected. Say hello to Addy in a few words and stop there.)")
+        let owner = BotPrompts.ownerName
+        ask(OwnerName.isUnset(owner)
+            ? "(The call just connected. Say hello in a few words and stop there.)"
+            : "(The call just connected. Say hello to \(owner) in a few words and stop there.)")
     }
 
     func end() {
@@ -260,7 +296,9 @@ final class TheoCallSession: ObservableObject {
     }
 
     private func appleEars() -> AppleCallEars {
-        AppleCallEars(locale: language.appleLocale, phrases: ["Theo", "Clicky", "Sarvam", "Addy"] + store.bots.map(\.name))
+        let owner = BotPrompts.ownerName
+        let ownerNameWords = OwnerName.isUnset(owner) ? [] : [owner]
+        return AppleCallEars(locale: language.appleLocale, phrases: ["Theo", "Clicky", "Sarvam"] + ownerNameWords + store.bots.map(\.name))
     }
 
     private func use(ears newEars: CallEars) {
@@ -339,7 +377,7 @@ final class TheoCallSession: ObservableObject {
         ears?.speechEnded()
     }
 
-    /// Addy talked over Theo: the voice stops at once and the rest of the reply is dropped.
+    /// The owner talked over Theo: the voice stops at once and the rest of the reply is dropped.
     private func bargeIn() {
         voice?.stopNow()
         if replyInProgress { brain?.interrupt() }
@@ -493,7 +531,7 @@ final class TheoCallSession: ObservableObject {
                 guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
                 if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking {
                     self.speechEndedAt = nil
-                    self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst()))
+                    self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst(), owner: BotPrompts.ownerName))
                     return
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
