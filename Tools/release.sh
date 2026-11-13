@@ -3,6 +3,11 @@
 # as a GitHub release of the updates repo, which every installed Clicky picks
 # up from Setup › Updates or the panel's "Update now".
 #
+# The release also carries SHA256SUMS and install.sh, so a new Mac can install from Terminal with
+#   curl -fsSL https://github.com/<repo>/releases/latest/download/install.sh | bash
+# (no Apple Developer account or notarization needed; see docs/INSTALL.md), and the run writes a
+# Homebrew cask for this build next to the zip.
+#
 # Usage: Tools/release.sh "What changed (one or two lines)"
 # Env:   CLICKY_UPDATES_REPO (default adhyanmahajan26-boop/claudia-releases)
 #        CLICKY_RELEASE_DRY_RUN=1 builds and zips without publishing.
@@ -28,17 +33,43 @@ codesign --verify --deep --strict "$APP"
 # Signed with the Apple Development identity (never ad hoc), so macOS keeps Theo's permissions across updates.
 SIGNING="$(codesign -dv --verbose=2 "$APP" 2>&1)"   # Not piped: with pipefail, grep -q closing early fails the check.
 [[ "$SIGNING" == *"Authority=Apple Development"* ]] || { echo "Theo.app isn't signed with the Apple Development identity"; exit 1; }
+# macOS keeps a permission (Accessibility, Screen Recording, Microphone) against the app's designated
+# requirement. If this build doesn't satisfy the installed Theo's (a new certificate, a changed name or
+# Apple ID), every user would be asked for every permission again, so stop here. (Compared with the
+# installed copy rather than a file in the repo, so the certificate's name and email aren't committed.)
+PREVIOUS_APP="${CLICKY_RELEASE_PREVIOUS_APP:-/Applications/Theo.app}"
+if [[ -d "$PREVIOUS_APP" && "${CLICKY_ALLOW_NEW_SIGNER:-0}" != "1" ]]; then
+  PREVIOUS_DR="$(codesign -d -r- "$PREVIOUS_APP" 2>&1 | sed -n 's/^designated => //p')"
+  if ! codesign --verify -R "=$PREVIOUS_DR" "$APP" 2>/dev/null; then
+    echo "This build doesn't satisfy $PREVIOUS_APP's designated requirement, so every user's permissions would reset:"
+    echo "  installed: $PREVIOUS_DR"
+    echo "  new:       $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+    echo "If that's intended, rerun with CLICKY_ALLOW_NEW_SIGNER=1 (and update install.sh's signer)."
+    exit 1
+  fi
+fi
+# And install.sh must accept it.
+codesign --verify -R "=$(bash Tools/install/install.sh --print-signer-requirement)" "$APP" \
+  || { echo "install.sh's signer requirement doesn't accept this build"; exit 1; }
 ZIP="$OUT/Theo-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+# Same format as `shasum -a 256`, which install.sh (and the Windows/Linux installers) read.
+SUMS="$STAGE/SHA256SUMS"
+printf '%s  %s\n' "$SHA" "$(basename "$ZIP")" > "$SUMS"
+INSTALLER="Tools/install/install.sh"
+bash -n "$INSTALLER"
+CASK="$OUT/theo-$BUILD.rb"
+Tools/install/make-cask.sh "$BUILD" "$SHA" "$REPO" > "$CASK"
 echo "Zip: $ZIP"
 echo "sha256: $SHA"
+echo "Cask: $CASK"
 
 if [[ "${CLICKY_RELEASE_DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run: not published."
   exit 0
 fi
-gh release create "build-$BUILD" "$ZIP" --repo "$REPO" --title "Theo build $BUILD" \
+gh release create "build-$BUILD" "$ZIP" "$SUMS" "$INSTALLER" --repo "$REPO" --title "Theo build $BUILD" \
   --notes "$(printf '%s\n\nsha256: %s\n' "$NOTES" "$SHA")"
 echo "Published build-$BUILD to $REPO"
