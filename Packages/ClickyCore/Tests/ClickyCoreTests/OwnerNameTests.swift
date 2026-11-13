@@ -83,6 +83,6 @@ struct OwnerNameTests {
             }
         }
         #expect(HarnessGuide.markdown().contains("Theo is the owner's bot harness"))
-        #expect(BotProtocol.screenHowTo(owner: OwnerName.unset).hasPrefix("The owner's Mac Studio"))
+        #expect(BotProtocol.screenHowTo(owner: OwnerName.unset).hasPrefix("The owner's Mac has hidden screens"))
     }
 }
