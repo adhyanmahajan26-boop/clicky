@@ -69,6 +69,13 @@ class TheoUIInstances(unittest.TestCase):
         self.assertFalse(self.ui.PIDFILE.exists())
         self.assertIsNone(other.poll(), "another profile's instance must be left alone")
 
+    def test_a_stale_pid_file_never_stops_another_program(self):
+        unrelated = self.spawn("not-a-theo-profile")   # took over the id a stopped instance had
+        self.ui.ROOT.mkdir(parents=True, exist_ok=True)
+        self.ui.PIDFILE.write_text(str(unrelated.pid))
+        self.assertEqual(self.ui.stop(), [])
+        self.assertIsNone(unrelated.poll(), "a process without this profile must be left alone")
+
     def test_a_copy_that_ignores_sigterm_is_killed(self):
         stubborn = self.spawn(self.ui.PROFILE_ARG, ignore_term=True)
         self.assertEqual(self.ui.stop_pids([stubborn.pid], wait=1), [])

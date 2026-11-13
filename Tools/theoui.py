@@ -145,7 +145,11 @@ def start(binary, tab=None):
 
 def stop(hard=False):
     """Stops every instance of this profile, the pid file's and any other, and waits until they're gone."""
-    left = stop_pids([running_pid()] + profile_pids(), hard=hard)
+    found = profile_pids()
+    # The pid file's id only counts while that process still carries this profile: a stale file's id can belong to
+    # an unrelated program by now.
+    tracked = running_pid()
+    left = stop_pids(([tracked] if tracked in found else []) + found, hard=hard)
     PIDFILE.unlink(missing_ok=True)
     return left
 
