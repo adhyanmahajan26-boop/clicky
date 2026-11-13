@@ -220,9 +220,11 @@ struct ActionEnterTierTests {
     /// Live 2026-11-13: Spotify, "play Ambarsaria" → click the song, then Return. The Return was dropped as
     /// "typed only", so the song was selected but never played.
     @Test func returnOnASelectedItemIsPressed() {
-        let spotifyRow = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium", role: "AXRow")
+        let spotifyRow = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium", role: "AXRow",
+                                           label: "Ambarsaria")
         let row = decide(Self.returnKey, spotifyRow, said: "Amasya song for me can you play it")
-        #expect(row.tier == .free)
+        #expect(row.tier != .refused)
+        #expect(row.tier != .confirm)
         #expect(!row.dropsReturn)
         // Focus Clicky can't read (Spotify keeps its AX tree mostly off): pressed after the usual countdown.
         let unknownFocus = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium")
@@ -232,6 +234,24 @@ struct ActionEnterTierTests {
         let finderFile = ActionTargetFacts(bundleIdentifier: "com.apple.finder", applicationName: "Finder", role: "AXTextField", subrole: nil, label: "report.pdf")
         // A text field (even Finder's rename box) keeps the typing rules: no Return unless asked.
         #expect(decide(Self.returnKey, finderFile, said: "rename it").dropsReturn)
+    }
+
+    /// Enter on a focused button is as careful as clicking it (review on PR #13): a dialog's default "Delete" or a
+    /// "Buy now" waits for a yes, even when the owner said "press enter".
+    @Test func returnOnAFocusedButtonIsAsCarefulAsAClick() {
+        let deleteButton = ActionTargetFacts(bundleIdentifier: "com.apple.finder", applicationName: "Finder", windowTitle: "Delete?",
+                                             role: "AXButton", label: "Delete")
+        #expect(decide(Self.returnKey, deleteButton, said: "clean up my downloads").tier == .confirm)
+        #expect(decide(Self.returnKey, deleteButton, said: "press enter").tier == .confirm)
+        let buyButton = ActionTargetFacts(bundleIdentifier: "com.google.Chrome", applicationName: "Google Chrome", windowTitle: "Checkout", role: "AXButton", label: "Buy now")
+        #expect(decide(Self.returnKey, buyButton, said: "get me that charger").tier == .confirm)
+        let settingsToggle = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Wi-Fi",
+                                               role: "AXCheckBox", label: "Wi-Fi")
+        #expect(decide(Self.returnKey, settingsToggle, said: "press enter").tier == .confirm)
+        // An ordinary focused button: same countdown as a click, free when the owner asked for Enter.
+        let okButton = ActionTargetFacts(bundleIdentifier: "com.apple.Preview", applicationName: "Preview", role: "AXButton", label: "Open")
+        #expect(decide(Self.returnKey, okButton, said: "show me that file").tier == .countdown)
+        #expect(decide(Self.returnKey, okButton, said: "press enter").tier == .free)
     }
 
     @Test func returnStillWaitsInTextFieldsAndMessages() {

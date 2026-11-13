@@ -308,6 +308,17 @@ struct WakeFollowUpWindowTests {
         #expect(window.tick(now: start.addingTimeInterval(10)) == .silence)
     }
 
+    /// Air, 2026-11-13: lone "Open" in the follow-up window became a turn and Clicky asked to hear it again.
+    @Test func aLoneStrayWordKeepsTheFollowUpListening() {
+        #expect(WakeFollowUpWindow.isStrayWord("Open"))
+        #expect(WakeFollowUpWindow.isStrayWord("bike."))
+        #expect(!WakeFollowUpWindow.isStrayWord("yes"))
+        #expect(!WakeFollowUpWindow.isStrayWord("No"))
+        #expect(!WakeFollowUpWindow.isStrayWord("send"))
+        #expect(!WakeFollowUpWindow.isStrayWord("open spotify"))
+        #expect(!WakeFollowUpWindow.isStrayWord("Amasya song for me can you play it"))
+    }
+
     @Test func shortCommandsAreNeverEcho() {
         #expect(!FollowUpEchoGuard.isLikelyEcho("next song", recentClickySpokenWords: ["next", "song"]))
         #expect(FollowUpEchoGuard.isLikelyEcho("here is the next song", recentClickySpokenWords: ["here", "is", "the", "next", "song"]))

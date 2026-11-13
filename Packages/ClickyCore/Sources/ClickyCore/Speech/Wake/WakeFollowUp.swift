@@ -107,8 +107,27 @@ public struct WakeFollowUpWindow: Equatable, Sendable {
             resumeListening(at: date)
             return .ignored(reason: "echo")
         }
+        if Self.isStrayWord(trimmedText) {
+            resumeListening(at: date)
+            return .ignored(reason: "one stray word")
+        }
         phase = .awaitingAnswer
         return .command(trimmedText)
+    }
+
+    /// One-word answers that mean something right after Clicky spoke (a confirm's yes, "send", "stop", "next").
+    static let shortReplies: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "no", "nope", "nah", "send", "stop", "cancel",
+                                            "next", "previous", "back", "pause", "play", "resume", "skip", "louder", "quieter", "mute", "unmute",
+                                            "again", "continue", "thanks", "haan", "nahi", "done"]
+
+    /// A lone word that is neither a short reply nor a fast-path command ("Open", "bike") is what the mic picked up
+    /// around the owner, not a request. Sent on, it only made Clicky say "i didn't catch that, say it again"
+    /// (Air, 2026-11-13: follow-ups "Open" and "No" each became a turn). The window keeps listening instead.
+    public static func isStrayWord(_ text: String) -> Bool {
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        guard words.count == 1, let word = words.first.map(String.init) else { return false }
+        if shortReplies.contains(word) { return false }
+        return VoiceFastPathParser.parse(text) == nil
     }
 
     /// Words started but nothing usable came of them (abandoned capture).

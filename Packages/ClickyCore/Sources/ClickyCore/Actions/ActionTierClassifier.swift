@@ -256,17 +256,19 @@ public enum ActionReturnRule {
         return [target.role, target.subrole].compactMap { $0 }.contains { textEntryRoles.contains($0) }
     }
 
-    /// A planned {"do":"key","combo":"return"} step. In a text field it follows the typing rules below; on a selected
-    /// item (a Spotify song, a Finder file, a list row) it's how the item opens or plays, so it is pressed: at once
-    /// when the focused element is known not to be a field, after the usual countdown when Clicky can't read the focus.
-    /// Messaging apps keep waiting for the owner's "send" either way.
+    /// A planned {"do":"key","combo":"return"} step. In a text field it follows the typing rules below, and messaging
+    /// apps keep waiting for the owner's "send". Anywhere else Enter activates whatever has focus (a selected Spotify
+    /// song, a Finder file, a dialog's default button), so it is exactly as careful as a click on that element: a
+    /// focused "Delete", "Send" or "Buy" button, a booking step or System Settings waits for a yes. Only when the click
+    /// would be free or a countdown does Enter go through: free when the owner asked for Enter, else the click's tier.
     static func keyDecision(context: ActionTurnContext, target: ActionTargetFacts?) -> ActionTierDecision {
         if isMessaging(target) || isTextEntry(target) { return decision(context: context, target: target, what: "press enter") }
+        let asClick = ActionTierClassifier.baseDecision(.click(elementID: 0), target: target, context: context)
+        guard asClick.tier <= .countdown else { return ActionTierDecision(asClick.tier, "enter on \(asClick.reason)") }
         if context.ownerAskedToPressReturn(forReturnStep: true) || context.ownerImpliedSearch || isEnterField(target) {
-            return decision(context: context, target: target, what: "press enter")
+            return ActionTierDecision(.free, "enter is the next step (press enter)")
         }
-        if target?.role != nil { return ActionTierDecision(.free, "enter opens or plays the selected item") }
-        return ActionTierDecision(.countdown, "enter on the selected item (couldn't read what has focus)")
+        return ActionTierDecision(asClick.tier, "enter opens or plays what's selected (\(asClick.reason))")
     }
 
     static func decision(context: ActionTurnContext, target: ActionTargetFacts?, what: String) -> ActionTierDecision {
