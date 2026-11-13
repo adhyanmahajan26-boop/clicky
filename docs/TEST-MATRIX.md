@@ -14,10 +14,10 @@ Theo as a brand new user meets it: a fresh profile, its own home folder, no codi
 
 | | What | Linux | Windows | Mac |
 |---|---|---|---|---|
-| ⚠️ | First run finishes with only an API key, and Theo answers on it | waits for package 10 | not run | not run |
+| ✅ | First run finishes with only an API key, and Theo answers on it (and uses the echo app on it) | ✅ | not run | not run |
 | ✅ | The owner's name from setup is in bots' prompts; "Addy" is in no prompt and no file | ✅ | not run | not run |
 | ✅ | The echo app added in Connectors, given to a bot, used in a turn, with no Claude Code | ✅ | not run | not run |
-| ✅ | A project folder outside the default place, and a coding run there with a stand-in harness | ✅ | not run | not run |
+| ⚠️ | A project folder outside the default place, and a coding run there with a stand-in harness. On Windows and Linux the stand-in has to be Claude Code: coding runs there use nothing else yet | ✅ | not run | not run |
 | ⚠️ | Two linked laptops: exactly one fires routines | Mac only | Mac only | not run (unit-tested in `BrowserResearchTests`) |
 
 ## Round 4 (2026-11-05): the bot harness
