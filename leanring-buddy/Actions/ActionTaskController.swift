@@ -114,7 +114,9 @@ final class ActionTaskController {
         self.companionManager = companionManager
         self.executor = ActionExecutor(companionManager: companionManager)
         executor.onSyntheticPointerEvent = { [weak self] in self?.inputMonitor.noteSyntheticPointerEvent() }
-        inputMonitor.onPhysicalInput = { [weak self] reason in self?.cancel(reason: reason, stopsSpeech: true) }
+        inputMonitor.onPhysicalInput = { [weak self] reason in
+            self?.cancel(reason: reason, stopsSpeech: true, speaksLine: ActionCancelLogic.cancelSpeaksLine(forReason: reason))
+        }
         confirmCard.onConfirm = { [weak self] in self?.approvePendingStep(how: "click") }
         confirmCard.onCancel = { [weak self] in self?.declinePendingStep(how: "click") }
     }
@@ -476,7 +478,8 @@ final class ActionTaskController {
     /// Esc while no batch runs (a running batch is cancelled by the input monitor).
     /// Never consumes the key: Escape's usual stop still happens.
     func handleEscapeKey() -> Bool {
-        if task != nil { cancel(reason: "you pressed Escape", stopsSpeech: false) }
+        // Escape means "be quiet": no "stopped: …" line after it.
+        if task != nil { cancel(reason: ActionCancelLogic.escapeReason, stopsSpeech: false, speaksLine: false) }
         return false
     }
 

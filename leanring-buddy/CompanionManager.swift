@@ -253,14 +253,23 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Code-mode results arrive long after the answer; wait for any speech to end first.
+    /// Escape silences every one-off line already waiting to be spoken (ClickyCore SpokenLineGate).
+    private var spokenLineGate = SpokenLineGate()
+
     func speakCodeModeLine(_ text: String) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
+        let ticket = spokenLineGate.ticket()
         Task { [weak self] in
             guard let self else { return }
             let giveUpDate = Date().addingTimeInterval(20)
             while self.speechOutputClient.isPlaying && Date() < giveUpDate {
                 try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            // Escape (or "stop") came after this line was queued: it isn't said.
+            guard self.spokenLineGate.allows(ticket) else {
+                print("🤫 Dropped a queued line after Escape")
+                return
             }
             try? await self.speechOutputClient.speakText(trimmedText)
         }
@@ -830,6 +839,7 @@ final class CompanionManager: ObservableObject {
         let isActing = actionTaskController.isActive
         guard speechOutputClient.isPlaying || isActing || currentResponseTask != nil else { return }
         print("✋ Barge-in: stop heard")
+        defer { spokenLineGate.silenceQueuedLines() }
         speechOutputClient.activeCoordinator?.bargeIn(.escape)
         speechOutputClient.stopPlayback()
         currentResponseTask?.cancel()
@@ -1302,6 +1312,10 @@ final class CompanionManager: ObservableObject {
     /// cancels any answer in flight, and ends a hands-free session. A key
     /// panel that's open consumes it first.
     private func handleEscapeKeyPressed() {
+        print("⎋ Escape: speaking \(speechOutputClient.isPlaying), answer \(speechOutputClient.activeCoordinator?.isSpeaking ?? false), " +
+              "acting \(actionTaskController.isActive), hands-free \(isHandsFreeSessionActive), voice \(voiceState)")
+        // Whatever this Escape stops, no line that was waiting (or that stopping queues) is spoken after it.
+        defer { spokenLineGate.silenceQueuedLines() }
         // Article highlights always go on Escape (the notes panel stays until it's closed).
         if !articleController.highlights.isEmpty { articleController.removeHighlights() }
         if escapeKeyConsumers.contains(where: { $0() }) { return }
