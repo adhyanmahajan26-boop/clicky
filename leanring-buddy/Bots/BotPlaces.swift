@@ -168,7 +168,7 @@ extension BotsStore {
         let description = bot.description.trimmingCharacters(in: .whitespacesAndNewlines)
         let firstSentence = bot.instructions.split(whereSeparator: { ".\n".contains($0) }).first.map(String.init) ?? ""
         let job = description.isEmpty ? firstSentence : description
-        return BotIdentityFacts(name: bot.name, owner: BotPrompts.ownerName, job: String(job.prefix(160)), isCEO: bot.primary, teams: teams.map(\.name),
+        return BotIdentityFacts(name: bot.name, owner: BotPrompts.ownerName, job: BotAwareness.shortJob(job), isCEO: bot.primary, teams: teams.map(\.name),
                                 managerName: manager(of: bot)?.name, managesTeams: teams.filter { $0.leaderID == bot.id }.map(\.name),
                                 ceoName: primary?.name, apps: BotConnectors.known.filter { bot.apps.contains($0.id) }.map(\.name), memoryPath: bot.provider.hasPrefix("api:") ? nil : bot.memoryPath)
     }

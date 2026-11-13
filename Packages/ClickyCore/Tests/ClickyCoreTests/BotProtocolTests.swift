@@ -578,6 +578,27 @@ struct BotProtocolTests {
         #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: BotCatchUp.fromTheStart, hasSession: true, isLinked: true) == ids)
     }
 
+    /// Day-one finding: after /new (session dropped, the whole chat marked heard) a bot on a Mac paired with the Air was still
+    /// handed its last replies, so mail manager's old "Hostinger needs authorizing" came straight back.
+    @Test func aFreshSessionAfterNewStartsCleanEvenWhenLinked() {
+        let ids = ["a", "b", "c", "d"]
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: "d", hasSession: false, isLinked: true).isEmpty)
+        // What came after /new (a message from the other Mac) still arrives.
+        #expect(BotCatchUp.unheard(messages: ids, id: { $0 }, heard: "c", hasSession: false, isLinked: true) == ["d"])
+    }
+
+    @Test func aLongJobIsCutAtASentenceOrAWord() {
+        let mailManager = "Reports to CEO. Owns the Hostinger/work mailbox: inbox checks, unread mail and routing, plus non-invoice digests (credit notes, promotional schemes, claims). Sends invoices on to Accountant."
+        let cut = BotAwareness.shortJob(mailManager)
+        #expect(cut == "Reports to CEO. Owns the Hostinger/work mailbox: inbox checks, unread mail and routing, plus non-invoice digests (credit notes, promotional schemes, claims).")
+        #expect(cut.count <= BotAwareness.maximumJobCharacters)
+        let oneLongSentence = String(repeating: "keeps the ledgers tidy and ", count: 10) + "more"
+        let words = BotAwareness.shortJob(oneLongSentence)
+        #expect(words.hasSuffix("tidy…") || words.hasSuffix("and…") || words.hasSuffix("ledgers…") || words.hasSuffix("the…") || words.hasSuffix("keeps…"))
+        #expect(!words.contains("  "))
+        #expect(BotAwareness.shortJob("Short job.") == "Short job.")
+    }
+
     @Test func messagesFromTheOtherMacInTheMiddleAreStillHeard() {
         // The Studio's session had heard up to "here-2". What the Air wrote while apart sorts before that.
         let merged = ["here-1", "air-1", "air-2", "here-2"]
