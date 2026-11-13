@@ -265,22 +265,24 @@ enum BotRunner {
          "Agent", "Task"]
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
+    /// `ownerAsked`: the turn came from the owner's own words. Only then may a bot's apps change anything (connector hub tickets); a
+    /// routine, another bot or the local API only reads.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
-                    onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+                    ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         // A test profile can make an engine count as signed out (`test.engines.missing`): local turns see it too, with the
         // same words a signed-out engine gives, not only the turns that would go to the other Mac.
         if TheoProfile.isTest, UserDefaults.standard.stringArray(forKey: "test.engines.missing")?.contains(bot.provider) == true {
             throw BotRunnerError.failed("\(HarnessCatalog.label(bot.provider)) isn't signed in. Sign in, then try again.")
         }
         do {
-            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
+            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
             // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
             let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
             let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
             guard !missing.isEmpty, !Task.isCancelled else { return first }
             try? await Task.sleep(nanoseconds: 20_000_000_000)
             guard !Task.isCancelled,
-                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, recall: recall, onText: onText),
+                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText),
                   !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
             return second
         } catch let error as BotRunnerError {
@@ -306,7 +308,7 @@ enum BotRunner {
             // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
             let key = "\(bot.id)#\(session ?? "new")"
             let standInSession = FallbackSessions.shared.get(key)
-            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, onText: onText)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
             if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
             return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInModel, on: "claude")).)_", session)
         }
@@ -378,8 +380,8 @@ enum BotRunner {
     }
 
     static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
-                                    onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
-        if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
+                                    ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, ownerAsked: ownerAsked, onText: onText) }
         if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
@@ -522,10 +524,11 @@ enum BotRunner {
 }
 
 extension BotRunner {
-    /// A bot on the owner's API key: stoppable like a process, and held to the same time limit.
-    static func runAPI(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    /// A bot on the owner's API key: stoppable like a process, and held to the same time limit. Its tools (memory folder, apps)
+    /// run inside the turn, so the limit covers them too.
+    static func runAPI(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], ownerAsked: Bool,
                        onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
-        let task = Task { try await APIChat.runBot(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
+        let task = Task { try await APIChat.runBot(bot: bot, prompt: prompt, session: session, team: team, ownerAsked: ownerAsked, onText: onText) }
         BotProcesses.shared.setTask(bot.id, task)
         let watchdog = Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))

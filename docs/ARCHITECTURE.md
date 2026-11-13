@@ -51,7 +51,7 @@ flowchart LR
 | Routines | `Bots/BotRoutines.swift`, `BotRoutineSync` | Scheduled instructions to a bot. The same list on both Macs, firing on one (the Studio by default), at most once per slot |
 | Coding runs | `Bots/BotsT3.swift`, `Harness/HarnessCoding.swift`, `Bots/RunChoices.swift` | The card under a final prompt picks the harness, the Mac, the folder (or New folder…) and the chat (new, or continue one). Runs carry their Mac (`T3Run.origin`) |
 | Harnesses | `Harness/HarnessCatalog.swift`, `HarnessChats.swift`, `HarnessViews.swift` | Finds each CLI, checks the sign-in, lists a folder's earlier chats from each harness's own files, and shows the Settings cards |
-| Providers and keys | `leanring-buddy/Providers/` | 19 providers plus custom ones. Keys in the Keychain (`com.theo.providers`). `APIChat` streams Anthropic and OpenAI-style APIs. Sarvam does voice |
+| Providers and keys | `leanring-buddy/Providers/` | 19 providers plus custom ones. Keys in the Keychain (`com.theo.providers`). `APIChat` streams Anthropic and OpenAI-style APIs, with tool calling for bots (`APIChatTools`: its memory folder and its connector hub apps). Sarvam does voice |
 | Two Macs | `Link/TheoLink.swift`, ClickyCore `Link/` (`TheoLinkCore`, `DeviceRouting`) | Pairing, sync and catch-up, the waiting queue (`LinkWaitingRequest`), and which Mac does what (Settings › Devices) |
 | Clicky | `CompanionManager.swift`, `Voice/`, `Call/`, `Dictation/`, `Actions/`, `Article/`, `Marks/`, `Research/` | Voice in and out, the screen, pointing, actions with safety tiers, article highlights, research agents |
 | Studio screens | `leanring-buddy/Studio/` | Hidden virtual screens, Studio only and off by default. Only research Chrome windows go there, never terminals or coding |

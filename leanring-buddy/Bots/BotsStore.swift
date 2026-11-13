@@ -1262,6 +1262,8 @@ final class BotsStore: ObservableObject {
         // Its own saved chats, which its prompt tells it to search (recall): its chat with the owner, the group chats it's in and its
         // private threads. Every other saved chat stays unreadable.
         let recall = bot.owner == nil ? [chatFilePath(bot.id)] + recallFiles(for: bot).map(\.path) : []
+        // What the bot's apps may change: only on the owner's own words, never on a routine's scheduled run.
+        let ownerAsked = fromOwner && !quietAllowed
         Task { [weak self] in
             var answer: String?
             var newSession = session
@@ -1274,11 +1276,11 @@ final class BotsStore: ObservableObject {
                 }
                 let result: (text: String, session: String?)
                 do {
-                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
                 } catch BotRunnerError.lostSession where session != nil {
                     // The engine has lost this chat (it's on the other Mac, or was cleaned up). It starts again with what the chat says so far.
                     let fresh = self?.startOverPrompt(bot: bot, in: conversationID, prompt: prompt) ?? prompt
-                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, readable: readable, recall: recall, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
                 }
                 answer = BotsStore.keepingLongReplyAside(result.text.trimmingCharacters(in: .whitespacesAndNewlines), bot: bot)
                 newSession = result.session

@@ -136,7 +136,7 @@ struct APIChatToolsTests {
         let result = await toolbox.run(APIChatToolCall(callID: "c1", toolName: "notion__search", argumentsJSON: #"{"query":"plan"}"#))
         #expect(!result.isError)
         #expect(result.text == "Found: Launch plan")
-        #expect(source.calls.map(\.toolName) == ["search"])
+        #expect(source.calls.map { $0.toolName } == ["search"])
         #expect(source.calls.first?.ticket == source.ticketURL)
         await toolbox.finish()
         #expect(source.revokedTickets == [source.ticketURL])
