@@ -164,6 +164,30 @@ struct HarnessDurabilityTests {
         researcher.duty = ClickyDuty.researcher.rawValue
         #expect(!BotRunner.claudeAllowedTools(for: researcher).contains("Read(\(log))"))
         #expect(!BotRunner.claudeAllowedTools(for: BotImport.starters[0]).contains("Read(\(log))"))
+        // And it's told where the log is, so it reads it instead of answering from an old session.
+        #expect(BotPrompts.persona(bot: helper, team: []).contains(BotMemory.clickyLogFolder.path + "/said.jsonl"))
+    }
+
+    /// Air-readiness finding: Claude Code ignores a new --append-system-prompt on --resume, so instruction edits and prompt changes in an
+    /// update never reached a bot with a running session. A resumed session now hears the current instructions once, when they changed.
+    @Test func aResumedSessionHearsChangedInstructionsOnce() {
+        let defaults = UserDefaults(suiteName: "theo-tests-session-fingerprints-\(UUID().uuidString)")!
+        let saved = BotRunner.sessionFingerprintDefaults
+        BotRunner.sessionFingerprintDefaults = defaults
+        defer { BotRunner.sessionFingerprintDefaults = saved }
+        var bot = BotImport.starters[0]
+        // A new session is told its instructions as the system prompt: nothing extra in the message.
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: nil, newSession: "s1") == "hi")
+        // Resumed with the same instructions: nothing extra.
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "s1", newSession: nil) == "hi")
+        // The owner edits the instructions: the next turn carries them, once.
+        bot.instructions += " Use the Google Drive connector only."
+        let refreshed = BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "s1", newSession: nil)
+        #expect(refreshed.hasPrefix("(Theo: your instructions have changed") && refreshed.contains("Use the Google Drive connector only.") && refreshed.hasSuffix("hi"))
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "s1", newSession: nil) == "hi")
+        // A session Theo has no record of (it began before this update) hears them once too.
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "older", newSession: nil).hasPrefix("(Theo:"))
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "older", newSession: nil) == "hi")
     }
 
     @Test func otherBotsFoldersAreDeniedButTheSharedSkillsAreNot() {

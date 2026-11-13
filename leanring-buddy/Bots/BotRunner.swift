@@ -336,6 +336,47 @@ enum BotRunner {
         }
     }
 
+    // MARK: Instructions a resumed session hasn't heard (ClickyCore `BotPersonaRefresh`)
+
+    /// Bump when Theo's own wording of what bots are told changes, so sessions that began before an update hear the new wording.
+    static let personaRevision = "2026-11-13"
+    static let sessionFingerprintsKey = "v3.bots.sessionFingerprints"
+    static let maximumRememberedSessions = 400
+    /// Tests use a suite of their own: hosted unit tests run with the owner's real preferences.
+    nonisolated(unsafe) static var sessionFingerprintDefaults = UserDefaults.standard
+
+    /// What a session was told is decided by these: Theo's wording, and the bot's own instructions, job and apps.
+    static func personaFingerprint(_ bot: NativeBot) -> String {
+        BotPersonaRefresh.fingerprint([personaRevision, bot.instructions, bot.description, bot.apps.joined(separator: ",")])
+    }
+
+    /// The fingerprint each engine session was last told, newest last, in this profile's own defaults.
+    static func rememberedFingerprint(of session: String) -> String? {
+        let remembered = sessionFingerprintDefaults.array(forKey: sessionFingerprintsKey) as? [[String]] ?? []
+        return remembered.last { $0.count == 2 && $0[0] == session }?[1]
+    }
+
+    static func remember(fingerprint: String, for session: String) {
+        var remembered = (sessionFingerprintDefaults.array(forKey: sessionFingerprintsKey) as? [[String]] ?? []).filter { $0.first != session }
+        remembered.append([session, fingerprint])
+        sessionFingerprintDefaults.set(Array(remembered.suffix(maximumRememberedSessions)), forKey: sessionFingerprintsKey)
+    }
+
+    /// Claude Code ignores a new --append-system-prompt on --resume, so a session that began with other instructions (or before Theo
+    /// kept a record) gets the current ones at the top of this turn's message, once. A new session is told them as its system prompt.
+    static func promptForClaude(bot: NativeBot, team: [NativeBot], prompt: String, session: String?, newSession: String?) -> String {
+        let fingerprint = personaFingerprint(bot)
+        if let newSession {
+            remember(fingerprint: fingerprint, for: newSession)
+            return prompt
+        }
+        guard let session, BotPersonaRefresh.needsRefresh(storedFingerprint: rememberedFingerprint(of: session), currentFingerprint: fingerprint) else {
+            return prompt
+        }
+        remember(fingerprint: fingerprint, for: session)
+        return BotPersonaRefresh.refreshedPrompt(prompt, persona: BotPrompts.persona(bot: bot, team: team))
+    }
+
     static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
@@ -370,7 +411,7 @@ enum BotRunner {
                 newSessionID = id
                 arguments += ["--session-id", id]
             }
-            arguments += ["--", prompt]
+            arguments += ["--", promptForClaude(bot: bot, team: team, prompt: prompt, session: session, newSession: newSessionID)]
         } else {
             arguments = ["run", "-m", bot.model, "--format", "json", "--dir", workspace.path]
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--variant", effort] }
