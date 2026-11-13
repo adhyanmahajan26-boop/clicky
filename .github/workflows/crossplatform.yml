@@ -54,6 +54,11 @@ jobs:
           THEO_TEST_ROOT: ${{ runner.temp }}/theo-suite/work
           PYTHONUNBUFFERED: "1"
         run: python tests/suite.py
+      # theo-fix-plan package 11: a clean profile with no coding agent on PATH, as a brand new user would start.
+      - name: Stranger test
+        if: always()
+        shell: bash
+        run: python tests/stranger.py
       - name: Processes left running (Windows, when something failed)
         if: failure() && runner.os == 'Windows'
         shell: pwsh
@@ -66,6 +71,7 @@ jobs:
           path: |
             ${{ runner.temp }}/theo-suite/results
             ${{ runner.temp }}/theo-suite/work/theod.log
+            crossplatform/tests/results-stranger
 
   desktop:
     name: Desktop app and installers (${{ matrix.os }})
