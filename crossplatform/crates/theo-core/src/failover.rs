@@ -15,7 +15,7 @@ pub enum Failure {
 }
 
 pub fn classify(text: &str) -> Failure {
-    static AUTH: Lazy<Regex> = Lazy::new(|| Regex::new(r"invalid api key|invalid x-api-key|authentication_error|please run /login|not logged in|unauthori[sz]ed|\b401\b|oauth token (has )?expired|credit balance is too low|permission_error|\b403\b").unwrap());
+    static AUTH: Lazy<Regex> = Lazy::new(|| Regex::new(r"invalid api key|invalid x-api-key|authentication_error|please run /login|not logged in|unauthori[sz]ed|\b401\b|oauth token (has )?expired|credit balance is too low|permission_error|\b403\b|isn.t signed in|not signed in|no api key").unwrap());
     static MODEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"model[^\n]{0,60}(not found|does not exist|isn't available|is not available|not supported|retired|deprecated)|not_found_error[^\n]{0,80}model|unknown model|invalid model|no such model|model_not_found|there's an issue with the selected model|may not exist or you may not have access").unwrap());
     static TRANSIENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"overloaded|\b529\b|\b429\b|rate.?limit|too many requests|\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway time-?out|api_error|econnreset|etimedout|socket hang up|connection (reset|refused|error)|network error|fetch failed|request timed out|temporarily unavailable").unwrap());
     let lower = text.to_lowercase();

@@ -424,6 +424,10 @@ def screenshot(name):
         return None
 
 
+# Claude Code's row on setup's brain step.
+CLAUDE_ROW = "#setup .crow[data-brain='claude']"
+
+
 def text_of(page, selector):
     try:
         return page.locator(selector).inner_text(timeout=2000)
@@ -487,23 +491,24 @@ def fresh(setup_exe, msi=None):
         page.wait_for_selector("#setup:not([hidden]) .su", timeout=30000)
         shot1 = screenshot("setup-welcome")
         page.click("#setup [data-next]")
-        page.wait_for_selector("#setup .crow .pill", timeout=60000)
-        wait_until(lambda: "Checking" not in text_of(page, "#setup .crow"), 60)
-        row = text_of(page, "#setup .crow")
-        cmd = text_of(page, "#setup .su-cmd")
+        # The brain step: paste an API key first, then every agent with its own row; Claude Code is one of them.
+        page.wait_for_selector(CLAUDE_ROW + " .pill", timeout=60000)
+        wait_until(lambda: "Checking" not in text_of(page, "#setup #su-brains"), 60)
+        row = text_of(page, CLAUDE_ROW)
+        cmd = row
         shot = screenshot("setup-claude-not-installed")
         ok = took is not None and not found and "Not installed" in row and "irm https://claude.ai/install.ps1 | iex" in cmd
         return ok, {"started_in_s": took, "devtools_via_direct_start": DEVTOOLS_NOTE.get("fallback_tried", False), "claude_already_here": [str(f) for f in found], "row": row, "command_shown": cmd, "welcome": shot1}, shot
-    if not check("Opened from the Start menu: first-run setup; Claude Code not installed, with the Windows install command", no_claude_yet):
+    if not check("Opened from the Start menu: first-run setup's brain step; Claude Code not installed, with the Windows install command", no_claude_yet):
         return
 
     def npm_installed_signed_out():
         code, out = install_claude_npm()
         page = PAGE["page"]
         page.click("#setup [data-recheck]")
-        wait_until(lambda: "Signed out" in text_of(page, "#setup .crow") or "Signed in" in text_of(page, "#setup .crow"), 90)
+        wait_until(lambda: "Signed out" in text_of(page, CLAUDE_ROW) or "Signed in" in text_of(page, CLAUDE_ROW), 90)
         st = P({"cmd": "setupState"}, timeout=90).get("result", {})
-        row = text_of(page, "#setup .crow")
+        row = text_of(page, CLAUDE_ROW)
         shot = screenshot("setup-npm-claude-signed-out")
         c = st.get("claude", {})
         ok = code == 0 and c.get("installed") and not c.get("signedIn") and "Signed out" in row and str(c.get("path", "")).lower().endswith("claude.cmd")
@@ -512,7 +517,7 @@ def fresh(setup_exe, msi=None):
 
     def sign_in_button():
         page = PAGE["page"]
-        page.click("#setup [data-term='signin']")
+        page.click("#setup [data-term='signin:claude']")
         def sign_in_shell():
             code, out = run(["powershell", "-NoProfile", "-Command",
                              "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -like '*auth login*' } | "
@@ -528,7 +533,7 @@ def fresh(setup_exe, msi=None):
 
     def coding_step():
         page = PAGE["page"]
-        page.click("#setup .btn.ghost[data-next]")  # "Skip for now": signed out
+        page.click("#setup .btn.ghost[data-next]")  # "Skip for now": no brain is ready (Claude Code is signed out, no key)
         page.wait_for_selector("#setup h1:has-text('Coding runs')", timeout=10000)
         wait_until(lambda: "Checking" not in text_of(page, "#setup .list"), 60)
         rows = text_of(page, "#setup .list")

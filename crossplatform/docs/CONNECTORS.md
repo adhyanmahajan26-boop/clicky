@@ -130,7 +130,7 @@ The ticket is how the hub knows which bot is calling without taking the bot's wo
 2. It starts the brain with the hub as an MCP server for this turn only:
    `command: <helper>`, `args: ["--data", <data>, "serve", "--ticket", <file>]`. For Claude Code that is an `--mcp-config`
    for the turn plus an allow rule for `mcp__theo__*` (call the server `theo`); each other brain has its own way to take
-   an MCP server for one run (package 3 finds it in each tool's help).
+   an MCP server for one run (on Windows and Linux: `crossplatform/docs/PLATFORMS.md`, Connectors).
 3. When the turn ends, it deletes the ticket (`ticket revoke`).
 
 The hub reads the ticket again on every tool call, so deleting it or letting it expire stops a turn's apps at once. It

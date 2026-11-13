@@ -42,6 +42,8 @@ CREW = [
     ("Relay3", "Relay", "You are Relay3.", {}),
 ]
 IDS = {}
+# The command-line agents besides Claude Code and OpenCode, each played by the stand-in engine in its own output format.
+AGENTS = ["codex", "cursor", "gemini", "grok"]
 
 
 def setup():
@@ -49,6 +51,8 @@ def setup():
     T.start()
     T.setd("test.engine.claude", str(T.FAKE))
     T.setd("test.engine.opencode", str(T.FAKE))
+    for agent in AGENTS:
+        T.setd("test.engine.%s" % agent, str(T.FAKE))
     T.setd("test.engine.gh", str(T.FAKE_GH))
     T.setd("test.bots.retryDelays", [0.2, 0.2])
     T.fake("ok")
@@ -1581,6 +1585,246 @@ def s09():
           and "git" in inn and "gh" in inn and not done_before and done_after and not refused.get("ok") and "email" not in text and "orgId" not in text and not theo_counted_as_engine)
     return ok, {"signed_out": out["claude"]["signedIn"], "signed_in": inn["claude"]["signedIn"], "git": inn["git"].get("installed"), "gh": inn["gh"],
                 "completed": [done_before, done_after], "unknown_terminal_command_refused": not refused.get("ok"), "theo_counted_as_engine": theo_counted_as_engine}
+
+
+# ---------------------------------------------------------------- Every brain (package 10)
+
+def last_reply(b):
+    return next((m["text"] for m in reversed(T.chat(b, 10)) if m["author"] == b), "")
+
+
+def agent_call(agent, name, mark):
+    """The stand-in's last call as `agent` for the bot called `name` (the persona is in the message for these agents)."""
+    cs = [c for c in T.calls(mark) if c.get("agent") == agent and re.search(r"You are %s\b" % name, c["prompt"] + c["system"])]
+    return cs[-1] if cs else None
+
+
+def agent_brain_case(agent):
+    """A bot on `agent`: it runs with its model, reads its persona, reaches a hub app through the agent's own way of being
+    given an MCP server (reads and drafts, never a send), and its next turn carries on its session (Gemini CLI: starts afresh
+    with the persona again). Files the agent read its server from are gone after the turn."""
+    hub_has_echo()
+    name = "%s %s" % (agent.capitalize(), T.nonce()[:4])
+    model = "fake-%s-model" % agent
+    b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": agent, "model": model})["result"]["id"]
+    P({"cmd": "botApp", "bot": b, "app": "echo"})
+    fake_mcp(THREE_ECHO_CALLS); mark = T.calls_mark()
+    T.say(b, "Use Echo."); T.wait_idle()
+    first = agent_call(agent, name, mark) or {}
+    report = first.get("mcp", {})
+    reply = last_reply(b)
+    workspace = T.BOTS / "memory"
+    files_left = [str(p) for p in (workspace / ".cursor" / "mcp.json", workspace / ".gemini" / "settings.json") if p.exists()]
+    T.fake("ok"); mark = T.calls_mark()
+    T.say(b, "And once more."); T.wait_idle()
+    second = agent_call(agent, name, mark) or {}
+    second_reply = last_reply(b)
+    checks = {"ran_on_%s" % agent: first.get("agent") == agent, "model_passed": first.get("model") == model,
+              "persona_in_message": "You are %s." % name in first.get("prompt", ""),
+              "hub_given": report.get("server") is True and "echo__echo" in report.get("tools", []),
+              "reads": report.get("results", {}).get("echo__echo") == "echo: hello hub",
+              "drafts": report.get("results", {}).get("echo__save_note") == "save_note: a note",
+              "send_refused": not report.get("results", {}).get("echo__send_note", "").startswith("send_note:"),
+              "reply_has_it": "echo: hello hub" in reply, "ticket_gone_after_turn": not tickets_left(), "config_files_gone": not files_left,
+              "second_turn_answered": ("fake %s ok" % agent) in second_reply}
+    if agent == "gemini":
+        checks["starts_afresh_with_persona"] = second.get("resume") is False and "You are %s." % name in second.get("prompt", "")
+    else:
+        checks["carries_on_its_session"] = second.get("resume") is True
+    if agent == "grok":
+        config = (T.DATA / "test-grok-config.toml").read_text(encoding="utf-8") if (T.DATA / "test-grok-config.toml").exists() else ""
+        checks["hub_in_grok_config_once"] = config.count("[mcp_servers.theo_apps]") == 1
+    P({"cmd": "botDelete", "id": b}); T.fake("ok")
+    return all(checks.values()), dict(checks, report=report, args=first.get("args"), reply=reply[:200], second_args=second.get("args"))
+
+
+@test("B01", "A Codex bot: exec with its model, the hub through -c mcp_servers overrides, then exec resume on its thread", "brains")
+def b01():
+    return agent_brain_case("codex")
+
+
+@test("B02", "A Cursor Agent bot: ask mode, the hub through .cursor/mcp.json with --approve-mcps, then --resume", "brains")
+def b02():
+    return agent_brain_case("cursor")
+
+
+@test("B03", "A Gemini CLI bot: the prompt on standard input, the hub in a trusted .gemini/settings.json, every turn afresh", "brains")
+def b03():
+    return agent_brain_case("gemini")
+
+
+@test("B04", "A Grok bot: the hub in Grok's config with each tool allowed by name, then --resume", "brains")
+def b04():
+    return agent_brain_case("grok")
+
+
+@test("B05", "A signed-out agent says so plainly, once, with where to sign in; a used-up plan says when it comes back", "brains")
+def b05():
+    shown = {}
+    calls_made = {}
+    for agent in AGENTS:
+        name = "Out%s %s" % (agent, T.nonce()[:4])
+        b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": agent, "model": ""})["result"]["id"]
+        T.fake("signedout-agent"); mark = T.calls_mark()
+        T.say(b, "hello"); T.wait_idle(seconds=60)
+        calls_made[agent] = len([c for c in T.calls(mark) if c.get("agent") == agent])
+        shown[agent] = T.chat(b, 1)[-1]["text"]
+        if agent in ("codex", "cursor"):
+            T.fake("usage-limit"); T.say(b, "hello again"); T.wait_idle(seconds=60)
+            shown[agent + " limit"] = T.chat(b, 1)[-1]["text"]
+        P({"cmd": "botDelete", "id": b})
+    T.fake("ok")
+    checks = {"one_call_each": all(n == 1 for n in calls_made.values()),
+              "says_signed_out": all("isn't signed in" in shown[a] and "Settings" in shown[a] for a in AGENTS),
+              "codex_limit": "usage limit is reached" in shown["codex limit"] and "try again in 3 hours" in shown["codex limit"],
+              "cursor_limit": "usage limit is reached" in shown["cursor limit"]}
+    return all(checks.values()), dict(checks, calls=calls_made, shown={k: v[:160] for k, v in shown.items()})
+
+
+API_KEY_FOR_TESTS = "sk-test-" + "k3y" * 8
+
+
+class FakeAPI:
+    """The stand-in model API (fake_api.py) on a free port, with Anthropic and OpenAI pointed at it."""
+
+    def __init__(self, calls):
+        self.log = T.ROOT / ("api-log-%s" % T.nonce()[:6])
+        env = dict(os.environ, FAKE_API_KEY=API_KEY_FOR_TESTS, FAKE_API_CALLS=json.dumps(calls))
+        self.process = subprocess.Popen([T.PY, str(T.HERE / "fake_api.py"), str(self.log)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        self.port = int(self.process.stdout.readline().strip())
+        T.setd("brains.apiBaseURL.anthropic", "http://127.0.0.1:%d/anthropic/v1" % self.port)
+        T.setd("brains.apiBaseURL.openai", "http://127.0.0.1:%d/openai/v1" % self.port)
+
+    def requests(self, style=None):
+        found = []
+        for path in sorted(self.log.glob("*.json")) if self.log.exists() else []:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            if entry.get("method") == "POST" and (style is None or entry.get("style") == style):
+                found.append(entry)
+        return found
+
+    def stop(self):
+        self.process.kill()
+        T.setd("brains.apiBaseURL.anthropic", None)
+        T.setd("brains.apiBaseURL.openai", None)
+
+
+def everything_theo_wrote():
+    """theod's log, its state and every file under its data folder except where the key is meant to be kept."""
+    text = (T.ROOT / "theod.log").read_text(encoding="utf-8", errors="replace") + json.dumps(T.state())
+    for path in T.DATA.rglob("*"):
+        if path.is_file() and "Keys" not in path.parts and path.stat().st_size < 5_000_000:
+            text += path.read_text(encoding="utf-8", errors="replace")
+    return text
+
+
+API_TOOL_CALLS = [{"tool": "echo__echo", "args": {"text": "hello hub"}}, {"tool": "memory_write", "args": {"path": "notes.md", "content": "the fern is in the hall"}},
+                  {"tool": "echo__send_note", "args": {"text": "to Sam"}}]
+
+
+@test("B06", "An API-key bot (Anthropic and OpenAI-style) calls the echo app and its memory tool, gets the results and answers; the key is never written anywhere else", "brains")
+def b06():
+    hub_has_echo()
+    api = FakeAPI(API_TOOL_CALLS)
+    checks, evidence = {}, {}
+    try:
+        for provider in ("anthropic", "openai"):
+            saved = P({"cmd": "apiKeySet", "provider": provider, "key": API_KEY_FOR_TESTS}, timeout=60).get("result", {})
+            name = "Keyed%s %s" % (provider, T.nonce()[:4])
+            b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "api:" + provider}, timeout=60)["result"]["id"]
+            bot = next(x for x in T.state()["bots"] if x["id"] == b)
+            P({"cmd": "botApp", "bot": b, "app": "echo"})
+            before = len(api.requests(provider))
+            T.say(b, "Use Echo and remember where the fern is."); T.wait_idle(seconds=90)
+            turn = api.requests(provider)[before:]
+            reply = last_reply(b)
+            T.say(b, "And now?"); T.wait_idle(seconds=90)
+            later = api.requests(provider)[before + len(turn):]
+            memory = T.BOTS / "memory" / b / "notes.md"
+            first = turn[0] if turn else {}
+            checks.update({
+                provider + "_key_works": saved.get("works") is True and "fake-chat-1" in saved.get("models", []),
+                provider + "_bot_on_a_chat_model": bot["model"] == "fake-chat-1",
+                provider + "_key_sent_right": bool(turn) and all(r["key_right"] for r in turn),
+                provider + "_tools_offered": "echo__echo" in first.get("tools", []) and "memory_write" in first.get("tools", []),
+                provider + "_send_not_offered": "echo__send_note" not in first.get("tools", ["?"]),
+                provider + "_persona_is_system": "You are %s." % name in json.dumps(first.get("body", {}).get("system", "")) + json.dumps(first.get("body", {}).get("messages", [])[:1]),
+                provider + "_results_went_back": len(turn) == 2 and any("echo: hello hub" in r for r in turn[1]["results"]),
+                provider + "_reply_has_them": "Done:" in reply and "echo: hello hub" in reply,
+                provider + "_memory_written": memory.exists() and "fern" in memory.read_text(encoding="utf-8"),
+                provider + "_next_turn_has_history": bool(later) and len(later[0].get("body", {}).get("messages", [])) >= 3,
+            })
+            evidence[provider] = {"reply": reply[:200], "requests": [{k: r[k] for k in ("tools", "results", "model", "key_right")} for r in turn]}
+            P({"cmd": "botDelete", "id": b})
+        brains = P({"cmd": "brains"}, timeout=90).get("result", {})
+        checks["brains_say_key_saved"] = all(next((a for a in brains.get("apis", []) if a["id"] == p), {}).get("hasKey") for p in ("anthropic", "openai"))
+        checks["ticket_gone_after_turn"] = not tickets_left()
+        checks["key_never_written_elsewhere"] = API_KEY_FOR_TESTS not in everything_theo_wrote()
+    finally:
+        api.stop()
+    return all(checks.values()), dict(checks, **evidence)
+
+
+@test("B07", "The stand-in follows the owner's choice: a Codex bot that keeps failing is answered by the API key picked in Settings, and the chat says so", "brains")
+def b07():
+    api = FakeAPI([])
+    try:
+        P({"cmd": "apiKeySet", "provider": "openai", "key": API_KEY_FOR_TESTS}, timeout=60)
+        chosen = P({"cmd": "standIn", "engine": "api:openai", "model": "fake-chat-2"})
+        name = "Stuck %s" % T.nonce()[:4]
+        b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "codex", "model": "fake-codex-model"})["result"]["id"]
+        T.fake("overloaded"); mark = T.calls_mark(); before = len(api.requests("openai"))
+        T.say(b, "hello"); T.wait_idle(seconds=90)
+        codex_calls = len([c for c in T.calls(mark) if c.get("agent") == "codex"])
+        claude_calls = len([c for c in T.calls(mark) if c.get("agent") == "claude"])
+        answered = api.requests("openai")[before:]
+        shown = last_reply(b)
+        P({"cmd": "botDelete", "id": b}); P({"cmd": "standIn", "engine": ""})
+        cleared = P({"cmd": "brains"}, timeout=90).get("result", {}).get("standIn")
+    finally:
+        T.fake("ok"); api.stop()
+    checks = {"chosen": chosen.get("ok") is True, "codex_retried": codex_calls == 3, "claude_not_used": claude_calls == 0,
+              "api_answered": len(answered) == 1 and answered[0]["model"] == "fake-chat-2",
+              "chat_says_so": "fake api ok" in shown and "Codex kept failing" in shown and "OpenAI (API key)" in shown, "cleared": cleared is None}
+    return all(checks.values()), dict(checks, codex_calls=codex_calls, shown=shown[-200:])
+
+
+@test("B08", "First run with no Claude Code and only an API key: setup is ready, suggests the key, the first bot thinks with it, and Theo moves onto it", "brains")
+def b08():
+    missing = str(T.ROOT / "not-installed")
+    for agent in ["claude", "opencode"] + AGENTS:
+        T.setd("test.engine.%s" % agent, missing)
+    api = FakeAPI([])
+    theo_before = next(x for x in T.state()["bots"] if x["id"] == "theo")
+    try:
+        for provider in ("anthropic", "openai"):
+            P({"cmd": "apiKeyRemove", "provider": provider})
+        empty = P({"cmd": "setupState"}, timeout=120)["result"]
+        P({"cmd": "apiKeySet", "provider": "openai", "key": API_KEY_FOR_TESTS}, timeout=60)
+        ready = P({"cmd": "setupState"}, timeout=120)["result"]
+        suggested = ready.get("suggested") or {}
+        first = P({"cmd": "botCreate", "name": "Firsty", "instructions": "You are Firsty.", "provider": suggested.get("engine", ""), "model": suggested.get("model", "")})
+        before = len(api.requests("openai"))
+        T.say(first["result"]["id"], "hello"); T.wait_idle(seconds=60)
+        answered = api.requests("openai")[before:]
+        shown = last_reply(first["result"]["id"])
+        P({"cmd": "botUpdate", "id": "theo", "provider": "claude", "model": "claude-sonnet-5-5"})
+        done = P({"cmd": "setupDone"}, timeout=120)["result"]
+        theo_after = next(x for x in T.state()["bots"] if x["id"] == "theo")
+        P({"cmd": "botDelete", "id": first["result"]["id"]})
+    finally:
+        for agent in ["claude", "opencode"] + AGENTS:
+            T.setd("test.engine.%s" % agent, str(T.FAKE))
+        P({"cmd": "botUpdate", "id": "theo", "provider": theo_before["provider"], "model": theo_before["model"]})
+        api.stop()
+    agents = {a["id"]: a for a in ready.get("brains", {}).get("agents", [])}
+    checks = {"nothing_ready_without_a_key": empty.get("anyReady") is False and empty.get("suggested") is None,
+              "every_agent_listed_with_install": set(agents) == {"claude", "codex", "cursor", "gemini", "grok", "opencode"} and all(a["install"] and not a["installed"] for a in agents.values()),
+              "ready_with_a_key": ready.get("anyReady") is True and ready["claude"]["installed"] is False,
+              "suggests_the_key": suggested.get("engine") == "api:openai" and suggested.get("model") == "fake-chat-1",
+              "first_bot_answers": first.get("ok") is True and len(answered) == 1 and "fake api ok" in shown,
+              "theo_moved_onto_it": done.get("theoMovedTo", {}) == {"engine": "api:openai", "model": "fake-chat-1"} and theo_after["provider"] == "api:openai"}
+    return all(checks.values()), dict(checks, suggested=suggested, theo_moved=done.get("theoMovedTo"), shown=shown[:120])
 
 
 # ---------------------------------------------------------------- Real model (opt-in: THEO_REAL=1, needs Claude Code signed in)

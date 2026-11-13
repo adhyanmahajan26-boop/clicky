@@ -66,7 +66,9 @@ pub fn secret_read_rules(paths: &Paths, recall: &[PathBuf]) -> Vec<String> {
     }
     denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), format!("{root}/Turns/**"),
         // The connector hub's sign-ins, its vault key (in a file on Linux) and the turns' tickets.
-        format!("{root}/Connectors/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
+        format!("{root}/Connectors/**"),
+        // API keys kept in a file (Linux and test profiles), API bots' chat history, and a test profile's Grok config.
+        format!("{root}/Keys/**"), format!("{root}/APISessions/**"), format!("{root}/test-grok-config.toml"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
     denied.into_iter().map(|p| format!("Read({p})")).collect()
 }
 

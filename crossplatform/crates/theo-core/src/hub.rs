@@ -23,8 +23,18 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The name the hub's MCP server goes by in every brain's config, so Claude Code calls its tools `mcp__theo__<app>__<tool>`.
+/// The name the hub's MCP server goes by in Claude Code's and OpenCode's config for a turn, so Claude Code calls its tools
+/// `mcp__theo__<app>__<tool>`.
 pub const HUB_SERVER_NAME: &str = "theo";
+
+/// The name it goes by for Codex, Cursor, Gemini and Grok: their per-turn settings are merged with the owner's own config by
+/// server name, and the Mac's Theo already has a server called `theo` there. The Mac app uses the same name
+/// (`ConnectorHubWiring.serverName`).
+pub const SHARED_HUB_SERVER_NAME: &str = "theo_apps";
+
+/// The ticket file a Grok turn uses. Grok only reads MCP servers from its own config file, so the hub's entry there names a
+/// ticket of fixed name that only exists while one of its turns runs.
+pub const GROK_TICKET_NAME: &str = "grok-turn.json";
 
 /// The three levels a bot can have for an app, weakest first.
 pub const LEVELS: [&str; 3] = ["read", "readAndDraft", "full"];
@@ -461,6 +471,11 @@ pub struct TurnApps {
     pub claude_mcp_config: Option<PathBuf>,
     /// `OPENCODE_CONFIG_CONTENT` for an OpenCode turn that has hub apps.
     pub opencode_config: Option<String>,
+    /// How to start the hub as this turn's MCP server (program, arguments, environment), for the engines that take it in
+    /// their own config shape (Codex, Cursor, Gemini, Grok).
+    pub launch: Option<HubLaunch>,
+    /// The hub app ids this turn reaches through the hub, with the level each has this turn.
+    pub through_hub: BTreeMap<String, String>,
     pub ticket: Option<PathBuf>,
     /// For the prompt: each app's name and the level this turn has.
     pub named: Vec<(String, String)>,
@@ -479,9 +494,17 @@ fn ticket_folder(harness: &Harness) -> PathBuf {
     harness.paths.root.join("Connectors").join("tickets")
 }
 
+/// How an engine starts the hub for one turn.
+#[derive(Clone, Debug)]
+pub struct HubLaunch {
+    pub command: String,
+    pub arguments: Vec<String>,
+    pub environment: Vec<(String, String)>,
+}
+
 /// Writes the turn's ticket in the hub's shape (`docs/CONNECTORS.md`, Tickets). It lasts as long as the turn may, plus a
-/// little; the turn deletes it when it ends.
-fn write_ticket(harness: &Harness, bot_id: &str, apps: &BTreeMap<String, String>, from_owner: bool) -> Result<PathBuf, String> {
+/// little; the turn deletes it when it ends. `fixed_name`: a ticket file name an engine's static config names (Grok).
+pub fn write_ticket(harness: &Harness, bot_id: &str, apps: &BTreeMap<String, String>, from_owner: bool, fixed_name: Option<&str>) -> Result<PathBuf, String> {
     let folder = ticket_folder(harness);
     std::fs::create_dir_all(&folder).map_err(|error| format!("Couldn't make the ticket folder: {error}"))?;
     crate::paths::make_private(&harness.paths.root.join("Connectors"));
@@ -490,7 +513,10 @@ fn write_ticket(harness: &Harness, bot_id: &str, apps: &BTreeMap<String, String>
     let expires_at = Utc::now() + chrono::Duration::from_std(lasts).unwrap_or_else(|_| chrono::Duration::minutes(10));
     let ticket = json!({"botId": bot_id, "apps": apps, "ownerAsked": from_owner, "expiresAt": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)});
     let safe_bot_id: String = bot_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(40).collect();
-    let file = folder.join(format!("{safe_bot_id}-{}.json", uuid::Uuid::new_v4().simple()));
+    let file = match fixed_name {
+        Some(name) => folder.join(name),
+        None => folder.join(format!("{safe_bot_id}-{}.json", uuid::Uuid::new_v4().simple())),
+    };
     crate::store::write_atomic(&file, &serde_json::to_vec(&ticket).unwrap_or_default()).map_err(|error| format!("Couldn't write the ticket: {error}"))?;
     crate::paths::make_private(&file);
     Ok(file)
@@ -506,6 +532,10 @@ fn serve_command(harness: &Harness, helper: &Path, ticket: &Path) -> (String, Ve
 /// Works out a bot turn's apps: which go straight to Claude Code, which go through the hub, the rules, the ticket and the
 /// engine's config. `turn_folder` is the turn's own folder (removed when it ends) for the MCP config file.
 pub async fn wire_turn(harness: &Harness, bot: &crate::model::Bot, from_owner: bool, turn_folder: &Path) -> Result<TurnApps, String> {
+    // API-key bots call the hub themselves, tool by tool (`apichat::Toolbox`).
+    if bot.provider.starts_with("api:") {
+        return Ok(TurnApps::default());
+    }
     let mut turn = TurnApps::default();
     if bot.apps.is_empty() {
         return Ok(turn);
@@ -541,10 +571,17 @@ pub async fn wire_turn(harness: &Harness, bot: &crate::model::Bot, from_owner: b
         return Ok(turn);
     }
     let helper = helper_path().ok_or_else(missing_helper_message)?;
-    let ticket = write_ticket(harness, &bot.id, &through_hub, from_owner)?;
+    let fixed_name = (bot.provider == "grok").then_some(GROK_TICKET_NAME);
+    let ticket = write_ticket(harness, &bot.id, &through_hub, from_owner, fixed_name)?;
     turn.ticket = Some(ticket.clone());
+    turn.through_hub = through_hub.clone();
     let (command, arguments) = serve_command(harness, &helper, &ticket);
+    turn.launch = Some(HubLaunch { command: command.clone(), arguments: arguments.clone(), environment: helper_environment(harness) });
     let environment: serde_json::Map<String, Value> = helper_environment(harness).into_iter().map(|(name, value)| (name, Value::String(value))).collect();
+    if !is_claude && bot.provider != "opencode" {
+        // Codex, Cursor, Gemini and Grok: each engine's own config shape is written by the harness from `launch`.
+        return Ok(turn);
+    }
     if is_claude {
         let config = json!({"mcpServers": {HUB_SERVER_NAME: {"type": "stdio", "command": command, "args": arguments, "env": environment}}});
         let file = turn_folder.join("mcp.json");
@@ -582,6 +619,111 @@ async fn direct_rules(harness: &Harness, app_id: &str, server: &str, level: &str
         if effect_allowed(&effect, level) { allow.push(rule) } else { deny.push(rule) }
     }
     (allow, deny)
+}
+
+// MARK: The hub in each engine's own config
+
+/// A TOML basic string: quotes and backslashes escaped, control characters as escapes.
+pub fn toml_string(text: &str) -> String {
+    let mut escaped = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => escaped.push_str(&format!("\\u{:04X}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+/// Codex takes config overrides per run (`-c key=value`, the value read as TOML), which never touch `~/.codex/config.toml`.
+/// Tool calls are approved up front: nobody is there to approve them, and the hub decides what the bot may run.
+pub fn codex_arguments(launch: &HubLaunch) -> Vec<String> {
+    let name = SHARED_HUB_SERVER_NAME;
+    let mut overrides = vec![
+        format!("mcp_servers.{name}.command={}", toml_string(&launch.command)),
+        format!("mcp_servers.{name}.args=[{}]", launch.arguments.iter().map(|argument| toml_string(argument)).collect::<Vec<_>>().join(",")),
+        format!("mcp_servers.{name}.default_tools_approval_mode=\"approve\""),
+    ];
+    if !launch.environment.is_empty() {
+        let pairs: Vec<String> = launch.environment.iter().map(|(key, value)| format!("{key}={}", toml_string(value))).collect();
+        overrides.push(format!("mcp_servers.{name}.env={{{}}}", pairs.join(",")));
+    }
+    overrides.into_iter().flat_map(|value| ["-c".to_string(), value]).collect()
+}
+
+fn stdio_server(launch: &HubLaunch) -> Value {
+    let environment: serde_json::Map<String, Value> = launch.environment.iter().map(|(key, value)| (key.clone(), Value::String(value.clone()))).collect();
+    json!({"type": "stdio", "command": launch.command, "args": launch.arguments, "env": environment})
+}
+
+/// Cursor Agent reads `.cursor/mcp.json` in the folder it works in: Theo's own bots folder, never the owner's projects.
+pub fn cursor_mcp_file(launch: &HubLaunch) -> String {
+    serde_json::to_string_pretty(&json!({"mcpServers": {SHARED_HUB_SERVER_NAME: stdio_server(launch)}})).unwrap_or_default()
+}
+
+/// Gemini CLI's `.gemini/settings.json` in the folder it works in (Theo's own bots folder), read with that folder trusted
+/// for the run (`GEMINI_CLI_TRUST_WORKSPACE=true`; an untrusted folder gets no MCP servers at all). `trust` lets the hub's
+/// tools run in a headless turn: the hub decides what may run.
+pub fn gemini_settings(launch: &HubLaunch) -> String {
+    let mut server = stdio_server(launch);
+    server["trust"] = json!(true);
+    serde_json::to_string_pretty(&json!({"mcpServers": {SHARED_HUB_SERVER_NAME: server}})).unwrap_or_default()
+}
+
+/// The hub's entry in Grok's own config.
+pub fn grok_config_block(launch: &HubLaunch) -> String {
+    let name = SHARED_HUB_SERVER_NAME;
+    let mut block = format!(
+        "\n[mcp_servers.{name}]\ncommand = {}\nargs = [{}]\nenabled = true\n",
+        toml_string(&launch.command),
+        launch.arguments.iter().map(|argument| toml_string(argument)).collect::<Vec<_>>().join(", ")
+    );
+    if !launch.environment.is_empty() {
+        block.push_str(&format!("[mcp_servers.{name}.env]\n"));
+        for (key, value) in &launch.environment {
+            block.push_str(&format!("{key} = {}\n", toml_string(value)));
+        }
+    }
+    block
+}
+
+/// Puts the hub's entry into a Grok config text, replacing an older entry of ours (from before Theo moved), and leaves
+/// everything else as it was. Returns None when it is already there as it should be.
+pub fn grok_config_with_hub(current: &str, launch: &HubLaunch) -> Option<String> {
+    let block = grok_config_block(launch);
+    if current.contains(&block) {
+        return None;
+    }
+    let header = format!("[mcp_servers.{SHARED_HUB_SERVER_NAME}");
+    let mut kept: Vec<&str> = vec![];
+    let mut inside_ours = false;
+    for line in current.split('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            inside_ours = trimmed.starts_with(&format!("{header}]")) || trimmed.starts_with(&format!("{header}."));
+        }
+        if !inside_ours {
+            kept.push(line);
+        }
+    }
+    let mut updated = kept.join("\n");
+    while updated.ends_with("\n\n") {
+        updated.pop();
+    }
+    Some(updated + &block)
+}
+
+/// Cursor, Gemini and Grok read the hub's server from a file all their runs share, so only one of their turns with apps
+/// runs at a time per engine: another waits for it, and gets its own ticket.
+pub fn shared_config_lock(engine: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> = once_cell::sync::Lazy::new(Default::default);
+    LOCKS.lock().unwrap().entry(engine.to_string()).or_default().clone()
 }
 
 // MARK: Signing in

@@ -46,8 +46,17 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "botCreate" => {
             let Some(name) = s(cmd, "name").filter(|n| !n.is_empty()) else { return err("Needs a name.") };
-            let provider = s(cmd, "provider").unwrap_or_else(|| "claude".into());
-            let model = s(cmd, "model").unwrap_or_else(|| if provider == "claude" { "claude-sonnet-5-5".into() } else { "opencode/deepseek-v4.1-flash-free".into() });
+            let provider = s(cmd, "provider").filter(|p| !p.is_empty()).unwrap_or_else(|| "claude".into());
+            if !crate::brains::is_known_engine(&provider) { return err("Theo doesn't know that brain."); }
+            // No model given: the agent's own starting model, or the key's preferred chat model.
+            let model = match s(cmd, "model").filter(|m| !m.is_empty()) {
+                Some(model) => model,
+                None => match crate::brains::api_provider_id(&provider) {
+                    Some(provider_id) => crate::brains::model_for_new_bot(h, provider_id).await.unwrap_or_default(),
+                    None => crate::brains::command_line_brain(&provider).map(|brain| brain.default_model.to_string()).unwrap_or_default(),
+                },
+            };
+            if model.is_empty() && provider.starts_with("api:") { return err("Pick a model for that key."); }
             let mut bot = Bot::new(&name, &s(cmd, "description").unwrap_or_default(), &s(cmd, "instructions").unwrap_or_else(|| format!("You are {name}.")), &provider, &model);
             if let Some(a) = s(cmd, "authority").filter(|a| ["member", "lead", "ceo"].contains(&a.as_str())) { bot.authority = Some(a); }
             if let Some(list) = cmd.get("canMessage").and_then(|c| c.as_array()) { bot.can_message = Some(list.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()); }
@@ -61,7 +70,10 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             if let Some(e) = cmd.get("enabled").and_then(|e| e.as_bool()) { bot.enabled = Some(e); }
             if let Some(a) = s(cmd, "authority").filter(|a| ["member", "lead", "ceo"].contains(&a.as_str())) { bot.authority = Some(a); }
             if let Some(list) = cmd.get("canMessage").and_then(|c| c.as_array()) { bot.can_message = Some(list.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()); }
-            if let Some(p) = s(cmd, "provider").filter(|p| !p.is_empty()) { bot.provider = p; }
+            if let Some(p) = s(cmd, "provider").filter(|p| !p.is_empty()) {
+                if !crate::brains::is_known_engine(&p) { return err("Theo doesn't know that brain."); }
+                bot.provider = p;
+            }
             if let Some(m) = s(cmd, "model").filter(|m| !m.is_empty()) { bot.model = m; bot.effort = None; }
             if let Some(i) = s(cmd, "instructions").filter(|i| !i.is_empty()) { bot.instructions = i; }
             if let Some(n) = s(cmd, "name").filter(|i| !i.is_empty()) { bot.name = n; }
@@ -108,7 +120,52 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         "setupState" => ok(crate::setup::state(h).await),
         "setupDone" => {
             h.settings.set("setup.completed", true.into());
-            ok(json!({"completed": true}))
+            let moved = crate::setup::move_untouched_theo(h).await.map(|(engine, model)| json!({"engine": engine, "model": model}));
+            ok(json!({"completed": true, "theoMovedTo": moved}))
+        }
+        // Every brain and whether it works here. Never includes a key, only whether one is saved.
+        "brains" => ok(crate::brains::inventory(h).await),
+        "apiKeySet" => {
+            let Some(provider) = s(cmd, "provider").filter(|p| crate::brains::api_provider(h, p).is_some()) else { return err("Theo doesn't know that provider.") };
+            let Some(key) = s(cmd, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty() && k.len() <= 4096 && !k.chars().any(char::is_control)) else { return err("Paste the key.") };
+            if let Err(e) = crate::secrets::write_api_key(&h.paths.root, h.settings.is_test, &provider, Some(&key)) { return err(&e.to_string()); }
+            // The check is the provider's own model list: it proves the key works and gives the first bot a model.
+            match crate::brains::list_models(h, &provider).await {
+                Ok(models) => {
+                    let preferred = crate::brains::preferred_model(&provider, &models);
+                    ok(json!({"provider": provider, "saved": true, "works": true, "models": models, "preferredModel": preferred}))
+                }
+                Err(problem) => ok(json!({"provider": provider, "saved": true, "works": false, "problem": problem})),
+            }
+        }
+        "apiKeyRemove" => {
+            let Some(provider) = s(cmd, "provider").filter(|p| crate::secrets::is_provider_id(p)) else { return err("Theo doesn't know that provider.") };
+            match crate::secrets::write_api_key(&h.paths.root, h.settings.is_test, &provider, None) {
+                Ok(()) => ok(json!({"provider": provider, "removed": true})),
+                Err(e) => err(&e.to_string()),
+            }
+        }
+        "apiModels" => {
+            let Some(provider) = s(cmd, "provider") else { return err("Needs provider.") };
+            match crate::brains::list_models(h, &provider).await {
+                Ok(models) => ok(json!({"provider": provider, "preferredModel": crate::brains::preferred_model(&provider, &models), "models": models})),
+                Err(problem) => err(&problem),
+            }
+        }
+        // The brain that answers when a bot's own keeps failing: `{engine, model}`, or an empty engine for Claude Code when
+        // it is installed (the default).
+        "standIn" => {
+            let engine = s(cmd, "engine").unwrap_or_default();
+            if engine.is_empty() {
+                h.settings.set(crate::brains::STAND_IN_SETTING, Value::Null);
+                return ok(json!({"standIn": null}));
+            }
+            if !crate::brains::is_known_engine(&engine) { return err("Theo doesn't know that brain."); }
+            let model = s(cmd, "model").unwrap_or_default();
+            if engine.starts_with("api:") && model.is_empty() { return err("Pick a model for that key."); }
+            let value = format!("{engine}|{model}");
+            h.settings.set(crate::brains::STAND_IN_SETTING, value.clone().into());
+            ok(json!({"standIn": value}))
         }
         "openTerminal" => {
             let which = s(cmd, "which").unwrap_or_default();

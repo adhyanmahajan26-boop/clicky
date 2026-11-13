@@ -38,8 +38,10 @@ impl Cancel {
     }
 }
 
+/// The shape of an engine's output: Claude Code's and OpenCode's stream-json, Codex's `exec --json` events, Cursor Agent's
+/// stream-json, Gemini CLI's one JSON object (`--output-format json`) and Grok's `streaming-messages-json`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Format { Claude, OpenCode }
+pub enum Format { Claude, OpenCode, Codex, Cursor, Gemini, Grok }
 
 pub struct Spec {
     pub program: PathBuf,
@@ -67,6 +69,8 @@ pub struct Outcome {
     pub stderr_tail: String,
     pub usage: Option<TurnUsage>,
     pub truncated: bool,
+    /// What the engine printed that wasn't read as a reply or an error (Gemini's plain output), for the error words.
+    pub unread_output: String,
 }
 
 /// Reads an engine's stream-json lines into a reply.
@@ -79,6 +83,12 @@ pub struct StreamParser {
     pub saw_delta: bool,
     pub truncated: bool,
     final_text: Option<String>,
+    /// Cursor: a tool ran since the last words, so the next words start a new paragraph.
+    tool_since_text: bool,
+    /// Gemini: its whole output, read as one JSON object at the end.
+    raw: String,
+    /// Cursor: the result's text replaces what streamed.
+    final_wins: bool,
 }
 
 impl StreamParser {
@@ -98,13 +108,21 @@ impl StreamParser {
 
     /// One line. True when the visible text changed.
     pub fn consume(&mut self, line: &str, format: Format) -> bool {
+        if format == Format::Gemini {
+            // One JSON object over many lines: kept whole and read in `finish`.
+            if self.raw.len() + line.len() < MAX_TEXT {
+                self.raw.push_str(line);
+                self.raw.push('\n');
+            }
+            return false;
+        }
         let line = line.trim();
         if !line.starts_with('{') {
             return false;
         }
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else { return false };
         let kind = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if let Some(id) = event.get("session_id").or_else(|| event.get("sessionID")).and_then(|s| s.as_str()) {
+        if let Some(id) = event.get("session_id").or_else(|| event.get("sessionID")).or_else(|| if format == Format::Codex && kind == "thread.started" { event.get("thread_id") } else { None }).and_then(|s| s.as_str()) {
             if !id.is_empty() {
                 self.session_id = Some(id.to_string());
             }
@@ -196,16 +214,120 @@ impl StreamParser {
                 }
                 _ => {}
             },
+            Format::Codex => match kind {
+                // Only the agent's messages are the reply, and the last one is the answer (earlier ones say what it's about
+                // to do); "error" items are warnings.
+                "item.completed" if event["item"]["type"] == "agent_message" => {
+                    if let Some(message) = event["item"]["text"].as_str().filter(|m| !m.is_empty()) {
+                        self.text.clear();
+                        self.push(message);
+                        return true;
+                    }
+                }
+                "turn.completed" => {
+                    let usage = &event["usage"];
+                    let n = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+                    let step = TurnUsage { input_tokens: n(&usage["input_tokens"]), output_tokens: n(&usage["output_tokens"]), cache_read_tokens: n(&usage["cached_input_tokens"]), cache_write_tokens: 0, cost_usd: None };
+                    if !step.is_empty() {
+                        self.usage.get_or_insert_with(TurnUsage::default).add(&step);
+                    }
+                }
+                "turn.failed" => self.error = Some(event["error"]["message"].as_str().unwrap_or("Codex reported an error.").to_string()),
+                "error" => {
+                    if let Some(message) = event["message"].as_str() {
+                        self.error = Some(message.to_string());
+                    }
+                }
+                _ => {}
+            },
+            Format::Cursor => match kind {
+                "assistant" => {
+                    let chunk: String = event["message"]["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
+                    if chunk.is_empty() {
+                        return false;
+                    }
+                    // With --stream-partial-output the pieces carry timestamp_ms; the whole message repeats at the end without one.
+                    if event.get("timestamp_ms").is_some() {
+                        self.saw_delta = true;
+                    } else if self.saw_delta {
+                        return false;
+                    }
+                    if self.tool_since_text && !self.text.is_empty() {
+                        self.push("\n\n");
+                    }
+                    self.tool_since_text = false;
+                    self.push(&chunk);
+                    return true;
+                }
+                "tool_call" => {
+                    if !self.text.is_empty() {
+                        self.tool_since_text = true;
+                    }
+                }
+                "result" => {
+                    let failed = event["is_error"].as_bool().unwrap_or(false) || event["subtype"].as_str().map(|s| s != "success").unwrap_or(false);
+                    if failed {
+                        self.error = Some(event["result"].as_str().filter(|r| !r.trim().is_empty()).unwrap_or("Cursor Agent reported an error.").to_string());
+                    } else if let Some(result) = event["result"].as_str().filter(|r| !r.is_empty()) {
+                        self.final_text = Some(result.to_string());
+                        self.final_wins = true;
+                    }
+                }
+                _ => {}
+            },
+            // Only the final message is the reply; the notes Grok writes between tool calls are left out.
+            Format::Grok => {
+                if kind == "result" {
+                    if event["is_error"].as_bool().unwrap_or(false) {
+                        self.error = Some(event["result"].as_str().filter(|r| !r.trim().is_empty()).unwrap_or("Grok reported an error.").to_string());
+                    } else if let Some(result) = event["result"].as_str() {
+                        self.text.clear();
+                        self.push(result);
+                        return true;
+                    }
+                }
+            }
+            Format::Gemini => {}
         }
         false
     }
 
     pub fn finish(&mut self) {
+        if !self.raw.is_empty() {
+            let raw = std::mem::take(&mut self.raw);
+            if let (Some(start), Some(end)) = (raw.find('{'), raw.rfind('}')) {
+                if let Ok(object) = serde_json::from_str::<serde_json::Value>(&raw[start..=end]) {
+                    if let Some(response) = object["response"].as_str().filter(|r| !r.trim().is_empty()) {
+                        self.text.clear();
+                        self.push(response.trim());
+                    } else if let Some(message) = object["error"]["message"].as_str() {
+                        self.error = Some(message.to_string());
+                    }
+                    if let Some(id) = object["session_id"].as_str().filter(|id| !id.is_empty()) {
+                        self.session_id = Some(id.to_string());
+                    }
+                }
+            }
+            if self.text.is_empty() && self.error.is_none() {
+                self.raw = raw;
+            }
+        }
+        // Cursor's whole answer at the end is the reply when it has one (the Mac's `final ?? streamed`).
+        if self.final_wins {
+            if let Some(t) = self.final_text.take().filter(|t| !t.trim().is_empty()) {
+                self.text = t;
+            }
+        }
         if self.text.trim().is_empty() {
             if let Some(t) = self.final_text.take() {
                 self.text = t;
             }
         }
+    }
+
+    /// What the engine printed when it gave no reply and no error of its own (Gemini's raw output), for the error words.
+    pub fn unread_output(&self) -> &str {
+        &self.raw
     }
 }
 
@@ -433,6 +555,7 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     let mut p = std::mem::take(&mut *parser.lock().unwrap());
     p.finish();
     on_text(&p.text.chars().take(20_000).collect::<String>());
+    let unread_output: String = p.unread_output().chars().take(20_000).collect();
     Ok(Outcome {
         text: p.text,
         session_id: p.session_id,
@@ -442,6 +565,7 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
         stderr_tail: stderr_tail.chars().rev().take(20_000).collect::<Vec<_>>().into_iter().rev().collect(),
         usage: p.usage,
         truncated: p.truncated,
+        unread_output,
     })
 }
 
