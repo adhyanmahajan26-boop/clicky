@@ -62,8 +62,10 @@ struct BotsRootView: View {
     @State private var showsInspector = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
-    /// The bot list sorts urgent first (needs you, failed, working, done, quiet) unless switched back to teams.
-    @AppStorage("theo.sidebar.sort") private var sortMode = "urgent"
+    /// The bot list shows the teams (each category with its manager first) unless switched to urgent first (needs you,
+    /// failed, working, done, quiet). A new key, so a Mac that was left on urgent first by tapping a counter pill opens on
+    /// the teams again.
+    @AppStorage("theo.sidebar.sort.v2") private var sortMode = "teams"
     /// A counter pill under Theo's row filters the list to that lane.
     @State private var laneFilter: PixelState.Lane?
     @ObservedObject private var studio = StudioController.shared
@@ -176,17 +178,20 @@ struct BotsRootView: View {
                         }
                         hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
                         if products.isOn(.theo) {
-                            let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) && !isCEO($0) }
+                            let pinned = pinnedItems
                             if !pinned.isEmpty {
                                 sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
                                 ForEach(pinned, id: \.self) { item in itemRow(item) }
                             }
                             sortSwitch
-                            if sortMode == "urgent" {
+                            // A counter pill shows its lane for now without leaving the teams for good.
+                            if sortMode == "urgent" || laneFilter != nil {
                                 urgentList
                             } else {
                                 // Clicky's own team leaves with Clicky (Settings › Products).
                                 ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
+                                unfiledBots
+                                newCategoryButton
                             }
                         }
                     }
@@ -196,6 +201,11 @@ struct BotsRootView: View {
             if products.isOn(.clicky) {
                 clickyPill
                     .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 6)
+            }
+            // Always in reach, so a new build installs from here instead of by hand.
+            if let companionManager = CompanionManager.current {
+                UpdateButton(updateController: companionManager.updateController, placement: .sidebar)
+                    .padding(.horizontal, 10).padding(.bottom, 2)
             }
             HStack(spacing: 2) {
                 hairlineRow("connectors", "Connectors", isSelected: selection.pane == .connectors, inset: 0) { selection.pane = .connectors }
@@ -285,6 +295,45 @@ struct BotsRootView: View {
 
     private func isCEO(_ item: String) -> Bool { item == store.primary.map { "bot:\($0.id)" } }
 
+    static let theoID = "theo"
+
+    /// What sits under Pinned. Theo is always first: as the CEO it has the row at the very top, and if another bot was
+    /// made primary, Theo heads this list instead, so it never drops into a team or the urgent lanes.
+    private var pinnedItems: [String] {
+        let theoItem = "bot:\(Self.theoID)"
+        let others = store.layout.pinned.filter { $0 != theoItem && itemExists($0) && !store.isHidden($0) && !isCEO($0) }
+        return itemExists(theoItem) && !isCEO(theoItem) ? [theoItem] + others : others
+    }
+
+    /// Bots in no category, so the teams view never loses one: they sit under "Other bots" until they're filed.
+    @ViewBuilder private var unfiledBots: some View {
+        let filed = Set(store.layout.sections.flatMap(\.items))
+        let unfiled = store.bots.filter { bot in
+            let item = BotsLayout.item(forBot: bot.id)
+            return !filed.contains(item) && item != "clicky" && bot.id != Self.theoID && !isCEO(item) && !store.isPinned(item) && !store.isHidden(item)
+                && (products.isOn(.clicky) || bot.owner != BotsStore.clickyID)
+        }
+        if !unfiled.isEmpty {
+            sectionTitle("Other bots", count: unfiled.count)
+            ForEach(unfiled, id: \.id) { bot in itemRow("bot:\(bot.id)") }
+        }
+    }
+
+    /// Makes a category and opens its page, where it's named, filled and given a manager.
+    private var newCategoryButton: some View {
+        Button(action: newCategory) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                Text("New category").font(.system(size: 11.5))
+            }
+            .foregroundColor(DS.Colors.textTertiary)
+            .padding(.horizontal, 20).frame(height: 30)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).pointerCursor().padding(.top, 6)
+    }
+
     @ViewBuilder private func itemRow(_ item: String) -> some View {
         Group {
             if item == "clicky" {
@@ -325,7 +374,12 @@ struct BotsRootView: View {
                     Text(bot.name).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
                         .foregroundColor(bot.isOn ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
                     if store.layout.sections.contains(where: { $0.leaderID == bot.id }) {
-                        Image(systemName: "crown.fill").font(.system(size: 8)).foregroundColor(DS.Colors.gold).help("Manager")
+                        // Spelled out, so it's plain at a glance who runs each team.
+                        HStack(spacing: 2) {
+                            Image(systemName: "crown.fill").font(.system(size: 8))
+                            Text("Manager").font(.system(size: 9.5, weight: .semibold))
+                        }
+                        .foregroundColor(DS.Colors.gold).fixedSize().help("Manager of this team: its members report here first")
                     }
                     if unread > 0 { Circle().fill(DS.Colors.accent).frame(width: 6, height: 6).help("Unread result") }
                 }
@@ -382,7 +436,6 @@ struct BotsRootView: View {
 
     private func counterPill(_ lane: PixelState.Lane, text: String, tone: StatusPill.Tone) -> some View {
         Button {
-            sortMode = "urgent"
             laneFilter = laneFilter == lane ? nil : lane
         } label: {
             StatusPill(text: text, tone: tone)
@@ -391,19 +444,19 @@ struct BotsRootView: View {
         .buttonStyle(.plain).pointerCursor().help(laneFilter == lane ? "Show every bot" : "Show only these")
     }
 
-    /// Urgent first or by team, remembered.
+    /// By team (the default) or urgent first, remembered.
     private var sortSwitch: some View {
         HStack {
             Text("Sort").font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
             Spacer()
-            HairlineSegments(options: [("urgent", "Urgent first"), ("teams", "Teams")], selection: Binding(get: { sortMode }, set: { sortMode = $0; laneFilter = nil }))
+            HairlineSegments(options: [("teams", "Teams"), ("urgent", "Urgent first")], selection: Binding(get: { laneFilter != nil ? "urgent" : sortMode }, set: { sortMode = $0; laneFilter = nil }))
         }
         .padding(.horizontal, 20).padding(.top, 14)
     }
 
     /// Needs you, Failed, Working, Done, then Quiet (ready, asleep, off), each with a small mono heading and its count.
     @ViewBuilder private var urgentList: some View {
-        let shown = store.bots.filter { !$0.primary && !store.isHidden("bot:\($0.id)") && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) }
+        let shown = store.bots.filter { !$0.primary && $0.id != Self.theoID && !store.isHidden("bot:\($0.id)") && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) }
         let lanes = Dictionary(grouping: shown) { store.pixelState(of: $0).state.lane }
         ForEach(PixelState.Lane.allCases.filter { laneFilter == nil || $0 == laneFilter }, id: \.self) { lane in
             if let bots = lanes[lane], !bots.isEmpty {
@@ -524,7 +577,9 @@ struct BotsRootView: View {
     }
 
     @ViewBuilder private func itemMenu(_ item: String) -> some View {
-        Button(store.isPinned(item) ? "Unpin" : "Pin to top") { store.setPinned(!store.isPinned(item), item) }
+        if item != "bot:\(Self.theoID)" {
+            Button(store.isPinned(item) ? "Unpin" : "Pin to top") { store.setPinned(!store.isPinned(item), item) }
+        }
         Menu("Move to category") {
             ForEach(store.layout.sections) { section in
                 Button(section.name) { store.move(item, toSection: section.id) }

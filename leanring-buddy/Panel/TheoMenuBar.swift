@@ -156,6 +156,7 @@ struct TheoPanelView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             MenuBarUrgentRows(close: close)
+            UpdateAvailableBanner(updateController: companionManager.updateController)
             if !companionManager.allPermissionsGranted || !speechAllowed { permissionsBanner }
             ClickyMacSwitch()
             tiles
@@ -441,6 +442,7 @@ struct TheoPanelView: View {
             link("Setup guide") { close(); SetupGuideWindowController.show(companionManager: companionManager) }
             link("Diagnostics") { close(); DiagnosticsWindowController.show(companionManager: companionManager) }
             Spacer()
+            UpdateButton(updateController: companionManager.updateController, placement: .panel)
             link("Quit") { NSApp.terminate(nil) }
         }
         .padding(.horizontal, 4)

@@ -2197,7 +2197,9 @@ struct BotsLayout: Codable, Equatable {
         /// The category's manager: members send it their reports and DMs, it rolls them up for the CEO. With none,
         /// every member reports to the CEO directly. (Saved as leaderID since categories first had leaders.)
         var leaderID: String?
-        /// "Has a manager" was switched on before a bot was picked for the job.
+        /// "Has a manager": true when switched on (even before a bot was picked for the job), false when the owner
+        /// switched it off so everyone reports to the CEO. Nil (never chosen) means it gets a manager as soon as it has
+        /// a bot to give the job to.
         var wantsManager: Bool?
         /// What this team is for, in a line ("Inbox and calendar", "Ship the website").
         var purpose: String?
@@ -2241,6 +2243,13 @@ extension BotsStore {
         }
         if let saved = BotsSavedFile.load(BotsLayout.self, from: layoutFile, decoder: Self.decoder, what: "the sidebar layout") {
             layout = saved
+            // Categories made before every team got a manager get one now (unless the owner switched it off).
+            var withManagers = layout
+            for index in withManagers.sections.indices { assignManagerIfNeeded(&withManagers.sections[index]) }
+            if withManagers != layout {
+                layout = withManagers
+                writeLayout()
+            }
         } else {
             // First run: a group without a head (the old "Personal" list) becomes a sidebar section.
             for group in groups where group.headID == nil {
@@ -2512,6 +2521,7 @@ extension BotsStore {
         } else if let sectionID, let index = layout.sections.firstIndex(where: { $0.id == sectionID }) {
             layout.sections[index].items.append(item)
         }
+        for index in layout.sections.indices { assignManagerIfNeeded(&layout.sections[index]) }
         writeLayout()
     }
 
@@ -2657,13 +2667,27 @@ extension BotsStore {
         if let leader = layout.sections[index].leaderID, !layout.sections[index].items.contains(BotsLayout.item(forBot: leader)) {
             if bot(leader) == nil { layout.sections[index].leaderID = nil } else { layout.sections[index].items.append(BotsLayout.item(forBot: leader)) }
         }
+        assignManagerIfNeeded(&layout.sections[index])
         writeLayout()
+    }
+
+    /// Every team has a manager unless the owner said it shouldn't: a category that never chose (or switched it on
+    /// without picking) gets its first member who isn't the CEO, until the owner picks another. Clicky's team keeps
+    /// Clicky, and a category with no bots waits for one.
+    func assignManagerIfNeeded(_ section: inout BotsLayout.Section) {
+        if let leader = section.leaderID, bot(leader) != nil { return }
+        guard section.wantsManager != false else { return }
+        let candidates = section.items.compactMap(BotsLayout.botID(ofItem:)).compactMap { bot($0) }
+        guard let manager = candidates.first(where: { !$0.primary && $0.id != Self.clickyID }) ?? candidates.first(where: { !$0.primary }) else { return }
+        section.leaderID = manager.id
+        section.wantsManager = true
     }
 
     func setLeader(_ botID: String?, of sectionID: String) {
         updateCategory(sectionID) {
             $0.leaderID = botID
-            $0.wantsManager = botID == nil ? nil : true
+            // Picking "No manager" is a choice, so the team isn't handed a new one straight away.
+            $0.wantsManager = botID != nil
         }
     }
 
@@ -2673,7 +2697,7 @@ extension BotsStore {
         updateCategory(sectionID) { section in
             guard on else {
                 section.leaderID = nil
-                section.wantsManager = nil
+                section.wantsManager = false
                 return
             }
             section.wantsManager = true
