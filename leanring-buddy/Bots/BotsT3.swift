@@ -93,6 +93,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var sessionID: String?
     /// Its harness doesn't say which chat a new run made, and Theo couldn't tell. It never guesses.
     var chatUnknown: Bool?
+    /// Its repo has no remote: the run still has its own branch and worktree, but nothing is pushed and there's no pull request.
+    var noRemote: Bool?
 }
 
 /// One file a run changed.
@@ -143,6 +145,19 @@ enum BotsT3 {
         pull request, and don't mention them in your report: Theo commits anything left over, pushes the branch and \
         opens the draft pull request after you finish.
         """
+
+    /// The same for a branch of a repo with no remote: it's committed here, and nothing is pushed.
+    static let localDeliveryNote = """
+
+
+        ---
+        When you're done: commit your work to git with a clear message, run the tests or checks you wrote and \
+        say how they went, and end with a short report: what you did, how to run it, the tests and their results, and \
+        anything left undone. If your sandbox can't commit, just leave the changes in the folder. Don't push or open a \
+        pull request: this repo has no remote, so the work stays on this branch, and Theo commits anything left over.
+        """
+
+    static func deliveryNote(for run: T3Run) -> String { run.noRemote == true ? localDeliveryNote : deliveryNote }
 
     /// The ```prompt block Theo writes as the team's final prompt, if there is one.
     static func promptBlock(in text: String) -> String? { fenced("prompt", in: text) }
@@ -207,7 +222,7 @@ enum BotsT3 {
     /// What a follow-up ends with: a plain folder stays out of git, everything else commits.
     static func followupNote(for run: T3Run) -> String {
         if run.continuedChat != nil { return continuedNote }
-        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
+        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote(for: run)
     }
 
     /// A new project's folder is made first and the agent starts inside it, whatever a bot's prompt says about making one.
@@ -288,24 +303,23 @@ enum BotsT3 {
         var subfolder = ""
         var topLevel: URL?
         if let repo { topLevel = await gitTopLevel(of: repo) }
-        if let repo, topLevel == nil {
+        var repoHasRemote = false
+        if let topLevel { repoHasRemote = await hasRemote(topLevel) }
+        let placement = CodingPlacement.decide(folderNamed: repo != nil, isGitRepo: topLevel != nil, hasRemote: repoHasRemote)
+        if let repo, placement == .inPlace {
             plainFolder = true
             _ = try? await shell(cli, ["project", "add", repo.path])
             arguments += [repo.path, "-"]
             run = T3Run(id: "", title: title, folder: repo.path)
-        } else if let topLevel, !(await hasRemote(topLevel)) {
-            // A project of the owner's that lives only here: changes go right in it, on its own history.
-            let base = try await headCommit(in: topLevel)
-            _ = try? await shell(cli, ["project", "add", topLevel.path])
-            arguments += [topLevel.path, "-"]
-            run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
-        } else if let repo, let topLevel {
+        } else if let repo, let topLevel, placement.hasOwnBranch {
+            // Its own branch and worktree, with or without a remote; one with no remote is never pushed.
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-", "--worktree", base, "--branch", branch]
             run = T3Run(id: "", title: title, folder: topLevel.path, repo: topLevel.path, branch: branch, baseCommit: base)
             run.baseBranch = await currentBranch(in: topLevel)
+            if !placement.publishes { run.noRemote = true }
             subfolder = subfolderNote(repo, in: topLevel)
         } else {
             let folder = try await newGitProject(title: newFolder ?? title)
@@ -320,7 +334,7 @@ enum BotsT3 {
         let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
         let chosenEffort = effortChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
-        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote))
+        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote(for: run)))
         run.model = chosenModel
         run.effort = chosenEffort
         run.prompt = prompt
@@ -653,6 +667,10 @@ enum BotsT3 {
         if !stopped {
             if let pr = state.pullRequest {
                 run.pullRequest = pr
+            } else if !failed, let branch = run.branch, run.noRemote == true {
+                // Nowhere to push: the work stays on its branch here, and the room is told so.
+                if let commitProblem { problems.append(commitProblem) }
+                lines.append(CodingPlacement.localBranchWords(branch: branch))
             } else if !failed, let branch = run.branch {
                 let changed = run.changedFiles ?? []
                 if let commitProblem {

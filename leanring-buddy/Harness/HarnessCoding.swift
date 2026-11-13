@@ -199,18 +199,17 @@ enum HarnessCoding {
         var gitFolder: String?
         var topLevel: URL?
         if let repo { topLevel = await BotsT3.gitTopLevel(of: repo) }
-        if let repo, topLevel == nil {
+        var hasRemote = false
+        if let topLevel { hasRemote = await BotsT3.hasRemote(topLevel) }
+        let placement = CodingPlacement.decide(folderNamed: repo != nil, isGitRepo: topLevel != nil, hasRemote: hasRemote)
+        if let repo, placement == .inPlace {
             // A plain folder: the work happens right there, with no branch and nothing added to it.
             plainFolder = true
             workdir = repo
             run = T3Run(id: "", title: title, folder: repo.path)
-        } else if let topLevel, !(await BotsT3.hasRemote(topLevel)) {
-            // A project of the owner's that lives only here: changes go right in it, on its own history.
-            workdir = topLevel
-            let base = try await BotsT3.headCommit(in: topLevel)
-            run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
-        } else if let repo = topLevel {
-            // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
+        } else if let repo = topLevel, placement.hasOwnBranch {
+            // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched. A repo with no remote gets one
+            // too; only the push and the draft pull request are left out.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await BotsT3.headCommit(in: repo)
             let trees = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -221,6 +220,7 @@ enum HarnessCoding {
             run = T3Run(id: "", title: title, folder: repo.path, repo: repo.path, branch: branch, baseCommit: base)
             run.worktree = workdir.path
             run.baseBranch = await BotsT3.currentBranch(in: repo)
+            if !placement.publishes { run.noRemote = true }
             gitFolder = repo.appendingPathComponent(".git").path
         } else {
             workdir = try await BotsT3.newGitProject(title: newFolder ?? title)
@@ -246,7 +246,7 @@ enum HarnessCoding {
             turn = NewChatTurn(key: key, ticket: ticket, before: Set(await HarnessChats.list(harness: harness, folder: workdir.path).map(\.id)))
             run.startedAt = Date()
         }
-        var message = BotsT3.forAgent((isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (isNewProject ? BotsT3.newFolderReminder : "") + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote))
+        var message = BotsT3.forAgent((isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (isNewProject ? BotsT3.newFolderReminder : "") + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote(for: run)))
         if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
             message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +
@@ -855,7 +855,7 @@ enum HarnessCoding {
         let promptStart = prompt.map { String($0.prefix(40)) }
         // What Theo typed shows back wrapped across lines (the prompt, a follow-up, the delivery note): a line that's a piece of it isn't the agent's.
         let squeeze: (String) -> String = { $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
-        let typed = squeeze(([prompt ?? ""] + followups + [BotsT3.deliveryNote, BotsT3.plainFolderNote, BotsT3.newFolderReminder]).joined(separator: " "))
+        let typed = squeeze(([prompt ?? ""] + followups + [BotsT3.deliveryNote, BotsT3.localDeliveryNote, BotsT3.plainFolderNote, BotsT3.newFolderReminder]).joined(separator: " "))
         let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map { line in
             line.trimmingCharacters(in: CharacterSet(charactersIn: "│┃╹▀╭╮╰╯─ ")).trimmingCharacters(in: .whitespaces)
         }

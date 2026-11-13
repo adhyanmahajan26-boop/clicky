@@ -1205,6 +1205,28 @@ def t24():
         "run": r, "pushed_file": text, "draft_prs": len(pr), "own_worktree_left_main_checkout_alone": main_clean}
 
 
+@test("T24b", "A repo with no remote still gets its own branch and worktree; nothing is pushed and main is untouched", "coding")
+def t24b():
+    T.fake("ok"); n = T.nonce(); title = "Local " + n
+    work = T.ROOT / ("local-only-" + n)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    (work / "README.md").write_text("local\n")
+    for a in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]):
+        subprocess.run(["git", "-C", str(work)] + a, check=True)
+    main_before = subprocess.run(["git", "-C", str(work), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    P({"cmd": "uiRunStart", "prompt": "In the current folder create local/%s.md containing the single line: local %s. Nothing else." % (n, n), "title": title, "folder": str(work)})
+    r = wait_runs(lambda x: x["title"] == title)[-1]
+    branch = r.get("branch") or ""
+    shown = subprocess.run(["git", "-C", str(work), "show", "%s:local/%s.md" % (branch, n)], capture_output=True, text=True)
+    main_after = subprocess.run(["git", "-C", str(work), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    main_clean = not (work / "local").exists() and main_after == main_before
+    said = json.dumps(T.chat(r.get("room") or "")) + json.dumps(T.state())
+    told = ("branch %s" % branch) in said and "Nothing was pushed because the repo has no remote" in said
+    pr = [p for p in prs() if p["head"] == branch]
+    return r["phase"] == "done" and branch.startswith("theo/") and shown.returncode == 0 and shown.stdout.strip() == "local " + n and main_clean and not pr and not r.get("pullRequest") and told, {
+        "run": r, "file_on_branch": shown.stdout.strip(), "main_untouched": main_clean, "prs": len(pr), "told_no_remote": told}
+
+
 @test("T25", "A follow-up on the same run lands on the same branch and PR", "coding")
 def t25():
     T.fake("ok"); work, remote = sandbox_repo(); n = T.nonce(); title = "Follow " + n
