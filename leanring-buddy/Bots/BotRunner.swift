@@ -717,7 +717,7 @@ extension BotRunner {
             if session != nil, saysSessionIsLost(output) { throw BotRunnerError.lostSession }
             // Its sign-in instructions aren't for the chat.
             if output.contains("grok login") { throw BotRunnerError.failed("Grok isn't signed in on this Mac. Sign in from Settings › Harnesses.") }
-            throw BotRunnerError.failed("Grok didn't answer: \(String(decoding: data.suffix(200), as: UTF8.self))")
+            throw BotRunnerError.failed("Grok didn't answer: \(EngineFailureText.grok(output) ?? String(decoding: data.suffix(200), as: UTF8.self))")
         }
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), newSession)
     }
