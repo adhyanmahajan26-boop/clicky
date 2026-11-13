@@ -151,6 +151,25 @@ STILL="$(ps -axo pid=,comm= | awk -v e="$APP/Contents/MacOS/Clicky" '{p=$1;$1=""
 [ $RC = 0 ] && has "Quitting the running Theo" && [ -z "$STILL" ] && [ "$(build "$APP")" = "$NEWBUILD" ] \
   && ok "upgrading quits the running copy first" || { bad "upgrade while running" "$LOG"; [ -n "$STILL" ] && kill $STILL; }
 
+# ---- 12b. an upgrade quits the app but leaves a `Clicky --mcp` helper (another session's MCP server) running.
+# Stand-ins, not the real binary (whose start-up writes the owner's preferences): a tiny program that waits for a
+# signal, placed at the app's executable path in a scratch copy, run once as the app and once with --mcp.
+HELPERS="$ROOT/apps-helper"; rm -rf "$HELPERS"; mkdir -p "$HELPERS"
+run --dir "$HELPERS" --from "$NEWZIP" --sha256 "$NEWSHA" --no-launch
+STANDIN="$HELPERS/Theo.app/Contents/MacOS/Clicky"
+printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' | cc -x c -o "$STANDIN" - 2>"$ROOT/logs/standin.log"
+# Started from a subshell, so they aren't this script's children (a dead child would linger as a zombie and still answer kill -0).
+APP_PID="$( ("$STANDIN" --background < /dev/null > /dev/null 2>&1 & echo $!) )"
+HELPER_PID="$( ("$STANDIN" --mcp < /dev/null > /dev/null 2>&1 & echo $!) )"
+sleep 1
+run --dir "$HELPERS" --from "$NEWZIP" --sha256 "$NEWSHA" --no-launch --force
+if [ $RC = 0 ] && has "Quitting the running Theo" && ! kill -0 $APP_PID 2>/dev/null && kill -0 $HELPER_PID 2>/dev/null; then
+  ok "upgrading quits the app but leaves its --mcp helper running"
+else
+  bad "upgrade with an --mcp helper (app alive: $(kill -0 $APP_PID 2>/dev/null && echo yes || echo no), helper alive: $(kill -0 $HELPER_PID 2>/dev/null && echo yes || echo no))" "$LOG"
+fi
+kill $APP_PID $HELPER_PID 2>/dev/null || true
+
 # ---- 13. uninstall keeps data (fake $HOME)
 mkdir -p "$ROOT/home/Library/Application Support/Theo/Bots" "$ROOT/home/.clicky"
 echo '{}' > "$ROOT/home/Library/Application Support/Theo/Bots/bots.json"
