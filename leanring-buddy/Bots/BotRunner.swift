@@ -197,7 +197,10 @@ enum BotRunner {
     /// words named this turn (`readable`, from BotReadScope). The shared guide beside the memory folders is in the engine's working folder,
     /// which it may always read; the other bots' folders there are denied (`otherBotsFolders`).
     /// `recall`: its own saved chats (with the owner, its groups, its private threads), which it may search but never write.
-    static func claudeAllowedTools(for bot: NativeBot, readable: [String] = [], recall: [String] = []) -> [String] {
+    /// `hubPlan`: this turn's apps. A claude-account app the plan routes directly keeps Claude Code's own tools (as before the hub);
+    /// the hub's apps come through its own server (`mcp__theo_apps`); an app the hub doesn't have yet (no helper, or not moved into
+    /// it) keeps the route it had before the hub.
+    static func claudeAllowedTools(for bot: NativeBot, readable: [String] = [], recall: [String] = [], hubPlan: ConnectorHubTurnPlan = .nothing) -> [String] {
         // Two slashes: an absolute path, in Claude Code's permission rules.
         let memoryFolder = "/" + BotMemory.file(botID: bot.id).deletingLastPathComponent().path + "/**"
         let projects = "/" + BotsT3.projectsFolder.path + "/**"
@@ -210,14 +213,21 @@ enum BotRunner {
         }
         tools += BotReadScope.readRules(for: readable)
         tools += recall.flatMap { ["Read(/\($0))", "Grep(/\($0))"] }
+        let hubAppIDs = Set(ConnectorHub.isAvailable ? ConnectorHub.cachedApps.map(\.id) : [])
         for connector in BotConnectors.known where bot.apps.contains(connector.id) {
             if connector.id == "theo" {
                 // Research, notes and the app bridge; never the screen or Theo's voice, with nobody watching.
                 tools += theoBotTools.map { "mcp__plugin_theo_theo__\($0)" }
+            } else if let direct = hubPlan.directClaudeApps.first(where: { $0.app.id == connector.id }), let server = direct.app.server {
+                tools.append(ClaudeDirectRoute.toolPrefix(forServer: server))
+            } else if hubAppIDs.contains(connector.id) {
+                // Through the hub's server, below, or not at all when it's switched off.
+                continue
             } else if let prefix = connector.claudeToolPrefix {
                 tools.append(prefix)
             }
         }
+        if hubPlan.usesHub { tools.append(ConnectorHubWiring.claudeAllowRule) }
         return tools
     }
 
@@ -251,7 +261,9 @@ enum BotRunner {
         let records = (mine.isEmpty ? ["/\(theo)/chats/**"] : others.flatMap { ["/\($0)", "/\($0)/**"] }) +
             ["/\(theo)/*.json", "/\(theo)/*.json.*", "/\(theo)/*.lastgood",
              // The other Mac's copies of every bot's memory, kept for the three-way merge.
-             "/\(theo)/link-memory/**"]
+             "/\(theo)/link-memory/**",
+             // The connector hub's sign-ins, tickets and state (crossplatform/docs/CONNECTORS.md).
+             "/\(theo)/Connectors/**"]
         let anywhere = ["//**/.env", "//**/.env.*"]
         return (home + records + anywhere).map { "Read(\($0))" }
     }
@@ -264,23 +276,37 @@ enum BotRunner {
          // Helpers inside a turn: they run under the same rules, but nothing counts them, so one turn could start any number.
          "Agent", "Task"]
 
+    /// What a Claude bot may not run this turn: the tools nobody approves, less those of a claude.ai app the owner gave it in full
+    /// (only on a turn from the owner's own words), plus the writing tools its level for each claude.ai app doesn't allow.
+    static func claudeDeniedConnectorTools(hubPlan: ConnectorHubTurnPlan) -> [String] {
+        let fullPrefixes = hubPlan.directClaudeApps.filter { $0.level == .full }.compactMap { $0.app.server.map(ClaudeDirectRoute.toolPrefix(forServer:)) }
+        let standing = irreversibleTools.filter { tool in !fullPrefixes.contains { tool.hasPrefix($0 + "__") } }
+        let byLevel = hubPlan.directClaudeApps.flatMap { ClaudeDirectRoute.deniedTools(for: $0.app, level: $0.level) }
+        return standing + byLevel.filter { !standing.contains($0) }
+    }
+
     /// Runs the turn; `onText` gets the reply so far as it streams in.
+    /// `ownerAsked`: the turn came from the owner's own words. Only then may a bot's apps change anything (connector hub tickets); a
+    /// routine, another bot or the local API only reads.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
-                    onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+                    ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         // A test profile can make an engine count as signed out (`test.engines.missing`): local turns see it too, with the
         // same words a signed-out engine gives, not only the turns that would go to the other Mac.
         if TheoProfile.isTest, UserDefaults.standard.stringArray(forKey: "test.engines.missing")?.contains(bot.provider) == true {
             throw BotRunnerError.failed("\(HarnessCatalog.label(bot.provider)) isn't signed in. Sign in, then try again.")
         }
         do {
-            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
-            // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
-            let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
-            let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
+            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
+            // An app still loading at the start (a claude.ai connector, or a hub app whose server was slow) looks "disconnected" to the
+            // bot, on any brain: one more go, a little later.
+            let names = BotConnectors.known.filter { connector in
+                bot.apps.contains(connector.id) && !connector.isSkill && (connector.hub != nil || connector.claudeServer?.hasPrefix("claude.ai") == true)
+            }.map(\.name)
+            let missing = ConnectorClaims.saysMissing(first.text, names: names)
             guard !missing.isEmpty, !Task.isCancelled else { return first }
             try? await Task.sleep(nanoseconds: 20_000_000_000)
             guard !Task.isCancelled,
-                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, recall: recall, onText: onText),
+                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText),
                   !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
             return second
         } catch let error as BotRunnerError {
@@ -306,7 +332,7 @@ enum BotRunner {
             // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
             let key = "\(bot.id)#\(session ?? "new")"
             let standInSession = FallbackSessions.shared.get(key)
-            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, onText: onText)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
             if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
             return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInModel, on: "claude")).)_", session)
         }
@@ -339,7 +365,7 @@ enum BotRunner {
     // MARK: Instructions a resumed session hasn't heard (ClickyCore `BotPersonaRefresh`)
 
     /// Bump when Theo's own wording of what bots are told changes, so sessions that began before an update hear the new wording.
-    static let personaRevision = "2026-11-13"
+    static let personaRevision = "2026-11-14"
     static let sessionFingerprintsKey = "v3.bots.sessionFingerprints"
     static let maximumRememberedSessions = 400
     /// Tests use a suite of their own: hosted unit tests run with the owner's real preferences.
@@ -378,10 +404,25 @@ enum BotRunner {
     }
 
     static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
-                                    onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+                                    ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
-        if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
-        if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
+        // Theo's connector hub for this turn: a ticket for the bot's apps that go through it (only those, at its level for each),
+        // and the hub as an MCP server the brain starts. The ticket is deleted when the turn ends, which stops its apps at once.
+        let hubPlan = await ConnectorHub.turnPlan(for: bot, ownerAsked: ownerAsked)
+        // Cursor, Gemini and Grok find the hub's server in a file their runs share, so one of their turns with apps runs at a time.
+        let hubConfigIsShared = hubPlan.usesHub && ["cursor", "gemini", "grok"].contains(bot.provider)
+        if hubConfigIsShared { await HubSharedConfigTurns.shared.begin(bot.provider) }
+        defer { if hubConfigIsShared { HubSharedConfigTurns.shared.end(bot.provider) } }
+        var hubTicket: URL?
+        if hubPlan.usesHub {
+            hubTicket = try? ConnectorHub.issueTicket(botID: bot.id, apps: hubPlan.ticketApps, ownerAsked: ownerAsked, expiresIn: turnLimitSeconds + 120,
+                                                      fileName: bot.provider == "grok" ? grokHubTicketName : nil)
+        }
+        let issuedTicket = hubTicket
+        defer { ConnectorHub.revokeTicket(issuedTicket) }
+        let hubLaunch = hubTicket.flatMap { ConnectorHub.serverLaunch(ticket: $0) }
+        if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, hubLaunch: hubLaunch, onText: onText) { return result }
+        if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team, hubPlan: hubPlan, hubLaunch: hubLaunch) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
         guard let executable = executable(for: provider) else {
@@ -391,11 +432,15 @@ enum BotRunner {
         var newSessionID: String?
         if isClaude {
             arguments = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                         "--model", bot.model,
+                         "--model", bot.model]
+            // The hub's server for this turn only, beside the owner's own servers (never instead of them).
+            if let hubLaunch { arguments += ["--mcp-config", ConnectorHubWiring.claudeMCPConfig(hubLaunch)] }
+            arguments += [
                          // Only the allowed tools run: the user's own permission mode (auto) mustn't widen it.
                          "--permission-mode", "dontAsk",
                          "--append-system-prompt", BotPrompts.persona(bot: bot, team: team),
-                         "--allowedTools"] + claudeAllowedTools(for: bot, readable: readable, recall: recall) + ["--disallowedTools"] + irreversibleTools + secretReadRules(recall: recall) +
+                         "--allowedTools"] + claudeAllowedTools(for: bot, readable: readable, recall: recall, hubPlan: hubPlan) +
+                         ["--disallowedTools"] + claudeDeniedConnectorTools(hubPlan: hubPlan) + secretReadRules(recall: recall) +
                          // Bash outright: Claude Code lets read-only commands (ls, cat, grep) run in the working folder without a rule.
                          ["Bash"] + otherBotsFolders(than: bot.id)
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
@@ -424,6 +469,8 @@ enum BotRunner {
         environment["NO_COLOR"] = "1"
         environment["PWD"] = workspace.path
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: bot.provider)) { _, new in new }
+        // OpenCode merges this into its config for this run only: the hub's server, beside the owner's own.
+        if !isClaude, let hubLaunch { environment["OPENCODE_CONFIG_CONTENT"] = ConnectorHubWiring.openCodeConfigContent(hubLaunch) }
         let errorLog = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Clicky/bots-\(provider.rawValue).log")
         try? FileManager.default.createDirectory(at: errorLog.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -559,7 +606,40 @@ extension BotRunner {
     /// Grok may read and search the web, nothing else, since nobody is there to approve more.
     static let grokTools = "web_search,web_fetch,read_file,grep,list_dir"
 
-    static func runGrok(bot: NativeBot, prompt: String, session: String?, team: [NativeBot]) async throws -> (text: String, session: String?) {
+    /// Grok only takes MCP servers from its own config, so the hub's entry there names a ticket file that only exists while one of
+    /// its turns runs (one at a time: `HubSharedConfigTurns`).
+    static let grokHubTicketName = "grok-turn.json"
+
+    /// Grok's own config. A test profile writes its own copy instead: its home shares ~/.grok with the owner's.
+    static var grokConfigFile: URL {
+        if TheoProfile.isTest { return TheoProfile.testHome.appendingPathComponent("theo-test-grok-config.toml") }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/config.toml")
+    }
+
+    /// Adds the hub's server to Grok's config, once, or puts it right when Theo has moved. The owner's own Grok sessions see it too;
+    /// with no Grok bot turn running it has no ticket and doesn't start.
+    static func ensureGrokHubServer(_ launch: HubServerLaunch) {
+        let config = grokConfigFile
+        let current = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
+        let block = ConnectorHubWiring.grokConfigBlock(launch)
+        guard !current.contains(block) else { return }
+        // Drop an older entry of ours (from before Theo moved), then add the current one.
+        var kept: [Substring] = []
+        var insideOurEntry = false
+        let header = "[mcp_servers.\(ConnectorHubWiring.serverName)"
+        for line in current.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") { insideOurEntry = trimmed.hasPrefix(header + "]") || trimmed.hasPrefix(header + ".") }
+            if !insideOurEntry { kept.append(line) }
+        }
+        var updated = kept.joined(separator: "\n")
+        while updated.hasSuffix("\n\n") { updated.removeLast() }
+        try? FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? (updated + block).write(to: config, atomically: true, encoding: .utf8)
+    }
+
+    static func runGrok(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], hubPlan: ConnectorHubTurnPlan = .nothing,
+                        hubLaunch: HubServerLaunch? = nil) async throws -> (text: String, session: String?) {
         guard let executable = grokExecutable else { throw BotRunnerError.notInstalled("Grok") }
         let fullPrompt = session == nil ? BotPrompts.persona(bot: bot, team: team) + "\n\n" + prompt : prompt
         var arguments = ["-p", fullPrompt, "-m", bot.model, "--output-format", "streaming-messages-json",
@@ -569,6 +649,14 @@ extension BotRunner {
             // Theo's MCP server (apps through claudia_app, research, screen) in the bots folder's Grok config.
             ensureGrokTheoServer()
             arguments += theoBotTools.flatMap { ["--allow", "mcp__theo__\($0)"] }
+        }
+        if let hubLaunch {
+            // The hub's tools by name: Grok allows exact tool names. The hub still refuses what the ticket doesn't allow.
+            ensureGrokHubServer(hubLaunch)
+            for appID in hubPlan.ticketApps.keys.sorted() {
+                let tools = (try? await ConnectorHub.tools(appID: appID)) ?? []
+                arguments += tools.flatMap { ["--allow", "mcp__\(ConnectorHubWiring.serverName)__\($0.exposedName)"] }
+            }
         }
         if let session { arguments += ["--resume", session] }
         let data: Data = try await Task.detached {
@@ -656,6 +744,35 @@ extension BotRunner {
         func finish() -> String? {
             defer { buffer.removeAll() }
             return buffer.isEmpty ? nil : String(decoding: buffer, as: UTF8.self)
+        }
+    }
+}
+
+/// Cursor, Gemini and Grok read the hub's MCP server from a file all their runs share (Cursor's `.cursor/mcp.json` and Gemini's
+/// `.gemini/settings.json` in the bots folder, Grok's own config), so only one of their turns with apps runs at a time: another
+/// waits for it, and gets its own ticket.
+@MainActor
+final class HubSharedConfigTurns {
+    static let shared = HubSharedConfigTurns()
+    private var busyEngines: Set<String> = []
+    private var waiting: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func begin(_ engine: String) async {
+        guard busyEngines.contains(engine) else {
+            busyEngines.insert(engine)
+            return
+        }
+        // Handed over by `end`: the engine stays busy, now for this turn.
+        await withCheckedContinuation { continuation in waiting[engine, default: []].append(continuation) }
+    }
+
+    func end(_ engine: String) {
+        if var queue = waiting[engine], !queue.isEmpty {
+            let next = queue.removeFirst()
+            waiting[engine] = queue
+            next.resume()
+        } else {
+            busyEngines.remove(engine)
         }
     }
 }

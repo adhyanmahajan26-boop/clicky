@@ -96,6 +96,18 @@ public struct HubAppRecord: Equatable, Sendable {
         return apps.compactMap(HubAppRecord.init(hubJSON:))
     }
 
+    /// The hub's status in the words the Connectors screen and cards already use. An app that is off reads as not connected.
+    public var connectorState: ConnectorState {
+        guard enabled else { return .missing }
+        switch status {
+        case "connected": return .connected
+        case "needsSignIn": return .needsSignIn
+        case "failed": return .failed(reason ?? "It didn't answer.")
+        case "off": return .missing
+        default: return .unknown
+        }
+    }
+
     public var isConnected: Bool { enabled && status == "connected" }
     public var needsSignIn: Bool { enabled && status == "needsSignIn" }
     public var isClaudeAccount: Bool { kind == .claudeAccount }
@@ -347,8 +359,10 @@ public enum ConnectorHubWiring {
         return jsonText(["mcp": [serverName: server]])
     }
 
-    /// Gemini CLI reads a settings file named by `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` under the owner's own settings; MCP servers are
-    /// merged by name, so the owner's servers stay. `trust` lets its tools run in a headless turn (the hub decides what may run).
+    /// Gemini CLI's `.gemini/settings.json` in the folder it works in (Theo's own bots folder), read with that folder trusted for the
+    /// run (`GEMINI_CLI_TRUST_WORKSPACE=true`; an untrusted folder gets no MCP servers at all). Its MCP servers are merged with the
+    /// owner's by name. A settings file named by `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` doesn't work: Gemini only reads one owned by root.
+    /// `trust` lets the hub's tools run in a headless turn (the hub decides what may run).
     public static func geminiSettings(_ launch: HubServerLaunch) -> String {
         var server = stdioServer(launch)
         server["trust"] = true

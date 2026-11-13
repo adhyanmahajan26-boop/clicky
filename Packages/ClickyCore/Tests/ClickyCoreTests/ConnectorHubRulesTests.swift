@@ -26,6 +26,13 @@ struct ConnectorHubRulesTests {
         #expect(apps[0].lastWorked != nil)
         #expect(apps[1].needsSignIn && apps[1].signsInWithBrowser && apps[1].lastWorked == nil)
         #expect(!apps[2].enabled && apps[2].status == "off" && !apps[2].isConnected)
+        #expect(apps[0].connectorState == .connected)
+        #expect(apps[1].connectorState == .needsSignIn)
+        #expect(apps[2].connectorState == .missing)
+        var failing = apps[1]
+        failing.status = "failed"
+        failing.reason = "HTTP 500"
+        #expect(failing.connectorState == .failed("HTTP 500"))
     }
 
     @Test func aFailureAnswerIsNotAList() {

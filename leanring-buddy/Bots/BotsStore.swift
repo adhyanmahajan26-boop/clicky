@@ -324,6 +324,14 @@ final class BotsStore: ObservableObject {
         }
         // Which engines can run on this Mac, for the bots' prompts and for the other Mac.
         Task { @MainActor in HarnessCenter.shared.refresh() }
+        // Theo's own connectors (ConnectorHub): the old fixed list moves into the hub once, then the list is read for the bots' settings.
+        if !isHostingTests {
+            let everyBotsApps = Set(bots.flatMap(\.apps))
+            Task { @MainActor in
+                await ConnectorHub.moveOldConnectorsOnce(botApps: everyBotsApps)
+                _ = try? await ConnectorHub.list()
+            }
+        }
     }
 
     var primary: NativeBot? { bots.first(where: \.primary) ?? bots.first }
@@ -1264,6 +1272,8 @@ final class BotsStore: ObservableObject {
         // Its own saved chats, which its prompt tells it to search (recall): its chat with the owner, the group chats it's in and its
         // private threads. Every other saved chat stays unreadable.
         let recall = bot.owner == nil ? [chatFilePath(bot.id)] + recallFiles(for: bot).map(\.path) : []
+        // What the bot's apps may change: only on the owner's own words, never on a routine's scheduled run.
+        let ownerAsked = fromOwner && !quietAllowed
         Task { [weak self] in
             var answer: String?
             var newSession = session
@@ -1276,11 +1286,11 @@ final class BotsStore: ObservableObject {
                 }
                 let result: (text: String, session: String?)
                 do {
-                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
                 } catch BotRunnerError.lostSession where session != nil {
                     // The engine has lost this chat (it's on the other Mac, or was cleaned up). It starts again with what the chat says so far.
                     let fresh = self?.startOverPrompt(bot: bot, in: conversationID, prompt: prompt) ?? prompt
-                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, readable: readable, recall: recall, onText: onText)
+                    result = try await BotRunner.run(bot: bot, prompt: fresh, session: nil, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
                 }
                 answer = BotsStore.keepingLongReplyAside(result.text.trimmingCharacters(in: .whitespacesAndNewlines), bot: bot)
                 newSession = result.session
@@ -2074,6 +2084,13 @@ enum BotPrompts {
                 parts.append("On your engine, reach \(bridged.map(\.name).joined(separator: ", ")) with Theo's claudia_app tool " +
                              "(app: \(bridged.map(\.id).joined(separator: ", "))): describe what to look up or draft and it " +
                              "returns what it found. Don't say an app needs connecting before you've tried it.")
+            }
+            // Apps from Theo's connector hub: the same tools on every brain, from its theo_apps server.
+            let throughHub = apps.filter { $0.hub != nil && !(bot.provider == "claude" && $0.hub?.isClaudeAccount == true) }
+            if !throughHub.isEmpty {
+                parts.append("Reach \(throughHub.map(\.name).joined(separator: ", ")) with the tools of Theo's theo_apps server, named " +
+                             "<app>__<tool> (\(throughHub.map { "\($0.id)__…" }.joined(separator: ", "))). Each app only lets you do what the owner " +
+                             "allowed for you; a refused call says why. Don't say an app needs connecting before you've tried its tools.")
             }
         }
         if bot.primary {

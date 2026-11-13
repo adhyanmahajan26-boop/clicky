@@ -33,7 +33,7 @@ extension BotRunner {
 
     /// One turn, with retries and the fallback chain. The session carries over: Claude Code resumes a session on any of its models.
     static func runWithFailover(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
-                                onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+                                ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         let plan = failoverPlan(for: bot)
         let began = Date()
         var current = bot
@@ -42,7 +42,7 @@ extension BotRunner {
         var firstFailure: EngineFailure?
         while true {
             do {
-                let result = try await runOnEngine(bot: current, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
+                let result = try await runOnEngine(bot: current, prompt: prompt, session: session, team: team, readable: readable, recall: recall, ownerAsked: ownerAsked, onText: onText)
                 guard current.model != bot.model, let reason = firstFailure else { return result }
                 log("bot \(bot.id): answered on fallback \(current.model) after \(bot.model) failed")
                 return (result.text + "\n\n" + EngineFailoverPlan.fallbackNote(from: BotModels.label(bot.model, on: bot.provider),
