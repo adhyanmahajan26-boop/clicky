@@ -30,6 +30,8 @@ STAGE="$OUT/stage-$BUILD"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 APP="$STAGE/Theo.app"
 ditto "$BUILT" "$APP"
 codesign --verify --deep --strict "$APP"
+# The connector hub helper is built into Contents/Helpers by the Xcode build phase; this says plainly if it is missing.
+bash Tools/build-connectors-helper.sh --check "$APP"
 # Signed with the Apple Development identity (never ad hoc), so macOS keeps Theo's permissions across updates.
 SIGNING="$(codesign -dv --verbose=2 "$APP" 2>&1)"   # Not piped: with pipefail, grep -q closing early fails the check.
 [[ "$SIGNING" == *"Authority=Apple Development"* ]] || { echo "Theo.app isn't signed with the Apple Development identity"; exit 1; }

@@ -33,6 +33,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var fast: Bool?
     /// App integrations the bot may use; see BotConnectors.known.
     var apps: [String]
+    /// The most it may do with each app (ClickyCore `HubAccessLevel`: read, readAndDraft, full). Missing: readAndDraft.
+    var appLevels: [String: String]?
     /// "personal" (your own helpers) or "project" (Theo's project team). Older saves have none.
     var category: String?
     /// The avatar's shape: "orb" (default), "square", "sparkle", "clover", "flower", "heart" or "star".
