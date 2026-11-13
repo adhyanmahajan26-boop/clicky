@@ -70,14 +70,58 @@ def every_text_theo_wrote():
 
 # ---------------------------------------------------------------- 1. First run on an API key only
 
+API_KEY = "sk-stranger-" + "n0tr3al" * 4
+API = {}
+
+
+def start_fake_api():
+    """tests/fake_api.py on a free port, with OpenAI's address pointed at it (`brains.apiBaseURL.openai`)."""
+    log = T.ROOT / "api-log"
+    env = dict(os.environ, FAKE_API_KEY=API_KEY, FAKE_API_CALLS=json.dumps([{"tool": "echo__echo", "args": {"text": "hello stranger"}}]))
+    process = subprocess.Popen([T.PY, str(HERE / "fake_api.py"), str(log)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    port = int(process.stdout.readline().strip())
+    T.setd("brains.apiBaseURL.openai", "http://127.0.0.1:%d/openai/v1" % port)
+    API.update(process=process, log=log)
+
+
+def api_requests():
+    log = API.get("log")
+    found = []
+    for path in sorted(log.glob("*.json")) if log and log.exists() else []:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        if entry.get("method") == "POST":
+            found.append(entry)
+    return found
+
+
 @step(1, "First run finishes with only an API key, and Theo answers on it")
 def first_run_on_an_api_key():
-    before = P({"cmd": "setupState"}, timeout=90).get("result", {})
-    api = before.get("apiKeys") or before.get("brains")
-    if api is None:
-        return None, {"skipped": "This build's setup has no API-key brain yet (theo-fix-plan package 10 adds it).",
-                      "setup_said": {k: before.get(k) for k in ("claude", "completed")}}
-    return False, {"todo": "package 10's API-key setup is in this build, but this step doesn't drive it yet", "setup_said": before}
+    before = P({"cmd": "setupState"}, timeout=120).get("result", {})
+    if "anyReady" not in before:
+        return None, {"skipped": "This build's setup has no API-key brain yet (theo-fix-plan package 10 adds it)."}
+    start_fake_api()
+    saved = P({"cmd": "apiKeySet", "provider": "openai", "key": API_KEY}, timeout=60)
+    ready = P({"cmd": "setupState"}, timeout=120).get("result", {})
+    done = P({"cmd": "setupDone"}, timeout=120).get("result", {})
+    theo = next((b for b in T.state().get("bots", []) if b.get("id") == "theo"), {})
+    asked = len(api_requests())
+    T.say("theo", "Hello Theo, are you there?")
+    T.wait_idle(seconds=90)
+    reply = next((m["text"] for m in reversed(T.chat("theo", 10)) if m["author"] == "theo"), "")
+    used = api_requests()[asked:]
+    checks = {
+        "nothing_ready_before_the_key": before.get("anyReady") is False,
+        "claude_code_not_found": before.get("claude", {}).get("installed") is False,
+        "key_saved": saved.get("ok") is True,
+        "ready_with_only_the_key": ready.get("anyReady") is True,
+        "setup_finished": done.get("completed") is True or P({"cmd": "setupState"}, timeout=120).get("result", {}).get("completed") is True,
+        "theo_moved_onto_the_key": theo.get("provider") == "api:openai",
+        "theo_answered_on_the_key": bool(used) and all(r.get("key_right") for r in used) and "fake api ok" in reply,
+        "no_claude_code_words": "claude code" not in reply.lower(),
+        "key_in_no_file_or_log": not any(API_KEY in text for path, text in every_text_theo_wrote() if "Keys" not in path)
+                                 and API_KEY not in (T.ROOT / "theod.log").read_text(encoding="utf-8", errors="replace"),
+    }
+    return all(checks.values()), dict(checks, suggested=ready.get("suggested"), theo={k: theo.get(k) for k in ("provider", "model")}, reply=reply[:200])
 
 
 # ---------------------------------------------------------------- 2. The owner's own name
@@ -105,7 +149,7 @@ def owner_name_everywhere():
         T.say(theo["id"], "Hi Theo.")
         T.wait_idle()
     theo_calls = engine_calls_since(mark)
-    prompts = [c["system"] + "\n" + c["prompt"] for c in unnamed + named + theo_calls]
+    prompts = [c["system"] + "\n" + c["prompt"] for c in unnamed + named + theo_calls] + [json.dumps(r.get("body", {})) for r in api_requests()]
     files_with_addy = [path for path, text in every_text_theo_wrote() if "Addy" in text]
     checks = {
         "no_name_until_given": not name_before,
@@ -114,9 +158,10 @@ def owner_name_everywhere():
         "saved": P({"cmd": "setupState"}, timeout=90).get("result", {}).get("ownerName") == OWNER,
         "addy_in_no_prompt": bool(prompts) and not any("Addy" in p for p in prompts),
         "addy_in_no_file": not files_with_addy,
+        "theo_is_told_the_name": not api_requests() or OWNER in json.dumps(api_requests()[-1].get("body", {})),
     }
     P({"cmd": "botDelete", "id": bot})
-    return all(checks.values()), dict(checks, files_with_addy=files_with_addy[:10], theo_turns=len(theo_calls))
+    return all(checks.values()), dict(checks, files_with_addy=files_with_addy[:10], theo_turns=len(theo_calls), api_turns=len(api_requests()))
 
 
 # ---------------------------------------------------------------- 3. The echo app, with no Claude Code
@@ -146,6 +191,13 @@ def echo_app_in_a_turn():
     report = used[-1]["mcp"] if used else {}
     reply = next((m["text"] for m in reversed(T.chat(bot, 10)) if m["author"] == bot), "")
     T.fake("ok")
+    # The same app for Theo on the API key: tool calls over HTTP, through the hub.
+    theo_given = P({"cmd": "botApp", "bot": "theo", "app": "echo", "level": "readAndDraft"})
+    asked = len(api_requests())
+    T.say("theo", "Say hello through Echo.")
+    T.wait_idle(seconds=90)
+    api_turn = api_requests()[asked:]
+    theo_reply = next((m["text"] for m in reversed(T.chat("theo", 10)) if m["author"] == "theo"), "")
     checks = {
         "page_works_without_claude_code": page_before.get("claudeCode") is False and "connectors" in page_before,
         "added": added.get("ok") is True,
@@ -154,9 +206,14 @@ def echo_app_in_a_turn():
         "tool_offered": "echo__echo" in report.get("tools", []),
         "tool_ran": report.get("results", {}).get("echo__echo") == "echo: hello stranger",
         "reply_has_it": "echo: hello stranger" in reply,
+        "api_key_theo_given_it": theo_given.get("ok") is True,
+        "api_key_theo_offered_it": any("echo__echo" in (r.get("tools") or []) for r in api_turn),
+        "api_key_theo_ran_it": any("echo: hello stranger" in json.dumps(r.get("results") or []) for r in api_turn),
+        "api_key_theo_reply_has_it": "echo: hello stranger" in theo_reply,
     }
     P({"cmd": "botDelete", "id": bot})
-    return all(checks.values()), dict(checks, report=report)
+    P({"cmd": "botApp", "bot": "theo", "app": "echo", "level": "off"})
+    return all(checks.values()), dict(checks, report=report, theo_reply=theo_reply[:200])
 
 
 # ---------------------------------------------------------------- 4. A coding run in a folder of the owner's choosing
@@ -221,8 +278,8 @@ def main():
     T.fresh()
     T.start()
     # No Claude Code anywhere: the engine override points at nothing, as on a computer that never had it.
-    T.setd("test.engine.claude", str(T.ROOT / "no-claude-code-here"))
-    T.setd("test.engine.opencode", str(T.FAKE))
+    for agent in ["claude", "codex", "cursor", "gemini", "grok", "opencode"]:
+        T.setd("test.engine.%s" % agent, str(T.ROOT / "not-installed"))
     results = {}
     try:
         for number, (title, fn) in STEPS.items():
@@ -239,6 +296,8 @@ def main():
             print(json.dumps(evidence, default=str)[:1500], flush=True)
     finally:
         T.stop()
+        if API.get("process"):
+            API["process"].kill()
     out = HERE / "results-stranger"
     out.mkdir(exist_ok=True)
     summary = {"os": sys.platform, "environment": environment, "steps": results}
