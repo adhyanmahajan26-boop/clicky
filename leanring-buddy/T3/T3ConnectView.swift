@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import ClickyCore
 import Combine
 import SwiftUI
 
