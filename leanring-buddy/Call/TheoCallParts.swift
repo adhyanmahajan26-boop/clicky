@@ -4,9 +4,11 @@
 //
 //  What a call is made of besides the sound: its brain, its ears and its voices.
 //
-//  The brain is one `claude -p` process kept open for the whole call. Each turn is one line on its stdin, so after the
-//  first turn there is no start-up at all (first words in about a second), and an interrupt stops it at once and keeps the
-//  conversation.
+//  The brain is a `ConversationBrain`. On Claude Code it's one `claude -p` process kept open for the whole call. Each turn
+//  is one line on its stdin, so after the first turn there is no start-up at all (first words in about a second), and an
+//  interrupt stops it at once and keeps the conversation. On any other brain (an API key, Codex, Cursor, OpenCode) it's
+//  `OneTurnConversation`: each turn is one streamed request with the earlier turns sent along, so calls and dictation
+//  clean-up work without Claude Code. `ConversationBrains.make` picks.
 //
 //  Ears: Sarvam's realtime socket, then its standard socket if realtime is refused, then Apple on this Mac. Voices: Sarvam's
 //  socket, sentence by sentence, then Apple's voices rendered to samples. Either way what plays goes through CallAudio.
@@ -19,9 +21,144 @@ import Speech
 
 // MARK: - Brain
 
+/// A conversation a call or dictation's clean-up talks to: words in, a streamed reply out, interruptible.
+@MainActor
+protocol ConversationBrain: AnyObject {
+    /// The brain ended by itself (signed out, crashed).
+    var onEnded: ((String) -> Void)? { get set }
+    var isRunning: Bool { get }
+    /// Gets ready now, so the first turn is quick. Throws when the brain isn't there, with words naming it and its fix.
+    func start() throws
+    /// Sends one message; the reply streams in. Turns stay in order.
+    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
+    /// Stops the reply in progress; the conversation stays, with what was said so far.
+    func interrupt()
+    func stop()
+}
+
+/// Which conversation a model setting gets.
+@MainActor
+enum ConversationBrains {
+    /// Claude Code's kept-open process when the model is Claude's and Claude Code is here; a turn-by-turn conversation
+    /// on any other brain. `keepsHistory` false sends each message on its own (dictation clean-up needs no memory).
+    static func make(model: String, systemPrompt: String, promptFileName: String, effort: String? = nil, keepsHistory: Bool = true) -> ConversationBrain {
+        let brainModel = BrainModel(setting: model)
+        if brainModel.isClaude {
+            return ClaudeConversation(model: brainModel.modelIdentifier, systemPrompt: systemPrompt, promptFileName: promptFileName, effort: effort)
+        }
+        return OneTurnConversation(model: brainModel, systemPrompt: systemPrompt, keepsHistory: keepsHistory)
+    }
+}
+
+/// A conversation on a brain without a kept-open process: an API key streams each turn over HTTP, a command-line agent
+/// runs one turn per process (BrainCLIRunner). The earlier turns go along with each message.
+@MainActor
+final class OneTurnConversation: ConversationBrain {
+    private struct WaitingTurn {
+        let text: String
+        let onDelta: (String) -> Void
+        let onDone: (Result<String, Error>) -> Void
+    }
+
+    private let model: BrainModel
+    private let systemPrompt: String
+    private let keepsHistory: Bool
+    /// BrainCLIRunner and APIChat keep the earlier turns of one conversation under this id.
+    private let conversationIdentifier = "conversation-\(UUID().uuidString.lowercased())"
+    private var isStarted = false
+    private var currentTask: Task<Void, Never>?
+    private var currentTurnText = ""
+    private var currentTurnWasInterrupted = false
+    private var waiting: [WaitingTurn] = []
+    var onEnded: ((String) -> Void)?
+
+    init(model: BrainModel, systemPrompt: String, keepsHistory: Bool) {
+        self.model = model
+        self.systemPrompt = systemPrompt
+        self.keepsHistory = keepsHistory
+    }
+
+    var isRunning: Bool { isStarted }
+
+    func start() throws {
+        guard !isStarted else { return }
+        if model.provider == .api {
+            guard BrainInventory.apiProviderID(of: model).flatMap({ ProviderInfo.info(for: $0) }) != nil else {
+                throw ClaudeConversation.Failure.ended(BrainTrouble.notInstalled(brainName: BrainAvailability.name(of: model.setting), provider: .api))
+            }
+        } else if BrainCLIRunner.locateExecutable(for: model.provider) == nil {
+            throw ClaudeConversation.Failure.ended(BrainTrouble.notInstalled(brainName: model.provider.displayName, provider: model.provider))
+        }
+        isStarted = true
+    }
+
+    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+        do { try start() } catch {
+            onDone(.failure(error))
+            return
+        }
+        waiting.append(WaitingTurn(text: text, onDelta: onDelta, onDone: onDone))
+        if currentTask == nil { runNextTurn() }
+    }
+
+    private func runNextTurn() {
+        guard !waiting.isEmpty else { return }
+        let turn = waiting.removeFirst()
+        currentTurnText = ""
+        currentTurnWasInterrupted = false
+        let model = model
+        let systemPrompt = systemPrompt
+        let sessionIdentifier = keepsHistory ? conversationIdentifier : nil
+        currentTask = Task { @MainActor [weak self] in
+            let result: Result<String, Error>
+            do {
+                let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)],
+                                                                persistentSessionIdentifier: sessionIdentifier,
+                                                                onTextChunk: { soFar in
+                    guard let self, !self.currentTurnWasInterrupted else { return }
+                    // The runner hands over the whole answer so far: pass on only what's new.
+                    let previous = self.currentTurnText
+                    guard soFar.unicodeScalars.count > previous.unicodeScalars.count, soFar.hasPrefix(previous) else { return }
+                    let delta = String(String.UnicodeScalarView(soFar.unicodeScalars.dropFirst(previous.unicodeScalars.count)))
+                    self.currentTurnText = soFar
+                    turn.onDelta(delta)
+                })
+                result = .success(finished.text)
+            } catch {
+                result = .failure(error)
+            }
+            guard let self else { return }
+            // An interrupted turn ends with what was said so far, like Claude Code's interrupt.
+            if self.currentTurnWasInterrupted {
+                turn.onDone(.success(self.currentTurnText))
+            } else {
+                turn.onDone(result)
+            }
+            self.currentTask = nil
+            self.runNextTurn()
+        }
+    }
+
+    func interrupt() {
+        guard let currentTask else { return }
+        currentTurnWasInterrupted = true
+        currentTask.cancel()
+    }
+
+    func stop() {
+        isStarted = false
+        let dropped = waiting
+        waiting = []
+        currentTurnWasInterrupted = true
+        currentTask?.cancel()
+        for turn in dropped { turn.onDone(.failure(ClaudeConversation.Failure.ended("The call ended."))) }
+        if keepsHistory { APIChat.History.forget(conversationIdentifier) }
+    }
+}
+
 /// One Claude conversation in one long-lived process.
 @MainActor
-final class ClaudeConversation {
+final class ClaudeConversation: ConversationBrain {
     private final class Turn {
         let onDelta: (String) -> Void
         let onDone: (Result<String, Error>) -> Void
@@ -37,7 +174,7 @@ final class ClaudeConversation {
         case notInstalled, ended(String)
         var errorDescription: String? {
             switch self {
-            case .notInstalled: return "Claude Code isn't installed."
+            case .notInstalled: return BrainTrouble.notInstalled(brainName: "Claude Code", provider: .claude)
             case .ended(let detail): return detail
             }
         }

@@ -1910,7 +1910,8 @@ final class BotsStore: ObservableObject {
         let base = (saved?.isEmpty == false ? saved : nil) ?? []
         let offeredFile = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: offeredFile)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
-        var upgraded = BotImport.upgrade(base, offered: &offered)
+        // Theo's brain is only worked out when he has to be made (a fresh setup): it looks at the agents and keys on this Mac.
+        var upgraded = BotImport.upgrade(base, offered: &offered, starterEngine: { BotImport.starterEngine })
         // Every bot from before the characters gets its own, no twins. Theo keeps its mark.
         for index in upgraded.indices where upgraded[index].avatar == nil && upgraded[index].id != "theo" {
             upgraded[index].avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(upgraded[index].id), among: upgraded).rawValue
@@ -1977,16 +1978,32 @@ enum BotImport {
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
     /// A fresh setup starts with Theo and the Clicky team (BotImport.addClickyTeam); the owner adds every other bot.
-    static let starters: [NativeBot] = [
-        NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to T3 Code.",
+    /// This is Theo as he was always made, on Claude Sonnet; `starter(on:)` makes him on another brain.
+    static let starters: [NativeBot] = [BotImport.starter(on: BotImport.starterEngineBeforeAnyBrain)]
+
+    /// Theo's brain when nothing on this Mac can think yet: Claude Sonnet, as before. Setup moves him to the brain the
+    /// owner sets up (`BotsStore.moveUntouchedStartersToWorkingBrain`).
+    static let starterEngineBeforeAnyBrain = BotEngineChoice(provider: "claude", model: "claude-sonnet-5-5")
+
+    /// Theo, the primary bot, on `engine`.
+    static func starter(on engine: BotEngineChoice) -> NativeBot {
+        NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to your coding agent.",
                   instructions: primaryInstructions,
-                  hue: 268, accentHue: 300, primary: true, provider: "claude", model: "claude-sonnet-5-5", effort: nil,
-                  apps: ["theo"], category: "project"),
-    ]
+                  hue: 268, accentHue: 300, primary: true, provider: engine.provider, model: engine.model, effort: nil,
+                  apps: ["theo"], category: "project")
+    }
+
+    /// The brain a new Theo starts on: Clicky's when it works here, else whatever this Mac can think with (an agent
+    /// that's signed in, else an API key), else Claude Sonnet until something is set up.
+    @MainActor static var starterEngine: BotEngineChoice {
+        guard let working = BrainAvailability.startingModel(current: ClickyModels.main) else { return starterEngineBeforeAnyBrain }
+        return BotEngineChoice(brainSetting: working)
+    }
 
     /// Makes sure Theo is there (and primary) and moves an older Code Improver off Big Pickle. Bots the owner
-    /// removed stay removed.
-    static func upgrade(_ bots: [NativeBot], offered: inout Set<String>) -> [NativeBot] {
+    /// removed stay removed. `starterEngine` is asked only when Theo has to be made.
+    static func upgrade(_ bots: [NativeBot], offered: inout Set<String>,
+                        starterEngine: () -> BotEngineChoice = { BotImport.starterEngineBeforeAnyBrain }) -> [NativeBot] {
         var result = bots.map { bot -> NativeBot in
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
@@ -2001,7 +2018,8 @@ enum BotImport {
             }
             return bot
         }
-        if !result.contains(where: \.primary), let theo = starters.first {
+        if !result.contains(where: \.primary) {
+            let theo = starter(on: starterEngine())
             result.removeAll { $0.id == theo.id }
             result.insert(theo, at: 0)
         }

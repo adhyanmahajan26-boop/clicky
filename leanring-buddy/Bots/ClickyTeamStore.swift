@@ -54,12 +54,13 @@ extension BotsStore {
 
     /// Clicky as a member of a team: its name, its brain, its place in the chart.
     var clickyBot: NativeBot {
-        let brain = BrainModel(setting: ClickyModels.main)
+        // Clicky's engine is its own brain, whatever it is (Claude, an agent, an API key), so its face and status follow it.
+        let engine = BotEngineChoice(brainSetting: ClickyModels.main)
         var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
                          instructions: "You are Clicky, \(BotPrompts.ownerName)'s screen companion. You manage a small team and report to the CEO.",
-                         hue: 20, accentHue: 40, primary: false, provider: "claude",
-                         model: brain.isClaude ? brain.modelIdentifier : ClickyModels.sonnet, effort: nil, apps: [], category: "personal")
+                         hue: 20, accentHue: 40, primary: false, provider: engine.provider,
+                         model: engine.model, effort: nil, apps: [], category: "personal")
         clicky.look = Self.savedClickyLook
         return clicky
     }
@@ -80,9 +81,14 @@ extension BotsStore {
 
     var memoryStore: ClickyMemoryStore { ClickyMemoryStore(directory: folder.appendingPathComponent("clicky-memory", isDirectory: true)) }
 
-    /// The model hidden helpers and Researcher's page readers use: Researcher's, when it's on Claude.
+    /// The model hidden helpers and Researcher's page readers use: Researcher's own brain when it runs here (Claude,
+    /// an agent or an API key), else the helper model. The name is older than the other brains.
     var researcherClaudeModel: String {
-        if let researcher = teamBot(.researcher), researcher.provider == "claude" { return researcher.model }
+        if let researcher = teamBot(.researcher),
+           let setting = BotEngineChoice(provider: researcher.provider, model: researcher.model).brainSetting,
+           BrainAvailability.inventory.isUsable(setting) {
+            return setting
+        }
         return ClickyModels.helper
     }
 
@@ -816,9 +822,11 @@ extension BotImport {
     /// The team and its category: Clicky manages Memory, Researcher and Runner, and Theo stays on top, pinned, above it.
     /// Safe to run on any setup: other bots and categories stay as they are.
     static func addClickyTeam(to bots: inout [NativeBot], layout: inout BotsLayout) {
+        // The team starts on the helper brain: Haiku on Claude, a cheap model of whatever else this Mac thinks with.
+        let teamEngine = BotsStore.clickyTeamEngine
         for duty in ClickyDuty.allCases where !bots.contains(where: { $0.id == duty.botID }) {
             var bot = NativeBot(id: duty.botID, name: duty.defaultName, description: duty.blurb, instructions: duty.instructions(owner: BotPrompts.ownerName),
-                                hue: 30, accentHue: 60, primary: false, provider: "claude", model: ClickyDuty.model, effort: nil,
+                                hue: 30, accentHue: 60, primary: false, provider: teamEngine.provider, model: teamEngine.model, effort: nil,
                                 apps: [], category: "personal")
             bot.owner = BotsStore.clickyID
             bot.duty = duty.rawValue

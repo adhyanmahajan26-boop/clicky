@@ -29,6 +29,12 @@ struct DictationSettingsContent: View {
     private var picked: DictationShortcut { DictationShortcut(rawValue: shortcut) ?? .controlFn }
     private var manager: CompanionManager? { CompanionManager.current }
 
+    /// Which model tidies up: Haiku with Claude Code, else the helper brain.
+    private var cleanupHint: String {
+        let model = DictationController.cleanupModel.map { BrainCatalog.shared.label(for: $0) } ?? "a fast model"
+        return "\(model) removes filler words and fixes punctuation and casing, keeping the language as you spoke it. If it's slow, your own words go in first."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             accessSection
@@ -110,9 +116,9 @@ struct DictationSettingsContent: View {
                     .labelsHidden().frame(width: 200)
                 }
             }
-            TheoSection(title: "Clean-up", hint: "It removes filler words and fixes punctuation and casing, keeping the language as you spoke it. If it's slow, your own words go in first.") {
-                SettingRow(title: "Tidy up with Haiku", detail: "Small filler words like “um” always go, even with this off.") {
-                    Toggle("Tidy up with Haiku", isOn: $cleanup).toggleStyle(.switch).labelsHidden()
+            TheoSection(title: "Clean-up", hint: cleanup ? (DictationController.cleanupUnavailableMessage ?? cleanupHint) : cleanupHint) {
+                SettingRow(title: "Tidy up with a fast model", detail: "Small filler words like “um” always go, even with this off.") {
+                    Toggle("Tidy up with a fast model", isOn: $cleanup).toggleStyle(.switch).labelsHidden()
                 }
             }
             TheoSection(title: "Your words", hint: "Names and terms it should always get right. To fix something it keeps mishearing, write it as heard = written.") {

@@ -473,6 +473,7 @@ struct ClickySettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
     @State private var main = ClickyModels.main
     @State private var helper = ClickyModels.helper
+    @AppStorage(EngineStandIn.settingKey) private var standIn = ""
     @State private var code = ClickyModels.code
     @State private var silent = ClickySettings.isSilentModeEnabled
     @State private var listens = ClickySettings.isWakeWordEnabled
@@ -505,6 +506,11 @@ struct ClickySettingsContent: View {
                 RowDivider()
                 SettingRow(title: "Helpers", detail: "Research pages, helper workers, mark checks.") {
                     BrainModelPicker(title: "Helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 })).frame(width: 260)
+                }
+                RowDivider()
+                SettingRow(title: "Stand-in for bots", detail: "Answers when a bot's own engine keeps failing. Until you pick one, Claude Code does it when it's here.") {
+                    BrainModelPicker(title: "Stand-in for bots", setting: Binding(get: { standIn.isEmpty ? (BrainAvailability.isClaudeReady ? BotRunner.standInModel : main) : standIn },
+                                                                                  set: { standIn = $0 })).frame(width: 260)
                 }
                 RowDivider()
                 SettingRow(title: "Code tasks", detail: "When you ask Clicky to change code by voice.") {
@@ -579,7 +585,8 @@ struct VoiceSettingsContent: View {
     @AppStorage(CloudListening.settingKey) private var listening = ""
     @AppStorage(PrismClient.settingKey) private var fastDecisions = true
     @AppStorage(CallSettings.languageKey) private var callLanguage = CallSettings.Language.auto.rawValue
-    @AppStorage(CallSettings.modelKey) private var callModel = "claude-sonnet-5-5"
+    /// Empty until picked: calls then use `CallSettings.automaticModel`.
+    @AppStorage(CallSettings.modelKey) private var callModel = ""
     @ObservedObject private var keys = ProviderKeys.shared
 
     var body: some View {
@@ -608,11 +615,10 @@ struct VoiceSettingsContent: View {
                 }
                 RowDivider()
                 SettingRow(title: "Thinks with") {
-                    Picker("Thinks with", selection: $callModel) {
-                        Text("Claude Sonnet 5.5").tag("claude-sonnet-5-5")
-                        Text("Claude Haiku 5.5 (fastest)").tag("claude-haiku-5-5")
-                    }
-                    .labelsHidden().frame(width: 220)
+                    // Any brain: Claude, a signed-in agent or an API key.
+                    BrainModelPicker(title: "Thinks with", setting: Binding(get: { callModel.isEmpty ? CallSettings.automaticModel : callModel },
+                                                                           set: { callModel = $0 }))
+                        .frame(width: 220)
                 }
                 RowDivider()
                 SettingRow(title: "Talk to Theo now") {

@@ -197,7 +197,9 @@ final class AnswerSession: SpeechCoordinatorHost {
             print("⚠️ Claude stream failed: \(failure)")
             route(router.finish())
             enqueue(segmenter.finish())
-            speakNow(failure.spokenMessage)
+            // The words name the brain that failed and its own fix: never "claude auth login" for someone on another brain.
+            let brainSetting = companionManager.selectedModel
+            speakNow(failure.spokenMessage(brainName: BrainAvailability.name(of: brainSetting), signInFix: BrainAvailability.signInFix(for: brainSetting)))
             finishStream(spawnedWorkers: false)
         }
     }

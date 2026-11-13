@@ -22,12 +22,12 @@ enum BotRunnerError: LocalizedError {
     case usageLimit(String)
     /// The engine doesn't have this session any more (it's on the other Mac, or was cleaned up).
     case lostSession
-    /// A non-Claude engine kept failing the way that passes: the turn goes to Claude Code instead (`BotFailover`).
+    /// An engine kept failing the way that passes: the turn goes to the stand-in brain instead (`BotFailover`, `standInEngine`).
     case engineDown(String)
 
     var errorDescription: String? {
         switch self {
-        case .notInstalled(let engine): return "\(engine) isn't installed on this Mac."
+        case .notInstalled(let engine): return "\(engine) isn't installed on this Mac. Install it from Settings \u{203A} Harnesses, or move this bot to another brain in its settings."
         case .failed(let message): return message
         case .freeLimit: return "OpenCode's free models have hit their usage limit."
         case .usageLimit(let message): return message
@@ -284,32 +284,44 @@ enum BotRunner {
                   !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
             return second
         } catch let error as BotRunnerError {
-            // OpenCode's free models are used up for now, or a non-Claude engine kept failing (overloaded, rate-limited, down):
-            // this turn runs on Claude Code instead, so the bot still answers. Its own session stays for when that engine is back.
+            // OpenCode's free models are used up for now, or another engine kept failing (overloaded, rate-limited, down):
+            // this turn runs on the owner's chosen stand-in brain, or on Claude Code when it's here, so the bot still answers.
+            // Its own session stays for when that engine is back. With no stand-in, the engine's own error stands.
             let why: String
             switch error {
             case .freeLimit: why = "OpenCode's free models hit their usage limit"
             case .engineDown(let message): why = "\(HarnessCatalog.label(bot.provider)) kept failing (\(message.prefix(80)))"
             default: throw error
             }
+            guard let standInChoice = standInEngine(for: bot) else {
+                throw BotRunnerError.failed("\(why). No other brain is set up to stand in: pick one in Settings \u{203A} Clicky (Stand-in for bots), or try again later.")
+            }
             var standIn = bot
-            standIn.provider = "claude"
-            standIn.model = standInModel
+            standIn.provider = standInChoice.provider
+            standIn.model = standInChoice.model
             standIn.effort = nil
             standIn.thinking = nil
             standIn.fast = nil
-            // Claude gets the persona as its system prompt; drop the copy an OpenCode first message carries.
-            var claudePrompt = prompt
+            // A stand-in gets the persona its own way (Claude: the system prompt); drop the copy an OpenCode first message carries.
+            var standInPrompt = prompt
             if let range = prompt.range(of: "\n\n---\n\n"), prompt.hasPrefix(bot.instructions) {
-                claudePrompt = String(prompt[range.upperBound...])
+                standInPrompt = String(prompt[range.upperBound...])
             }
-            // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
-            let key = "\(bot.id)#\(session ?? "new")"
+            // The stand-in keeps its own session per engine session, so follow-ups keep their context. The key carries the
+            // stand-in's engine, so a session from one brain is never resumed on another.
+            let key = "\(bot.id)#\(session ?? "new")" + (standInChoice.provider == "claude" ? "" : "#\(standInChoice.provider)")
             let standInSession = FallbackSessions.shared.get(key)
-            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, onText: onText)
-            if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
-            return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInModel, on: "claude")).)_", session)
+            let result = try await runOnEngine(bot: standIn, prompt: standInPrompt, session: standInSession, team: team, readable: readable, recall: recall, onText: onText)
+            if let standInSessionNow = result.session { FallbackSessions.shared.set(key, standInSessionNow) }
+            return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInChoice.model, on: standInChoice.provider)).)_", session)
         }
+    }
+
+    /// Who stands in for a bot whose engine keeps failing: the owner's chosen stand-in brain (`v3.bots.standInBrain`)
+    /// when it runs here, else Claude Code when it's installed and signed in, else nobody (ClickyCore `EngineStandIn`).
+    static func standInEngine(for bot: NativeBot) -> BotEngineChoice? {
+        EngineStandIn.pick(failingEngine: bot.provider, chosen: UserDefaults.standard.string(forKey: EngineStandIn.settingKey),
+                           inventory: BrainAvailability.inventory, claudeModel: standInModel)
     }
 
     static let fallbackModel = "claude-haiku-5-5"

@@ -128,6 +128,23 @@ public struct WBRepairRequest: Equatable, Sendable {
         return nil
     }
 
+    /// The repair for a brain with no `--json-schema` (Codex, Cursor, OpenCode, an API key): the same instructions, with
+    /// the schema written out and a plain JSON answer asked for.
+    public static var systemPromptTextForAnyBrain: String {
+        systemPromptText + "\n\nAnswer with only the JSON object, no other words and no code fence. It must match this JSON schema:\n" + boardJSONSchema
+    }
+
+    /// The repaired board from a plain text answer: the JSON object in it (a code fence or words around it are ignored),
+    /// normalized like any streamed one. Nil when there's no readable object.
+    public static func board(fromAnswerText answerText: String, isValidSymbol: @escaping @Sendable (String) -> Bool = WBNormalizer.defaultSymbolCheck) -> WBParseOutcome? {
+        guard let firstBrace = answerText.firstIndex(of: "{"), let lastBrace = answerText.lastIndex(of: "}"), firstBrace < lastBrace else { return nil }
+        let objectText = String(answerText[firstBrace...lastBrace])
+        guard let parsedObject = WBRepair.strictParse(objectText), case .object = parsedObject else { return nil }
+        var normalizer = WBNormalizer(isValidSymbol: isValidSymbol)
+        normalizer.ingest(WBRepairResult(values: [parsedObject], rung: .strict))
+        return normalizer.finish()
+    }
+
     /// The repaired board, normalized like any streamed one.
     public static func board(fromCLIResult resultText: String, isValidSymbol: @escaping @Sendable (String) -> Bool = WBNormalizer.defaultSymbolCheck) -> WBParseOutcome? {
         guard let structuredOutput = structuredOutput(fromCLIResult: resultText) else { return nil }
