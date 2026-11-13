@@ -383,10 +383,31 @@ async function renderSettings() {
   const [doc, gw, st] = await Promise.all([invoke({ cmd: "doctor" }), invoke({ cmd: "gateway" }), invoke({ cmd: "status" })]);
   const rows = (doc.result.findings || []).map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}</div>`).join("");
   const g = gw.result;
-  $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><h2>Health check</h2><div class="list">${rows}</div>`
+  $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><section id="brains-settings"></section><h2>Health check</h2><div class="list">${rows}</div>`
     + `<h2>Local API</h2><div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`
     + `<h2>This computer</h2><div class="list" id="login-row"></div><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
   $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettings(); };
+  // Brains: keys, agents, and which one answers when a bot's own keeps failing.
+  const drawBrains = () => {
+    const box = $("#brains-settings");
+    if (!box) return;
+    const b = brainsCache;
+    const current = b && b.standIn ? b.standIn.split("|")[0] : "";
+    const choices = brainChoices(b).filter(([id]) => id !== "claude");
+    box.innerHTML = `${brainsHTML(b)}<h2>When a bot's brain fails</h2><div class="list"><div class="crow"><span class="tx"><b>Answer with</b><small style="white-space:normal">Another brain answers for the turn and the chat says so. The default is Claude Code when it's installed.</small></span>`
+      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`;
+    wireBrains(box, drawBrains);
+    $("#stand-in").onchange = async (e) => {
+      const engine = e.target.value;
+      let model = "";
+      if (engine.startsWith("api:")) { const m = await invoke({ cmd: "apiModels", provider: engine.slice(4) }); model = m.ok ? m.result.preferredModel || "" : ""; }
+      else if (b) { const agent = b.agents.find((a) => a.id === engine); model = agent ? agent.defaultModel : ""; }
+      await invoke({ cmd: "standIn", engine, model });
+      await loadBrains(); drawBrains();
+    };
+  };
+  drawBrains();
+  loadBrains().then(drawBrains);
   // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
   const drawLogin = (on) => {
     if (typeof on !== "boolean" || !$("#login-row")) return;
@@ -394,6 +415,59 @@ async function renderSettings() {
     $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
   };
   window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
+}
+
+/* ---------------- brains ---------------- */
+// Every brain a bot can think with: an API key you paste (quickest), or an agent signed in with your own subscription. None
+// is required; any one is enough. Keys go to the Credential Manager, the Keychain or a file only you can read, and never come
+// back to this window: only whether one is saved.
+let brainsCache = null;
+async function loadBrains() { const r = await invoke({ cmd: "brains" }); if (r.ok) brainsCache = r.result; return brainsCache; }
+function brainChoices(b) {
+  if (!b) return [["claude", "Claude Code"]];
+  const agents = b.agents.map((a) => [a.id, a.label + (a.ready ? "" : a.installed ? " (signed out)" : " (not installed)")]);
+  const apis = b.apis.filter((a) => a.hasKey || a.keyless).map((a) => [a.engine, a.label + (a.keyless ? " (on this computer)" : " (API key)")]);
+  return apis.concat(agents);
+}
+function brainsHTML(b) {
+  if (!b) return `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
+  const keyed = b.apis.filter((a) => !a.keyless);
+  const saved = keyed.filter((a) => a.hasKey);
+  const keyRows = saved.map((a) => `<div class="crow"><span class="tx"><b>${esc(a.label)}</b><small>API key saved</small></span>${TP.pill("ok", "Ready")}<span class="act"><button class="btn sm ghost" data-key-remove="${esc(a.id)}">Remove</button></span></div>`).join("");
+  const agentRows = b.agents.map((a) => {
+    const pill = a.ready && a.signedIn === true ? TP.pill("ok", "Signed in") : a.ready ? TP.pill("ok", "Installed") : a.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
+    const line = a.ready ? "Thinks with your own subscription." : a.installed ? esc(a.signInHint) : `Install: <code>${esc(a.install)}</code>`;
+    const act = a.ready ? "" : a.installed ? `<button class="btn sm" data-term="signin:${esc(a.id)}">Sign in</button>` : `<button class="btn sm" data-term="install:${esc(a.id)}">Install</button>`;
+    return `<div class="crow" data-brain="${esc(a.id)}"><span class="tx"><b>${esc(a.label)}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
+  }).join("");
+  return `<h2>Quickest start: paste an API key</h2>`
+    + `<div class="list"><div class="crow brain-key"><select id="key-provider" aria-label="Provider">${keyed.map((a) => `<option value="${esc(a.id)}" data-page="${esc(a.keyPage)}" data-hint="${esc(a.keyHint)}">${esc(a.label)}</option>`).join("")}</select>`
+    + `<input id="key-value" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(keyed[0] ? keyed[0].keyHint : "")}" aria-label="API key"><button class="btn pri sm" id="key-save">Save key</button></div>${keyRows}</div>`
+    + `<p class="muted" id="key-note">Get a key at <span id="key-page">${esc(keyed[0] ? keyed[0].keyPage : "")}</span>. It stays on this computer.</p>`
+    + `<h2>Or an agent on your own subscription</h2><div class="list">${agentRows}</div>`;
+}
+function wireBrains(root, redraw) {
+  const provider = root.querySelector("#key-provider");
+  if (provider) provider.onchange = () => {
+    const o = provider.selectedOptions[0];
+    root.querySelector("#key-value").placeholder = o.dataset.hint || "";
+    root.querySelector("#key-page").textContent = o.dataset.page || "";
+  };
+  const save = root.querySelector("#key-save");
+  if (save) save.onclick = async () => {
+    const input = root.querySelector("#key-value");
+    if (!input.value.trim()) return;
+    save.disabled = true; save.textContent = "Checking";
+    const r = await invoke({ cmd: "apiKeySet", provider: provider.value, key: input.value });
+    input.value = "";
+    await loadBrains(); await redraw();
+    // Redrawn, so the note is found again. The answer never has the key in it, only whether it worked.
+    const note = document.querySelector("#key-note");
+    if (note && !r.ok) note.textContent = r.error;
+    else if (note && !r.result.works) note.textContent = `Saved, but it didn't work yet: ${r.result.problem}`;
+  };
+  root.querySelectorAll("[data-key-remove]").forEach((b) => b.onclick = async () => { await invoke({ cmd: "apiKeyRemove", provider: b.dataset.keyRemove }); await loadBrains(); redraw(); });
+  root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
 }
 
 /* ---------------- the loop ---------------- */
@@ -476,8 +550,38 @@ function openBotDialog(mode) {
   $("#bot-fields").style.display = editing ? "none" : "";
   $("#bot-fields").querySelectorAll("input,textarea").forEach((i) => (i.required = !editing && i.name === "name"));
   $("#bot-dialog-ok").textContent = editing ? "Save" : "Create";
+  if (!editing) fillBrainPicker();
   $("#bot-dialog").showModal();
 }
+// The new-bot dialog's brain list (keys first, then agents) and the models it suggests for the one picked. An empty model
+// means the brain's own default.
+const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"];
+async function fillBrainPicker() {
+  const select = $("#bot-brain");
+  const draw = () => {
+    const keep = select.value;
+    const choices = brainChoices(brainsCache);
+    select.innerHTML = choices.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("");
+    // Starts on what works here: a signed-in agent (Claude Code first), else a saved key, else Claude Code.
+    const agent = brainsCache && brainsCache.agents.find((a) => a.ready && a.signedIn);
+    const key = brainsCache && brainsCache.apis.find((a) => a.ready);
+    select.value = choices.some(([id]) => id === keep) ? keep : agent ? agent.id : key ? key.engine : "claude";
+    suggestModels();
+  };
+  draw();
+  await loadBrains(); draw();
+}
+async function suggestModels() {
+  const engine = $("#bot-brain").value;
+  const model = $("#bot-model");
+  let models = [];
+  if (engine === "claude") models = CLAUDE_MODELS;
+  else if (engine.startsWith("api:")) { const r = await invoke({ cmd: "apiModels", provider: engine.slice(4) }); if (r.ok) { models = r.result.models.slice(0, 200); if (!model.value && r.result.preferredModel) model.placeholder = r.result.preferredModel; } }
+  else { const agent = brainsCache && brainsCache.agents.find((a) => a.id === engine); model.placeholder = agent && agent.defaultModel ? agent.defaultModel : "The agent's own default"; }
+  if (engine === "claude") model.placeholder = "claude-sonnet-5-5";
+  $("#bot-models").innerHTML = models.map((m) => `<option value="${esc(m)}"></option>`).join("");
+}
+$("#bot-brain").onchange = () => { $("#bot-model").value = ""; suggestModels(); };
 $("#new-bot").onclick = () => openBotDialog({ kind: "new" });
 $("#head-face").onclick = () => { if (view.kind === "bot") openBotDialog({ kind: "look", id: view.id }); };
 $("#bot-form").onsubmit = async (e) => {
@@ -485,12 +589,13 @@ $("#bot-form").onsubmit = async (e) => {
   const look = makerLook();
   if (botDialogMode.kind === "look") { await invoke({ cmd: "botLook", id: botDialogMode.id, look }); Object.keys(sigs).forEach((k) => delete sigs[k]); return refresh(); }
   const f = new FormData(e.target);
-  const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: "claude", model: f.get("model") });
+  const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: f.get("provider") || "claude", model: (f.get("model") || "").trim() || $("#bot-model").placeholder || "" });
   if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
+  else { $("#bot-dialog-title").textContent = r.error; $("#bot-dialog").showModal(); }
 };
 
 /* ---------------- first run ---------------- */
-const SETUP_STEPS = ["Welcome", "Claude Code", "Coding", "Your first bot", "Done"];
+const SETUP_STEPS = ["Welcome", "Brain", "Coding", "Your first bot", "Done"];
 let setup = null;
 const TEMPLATES = [
   ["Researcher", "Looks things up and sums them up", "You are Researcher. Read what you're asked about on the web and in files you're given, and answer in a few clear sentences with sources.", { fin: "sky", trim: "#F4F4F5", eye: "round", top: "twin", extra: "none" }],
@@ -507,7 +612,7 @@ async function startSetup() {
 function setupFace() {
   const s = setup.st;
   if (setup.step === 4) return "done";
-  if (setup.step === 1 && s && !(s.claude.installed && s.claude.signedIn)) return "needs";
+  if (setup.step === 1 && s && !s.anyReady) return "needs";
   if (setup.step === 3 && !setup.name.trim()) return "needs";
   return "awake";
 }
@@ -518,22 +623,19 @@ function drawSetup() {
   const checking = `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
   if (step === 0) {
     body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Meet Theo</h1>`
-      + `<p class="lead">Theo runs a team of AI bots on your own Claude subscription: chats, group chats, routines and coding runs. Bots can't loop, schedule things or start coding without you saying so.</p>`
-      + `<p class="muted">This takes a minute: check Claude Code, then make your first bot.</p><div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
+      + `<p class="lead">Theo runs a team of AI bots on the AI you already have: an API key, or Claude Code, Codex, Cursor, Gemini, Grok or OpenCode on your own subscription. Chats, group chats, routines and coding runs. Bots can't loop, schedule things or start coding without you saying so.</p>`
+      + `<p class="muted">This takes a minute: pick a brain, then make your first bot.</p><div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
   } else if (step === 1) {
-    const ready = c && c.installed && c.signedIn;
-    const pill = !c ? TP.pill("checking", "Checking") : ready ? TP.pill("ok", "Signed in") : c.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
-    const line = !c ? "Looking for it on this computer…" : ready ? `${esc(c.version)}${c.plan ? ` · Claude ${esc(c.plan[0].toUpperCase() + c.plan.slice(1))}` : ""}` : c.installed ? "Installed, but signed out. Sign in once with your Claude account." : "Not installed yet. It's free; your Claude subscription pays for what bots do.";
-    const act = !c || ready ? "" : `<button class="btn pri sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button>`;
-    body = `<h1>Claude Code</h1><p class="lead">Theo's bots think with Claude Code, signed in with your Claude account. Nothing goes through anyone else's server.</p>`
-      + `<div class="list"><div class="crow"><span class="app"><b>C</b>${c ? TP.badge(ready ? "ok" : c.installed ? "needs" : "none") : ""}</span><span class="tx"><b>Claude Code</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div></div>`
-      + (c && !ready ? `<div class="tc-field su-cmd"><span>${esc(c.installed ? c.signIn : c.install)}</span><button class="btn sm" data-copy="${esc(c.installed ? c.signIn : c.install)}">Copy</button></div><p class="muted">${c.installed ? "Sign in opens a terminal with this command; your browser finishes the sign-in." : "Install opens a terminal with Claude Code's own installer."} Then check again.</p>` : "")
-      + `<div class="btns"><button class="btn pri" data-next${ready ? "" : " disabled"}>Continue</button><button class="btn" data-recheck>Check again</button>${!ready && c ? `<button class="btn ghost" data-next>Skip for now</button>${TP.pill("needs", "Sign in to continue")}` : ""}</div>`;
+    const ready = s && s.anyReady;
+    body = `<h1>Pick a brain</h1><p class="lead">Bots think with the AI you already have. Paste an API key, or use an agent you're signed in to. You need one, any one; you can add more later in Settings.</p>`
+      + `<div id="su-brains">${brainsHTML(s && s.brains)}</div>`
+      + `<div class="btns"><button class="btn pri" data-next${ready ? "" : " disabled"}>Continue</button><button class="btn" data-recheck>Check again</button>${s && !ready ? `<button class="btn ghost" data-next>Skip for now</button>${TP.pill("needs", "Add one to continue")}` : ""}</div>`;
   } else if (step === 2) {
     const g = s && s.git, h = s && s.gh;
     const r = (name, icon, line, pill, act) => `<div class="crow"><span class="app">${icon}</span><span class="tx"><b>${name}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
     body = `<h1>Coding runs</h1><p class="lead">Optional. When you ask a bot to build or fix something, a coding agent works on its own branch, commits, and with GitHub pushes and opens a draft pull request.</p>`
-      + (!s ? checking : `<div class="list">${r("git", "g", g.installed ? esc(g.version) : "Not installed. Get it from git-scm.com or your package manager.", g.installed ? TP.pill("ok", "Installed") : TP.pill("none", "Not installed"), "")}`
+      + (!s ? checking : `<div class="list">${r("Claude Code", "C", c.installed && c.signedIn ? `${esc(c.version)} · runs the coding` : c.installed ? "Signed out: sign in to start coding runs." : "Not installed: coding runs need it. Chats and routines don't.", c.installed && c.signedIn ? TP.pill("ok", "Signed in") : c.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed"), c.installed && c.signedIn ? "" : `<button class="btn sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button>`)}`
+      + `${r("git", "g", g.installed ? esc(g.version) : "Not installed. Get it from git-scm.com or your package manager.", g.installed ? TP.pill("ok", "Installed") : TP.pill("none", "Not installed"), "")}`
       + r("GitHub CLI", "gh", !h.installed ? "Not installed: runs still commit, they just don't push. cli.github.com" : h.signedIn ? "Signed in: runs can push and open draft PRs." : "Signed out: sign in to push and open draft PRs.",
           !h.installed ? TP.pill("none", "Not installed") : h.signedIn ? TP.pill("ok", "Signed in") : TP.pill("needs", "Signed out"), h.installed && !h.signedIn ? `<button class="btn sm" data-term="gh">Sign in</button>` : "") + `</div>`)
       + `<div class="btns"><button class="btn pri" data-next>Continue</button><button class="btn" data-recheck>Check again</button></div>`;
@@ -543,11 +645,11 @@ function drawSetup() {
       + `<div class="su-fields"><label>Name <input id="su-name" value="${esc(setup.name)}" maxlength="40"></label><label>What it does <input id="su-desc" value="${esc(setup.desc)}" maxlength="120"></label></div><div id="su-maker"></div>`
       + `<div class="btns"><button class="btn pri" data-create${setup.name.trim() ? "" : " disabled"}>Make ${esc(setup.name || "it")}</button><button class="btn ghost" data-next>Skip</button></div>`;
   } else {
-    const missing = c && !(c.installed && c.signedIn);
+    const missing = s && !s.anyReady;
     const who = setup.made ? setup.name : "a bot";
     body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "done", 84, { badge: false })}</div><h1>You're all set</h1>`
       + `<p class="lead">Things to try:</p><ul class="su-try"><li>Ask ${esc(who)} something in its chat.</li><li>Ask Theo to get ${esc(who)} to look into something and report back.</li><li>Say "every weekday at 8, send me a brief" to set up a routine.</li></ul>`
-      + (missing ? `<div class="tc-line">${TP.badge("needs", "pg")}<span><b>Claude Code is ${c.installed ? "signed out" : "not installed"}</b> · bots can't answer until it is</span><button class="btn sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button></div>` : "")
+      + (missing ? `<div class="tc-line">${TP.badge("needs", "pg")}<span><b>No brain yet</b> · bots can't answer until you add an API key or sign in to an agent in Settings</span></div>` : "")
       + `<div class="btns"><button class="btn pri" data-finish>Open Theo</button></div>`;
   }
   $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Theo</b></div>${steps}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
@@ -557,12 +659,15 @@ function drawSetup() {
   root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
   root.querySelectorAll("[data-tpl]").forEach((b) => b.onclick = () => { const t = TEMPLATES.find((x) => x[0] === b.dataset.tpl); Object.assign(setup, { name: t[0], desc: t[1], instr: t[2], look: t[3] }); drawSetup(); });
   wire(root);
+  if (step === 1 && s) wireBrains(root.querySelector("#su-brains"), async () => { setup.st = (await invoke({ cmd: "setupState" })).result; drawSetup(); });
   if (step === 3) {
     const get = mountMaker($("#su-maker"), setup.look, (l) => (setup.look = l));
     $("#su-name").oninput = (e) => { setup.name = e.target.value; root.querySelector("[data-create]").disabled = !setup.name.trim(); root.querySelector("[data-create]").textContent = `Make ${setup.name || "it"}`; };
     $("#su-desc").oninput = (e) => (setup.desc = e.target.value);
     root.querySelector("[data-create]").onclick = async () => {
-      const r = await invoke({ cmd: "botCreate", name: setup.name.trim(), description: setup.desc, instructions: setup.instr || `You are ${setup.name.trim()}.`, provider: "claude", model: "claude-sonnet-5-5" });
+      // The first bot thinks with the brain setup found: a signed-in agent, else a key on its preferred model.
+      const brain = (setup.st && setup.st.suggested) || { engine: "claude", model: "claude-sonnet-5-5" };
+      const r = await invoke({ cmd: "botCreate", name: setup.name.trim(), description: setup.desc, instructions: setup.instr || `You are ${setup.name.trim()}.`, provider: brain.engine, model: brain.model });
       if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look: get() }); setup.made = r.result.id; setup.step = 4; drawSetup(); }
     };
   }

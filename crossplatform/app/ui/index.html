@@ -39,13 +39,8 @@
         <label>Name <input name="name" required maxlength="40"></label>
         <label>What it does <input name="description" maxlength="120"></label>
         <label>Instructions <textarea name="instructions" rows="3"></textarea></label>
-        <label>Model
-          <select name="model">
-            <option value="claude-sonnet-5-5">Sonnet</option>
-            <option value="claude-haiku-5-5">Haiku</option>
-            <option value="claude-opus-5-5">Opus</option>
-          </select>
-        </label>
+        <label>Brain <select name="provider" id="bot-brain"></select></label>
+        <label>Model <input name="model" id="bot-model" list="bot-models" maxlength="120" autocomplete="off" spellcheck="false"><datalist id="bot-models"></datalist></label>
       </div>
       <menu><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn pri" id="bot-dialog-ok">Create</button></menu>
     </form>

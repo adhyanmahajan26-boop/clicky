@@ -1,6 +1,6 @@
 //! Settings, kept in one JSON file (the Swift app uses UserDefaults; the keys are the same).
 //!
-//! Keys the harness reads: `test.engine.claude`, `test.engine.opencode` (a stand-in engine, tests only), `test.bots.turnLimit`,
+//! Keys the harness reads: `test.engine.<brain>` (claude, opencode, codex, cursor, gemini, grok: a stand-in engine, tests only), `brains.apiBaseURL.<provider>` (a provider moved, such as a test's stand-in API), `test.bots.turnLimit`,
 //! `test.bots.retryDelays`, `test.routines.run`, `v3.bots.fallbackModels`, `v3.bots.parallelMessages`, `v3.gateway.enabled`,
 //! `v3.gateway.port`, `owner.name`.
 

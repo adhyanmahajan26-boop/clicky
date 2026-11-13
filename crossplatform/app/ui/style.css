@@ -133,3 +133,8 @@ dialog { width: 640px; max-width: calc(100vw - 32px); }
 .hub-form label { flex: 1 1 200px; }
 .hub-form select { display: block; width: 100%; margin-top: 4px; background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 14px var(--body); }
 .crow .act.many { width: auto; gap: 6px; }
+/* Brains: the paste-a-key row and the stand-in picker (Setup and Settings). */
+.brain-key { gap: 8px; }
+.brain-key select, .brain-key input, #stand-in { background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: 14px var(--body); }
+.brain-key input { flex: 1; min-width: 0; }
+.crow code { font-size: 12px; }
