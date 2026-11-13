@@ -31,7 +31,7 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 - Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
 - `[PDF:]` documents, `[CHOOSE:]` cards, `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
 - Harness cards for T3 Code, Codex, Cursor, Grok and Gemini; continuing a harness's own chat.
-- Connectors are Claude Code's own (claude.ai MCP servers), so they work wherever Claude Code is signed in; Theo's own MCP server (`claudia_*` tools) isn't ported.
+- Theo's own MCP server (`claudia_*` tools) isn't ported. Connectors themselves work: they're Claude Code's own (claude.ai and `claude mcp add` servers), listed on the Connectors page, and a bot can use the ones you give it there.
 - API-key bots (Anthropic or OpenAI-compatible keys without Claude Code).
 
 ## Clicky (voice and screen helper): Mac only for now
@@ -66,8 +66,8 @@ Verdict: Windows dictation is very doable (about a week's work), X11 too; Waylan
 
 ## Not yet verified
 
-- Windows: everything was compiled and tested on GitHub's Windows Server 2022 runners, not on a Windows 10/11 PC with a
-  real Claude Code login. The Claude Code permission-rule paths on Windows (`//c/Users/...`) follow Claude Code's docs and
-  weren't exercised against a real `claude.exe`. SmartScreen will warn about the unsigned installer.
+- Windows: the installed app is driven end to end on GitHub's Windows Server 2022 and 2025 machines with the real
+  Claude Code (see [WINDOWS-PC.md](WINDOWS-PC.md) for the list), but not yet on a Windows 10/11 PC with a person signing
+  in. SmartScreen will warn about the unsigned installer. WINDOWS-PC.md has the 30-minute check for a real PC.
 - Linux: tested on GitHub's Ubuntu runners (22.04 for the app and installers, 24.04 for the engine), not on a desktop with a
   real Claude Code login, and not on Wayland with a person at it.

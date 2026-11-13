@@ -51,7 +51,7 @@ def record(step, ok, evidence=None, must=True, shot=None):
     RESULTS.append(entry)
     print("--> %-6s %s" % (entry["verdict"], step), flush=True)
     if evidence:
-        print("    " + json.dumps(evidence, default=str)[:1500], flush=True)
+        print("    " + json.dumps(evidence, default=str)[:(1500 if ok else 8000)], flush=True)
     return ok
 
 
@@ -60,7 +60,12 @@ def check(step, fn, must=True):
     try:
         ok, evidence, shot = fn()
     except Exception:
-        ok, evidence, shot = False, {"exception": traceback.format_exc()[-3000:]}, None
+        ok, evidence, shot = False, {"exception": traceback.format_exc()[-1200:]}, None
+        try:
+            evidence["webview"] = webview_state()
+            evidence["theo"] = theo_state()
+        except Exception as e:
+            evidence["diagnostics_error"] = repr(e)
         shot = screenshot("error-" + re.sub(r"\W+", "-", step)[:40])
     return record(step, ok, evidence, must, shot)
 
@@ -239,6 +244,45 @@ def idle(seconds=180):
     return wait_until(calm, seconds, 1)
 
 
+def theo_state():
+    """What Theo looks like right now, for a step that failed: faces, each bot's last messages, the engine log's end."""
+    found = {}
+    try:
+        st = P({"cmd": "botsState"}, timeout=10).get("result", {})
+        found["faces"] = [{k: f.get(k) for k in ("id", "state", "detail", "since")} for f in st.get("faces", [])]
+        found["replying"] = list((st.get("replying") or {}).keys()) if isinstance(st.get("replying"), dict) else st.get("replying")
+        found["last_messages"] = {b["name"]: [(m.get("author"), (m.get("text") or "")[:400]) for m in chat(b["id"], 3)] for b in st.get("bots", [])}
+    except Exception as e:
+        found["state_error"] = repr(e)
+    logs = DATA / "Logs"
+    if logs.exists():
+        for f in logs.iterdir():
+            if f.is_file() and f.stat().st_size:
+                found["log " + f.name] = f.read_text(encoding="utf-8", errors="replace")[-1500:]
+    return found
+
+
+def webview_state():
+    """Why the window's DevTools port might not answer: WebView2's version, its processes, Theo's windows."""
+    found = {"msedgewebview2": len(processes_named("msedgewebview2.exe")), "theo": theo_pids()}
+    for hive, path in [(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+                       (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")]:
+        try:
+            found["webview2_" + ("machine" if hive == winreg.HKEY_LOCAL_MACHINE else "user")] = winreg.QueryValueEx(winreg.OpenKey(hive, path), "pv")[0]
+        except OSError:
+            pass
+    try:
+        found["main_window"] = main_window()
+    except Exception as e:
+        found["main_window"] = repr(e)
+    try:
+        import urllib.request
+        found["devtools_version"] = urllib.request.urlopen("http://127.0.0.1:%d/json/version" % CDP_PORT, timeout=3).read().decode()[:300]
+    except Exception as e:
+        found["devtools_version"] = repr(e)[:300]
+    return found
+
+
 # ---------------------------------------------------------------- the window
 
 def windows_of(pid):
@@ -280,8 +324,8 @@ def connect():
             _browser = _pw.chromium.connect_over_cdp("http://127.0.0.1:%d" % CDP_PORT, timeout=5000)
             break
         except Exception:
-            if time.time() - t0 > 60:
-                raise
+            if time.time() - t0 > 120:
+                raise RuntimeError("Theo's window never opened its DevTools port: %s" % json.dumps(webview_state(), default=str))
             time.sleep(1)
     page = wait_until(lambda: next((p for c in _browser.contexts for p in c.pages if "tauri" in p.url or "localhost" in p.url), None), 30)
     if page is None:
@@ -457,13 +501,18 @@ def fresh(setup_exe, msi=None):
         rid = bot_id("Researcher")
         page.fill("#input", "Hello from a Windows PC. What can you do?")
         page.press("#input", "Enter")
-        page.wait_for_selector(".tc.ask:has-text('Sign in to Claude Code')", timeout=180000)
+        t0 = time.time()
+        try:
+            page.wait_for_selector(".tc.ask:has-text('Sign in to Claude Code')", timeout=300000)
+        except Exception:
+            return False, {"waited_s": round(time.time() - t0), "card_texts": page.locator(".tc").all_inner_texts()[-3:], **theo_state()}, screenshot("chat-no-signin-card")
+        took = round(time.time() - t0)
         msgs = chat(rid)
         last = msgs[-1]["text"] if msgs else ""
         face = [f for f in P({"cmd": "botsState"}).get("result", {}).get("faces", []) if f["id"] == rid]
         shot = screenshot("chat-signin-card")
         bad = re.search(r"command line is too long|is not recognized|cannot find the path|The system cannot", last, re.I)
-        return not bad and face and face[0]["state"] == "needs", {"engine_said": last[:600], "face": face[0] if face else None}, shot
+        return not bad and face and face[0]["state"] == "needs", {"engine_said": last[:600], "face": face[0] if face else None, "card_after_s": took}, shot
     check("Message a bot with npm's Claude Code signed out: the real engine runs and Theo shows the sign-in card", signed_out_turn)
 
     def long_turn_npm():
@@ -530,9 +579,21 @@ def fresh(setup_exe, msi=None):
                     run_key[name] = value
         except OSError:
             pass
+        # Only this user's list: never every user's (HKLM), which the uninstaller wouldn't clean up.
+        machine_wide = {}
+        for view in (0, winreg.KEY_WOW64_32KEY):
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_READ | view)
+                for i in range(winreg.QueryInfoKey(k)[1]):
+                    name, value, _ = winreg.EnumValue(k, i)
+                    if EXE_NAME in str(value).lower():
+                        machine_wide[name] = value
+            except OSError:
+                pass
         shot = screenshot("settings")
-        ok = "Open Theo when you sign in" in text and bool(run_key) and all("--background" in v for v in run_key.values())
-        return ok, {"run_key": run_key, "settings_text": text[:1500]}, shot
+        ok = ("Open Theo when you sign in" in text and list(run_key) == ["Theo"] and not machine_wide
+              and all(v.startswith('"') and v.endswith(" --background") for v in run_key.values()))
+        return ok, {"run_key": run_key, "every_user_run_key": machine_wide, "settings_text": text[:600]}, shot
     check("Settings: health check, and Theo set to open at sign-in (Windows Run key, starts in the tray)", settings)
 
     def close_keeps_running():
@@ -543,15 +604,21 @@ def fresh(setup_exe, msi=None):
         _, still_visible = main_window()
         log = DATA / "Logs" / "notifications.log"
         before = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-        # With the window closed, a bot starts needing you: the app (not the hidden page) sends the notification.
-        P({"cmd": "botSay", "bot": bot_id("Writer"), "text": "One more thing."})
-        idle(180)
-        lines = wait_until(lambda: [l for l in (log.read_text(encoding="utf-8", errors="replace") if log.exists() else "")[len(before):].splitlines() if "Writer" in l], 20) or []
+        # With the window closed, a new bot starts needing you (Claude Code is signed out): the app, not the hidden page, sends
+        # the notification. A new bot, so it's a change from calm to needs, not a bot that already needed you.
+        nid = P({"cmd": "botCreate", "name": "Notifier", "description": "Checks notifications", "instructions": "Answer briefly.", "provider": "claude", "model": "claude-haiku-5-5"})["result"]["id"]
+        P({"cmd": "botSay", "bot": nid, "text": "One more thing."})
+        face_of = lambda: next((f for f in P({"cmd": "botsState"}).get("result", {}).get("faces", []) if f["id"] == nid), {})
+        settled = wait_until(lambda: face_of().get("state") in ("needs", "failed") and face_of(), 300)
+        lines = wait_until(lambda: [l for l in (log.read_text(encoding="utf-8", errors="replace") if log.exists() else "")[len(before):].splitlines() if "Notifier" in l], 20) or []
         toast = run(["powershell", "-NoProfile", "-Command",
                      "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; "
                      "$h = [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('com.theo.desktop'); $h.Count"], timeout=60)
         ok = theo_pids() == [pid] and not still_visible and P({"cmd": "ping"}).get("ok") and any("\tsent\t" in l for l in lines)
-        return ok, {"pid": pid, "visible_before": visible, "visible_after": still_visible, "notifications": lines, "toast_history_count": toast[1].strip()[-200:]}, None
+        evidence = {"pid": pid, "visible_before": visible, "visible_after": still_visible, "notifier_face": settled, "notifications": lines, "toast_history_count": toast[1].strip()[-200:]}
+        if not ok:
+            evidence.update(theo_state())
+        return ok, evidence, None
     check("Close the window: Theo keeps running in the tray, and a bot that needs you raises a Windows notification", close_keeps_running)
 
     def one_theo():
@@ -589,6 +656,8 @@ def fresh(setup_exe, msi=None):
             _, value, _ = winreg.EnumValue(k, i)
             if EXE_NAME in str(value).lower():
                 command = value
+        if command is None:
+            return False, {"run_command": None}, None
         # What Windows runs at sign-in, exactly as written in the Run key.
         subprocess.Popen(command, env=launch_env(), creationflags=0x00000008, shell=False)
         took = wait_ping(60)

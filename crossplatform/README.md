@@ -12,7 +12,7 @@ crossplatform/
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests
   install/            one-line installers: install-linux.sh, install.ps1
   tools/              naming installers for a release and writing SHA256SUMS
-  docs/               PLATFORMS.md (what runs where), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
+  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
 ```
 
 ## Why Rust and Tauri

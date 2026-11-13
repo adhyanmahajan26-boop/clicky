@@ -16,8 +16,11 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde_json = "1"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# Windows writes its own sign-in entry (theo_core::setup::windows_sign_in).
+[target.'cfg(not(windows))'.dependencies]
+tauri-plugin-autostart = "2"
 
 [profile.release]
 lto = true

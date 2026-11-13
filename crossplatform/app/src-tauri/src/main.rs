@@ -111,13 +111,41 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
 /// Whether Theo opens when you sign in to this computer (Settings). Like the Mac app, it's on unless you turn it off.
 #[tauri::command]
 fn open_at_login(app: tauri::AppHandle, harness: tauri::State<'_, Arc<Harness>>, enabled: Option<bool>) -> Result<bool, String> {
-    use tauri_plugin_autostart::ManagerExt;
-    let launcher = app.autolaunch();
     if let Some(on) = enabled {
-        if on { launcher.enable() } else { launcher.disable() }.map_err(|e| e.to_string())?;
+        set_open_at_login(&app, on)?;
         harness.settings.set("desktop.openAtLogin", serde_json::json!(on));
     }
-    launcher.is_enabled().map_err(|e| e.to_string())
+    open_at_login_is_on(&app)
+}
+
+/// Windows: this user's Run entry, written by Theo (see theo_core::setup::windows_sign_in for why not the plugin).
+#[cfg(windows)]
+fn set_open_at_login(_app: &tauri::AppHandle, on: bool) -> Result<(), String> {
+    use theo_core::setup::windows_sign_in;
+    let command = match on {
+        true => Some(windows_sign_in::command_for(&std::env::current_exe().map_err(|e| e.to_string())?, &[BACKGROUND_ARG])),
+        false => None,
+    };
+    windows_sign_in::set("Theo", command.as_deref())
+}
+
+#[cfg(windows)]
+fn open_at_login_is_on(_app: &tauri::AppHandle) -> Result<bool, String> {
+    Ok(theo_core::setup::windows_sign_in::is_on("Theo"))
+}
+
+/// Mac and Linux: the autostart plugin (a LaunchAgent, or an XDG autostart file).
+#[cfg(not(windows))]
+fn set_open_at_login(app: &tauri::AppHandle, on: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    if on { launcher.enable() } else { launcher.disable() }.map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn open_at_login_is_on(app: &tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -143,10 +171,12 @@ fn main() {
         // (its own --data folder) stays out of it, so it never collides with the Theo someone is using.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)));
     }
+    #[cfg(not(windows))]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::Builder::new().app_name("Theo").args([BACKGROUND_ARG]).build());
+    }
     let app = builder
         .plugin(tauri_plugin_notification::init())
-        // "Theo" is the name of its entry in Windows' sign-in list, which the uninstaller removes (windows/hooks.nsh).
-        .plugin(tauri_plugin_autostart::Builder::new().app_name("Theo").args([BACKGROUND_ARG]).build())
         .setup(|app| {
             // The same flags as theod, so the test suite can drive the app itself: --data DIR, --test.
             let args: Vec<String> = std::env::args().collect();
@@ -163,16 +193,16 @@ fn main() {
             std::fs::write(harness.paths.pid_file(), std::process::id().to_string())?;
             // Open at sign-in, as the Mac app does, from the first time Theo runs; after that, whatever Settings says (and Windows'
             // own Startup apps switch, which Theo leaves alone). Never for a test.
+            // "Theo" is the name of its entry in Windows' sign-in list, which the uninstaller removes (windows/hooks.nsh).
             if !is_test {
-                use tauri_plugin_autostart::ManagerExt;
                 match harness.settings.get("desktop.openAtLogin").and_then(|v| v.as_bool()) {
                     None => {
-                        let on = app.autolaunch().enable().is_ok();
+                        let on = set_open_at_login(app.handle(), true).is_ok();
                         harness.settings.set("desktop.openAtLogin", serde_json::json!(on));
                     }
                     // Uninstalled and installed again: the entry went with the uninstall, the setting stayed on.
                     Some(true) if !theo_core::setup::sign_in_entry_exists("Theo") => {
-                        let _ = app.autolaunch().enable();
+                        let _ = set_open_at_login(app.handle(), true);
                     }
                     _ => {}
                 }

@@ -17,17 +17,106 @@ async fn run(program: &Path, args: &[&str], secs: u64) -> Option<(i32, String)> 
 /// An uninstall removes Theo's entry, so a reinstall puts it back when the setting is still on.
 pub fn sign_in_entry_exists(name: &str) -> bool {
     #[cfg(windows)]
-    unsafe {
-        use windows_sys::Win32::System::Registry::*;
-        let key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run".encode_utf16().chain(Some(0)).collect();
-        let value: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        let mut bytes: u32 = 0;
-        return RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_ANY, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) == 0;
+    {
+        windows_sign_in::read_string(windows_sign_in::RUN_KEY, name).is_some()
     }
     #[cfg(not(windows))]
     {
         let _ = name;
         true
+    }
+}
+
+/// Theo's start-at-sign-in entry on Windows, written by Theo itself for this user only. (The autostart plugin writes to
+/// HKLM whenever the process can, which on an admin account with UAC off means every user of the PC gets Theo, and the
+/// uninstaller, which only cleans this user's entry, leaves it behind. It also leaves the program path unquoted.)
+#[cfg(windows)]
+pub mod windows_sign_in {
+    use windows_sys::Win32::System::Registry::*;
+
+    pub const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    /// Task Manager's Startup apps switch: the first byte is even when the entry is allowed to run, odd when switched off.
+    pub const APPROVED_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(Some(0)).collect()
+    }
+
+    pub fn read_string(key: &str, name: &str) -> Option<String> {
+        let (key, name) = (wide(key), wide(name));
+        let mut bytes: u32 = 0;
+        unsafe {
+            if RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 {
+                return None;
+            }
+            let mut buffer = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+            let mut size = (buffer.len() * 2) as u32;
+            if RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buffer.as_mut_ptr().cast(), &mut size) != 0 {
+                return None;
+            }
+            let length = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+            Some(String::from_utf16_lossy(&buffer[..length]))
+        }
+    }
+
+    fn switched_off_in_task_manager(name: &str) -> bool {
+        let (key, name) = (wide(APPROVED_KEY), wide(name));
+        let mut value = [0u8; 12];
+        let mut size = value.len() as u32;
+        let read = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_BINARY, std::ptr::null_mut(), value.as_mut_ptr().cast(), &mut size) };
+        read == 0 && size > 0 && value[0] % 2 == 1
+    }
+
+    /// On: the entry exists and Task Manager hasn't switched it off.
+    pub fn is_on(name: &str) -> bool {
+        read_string(RUN_KEY, name).is_some() && !switched_off_in_task_manager(name)
+    }
+
+    /// The command Windows runs: the program's full path in quotes (a user name can have spaces), then the arguments.
+    pub fn command_for(program: &std::path::Path, args: &[&str]) -> String {
+        let mut command = format!("\"{}\"", program.display());
+        for arg in args {
+            command.push(' ');
+            command.push_str(arg);
+        }
+        command
+    }
+
+    pub fn set(name: &str, command: Option<&str>) -> Result<(), String> {
+        let name_wide = wide(name);
+        unsafe {
+            let mut run: HKEY = std::ptr::null_mut();
+            let status = RegCreateKeyExW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), 0, std::ptr::null(), REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, std::ptr::null(), &mut run, std::ptr::null_mut());
+            if status != 0 {
+                return Err(format!("Windows wouldn't open the sign-in list (error {status})"));
+            }
+            let status = match command {
+                Some(command) => {
+                    let value = wide(command);
+                    RegSetValueExW(run, name_wide.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32)
+                }
+                None => match RegDeleteValueW(run, name_wide.as_ptr()) {
+                    2 => 0, // ERROR_FILE_NOT_FOUND: already gone
+                    other => other,
+                },
+            };
+            RegCloseKey(run);
+            if status != 0 {
+                return Err(format!("Windows wouldn't change the sign-in list (error {status})"));
+            }
+            // Turning it on in Theo also turns it back on in Task Manager's Startup apps; turning it off leaves no trace there.
+            let mut approved: HKEY = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, wide(APPROVED_KEY).as_ptr(), 0, KEY_SET_VALUE, &mut approved) == 0 {
+                if command.is_some() {
+                    let enabled = [2u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+                    RegSetValueExW(approved, name_wide.as_ptr(), 0, REG_BINARY, enabled.as_ptr(), enabled.len() as u32);
+                } else {
+                    RegDeleteValueW(approved, name_wide.as_ptr());
+                }
+                RegCloseKey(approved);
+            }
+        }
+        Ok(())
     }
 }
 
