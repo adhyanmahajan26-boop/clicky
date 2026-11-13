@@ -25,6 +25,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+# Windows PowerShell 5.1 on older Windows 10 may still offer only TLS 1.0/1.1, which GitHub refuses.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 function Main {
   $Repo = if ($env:THEO_RELEASES_REPO) { $env:THEO_RELEASES_REPO } else { "adhyanmahajan26-boop/claudia-releases" }
@@ -55,8 +57,17 @@ Environment: THEO_RELEASES_REPO, THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (falls back
       $answer = Read-Host "This deletes Theo and all its data in $DataDir (bots, chats, memory). Type yes to go on"
       if ($answer -ne "yes") { throw "Nothing was deleted." }
     }
-    $uninstaller = Get-UninstallCommand
-    if ($uninstaller) { Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait } else { Write-Output "Theo isn't installed." }
+    $entry = Get-UninstallEntry
+    if (-not $entry) { Write-Output "Theo isn't installed." }
+    elseif ($entry.UninstallString -match "(?i)msiexec") {
+      # Installed from the .msi: its uninstall string is MsiExec.exe /X{product code}.
+      $code = [regex]::Match($entry.UninstallString, "\{[0-9A-Fa-f-]+\}").Value
+      $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $code, "/qn", "/norestart") -Wait -PassThru
+      if ($proc.ExitCode -ne 0) { throw "Removing Theo failed (msiexec code $($proc.ExitCode)); it may need an administrator." }
+    } else {
+      $proc = Start-Process -FilePath (Get-UninstallCommand) -ArgumentList "/S" -Wait -PassThru
+      if ($proc.ExitCode -ne 0) { throw "Removing Theo failed (code $($proc.ExitCode))." }
+    }
     if ($Purge) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $DataDir; Write-Output "Theo and its data are removed." }
     else { Write-Output "Theo is removed. Its data is still in $DataDir." }
     return
@@ -95,7 +106,9 @@ Environment: THEO_RELEASES_REPO, THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (falls back
     }
     $args = @("/S")
     if ($Dir) { $args += "/D=$Dir" }
-    Start-Process -FilePath $setup -ArgumentList $args -Wait
+    $proc = Start-Process -FilePath $setup -ArgumentList $args -Wait -PassThru
+    if ($proc.ExitCode -ne 0) { throw "The Theo installer stopped with code $($proc.ExitCode); nothing was changed. If Windows blocked it, run it again and allow it." }
+    if (-not (Get-AppPath)) { throw "The Theo installer finished but Theo isn't installed: try again, or run the setup .exe from the release page." }
     $marker = Join-Path $DataDir "INSTALLED_BUILD"
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     Set-Content -Path $marker -Value $build

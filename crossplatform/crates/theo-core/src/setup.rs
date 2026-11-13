@@ -7,17 +7,28 @@ use std::path::Path;
 use std::time::Duration;
 
 async fn run(program: &Path, args: &[&str], secs: u64) -> Option<(i32, String)> {
-    let (program, mut pre) = crate::engine::command_for(program);
-    pre.extend(args.iter().map(|s| s.to_string()));
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(pre).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
-    // Its own process group (and no console window on Windows), like every engine Theo starts: a probe in Theo's own
-    // group would make anything that ends an engine's group end Theo with it.
-    crate::procs::configure(&mut cmd);
-    let out = tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await.ok()?.ok()?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Some((out.status.code().unwrap_or(-1), text))
+    // Its own process tree with no console window, like every engine Theo starts: a probe in Theo's own group would make
+    // anything that ends an engine's group end Theo with it.
+    let (code, stdout, stderr) = crate::engine::run_briefly(program, args, &crate::paths::home(), Duration::from_secs(secs)).await?;
+    Some((code, stdout + &stderr))
+}
+
+/// Whether Windows has an entry called `name` in this user's programs to start at sign-in (HKCU\\...\\Run). Elsewhere: true.
+/// An uninstall removes Theo's entry, so a reinstall puts it back when the setting is still on.
+pub fn sign_in_entry_exists(name: &str) -> bool {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Registry::*;
+        let key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run".encode_utf16().chain(Some(0)).collect();
+        let value: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let mut bytes: u32 = 0;
+        return RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_ANY, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) == 0;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        true
+    }
 }
 
 /// The official one-line installs for Claude Code, by platform.

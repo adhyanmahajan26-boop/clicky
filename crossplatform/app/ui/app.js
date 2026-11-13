@@ -98,7 +98,8 @@ function renderHead() {
 
 /* ---------------- cards ---------------- */
 const INSTALL = /win/i.test(navigator.platform || navigator.userAgent) ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash";
-const SIGNIN = /\/login|invalid api key|isn't installed|not logged in|sign in/i;
+// Kept in step with failover.rs classify's Auth, so a card and the Home lane agree on "signed out".
+const SIGNIN = /\/login|invalid api key|invalid x-api-key|authentication_error|isn't installed|not logged in|sign in|unauthori[sz]ed|\b401\b|oauth token (has )?expired/i;
 function failureCard(m, latest) {
   const reason = m.text.replace(/^Couldn't reply:\s*/, "");
   const signin = SIGNIN.test(reason);
@@ -110,7 +111,7 @@ function failureCard(m, latest) {
       + `<p>${missing ? "Theo runs bots on Claude Code, which isn't installed here yet." : "Theo runs bots on your Claude subscription, and Claude Code on this computer is signed out."}</p>`
       + `<div class="tc-obj"><span class="app"><b>C</b>${TP.badge("needs")}</span><span class="tx"><b>Claude Code</b><small>${missing ? "https://claude.com/claude-code" : "Run this in a terminal, then try again"}</small></span>${TP.pill("needs", missing ? "Not installed" : "Signed out")}</div>`
       + `<div class="tc-field"><span>${missing ? INSTALL : "claude auth login"}</span><button class="btn sm" data-copy="${missing ? INSTALL : "claude auth login"}">Copy</button></div>`
-      + `<div class="btns"><button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
+      + `<div class="btns">${missing ? "" : `<button class="btn" data-term="signin">Sign in</button>`}<button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
   }
   return `<div class="tc bad"><div class="tc-h">${botHTML(m.author, 28, { state: "failed" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · Reply</span>${TP.pill("failed", "Failed")}</div>`
     + `<div class="tc-q">${esc(nameOf(m.author))} couldn't answer</div><p>${esc(reason.split(/(?<=\.)\s/)[0])} Your message is kept, and nothing else was changed.</p>`
@@ -218,6 +219,8 @@ function wire(root) {
   root.querySelectorAll("[data-details]").forEach((b) => b.onclick = () => b.closest(".tc").classList.toggle("open"));
   root.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; });
   root.querySelectorAll("[data-say]").forEach((b) => b.onclick = async () => { await say(b.dataset.say); });
+  // Opens a terminal with the sign-in command, by the full path of the Claude Code Theo found (setup.rs terminal_command).
+  root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
   root.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => open({ kind: "bot", id: b.dataset.open }));
 }
 
@@ -332,19 +335,10 @@ async function renderSettings() {
 
 /* ---------------- the loop ---------------- */
 function open(v) { view = v; Object.keys(sigs).forEach((k) => delete sigs[k]); render(); }
-let traySig = "";
-function updateTray() {
-  const c = state.counts || {};
-  const [st, n, label] = c.failed ? ["failed", c.failed, `${c.failed} failed`] : c.needs ? ["needs", c.needs, `${c.needs} need${c.needs === 1 ? "s" : ""} you`] : c.working ? ["working", c.working, `${c.working} working`] : ["awake", 0, ""];
-  const sig = `${st}${n}`;
-  if (sig === traySig || !window.__TAURI__.core.invoke) return;
-  traySig = sig;
-  window.__TAURI__.core.invoke("set_tray", { state: st, count: n, label }).catch(() => {});
-}
 async function refresh() {
   try { state = (await invoke({ cmd: "botsState" })).result || state; } catch (e) { console.error(e); }
-  updateTray();
-  notifyChanges();
+  // The tray face and notifications come from the app itself (main.rs watch_faces), so they keep working while this window
+  // is hidden and its timers are slowed down.
   renderSidebar(); renderHead();
   if (view.kind === "bot" || view.kind === "group") await renderChat();
   else if (view.kind === "home") renderHome();
@@ -431,29 +425,6 @@ $("#bot-form").onsubmit = async (e) => {
   const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: "claude", model: f.get("model") });
   if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
 };
-
-/* ---------------- notifications ---------------- */
-// A bot that starts needing you, or fails, gets a system notification, once, unless you're looking at its chat.
-let prevFaces = null;
-const notified = new Set((() => { try { return JSON.parse(localStorage.getItem("theo.notified") || "[]"); } catch (e) { return []; } })());
-function notifyChanges() {
-  const now = Object.fromEntries(state.faces.map((f) => [f.id, f]));
-  if (prevFaces) {
-    for (const f of state.faces) {
-      if (f.state !== "needs" && f.state !== "failed") continue;
-      // New when the state or the moment it began changed: failing again is news too.
-      if (prevFaces[f.id] && prevFaces[f.id].state === f.state && prevFaces[f.id].since === f.since) continue;
-      const key = `${f.id}|${f.state}|${f.since || ""}`;
-      if (notified.has(key)) continue;
-      notified.add(key);
-      try { localStorage.setItem("theo.notified", JSON.stringify([...notified].slice(-200))); } catch (e) {}
-      if (document.hasFocus() && view.kind === "bot" && view.id === f.id) continue;
-      const title = `${nameOf(f.id)} ${f.state === "needs" ? "needs you" : "failed"}`;
-      window.__TAURI__.core.invoke("notify", { title, body: f.detail || f.word }).then(() => console.info("theo-notified", title)).catch((e) => console.error("theo-notify-failed", title, String(e)));
-    }
-  }
-  prevFaces = now;
-}
 
 /* ---------------- first run ---------------- */
 const SETUP_STEPS = ["Welcome", "Claude Code", "Coding", "Your first bot", "Done"];

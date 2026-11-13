@@ -1006,9 +1006,14 @@ impl Harness {
             }
             let persona = self.persona(bot);
             let persona_file = turn_folder.0.join("system-prompt.md");
-            std::fs::create_dir_all(&turn_folder.0).and_then(|_| std::fs::write(&persona_file, persona.as_bytes())).map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
+            let settings_file = turn_folder.0.join("settings.json");
+            let (args, settings) = crate::policy::claude_turn(&self.paths, bot, model, &persona_file, &settings_file, session.as_deref(), new_session.as_deref(), readable, recall);
+            std::fs::create_dir_all(&turn_folder.0)
+                .and_then(|_| std::fs::write(&persona_file, persona.as_bytes()))
+                .and_then(|_| std::fs::write(&settings_file, serde_json::to_vec_pretty(&settings).unwrap_or_default()))
+                .map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
             stdin = Some(prompt.to_string());
-            crate::policy::claude_args(&self.paths, bot, model, &persona_file, session.as_deref(), new_session.as_deref(), readable, recall)
+            args
         } else {
             let mut a: Vec<String> = vec!["run".into(), "-m".into(), model.into(), "--format".into(), "json".into(), "--dir".into(), workspace.to_string_lossy().to_string()];
             if let Some(s) = &session {
@@ -1118,15 +1123,22 @@ impl Harness {
                     continue;
                 };
                 let key = format!("{}|{}|{}", room, sender.id, target.id);
+                // Checked and counted in one step: relays answering at the same time could otherwise each see 11 sent and
+                // both send, going past the cap (seen on Windows).
                 let (verdict, exchange) = me.with(|s| {
                     let turn = s.owner_turns.get(&ctx.root_room).copied().unwrap_or(0);
-                    let exchange = s.open_exchanges.get(&key).filter(|e| e.owner_turn == turn).cloned().unwrap_or_else(|| Exchange {
+                    let mut exchange = s.open_exchanges.get(&key).filter(|e| e.owner_turn == turn).cloned().unwrap_or_else(|| Exchange {
                         id: uuid::Uuid::new_v4().to_string().to_uppercase(),
                         thread_id: dm::id(&sender.id, &target.id),
                         owner_turn: turn,
                         round_trips: 0,
                     });
                     let verdict = s.budgets.get(&ctx.root_room).cloned().unwrap_or_default().verdict(exchange.round_trips);
+                    if protocol::cap_line(verdict, "", "").is_none() {
+                        exchange.round_trips += 1;
+                        s.budgets.entry(ctx.root_room.clone()).or_default().note_sent();
+                        s.open_exchanges.insert(key.clone(), exchange.clone());
+                    }
                     (verdict, exchange)
                 });
                 if let Some(line) = protocol::cap_line(verdict, &sender.name, &target.name) {
@@ -1134,13 +1146,7 @@ impl Harness {
                     note_at.insert(index, line);
                     continue;
                 }
-                let mut exchange = exchange;
-                let first = exchange.round_trips == 0;
-                exchange.round_trips += 1;
-                me.with(|s| {
-                    s.budgets.entry(ctx.root_room.clone()).or_default().note_sent();
-                    s.open_exchanges.insert(key, exchange.clone());
-                });
+                let first = exchange.round_trips == 1;
                 if first {
                     let mut card = ChatMessage::new(&sender.id, "");
                     card.card = Some(dm::card(&exchange.id, &target.id));
@@ -1901,14 +1907,9 @@ impl Harness {
 
     async fn list_connectors_now(&self) -> Result<(), String> {
         let program = self.executable("claude").ok_or("Claude Code isn't installed.")?;
-        let (program, mut args) = engine::command_for(&program);
-        args.extend(["mcp".to_string(), "list".to_string()]);
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
-        // Its own process group, like every engine Theo starts (see setup::run).
-        crate::procs::configure(&mut cmd);
-        let out = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await.map_err(|_| "Claude Code took too long to list connectors.".to_string())?.map_err(|e| e.to_string())?;
-        let mut list = crate::connectors::parse(&String::from_utf8_lossy(&out.stdout));
+        // Its own process tree, like every engine Theo starts: the servers it checks end with it, even after a timeout.
+        let (_, stdout, _) = engine::run_briefly(&program, &["mcp", "list"], &crate::paths::home(), Duration::from_secs(90)).await.ok_or_else(|| "Claude Code took too long to list connectors, or couldn't start.".to_string())?;
+        let mut list = crate::connectors::parse(&stdout);
         let now = Utc::now();
         let mut seen: HashMap<String, String> = std::fs::read(self.paths.root.join("connectors-seen.json")).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
         for c in list.iter_mut() {

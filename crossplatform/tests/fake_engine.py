@@ -38,6 +38,26 @@ if system_file:
     with open(system_file, encoding="utf-8") as f:
         system = f.read()
 is_opencode = bool(args) and args[0] == "run"
+
+
+def flag_values(flag):
+    out = []
+    if flag in args:
+        for a in args[args.index(flag) + 1:]:
+            if a.startswith("--"):
+                break
+            out.append(a)
+    return out
+
+
+# Permission rules: on the command line, and from a --settings file, as Claude Code merges them.
+allowed, denied = flag_values("--allowedTools"), flag_values("--disallowedTools")
+settings_file = arg_after("--settings")
+if settings_file:
+    with open(settings_file, encoding="utf-8") as f:
+        perms = json.load(f).get("permissions", {})
+    allowed += perms.get("allow", [])
+    denied += perms.get("deny", [])
 if not is_opencode and "-p" in args and "--" not in args:
     # `claude -p` with no prompt argument reads the prompt from standard input, as Theo now sends it.
     prompt = sys.stdin.buffer.read().decode("utf-8")
@@ -50,7 +70,7 @@ pgid = os.getpgid(0) if not WIN else None
 
 def log(extra=None):
     entry = {"t": time.time(), "mode": mode, "pid": os.getpid(), "pgid": pgid, "model": model, "resume": resume, "coding": coding,
-             "opencode": is_opencode, "cwd": os.getcwd(), "args": args, "system": system, "prompt": prompt}
+             "opencode": is_opencode, "cwd": os.getcwd(), "args": args, "allowed": allowed, "denied": denied, "system": system, "prompt": prompt}
     if extra:
         entry.update(extra)
     # One file per call: appends from engines running at once can interleave on Windows.

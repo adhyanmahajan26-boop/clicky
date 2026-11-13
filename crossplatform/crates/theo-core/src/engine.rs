@@ -200,7 +200,7 @@ impl StreamParser {
     }
 }
 
-/// How a program is started: a Python stand-in through Python, a .cmd or .bat through cmd on Windows.
+/// How a program is started: a Python stand-in through Python; anything else as itself.
 ///
 /// An npm-installed program on Windows is a `.cmd` shim (`%APPDATA%\npm\claude.cmd`). Going through cmd.exe would cut every
 /// argument at its first line break and cap the whole command at 8,191 characters, so the shim is read and what it points
@@ -215,7 +215,9 @@ pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
         if let Some(direct) = std::fs::read_to_string(program).ok().and_then(|text| npm_shim_target(&text, program.parent().unwrap_or(std::path::Path::new(".")))) {
             return direct;
         }
-        return (PathBuf::from("cmd"), vec!["/C".into(), program.to_string_lossy().to_string()]);
+        // Any other batch file is started as itself: Rust runs it through cmd.exe with cmd's own quoting (and refuses an
+        // argument it can't pass safely), where a hand-made `cmd /C` line breaks on a space in the path.
+        return (program.to_path_buf(), vec![]);
     }
     (program.to_path_buf(), vec![])
 }
@@ -293,6 +295,9 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     let (program, mut pre_args) = command_for(&spec.program);
     pre_args.extend(spec.args.iter().cloned());
     let mut cmd = tokio::process::Command::new(&program);
+    if cfg!(windows) {
+        cmd.env("PATH", child_path());
+    }
     cmd.args(&pre_args).current_dir(&spec.cwd).stdin(if spec.stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() }).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     for key in &spec.remove_env {
         cmd.env_remove(key);
@@ -303,7 +308,14 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     cmd.kill_on_drop(false);
     crate::procs::configure(&mut cmd);
     let mut child = cmd.spawn()?;
-    let tree = Arc::new(ProcessTree::attach(&child)?);
+    let tree = match ProcessTree::attach(&child) {
+        Ok(tree) => Arc::new(tree),
+        Err(e) => {
+            // Not tracked means it couldn't be stopped later: end it now rather than leave it running.
+            let _ = child.start_kill();
+            return Err(e);
+        }
+    };
     if let Some(r) = &registry {
         r.add(&tree);
     }
@@ -424,17 +436,111 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     })
 }
 
+/// The folders programs are looked for in, in order: this process's PATH and, on Windows, PATH as it is now in the registry
+/// (for you and for the machine) plus where Node, Git and the GitHub CLI install. Theo keeps running in the tray for days, so
+/// something installed since it started (Node, Git, Claude Code's own installer adding `.local\bin`) is found without
+/// quitting it. Also the PATH every engine and tool Theo starts gets, so Claude Code finds Git Bash and npm's shims find Node.
+pub fn search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    #[cfg(windows)]
+    {
+        for user in [true, false] {
+            if let Some(path) = registry_path(user) {
+                dirs.extend(std::env::split_paths(&std::ffi::OsString::from(path)));
+            }
+        }
+        for (var, rest) in [("ProgramFiles", "nodejs"), ("ProgramFiles", "Git\\cmd"), ("ProgramFiles", "GitHub CLI"), ("LOCALAPPDATA", "Programs\\Git\\cmd"), ("APPDATA", "npm")] {
+            if let Some(base) = std::env::var_os(var) {
+                dirs.push(PathBuf::from(base).join(rest));
+            }
+        }
+        dirs.push(crate::paths::home().join(".local").join("bin"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| !d.as_os_str().is_empty() && seen.insert(if cfg!(windows) { d.to_string_lossy().to_lowercase() } else { d.to_string_lossy().to_string() }));
+    dirs
+}
+
+/// The PATH for a program Theo starts (see `search_dirs`).
+pub fn child_path() -> std::ffi::OsString {
+    std::env::join_paths(search_dirs()).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// PATH as saved in the registry, for this user or for the machine, with %VARIABLES% expanded.
+#[cfg(windows)]
+fn registry_path(user: bool) -> Option<String> {
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::System::Registry::*;
+    let (root, key) = if user { (HKEY_CURRENT_USER, "Environment") } else { (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment") };
+    let key: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = "Path".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let mut bytes: u32 = 0;
+        if RegGetValueW(root, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 || bytes == 0 {
+            return None;
+        }
+        let mut raw = vec![0u16; bytes as usize / 2 + 1];
+        let mut size = (raw.len() * 2) as u32;
+        if RegGetValueW(root, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, std::ptr::null_mut(), raw.as_mut_ptr() as *mut _, &mut size) != 0 {
+            return None;
+        }
+        let needed = ExpandEnvironmentStringsW(raw.as_ptr(), std::ptr::null_mut(), 0);
+        if needed == 0 {
+            return None;
+        }
+        let mut expanded = vec![0u16; needed as usize];
+        let written = ExpandEnvironmentStringsW(raw.as_ptr(), expanded.as_mut_ptr(), needed);
+        if written == 0 {
+            return None;
+        }
+        let end = expanded.iter().position(|&c| c == 0).unwrap_or(expanded.len());
+        Some(String::from_utf16_lossy(&expanded[..end]))
+    }
+}
+
+/// A command for a program Theo starts in the background: no console window on Windows, its own process group, and the
+/// PATH from `child_path`. `program` may be an npm shim or a Python stand-in (`command_for`).
+pub fn background_command(program: &std::path::Path) -> tokio::process::Command {
+    let (program, pre) = command_for(program);
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(pre);
+    if cfg!(windows) {
+        cmd.env("PATH", child_path());
+    }
+    crate::procs::configure(&mut cmd);
+    cmd
+}
+
+/// Runs a short background program to its end and returns its exit code and output (stdout, then stderr), or None if it
+/// couldn't start or took longer than `limit`. Everything it started (Claude Code's MCP servers, say) ends with it.
+pub async fn run_briefly(program: &std::path::Path, args: &[&str], cwd: &std::path::Path, limit: Duration) -> Option<(i32, String, String)> {
+    let mut cmd = background_command(program);
+    cmd.args(args).current_dir(cwd).env("NO_COLOR", "1").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    let child = cmd.spawn().ok()?;
+    let tree = ProcessTree::attach(&child).ok();
+    let result = tokio::time::timeout(limit, child.wait_with_output()).await;
+    if let Some(tree) = &tree {
+        // Whatever it left behind (or all of it, after a timeout).
+        if tree.alive() {
+            tree.kill();
+        }
+    }
+    let out = result.ok()?.ok()?;
+    Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string()))
+}
+
 /// Where an engine's program is: on PATH, or where its installer puts it.
 pub fn locate(name: &str) -> Option<PathBuf> {
     let home = crate::paths::home();
     let exts: Vec<&str> = if cfg!(windows) { vec![".exe", ".cmd", ".bat", ""] } else { vec![""] };
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs = search_dirs();
+    // Each part joined on its own, so a Windows path reads C:\Users\me\.local\bin, never .local/bin.
     dirs.extend([
-        home.join(".local/bin"),
-        home.join(format!(".{name}/local")),
-        home.join(format!(".{name}/bin")),
-        home.join(".npm-global/bin"),
-        home.join(".bun/bin"),
+        home.join(".local").join("bin"),
+        home.join(format!(".{name}")).join("local"),
+        home.join(format!(".{name}")).join("bin"),
+        home.join(".npm-global").join("bin"),
+        home.join(".bun").join("bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/usr/bin"),

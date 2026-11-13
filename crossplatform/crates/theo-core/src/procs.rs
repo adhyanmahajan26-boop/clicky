@@ -49,7 +49,12 @@ impl ProcessTree {
             }
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
+            if SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) == 0 {
+                // Without kill-on-close the tree wouldn't end with Theo: don't pretend it's tracked.
+                let error = std::io::Error::last_os_error();
+                windows_sys::Win32::Foundation::CloseHandle(job);
+                return Err(error);
+            }
             let handle = child.raw_handle().ok_or_else(|| std::io::Error::other("engine exited before it could be tracked"))?;
             if AssignProcessToJobObject(job, handle as _) == 0 {
                 let error = std::io::Error::last_os_error();

@@ -175,8 +175,8 @@ def t04():
     T.wait_idle(seconds=60)
     c = [x for x in T.calls(mark) if "You are Rogue" in x["system"]][-1]
     args = c["args"]
-    allowed = flag_list(args, "--allowedTools")
-    denied = flag_list(args, "--disallowedTools")
+    allowed = c["allowed"]
+    denied = c["denied"]
     mem = rule_path(T.BOTS / "memory" / r)
     writes = [a for a in allowed if a.startswith(("Write(", "Edit("))]
     checks = {
@@ -713,8 +713,8 @@ def p_apps():
     T.fake("ok"); mark = T.calls_mark()
     T.say(a, "Check my mail."); T.say(l, "Check my mail."); T.wait_idle()
     ca, cl = last_call("Archivist", mark), last_call("Ledger", mark)
-    allowed_a = flag_list(ca["args"], "--allowedTools") if ca else []
-    allowed_l = flag_list(cl["args"], "--allowedTools") if cl else []
+    allowed_a = ca["allowed"] if ca else []
+    allowed_l = cl["allowed"] if cl else []
     checks = {"saved": r.get("ok") and [b for b in T.state().get("bots", []) if b["id"] == a][0].get("apps") == ["claude.ai Gmail", "theo-echo"],
               "given_bot_has_its_connectors": "mcp__claude_ai_Gmail" in allowed_a and "mcp__theo-echo" in allowed_a,
               "told_in_its_prompt": ca is not None and "Apps you can use: Gmail, theo-echo" in ca["system"],
@@ -729,14 +729,21 @@ def p_long():
     long_instructions = "You are Archivist.\n" + "".join('Rule %d: keep "quotes" & ampersands | pipes ^ carets %%PATH%% intact.\n' % i for i in range(700)) + "END-%s" % n
     P({"cmd": "botUpdate", "id": a, "instructions": long_instructions})
     message = 'Line one with "quotes" & an ampersand.\nLine two: 100% ^done | piped > redirected.\n' + ("x" * 40000) + "\nLAST-" + n
+    # A Theo that has been used a while: hundreds of saved chats, each one a deny rule for this bot.
+    many = [T.BOTS / "chats" / ("zz-old-thread-%03d-with-a-long-name.json" % i) for i in range(400)]
+    for f in many:
+        f.write_text('{"messages": []}', encoding="utf-8")
     T.fake("ok"); mark = T.calls_mark()
     T.say(a, message); T.wait_idle()
     c = last_call("Archivist", mark)
+    for f in many:
+        f.unlink()
     P({"cmd": "botUpdate", "id": a, "instructions": "You are Archivist. When asked to remember something, write it into your memory file right away."})
     checks = {"engine_ran": c is not None,
               "instructions_whole": c is not None and "END-" + n in c["system"] and c["system"].count("Rule ") >= 700,
               "message_whole": c is not None and c["prompt"].endswith("LAST-" + n) and 'Line one with "quotes" & an ampersand.\nLine two: 100% ^done' in c["prompt"],
-              "command_line_short": c is not None and sum(len(x) + 1 for x in c["args"]) < 30000}
+              "command_line_short": c is not None and sum(len(x) + 1 for x in c["args"]) < 8000,
+              "every_old_chat_still_denied": c is not None and sum(1 for d in c["denied"] if "zz-old-thread-" in d) == 400}
     return all(checks.values()), dict(checks, command_line_chars=c and sum(len(x) + 1 for x in c["args"]))
 
 
@@ -764,8 +771,8 @@ def p_skills():
     listed = c is not None and "invoice-check (by Scout)" in c["system"] and str(copy) in c["system"]
     not_private_path = c is not None and str(s / "SKILL.md") not in c["system"]
     copied = copy.is_file() and copy.read_text() == (s / "SKILL.md").read_text()
-    scout_denied = c is not None and any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / bid("Scout"))) for a in flag_list(c["args"], "--disallowedTools"))
-    copy_not_denied = c is not None and not any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / "skills")) for a in flag_list(c["args"], "--disallowedTools"))
+    scout_denied = c is not None and any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / bid("Scout"))) for a in c["denied"])
+    copy_not_denied = c is not None and not any(a.lower().startswith("read(" + rule_path(T.BOTS / "memory" / "skills")) for a in c["denied"])
     ok = listed and not_private_path and copied and scout_denied and copy_not_denied
     return ok, {"listed_with_copy_path": listed, "private_path_not_shown": not_private_path, "copy_matches": copied,
                 "authors_folder_denied": scout_denied, "copy_readable": copy_not_denied}
@@ -779,9 +786,9 @@ def p_recall():
     c = last_call("Ledger", mark)
     own = str(T.BOTS / "chats" / (bid("Ledger") + ".json"))
     told = c is not None and own in c["system"]
-    grep_ok = c is not None and any(a.lower() == "grep(" + rule_path(own) + ")" for a in c["args"])
+    grep_ok = c is not None and any(a.lower() == "grep(" + rule_path(own) + ")" for a in c["allowed"])
     scout = rule_path(T.BOTS / "chats" / (bid("Scout") + ".json"))
-    others_denied = c is not None and any(a.lower() == "read(" + scout + ")" for a in flag_list(c["args"], "--disallowedTools"))
+    others_denied = c is not None and any(a.lower() == "read(" + scout + ")" for a in c["denied"])
     return told and grep_ok and others_denied, {"told_path": told, "may_grep_own": grep_ok, "others_chats_denied": others_denied}
 
 

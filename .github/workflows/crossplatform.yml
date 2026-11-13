@@ -217,8 +217,9 @@ jobs:
         run: |
           run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow crossplatform.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
           if [ -z "$run_id" ]; then echo "No successful main build to update from."; exit 0; fi
-          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name theo-installers-windows-2022 --dir older
-          echo "exe=$(ls older/*-windows-x64-setup.exe | head -1)" >> "$GITHUB_OUTPUT"
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name theo-installers-windows-2022 --dir older || { echo "That build kept no Windows installer, so there is nothing to update from."; exit 0; }
+          exe=$(ls older/*-windows-x64-setup.exe 2>/dev/null | head -1)
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
       - run: python -m pip install playwright==1.52.0
       - name: Older build, then this one over it
         if: steps.older.outputs.exe != ''

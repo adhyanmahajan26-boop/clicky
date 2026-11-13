@@ -11,9 +11,8 @@ const BACKGROUND_ARG: &str = "--background";
 
 /// The tray icon is the micro face of the most urgent state (failed, then needs you, then working), with how many bots are
 /// in it; calm is the awake face and no count.
-#[tauri::command]
-fn set_tray(app: tauri::AppHandle, state: String, count: usize, label: String) -> Result<(), String> {
-    let bytes: &[u8] = match state.as_str() {
+fn show_tray_state(app: &tauri::AppHandle, state: &str, count: usize, label: &str) -> Result<(), String> {
+    let bytes: &[u8] = match state {
         "failed" => include_bytes!("../icons/tray/failed.png"),
         "needs" => include_bytes!("../icons/tray/needs.png"),
         "working" => include_bytes!("../icons/tray/working.png"),
@@ -28,6 +27,78 @@ fn set_tray(app: tauri::AppHandle, state: String, count: usize, label: String) -
         let _ = tray.set_title(if count > 0 { Some(count.to_string()) } else { None });
     }
     Ok(())
+}
+
+#[tauri::command]
+fn set_tray(app: tauri::AppHandle, state: String, count: usize, label: String) -> Result<(), String> {
+    show_tray_state(&app, &state, count, &label)
+}
+
+/// Keeps the tray face and notifications current from the engine itself, every second, whether or not the window is open.
+/// (The window's own timers slow down or stop while it's hidden, which is when "Writer needs you" matters most.) A bot that
+/// starts needing you, or fails, gets one notification, unless Theo's window is in front. Each one is written to
+/// Logs/notifications.log (title and whether Windows took it), so a test can see it was sent.
+fn watch_faces(app: tauri::AppHandle, harness: Arc<Harness>) {
+    tauri::async_runtime::spawn(async move {
+        let mut known: Option<std::collections::HashMap<String, (String, String)>> = None;
+        let mut tray_shown = String::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let report = harness.state_report();
+            let counts = &report["counts"];
+            let number = |key: &str| counts[key].as_u64().unwrap_or(0) as usize;
+            let (state, count, label) = if number("failed") > 0 {
+                ("failed", number("failed"), format!("{} failed", number("failed")))
+            } else if number("needs") > 0 {
+                ("needs", number("needs"), format!("{} need{} you", number("needs"), if number("needs") == 1 { "s" } else { "" }))
+            } else if number("working") > 0 {
+                ("working", number("working"), format!("{} working", number("working")))
+            } else {
+                ("awake", 0, String::new())
+            };
+            let shown = format!("{state}{count}");
+            if shown != tray_shown && show_tray_state(&app, state, count, &label).is_ok() {
+                tray_shown = shown;
+            }
+            let names: std::collections::HashMap<String, String> = report["bots"].as_array().into_iter().flatten()
+                .filter_map(|b| Some((b["id"].as_str()?.to_string(), b["name"].as_str()?.to_string()))).collect();
+            let mut now = std::collections::HashMap::new();
+            for face in report["faces"].as_array().into_iter().flatten() {
+                let (Some(id), Some(face_state)) = (face["id"].as_str(), face["state"].as_str()) else { continue };
+                let since = face["since"].as_str().unwrap_or("").to_string();
+                now.insert(id.to_string(), (face_state.to_string(), since.clone()));
+                let Some(before) = &known else { continue };
+                if face_state != "needs" && face_state != "failed" {
+                    continue;
+                }
+                if before.get(id) == Some(&(face_state.to_string(), since)) {
+                    continue;
+                }
+                let in_front = app.get_webview_window("main").map(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false)).unwrap_or(false);
+                if in_front {
+                    continue;
+                }
+                let name = names.get(id).cloned().unwrap_or_else(|| id.to_string());
+                let title = format!("{name} {}", if face_state == "needs" { "needs you" } else { "failed" });
+                let detail = face["detail"].as_str().filter(|d| !d.is_empty()).or(face["word"].as_str()).unwrap_or("").to_string();
+                use tauri_plugin_notification::NotificationExt;
+                let sent = app.notification().builder().title(&title).body(&detail).show();
+                let line = format!("{}\t{}\t{}\n", chrono_now(), match &sent { Ok(()) => "sent".to_string(), Err(e) => format!("error: {e}") }, title);
+                let log = harness.paths.logs_dir();
+                let _ = std::fs::create_dir_all(&log);
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log.join("notifications.log")) {
+                    let _ = f.write_all(line.as_bytes());
+                }
+            }
+            known = Some(now);
+        }
+    });
+}
+
+fn chrono_now() -> String {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    seconds.to_string()
 }
 
 /// A system notification: "<Bot> needs you" or "<Bot> failed", with one line of detail.
@@ -64,10 +135,15 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 fn main() {
     let told_still_running = Arc::new(AtomicBool::new(false));
-    let app = tauri::Builder::default()
+    let is_test_run = std::env::args().any(|a| a == "--test");
+    let mut builder = tauri::Builder::default();
+    if !is_test_run {
         // One Theo at a time: two engines on one data folder would run every routine twice and race on the same files. Opening
-        // Theo again (Start menu, desktop icon, a second double-click) brings the running one to the front instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
+        // Theo again (Start menu, desktop icon, a second double-click) brings the running one to the front instead. A test run
+        // (its own --data folder) stays out of it, so it never collides with the Theo someone is using.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)));
+    }
+    let app = builder
         .plugin(tauri_plugin_notification::init())
         // "Theo" is the name of its entry in Windows' sign-in list, which the uninstaller removes (windows/hooks.nsh).
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Theo").args([BACKGROUND_ARG]).build())
@@ -87,11 +163,21 @@ fn main() {
             std::fs::write(harness.paths.pid_file(), std::process::id().to_string())?;
             // Open at sign-in, as the Mac app does, from the first time Theo runs; after that, whatever Settings says (and Windows'
             // own Startup apps switch, which Theo leaves alone). Never for a test.
-            if !is_test && harness.settings.get("desktop.openAtLogin").is_none() {
+            if !is_test {
                 use tauri_plugin_autostart::ManagerExt;
-                let on = app.autolaunch().enable().is_ok();
-                harness.settings.set("desktop.openAtLogin", serde_json::json!(on));
+                match harness.settings.get("desktop.openAtLogin").and_then(|v| v.as_bool()) {
+                    None => {
+                        let on = app.autolaunch().enable().is_ok();
+                        harness.settings.set("desktop.openAtLogin", serde_json::json!(on));
+                    }
+                    // Uninstalled and installed again: the entry went with the uninstall, the setting stayed on.
+                    Some(true) if !theo_core::setup::sign_in_entry_exists("Theo") => {
+                        let _ = app.autolaunch().enable();
+                    }
+                    _ => {}
+                }
             }
+            watch_faces(app.handle().clone(), harness.clone());
             app.manage(harness);
 
             let open_item = tauri::menu::MenuItem::with_id(app, "open", "Open Theo", true, None::<&str>)?;
