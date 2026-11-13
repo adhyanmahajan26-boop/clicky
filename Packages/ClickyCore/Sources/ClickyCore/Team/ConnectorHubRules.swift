@@ -148,9 +148,12 @@ public enum HubAccessLevel: String, CaseIterable, Sendable {
         self = saved.flatMap(HubAccessLevel.init(rawValue:)) ?? .standard
     }
 
-    /// A turn that didn't come from the owner's own words (a routine, another bot, the local API) never does more than read.
+    /// A turn that didn't come from the owner's own words (a routine, another bot, the local API) never does more than read and
+    /// draft, which is what such turns could do before the hub: a routine still writes its draft or its page. Sending, sharing
+    /// and deleting (`full`) take the owner's own words.
     public func effective(ownerAsked: Bool) -> HubAccessLevel {
-        ownerAsked ? self : .read
+        if ownerAsked { return self }
+        return self == .full ? .readAndDraft : self
     }
 
     public var label: String {

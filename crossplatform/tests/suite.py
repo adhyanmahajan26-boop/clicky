@@ -1492,7 +1492,7 @@ def c02():
     return all(checks.values()), dict(checks, given=ra, read_only=rr)
 
 
-@test("C03", "A message through the local API only reads: a hub app's changing tool is refused, and a Claude account app's drafts are denied", "connectors")
+@test("C03", "A message through the local API never sends, even for a bot with the app in full: a hub app's sending tool is refused and a Claude account app's send is denied, while reading and drafting carry on", "connectors")
 def c03():
     hub_has_echo()
     a = fresh_bot("Outsider"); name = next(b["name"] for b in T.state()["bots"] if b["id"] == a)
@@ -1504,10 +1504,12 @@ def c03():
     c = mcp_call(name, mark); r = (c or {}).get("mcp", {})
     P({"cmd": "gateway", "action": "off"}); T.fake("ok")
     checks = {"answered": status == 200, "reads": r.get("results", {}).get("echo__echo") == "echo: hello hub",
-              "no_draft": not r.get("results", {}).get("echo__save_note", "").startswith("save_note:"),
+              "drafts": r.get("results", {}).get("echo__save_note") == "save_note: a note",
+              "send_not_offered": "echo__send_note" not in r.get("tools", ["?"]),
               "no_send": not r.get("results", {}).get("echo__send_note", "").startswith("send_note:"),
               "gmail_search_allowed": c is not None and "mcp__claude_ai_Gmail__search_threads" in c["allowed"],
-              "gmail_draft_denied": c is not None and "mcp__claude_ai_Gmail__create_draft" in c["denied"] and "mcp__claude_ai_Gmail__create_draft" not in c["allowed"]}
+              "gmail_draft_allowed": c is not None and "mcp__claude_ai_Gmail__create_draft" in c["allowed"] and "mcp__claude_ai_Gmail__create_draft" not in c["denied"],
+              "gmail_send_denied": c is not None and "mcp__claude_ai_Gmail__send_message" in c["denied"] and "mcp__claude_ai_Gmail__send_message" not in c["allowed"]}
     return all(checks.values()), dict(checks, report=r)
 
 

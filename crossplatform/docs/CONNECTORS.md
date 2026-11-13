@@ -114,7 +114,8 @@ Each bot has a **level** per app:
 | `readAndDraft` (default) | `read` and `change`. What bots could do before the hub. |
 | `full` | Everything. |
 
-**A turn that did not come from the owner's own words (a routine, another bot, the local API) never gets more than `read`.**
+**A turn that did not come from the owner's own words (a routine, another bot, the local API) never gets more than
+`readAndDraft`:** it looks things up and drafts as bots always could, and never sends, shares or deletes.
 A tool the level doesn't allow is not offered to the brain, and is refused if the brain asks for it by name anyway.
 
 ## Bot turns: tickets
@@ -225,7 +226,7 @@ the stand-ins in `crossplatform/tests`:
 - `oauth_mcp.py`, a remote app with its own OAuth server (registration, PKCE, rotating refresh tokens): sign-in with a
   stand-in browser, refresh when the token runs out and when the server stops taking it, `needsSignIn` after `signout`, and
   no token the server issued in anything the hub printed or wrote.
-- Levels and tickets: a `read` ticket can't run a changing tool, a turn not from the owner only reads, an expired ticket
+- Levels and tickets: a `read` ticket can't run a changing tool, a turn not from the owner never sends, an expired ticket
   runs nothing, a ticket deleted mid-turn stops it, a ticket outside `tickets/` is refused.
 - `fake_engine.py` as Claude Code: claude-account statuses from `claude mcp list`, and a plain failure with no Claude Code.
 

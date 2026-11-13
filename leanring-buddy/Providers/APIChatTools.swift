@@ -3,7 +3,7 @@
 //  leanring-buddy
 //
 //  The tools a bot on an API key may call in one turn: reading and writing its own memory folder, and the connector hub apps it
-//  was given, at the level it was given (a turn not from the owner's own words only reads). The loop that runs them and the wire
+//  was given, at the level it was given (a turn not from the owner's own words reads and drafts at most). The loop that runs them and the wire
 //  format for each API are in ClickyCore `Team/APIChatToolCalling.swift`; `APIChat.stream` sends the requests.
 //
 
@@ -236,10 +236,12 @@ final class APIChatToolbox: @unchecked Sendable {
     }
 
     private static func levelWords(_ level: String, ownerAsked: Bool) -> String {
-        guard ownerAsked else { return "look things up only: this turn didn't come from the owner's own words" }
-        switch HubAccessLevel(saved: level) {
+        // The level that holds for this turn: a turn not from the owner's own words is never `full`.
+        switch HubAccessLevel(saved: level).effective(ownerAsked: ownerAsked) {
         case .full: return "everything its tools do"
-        case .readAndDraft: return "look things up and draft or change, never send, share or delete"
+        case .readAndDraft:
+            let words = "look things up and draft or change, never send, share or delete"
+            return ownerAsked ? words : words + ": this turn didn't come from the owner's own words"
         case .read: return "look things up only"
         }
     }

@@ -414,7 +414,7 @@ fn call_tool(hub: &Hub, command_line: &CommandLine) -> Result<Option<Value>, Str
     };
     let tool = tools.iter().find(|tool| tool.name == tool_name).ok_or_else(|| format!("{} has no tool called {tool_name}.", entry.name))?;
     if !level.allows(tool.effect) {
-        let why = if ticket.owner_asked { "" } else { " This turn didn't come from the owner's own words, so apps are read-only." };
+        let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, tool.effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted." } else { "" };
         return Err(format!("Not allowed: {tool_name} {}, and this bot may {} in {}.{why}", effect_words(tool.effect), level_words(level), entry.name));
     }
     match hub.call_on(&mut connection, &tool_name, arguments, level) {

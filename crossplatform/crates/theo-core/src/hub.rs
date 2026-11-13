@@ -442,10 +442,10 @@ pub fn level_of(bot: &crate::model::Bot, app_id: &str) -> String {
 }
 
 /// The level that holds for this turn: a turn that didn't come from the owner's own words (a routine, another bot, the
-/// local API) never gets more than `read`.
+/// local API) never gets more than `readAndDraft`: it can look things up and draft, never send, share or delete.
 pub fn level_for_turn(granted_level: &str, from_owner: bool) -> &'static str {
     let granted = LEVELS.iter().position(|level| *level == granted_level).unwrap_or(1);
-    let most = if from_owner { 2 } else { 0 };
+    let most = if from_owner { 2 } else { 1 };
     LEVELS[granted.min(most)]
 }
 
@@ -885,12 +885,13 @@ mod tests {
     }
 
     #[test]
-    fn turns_not_from_the_owner_only_read() {
+    fn turns_not_from_the_owner_read_and_draft_at_most() {
         assert_eq!(level_for_turn("full", true), "full");
         assert_eq!(level_for_turn("readAndDraft", true), "readAndDraft");
         assert_eq!(level_for_turn("read", true), "read");
-        assert_eq!(level_for_turn("full", false), "read");
-        assert_eq!(level_for_turn("readAndDraft", false), "read");
+        assert_eq!(level_for_turn("full", false), "readAndDraft");
+        assert_eq!(level_for_turn("readAndDraft", false), "readAndDraft");
+        assert_eq!(level_for_turn("read", false), "read");
         assert_eq!(level_for_turn("nonsense", true), "readAndDraft");
     }
 

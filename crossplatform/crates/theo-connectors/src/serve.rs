@@ -155,7 +155,7 @@ impl ServerState {
             return refusal(format!("This bot wasn't given {}.", entry.name));
         };
         if !level.allows(tool_effect) {
-            let why = if ticket.owner_asked { String::new() } else { " This turn didn't come from the owner's own words, so apps are read-only.".to_string() };
+            let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, tool_effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted.".to_string() } else { String::new() };
             return refusal(format!("Not allowed: {tool_name} {}, and this bot may {} in {}.{why}", effect_words(tool_effect), level_words(level), entry.name));
         }
         match self.with_connection(&entry, tool_effect == ToolEffect::Reads, |hub, connection| hub.call_on(connection, &tool_name, arguments.clone(), level)) {

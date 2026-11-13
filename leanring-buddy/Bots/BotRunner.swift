@@ -286,8 +286,8 @@ enum BotRunner {
     }
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
-    /// `ownerAsked`: the turn came from the owner's own words. Only then may a bot's apps change anything (connector hub tickets); a
-    /// routine, another bot or the local API only reads.
+    /// `ownerAsked`: the turn came from the owner's own words. Only then may a bot's apps do everything their level says (connector
+    /// hub tickets); a routine, another bot or the local API reads and drafts at most, and never sends, shares or deletes.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                     ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         // A test profile can make an engine count as signed out (`test.engines.missing`): local turns see it too, with the

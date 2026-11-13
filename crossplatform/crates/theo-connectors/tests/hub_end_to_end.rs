@@ -189,11 +189,17 @@ fn levels_tickets_and_turns_not_from_the_owner_limit_what_runs() {
     let (sent, _) = hub(data.path(), &["call", "echo", "send_note", "--args", r#"{"text":"x"}"#, "--ticket", &draft_ticket]);
     assert_eq!(sent["ok"], false);
 
-    // A turn that didn't come from the owner never gets more than read.
+    // A turn that didn't come from the owner (a routine, another bot) never gets more than read and draft: it can
+    // still save its draft, and it can't send even when the bot has the app in full.
     let routine_ticket = issue_ticket(data.path(), json!({"echo": "full"}), false, 600);
     let (routine_change, _) = hub(data.path(), &["call", "echo", "save_note", "--args", r#"{"text":"x"}"#, "--ticket", &routine_ticket]);
-    assert_eq!(routine_change["ok"], false);
-    assert!(routine_change["error"].as_str().unwrap().contains("owner's own words"), "{routine_change}");
+    assert_eq!(routine_change["ok"], true, "{routine_change}");
+    let (routine_send, _) = hub(data.path(), &["call", "echo", "send_note", "--args", r#"{"text":"x"}"#, "--ticket", &routine_ticket]);
+    assert_eq!(routine_send["ok"], false);
+    assert!(routine_send["error"].as_str().unwrap().contains("owner's own words"), "{routine_send}");
+    let routine_read_ticket = issue_ticket(data.path(), json!({"echo": "read"}), false, 600);
+    let (routine_read_change, _) = hub(data.path(), &["call", "echo", "save_note", "--args", r#"{"text":"x"}"#, "--ticket", &routine_read_ticket]);
+    assert_eq!(routine_read_change["ok"], false);
 
     // An app the bot wasn't given can't be called.
     let other_app_ticket = issue_ticket(data.path(), json!({"gmail": "full"}), true, 600);

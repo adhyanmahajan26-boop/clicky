@@ -41,8 +41,10 @@ struct ConnectorHubRulesTests {
 
     // MARK: Levels
 
-    @Test func aTurnNotFromTheOwnerOnlyReads() {
-        #expect(HubAccessLevel.full.effective(ownerAsked: false) == .read)
+    @Test func aTurnNotFromTheOwnerReadsAndDraftsAtMost() {
+        #expect(HubAccessLevel.full.effective(ownerAsked: false) == .readAndDraft)
+        #expect(HubAccessLevel.readAndDraft.effective(ownerAsked: false) == .readAndDraft)
+        #expect(HubAccessLevel.read.effective(ownerAsked: false) == .read)
         #expect(HubAccessLevel.full.effective(ownerAsked: true) == .full)
         #expect(HubAccessLevel(saved: nil) == .readAndDraft)
         #expect(HubAccessLevel(saved: "nonsense") == .readAndDraft)
@@ -89,11 +91,15 @@ struct ConnectorHubRulesTests {
         #expect(!other.usesHub)
     }
 
-    @Test func aRoutineTurnGetsReadOnlyTickets() {
+    @Test func aRoutineTurnNeverGetsMoreThanReadAndDraft() {
         let plan = ConnectorHubTurnPlan.make(botApps: ["files", "gmail"], savedLevels: ["files": "full"], hubApps: [gmail(), files()],
                                              engine: "claude", ownerAsked: false)
-        #expect(plan.ticketApps == ["files": .read])
-        #expect(plan.directClaudeApps.first?.level == .read)
+        #expect(plan.ticketApps == ["files": .readAndDraft])
+        #expect(plan.directClaudeApps.first?.level == .readAndDraft)
+        let readOnly = ConnectorHubTurnPlan.make(botApps: ["files", "gmail"], savedLevels: ["files": "read", "gmail": "read"],
+                                                 hubApps: [gmail(), files()], engine: "claude", ownerAsked: false)
+        #expect(readOnly.ticketApps == ["files": .read])
+        #expect(readOnly.directClaudeApps.first?.level == .read)
     }
 
     @Test func claudeDirectRouteDeniesWhatTheLevelDoesNot() {

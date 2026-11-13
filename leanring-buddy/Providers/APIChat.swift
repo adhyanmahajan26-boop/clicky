@@ -312,7 +312,7 @@ enum APIChat {
     }
 
     /// A bot's turn: its persona as the system message, its memory file read in, the conversation so far, and its tools (its own
-    /// memory folder and the hub apps it was given). `ownerAsked`: the turn came from the owner's own words; otherwise its apps only read.
+    /// memory folder and the hub apps it was given). `ownerAsked`: the turn came from the owner's own words; otherwise its apps read and draft at most.
     static func runBot(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], ownerAsked: Bool,
                        onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         let providerID = String(bot.provider.dropFirst("api:".count))

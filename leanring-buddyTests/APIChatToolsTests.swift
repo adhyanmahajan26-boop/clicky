@@ -122,10 +122,13 @@ struct APIChatToolsTests {
 
         let notFromOwner = await APIChatToolbox.make(for: bot, ownerAsked: false, turnLimitSeconds: 60,
                                                      connectorSource: StandInConnectorSource(levels: ["notion": "full"]), memoryFolder: folder)
-        let readingNames = notFromOwner.definitions.map(\.name)
-        #expect(readingNames.contains("notion__search"))
-        #expect(!readingNames.contains("notion__create_page"))
-        #expect(!readingNames.contains("notion__delete_page"))
+        // Not the owner's own words (a routine, another bot): drafting carries on, and nothing that can't be undone is offered
+        // even to a bot that has the app in full.
+        let notFromOwnerNames = notFromOwner.definitions.map(\.name)
+        #expect(notFromOwnerNames.contains("notion__search"))
+        #expect(notFromOwnerNames.contains("notion__create_page"))
+        #expect(!notFromOwnerNames.contains("notion__delete_page"))
+        #expect(notFromOwner.promptSection.contains("never send, share or delete: this turn didn't come from the owner's own words"))
     }
 
     @Test func aGivenAppsToolRunsWithTheTurnsTicket() async throws {

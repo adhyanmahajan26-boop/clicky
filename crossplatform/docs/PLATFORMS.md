@@ -60,7 +60,7 @@ the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them
   program on this computer, and the apps on the owner's Claude account. Each server Claude Code has is added as an app on
   the Claude account the first time the page checks, once, so removing one keeps it removed.
 - Each bot gets each app at a level: read only, read and draft (the default), or everything. A turn that didn't come from the
-  owner's own words (a routine, another bot, the local API) only reads.
+  owner's own words (a routine, another bot, the local API) reads and drafts at most: it never sends, shares or deletes.
 - A turn's apps: before the turn Theo writes a ticket (`Connectors/tickets/`, deleted when the turn ends) and starts the
   engine with the hub as an MCP server called `theo` for that turn only: Claude Code through `--mcp-config` and an allow rule
   for `mcp__theo`, OpenCode through `OPENCODE_CONFIG_CONTENT`. The other agents call it `theo_apps`, as the Mac does: Codex

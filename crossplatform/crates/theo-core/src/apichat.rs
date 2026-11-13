@@ -9,7 +9,7 @@
 //! - A provider or model that turns tools down gets today's words-only turn, and the chat says why once
 //!   (`brains.modelsWithoutTools` remembers a model that has no tools at all).
 //! - Hub apps go through `theo-connectors call` with a ticket written for this turn and deleted when it ends. A tool name the
-//!   bot wasn't offered never reaches the hub. A turn not from the owner's own words only gets reading tools.
+//!   bot wasn't offered never reaches the hub. A turn not from the owner's own words never gets a tool that sends, shares or deletes.
 //!
 //! There is no engine session on an API: each turn's earlier messages are kept by Theo under `APISessions/<id>.json`, and the
 //! id is the bot's session for that chat, like any engine's.
@@ -528,13 +528,12 @@ impl Drop for Toolbox {
     }
 }
 
+/// `level` is the level that holds for this turn (`hub::level_for_turn`), so a turn not from the owner is never `full`.
 fn level_words(level: &str, from_owner: bool) -> &'static str {
-    if !from_owner {
-        return "look things up only: this turn didn't come from the owner's own words";
-    }
     match level {
         "full" => "everything its tools do",
         "read" => "look things up only",
+        _ if !from_owner => "look things up and draft or change, never send, share or delete: this turn didn't come from the owner's own words",
         _ => "look things up and draft or change, never send, share or delete",
     }
 }

@@ -88,13 +88,14 @@ pub fn tool_effect(tool_name: &str, annotations: Option<&serde_json::Value>) -> 
     ToolEffect::Changes
 }
 
-/// The level a bot really gets for one app in one turn: never more than `read` when the turn didn't come from the
-/// owner's own words (a routine, another bot, the local API).
+/// The level a bot really gets for one app in one turn: never more than `readAndDraft` when the turn didn't come from
+/// the owner's own words (a routine, another bot, the local API). Sending, sharing and deleting take the owner's own
+/// words; looking things up and drafting carry on, so a routine can still write its draft or its page.
 pub fn effective_level(granted_level: AccessLevel, turn_came_from_owner: bool) -> AccessLevel {
     if turn_came_from_owner {
         granted_level
     } else {
-        granted_level.min(AccessLevel::Read)
+        granted_level.min(AccessLevel::ReadAndDraft)
     }
 }
 
@@ -148,9 +149,10 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_not_from_the_owner_only_reads() {
-        assert_eq!(effective_level(AccessLevel::Full, false), AccessLevel::Read);
-        assert_eq!(effective_level(AccessLevel::ReadAndDraft, false), AccessLevel::Read);
+    fn a_turn_not_from_the_owner_reads_and_drafts_at_most() {
+        assert_eq!(effective_level(AccessLevel::Full, false), AccessLevel::ReadAndDraft);
+        assert_eq!(effective_level(AccessLevel::ReadAndDraft, false), AccessLevel::ReadAndDraft);
+        assert_eq!(effective_level(AccessLevel::Read, false), AccessLevel::Read);
         assert_eq!(effective_level(AccessLevel::Full, true), AccessLevel::Full);
     }
 }

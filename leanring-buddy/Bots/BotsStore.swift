@@ -1272,7 +1272,8 @@ final class BotsStore: ObservableObject {
         // Its own saved chats, which its prompt tells it to search (recall): its chat with the owner, the group chats it's in and its
         // private threads. Every other saved chat stays unreadable.
         let recall = bot.owner == nil ? [chatFilePath(bot.id)] + recallFiles(for: bot).map(\.path) : []
-        // What the bot's apps may change: only on the owner's own words, never on a routine's scheduled run.
+        // An app's `full` level (send, share, delete) holds only on the owner's own words, never on a routine's scheduled run;
+        // those still read and draft.
         let ownerAsked = fromOwner && !quietAllowed
         Task { [weak self] in
             var answer: String?

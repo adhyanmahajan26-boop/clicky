@@ -23,7 +23,7 @@ pub struct Ticket {
     pub bot_id: String,
     /// App id → the most this bot may do with it.
     pub apps: BTreeMap<String, AccessLevel>,
-    /// True only when the turn came from the owner's own words. Otherwise every app is `read` at most.
+    /// True only when the turn came from the owner's own words. Otherwise every app is `readAndDraft` at most.
     pub owner_asked: bool,
     /// When the ticket stops working (RFC 3339).
     pub expires_at: String,
@@ -40,6 +40,15 @@ impl Ticket {
     /// The level this turn really has for an app, or None when the bot wasn't given it.
     pub fn level_for(&self, app_id: &str) -> Option<AccessLevel> {
         self.apps.get(app_id).map(|granted_level| effective_level(*granted_level, self.owner_asked))
+    }
+
+    /// True when the bot's own level for the app would have let this tool run, and it's held back only because the turn
+    /// didn't come from the owner's own words. The refusal says so, so the bot can tell the owner what to ask for.
+    pub fn is_held_back_only_because_owner_did_not_ask(&self, app_id: &str, tool_effect: crate::model::ToolEffect) -> bool {
+        match self.apps.get(app_id) {
+            Some(granted_level) => !self.owner_asked && granted_level.allows(tool_effect),
+            None => false,
+        }
     }
 }
 
@@ -134,9 +143,9 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_not_from_the_owner_is_read_only() {
+    fn a_turn_not_from_the_owner_reads_and_drafts_at_most() {
         let mut ticket = ticket_expiring_in(60);
         ticket.owner_asked = false;
-        assert_eq!(ticket.level_for("echo"), Some(AccessLevel::Read));
+        assert_eq!(ticket.level_for("echo"), Some(AccessLevel::ReadAndDraft));
     }
 }

@@ -288,7 +288,7 @@ struct AppLevelRows: View {
                         .help(level.explanation)
                     }
                 }
-                Text("Only on your own words: a routine, another bot or the local API only ever reads.")
+                Text("Sending, sharing and deleting happen only on your own words: a routine, another bot or the local API reads and drafts at most.")
                     .font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
