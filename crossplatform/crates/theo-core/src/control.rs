@@ -66,12 +66,25 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             if let Some(i) = s(cmd, "instructions").filter(|i| !i.is_empty()) { bot.instructions = i; }
             if let Some(n) = s(cmd, "name").filter(|i| !i.is_empty()) { bot.name = n; }
             if let Some(d) = s(cmd, "description") { bot.description = d; }
-            // Which connectors it may use, by server name in `claude mcp list`.
+            // Which apps it may use: connector hub app ids, or (from older callers) Claude Code server names, which become
+            // the hub apps for those servers.
             if let Some(list) = cmd.get("apps").and_then(|a| a.as_array()) {
-                let mut apps: Vec<String> = list.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.len() <= 120 && crate::connectors::tool_rule(x).is_some()).collect();
-                apps.dedup();
-                bot.apps = apps;
+                let wanted: Vec<String> = list.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.len() <= 120).collect();
+                match crate::hub::hub_ids_for(h, &wanted).await {
+                    Ok((ids, added_levels)) => {
+                        for (id, level) in added_levels { bot.app_levels.entry(id).or_insert(level); }
+                        bot.apps = ids;
+                    }
+                    Err(e) => return err(&e),
+                }
             }
+            if let Some(levels) = cmd.get("appLevels").and_then(|a| a.as_object()) {
+                for (id, level) in levels {
+                    if let Some(level) = level.as_str().filter(|l| crate::hub::LEVELS.contains(l)) { bot.app_levels.insert(id.clone(), level.to_string()); }
+                }
+            }
+            let kept_apps = bot.apps.clone();
+            bot.app_levels.retain(|id, _| kept_apps.contains(id));
             let id = bot.id.clone();
             let enabled = bot.is_on();
             h.save_bot(bot);
@@ -120,15 +133,110 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                 Err(e) => err(&e),
             }
         }
+        // The Connectors page: the connector hub's apps (docs/CONNECTORS.md), which bots may use each, and sign-ins under way.
         "connectors" => {
             let stale = h.with(|s| s.connectors_checked.map(|t| (chrono::Utc::now() - t).num_seconds() > 300).unwrap_or(true));
             if cmd.get("refresh").and_then(|r| r.as_bool()).unwrap_or(false) || stale {
                 if let Err(e) = h.refresh_connectors().await {
-                    return err(&e);
+                    // A check that failed still leaves the list as the hub has it.
+                    if crate::hub::list_apps(h).await.is_err() { return err(&e); }
+                }
+            } else if let Err(e) = crate::hub::list_apps(h).await {
+                return err(&e);
+            }
+            ok(crate::hub::page_report(h))
+        }
+        "connectorCatalog" => match crate::hub::catalog(h).await {
+            Ok(apps) => ok(json!({"apps": apps})),
+            Err(e) => err(&e),
+        },
+        "connectorAdd" => {
+            let words: Vec<String> = if let Some(id) = s(cmd, "catalog") {
+                let mut w = vec!["add".to_string(), "--catalog".into(), id];
+                if let Some(new_id) = s(cmd, "id") { w.push("--id".into()); w.push(new_id); }
+                w
+            } else if let Some(app) = cmd.get("app").filter(|a| a.is_object()) {
+                vec!["add".into(), "--json".into(), app.to_string()]
+            } else {
+                return err("Needs an app or a catalog id.");
+            };
+            connector_change(h, words, None).await
+        }
+        "connectorRemove" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            let answer = connector_change(h, vec!["remove".into(), id.clone()], None).await;
+            // No bot keeps an app that's gone.
+            if answer.get("ok").and_then(|o| o.as_bool()) == Some(true) {
+                for mut bot in h.bots().into_iter().filter(|b| b.apps.contains(&id)) {
+                    bot.apps.retain(|a| a != &id);
+                    bot.app_levels.remove(&id);
+                    h.save_bot(bot);
                 }
             }
-            let (list, at) = h.with(|s| (s.connectors.clone(), s.connectors_checked));
-            ok(json!({"connectors": list, "checked": at.map(|t| t.to_rfc3339())}))
+            answer
+        }
+        "connectorEnable" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            let on = cmd.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+            connector_change(h, vec![if on { "enable" } else { "disable" }.into(), id], None).await
+        }
+        "connectorCheck" => {
+            let mut words = vec!["check".to_string()];
+            if let Some(id) = s(cmd, "id") { words.push(id); }
+            connector_change(h, words, None).await
+        }
+        // A pasted token (or a local app's secret setting), handed to the hub on its standard input: never on a command line,
+        // never in a log, never in the answer.
+        "connectorSecret" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            let value = s(cmd, "value").unwrap_or_default();
+            let mut words = vec!["set-secret".to_string(), id];
+            if let Some(name) = s(cmd, "env") { words.push("--env".into()); words.push(name); }
+            if cmd.get("clientSecret").and_then(|c| c.as_bool()).unwrap_or(false) { words.push("--client-secret".into()); }
+            let answer = connector_change(h, words.clone(), Some(value)).await;
+            if answer.get("ok").and_then(|o| o.as_bool()) == Some(true) && words.len() == 2 {
+                let _ = crate::hub::run_hub_command(h, &[String::from("check"), words[1].clone()], None, Duration::from_secs(60)).await;
+                let _ = crate::hub::list_apps(h).await;
+            }
+            answer
+        }
+        "connectorSignIn" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            match crate::hub::start_sign_in(h, &id).await {
+                Ok(url) => ok(json!({"app": id, "url": url})),
+                Err(e) => err(&e),
+            }
+        }
+        "connectorSignOut" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            h.with(|s| { s.sign_ins.remove(&id); });
+            connector_change(h, vec!["signout".into(), id], None).await
+        }
+        "connectorTools" => {
+            let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            match crate::hub::tools_of(h, &id).await {
+                Ok(tools) => ok(json!({"app": id, "tools": tools})),
+                Err(e) => err(&e),
+            }
+        }
+        // One bot's access to one app: off, read, readAndDraft or full.
+        "botApp" => {
+            let (Some(mut bot), Some(app)) = (s(cmd, "bot").and_then(|id| h.bot(&id)), s(cmd, "app")) else { return err("Needs bot and app.") };
+            let level = s(cmd, "level").unwrap_or_else(|| crate::hub::DEFAULT_LEVEL.into());
+            if level == "off" {
+                bot.apps.retain(|a| a != &app);
+                bot.app_levels.remove(&app);
+            } else {
+                if !crate::hub::LEVELS.contains(&level.as_str()) { return err("The level is read, readAndDraft, full or off."); }
+                if !h.with(|s| s.hub_apps.iter().any(|a| a.get("id").and_then(|i| i.as_str()) == Some(app.as_str()))) && crate::hub::list_apps(h).await.map(|apps| !apps.iter().any(|a| a.get("id").and_then(|i| i.as_str()) == Some(app.as_str()))).unwrap_or(true) {
+                    return err("There's no such app.");
+                }
+                if !bot.apps.contains(&app) { bot.apps.push(app.clone()); }
+                bot.app_levels.insert(app.clone(), level.clone());
+            }
+            let id = bot.id.clone();
+            h.save_bot(bot);
+            ok(json!({"bot": id, "app": app, "level": level}))
         }
         "botLook" => {
             let Some(mut bot) = s(cmd, "id").and_then(|id| h.bot(&id)) else { return err("No such bot.") };
@@ -229,6 +337,21 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION")})),
         _ => err(&format!("Unknown command {name}")),
+    }
+}
+
+/// Runs one hub command that changes the list, then reads the list again for the page and the prompts.
+async fn connector_change(h: &Arc<Harness>, words: Vec<String>, standard_input: Option<String>) -> Value {
+    let limit = if words.first().map(|w| w == "add" || w == "check").unwrap_or(false) { Duration::from_secs(150) } else { Duration::from_secs(30) };
+    let answer = crate::hub::run_hub_command(h, &words, standard_input, limit).await;
+    crate::hub::forget_kept_tools(h);
+    let _ = crate::hub::list_apps(h).await;
+    match answer {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() { object.remove("ok"); }
+            ok(value)
+        }
+        Err(e) => err(&e),
     }
 }
 

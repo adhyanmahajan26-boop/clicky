@@ -706,17 +706,24 @@ def p_memory():
     return c is not None and "ORCHID-" + n in c["system"], {"in_system_prompt": c is not None and "ORCHID-" + n in c["system"]}
 
 
-@test("P_connector_apps", "A bot gets a connector's tools only when the owner gave it that connector", "parity")
+@test("P_connector_apps", "A bot gets an app's tools only when the owner gave it that app; old Claude server names move onto hub apps; read and draft by default", "parity")
 def p_apps():
     a, l = bid("Archivist"), bid("Ledger")
-    r = P({"cmd": "botUpdate", "id": a, "apps": ["claude.ai Gmail", "theo-echo", "*"]})
+    # Older callers (and bots saved before the connector hub) name Claude Code servers: each becomes the hub app for it.
+    r = P({"cmd": "botUpdate", "id": a, "apps": ["claude.ai Gmail", "theo-echo", "*"]}, timeout=60)
     T.fake("ok"); mark = T.calls_mark()
     T.say(a, "Check my mail."); T.say(l, "Check my mail."); T.wait_idle()
     ca, cl = last_call("Archivist", mark), last_call("Ledger", mark)
-    allowed_a = ca["allowed"] if ca else []
+    allowed_a, denied_a = (ca["allowed"], ca["denied"]) if ca else ([], [])
     allowed_l = cl["allowed"] if cl else []
-    checks = {"saved": r.get("ok") and [b for b in T.state().get("bots", []) if b["id"] == a][0].get("apps") == ["claude.ai Gmail", "theo-echo"],
-              "given_bot_has_its_connectors": "mcp__claude_ai_Gmail" in allowed_a and "mcp__theo-echo" in allowed_a,
+    saved = [b for b in T.state().get("bots", []) if b["id"] == a][0]
+    checks = {"saved_as_hub_apps": r.get("ok") and saved.get("apps") == ["gmail", "theo-echo"],
+              # Gmail's tools are known (the catalog): read and draft, tool by tool, and sending is denied outright.
+              "gmail_reads_and_drafts": "mcp__claude_ai_Gmail__search_threads" in allowed_a and "mcp__claude_ai_Gmail__create_draft" in allowed_a,
+              "gmail_cant_send": "mcp__claude_ai_Gmail__send_message" in denied_a and "mcp__claude_ai_Gmail__send_message" not in allowed_a and "mcp__claude_ai_Gmail" not in allowed_a,
+              # A server whose tools Theo can't tell apart keeps what it had: the whole server, for the owner's own turns.
+              "unknown_server_kept_whole": "mcp__theo-echo" in allowed_a and saved.get("appLevels", {}).get("theo-echo") == "full",
+              "claude_account_apps_go_direct": ca is not None and "--mcp-config" not in ca["args"],
               "told_in_its_prompt": ca is not None and "Apps you can use: Gmail, theo-echo" in ca["system"],
               "other_bot_has_none": cl is not None and not any(x.startswith("mcp__") for x in allowed_l)}
     P({"cmd": "botUpdate", "id": a, "apps": []})
@@ -1342,19 +1349,20 @@ def s05():
     return ok, {"card": bool(cards), "started_by_itself": started_by_itself, "after_dont": after_no, "runs_after_start_it": [(r["title"], r["phase"]) for r in runs]}
 
 
-@test("S06", "Connectors from claude mcp list: connected, needs sign-in and can't connect, with when each last worked", "connectors")
+@test("S06", "Connectors on a Claude account (from claude mcp list): connected, needs sign-in and can't connect, with when each last worked", "connectors")
 def s06():
     (T.FAKE_DIR / "fake-mcp").write_text("Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\nclaude.ai Linear: https://mcp.linear.app/mcp - ! Needs authentication\nsentry: npx @sentry/mcp-server - \u2718 Failed to connect\n", encoding="utf-8")
-    r1 = P({"cmd": "connectors", "refresh": True}, timeout=60)["result"]["connectors"]
+    r1 = P({"cmd": "connectors", "refresh": True}, timeout=200)["result"]["connectors"]
     (T.FAKE_DIR / "fake-mcp").write_text("claude.ai Notion: https://mcp.notion.com/mcp - \u2718 Failed to connect\n", encoding="utf-8")
-    r2 = P({"cmd": "connectors", "refresh": True}, timeout=60)["result"]["connectors"]
-    by = {c["name"]: c for c in r1}
+    r2 = P({"cmd": "connectors", "refresh": True}, timeout=200)["result"]["connectors"]
+    by, later = {c["name"]: c for c in r1}, {c["name"]: c for c in r2}
+    notion_later = later.get("Notion", {})
     ok = (by.get("Notion", {}).get("status") == "connected" and by.get("Linear", {}).get("status") == "needsSignIn" and by.get("sentry", {}).get("status") == "failed"
-          and r2[0]["status"] == "failed" and r2[0].get("lastConnected"))
-    return ok, {"first": [(c["name"], c["status"]) for c in r1], "notion_later": r2[0]}
+          and by.get("Notion", {}).get("kind") == "claude-account" and notion_later.get("status") == "failed" and notion_later.get("lastConnected"))
+    return ok, {"first": [(c["name"], c["status"]) for c in r1], "notion_later": notion_later}
 
 
-@test("S08", "Three connector checks at once start one claude mcp list, and each gets its answer", "connectors")
+@test("S08", "Three connector checks at once run one check (not three), and each gets its answer", "connectors")
 def s08():
     import threading
     (T.FAKE_DIR / "fake-mcp").write_text("claude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\n", encoding="utf-8")
@@ -1374,7 +1382,8 @@ def s08():
     finally:
         (T.FAKE_DIR / "fake-mcp-sleep").unlink(missing_ok=True)
     lists = [c for c in T.calls(mark) if c.get("args", [])[:2] == ["mcp", "list"]]
-    ok = len(lists) == 1 and len(answers) == 3 and all(a == ["Notion"] for a in answers)
+    # One check: what Claude Code has (one list), then every app (one more, shared by every Claude account app).
+    ok = len(lists) <= 2 and len(answers) == 3 and all(a == answers[0] and "Notion" in a for a in answers)
     return ok, {"mcp_list_runs": len(lists), "answers": answers}
 
 
@@ -1388,6 +1397,170 @@ def s07():
     st2 = face_of(b).get("state")
     return st1 == "needs" and st2 != "needs", {"asking": st1, "after_answer": st2}
 
+
+
+# ---------------------------------------------------------------- The connector hub (theo-fix-plan package 2)
+
+ECHO_APP = {"id": "echo", "name": "Echo", "kind": "local", "command": str(T.HERE / "echo_mcp.py")}
+
+
+def hub_apps(refresh=False):
+    r = P({"cmd": "connectors", "refresh": refresh}, timeout=200)
+    return {a["id"]: a for a in r.get("result", {}).get("connectors", [])}
+
+
+def hub_has_echo():
+    """The echo stand-in as a local app in Theo's own hub (no Claude Code involved), added once."""
+    if "echo" not in hub_apps():
+        P({"cmd": "connectorAdd", "app": ECHO_APP}, timeout=120)
+    return hub_apps().get("echo", {})
+
+
+def fake_mcp(calls):
+    (T.FAKE_DIR / "fake-mcp-calls.json").write_text(json.dumps(calls), encoding="utf-8")
+    T.fake("mcp")
+
+
+def mcp_call(name, mark):
+    """The stand-in engine's last call for this bot that used MCP (OpenCode bots get their prompt in the message)."""
+    cs = [c for c in T.calls(mark) if "mcp" in c and (re.search(r"You are %s\b" % name, c["system"]) or re.search(r"You are %s\b" % name, c["prompt"]))]
+    return cs[-1] if cs else None
+
+
+def tickets_left():
+    folder = T.DATA / "Connectors" / "tickets"
+    return sorted(p.name for p in folder.glob("*.json")) if folder.exists() else []
+
+
+THREE_ECHO_CALLS = [{"tool": "echo__echo", "args": {"text": "hello hub"}}, {"tool": "echo__save_note", "args": {"text": "a note"}},
+                    {"tool": "echo__send_note", "args": {"text": "to Sam"}}]
+
+
+@test("C01", "No Claude Code on the computer: the Connectors page lists the echo app as connected, and an OpenCode bot uses its tool in a turn", "connectors")
+def c01():
+    T.setd("test.engine.claude", str(T.ROOT / "no-claude-code-here"))
+    try:
+        hub_has_echo()
+        page = P({"cmd": "connectors", "refresh": True}, timeout=200).get("result", {})
+        echo = next((a for a in page.get("connectors", []) if a["id"] == "echo"), {})
+        name = "Ocho %s" % T.nonce()[:4]
+        b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "opencode", "model": "opencode/fake"})["result"]["id"]
+        given = P({"cmd": "botApp", "bot": b, "app": "echo", "level": "readAndDraft"})
+        fake_mcp([{"tool": "echo__echo", "args": {"text": "hello hub"}}]); mark = T.calls_mark()
+        T.say(b, "Say hello through Echo."); T.wait_idle()
+        c = mcp_call(name, mark); report = (c or {}).get("mcp", {})
+        reply = next((m["text"] for m in reversed(T.chat(b, 10)) if m["author"] == b), "")
+        checks = {"listed_connected": echo.get("status") == "connected" and echo.get("kind") == "local",
+                  "page_knows_no_claude_code": page.get("claudeCode") is False and bool(page.get("note")),
+                  "given": given.get("ok") is True, "engine_was_opencode": bool(c and c["opencode"]),
+                  "tools_named_by_app": "echo__echo" in report.get("tools", []),
+                  "tool_ran": report.get("results", {}).get("echo__echo") == "echo: hello hub",
+                  "reply_has_it": "echo: hello hub" in reply, "ticket_gone_after_turn": not tickets_left()}
+        P({"cmd": "botDelete", "id": b})
+    finally:
+        T.setd("test.engine.claude", str(T.FAKE)); T.fake("ok")
+    return all(checks.values()), dict(checks, report=report)
+
+
+@test("C02", "A Claude Code bot reaches a hub app through its own --mcp-config: read and draft by default, never a send; read only when set so", "connectors")
+def c02():
+    hub_has_echo()
+    a = fresh_bot("Hubby"); other = fresh_bot("Plain")
+    name_a = next(b["name"] for b in T.state()["bots"] if b["id"] == a); name_o = next(b["name"] for b in T.state()["bots"] if b["id"] == other)
+    P({"cmd": "botApp", "bot": a, "app": "echo"})
+    fake_mcp(THREE_ECHO_CALLS); mark = T.calls_mark()
+    T.say(a, "Use Echo."); T.say(other, "Use Echo."); T.wait_idle()
+    ca, co = mcp_call(name_a, mark), mcp_call(name_o, mark)
+    ra = (ca or {}).get("mcp", {})
+    P({"cmd": "botApp", "bot": a, "app": "echo", "level": "read"}); mark = T.calls_mark()
+    T.say(a, "Use Echo again."); T.wait_idle()
+    rr = (mcp_call(name_a, mark) or {}).get("mcp", {})
+    checks = {"turn_has_the_hub": ca is not None and "--mcp-config" in ca["args"] and "mcp__theo" in ca["allowed"],
+              "send_not_offered": "echo__send_note" not in ra.get("tools", ["?"]) and "echo__echo" in ra.get("tools", []),
+              "reads": ra.get("results", {}).get("echo__echo") == "echo: hello hub",
+              "drafts": ra.get("results", {}).get("echo__save_note") == "save_note: a note",
+              "send_refused": not ra.get("results", {}).get("echo__send_note", "").startswith("send_note:"),
+              "bot_not_given_it_has_no_hub": co is not None and not co["mcp"]["server"] and "--mcp-config" not in co["args"],
+              "read_level_reads": rr.get("results", {}).get("echo__echo") == "echo: hello hub",
+              "read_level_cant_draft": not rr.get("results", {}).get("echo__save_note", "").startswith("save_note:"),
+              "ticket_gone_after_turn": not tickets_left()}
+    T.fake("ok")
+    return all(checks.values()), dict(checks, given=ra, read_only=rr)
+
+
+@test("C03", "A message through the local API only reads: a hub app's changing tool is refused, and a Claude account app's drafts are denied", "connectors")
+def c03():
+    hub_has_echo()
+    a = fresh_bot("Outsider"); name = next(b["name"] for b in T.state()["bots"] if b["id"] == a)
+    P({"cmd": "botApp", "bot": a, "app": "echo", "level": "full"})
+    P({"cmd": "connectorAdd", "catalog": "gmail"}, timeout=60) if "gmail" not in hub_apps() else None
+    P({"cmd": "botApp", "bot": a, "app": "gmail", "level": "full"})
+    tok = gw_on(); fake_mcp(THREE_ECHO_CALLS); mark = T.calls_mark()
+    status, body = req("POST", "/v1/bots/%s/messages" % a, {"text": "use echo", "source": "ci-job", "wait": True, "timeout": 60}, token=tok)
+    c = mcp_call(name, mark); r = (c or {}).get("mcp", {})
+    P({"cmd": "gateway", "action": "off"}); T.fake("ok")
+    checks = {"answered": status == 200, "reads": r.get("results", {}).get("echo__echo") == "echo: hello hub",
+              "no_draft": not r.get("results", {}).get("echo__save_note", "").startswith("save_note:"),
+              "no_send": not r.get("results", {}).get("echo__send_note", "").startswith("send_note:"),
+              "gmail_search_allowed": c is not None and "mcp__claude_ai_Gmail__search_threads" in c["allowed"],
+              "gmail_draft_denied": c is not None and "mcp__claude_ai_Gmail__create_draft" in c["denied"] and "mcp__claude_ai_Gmail__create_draft" not in c["allowed"]}
+    return all(checks.values()), dict(checks, report=r)
+
+
+@test("C04", "Sign in to a remote app from the Connectors page: the browser opens the hub's address, the app connects, sign out needs sign-in again; no token shows", "connectors")
+def c04():
+    server = subprocess.Popen([T.PY, str(T.HERE / "oauth_mcp.py")], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        port = int(server.stdout.readline().strip())
+        added = P({"cmd": "connectorAdd", "app": {"id": "notes", "name": "Notes", "kind": "remote", "url": "http://127.0.0.1:%d/mcp" % port, "auth": "oauth"}}, timeout=120)
+        before = hub_apps().get("notes", {})
+        opened_log = T.DATA / "Logs" / "opened.log"
+        started = P({"cmd": "connectorSignIn", "id": "notes"}, timeout=90)
+        url = started.get("result", {}).get("url", "")
+        opened = opened_log.read_text(encoding="utf-8").split() if opened_log.exists() else []
+        import urllib.request
+        landed = urllib.request.urlopen(url, timeout=30).read().decode("utf-8", "replace") if url else ""
+        after = T.wait_until(lambda: (lambda n: n if n.get("status") == "connected" and n.get("signIn", {}).get("state") == "done" else None)(hub_apps().get("notes", {})), 60) or {}
+        tools = P({"cmd": "connectorTools", "id": "notes"}, timeout=60).get("result", {}).get("tools", [])
+        signed_out = P({"cmd": "connectorSignOut", "id": "notes"}, timeout=60)
+        out = hub_apps().get("notes", {})
+        issued = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/debug/stats" % port, timeout=10).read()).get("issued", [])
+        everything = json.dumps([added, before, started, after, tools, signed_out, out, T.state()]) + (T.ROOT / "theod.log").read_text(encoding="utf-8", errors="replace")
+        for f in (T.DATA / "Connectors").glob("*.json"):
+            everything += f.read_text(encoding="utf-8", errors="replace")
+        checks = {"added_needs_sign_in": before.get("status") == "needsSignIn", "browser_opened_the_address": bool(url) and url in opened,
+                  "browser_came_back": "Signed in" in landed, "connected": after.get("status") == "connected",
+                  "tools_listed": any(t["name"] == "whoami" for t in tools), "signed_out": out.get("status") == "needsSignIn",
+                  "no_token_anywhere": bool(issued) and not any(t in everything for t in issued)}
+        P({"cmd": "connectorRemove", "id": "notes"}, timeout=60)
+    finally:
+        server.kill()
+    return all(checks.values()), checks
+
+
+@test("C05", "Bots saved before the hub keep their apps: \"claude.ai Gmail\" and \"theo-echo\" move onto hub apps at start, and a removed app leaves every bot", "connectors")
+def c05():
+    a = bid("Scout")
+    T.stop()
+    bots = json.loads((T.BOTS / "bots.json").read_text(encoding="utf-8"))
+    for b in bots:
+        if b["id"] == a:
+            b["apps"] = ["claude.ai Gmail", "theo-echo"]; b.pop("appLevels", None)
+    (T.BOTS / "bots.json").write_text(json.dumps(bots), encoding="utf-8")
+    settings_file = T.DATA / "settings.json"
+    settings = json.loads(settings_file.read_text(encoding="utf-8"))
+    settings.pop("connectors.movedOntoHub", None)
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
+    T.start()
+    moved = T.wait_until(lambda: (lambda b: b if b.get("apps") == ["gmail", "theo-echo"] else None)(next(x for x in T.state()["bots"] if x["id"] == a)), 30) or {}
+    on_disk = next(b for b in json.loads((T.BOTS / "bots.json").read_text(encoding="utf-8")) if b["id"] == a)
+    hub_has_echo(); P({"cmd": "botApp", "bot": a, "app": "echo"})
+    P({"cmd": "connectorRemove", "id": "echo"}, timeout=60)
+    after = next(x for x in T.state()["bots"] if x["id"] == a)
+    checks = {"moved": bool(moved), "saved": on_disk.get("apps") == ["gmail", "theo-echo"], "unknown_kept_whole": moved.get("appLevels", {}).get("theo-echo") == "full",
+              "removed_app_left_the_bot": "echo" not in after.get("apps", [])}
+    P({"cmd": "botUpdate", "id": a, "apps": []})
+    return all(checks.values()), dict(checks, apps=moved.get("apps"))
 
 
 @test("S09", "First run: Claude Code found, signed in or out from claude auth status, git and the GitHub CLI checked, no account details passed on", "setup")

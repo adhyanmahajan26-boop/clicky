@@ -168,8 +168,10 @@ The behaviour every connector had before the hub, kept as an option:
   whole server, so it counts as irreversible and only a `full` bot gets it.
 - `THEO_CONNECTORS_CLAUDE` points the hub at a stand-in Claude Code (the tests use `tests/fake_engine.py`).
 
-A Claude bot using a claude-account app should keep its direct route (Claude Code's own `mcp__claude_ai_*` tools; packages
-2 and 3), which is faster. The hub's route is for every other brain.
+A Claude bot using a claude-account app keeps its direct route (Claude Code's own `mcp__claude_ai_*` tools), which is faster.
+The hub's route is for every other brain. The Windows and Linux app does this already (`theo-core/src/hub.rs`: the tools the
+level allows are allowed by name, the rest denied, and a server whose tools aren't known is allowed whole only at `full`);
+the Mac app is package 3.
 
 ### Migrating what bots have today
 
