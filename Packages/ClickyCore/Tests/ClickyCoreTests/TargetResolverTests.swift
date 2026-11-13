@@ -289,6 +289,48 @@ private func resolvedTarget(pid: pid_t, node: MockNode, point: CGPoint, label: S
     #expect(target.occludedByPID == 700)
 }
 
+// MARK: - Theo's own main window
+
+private let theoDisplay = DisplayInfo(displayID: 1, localizedName: "Main", boundsCG: CGRect(x: 0, y: 0, width: 1470, height: 956),
+                                      visibleCG: CGRect(x: 0, y: 0, width: 1470, height: 956), frameAppKit: CGRect(x: 0, y: 0, width: 1470, height: 956), isMain: true)
+
+/// Theo's titled main window stays in the stack (text on it is Theo's, and what it covers is behind); its overlays don't.
+@Test func windowStackKeepsTheosMainWindowButNotItsOverlays() {
+    let windows = [
+        WindowInfo(windowID: 9, processIdentifier: 1, layer: 1000, boundsCG: CGRect(x: 0, y: 0, width: 1470, height: 956), alpha: 1, ownerName: "Theo", title: nil),
+        WindowInfo(windowID: 5, processIdentifier: 1, layer: 0, boundsCG: CGRect(x: 118, y: 190, width: 1280, height: 820), alpha: 1, ownerName: "Theo", title: "Theo"),
+        WindowInfo(windowID: 7, processIdentifier: 42, layer: 0, boundsCG: CGRect(x: 0, y: 33, width: 1470, height: 923), alpha: 1, ownerName: "Safari", title: "Wikipedia"),
+    ]
+    #expect(WindowStack(windows: windows, ownProcessIdentifier: 1, displays: [theoDisplay]).windows.map(\.windowID) == [7])
+    let kept = WindowStack(windows: windows, ownProcessIdentifier: 1, displays: [theoDisplay], keepingOwnWindowIDs: [5])
+    #expect(kept.windows.map(\.windowID) == [5, 7])
+    // Safari's text under Theo's window is behind it; Theo's own text isn't.
+    #expect(kept.isBehind(point: CGPoint(x: 500, y: 500), processIdentifier: 42))
+    #expect(!kept.isBehind(point: CGPoint(x: 500, y: 500), processIdentifier: 1))
+}
+
+/// Pointing at something in Theo's own window is checked against the window stack only: an AX hit test there would
+/// ask this very process for the element and wait on itself.
+@Test func hitTestOnTheosOwnWindowUsesTheWindowStackOnly() {
+    let button = MockNode(role: "AXButton", title: "Devices", frame: CGRect(x: 300, y: 400, width: 100, height: 30))
+    let window = MockNode(role: "AXWindow", title: "Theo", frame: CGRect(x: 118, y: 190, width: 1280, height: 820), children: [button])
+    let theo = MockNode(role: "AXApplication", title: "Theo", pid: 1, children: [window])
+    let ax = MockAXQuerying(apps: [theo])
+    let theoWindow = WindowInfo(windowID: 5, processIdentifier: 1, layer: 0, boundsCG: CGRect(x: 118, y: 190, width: 1280, height: 820), alpha: 1, ownerName: "Theo", title: "Theo")
+    let onTop = WindowStack(windows: [theoWindow], ownProcessIdentifier: 1, displays: [theoDisplay], keepingOwnWindowIDs: [5])
+    var target = resolvedTarget(pid: 1, node: button, point: CGPoint(x: 350, y: 415), label: "Devices")
+    HitTestVerifier.verify(&target, ax: ax, ownProcessIdentifier: 1, windowStack: onTop)
+    #expect(target.verified == true)
+    #expect(ax.systemWideQueries == 0)
+
+    let cover = WindowInfo(windowID: 8, processIdentifier: 700, layer: 0, boundsCG: CGRect(x: 200, y: 300, width: 400, height: 300), alpha: 1, ownerName: "Notes", title: "Notes")
+    let covered = WindowStack(windows: [cover, theoWindow], ownProcessIdentifier: 1, displays: [theoDisplay], keepingOwnWindowIDs: [5])
+    var coveredTarget = resolvedTarget(pid: 1, node: button, point: CGPoint(x: 350, y: 415), label: "Devices")
+    HitTestVerifier.verify(&coveredTarget, ax: ax, ownProcessIdentifier: 1, windowStack: covered)
+    #expect(coveredTarget.verified == false)
+    #expect(coveredTarget.occludedByPID == 700)
+}
+
 // MARK: - Explicit box on text inside a card
 
 @Test func explicitBoxOnOCRTextSnapsToTheContainingCard() throws {

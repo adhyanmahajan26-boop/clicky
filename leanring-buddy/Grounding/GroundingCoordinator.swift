@@ -568,6 +568,7 @@ final class GroundingCoordinator {
                     let outcome = await self.warmUpCaptureOutcome()
                     guard !Task.isCancelled else { return }
                     if outcome == .black { print("📸 Capture warm-up (\(reason)): app windows still black") }
+                    if outcome == .good { NotificationCenter.default.post(name: .clickyScreenContentSeen, object: nil) }
                     self.captureWarmUp.record(outcome, at: Date())
                 }
             }
@@ -658,6 +659,7 @@ final class GroundingCoordinator {
         let cursorCG = ScreenTopology.cg(fromAppKit: NSEvent.mouseLocation, flipH: ScreenTopology.mainDisplayHeight)
         if let cursorDisplay = windowStack.displays.first(where: { $0.boundsCG.contains(cursorCG) }),
            let topWindowOnCursorScreen = windowStack.windows.first(where: { $0.isApplicationWindowLayer && cursorDisplay.boundsCG.intersects($0.boundsCG) }),
+           topWindowOnCursorScreen.processIdentifier != ownProcessIdentifier,
            !frontProcessIdentifiers.contains(topWindowOnCursorScreen.processIdentifier) {
             frontProcessIdentifiers.append(topWindowOnCursorScreen.processIdentifier)
         }
@@ -952,6 +954,6 @@ enum WindowListReader {
                               ownerName: windowInfo[kCGWindowOwnerName as String] as? String ?? "",
                               title: windowInfo[kCGWindowName as String] as? String)
         }
-        return WindowStack(windows: windows, ownProcessIdentifier: getpid(), displays: displays)
+        return WindowStack(windows: windows, ownProcessIdentifier: getpid(), displays: displays, keepingOwnWindowIDs: TheoMainWindows.numbers())
     }
 }

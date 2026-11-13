@@ -87,7 +87,10 @@ final class ActionExecutor {
 
     // MARK: - Resolve (read only)
 
-    func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String) -> ResolvedActionTarget {
+    /// `previousTargetProcessIdentifier`: the app the task's previous step acted on (key steps go there when a
+    /// notification alert or one of Theo's panels is in front; ClickyCore ActionKeyTarget).
+    func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String,
+                 previousTargetProcessIdentifier: pid_t? = nil, previousStepBroughtAppForward: Bool = false) -> ResolvedActionTarget {
         switch step {
         case .openApp(let name, let bundleIdentifier):
             guard let candidate = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier) else {
@@ -113,7 +116,7 @@ final class ActionExecutor {
             return resolveFrontmost(includingFocusedElement: true)
 
         case .key:
-            return resolveFrontmost(includingFocusedElement: true)
+            return resolveKeyTarget(previousTargetProcessIdentifier: previousTargetProcessIdentifier, previousStepBroughtAppForward: previousStepBroughtAppForward)
 
         case .scroll(let elementID, _, _):
             if let elementID { return resolveElement(elementID, in: groundedTurn) }
@@ -161,12 +164,36 @@ final class ActionExecutor {
                                     processIdentifier: groundingElement.processIdentifier, frameCG: liveFrame)
     }
 
+    /// A key step's app: the frontmost one, unless that's a notification alert or one of Theo's panels while the task
+    /// was working in another app that's still running (ClickyCore ActionKeyTarget).
+    private func resolveKeyTarget(previousTargetProcessIdentifier: pid_t?, previousStepBroughtAppForward: Bool) -> ResolvedActionTarget {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
+        let isOwnApplication = frontmostApplication.processIdentifier == getpid()
+        let showsOwnMainWindow = isOwnApplication && (NSApp.keyWindow.map { TheoMainWindows.windows().contains($0) } ?? false)
+        let previousApplication = previousTargetProcessIdentifier.flatMap { NSRunningApplication(processIdentifier: $0) }
+        let chosenProcessIdentifier = ActionKeyTarget.processIdentifier(
+            frontmost: ActionKeyTarget.Frontmost(processIdentifier: frontmostApplication.processIdentifier, bundleIdentifier: frontmostApplication.bundleIdentifier,
+                                                 isOwnApplication: isOwnApplication, showsOwnMainWindow: showsOwnMainWindow),
+            previousTargetProcessIdentifier: previousTargetProcessIdentifier,
+            previousTargetIsRunning: previousApplication.map { !$0.isTerminated } ?? false,
+            previousStepBroughtAppForward: previousStepBroughtAppForward)
+        guard chosenProcessIdentifier != frontmostApplication.processIdentifier, let previousApplication else {
+            return resolveApplication(frontmostApplication, includingFocusedElement: true)
+        }
+        return resolveApplication(previousApplication, includingFocusedElement: true)
+    }
+
     private func resolveFrontmost(includingFocusedElement: Bool) -> ResolvedActionTarget {
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
+        return resolveApplication(frontmostApplication, includingFocusedElement: includingFocusedElement)
+    }
+
+    private func resolveApplication(_ frontmostApplication: NSRunningApplication, includingFocusedElement: Bool) -> ResolvedActionTarget {
         let processIdentifier = frontmostApplication.processIdentifier
-        let focusedElement = includingFocusedElement ? TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) : nil
+        // Never ask Theo's own process over AX from here (it would wait on itself).
+        let focusedElement = includingFocusedElement && processIdentifier != getpid() ? TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) : nil
         let facts = Self.facts(processIdentifier: processIdentifier, element: focusedElement, groundingElement: nil)
-        let windowFrame = Self.focusedWindow(processIdentifier: processIdentifier).flatMap(TypeForMeAccessibility.frameCG)
+        let windowFrame = processIdentifier == getpid() ? Self.theoWindowFrameCG() : Self.focusedWindow(processIdentifier: processIdentifier).flatMap(TypeForMeAccessibility.frameCG)
         return ResolvedActionTarget(facts: facts, axElement: focusedElement, processIdentifier: processIdentifier,
                                     frameCG: focusedElement.flatMap(TypeForMeAccessibility.frameCG) ?? windowFrame,
                                     runningApplication: frontmostApplication)
@@ -257,12 +284,29 @@ final class ActionExecutor {
         return (windowValue as! AXUIElement)
     }
 
+    /// Theo's key (else first) main window, in CG coordinates.
+    static func theoWindowFrameCG() -> CGRect? {
+        guard let window = NSApp.keyWindow.flatMap({ TheoMainWindows.windows().contains($0) ? $0 : nil }) ?? TheoMainWindows.windows().first else { return nil }
+        return ScreenTopology.cg(fromAppKit: window.frame, flipH: ScreenTopology.mainDisplayHeight)
+    }
+
     static func facts(processIdentifier: pid_t, element: AXUIElement?, groundingElement: GroundingElement?) -> ActionTargetFacts {
         let runningApplication = NSRunningApplication(processIdentifier: processIdentifier)
         var facts = ActionTargetFacts()
         facts.bundleIdentifier = runningApplication?.bundleIdentifier
         facts.applicationName = runningApplication?.localizedName ?? groundingElement?.applicationName
         facts.isOwnApplication = processIdentifier == getpid() || (runningApplication?.bundleIdentifier != nil && runningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier)
+        if processIdentifier == getpid() {
+            // Theo's own window: everything from AppKit and the grounding element, nothing over AX (it would wait on itself).
+            let keyMainWindow = NSApp.keyWindow.flatMap { TheoMainWindows.windows().contains($0) ? $0 : nil }
+            facts.windowIdentifier = groundingElement?.windowID ?? keyMainWindow.map { CGWindowID($0.windowNumber) }
+            facts.windowTitle = groundingElement?.windowTitle ?? keyMainWindow?.title
+            facts.isOwnMainWindow = TheoMainWindows.contains(facts.windowIdentifier)
+            facts.isSecureEventInputOn = IsSecureEventInputEnabled()
+            facts.groundingRole = groundingElement?.role
+            facts.label = groundingElement?.label ?? groundingElement?.value
+            return facts
+        }
         facts.isSecureEventInputOn = IsSecureEventInputEnabled()
         facts.groundingRole = groundingElement?.role
         facts.windowTitle = groundingElement?.windowTitle
@@ -441,7 +485,9 @@ final class ActionExecutor {
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
                     return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
-                runningApplication.activate(options: [.activateAllWindows])
+                guard await BackgroundInput.bringToFront(runningApplication) else {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: "brought it forward"), nil)
             }
             guard let applicationURL = target.applicationURL else { return (.failed(reason: "couldn't find the app"), nil) }
@@ -522,10 +568,32 @@ final class ActionExecutor {
                 guard let processIdentifier = target.processIdentifier else { return (.failed(reason: "no app to scroll"), nil) }
                 await VirtualCursor.shared.move(toCG: scrollPoint)
                 let lines = Int32(amount * 3)
+                // Something on the page under the point, to see afterwards whether the page really moved.
+                let elementUnderScrollPoint = BackgroundInput.element(atCG: scrollPoint)
+                let frameBeforeScroll = elementUnderScrollPoint.flatMap { TypeForMeAccessibility.frameCG(of: $0) }
                 let method = BackgroundInput.scroll(processIdentifier: processIdentifier, at: scrollPoint,
                                                     verticalLines: direction == .up ? lines : (direction == .down ? -lines : 0),
                                                     horizontalLines: direction == .left ? lines : (direction == .right ? -lines : 0))
-                return method.map { (.done(detail: "scrolled (\($0))"), nil) } ?? (.failed(reason: "couldn't scroll"), nil)
+                guard let method else { return (.failed(reason: "couldn't scroll"), nil) }
+                // A wheel event posted to the app's process is dropped by some apps (Safari's pages): it used to be
+                // reported as "scrolled" while nothing moved. When the page under the point didn't move and that
+                // point shows the target app, scroll there with the real pointer for a moment and put the pointer back.
+                if method == "pid scroll wheel", let elementUnderScrollPoint, let frameBeforeScroll {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    let frameAfterScroll = TypeForMeAccessibility.frameCG(of: elementUnderScrollPoint)
+                    let pageMoved = frameAfterScroll != nil && frameAfterScroll != frameBeforeScroll
+                    let pointShowsTargetApp = BackgroundInput.processIdentifier(of: elementUnderScrollPoint) == processIdentifier
+                    if !pageMoved && pointShowsTargetApp {
+                        let ownerPointerLocation = CGEvent(source: nil)?.location
+                        scroll(at: scrollPoint, direction: direction, amount: amount)
+                        if let ownerPointerLocation {
+                            SyntheticEvents.mouseEvent(.mouseMoved, at: ownerPointerLocation)?.post(tap: .cghidEventTap)
+                            onSyntheticPointerEvent()
+                        }
+                        return (.done(detail: "scrolled (real pointer, the app ignored a background scroll)"), nil)
+                    }
+                }
+                return (.done(detail: "scrolled (\(method))"), nil)
             }
             scroll(at: scrollPoint, direction: direction, amount: amount)
             return (.done(detail: nil), nil)
@@ -567,7 +635,9 @@ final class ActionExecutor {
                     if let processIdentifier = target.processIdentifier { frontmostBefore.restore(ifStolenBy: [processIdentifier]) }
                     return (.done(detail: "raised on Theo's screen"), nil)
                 }
-                target.runningApplication?.activate(options: [])
+                if let runningApplication = target.runningApplication, !(await BackgroundInput.bringToFront(runningApplication)) {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: nil), nil)
             }
             if let runningApplication = target.runningApplication {
@@ -582,7 +652,9 @@ final class ActionExecutor {
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
                     return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
-                runningApplication.activate(options: [.activateAllWindows])
+                guard await BackgroundInput.bringToFront(runningApplication) else {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: nil), nil)
             }
             if let applicationURL = target.applicationURL {
@@ -628,7 +700,10 @@ final class ActionExecutor {
         guard let frame = target.frameCG, frame.width > 0, frame.height > 0 else { return .failed(reason: "couldn't find where to click") }
         let point = CGPoint(x: frame.midX, y: frame.midY)
         // Never click through another app's window (or Clicky's own).
-        if let expectedProcessIdentifier = target.processIdentifier {
+        if target.processIdentifier == getpid() {
+            // Theo's own main window (the classifier refuses anything else of Theo's): checked from the window list.
+            guard TheoMainWindows.isOnTop(at: point) else { return .failed(reason: "something is covering it") }
+        } else if let expectedProcessIdentifier = target.processIdentifier {
             let systemWideElement = AXUIElementCreateSystemWide()
             var hitElement: AXUIElement?
             if AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &hitElement) == .success, let hitElement {
@@ -645,6 +720,7 @@ final class ActionExecutor {
     /// Theo's own cursor flies to the target; the click is AXPress, then a press on whatever supports one at that
     /// point, then a click posted to the app's process. The real pointer and keyboard focus are never touched.
     private func backgroundClick(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
+        if target.processIdentifier == getpid() { return .failed(reason: "Theo's own window can't be pressed in the background") }
         let frame = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
         let point = frame.flatMap { $0.width > 0 && $0.height > 0 ? CGPoint(x: $0.midX, y: $0.midY) : nil }
         if let point {
@@ -785,7 +861,7 @@ final class ActionExecutor {
         guard let processIdentifier = target.processIdentifier, processIdentifier != getpid(),
               NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier,
               let application = NSRunningApplication(processIdentifier: processIdentifier) else { return }
-        application.activate()
+        await BackgroundInput.bringToFront(application)
         try? await Task.sleep(nanoseconds: 150_000_000)
     }
 

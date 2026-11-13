@@ -35,6 +35,37 @@ struct ScreenCapture {
     var displayID: CGDirectDisplayID { frame.display.displayID }
 }
 
+/// Theo's own titled main windows on screen (Home with Settings, Agents, Setup): real windows the owner looks at, so
+/// Clicky sees them and can point there. Panels and overlays (spark, notch, pill, confirm card, notes) stay out of
+/// every capture. Before this, a question asked with Theo's window in front got a screenshot of the bare desktop.
+@MainActor
+enum TheoMainWindows {
+    static func windows() -> [NSWindow] {
+        NSApp.windows.filter { $0.isVisible && !($0 is NSPanel) && $0.styleMask.contains(.titled) && $0.level == .normal }
+    }
+
+    static func numbers() -> Set<CGWindowID> { Set(windows().map { CGWindowID($0.windowNumber) }) }
+
+    static func contains(_ windowID: CGWindowID?) -> Bool {
+        guard let windowID else { return false }
+        return numbers().contains(windowID)
+    }
+
+    /// The front app window (layers 0–19) under a CG point is one of Theo's main windows.
+    static func isOnTop(at pointCG: CGPoint) -> Bool {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        for info in windowList {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer >= 0, layer < 20,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary), bounds.contains(pointCG) else { continue }
+            let owner = (info[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
+            let number = (info[kCGWindowNumber as String] as? Int).map { CGWindowID($0) }
+            return owner == getpid() && contains(number)
+        }
+        return false
+    }
+}
+
 struct ScreenCaptureError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -196,16 +227,22 @@ enum ScreenCaptureService {
             return SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         }
         let ownProcessIdentifier = getpid()
+        // Theo's main windows are the owner's content too; only the overlays and panels are left out.
+        let mainWindowNumbers = TheoMainWindows.numbers()
+        let ownOverlayWindows = shareableContent.windows.filter {
+            $0.owningApplication?.processID == ownProcessIdentifier && !mainWindowNumbers.contains($0.windowID)
+        }
         if excludesOwnWindowsByWindow {
-            let ownWindows = shareableContent.windows.filter { $0.owningApplication?.processID == ownProcessIdentifier }
-            return SCContentFilter(display: display, excludingWindows: ownWindows)
+            return SCContentFilter(display: display, excludingWindows: ownOverlayWindows)
         }
         if let ownApplication = shareableContent.applications.first(where: { $0.processID == ownProcessIdentifier }) {
-            return SCContentFilter(display: display, excludingApplications: [ownApplication], exceptingWindows: [])
+            let ownMainWindows = shareableContent.windows.filter {
+                $0.owningApplication?.processID == ownProcessIdentifier && mainWindowNumbers.contains($0.windowID)
+            }
+            return SCContentFilter(display: display, excludingApplications: [ownApplication], exceptingWindows: ownMainWindows)
         }
         print("⚠️ ScreenCaptureService: own app not in SCShareableContent; excluding own windows by pid")
-        let ownWindows = shareableContent.windows.filter { $0.owningApplication?.processID == ownProcessIdentifier }
-        return SCContentFilter(display: display, excludingWindows: ownWindows)
+        return SCContentFilter(display: display, excludingWindows: ownOverlayWindows)
     }
 
     /// If the image's aspect ratio doesn't match the region (letterboxing),

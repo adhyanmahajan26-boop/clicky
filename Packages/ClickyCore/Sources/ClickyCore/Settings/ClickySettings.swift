@@ -64,6 +64,7 @@ public enum ClickySettings {
         public static let actionsEnabled = "v2.actions.enabled"
         /// Double, default 1.5 (0.5–5): the on-screen countdown before typing or an ordinary click.
         public static let actionsCountdownSeconds = "v2.actions.countdownSeconds"
+        public static let actionsLeaveSafariAlone = "v2.actions.leaveSafariAlone"
         /// Bool, default true: P8 read_article may scroll the article and OCR it when the web area has no text.
         public static let articleScrollOCRFallback = "v2.article.scrollOCRFallback"
         /// Bool, default true: "save my notes" also writes a PDF next to the Markdown file.
@@ -238,6 +239,13 @@ public enum ClickySettings {
     /// Clamped to 0.5…5 s.
     public static var actionsCountdownSeconds: Double {
         min(5, max(0.5, defaults.object(forKey: Keys.actionsCountdownSeconds) as? Double ?? 1.5))
+    }
+
+    /// Off by default: Clicky clicks, scrolls and types in Safari like any other browser. On: Safari is hands-off
+    /// unless the owner names it (the old rule, for a Mac where Safari mostly plays Netflix). Netflix is hands-off either way.
+    public static var actionsLeaveSafariAlone: Bool {
+        get { defaults.object(forKey: Keys.actionsLeaveSafariAlone) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.actionsLeaveSafariAlone) }
     }
 
     /// Password managers and Keychain: never read their field values.

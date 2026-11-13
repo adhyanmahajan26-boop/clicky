@@ -49,6 +49,8 @@ final class MockNode {
 
 /// An in-memory `AXQuerying`. `apps` are listed front-most first.
 final class MockAXQuerying: AXQuerying, @unchecked Sendable {
+    /// System-wide hit tests asked for (Theo's own targets must not ask).
+    var systemWideQueries = 0
     let apps: [MockNode]
     var focusedNode: MockNode?
 
@@ -147,6 +149,7 @@ final class MockAXQuerying: AXQuerying, @unchecked Sendable {
     }
 
     func systemWideElement(at pointCG: CGPoint) -> AXNodeReference? {
+        systemWideQueries += 1
         for app in apps {
             if let hit = Self.deepestHit(in: app, at: pointCG) {
                 return reference(hit)

@@ -442,6 +442,12 @@ public enum HitTestVerifier {
             target.verified = nil
             return
         }
+        // Something in Theo's own main window: the window stack decides. No AX hit test, which would ask this
+        // very process (and wait on it) for the element under the point.
+        if targetPID == ownProcessIdentifier {
+            applyWindowStackRule(&target, targetPID: targetPID, windowStack: windowStack)
+            return
+        }
 
         // One system-wide hit test usually settles it: whatever is on top.
         let systemWideHit = ax.systemWideElement(at: target.pointCG)

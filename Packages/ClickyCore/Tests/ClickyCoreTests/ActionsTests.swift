@@ -161,8 +161,9 @@ struct ActionDSLTests {
 struct ActionTierTests {
     static let plainContext = ActionTurnContext(ownerTranscript: "open chrome and google the best ramen")
 
-    func tier(_ step: ActionStep, _ target: ActionTargetFacts?, said transcript: String = "open chrome and google the best ramen") -> ActionTier {
-        ActionTierClassifier.classify(step, target: target, context: ActionTurnContext(ownerTranscript: transcript)).tier
+    func tier(_ step: ActionStep, _ target: ActionTargetFacts?, said transcript: String = "open chrome and google the best ramen",
+              leavesSafariAlone: Bool = false) -> ActionTier {
+        ActionTierClassifier.classify(step, target: target, context: ActionTurnContext(ownerTranscript: transcript, leavesSafariAlone: leavesSafariAlone)).tier
     }
 
     static let chrome = ActionTargetFacts(bundleIdentifier: "com.google.Chrome", applicationName: "Google Chrome", windowTitle: "Google")
@@ -301,21 +302,64 @@ struct ActionTierTests {
         #expect(tier(.highlight(targets: [.element(1)], notes: []), safari) == .refused)
         #expect(tier(.summarize(text: nil, title: nil), safari) == .refused)
         #expect(tier(.key(ActionKeyCombo.parse("space")!), safari) == .refused)
-        #expect(tier(.openApp(name: "Safari", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari")) == .refused)
-        #expect(tier(.switchWindow(app: "Safari", title: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari", applicationName: "Safari")) == .refused)
+        // Safari itself is a browser like any other by default...
+        #expect(tier(.openApp(name: "Safari", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari")) == .free)
+        #expect(tier(.switchWindow(app: "Safari", title: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari", applicationName: "Safari")) == .free)
+        // ...and hands-off unless named only with "leave Safari alone" on.
+        #expect(tier(.openApp(name: "Safari", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari"), leavesSafariAlone: true) == .refused)
+        #expect(tier(.switchWindow(app: "Safari", title: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari", applicationName: "Safari"),
+                     leavesSafariAlone: true) == .refused)
         // A Netflix window in another browser is protected too.
         let chromeNetflix = ActionTargetFacts(bundleIdentifier: "com.google.Chrome", applicationName: "Google Chrome", windowTitle: "Netflix")
         #expect(tier(.scroll(elementID: nil, direction: .down, amount: 1), chromeNetflix) == .refused)
         // Named this turn: allowed (normal tiers).
         #expect(tier(.click(elementID: 1), safari, said: "pause netflix") == .countdown)
-        #expect(tier(.openApp(name: "Safari", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari"), said: "open safari") == .free)
+        #expect(tier(.openApp(name: "Safari", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.Safari"), said: "open safari",
+                     leavesSafariAlone: true) == .free)
         // "safaris" isn't "safari".
         #expect(tier(.click(elementID: 1), safari, said: "book african safaris") == .refused)
+    }
+
+    /// Live 2026-11-13: "can you scroll down for me?" on a Wikipedia article in Safari was refused, and so was every click there.
+    @Test func safariArticlesAreScrolledAndClickedByDefault() {
+        let article = ActionTargetFacts(bundleIdentifier: "com.apple.Safari", applicationName: "Safari", windowTitle: "James Webb Space Telescope - Wikipedia",
+                                        groundingRole: .link, label: "Hubble Space Telescope", url: "https://en.wikipedia.org/wiki/James_Webb_Space_Telescope")
+        #expect(tier(.scroll(elementID: nil, direction: .down, amount: 3), article, said: "can you scroll down for me?") == .free)
+        #expect(tier(.click(elementID: 1), article, said: "open the hubble link") != .refused)
+        #expect(tier(.scroll(elementID: nil, direction: .down, amount: 3), article, said: "can you scroll down for me?", leavesSafariAlone: true) == .refused)
+        let refusal = ActionTierClassifier.classify(.scroll(elementID: nil, direction: .down, amount: 3), target: article,
+                                                    context: ActionTurnContext(ownerTranscript: "scroll down", leavesSafariAlone: true))
+        #expect(refusal.reason.contains("Safari"))
+        #expect(!refusal.reason.contains("Netflix"))
     }
 
     @Test func clickysOwnWindowsAreRefused() {
         #expect(tier(.click(elementID: 1), ActionTargetFacts(bundleIdentifier: "com.personal.clicky", groundingRole: .button, label: "Type", isOwnApplication: true)) == .refused)
         #expect(tier(.highlight(targets: [.element(1)], notes: []), ActionTargetFacts(isOwnApplication: true)) == .refused)
+    }
+
+    /// Live 2026-11-13: "press the device settings for me on this app" with Theo's own window in front. Clicky saw only the
+    /// desktop and asked which app. Theo's main windows are now seen; pressing there waits for the owner's yes.
+    @Test func theosMainWindowWaitsForAYesAndItsPanelsStayRefused() {
+        let settingsButton = ActionTargetFacts(bundleIdentifier: "com.personal.clicky", applicationName: "Theo", windowTitle: "Theo", groundingRole: .text,
+                                               label: "Devices", isOwnApplication: true, isOwnMainWindow: true)
+        let click = ActionTierClassifier.classify(.click(elementID: 1), target: settingsButton, context: ActionTurnContext(ownerTranscript: "press the device settings"))
+        #expect(click.tier == .confirm)
+        #expect(click.confirmQuestion?.contains("Theo") == true)
+        #expect(tier(.key(ActionKeyCombo.parse("cmd+f")!), settingsButton) == .confirm)
+        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: false), settingsButton) == .confirm)
+        #expect(tier(.scroll(elementID: nil, direction: .down, amount: 3), settingsButton) == .free)
+        #expect(tier(.highlight(targets: [.element(1)], notes: []), settingsButton) == .free)
+        // The confirm card, notch or spark are Theo's too, but never main windows: still refused, so Clicky can't approve itself.
+        var confirmCard = settingsButton
+        confirmCard.isOwnMainWindow = false
+        confirmCard.windowTitle = nil
+        confirmCard.label = "Yes"
+        #expect(tier(.click(elementID: 1), confirmCard) == .refused)
+        // Password fields in Theo's window are refused like anywhere else.
+        var keyField = settingsButton
+        keyField.role = "AXSecureTextField"
+        #expect(tier(.type(elementID: 1, text: "x", pressesReturn: false), keyField) == .refused)
     }
 
     @Test func returnIsAutomaticWhenAskedOrImpliedAndNeverAQuestion() {
@@ -351,17 +395,36 @@ struct ActionTierTests {
         #expect(tier(.openURL(URL(string: "https://a.com")!), nil) == .free)
     }
 
-    @Test func browserChoiceAvoidsSafari() {
+    @Test func browserChoiceUsesTheDefaultSafariUnlessItIsLeftAlone() {
         let installed: Set<String> = ["com.apple.Safari", "com.google.Chrome"]
         #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: installed, ownerTranscript: "google cats")
+                == .use(bundleIdentifier: "com.apple.Safari"))
+        #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: ["com.apple.Safari"], ownerTranscript: "google x")
+                == .use(bundleIdentifier: "com.apple.Safari"))
+    }
+
+    @Test func promptFollowsTheSafariChoiceAndAsksForActionNotInstructions() {
+        #expect(ActionsPromptSection.text(leavesSafariAlone: false).contains("leaves netflix alone unless the user names it"))
+        #expect(!ActionsPromptSection.text(leavesSafariAlone: false).contains("safari"))
+        #expect(ActionsPromptSection.text(leavesSafariAlone: true).contains("leaves safari and netflix alone"))
+        #expect(ActionsPromptSection.text(leavesSafariAlone: false).contains("don't tell them to click it themselves"))
+        #expect(ActionsPromptSection.text(leavesSafariAlone: false).contains("{\"do\":\"key\",\"combo\":\"return\"}"))
+    }
+
+    @Test func browserChoiceAvoidsSafariWhenItIsLeftAlone() {
+        let installed: Set<String> = ["com.apple.Safari", "com.google.Chrome"]
+        #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: installed, ownerTranscript: "google cats",
+                                           leavesSafariAlone: true)
                 == .use(bundleIdentifier: "com.google.Chrome"))
-        #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: installed, ownerTranscript: "google cats in safari")
+        #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: installed, ownerTranscript: "google cats in safari",
+                                           leavesSafariAlone: true)
                 == .use(bundleIdentifier: "com.apple.Safari"))
         #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "org.mozilla.firefox", installedBundleIdentifiers: installed.union(["org.mozilla.firefox"]),
                                            ownerTranscript: "open it in chrome") == .use(bundleIdentifier: "com.google.Chrome"))
         #expect(ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "org.mozilla.firefox", installedBundleIdentifiers: installed.union(["org.mozilla.firefox"]),
                                            ownerTranscript: "search it") == .use(bundleIdentifier: "org.mozilla.firefox"))
-        guard case .refused = ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: ["com.apple.Safari"], ownerTranscript: "google x")
+        guard case .refused = ActionBrowserChoice.choose(defaultBrowserBundleIdentifier: "com.apple.Safari", installedBundleIdentifiers: ["com.apple.Safari"], ownerTranscript: "google x",
+                                                         leavesSafariAlone: true)
         else { Issue.record("expected refused"); return }
     }
 }

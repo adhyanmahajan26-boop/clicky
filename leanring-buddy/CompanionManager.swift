@@ -364,6 +364,7 @@ final class CompanionManager: ObservableObject {
     private var audioPowerCancellable: AnyCancellable?
     private var permissionPollTimer: Timer?
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var screenContentSeenObserver: NSObjectProtocol?
     /// Permission changes in the unified log: `log show --predicate 'subsystem == "com.personal.clicky"'`.
     private let permissionLogger = Logger(subsystem: "com.personal.clicky", category: "permissions")
     /// Push-to-talk's start, which can still be pending when the keys come up.
@@ -374,6 +375,23 @@ final class CompanionManager: ObservableObject {
     /// Everything Theo needs is allowed.
     var allPermissionsGranted: Bool {
         [hasAccessibilityPermission, hasScreenRecordingPermission, hasMicrophonePermission, hasScreenContentPermission].allSatisfy { $0 }
+    }
+
+    /// What the spark waits for. Not the screen-content picker: the spark only follows the pointer, and that flag is
+    /// only set by the menu's "Screen access" item, so a fresh install with every real permission on never showed
+    /// the spark (Air, 2026-11-13: "screen content false" at launch, no spark at the mouse).
+    var sparkPermissionsGranted: Bool {
+        [hasAccessibilityPermission, hasScreenRecordingPermission, hasMicrophonePermission].allSatisfy { $0 }
+    }
+
+    /// A real capture showed other apps' windows, so screen content is plainly allowed: remember it as if
+    /// "Screen access" had been clicked.
+    func noteScreenContentSeen() {
+        guard !hasScreenContentPermission else { return }
+        hasScreenContentPermission = true
+        UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
+        print("🔑 Screen content: seen in a capture, remembered")
+        showSparkIfReady()
     }
 
     /// The spark layer is on screen.
@@ -419,6 +437,7 @@ final class CompanionManager: ObservableObject {
         if !greeting { sparkOverlay.hasShownOverlayBefore = true }
         sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
+        print("✨ Spark: on \(NSScreen.ownerScreens.count) screen(s)")
     }
 
     private func takeSparkOffScreens() {
@@ -474,6 +493,9 @@ final class CompanionManager: ObservableObject {
             self?.updateBrainAgent(for: newVoiceState)
         }
         startWakeWord()
+        screenContentSeenObserver = NotificationCenter.default.addObserver(forName: .clickyScreenContentSeen, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteScreenContentSeen() }
+        }
         refreshAllPermissions()
         print("🔑 Theo start: accessibility \(hasAccessibilityPermission), screen \(hasScreenRecordingPermission), mic \(hasMicrophonePermission), screen content \(hasScreenContentPermission)")
         startPermissionPolling()
@@ -505,7 +527,7 @@ final class CompanionManager: ObservableObject {
 
     /// Once everything is allowed the spark appears; the very first time it says hello.
     func showSparkIfReady() {
-        guard TheoProducts.isOn(.clicky), allPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible, TheoLink.shared.clickyRunsHere else { return }
+        guard TheoProducts.isOn(.clicky), sparkPermissionsGranted, isClickyCursorEnabled, !isOverlayVisible, TheoLink.shared.clickyRunsHere else { return }
         let isFirstTime = !hasCompletedOnboarding
         hasCompletedOnboarding = true
         putSparkOnScreens(greeting: isFirstTime)

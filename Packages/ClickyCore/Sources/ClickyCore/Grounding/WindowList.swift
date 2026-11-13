@@ -36,12 +36,17 @@ public struct WindowInfo: Sendable, Equatable {
 }
 
 public struct WindowStack: Sendable {
-    /// Front to back, without invisible windows and without Clicky's own.
+    /// Front to back, without invisible windows and without Clicky's own (except Theo's main windows, when kept).
     public let windows: [WindowInfo]
     public let displays: [DisplayInfo]
 
-    public init(windows rawWindows: [WindowInfo], ownProcessIdentifier: pid_t, displays: [DisplayInfo]) {
-        self.windows = rawWindows.filter { $0.alpha > 0.01 && $0.processIdentifier != ownProcessIdentifier && $0.boundsCG.area > 0 }
+    /// `keepingOwnWindowIDs`: Theo's own titled main windows (Home, Settings, Agents, Setup). They are real windows the
+    /// owner looks at, so they stay in the stack: text on them is read and owned by Theo, and what they cover counts as
+    /// behind. Overlays and panels (spark, notch, confirm card) are still left out.
+    public init(windows rawWindows: [WindowInfo], ownProcessIdentifier: pid_t, displays: [DisplayInfo], keepingOwnWindowIDs: Set<CGWindowID> = []) {
+        self.windows = rawWindows.filter {
+            $0.alpha > 0.01 && $0.boundsCG.area > 0 && ($0.processIdentifier != ownProcessIdentifier || keepingOwnWindowIDs.contains($0.windowID))
+        }
         self.displays = displays
     }
 

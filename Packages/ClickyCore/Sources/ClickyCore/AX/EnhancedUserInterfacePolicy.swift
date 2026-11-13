@@ -18,7 +18,11 @@ public enum EnhancedUserInterfacePolicy {
 
     public static let defaultBundleIdentifiers = [
         "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser",
-        "com.tinyspeck.slackmacgap", "com.microsoft.VSCode", electronToken
+        "com.tinyspeck.slackmacgap", "com.microsoft.VSCode",
+        // Spotify is built on Chromium (CEF), not Electron: without this its playlists and play buttons are hidden
+        // from Clicky (3 elements on the Studio, 2026-11-13), so "play <playlist>" could never be pressed.
+        "com.spotify.client",
+        electronToken
     ]
 
     public static func matches(bundleIdentifier: String?, isElectron: Bool, configuredBundleIdentifiers: Set<String>) -> Bool {

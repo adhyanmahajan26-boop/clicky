@@ -14,16 +14,19 @@ import ClickyCore
 import Combine
 import SwiftUI
 
-/// A borderless, click-through window covering one screen, above everything.
-final class SparkOverlayWindow: NSWindow {
+/// A borderless, click-through panel covering one screen, above everything. A non-activating panel (like the
+/// notch) rather than a plain window: with Theo in the Dock (a regular app) a plain window can be kept off other
+/// apps' full-screen Spaces, and the spark then isn't at the pointer there.
+final class SparkOverlayWindow: NSPanel {
     init(screen: NSScreen) {
-        super.init(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
         level = .screenSaver
         ignoresMouseEvents = true
         hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         setFrame(screen.frame, display: false)
@@ -41,6 +44,7 @@ final class SparkOverlayManager {
     var hasShownOverlayBefore = false
     private weak var companionManager: CompanionManager?
     private var screensObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     init() {
         screensObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -48,6 +52,22 @@ final class SparkOverlayManager {
                 guard let self, self.isShowingOverlay(), let companionManager = self.companionManager else { return }
                 self.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: companionManager)
             }
+        }
+        // Waking, unlocking or changing Space can leave the layer ordered out while Theo still counts it as shown.
+        // Put it back in front each time (cheap: only windows that aren't visible are touched).
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification,
+                     NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification] {
+            workspaceObservers.append(workspaceCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.bringBackIfOrderedOut() }
+            })
+        }
+    }
+
+    /// Re-fronts any spark window macOS took off screen while the layer is meant to be up.
+    func bringBackIfOrderedOut() {
+        for window in windows where !window.isVisible {
+            window.orderFrontRegardless()
         }
     }
 

@@ -17,6 +17,8 @@ import SwiftUI
 extension Notification.Name {
     /// Anything can ask the panel to close (push-to-talk, a turn starting…).
     static let clickyDismissPanel = Notification.Name("clickyDismissPanel")
+    /// Grounding's capture warm-up saw other apps' windows (screen content is allowed).
+    static let clickyScreenContentSeen = Notification.Name("clickyScreenContentSeen")
     /// Opens the panel (debug command showPanel).
     static let theoShowPanel = Notification.Name("theoShowPanel")
 }

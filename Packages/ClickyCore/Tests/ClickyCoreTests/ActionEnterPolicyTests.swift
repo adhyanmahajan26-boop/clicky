@@ -96,10 +96,11 @@ struct ActionEnterTierTests {
                                              role: "AXTextArea", label: "Write your prompt to Claude")
     static let messages = ActionTargetFacts(bundleIdentifier: "com.apple.MobileSMS", applicationName: "Messages", role: "AXTextArea", label: "iMessage")
 
+    /// With "leave Safari alone" on, so the Safari follow-up rules below are what's tested (off is the default; see ActionsTests).
     func decide(_ step: ActionStep, _ target: ActionTargetFacts, said transcript: String, current: String? = nil,
                 followUp: ActionSafariFollowUp = ActionSafariFollowUp(), now: Date = Date()) -> ActionTierDecision {
         ActionTierClassifier.classify(step, target: target, context: ActionTurnContext(ownerTranscript: transcript, currentTranscript: current,
-                                                                                       safariFollowUp: followUp, now: now))
+                                                                                       safariFollowUp: followUp, now: now, leavesSafariAlone: true))
     }
 
     @Test func ownerSaidItPressesEnterRightAway() {
@@ -212,6 +213,54 @@ struct ActionEnterTierTests {
         #expect(TerminalTTYLookup.isClaudeCode(name: "claude", executablePath: nil))
         #expect(!TerminalTTYLookup.isClaudeCode(name: "node", executablePath: "/opt/homebrew/bin/node"))
         #expect(!TerminalTTYLookup.isClaudeCode(name: "zsh", executablePath: "/bin/zsh"))
+    }
+
+    // MARK: Return on a selected item
+
+    /// Live 2026-11-13: Spotify, "play Ambarsaria" → click the song, then Return. The Return was dropped as
+    /// "typed only", so the song was selected but never played.
+    @Test func returnOnASelectedItemIsPressed() {
+        let spotifyRow = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium", role: "AXRow",
+                                           label: "Ambarsaria")
+        let row = decide(Self.returnKey, spotifyRow, said: "Amasya song for me can you play it")
+        #expect(row.tier != .refused)
+        #expect(row.tier != .confirm)
+        #expect(!row.dropsReturn)
+        // Focus Clicky can't read (Spotify keeps its AX tree mostly off): pressed after the usual countdown.
+        let unknownFocus = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium")
+        let unknown = decide(Self.returnKey, unknownFocus, said: "Amasya song for me can you play it")
+        #expect(unknown.tier == .countdown)
+        #expect(!unknown.dropsReturn)
+        let finderFile = ActionTargetFacts(bundleIdentifier: "com.apple.finder", applicationName: "Finder", role: "AXTextField", subrole: nil, label: "report.pdf")
+        // A text field (even Finder's rename box) keeps the typing rules: no Return unless asked.
+        #expect(decide(Self.returnKey, finderFile, said: "rename it").dropsReturn)
+    }
+
+    /// Enter on a focused button is as careful as clicking it (review on PR #13): a dialog's default "Delete" or a
+    /// "Buy now" waits for a yes, even when the owner said "press enter".
+    @Test func returnOnAFocusedButtonIsAsCarefulAsAClick() {
+        let deleteButton = ActionTargetFacts(bundleIdentifier: "com.apple.finder", applicationName: "Finder", windowTitle: "Delete?",
+                                             role: "AXButton", label: "Delete")
+        #expect(decide(Self.returnKey, deleteButton, said: "clean up my downloads").tier == .confirm)
+        #expect(decide(Self.returnKey, deleteButton, said: "press enter").tier == .confirm)
+        let buyButton = ActionTargetFacts(bundleIdentifier: "com.google.Chrome", applicationName: "Google Chrome", windowTitle: "Checkout", role: "AXButton", label: "Buy now")
+        #expect(decide(Self.returnKey, buyButton, said: "get me that charger").tier == .confirm)
+        let settingsToggle = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Wi-Fi",
+                                               role: "AXCheckBox", label: "Wi-Fi")
+        #expect(decide(Self.returnKey, settingsToggle, said: "press enter").tier == .confirm)
+        // An ordinary focused button: same countdown as a click, free when the owner asked for Enter.
+        let okButton = ActionTargetFacts(bundleIdentifier: "com.apple.Preview", applicationName: "Preview", role: "AXButton", label: "Open")
+        #expect(decide(Self.returnKey, okButton, said: "show me that file").tier == .countdown)
+        #expect(decide(Self.returnKey, okButton, said: "press enter").tier == .free)
+    }
+
+    @Test func returnStillWaitsInTextFieldsAndMessages() {
+        let document = ActionTargetFacts(bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", windowTitle: "Untitled", role: "AXTextArea")
+        #expect(decide(Self.returnKey, document, said: "write hello").dropsReturn)
+        #expect(decide(Self.returnKey, Self.messages, said: "tell mom hi").dropsReturn)
+        let messagesNoFocus = ActionTargetFacts(bundleIdentifier: "com.apple.MobileSMS", applicationName: "Messages")
+        #expect(decide(Self.returnKey, messagesNoFocus, said: "tell mom hi").dropsReturn)
+        #expect(!decide(Self.returnKey, Self.messages, said: "send it").dropsReturn)
     }
 
     // MARK: Safari follow-ups

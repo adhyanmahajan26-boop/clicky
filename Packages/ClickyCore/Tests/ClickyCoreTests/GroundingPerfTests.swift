@@ -312,6 +312,8 @@ private func drawInk(_ pixels: inout [UInt8], grayWidth: Int, nativeRect: CGRect
     let configured = Set(EnhancedUserInterfacePolicy.defaultBundleIdentifiers)
     #expect(EnhancedUserInterfacePolicy.matches(bundleIdentifier: "com.google.Chrome", isElectron: false, configuredBundleIdentifiers: configured))
     #expect(EnhancedUserInterfacePolicy.matches(bundleIdentifier: "company.thebrowser.Browser", isElectron: false, configuredBundleIdentifiers: configured))
+    // Spotify (Chromium, not Electron) has to be listed by name for its playlists to be seen.
+    #expect(EnhancedUserInterfacePolicy.matches(bundleIdentifier: "com.spotify.client", isElectron: false, configuredBundleIdentifiers: configured))
     #expect(!EnhancedUserInterfacePolicy.matches(bundleIdentifier: "com.apple.Safari", isElectron: false, configuredBundleIdentifiers: configured))
     #expect(!EnhancedUserInterfacePolicy.matches(bundleIdentifier: nil, isElectron: false, configuredBundleIdentifiers: configured))
     #expect(EnhancedUserInterfacePolicy.matches(bundleIdentifier: "com.hnc.Discord", isElectron: true, configuredBundleIdentifiers: configured))

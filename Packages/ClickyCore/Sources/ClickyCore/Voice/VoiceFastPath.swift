@@ -639,7 +639,8 @@ public enum VoiceFastPathPolicy {
     /// The tier, from ActionTierClassifier wherever the command is an action step.
     public static func tier(for command: VoiceFastPathCommand, facts: VoiceFastPathFacts, context: ActionTurnContext) -> ActionTierDecision {
         let frontmost = facts.frontmost
-        if let frontmost, frontmost.isOwnApplication, commandActsOnFrontWindow(command) {
+        // Theo's main window goes through the usual tiers below (keys there wait for a yes); its panels never.
+        if let frontmost, frontmost.isOwnApplication, !frontmost.isOwnMainWindow, commandActsOnFrontWindow(command) {
             return ActionTierDecision(.refused, "that's Clicky's own window")
         }
         switch command {
@@ -652,8 +653,8 @@ public enum VoiceFastPathPolicy {
             return ActionTierDecision(.free, "a media key")
         case .window:
             guard let frontmost else { return ActionTierDecision(.refused, "no window in front") }
-            if ActionTierClassifier.isProtectedFromActions(frontmost) && !context.ownerNamedSafariOrNetflix {
-                return ActionTierDecision(.refused, "Safari and Netflix are left alone unless you name them")
+            if ActionTierClassifier.isProtectedFromActions(frontmost, leavesSafariAlone: context.leavesSafariAlone) && !context.ownerNamedSafariOrNetflix {
+                return ActionTierDecision(.refused, ActionTierClassifier.protectedRefusalReason(frontmost))
             }
             if ActionTierClassifier.isSecurityApplication(frontmost) { return ActionTierDecision(.refused, "security prompts are off limits") }
             return ActionTierDecision(.free, "moving a window")
