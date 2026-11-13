@@ -66,6 +66,12 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             if let Some(i) = s(cmd, "instructions").filter(|i| !i.is_empty()) { bot.instructions = i; }
             if let Some(n) = s(cmd, "name").filter(|i| !i.is_empty()) { bot.name = n; }
             if let Some(d) = s(cmd, "description") { bot.description = d; }
+            // Which connectors it may use, by server name in `claude mcp list`.
+            if let Some(list) = cmd.get("apps").and_then(|a| a.as_array()) {
+                let mut apps: Vec<String> = list.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.len() <= 120 && crate::connectors::tool_rule(x).is_some()).collect();
+                apps.dedup();
+                bot.apps = apps;
+            }
             let id = bot.id.clone();
             let enabled = bot.is_on();
             h.save_bot(bot);
@@ -93,7 +99,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "openTerminal" => {
             let which = s(cmd, "which").unwrap_or_default();
-            match crate::setup::open_terminal(&which) {
+            match crate::setup::open_terminal(h, &which) {
                 Ok(()) => ok(json!({"opened": which})),
                 Err(e) => err(&e),
             }

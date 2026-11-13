@@ -98,7 +98,8 @@ function renderHead() {
 
 /* ---------------- cards ---------------- */
 const INSTALL = /win/i.test(navigator.platform || navigator.userAgent) ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash";
-const SIGNIN = /\/login|invalid api key|isn't installed|not logged in|sign in/i;
+// Kept in step with failover.rs classify's Auth, so a card and the Home lane agree on "signed out".
+const SIGNIN = /\/login|invalid api key|invalid x-api-key|authentication_error|isn't installed|not logged in|sign in|unauthori[sz]ed|\b401\b|oauth token (has )?expired/i;
 function failureCard(m, latest) {
   const reason = m.text.replace(/^Couldn't reply:\s*/, "");
   const signin = SIGNIN.test(reason);
@@ -110,7 +111,7 @@ function failureCard(m, latest) {
       + `<p>${missing ? "Theo runs bots on Claude Code, which isn't installed here yet." : "Theo runs bots on your Claude subscription, and Claude Code on this computer is signed out."}</p>`
       + `<div class="tc-obj"><span class="app"><b>C</b>${TP.badge("needs")}</span><span class="tx"><b>Claude Code</b><small>${missing ? "https://claude.com/claude-code" : "Run this in a terminal, then try again"}</small></span>${TP.pill("needs", missing ? "Not installed" : "Signed out")}</div>`
       + `<div class="tc-field"><span>${missing ? INSTALL : "claude auth login"}</span><button class="btn sm" data-copy="${missing ? INSTALL : "claude auth login"}">Copy</button></div>`
-      + `<div class="btns"><button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
+      + `<div class="btns">${missing ? "" : `<button class="btn" data-term="signin">Sign in</button>`}<button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
   }
   return `<div class="tc bad"><div class="tc-h">${botHTML(m.author, 28, { state: "failed" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · Reply</span>${TP.pill("failed", "Failed")}</div>`
     + `<div class="tc-q">${esc(nameOf(m.author))} couldn't answer</div><p>${esc(reason.split(/(?<=\.)\s/)[0])} Your message is kept, and nothing else was changed.</p>`
@@ -218,6 +219,8 @@ function wire(root) {
   root.querySelectorAll("[data-details]").forEach((b) => b.onclick = () => b.closest(".tc").classList.toggle("open"));
   root.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; });
   root.querySelectorAll("[data-say]").forEach((b) => b.onclick = async () => { await say(b.dataset.say); });
+  // Opens a terminal with the sign-in command, by the full path of the Claude Code Theo found (setup.rs terminal_command).
+  root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
   root.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => open({ kind: "bot", id: b.dataset.open }));
 }
 
@@ -262,7 +265,14 @@ async function renderConnectors(refresh = false) {
     const small = c.status === "failed" ? `<small class="w-bad">${esc(c.reason || "Not answering")}${c.lastConnected ? ` · worked ${ago(c.lastConnected)} ago` : ""}</small>`
       : c.status === "needsSignIn" ? `<small class="w-ask">Sign in so bots can use it</small>` : `<small>${esc(c.target)}</small>`;
     const act = c.status === "needsSignIn" ? `<button class="btn pri sm" data-signin="${esc(c.name)}">Sign in</button>` : c.status === "failed" ? `<button class="btn sm" data-refresh>Try again</button>` : "";
-    return `<div class="crow"><span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(kind === "ok" ? "ok" : kind === "needs" ? "needs" : kind === "failed" ? "failed" : "none")}</span><span class="tx"><b>${esc(c.name)}</b>${small}</span>${TP.pill(kind, word)}<span class="act">${act}</span></div>`;
+    // Who may use it: a bot only gets a connector's tools when it's switched on here (the Mac app's per-bot apps).
+    const server = c.server || c.name;
+    const who = state.bots.filter((b) => b.enabled !== false).map((b) => {
+      const on = (b.apps || []).includes(server);
+      return `<button type="button" class="btn sm${on ? " pri" : ""}" data-app="${esc(server)}" data-botapp="${esc(b.id)}" aria-pressed="${on}">${esc(b.name)}</button>`;
+    }).join("");
+    return `<div class="crow"><span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(kind === "ok" ? "ok" : kind === "needs" ? "needs" : kind === "failed" ? "failed" : "none")}</span><span class="tx"><b>${esc(c.name)}</b>${small}</span>${TP.pill(kind, word)}<span class="act">${act}</span></div>`
+      + `<div class="apps-for"><span class="muted">Bots that can use it</span>${who}</div>`;
   }).join("");
   $("#pane").innerHTML = `<div class="column"><div><h1>Connectors</h1><p class="muted">The apps Claude Code can reach for your bots. Checked ${ago(r.result.checked)} ago.</p>`
     + `<div class="pills">${TP.pill("ok", `${n("connected")} connected`)}${n("needsSignIn") ? TP.pill("needs", `${n("needsSignIn")} need sign-in`) : ""}${n("failed") ? TP.pill("failed", `${n("failed")} can't connect`) : ""}<button class="btn sm" data-refresh>Check again</button></div></div>`
@@ -270,6 +280,15 @@ async function renderConnectors(refresh = false) {
     + `<div id="signin-help"></div></div>`;
   sigs.connectors = true;
   $("#pane").querySelectorAll("[data-refresh]").forEach((b) => b.onclick = () => { b.disabled = true; renderConnectors(true); });
+  $("#pane").querySelectorAll("[data-botapp]").forEach((b) => b.onclick = async () => {
+    const bot = state.bots.find((x) => x.id === b.dataset.botapp);
+    if (!bot) return;
+    const apps = (bot.apps || []).filter((a) => a !== b.dataset.app);
+    if (b.getAttribute("aria-pressed") !== "true") apps.push(b.dataset.app);
+    await invoke({ cmd: "botUpdate", id: bot.id, apps });
+    state = (await invoke({ cmd: "botsState" })).result || state;
+    renderConnectors();
+  });
   $("#pane").querySelectorAll("[data-signin]").forEach((b) => b.onclick = () => {
     $("#signin-help").innerHTML = `<div class="tc ask"><div class="tc-h"><span class="app">${esc(b.dataset.signin.slice(0, 1))}${TP.badge("needs")}</span><span class="who"><b>${esc(b.dataset.signin)}</b> · Connector</span>${TP.pill("needs", "Needs sign-in")}</div>`
       + `<div class="tc-q">Sign in to ${esc(b.dataset.signin)}</div><p>claude.ai connectors sign in on claude.ai; others sign in from Claude Code's own <code>/mcp</code> menu. Then check again.</p>`
@@ -303,25 +322,23 @@ async function renderSettings() {
   const g = gw.result;
   $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><h2>Health check</h2><div class="list">${rows}</div>`
     + `<h2>Local API</h2><div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`
-    + `<h2>This computer</h2><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
+    + `<h2>This computer</h2><div class="list" id="login-row"></div><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
   $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettings(); };
+  // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
+  const drawLogin = (on) => {
+    if (typeof on !== "boolean" || !$("#login-row")) return;
+    $("#login-row").innerHTML = `<div class="crow"><span class="tx"><b>Open Theo when you sign in</b><small style="white-space:normal">Theo starts in the tray, so routines run without you opening it. Closing the window keeps Theo running; quit it from the tray icon.</small></span>${TP.pill(on ? "ok" : "none", on ? "On" : "Off")}<span class="act"><button class="btn sm" id="login-toggle">${on ? "Turn off" : "Turn on"}</button></span></div>`;
+    $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
+  };
+  window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
 }
 
 /* ---------------- the loop ---------------- */
 function open(v) { view = v; Object.keys(sigs).forEach((k) => delete sigs[k]); render(); }
-let traySig = "";
-function updateTray() {
-  const c = state.counts || {};
-  const [st, n, label] = c.failed ? ["failed", c.failed, `${c.failed} failed`] : c.needs ? ["needs", c.needs, `${c.needs} need${c.needs === 1 ? "s" : ""} you`] : c.working ? ["working", c.working, `${c.working} working`] : ["awake", 0, ""];
-  const sig = `${st}${n}`;
-  if (sig === traySig || !window.__TAURI__.core.invoke) return;
-  traySig = sig;
-  window.__TAURI__.core.invoke("set_tray", { state: st, count: n, label }).catch(() => {});
-}
 async function refresh() {
   try { state = (await invoke({ cmd: "botsState" })).result || state; } catch (e) { console.error(e); }
-  updateTray();
-  notifyChanges();
+  // The tray face and notifications come from the app itself (main.rs watch_faces), so they keep working while this window
+  // is hidden and its timers are slowed down.
   renderSidebar(); renderHead();
   if (view.kind === "bot" || view.kind === "group") await renderChat();
   else if (view.kind === "home") renderHome();
@@ -408,29 +425,6 @@ $("#bot-form").onsubmit = async (e) => {
   const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: "claude", model: f.get("model") });
   if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
 };
-
-/* ---------------- notifications ---------------- */
-// A bot that starts needing you, or fails, gets a system notification, once, unless you're looking at its chat.
-let prevFaces = null;
-const notified = new Set((() => { try { return JSON.parse(localStorage.getItem("theo.notified") || "[]"); } catch (e) { return []; } })());
-function notifyChanges() {
-  const now = Object.fromEntries(state.faces.map((f) => [f.id, f]));
-  if (prevFaces) {
-    for (const f of state.faces) {
-      if (f.state !== "needs" && f.state !== "failed") continue;
-      // New when the state or the moment it began changed: failing again is news too.
-      if (prevFaces[f.id] && prevFaces[f.id].state === f.state && prevFaces[f.id].since === f.since) continue;
-      const key = `${f.id}|${f.state}|${f.since || ""}`;
-      if (notified.has(key)) continue;
-      notified.add(key);
-      try { localStorage.setItem("theo.notified", JSON.stringify([...notified].slice(-200))); } catch (e) {}
-      if (document.hasFocus() && view.kind === "bot" && view.id === f.id) continue;
-      const title = `${nameOf(f.id)} ${f.state === "needs" ? "needs you" : "failed"}`;
-      window.__TAURI__.core.invoke("notify", { title, body: f.detail || f.word }).catch(() => {});
-    }
-  }
-  prevFaces = now;
-}
 
 /* ---------------- first run ---------------- */
 const SETUP_STEPS = ["Welcome", "Claude Code", "Coding", "Your first bot", "Done"];

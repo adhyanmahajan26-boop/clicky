@@ -36,7 +36,14 @@ fn named_repo(owner_words: &str) -> Option<PathBuf> {
 }
 
 async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = tokio::process::Command::new("git").args(args).current_dir(dir).output().await.map_err(|e| e.to_string())?;
+    let git = engine::locate("git").unwrap_or_else(|| PathBuf::from("git"));
+    let mut cmd = engine::background_command(&git);
+    // Never wait on a password prompt nobody can see: a push without credentials fails instead of hanging the run.
+    cmd.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never").stdin(std::process::Stdio::null()).kill_on_drop(true);
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(600), cmd.output()).await {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => return Err(format!("git {} took more than 10 minutes and was stopped.", args.first().unwrap_or(&""))),
+    };
     if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
 }
 
@@ -171,11 +178,9 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
         args.push("--resume".into());
         args.push(session.clone());
     }
-    args.push("--".into());
-    args.push(prompt);
     let cancel = Cancel::new();
     h.coding_procs.lock().unwrap().insert(run.id.clone(), cancel.clone());
-    let spec = Spec { program, args, env: vec![("NO_COLOR".into(), "1".into())], remove_env: vec!["CLAUDECODE".into(), "CLAUDE_CODE_ENTRYPOINT".into()], cwd: folder.clone(), limit: Duration::from_secs(3600), format: Format::Claude };
+    let spec = Spec { program, args, env: vec![("NO_COLOR".into(), "1".into())], remove_env: vec!["CLAUDECODE".into(), "CLAUDE_CODE_ENTRYPOINT".into()], cwd: folder.clone(), limit: Duration::from_secs(3600), format: Format::Claude, stdin: Some(prompt) };
     let outcome = engine::run(spec, cancel.clone(), Some(h.registry.clone()), |_| {}).await;
     h.coding_procs.lock().unwrap().remove(&run.id);
     if cancel.is_cancelled() {
@@ -221,9 +226,9 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
                     if existing.is_none() {
                         let gh = h.settings.string("test.engine.gh").map(PathBuf::from).or_else(|| engine::locate("gh"));
                         if let Some(gh) = gh {
-                            let (program, mut pre) = engine::command_for(&gh);
-                            pre.extend(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Theo's coding run.", "--head", branch].iter().map(|s| s.to_string()));
-                            let out = tokio::process::Command::new(program).args(pre).current_dir(&folder).output().await;
+                            let mut cmd = engine::background_command(&gh);
+                            cmd.args(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Theo's coding run.", "--head", branch]).current_dir(&folder).env("GH_PROMPT_DISABLED", "1").stdin(std::process::Stdio::null()).kill_on_drop(true);
+                            let out = cmd.output().await;
                             match out {
                                 Ok(o) if o.status.success() => {
                                     let url = String::from_utf8_lossy(&o.stdout).trim().lines().last().unwrap_or("").to_string();

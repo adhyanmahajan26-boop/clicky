@@ -7,17 +7,117 @@ use std::path::Path;
 use std::time::Duration;
 
 async fn run(program: &Path, args: &[&str], secs: u64) -> Option<(i32, String)> {
-    let (program, mut pre) = crate::engine::command_for(program);
-    pre.extend(args.iter().map(|s| s.to_string()));
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(pre).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
-    // Its own process group (and no console window on Windows), like every engine Theo starts: a probe in Theo's own
-    // group would make anything that ends an engine's group end Theo with it.
-    crate::procs::configure(&mut cmd);
-    let out = tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await.ok()?.ok()?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Some((out.status.code().unwrap_or(-1), text))
+    // Its own process tree with no console window, like every engine Theo starts: a probe in Theo's own group would make
+    // anything that ends an engine's group end Theo with it.
+    let (code, stdout, stderr) = crate::engine::run_briefly(program, args, &crate::paths::home(), Duration::from_secs(secs)).await?;
+    Some((code, stdout + &stderr))
+}
+
+/// Whether Windows has an entry called `name` in this user's programs to start at sign-in (HKCU\\...\\Run). Elsewhere: true.
+/// An uninstall removes Theo's entry, so a reinstall puts it back when the setting is still on.
+pub fn sign_in_entry_exists(name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        windows_sign_in::read_string(windows_sign_in::RUN_KEY, name).is_some()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+/// Theo's start-at-sign-in entry on Windows, written by Theo itself for this user only. (The autostart plugin writes to
+/// HKLM whenever the process can, which on an admin account with UAC off means every user of the PC gets Theo, and the
+/// uninstaller, which only cleans this user's entry, leaves it behind. It also leaves the program path unquoted.)
+#[cfg(windows)]
+pub mod windows_sign_in {
+    use windows_sys::Win32::System::Registry::*;
+
+    pub const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    /// Task Manager's Startup apps switch: the first byte is even when the entry is allowed to run, odd when switched off.
+    pub const APPROVED_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(Some(0)).collect()
+    }
+
+    pub fn read_string(key: &str, name: &str) -> Option<String> {
+        let (key, name) = (wide(key), wide(name));
+        let mut bytes: u32 = 0;
+        unsafe {
+            if RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 {
+                return None;
+            }
+            let mut buffer = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+            let mut size = (buffer.len() * 2) as u32;
+            if RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buffer.as_mut_ptr().cast(), &mut size) != 0 {
+                return None;
+            }
+            let length = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+            Some(String::from_utf16_lossy(&buffer[..length]))
+        }
+    }
+
+    fn switched_off_in_task_manager(name: &str) -> bool {
+        let (key, name) = (wide(APPROVED_KEY), wide(name));
+        let mut value = [0u8; 12];
+        let mut size = value.len() as u32;
+        let read = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_BINARY, std::ptr::null_mut(), value.as_mut_ptr().cast(), &mut size) };
+        read == 0 && size > 0 && value[0] % 2 == 1
+    }
+
+    /// On: the entry exists and Task Manager hasn't switched it off.
+    pub fn is_on(name: &str) -> bool {
+        read_string(RUN_KEY, name).is_some() && !switched_off_in_task_manager(name)
+    }
+
+    /// The command Windows runs: the program's full path in quotes (a user name can have spaces), then the arguments.
+    pub fn command_for(program: &std::path::Path, args: &[&str]) -> String {
+        let mut command = format!("\"{}\"", program.display());
+        for arg in args {
+            command.push(' ');
+            command.push_str(arg);
+        }
+        command
+    }
+
+    pub fn set(name: &str, command: Option<&str>) -> Result<(), String> {
+        let name_wide = wide(name);
+        unsafe {
+            let mut run: HKEY = std::ptr::null_mut();
+            let status = RegCreateKeyExW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), 0, std::ptr::null(), REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, std::ptr::null(), &mut run, std::ptr::null_mut());
+            if status != 0 {
+                return Err(format!("Windows wouldn't open the sign-in list (error {status})"));
+            }
+            let status = match command {
+                Some(command) => {
+                    let value = wide(command);
+                    RegSetValueExW(run, name_wide.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32)
+                }
+                None => match RegDeleteValueW(run, name_wide.as_ptr()) {
+                    2 => 0, // ERROR_FILE_NOT_FOUND: already gone
+                    other => other,
+                },
+            };
+            RegCloseKey(run);
+            if status != 0 {
+                return Err(format!("Windows wouldn't change the sign-in list (error {status})"));
+            }
+            // Turning it on in Theo also turns it back on in Task Manager's Startup apps; turning it off leaves no trace there.
+            let mut approved: HKEY = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, wide(APPROVED_KEY).as_ptr(), 0, KEY_SET_VALUE, &mut approved) == 0 {
+                if command.is_some() {
+                    let enabled = [2u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+                    RegSetValueExW(approved, name_wide.as_ptr(), 0, REG_BINARY, enabled.as_ptr(), enabled.len() as u32);
+                } else {
+                    RegDeleteValueW(approved, name_wide.as_ptr());
+                }
+                RegCloseKey(approved);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The official one-line installs for Claude Code, by platform.
@@ -53,15 +153,29 @@ pub async fn state(h: &Harness) -> Value {
     json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS})
 }
 
+/// The command a setup button runs in a terminal. Claude Code and the GitHub CLI are named by the full path Theo found them at:
+/// a terminal opened from Theo has Theo's own PATH, which doesn't yet have the folder an installer added since Theo started
+/// (Claude Code's Windows installer adds `%USERPROFILE%\.local\bin`; npm's folder often isn't on PATH at all).
+pub fn terminal_command(which: &str, claude: Option<&Path>, gh: Option<&Path>) -> Result<String, String> {
+    let quoted = |path: &Path, rest: &str| {
+        let text = path.to_string_lossy();
+        if cfg!(windows) { format!("& '{}' {rest}", text.replace('\'', "''")) } else { format!("'{}' {rest}", text.replace('\'', "'\\''")) }
+    };
+    Ok(match which {
+        "signin" => claude.map(|p| quoted(p, "auth login")).unwrap_or_else(|| "claude auth login".into()),
+        "install" => claude_install_command().to_string(),
+        "gh" => gh.map(|p| quoted(p, "auth login")).unwrap_or_else(|| "gh auth login".into()),
+        _ => return Err("Unknown command.".into()),
+    })
+}
+
 /// Opens the platform's terminal running one of the setup commands, for signing in or installing. Only these commands:
 /// the window can't ask for anything else.
-pub fn open_terminal(which: &str) -> Result<(), String> {
-    let command = match which {
-        "signin" => "claude auth login",
-        "install" => claude_install_command(),
-        "gh" => "gh auth login",
-        _ => return Err("Unknown command.".into()),
-    };
+pub fn open_terminal(h: &Harness, which: &str) -> Result<(), String> {
+    let claude = h.executable("claude").filter(|p| p.extension().map(|e| e != "py").unwrap_or(true));
+    let gh = crate::engine::locate("gh");
+    let command = terminal_command(which, claude.as_deref(), gh.as_deref())?;
+    let command = command.as_str();
     let spawn = |program: &str, args: &[&str]| std::process::Command::new(program).args(args).spawn().map(|_| ()).map_err(|e| e.to_string());
     if cfg!(target_os = "macos") {
         let script = format!("tell application \"Terminal\" to do script \"{}\"\ntell application \"Terminal\" to activate", command.replace('"', "\\\""));
@@ -79,5 +193,24 @@ pub fn open_terminal(which: &str) -> Result<(), String> {
             }
         }
         Err(format!("No terminal found. Run this in one: {command}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_names_the_program_theo_found() {
+        let found = Path::new(if cfg!(windows) { r"C:\Users\O'Neil\.local\bin\claude.exe" } else { "/home/o'neil/.local/bin/claude" });
+        let command = terminal_command("signin", Some(found), None).unwrap();
+        if cfg!(windows) {
+            assert_eq!(command, r"& 'C:\Users\O''Neil\.local\bin\claude.exe' auth login");
+        } else {
+            assert_eq!(command, "'/home/o'\\''neil/.local/bin/claude' auth login");
+        }
+        assert_eq!(terminal_command("signin", None, None).unwrap(), "claude auth login");
+        assert_eq!(terminal_command("gh", None, None).unwrap(), "gh auth login");
+        assert!(terminal_command("rm -rf", None, None).is_err());
     }
 }

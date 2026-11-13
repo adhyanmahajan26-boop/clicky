@@ -32,16 +32,45 @@ def arg_after(flag):
 
 model = arg_after("--model") or arg_after("-m") or ""
 system = arg_after("--append-system-prompt") or ""
-prompt = args[-1] if args else ""
+system_file = arg_after("--append-system-prompt-file")
+if system_file:
+    # As Claude Code does: the file is read once, at the start.
+    with open(system_file, encoding="utf-8") as f:
+        system = f.read()
+is_opencode = bool(args) and args[0] == "run"
+
+
+def flag_values(flag):
+    out = []
+    if flag in args:
+        for a in args[args.index(flag) + 1:]:
+            if a.startswith("--"):
+                break
+            out.append(a)
+    return out
+
+
+# Permission rules: on the command line, and from a --settings file, as Claude Code merges them.
+allowed, denied = flag_values("--allowedTools"), flag_values("--disallowedTools")
+settings_file = arg_after("--settings")
+if settings_file:
+    with open(settings_file, encoding="utf-8") as f:
+        perms = json.load(f).get("permissions", {})
+    allowed += perms.get("allow", [])
+    denied += perms.get("deny", [])
+if not is_opencode and "-p" in args and "--" not in args:
+    # `claude -p` with no prompt argument reads the prompt from standard input, as Theo now sends it.
+    prompt = sys.stdin.buffer.read().decode("utf-8")
+else:
+    prompt = args[-1] if args else ""
 resume = "--resume" in args or "-s" in args
 coding = "bypassPermissions" in args
-is_opencode = bool(args) and args[0] == "run"
 pgid = os.getpgid(0) if not WIN else None
 
 
 def log(extra=None):
     entry = {"t": time.time(), "mode": mode, "pid": os.getpid(), "pgid": pgid, "model": model, "resume": resume, "coding": coding,
-             "opencode": is_opencode, "cwd": os.getcwd(), "args": args, "system": system, "prompt": prompt}
+             "opencode": is_opencode, "cwd": os.getcwd(), "args": args, "allowed": allowed, "denied": denied, "system": system, "prompt": prompt}
     if extra:
         entry.update(extra)
     # One file per call: appends from engines running at once can interleave on Windows.
@@ -217,6 +246,18 @@ elif mode == "flaky":
     init(); say("answered after retry on " + model); done()
 elif mode == "autherr":
     fail("Invalid API key · Please run /login")
+elif mode == "signedout-cli":
+    # What Claude Code on Windows printed when signed out (seen on GitHub's Windows runners): its line as an assistant message
+    # marked with an error, then a result carrying the same line.
+    init()
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}, "error": "authentication_failed"})
+    out({"type": "result", "subtype": "success", "is_error": True, "result": "Not logged in · Please run /login"})
+    sys.exit(1)
+elif mode == "signedout-quiet":
+    # The same line with nothing marking it as an error, and a clean exit.
+    init()
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "result": "Not logged in · Please run /login"})
 elif mode == "usage":
     init(); say("counted")
     done(total_cost_usd=0.0125, usage={"input_tokens": 100, "output_tokens": 40, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 10})

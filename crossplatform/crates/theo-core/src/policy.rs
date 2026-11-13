@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const IRREVERSIBLE: [&str; 8] = ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill", "Agent", "Task"];
 
-pub fn allowed_tools(paths: &Paths, bot_id: &str, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
+pub fn allowed_tools(paths: &Paths, bot_id: &str, apps: &[String], readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
     let memory = format!("{}/**", rule_path(&paths.memory_dir(bot_id)));
     let projects = format!("{}/**", rule_path(&paths.projects_dir()));
     let mut tools = vec!["WebSearch".to_string(), "WebFetch".to_string(), format!("Edit({memory})"), format!("Write({memory})")];
@@ -29,6 +29,14 @@ pub fn allowed_tools(paths: &Paths, bot_id: &str, readable: &[PathBuf], recall: 
         tools.push(format!("Read({rule})"));
         tools.push(format!("Grep({rule})"));
     }
+    // The connectors the owner gave this bot (Connectors page), each by its server's name in `claude mcp list`.
+    for app in apps {
+        if let Some(rule) = crate::connectors::tool_rule(app) {
+            if !tools.contains(&rule) {
+                tools.push(rule);
+            }
+        }
+    }
     tools
 }
 
@@ -42,6 +50,11 @@ pub fn secret_read_rules(paths: &Paths, recall: &[PathBuf]) -> Vec<String> {
         ".gemini/**", ".cursor/**", ".local/share/opencode/auth.json", ".local/share/keyrings/**", ".mozilla/**", ".config/google-chrome/**",
         "Library/Keychains/**", "Library/Cookies/**", "Library/Mail/**", "Library/Messages/**", "Library/Application Support/Google/Chrome/**",
         "AppData/Roaming/Microsoft/Credentials/**", "AppData/Local/Google/Chrome/User Data/**",
+        // Windows' own places for the same things.
+        "AppData/Local/Microsoft/Credentials/**", "AppData/Local/Microsoft/Vault/**", "AppData/Roaming/Microsoft/Protect/**",
+        "AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/**", "AppData/Roaming/GitHub CLI/**", "AppData/Roaming/gcloud/**",
+        "AppData/Local/Microsoft/Edge/User Data/**", "AppData/Roaming/Mozilla/**", "AppData/Local/BraveSoftware/**",
+        "AppData/Roaming/Opera Software/**", "AppData/Roaming/Thunderbird/**",
     ]
     .iter()
     .map(|p| format!("{}/{}", rule_path(&home), p))
@@ -59,7 +72,7 @@ pub fn secret_read_rules(paths: &Paths, recall: &[PathBuf]) -> Vec<String> {
             }
         }
     }
-    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
+    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), format!("{root}/Turns/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
     denied.into_iter().map(|p| format!("Read({p})")).collect()
 }
 
@@ -77,21 +90,26 @@ pub fn other_bots_folders(paths: &Paths, bot_id: &str) -> Vec<String> {
     out
 }
 
-/// The whole argument list for a Claude Code bot turn.
-pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona: &str, prompt: &str, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
-    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model, "--permission-mode", "dontAsk", "--append-system-prompt", persona]
+/// The whole argument list for a Claude Code bot turn, and the permission rules that go with it. The bot's system prompt is read
+/// from `persona_file`, the owner's message goes in on standard input, and the rules go in a settings file (`settings_file`,
+/// written by the caller from what this returns): each can be long (one rule per saved chat), and Windows caps a whole command
+/// line at 32,767 characters. Rules from `--settings` are the same allow and deny rules as `--allowedTools` and
+/// `--disallowedTools`; a deny still wins over any allow.
+pub fn claude_turn(paths: &Paths, bot: &crate::model::Bot, model: &str, persona_file: &Path, settings_file: &Path, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf]) -> (Vec<String>, serde_json::Value) {
+    let persona_file = persona_file.to_string_lossy().to_string();
+    let settings_path = settings_file.to_string_lossy().to_string();
+    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model, "--permission-mode", "dontAsk", "--append-system-prompt-file", &persona_file, "--settings", &settings_path]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    args.push("--allowedTools".into());
-    args.extend(allowed_tools(paths, &bot.id, readable, recall));
-    args.push("--disallowedTools".into());
-    args.extend(IRREVERSIBLE.iter().map(|s| s.to_string()));
-    args.extend(secret_read_rules(paths, recall));
+    let allow = allowed_tools(paths, &bot.id, &bot.apps, readable, recall);
+    let mut deny: Vec<String> = IRREVERSIBLE.iter().map(|s| s.to_string()).collect();
+    deny.extend(secret_read_rules(paths, recall));
     // Bash outright: Claude Code lets read-only commands run in the working folder without a rule.
-    args.push("Bash".into());
-    args.push("PowerShell".into());
-    args.extend(other_bots_folders(paths, &bot.id));
+    deny.push("Bash".into());
+    deny.push("PowerShell".into());
+    deny.extend(other_bots_folders(paths, &bot.id));
+    let settings = serde_json::json!({"permissions": {"allow": allow, "deny": deny}});
     if let Some(effort) = bot.effort.as_deref().filter(|e| !e.is_empty()) {
         args.push("--effort".into());
         args.push(effort.into());
@@ -107,9 +125,7 @@ pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona:
         }
         _ => {}
     }
-    args.push("--".into());
-    args.push(prompt.into());
-    args
+    (args, settings)
 }
 
 /// Paths the owner's own words named this turn ("read ~/notes/plan.md"), which the bot may read too. Too-broad ones (the whole
@@ -173,8 +189,9 @@ fn is_narrow_enough(path: &Path, home: &Path) -> bool {
 }
 
 fn is_sensitive(path: &Path) -> bool {
-    let text = path.to_string_lossy();
-    [".ssh", ".aws", ".gnupg", "Keychains", ".env", "credentials"].iter().any(|s| text.contains(s))
+    // Without case: Windows and the Mac's disks don't care about it either (".SSH" is ".ssh").
+    let text = path.to_string_lossy().to_lowercase();
+    [".ssh", ".aws", ".gnupg", "keychains", ".env", "credentials", "protect", "psreadline", "user data"].iter().any(|s| text.contains(s))
 }
 
 #[cfg(test)]

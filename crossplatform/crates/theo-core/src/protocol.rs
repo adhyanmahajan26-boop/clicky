@@ -424,6 +424,15 @@ pub fn without_name_heading(text: &str, name: &str) -> String {
     }
 }
 
+/// Claude Code's own one-line answer when it isn't signed in, e.g. "Not logged in · Please run /login" or "Invalid API key ·
+/// Please run /login". Only the whole reply counts: a bot explaining how to run /login is still a reply.
+pub fn is_sign_in_line(text: &str) -> bool {
+    static LINE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"(?i)^(not logged in|invalid api key|oauth token (has )?expired|authentication[ _]error|invalid x-api-key)[^\n]{0,80}/login\.?$").unwrap()
+    });
+    LINE.is_match(text.trim())
+}
+
 /// A session the engine doesn't have any more.
 pub fn says_session_is_lost(text: &str) -> bool {
     static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)no conversation found|session[^\n]{0,60}not found|no such session|unknown session|could not find (the )?session|no (saved )?session|invalid session|valid session|thread[^\n]{0,40}not found").unwrap());

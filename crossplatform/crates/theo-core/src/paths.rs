@@ -72,6 +72,8 @@ impl Paths {
     pub fn logs_dir(&self) -> PathBuf { self.root.join("Logs") }
     pub fn control_inbox(&self) -> PathBuf { self.root.join("control-inbox") }
     pub fn control_outbox(&self) -> PathBuf { self.root.join("control-outbox") }
+    /// One folder per running bot turn, holding the system prompt the engine reads; removed when the turn ends.
+    pub fn turns_dir(&self) -> PathBuf { self.root.join("Turns") }
     pub fn pid_file(&self) -> PathBuf { self.root.join("theod.pid") }
     pub fn token_file(&self) -> PathBuf { self.root.join("gateway-token") }
 

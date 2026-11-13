@@ -12,7 +12,7 @@ crossplatform/
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests
   install/            one-line installers: install-linux.sh, install.ps1
   tools/              naming installers for a release and writing SHA256SUMS
-  docs/               PLATFORMS.md (what runs where), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
+  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
 ```
 
 ## Why Rust and Tauri
@@ -61,7 +61,8 @@ runs. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
 | Where | Result |
 |---|---|
 | Mac Studio | full suite 71/71; the built app 12/12; real Claude Code red-team and memory tests pass |
-| GitHub Ubuntu 24.04 / Windows Server 2022 | unit tests and full suite, 71/71 each |
-| GitHub Ubuntu 22.04 / Windows Server 2022 | app and installers built; the real app passes 12/12; `.deb` install, and `install.ps1` install and removal without admin |
+| GitHub Ubuntu 24.04 / Windows Server 2022 | unit tests and full suite, 83/83 each |
+| GitHub Ubuntu 22.04 / Windows Server 2022 | app and installers built; the real app passes 16/16; `.deb` install, and `install.ps1` install and removal without admin |
+| GitHub Windows Server 2022 and 2025 | the installed app driven end to end with the real Claude Code, 18/18 each, and updating over the last `main` build ([docs/WINDOWS-PC.md](docs/WINDOWS-PC.md)) |
 
-Not yet run on a Windows 10/11 PC or a Linux desktop with a real Claude Code login.
+Not yet run on a Windows 10/11 PC or a Linux desktop with a person signing in to Claude Code; docs/WINDOWS-PC.md has the 30-minute check for a real PC.

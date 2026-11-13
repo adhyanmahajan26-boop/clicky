@@ -192,6 +192,8 @@ impl Harness {
         if ended > 0 {
             eprintln!("[theo] ended {ended} engine(s) left running by the last session");
         }
+        // Turn folders a crash left behind.
+        let _ = std::fs::remove_dir_all(self.paths.turns_dir());
         self.load();
         self.settle_stale_routine_runs();
         let me = self.clone();
@@ -430,6 +432,10 @@ impl Harness {
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.push(self.reach_note(bot));
+        if !bot.apps.is_empty() {
+            let names: Vec<String> = bot.apps.iter().map(|a| a.strip_prefix("claude.ai ").unwrap_or(a).to_string()).collect();
+            parts.push(format!("Apps you can use: {}. Their tools are yours to call when the owner's request needs them; any other app's tools are off for you.", names.join(", ")));
+        }
         let memory_file = self.paths.memory_file(&bot.id);
         let memory = std::fs::read_to_string(&memory_file).unwrap_or_default();
         parts.push(prompts::memory_section(&memory, &memory_file.to_string_lossy()));
@@ -991,12 +997,23 @@ impl Harness {
         let _ = std::fs::create_dir_all(&workspace);
         let _ = std::fs::create_dir_all(self.paths.memory_dir(&bot.id));
         let mut new_session = None;
+        // This turn's own folder for the system prompt the engine reads; removed when the turn ends, however it ends.
+        let turn_folder = TurnFolder(self.paths.turns_dir().join(uuid::Uuid::new_v4().to_string()));
+        let mut stdin = None;
         let args = if is_claude {
             if session.is_none() {
                 new_session = Some(uuid::Uuid::new_v4().to_string());
             }
             let persona = self.persona(bot);
-            crate::policy::claude_args(&self.paths, bot, model, &persona, prompt, session.as_deref(), new_session.as_deref(), readable, recall)
+            let persona_file = turn_folder.0.join("system-prompt.md");
+            let settings_file = turn_folder.0.join("settings.json");
+            let (args, settings) = crate::policy::claude_turn(&self.paths, bot, model, &persona_file, &settings_file, session.as_deref(), new_session.as_deref(), readable, recall);
+            std::fs::create_dir_all(&turn_folder.0)
+                .and_then(|_| std::fs::write(&persona_file, persona.as_bytes()))
+                .and_then(|_| std::fs::write(&settings_file, serde_json::to_vec_pretty(&settings).unwrap_or_default()))
+                .map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
+            stdin = Some(prompt.to_string());
+            args
         } else {
             let mut a: Vec<String> = vec!["run".into(), "-m".into(), model.into(), "--format".into(), "json".into(), "--dir".into(), workspace.to_string_lossy().to_string()];
             if let Some(s) = &session {
@@ -1015,6 +1032,7 @@ impl Harness {
             cwd: workspace,
             limit: Duration::from_secs_f64(self.settings.turn_limit_seconds()),
             format: if is_claude { Format::Claude } else { Format::OpenCode },
+            stdin,
         };
         let cancel = Cancel::new();
         if self.with(|s| s.stopped.contains(&bot.id)) {
@@ -1059,8 +1077,11 @@ impl Harness {
             EndReason::Cancelled => return Ok((text, resolved)),
             EndReason::Exited => {}
         }
-        if let Some(error) = &outcome.error {
-            if text.is_empty() {
+        // Claude Code signed out answers with its own one line ("Not logged in · Please run /login") as if it were the reply,
+        // so a reply that is only that line, or only the error it reported, is the turn failing, never the bot speaking.
+        let error = outcome.error.clone().or_else(|| protocol::is_sign_in_line(&text).then(|| text.trim().to_string()));
+        if let Some(error) = &error {
+            if text.trim().is_empty() || text.trim() == error.trim() || protocol::is_sign_in_line(&text) {
                 let last = outcome.stderr_tail.lines().last().unwrap_or("").trim().to_string();
                 if session.is_some() && (protocol::says_session_is_lost(error) || protocol::says_session_is_lost(&outcome.stderr_tail)) {
                     return Err(RunError::LostSession);
@@ -1105,15 +1126,22 @@ impl Harness {
                     continue;
                 };
                 let key = format!("{}|{}|{}", room, sender.id, target.id);
+                // Checked and counted in one step: relays answering at the same time could otherwise each see 11 sent and
+                // both send, going past the cap (seen on Windows).
                 let (verdict, exchange) = me.with(|s| {
                     let turn = s.owner_turns.get(&ctx.root_room).copied().unwrap_or(0);
-                    let exchange = s.open_exchanges.get(&key).filter(|e| e.owner_turn == turn).cloned().unwrap_or_else(|| Exchange {
+                    let mut exchange = s.open_exchanges.get(&key).filter(|e| e.owner_turn == turn).cloned().unwrap_or_else(|| Exchange {
                         id: uuid::Uuid::new_v4().to_string().to_uppercase(),
                         thread_id: dm::id(&sender.id, &target.id),
                         owner_turn: turn,
                         round_trips: 0,
                     });
                     let verdict = s.budgets.get(&ctx.root_room).cloned().unwrap_or_default().verdict(exchange.round_trips);
+                    if protocol::cap_line(verdict, "", "").is_none() {
+                        exchange.round_trips += 1;
+                        s.budgets.entry(ctx.root_room.clone()).or_default().note_sent();
+                        s.open_exchanges.insert(key.clone(), exchange.clone());
+                    }
                     (verdict, exchange)
                 });
                 if let Some(line) = protocol::cap_line(verdict, &sender.name, &target.name) {
@@ -1121,13 +1149,7 @@ impl Harness {
                     note_at.insert(index, line);
                     continue;
                 }
-                let mut exchange = exchange;
-                let first = exchange.round_trips == 0;
-                exchange.round_trips += 1;
-                me.with(|s| {
-                    s.budgets.entry(ctx.root_room.clone()).or_default().note_sent();
-                    s.open_exchanges.insert(key, exchange.clone());
-                });
+                let first = exchange.round_trips == 1;
                 if first {
                     let mut card = ChatMessage::new(&sender.id, "");
                     card.card = Some(dm::card(&exchange.id, &target.id));
@@ -1888,14 +1910,9 @@ impl Harness {
 
     async fn list_connectors_now(&self) -> Result<(), String> {
         let program = self.executable("claude").ok_or("Claude Code isn't installed.")?;
-        let (program, mut args) = engine::command_for(&program);
-        args.extend(["mcp".to_string(), "list".to_string()]);
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
-        // Its own process group, like every engine Theo starts (see setup::run).
-        crate::procs::configure(&mut cmd);
-        let out = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await.map_err(|_| "Claude Code took too long to list connectors.".to_string())?.map_err(|e| e.to_string())?;
-        let mut list = crate::connectors::parse(&String::from_utf8_lossy(&out.stdout));
+        // Its own process tree, like every engine Theo starts: the servers it checks end with it, even after a timeout.
+        let (_, stdout, _) = engine::run_briefly(&program, &["mcp", "list"], &crate::paths::home(), Duration::from_secs(90)).await.ok_or_else(|| "Claude Code took too long to list connectors, or couldn't start.".to_string())?;
+        let mut list = crate::connectors::parse(&stdout);
         let now = Utc::now();
         let mut seen: HashMap<String, String> = std::fs::read(self.paths.root.join("connectors-seen.json")).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
         for c in list.iter_mut() {
@@ -2058,7 +2075,7 @@ impl Harness {
                 "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
                 "exchanges": s.live_exchanges.iter().map(|(id, e)| json!({"id": id, "from": e.sender, "to": e.target, "room": e.room, "replying": e.replying})).collect::<Vec<_>>(),
                 "threads": threads,
-                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description})).collect::<Vec<_>>(),
+                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps})).collect::<Vec<_>>(),
                 "groups": s.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "head": g.head_id, "members": g.member_ids})).collect::<Vec<_>>(),
                 "rounds": s.rounds.keys().collect::<Vec<_>>(),
                 "queued": s.queues.iter().filter(|(_, q)| !q.is_empty()).map(|(k, q)| (k.clone(), q.len())).collect::<HashMap<_, _>>(),
@@ -2099,4 +2116,13 @@ pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
     };
     let lines: Vec<String> = sorted.iter().map(|f| format!("{} **{}**: {}", match f.0.as_str() { "fail" => "✗", "warn" => "!", _ => "✓" }, f.1, f.2)).collect();
     format!("{head}\n\n{}", lines.join("\n"))
+}
+
+/// A bot turn's folder under Turns/, removed when the turn is over.
+struct TurnFolder(PathBuf);
+
+impl Drop for TurnFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

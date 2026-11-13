@@ -49,6 +49,9 @@ pub struct Spec {
     pub cwd: PathBuf,
     pub limit: Duration,
     pub format: Format,
+    /// Written to the engine's standard input, then closed. The prompt goes here rather than on the command line: Windows
+    /// caps a command line at 32,767 characters (8,191 through cmd.exe) and cmd.exe cuts an argument at its first line break.
+    pub stdin: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +130,14 @@ impl StreamParser {
                         _ => {}
                     }
                 }
+                // Claude Code's own message about a failed request (signed out, no credit, the API down) comes as an assistant
+                // message marked with `error`. It's not the bot speaking, so it's the turn's error, not its reply.
+                "assistant" if event.get("error").map(|e| !e.is_null()).unwrap_or(false) => {
+                    let said: Vec<&str> = event["message"]["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
+                    let said = said.join("\n");
+                    let code = event["error"].as_str().unwrap_or("error");
+                    self.error = Some(if said.trim().is_empty() { format!("Claude Code reported an error ({code}).") } else { said });
+                }
                 "assistant" if !self.saw_delta => {
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
@@ -146,7 +157,8 @@ impl StreamParser {
                     self.usage = TurnUsage::from_claude_result(&event);
                     let result = event.get("result").and_then(|r| r.as_str()).map(str::to_string);
                     if event.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false) || event.get("subtype").and_then(|s| s.as_str()).map(|s| s.starts_with("error")).unwrap_or(false) {
-                        self.error = Some(result.unwrap_or_else(|| "Claude reported an error.".to_string()));
+                        let reported = self.error.take();
+                        self.error = Some(result.filter(|r| !r.trim().is_empty()).or(reported).unwrap_or_else(|| "Claude reported an error.".to_string()));
                     } else {
                         self.final_text = result;
                     }
@@ -197,7 +209,11 @@ impl StreamParser {
     }
 }
 
-/// How a program is started: a Python stand-in through Python, a .cmd or .bat through cmd on Windows.
+/// How a program is started: a Python stand-in through Python; anything else as itself.
+///
+/// An npm-installed program on Windows is a `.cmd` shim (`%APPDATA%\npm\claude.cmd`). Going through cmd.exe would cut every
+/// argument at its first line break and cap the whole command at 8,191 characters, so the shim is read and what it points
+/// at is started directly: the package's own `.exe`, or its script with Node.
 pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
     let ext = program.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if ext == "py" {
@@ -205,9 +221,58 @@ pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
         return (PathBuf::from(python), vec![program.to_string_lossy().to_string()]);
     }
     if cfg!(windows) && (ext == "cmd" || ext == "bat") {
-        return (PathBuf::from("cmd"), vec!["/C".into(), program.to_string_lossy().to_string()]);
+        if let Some(direct) = std::fs::read_to_string(program).ok().and_then(|text| npm_shim_target(&text, program.parent().unwrap_or(std::path::Path::new(".")))) {
+            return direct;
+        }
+        // Any other batch file is started as itself: Rust runs it through cmd.exe with cmd's own quoting (and refuses an
+        // argument it can't pass safely), where a hand-made `cmd /C` line breaks on a space in the path.
+        return (program.to_path_buf(), vec![]);
     }
     (program.to_path_buf(), vec![])
+}
+
+/// What an npm `.cmd` shim runs, read from the shim itself: `"%dp0%\node_modules\pkg\bin\tool.exe" %*` is that `.exe`;
+/// `"%_prog%" "%dp0%\node_modules\pkg\cli.js" %*` is that script with Node (the shim's own `node.exe` beside it if there
+/// is one, as npm does). None when the shim isn't npm's or what it names isn't there.
+pub fn npm_shim_target(shim_text: &str, shim_dir: &std::path::Path) -> Option<(PathBuf, Vec<String>)> {
+    if shim_text.len() > 64 * 1024 {
+        return None;
+    }
+    let mut target: Option<String> = None;
+    for marker in ["\"%dp0%\\", "\"%~dp0\\"] {
+        let mut rest = shim_text;
+        while let Some(start) = rest.find(marker) {
+            let after = &rest[start + marker.len()..];
+            let Some(end) = after.find('"') else { break };
+            let candidate = &after[..end];
+            // The program the shim runs is the last quoted path in it; the ones before are the `node.exe` checks.
+            if !candidate.eq_ignore_ascii_case("node.exe") && !candidate.eq_ignore_ascii_case("node") {
+                target = Some(candidate.to_string());
+            }
+            rest = &after[end..];
+        }
+    }
+    let relative = target?;
+    if relative.split(['\\', '/']).any(|part| part == "..") {
+        return None;
+    }
+    let mut path = shim_dir.to_path_buf();
+    for part in relative.split(['\\', '/']).filter(|p| !p.is_empty()) {
+        path.push(part);
+    }
+    if !path.is_file() {
+        return None;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "exe" => Some((path, vec![])),
+        "js" | "cjs" | "mjs" => {
+            let beside = shim_dir.join("node.exe");
+            let node = if beside.is_file() { beside } else { locate("node").unwrap_or_else(|| PathBuf::from("node")) };
+            Some((node, vec![path.to_string_lossy().to_string()]))
+        }
+        _ => None,
+    }
 }
 
 /// Splits a byte stream into lines, keeping at most `MAX_LINE` of each.
@@ -239,7 +304,10 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     let (program, mut pre_args) = command_for(&spec.program);
     pre_args.extend(spec.args.iter().cloned());
     let mut cmd = tokio::process::Command::new(&program);
-    cmd.args(&pre_args).current_dir(&spec.cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    if cfg!(windows) {
+        cmd.env("PATH", child_path());
+    }
+    cmd.args(&pre_args).current_dir(&spec.cwd).stdin(if spec.stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() }).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     for key in &spec.remove_env {
         cmd.env_remove(key);
     }
@@ -249,9 +317,24 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     cmd.kill_on_drop(false);
     crate::procs::configure(&mut cmd);
     let mut child = cmd.spawn()?;
-    let tree = Arc::new(ProcessTree::attach(&child)?);
+    let tree = match ProcessTree::attach(&child) {
+        Ok(tree) => Arc::new(tree),
+        Err(e) => {
+            // Not tracked means it couldn't be stopped later: end it now rather than leave it running.
+            let _ = child.start_kill();
+            return Err(e);
+        }
+    };
     if let Some(r) = &registry {
         r.add(&tree);
+    }
+    if let (Some(text), Some(mut input)) = (spec.stdin.clone(), child.stdin.take()) {
+        // Written on its own task: an engine that answers before it has read everything mustn't block on a full pipe.
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = input.write_all(text.as_bytes()).await;
+            let _ = input.shutdown().await;
+        });
     }
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -362,17 +445,111 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     })
 }
 
+/// The folders programs are looked for in, in order: this process's PATH and, on Windows, PATH as it is now in the registry
+/// (for you and for the machine) plus where Node, Git and the GitHub CLI install. Theo keeps running in the tray for days, so
+/// something installed since it started (Node, Git, Claude Code's own installer adding `.local\bin`) is found without
+/// quitting it. Also the PATH every engine and tool Theo starts gets, so Claude Code finds Git Bash and npm's shims find Node.
+pub fn search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    #[cfg(windows)]
+    {
+        for user in [true, false] {
+            if let Some(path) = registry_path(user) {
+                dirs.extend(std::env::split_paths(&std::ffi::OsString::from(path)));
+            }
+        }
+        for (var, rest) in [("ProgramFiles", "nodejs"), ("ProgramFiles", "Git\\cmd"), ("ProgramFiles", "GitHub CLI"), ("LOCALAPPDATA", "Programs\\Git\\cmd"), ("APPDATA", "npm")] {
+            if let Some(base) = std::env::var_os(var) {
+                dirs.push(PathBuf::from(base).join(rest));
+            }
+        }
+        dirs.push(crate::paths::home().join(".local").join("bin"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| !d.as_os_str().is_empty() && seen.insert(if cfg!(windows) { d.to_string_lossy().to_lowercase() } else { d.to_string_lossy().to_string() }));
+    dirs
+}
+
+/// The PATH for a program Theo starts (see `search_dirs`).
+pub fn child_path() -> std::ffi::OsString {
+    std::env::join_paths(search_dirs()).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// PATH as saved in the registry, for this user or for the machine, with %VARIABLES% expanded.
+#[cfg(windows)]
+fn registry_path(user: bool) -> Option<String> {
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::System::Registry::*;
+    let (root, key) = if user { (HKEY_CURRENT_USER, "Environment") } else { (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment") };
+    let key: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = "Path".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let mut bytes: u32 = 0;
+        if RegGetValueW(root, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 || bytes == 0 {
+            return None;
+        }
+        let mut raw = vec![0u16; bytes as usize / 2 + 1];
+        let mut size = (raw.len() * 2) as u32;
+        if RegGetValueW(root, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, std::ptr::null_mut(), raw.as_mut_ptr() as *mut _, &mut size) != 0 {
+            return None;
+        }
+        let needed = ExpandEnvironmentStringsW(raw.as_ptr(), std::ptr::null_mut(), 0);
+        if needed == 0 {
+            return None;
+        }
+        let mut expanded = vec![0u16; needed as usize];
+        let written = ExpandEnvironmentStringsW(raw.as_ptr(), expanded.as_mut_ptr(), needed);
+        if written == 0 {
+            return None;
+        }
+        let end = expanded.iter().position(|&c| c == 0).unwrap_or(expanded.len());
+        Some(String::from_utf16_lossy(&expanded[..end]))
+    }
+}
+
+/// A command for a program Theo starts in the background: no console window on Windows, its own process group, and the
+/// PATH from `child_path`. `program` may be an npm shim or a Python stand-in (`command_for`).
+pub fn background_command(program: &std::path::Path) -> tokio::process::Command {
+    let (program, pre) = command_for(program);
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(pre);
+    if cfg!(windows) {
+        cmd.env("PATH", child_path());
+    }
+    crate::procs::configure(&mut cmd);
+    cmd
+}
+
+/// Runs a short background program to its end and returns its exit code and output (stdout, then stderr), or None if it
+/// couldn't start or took longer than `limit`. Everything it started (Claude Code's MCP servers, say) ends with it.
+pub async fn run_briefly(program: &std::path::Path, args: &[&str], cwd: &std::path::Path, limit: Duration) -> Option<(i32, String, String)> {
+    let mut cmd = background_command(program);
+    cmd.args(args).current_dir(cwd).env("NO_COLOR", "1").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    let child = cmd.spawn().ok()?;
+    let tree = ProcessTree::attach(&child).ok();
+    let result = tokio::time::timeout(limit, child.wait_with_output()).await;
+    if let Some(tree) = &tree {
+        // Whatever it left behind (or all of it, after a timeout).
+        if tree.alive() {
+            tree.kill();
+        }
+    }
+    let out = result.ok()?.ok()?;
+    Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string()))
+}
+
 /// Where an engine's program is: on PATH, or where its installer puts it.
 pub fn locate(name: &str) -> Option<PathBuf> {
     let home = crate::paths::home();
     let exts: Vec<&str> = if cfg!(windows) { vec![".exe", ".cmd", ".bat", ""] } else { vec![""] };
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs = search_dirs();
+    // Each part joined on its own, so a Windows path reads C:\Users\me\.local\bin, never .local/bin.
     dirs.extend([
-        home.join(".local/bin"),
-        home.join(format!(".{name}/local")),
-        home.join(format!(".{name}/bin")),
-        home.join(".npm-global/bin"),
-        home.join(".bun/bin"),
+        home.join(".local").join("bin"),
+        home.join(format!(".{name}")).join("local"),
+        home.join(format!(".{name}")).join("bin"),
+        home.join(".npm-global").join("bin"),
+        home.join(".bun").join("bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/usr/bin"),
@@ -389,4 +566,43 @@ pub fn locate(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // What npm (cmd-shim) writes to %APPDATA%\npm\claude.cmd for a package whose bin is an .exe, and for one whose bin is a
+    // Node script.
+    const EXE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+    const JS_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.js\" %*\r\n";
+
+    #[test]
+    fn npm_shims_run_their_target_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let (program, pre) = npm_shim_target(EXE_SHIM, dir.path()).expect("the exe shim resolves");
+        assert_eq!(program, exe);
+        assert!(pre.is_empty());
+
+        let script = dir.path().join("node_modules/opencode-ai/bin/opencode.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, b"").unwrap();
+        std::fs::write(dir.path().join("node.exe"), b"").unwrap();
+        let (program, pre) = npm_shim_target(JS_SHIM, dir.path()).expect("the script shim resolves");
+        assert_eq!(program, dir.path().join("node.exe"));
+        assert_eq!(pre.len(), 1);
+        assert_eq!(PathBuf::from(&pre[0]), script);
+    }
+
+    #[test]
+    fn other_batch_files_are_left_to_cmd() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(npm_shim_target("@echo off\r\necho hi %*\r\n", dir.path()).is_none());
+        // A shim whose target isn't there, or that climbs out of its folder, isn't followed.
+        assert!(npm_shim_target(EXE_SHIM, dir.path()).is_none());
+        assert!(npm_shim_target("\"%dp0%\\..\\..\\evil.exe\" %*", dir.path()).is_none());
+    }
 }
