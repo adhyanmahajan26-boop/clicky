@@ -485,7 +485,9 @@ final class ActionExecutor {
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
                     return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
-                runningApplication.activate(options: [.activateAllWindows])
+                guard await BackgroundInput.bringToFront(runningApplication) else {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: "brought it forward"), nil)
             }
             guard let applicationURL = target.applicationURL else { return (.failed(reason: "couldn't find the app"), nil) }
@@ -633,7 +635,9 @@ final class ActionExecutor {
                     if let processIdentifier = target.processIdentifier { frontmostBefore.restore(ifStolenBy: [processIdentifier]) }
                     return (.done(detail: "raised on Theo's screen"), nil)
                 }
-                target.runningApplication?.activate(options: [])
+                if let runningApplication = target.runningApplication, !(await BackgroundInput.bringToFront(runningApplication)) {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: nil), nil)
             }
             if let runningApplication = target.runningApplication {
@@ -648,7 +652,9 @@ final class ActionExecutor {
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
                     return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
                 }
-                runningApplication.activate(options: [.activateAllWindows])
+                guard await BackgroundInput.bringToFront(runningApplication) else {
+                    return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
+                }
                 return (.done(detail: nil), nil)
             }
             if let applicationURL = target.applicationURL {
@@ -855,7 +861,7 @@ final class ActionExecutor {
         guard let processIdentifier = target.processIdentifier, processIdentifier != getpid(),
               NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier,
               let application = NSRunningApplication(processIdentifier: processIdentifier) else { return }
-        application.activate()
+        await BackgroundInput.bringToFront(application)
         try? await Task.sleep(nanoseconds: 150_000_000)
     }
 

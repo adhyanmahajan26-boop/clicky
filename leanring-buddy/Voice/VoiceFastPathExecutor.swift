@@ -100,7 +100,7 @@ final class VoiceFastPathExecutor {
         case .brightnessDown: return changeBrightness(by: -0.1)
         case .media(let mediaKey, _): return pressMediaKey(mediaKey, command: command)
         case .window(let windowCommand): return moveFrontWindow(windowCommand, command: command)
-        case .switchToApp(let name): return switchToApplication(named: name, command: command)
+        case .switchToApp(let name): return await switchToApplication(named: name, command: command)
         case .openApp(let name): return openApplication(named: name, command: command)
         case .openItem(let name, let kind): return await openItem(named: name, kind: kind, command: command)
         case .key(let keyCommand):
@@ -320,7 +320,7 @@ final class VoiceFastPathExecutor {
 
     // MARK: Apps
 
-    private func switchToApplication(named name: String, command: VoiceFastPathCommand) -> VoiceFastPathOutcome {
+    private func switchToApplication(named name: String, command: VoiceFastPathCommand) async -> VoiceFastPathOutcome {
         let regularApplications = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0.processIdentifier != getpid() }
         let candidates = regularApplications.map { ActionApplicationCandidate(name: $0.localizedName ?? "", bundleIdentifier: $0.bundleIdentifier, path: $0.bundleURL?.path) }
         if let match = ActionAppNameMatcher.bestMatch(name: name, bundleIdentifier: nil, candidates: candidates),
@@ -328,7 +328,9 @@ final class VoiceFastPathExecutor {
             if Self.isProtectedApplication(bundleIdentifier: runningApplication.bundleIdentifier, name: runningApplication.localizedName), !Self.namesSafariOrNetflix(name) {
                 return .failed(reason: "Safari is left alone unless named", spokenLine: "I leave Safari alone.")
             }
-            runningApplication.activate()
+            guard await BackgroundInput.bringToFront(runningApplication) else {
+                return .failed(reason: "macOS didn't bring \(match.name) to the front", spokenLine: "Couldn't switch to \(match.name).")
+            }
             return .done(detail: "switched to \(match.name)", acknowledgement: command.acknowledgement())
         }
         // Not running: open it.
@@ -350,8 +352,9 @@ final class VoiceFastPathExecutor {
         return .done(detail: "opened \(candidate.name)", acknowledgement: command.acknowledgement())
     }
 
+    /// Safari is only hands-off with "leave Safari alone" on (v2.actions.leaveSafariAlone, default off).
     static func isProtectedApplication(bundleIdentifier: String?, name: String?) -> Bool {
-        ActionTierClassifier.isSafari(ActionTargetFacts(bundleIdentifier: bundleIdentifier, applicationName: name))
+        ClickySettings.actionsLeaveSafariAlone && ActionTierClassifier.isSafari(ActionTargetFacts(bundleIdentifier: bundleIdentifier, applicationName: name))
     }
 
     static func namesSafariOrNetflix(_ text: String) -> Bool {

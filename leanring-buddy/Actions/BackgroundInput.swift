@@ -188,6 +188,38 @@ enum BackgroundInput {
     // MARK: Keeping the owner's focus
 
     /// Theo's own binary, for a moment: `--bring-forward <pid>` activates that app and quits.
+    /// Puts an app in front and reports whether it really is. Since macOS 14 a background app's activate() is only a
+    /// request, and it was ignored on the Air (2026-11-13: "switch to Safari" said done while Claude stayed in front,
+    /// and a key meant for Safari went to WhatsApp). So: ask, then set it frontmost over Accessibility, then let
+    /// LaunchServices open it (as `open -a` does), checking after each. Activating an app whose window is full screen
+    /// moves to its Space, which takes a moment, hence the waits.
+    @discardableResult
+    static func bringToFront(_ application: NSRunningApplication) async -> Bool {
+        func isInFront() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier }
+        func waitUntilInFront(seconds: Double) async -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if isInFront() { return true }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            return isInFront()
+        }
+        if isInFront() { return true }
+        application.unhide()
+        application.activate(options: [.activateAllWindows])
+        if await waitUntilInFront(seconds: 0.6) { return true }
+        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetAttributeValue(applicationElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        if await waitUntilInFront(seconds: 0.8) { return true }
+        if let bundleURL = application.bundleURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            _ = try? await NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration)
+            if await waitUntilInFront(seconds: 1.2) { return true }
+        }
+        return false
+    }
+
     static func bringForwardFromHelper(_ processIdentifier: pid_t) {
         guard let executable = Bundle.main.executableURL else { return }
         let helper = Process()
