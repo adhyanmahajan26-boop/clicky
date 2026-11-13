@@ -20,7 +20,7 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 enum TheoHomeWindowController {
     private static var window: NSWindow?
-    static let t3BuiltInDownloadURL: URL? = T3ConnectView.builtInReleaseURL
+    static let t3BuiltInDownloadURL: URL? = UpdateFeed.bundledReleasesRepository.flatMap(UpdateFeed.releasesPageURL(repository:))
 
     /// `activates` false opens it without taking focus (a launch in the background).
     static func show(companionManager: CompanionManager, tab: TheoHomeView.Tab = .home, activates: Bool = true) {
