@@ -478,7 +478,8 @@ mod tests {
         std::fs::write(dir.path().join("node.exe"), b"").unwrap();
         let (program, pre) = npm_shim_target(JS_SHIM, dir.path()).expect("the script shim resolves");
         assert_eq!(program, dir.path().join("node.exe"));
-        assert_eq!(pre, vec![script.to_string_lossy().to_string()]);
+        assert_eq!(pre.len(), 1);
+        assert_eq!(PathBuf::from(&pre[0]), script);
     }
 
     #[test]

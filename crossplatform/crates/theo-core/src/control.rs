@@ -99,7 +99,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "openTerminal" => {
             let which = s(cmd, "which").unwrap_or_default();
-            match crate::setup::open_terminal(&which) {
+            match crate::setup::open_terminal(h, &which) {
                 Ok(()) => ok(json!({"opened": which})),
                 Err(e) => err(&e),
             }

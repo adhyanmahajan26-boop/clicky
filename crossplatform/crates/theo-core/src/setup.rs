@@ -53,15 +53,29 @@ pub async fn state(h: &Harness) -> Value {
     json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS})
 }
 
+/// The command a setup button runs in a terminal. Claude Code and the GitHub CLI are named by the full path Theo found them at:
+/// a terminal opened from Theo has Theo's own PATH, which doesn't yet have the folder an installer added since Theo started
+/// (Claude Code's Windows installer adds `%USERPROFILE%\.local\bin`; npm's folder often isn't on PATH at all).
+pub fn terminal_command(which: &str, claude: Option<&Path>, gh: Option<&Path>) -> Result<String, String> {
+    let quoted = |path: &Path, rest: &str| {
+        let text = path.to_string_lossy();
+        if cfg!(windows) { format!("& '{}' {rest}", text.replace('\'', "''")) } else { format!("'{}' {rest}", text.replace('\'', "'\\''")) }
+    };
+    Ok(match which {
+        "signin" => claude.map(|p| quoted(p, "auth login")).unwrap_or_else(|| "claude auth login".into()),
+        "install" => claude_install_command().to_string(),
+        "gh" => gh.map(|p| quoted(p, "auth login")).unwrap_or_else(|| "gh auth login".into()),
+        _ => return Err("Unknown command.".into()),
+    })
+}
+
 /// Opens the platform's terminal running one of the setup commands, for signing in or installing. Only these commands:
 /// the window can't ask for anything else.
-pub fn open_terminal(which: &str) -> Result<(), String> {
-    let command = match which {
-        "signin" => "claude auth login",
-        "install" => claude_install_command(),
-        "gh" => "gh auth login",
-        _ => return Err("Unknown command.".into()),
-    };
+pub fn open_terminal(h: &Harness, which: &str) -> Result<(), String> {
+    let claude = h.executable("claude").filter(|p| p.extension().map(|e| e != "py").unwrap_or(true));
+    let gh = crate::engine::locate("gh");
+    let command = terminal_command(which, claude.as_deref(), gh.as_deref())?;
+    let command = command.as_str();
     let spawn = |program: &str, args: &[&str]| std::process::Command::new(program).args(args).spawn().map(|_| ()).map_err(|e| e.to_string());
     if cfg!(target_os = "macos") {
         let script = format!("tell application \"Terminal\" to do script \"{}\"\ntell application \"Terminal\" to activate", command.replace('"', "\\\""));
@@ -79,5 +93,24 @@ pub fn open_terminal(which: &str) -> Result<(), String> {
             }
         }
         Err(format!("No terminal found. Run this in one: {command}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_names_the_program_theo_found() {
+        let found = Path::new(if cfg!(windows) { r"C:\Users\O'Neil\.local\bin\claude.exe" } else { "/home/o'neil/.local/bin/claude" });
+        let command = terminal_command("signin", Some(found), None).unwrap();
+        if cfg!(windows) {
+            assert_eq!(command, r"& 'C:\Users\O''Neil\.local\bin\claude.exe' auth login");
+        } else {
+            assert_eq!(command, "'/home/o'\\''neil/.local/bin/claude' auth login");
+        }
+        assert_eq!(terminal_command("signin", None, None).unwrap(), "claude auth login");
+        assert_eq!(terminal_command("gh", None, None).unwrap(), "gh auth login");
+        assert!(terminal_command("rm -rf", None, None).is_err());
     }
 }

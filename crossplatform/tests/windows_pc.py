@@ -405,6 +405,22 @@ def fresh(setup_exe, msi=None):
         return ok, {"npm_exit": code, "npm_tail": out[-600:], "claude": c, "row": row}, shot
     check("Claude Code installed with npm (%APPDATA%\\npm\\claude.cmd, not on PATH): Theo finds it and sees it's signed out", npm_installed_signed_out)
 
+    def sign_in_button():
+        page = PAGE["page"]
+        page.click("#setup [data-term='signin']")
+        def sign_in_shell():
+            code, out = run(["powershell", "-NoProfile", "-Command",
+                             "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -like '*auth login*' } | "
+                             "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"], timeout=60)
+            return [line for line in out.splitlines() if "auth login" in line and "Get-CimInstance" not in line]
+        found = wait_until(sign_in_shell, 20)
+        for line in found or []:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", line.split("\t")[0].strip()], capture_output=True)
+        # The terminal runs the Claude Code Theo found, by its full path: a terminal opened from Theo has Theo's PATH.
+        ok = bool(found) and any(str(NPM_PREFIX).lower() in line.lower() for line in found)
+        return ok, {"terminal": found}, None
+    check("Setup's Sign in button opens PowerShell running that Claude Code's sign-in, by its full path", sign_in_button)
+
     def coding_step():
         page = PAGE["page"]
         page.click("#setup .btn.ghost[data-next]")  # "Skip for now": signed out
