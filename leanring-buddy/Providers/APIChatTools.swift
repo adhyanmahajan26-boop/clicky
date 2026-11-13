@@ -92,10 +92,13 @@ final class APIChatToolbox: @unchecked Sendable {
             for await (appID, listing) in group {
                 switch listing {
                 case .success(let tools):
-                    let level = appLevels[appID] ?? "read"
+                    let level = appLevels[appID]
                     // A tool the level doesn't allow is never offered (the hub refuses it too, if asked by name anyway).
-                    offeredTools += tools.filter {
-                        APIChatToolAccess.allows(effect: $0.effect, level: level, ownerAsked: ownerAsked) && APIChatToolWire.isUsableToolName($0.exposedName)
+                    let effectiveLevel = HubAccessLevel(saved: level).effective(ownerAsked: ownerAsked)
+                    offeredTools += tools.filter { hubTool in
+                        // An effect this build doesn't know is never offered.
+                        let allowed = HubToolEffect(rawValue: hubTool.effect)?.allowed(at: effectiveLevel) ?? false
+                        return allowed && APIChatToolWire.isUsableToolName(hubTool.exposedName)
                     }
                 case .failure(let error):
                     appsNotReachable.append("\(appID) (\(error.localizedDescription.prefix(120)))")
@@ -220,7 +223,7 @@ final class APIChatToolbox: @unchecked Sendable {
         let appsWithTools = appNamesByID.keys.sorted()
         if !appsWithTools.isEmpty {
             let described = appsWithTools.map { appID in
-                "\(appNamesByID[appID] ?? appID) (\(levelWords(appLevels[appID] ?? "read", ownerAsked: ownerAsked)))"
+                "\(appNamesByID[appID] ?? appID) (\(levelWords(appLevels[appID] ?? HubAccessLevel.standard.rawValue, ownerAsked: ownerAsked)))"
             }
             lines.append("Your apps, as tools named <app>__<tool>: " + described.joined(separator: ", ") + ". " +
                          "Use them when the request needs them, and only say something was done when the tool's answer shows it was.")
@@ -234,75 +237,53 @@ final class APIChatToolbox: @unchecked Sendable {
 
     private static func levelWords(_ level: String, ownerAsked: Bool) -> String {
         guard ownerAsked else { return "look things up only: this turn didn't come from the owner's own words" }
-        switch level {
-        case "full": return "everything its tools do"
-        case "readAndDraft": return "look things up and draft or change, never send, share or delete"
-        default: return "look things up only"
+        switch HubAccessLevel(saved: level) {
+        case .full: return "everything its tools do"
+        case .readAndDraft: return "look things up and draft or change, never send, share or delete"
+        case .read: return "look things up only"
         }
     }
 }
 
-/// The real hub: the `theo-connectors` helper inside Theo.app, run once per command (`crossplatform/docs/CONNECTORS.md`).
-/// Theo's data folder is the same in a test profile, since the profile moves the home folder.
-// TODO(package 3): once `Bots/ConnectorHub.swift` lands, run every command through it and take each bot's apps and levels from it.
+/// The real hub, through package 3's `ConnectorHub` (the `theo-connectors` helper in Theo.app, `crossplatform/docs/CONNECTORS.md`).
 struct HubConnectorSource: APIChatConnectorSource {
-    let helperExecutable: URL
-    let theoDataFolder: URL
-
     /// Nil when this build has no helper (Rust wasn't there when it was built): the bot then has its memory tools only.
-    static func ifInstalled() -> HubConnectorSource? {
-        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/theo-connectors")
-        guard FileManager.default.isExecutableFile(atPath: helper.path) else { return nil }
-        let theoDataFolder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Theo", isDirectory: true)
-        return HubConnectorSource(helperExecutable: helper, theoDataFolder: theoDataFolder)
-    }
+    static func ifInstalled() -> HubConnectorSource? { ConnectorHub.isAvailable ? HubConnectorSource() : nil }
 
-    /// The bot's apps the hub knows and has switched on, at the default level (`readAndDraft`, what bots could do before the hub).
+    /// The bot's hub apps with its saved level on each (the owner's-words rule is applied by the toolbox and the ticket). An
+    /// API-key bot reaches every app through the hub, claude-account ones too.
     func appLevels(for bot: NativeBot) async -> [String: String] {
-        guard let listing = try? await runHub(["list"]), let apps = listing["apps"] as? [[String: Any]] else { return [:] }
-        var levels: [String: String] = [:]
-        for app in apps {
-            guard let appID = app["id"] as? String, bot.apps.contains(appID), app["status"] as? String != "off" else { continue }
-            levels[appID] = "readAndDraft"
-        }
-        return levels
+        let plan = await ConnectorHub.turnPlan(for: bot, ownerAsked: true)
+        return plan.ticketApps.mapValues { level in level.rawValue }
     }
 
     func tools(appID: String) async throws -> [APIChatHubTool] {
-        let listing = try await runHub(["tools", appID])
-        let hubApps = (try? await runHub(["list"]))?["apps"] as? [[String: Any]] ?? []
-        let thisApp = hubApps.first { hubApp in hubApp["id"] as? String == appID }
-        let appName = thisApp?["name"] as? String ?? appID
-        return (listing["tools"] as? [[String: Any]] ?? []).compactMap { tool -> APIChatHubTool? in
-            guard let toolName = tool["name"] as? String, let exposedName = tool["exposedName"] as? String else { return nil }
-            let schemaData = tool["inputSchema"].flatMap { schema in try? JSONSerialization.data(withJSONObject: schema) } ?? Data("{}".utf8)
-            return APIChatHubTool(appID: appID, appName: appName, toolName: toolName, exposedName: exposedName,
-                                  description: tool["description"] as? String ?? tool["title"] as? String ?? "",
-                                  inputSchemaJSON: String(decoding: schemaData, as: UTF8.self),
-                                  effect: tool["effect"] as? String ?? "irreversible")
+        let appName = ConnectorHub.cachedApps.first { app in app.id == appID }?.name ?? appID
+        return try await ConnectorHub.tools(appID: appID).map { hubTool in
+            let words = hubTool.description ?? hubTool.title ?? ""
+            return APIChatHubTool(appID: appID, appName: appName, toolName: hubTool.name, exposedName: hubTool.exposedName,
+                                  description: words.hasPrefix("[") ? words : "[\(appName)] \(words)",
+                                  inputSchemaJSON: String(decoding: hubTool.inputSchemaJSON, as: UTF8.self), effect: hubTool.effect)
         }
     }
 
     func issueTicket(botID: String, appLevels: [String: String], ownerAsked: Bool, expiresAt: Date) async throws -> URL {
-        let ticket: [String: Any] = ["botId": botID, "apps": appLevels, "ownerAsked": ownerAsked,
-                                     "expiresAt": ISO8601DateFormatter().string(from: expiresAt)]
-        let ticketText = String(decoding: try JSONSerialization.data(withJSONObject: ticket), as: UTF8.self)
-        let issued = try await runHub(["ticket", "issue", "--json", ticketText])
-        guard let path = issued["ticket"] as? String else { throw APIChatError.rejected("The connector helper didn't issue a ticket.") }
-        return URL(fileURLWithPath: path)
+        try ConnectorHub.issueTicket(botID: botID, apps: appLevels.mapValues { level in HubAccessLevel(saved: level) },
+                                     ownerAsked: ownerAsked, expiresIn: max(60, expiresAt.timeIntervalSinceNow))
     }
 
     func revokeTicket(_ ticket: URL) async {
-        _ = try? await runHub(["ticket", "revoke", ticket.path])
+        ConnectorHub.revokeTicket(ticket)
     }
 
     func call(appID: String, toolName: String, argumentsJSON: String, ticket: URL) async throws -> (text: String, isError: Bool) {
-        let reply = try await runHub(["call", appID, toolName, "--args", argumentsJSON, "--ticket", ticket.path])
-        let result = reply["result"] as? [String: Any] ?? [:]
-        return (Self.text(ofToolResult: result), result["isError"] as? Bool ?? false)
+        let result = try await ConnectorHub.call(appID: appID, tool: toolName, argumentsJSON: Data(argumentsJSON.utf8), ticket: ticket)
+        let resultObject = (try? JSONSerialization.jsonObject(with: result.resultJSON) as? [String: Any]) ?? [:]
+        let words = Self.text(ofToolResult: resultObject)
+        return (words.isEmpty ? result.text : words, result.isError)
     }
 
-    /// An MCP CallToolResult as words: its text parts, a note for anything else, else its structured content.
+    /// An MCP CallToolResult as words: its text parts, a note for anything else (an image, a file), else its structured content.
     static func text(ofToolResult result: [String: Any]) -> String {
         let parts: [String] = (result["content"] as? [[String: Any]] ?? []).map { part -> String in
             switch part["type"] as? String {
@@ -313,24 +294,10 @@ struct HubConnectorSource: APIChatConnectorSource {
             }
         }.filter { !$0.isEmpty }
         if !parts.isEmpty { return parts.joined(separator: "\n") }
-        if let structured = result["structuredContent"], let data = try? JSONSerialization.data(withJSONObject: structured, options: .sortedKeys) {
+        if let structured = result["structuredContent"], JSONSerialization.isValidJSONObject(structured),
+           let data = try? JSONSerialization.data(withJSONObject: structured, options: .sortedKeys) {
             return String(decoding: data, as: UTF8.self)
         }
         return ""
-    }
-
-    /// Runs one hub command and returns its JSON object; a failure (`ok: false`) throws its sentence for the user.
-    private func runHub(_ arguments: [String]) async throws -> [String: Any] {
-        var environment = ProcessInfo.processInfo.environment
-        // A test profile keeps the vault key in a file, never in the real Keychain.
-        if TheoProfile.isTest { environment["THEO_CONNECTORS_KEY_STORE"] = "file" }
-        let result = try await ChildProcess.run(executable: helperExecutable.path, arguments: ["--data", theoDataFolder.path] + arguments,
-                                                environment: environment, timeouts: .total(120))
-        let lastLine = result.standardOutputText.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
-        guard let reply = try? JSONSerialization.jsonObject(with: Data(lastLine.utf8)) as? [String: Any] else {
-            throw APIChatError.rejected("The connector helper didn't answer (\(result.endReason == .totalTimeout ? "it timed out" : "exit \(result.exitStatus ?? -1)")).")
-        }
-        if reply["ok"] as? Bool == false { throw APIChatError.rejected(reply["error"] as? String ?? "The connector helper refused.") }
-        return reply
     }
 }

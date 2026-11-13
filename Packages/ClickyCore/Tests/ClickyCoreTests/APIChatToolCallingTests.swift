@@ -259,27 +259,6 @@ struct APIChatToolCallingTests {
         #expect(APIChatToolWire.toolRefusal(statusCode: 400, body: "max_tokens: too large") == nil)
     }
 
-    // MARK: Who may run what
-
-    @Test func levelsMatchTheHubRule() {
-        #expect(APIChatToolAccess.allows(effect: "read", level: "read", ownerAsked: true))
-        #expect(!APIChatToolAccess.allows(effect: "change", level: "read", ownerAsked: true))
-        #expect(APIChatToolAccess.allows(effect: "change", level: "readAndDraft", ownerAsked: true))
-        #expect(!APIChatToolAccess.allows(effect: "irreversible", level: "readAndDraft", ownerAsked: true))
-        #expect(APIChatToolAccess.allows(effect: "irreversible", level: "full", ownerAsked: true))
-    }
-
-    @Test func aTurnNotFromTheOwnerOnlyReads() {
-        #expect(APIChatToolAccess.allows(effect: "read", level: "full", ownerAsked: false))
-        #expect(!APIChatToolAccess.allows(effect: "change", level: "full", ownerAsked: false))
-        #expect(!APIChatToolAccess.allows(effect: "irreversible", level: "full", ownerAsked: false))
-    }
-
-    @Test func anUnknownLevelOnlyReads() {
-        #expect(APIChatToolAccess.allows(effect: "read", level: "everything", ownerAsked: true))
-        #expect(!APIChatToolAccess.allows(effect: "change", level: "everything", ownerAsked: true))
-    }
-
     // MARK: Its own memory folder
 
     @Test func memoryPathsStayInTheBotsFolder() throws {

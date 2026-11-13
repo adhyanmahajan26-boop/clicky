@@ -3,7 +3,8 @@ import Foundation
 // Tool calling for bots that run straight on a model API with the owner's key (`api:<provider>` engines). The app's `APIChat`
 // sends the requests and `APIChatToolbox` runs the tools; this file is the part that needs no network, so it can be tested here:
 // how tools and tool rounds are written for each API, how a streamed answer's tool calls are put back together, the loop that
-// keeps going until the model stops asking for tools, which tools a bot's level allows, and which paths are its own memory folder.
+// keeps going until the model stops asking for tools, and which paths are its own memory folder. Which tools a bot's level allows
+// is ConnectorHubRules' `HubToolEffect.allowed(at:)`, the same rule every brain gets.
 
 /// The two ways model APIs take tools: Anthropic's Messages API (`tool_use` and `tool_result` blocks) and the OpenAI-style chat
 /// endpoint everyone else offers (`tools`, `tool_calls` and `role: tool` messages).
@@ -330,20 +331,6 @@ public enum APIChatToolLoop {
             }
             rounds.append(APIChatToolRound(assistantText: reply.text, calls: reply.toolCalls, results: results))
             textBeforeThisRound = APIChatToolWire.joinedAnswer(textBeforeThisRound, reply.text)
-        }
-    }
-}
-
-/// What a bot's level on an app lets it run, matching the connector hub's rule (`crossplatform/docs/CONNECTORS.md`).
-public enum APIChatToolAccess {
-    /// `effect` is the hub's `read`, `change` or `irreversible`; `level` is `read`, `readAndDraft` or `full`. A turn that didn't
-    /// come from the owner's own words never gets more than `read`, and a level this build doesn't know counts as `read`.
-    public static func allows(effect: String, level: String, ownerAsked: Bool) -> Bool {
-        let effectiveLevel = ownerAsked ? level : "read"
-        switch effectiveLevel {
-        case "full": return true
-        case "readAndDraft": return effect == "read" || effect == "change"
-        default: return effect == "read"
         }
     }
 }
