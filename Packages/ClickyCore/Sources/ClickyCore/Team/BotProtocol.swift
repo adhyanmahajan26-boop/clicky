@@ -140,6 +140,24 @@ public enum BotMentions {
         return found.sorted { $0.position < $1.position }.map(\.id)
     }
 
+    /// Bots the owner addresses by name without an @: "Ledger: the break-even", "Scout, two risks". The name has to be written
+    /// as the bot is named (case and all), at the start of a line or a sentence, and followed by ":" or ",", so "the runner
+    /// crashed again" or "my Ledger looks off" in a group with Runner or Ledger brings nobody in. In the order addressed.
+    public static func addressed(in text: String, bots: [(id: String, name: String)]) -> [String] {
+        let withoutCode = text.replacingOccurrences(of: "(?s)```.*?(```|$)", with: " ", options: .regularExpression)
+        var found: [(position: Int, id: String)] = []
+        for bot in bots where !bot.name.isEmpty {
+            let name = NSRegularExpression.escapedPattern(for: bot.name)
+            let pattern = #"(?m)(?:^[ \t]*(?:[-*•][ \t]*)?|[.!?;][ \t]+)"# + "(" + name + ")" + #"[ \t]*[:,]"#
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(withoutCode.startIndex..., in: withoutCode)
+            if let match = regex.firstMatch(in: withoutCode, range: range) {
+                found.append((match.range(at: 1).location, bot.id))
+            }
+        }
+        return found.sorted { $0.position < $1.position }.map(\.id)
+    }
+
     /// Like `ordered`, but a name counts with or without the @: what a head means when it says "Backend first, then Frontend".
     /// Only the head's turns use this, so a member mentioning a name in passing doesn't hand on the turn.
     public static func named(in text: String, bots: [(id: String, name: String)]) -> [String] {

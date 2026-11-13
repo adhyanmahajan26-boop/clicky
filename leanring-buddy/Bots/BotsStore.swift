@@ -789,9 +789,9 @@ final class BotsStore: ObservableObject {
             note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         }
         let first = groupBriefs[room] != nil ? [head.id] : (tagged.isEmpty ? [head.id] : tagged)
-        // Members the owner names without an @ ("Ledger: the break-even") answer too, after the head, even if the head forgets
+        // Members the owner addresses without an @ ("Ledger: the break-even") answer too, after the head, even if the head forgets
         // to hand them anything. A build discussion keeps its own steps.
-        let asked = groupBriefs[room] != nil ? [] : BotMentions.named(in: text, bots: otherMembers(of: group).map { ($0.id, $0.name) })
+        let asked = groupBriefs[room] != nil ? [] : BotMentions.addressed(in: text, bots: otherMembers(of: group).map { ($0.id, $0.name) })
         startGroupTurns(in: group, first: first, asked: asked, note: note, words: command ?? text)
     }
 
