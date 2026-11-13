@@ -13,6 +13,13 @@ struct HarnessGuideTests {
         #expect(!guide.contains("  "))
     }
 
+    /// The guide names the projects folder the owner chose, not always ~/Projects (a bot is only allowed to read the chosen one).
+    @Test func theGuideNamesTheChosenProjectsFolder() {
+        let guide = HarnessGuide.markdown(owner: "Priya", projectsFolder: "~/Code")
+        #expect(guide.contains("You can read only your memory folder, ~/Code and files or folders Priya names"))
+        #expect(!guide.contains("~/Projects"))
+    }
+
     /// docs/BOT-HARNESS-GUIDE.md is the guide as the code makes it. UPDATE_HARNESS_GUIDE=1 rewrites it.
     @Test func theGuideInTheRepoMatchesTheCode() throws {
         let docs = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

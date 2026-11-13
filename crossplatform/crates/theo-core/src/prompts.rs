@@ -24,7 +24,8 @@ pub fn reachable_list(bots: &[(String, String)]) -> String {
 }
 
 pub fn reach_how_to(reachable: &[(String, String)], owner: &str) -> String {
-    let how = format!("To message another bot, put a line [TELL: their exact name: what you need] in your reply, from any chat. It's private: they answer you, and you then carry on where you were and tell {owner} what came of it. {owner} sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Just do it: don't explain to {owner} how you reach them, and never ask {owner} to pass a message on or add anyone to a group.");
+    let owner_starting = crate::settings::owner_starting_sentence(owner);
+    let how = format!("To message another bot, put a line [TELL: their exact name: what you need] in your reply, from any chat. It's private: they answer you, and you then carry on where you were and tell {owner} what came of it. {owner_starting} sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Just do it: don't explain to {owner} how you reach them, and never ask {owner} to pass a message on or add anyone to a group.");
     if reachable.is_empty() { format!("{how} No other bots are on right now.") } else { format!("{how} Who you can reach: {}.", reachable_list(reachable)) }
 }
 
@@ -317,5 +318,42 @@ mod skill_copy_tests {
         std::fs::remove_file(skill.join("notes").join("tips.md")).unwrap();
         copy_skill(&skill, "scout", &copies).unwrap();
         assert!(!copy.join("notes").join("tips.md").exists());
+    }
+}
+
+#[cfg(test)]
+mod owner_name_prompt_tests {
+    use super::*;
+
+    /// Every prompt text that takes the owner's name.
+    fn every_owner_prompt(owner: &str) -> Vec<String> {
+        vec![
+            house_style(owner),
+            routine_how_to(owner),
+            reach_how_to(&[("Coder".to_string(), "Writes code".to_string())], owner),
+            private_message_prompt("Theo", Some("the CEO"), "Which database?", Some("ask Coder"), &[], owner),
+            head_opens_note(owner),
+            wrap_up_note(owner),
+            recall_section("/chat.json", owner, &[]),
+            outside_note("ci", owner),
+        ]
+    }
+
+    #[test]
+    fn prompts_use_another_name() {
+        for prompt in every_owner_prompt("Priya") {
+            assert!(prompt.contains("Priya") && !prompt.contains("the owner"), "{prompt}");
+        }
+        assert!(reach_how_to(&[], "Priya").contains("Priya sees a small card"));
+    }
+
+    #[test]
+    fn with_no_name_set_prompts_say_the_owner_and_read_as_sentences() {
+        let owner = crate::settings::owner_name_from(None);
+        for prompt in every_owner_prompt(&owner) {
+            assert!(prompt.contains("the owner") || prompt.contains("The owner"), "{prompt}");
+            assert!(!prompt.contains(". the owner"), "{prompt}");
+        }
+        assert!(reach_how_to(&[], &owner).contains("The owner sees a small card"));
     }
 }

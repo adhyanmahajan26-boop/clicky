@@ -8,11 +8,12 @@ now; [docs/PLATFORMS.md](docs/PLATFORMS.md) says what each would take elsewhere.
 crossplatform/
   crates/theo-core/   the engine: bots, chats, turns, limits, routines, recovery, local API, hooks, usage, doctor, coding runs
   crates/theod/       the engine as a background program, driven through a control inbox (for servers and tests)
+  crates/theo-connectors/  the connector hub: Theo's own apps, sign-ins and safety rule, for every brain, Mac and Windows (docs/CONNECTORS.md)
   app/                the desktop app: Tauri 2, a plain HTML/JS window on the Theo Pixel kit (app/ui/kit), the same engine inside
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests
   install/            one-line installers: install-linux.sh, install.ps1
   tools/              naming installers for a release and writing SHA256SUMS
-  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
+  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), CONNECTORS.md (the connector hub's contract), PIXEL.md (faces, cards, connectors), screenshots/
 ```
 
 ## Why Rust and Tauri
@@ -53,8 +54,10 @@ Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf` t
 built app too: `THEOD_BIN=app/src-tauri/target/release/theo-desktop python3 tests/suite.py` (under `xvfb-run` on a Linux
 server).
 
-Running Theo needs Claude Code installed and signed in (`claude auth login`), as on the Mac; `git` and `gh` for coding
-runs. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
+Running Theo's bots needs Claude Code installed and signed in (`claude auth login`), or OpenCode; connectors don't (the hub
+ships beside the app, [docs/CONNECTORS.md](docs/CONNECTORS.md)). Building the app builds the hub's helper first
+(`app/scripts/build-connectors-helper.mjs`, run by `tauri build` and `tauri dev`); a plain `cargo build` in `app/src-tauri`
+needs it run once by hand (`node app/scripts/build-connectors-helper.mjs --debug`). Coding runs need `git` and `gh`. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
 
 ## Status
 

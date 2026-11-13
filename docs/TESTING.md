@@ -26,7 +26,7 @@ Commands for `cmd`:
 - App commands: `botCreate`, `botUpdate`, `botDelete`, `botSay {bot, text}`, `botChat {id, limit}`, `botsState`, `groupSave`, `groupDelete`, `routines {action, id}`, `harnessState {refresh}`, `harnessSet {codingTarget, codingModel, codingEffort, defaultHarness}`, `terminalText {id}`.
 
 - Runs: `uiRunStart` (with `await: true` it answers whether the run really started), `uiRunFollowup`, `uiChatsList {harness, folder}` (what the Chat menu offers), `uiRunPane {run}` (the screen of a run's terminal, what Watch shows).
-- Crew and Studio: `uiSeedDemo` (a team and a chat with every card), `uiCrew {pointer: {x, y}}` (a stand-in pointer in window points, the real one stays put; `{pointer: null}` lets go), `uiStudio {action: on|off|state|panel|assign|clear, botID or botName, screen, tile}`, `uiSetDefaults {key, value}`. `test.studio.model` set before launch tests the Mac Studio gate. Boops need `uiClick`; `uiClickPost` doesn't reach a sheet.
+- Crew and Studio: `uiSeedDemo` (a team and a chat with every card), `uiCrew {pointer: {x, y}}` (a stand-in pointer in window points, the real one stays put; `{pointer: null}` lets go), `uiStudio {action: on|off|state|panel|assign|clear, botID or botName, screen, tile}`, `uiSetDefaults {key, value}`. `test.studio.unsupported` set before launch stands in for a Mac that can't make hidden screens. Boops need `uiClick`; `uiClickPost` doesn't reach a sheet.
 - Clicky's team: `clickyTeam` (the team, its category and recent jobs), `clickyTeam {action: "delegate", duty, task}`, `clickyTeam {action: "order", text}` (the CEO's order to Clicky), `clickyTeam {action: "memorySearch", query}`. `ask {text, speak: false, owner: true}` is a message typed in Clicky's chat.
 - Voice: `uiDictationFeed {path, app, window}` (a sound file through dictation into a background window), `uiDictationField`, `uiDictationStatus`, `uiDictationPill {state}`, `uiDictationKeys {flags}`; `uiComposerDictation {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions}` (the composer's dictation: `feed {path, realTime, stopAtEnd}` sends a sound file down the mic's path, `key {key, up}` runs a key through the real handling, `permissions {microphone, speech}` forces a status, `noMic {on}` runs the no-usable-mic path, and the profile never opens the mic); `uiCallStart`, `uiCallFeed {path, silence}`, `uiCallStatus`, `uiCallMute`, `uiCallEnd`; `uiSpeak`, `uiSpeakStop`; `uiSet {key, value}`, `uiTestKey {provider, value}`.
 
@@ -40,12 +40,14 @@ Two test profiles can stand in for two Macs, each with its own home folder and `
 
 ```
 defaults write com.personal.clicky.test-mba test.link.name "Adhyan’s MacBook Air"
-defaults write com.personal.clicky.test-mba test.studio.model "MacBookAir10,1"
+defaults write com.personal.clicky.test-mba test.devices.isDesktop -bool false
 defaults write com.personal.clicky.test-mba v2.setup.completed -bool true
 defaults write com.personal.clicky.test-mba v3.bots.freshStart -bool true
 # in one profile: uiLink {action: start, port: 47401}, which returns the code
 # in the other: uiLink {action: start, code, port: 47402, dialHost: "127.0.0.1", dialPort: 47401}
 ```
+
+Each test profile is a Mac of its own to the routing rules: its id is `test:<link name>`, and `test.devices.isDesktop` says whether it's a desktop, which makes it the always-on Mac. Two laptops: set it false on both. `uiLink {action: state}` shows `thisMac`, `otherMac` and `routinesRoute`.
 
 `uiLink {action: down | up | state}` takes the link away and brings it back. A profile needs `up` after a restart. `uiSetDefaults {key: "test.engines.missing", value: ["claude"]}` makes an engine count as signed out on that side. Both profiles share one disk, so a folder check can't tell them apart: test a refused folder with a path that doesn't exist anywhere.
 
@@ -58,6 +60,7 @@ With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. S
 ## Rules
 - A test profile can hold a copy of real bots signed in as the owner, so its routines never fire on schedule (`test.routines.run` overrides that). An older build has no such gate: pause routines in any copy it might read.
 - A test profile's child processes get its home folder, so never start a browser from one: Chrome comes up as a new, empty copy.
+- A `test-stranger…` profile borrows nothing: no links to the owner's CLI sign-ins, `~/.ssh` or `~/.gitconfig`, and what it starts gets the test home as HOME. Every other test profile borrows as below.
 - A coding agent started from a test profile has the owner's real HOME. Prompts in tests must say "the current folder", never `~/...`: a `~/Projects/x` in a prompt lands in the owner's real `~/Projects`.
 - Studio screens drop the owner's monitors out of HDR while they exist, and each on or off nudges a monitor. Either can interrupt a video. Don't toggle them without the owner's OK that nothing's playing.
 - Studio screens are real displays for the whole Mac while they're on, so keep tests short and check the real monitors are back after turning them off. Never turn on Live capture in a test.

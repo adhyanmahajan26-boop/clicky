@@ -40,6 +40,10 @@ enum TheoProfile {
         URL(fileURLWithPath: realHome).appendingPathComponent("Library/Application Support/\(folderName)/home", isDirectory: true)
     }
 
+    /// `--profile test-stranger…`: someone who has never used this Mac. Nothing is borrowed from the real home (no CLI
+    /// sign-ins, no ~/.ssh or ~/.gitconfig), and the processes it starts get the test home as HOME too.
+    static var borrowsNothing: Bool { name?.hasPrefix("test-stranger") == true }
+
     private static let homeVariable = "CFFIXED_USER_HOME"
     private static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
 
@@ -87,7 +91,7 @@ enum TheoProfile {
     private static func makeTestHome() {
         let manager = FileManager.default
         try? manager.createDirectory(at: testHome.appendingPathComponent("Library/Application Support"), withIntermediateDirectories: true)
-        for item in sharedHomeItems {
+        for item in sharedHomeItems where !borrowsNothing {
             let real = URL(fileURLWithPath: realHome).appendingPathComponent(item)
             guard manager.fileExists(atPath: real.path) else { continue }
             let link = testHome.appendingPathComponent(item)
@@ -138,6 +142,8 @@ enum TheoProfile {
             if let process = task as? Process {
                 var environment = process.environment ?? ProcessInfo.processInfo.environment
                 environment[homeVariable] = nil
+                // A stranger's agents and helpers find nothing of the owner's under ~ either.
+                if borrowsNothing { environment["HOME"] = testHome.path }
                 // A test bot's Theo tools still talk to this test instance, not the owner's Theo.
                 environment["THEO_CONTROL_HOME"] = testHome.path
                 process.environment = environment

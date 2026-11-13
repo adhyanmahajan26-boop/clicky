@@ -4,7 +4,8 @@
 //
 //  Headless bot engines for Codex (ChatGPT subscription), Cursor Agent and Gemini CLI, next to the Claude,
 //  OpenCode and Grok ones in BotRunner. Bots are read-only here (Codex's read-only sandbox, Cursor's ask
-//  mode): nobody is there to approve anything.
+//  mode): nobody is there to approve anything. A bot's apps come from Theo's connector hub, started by the
+//  engine as an MCP server for the one turn (`hubLaunch`, ConnectorHub.swift); the hub decides what may run.
 //
 
 import ClickyCore
@@ -19,12 +20,12 @@ extension BotRunner {
     }
 
     /// The engines in this file, by `bot.provider`; nil for the others.
-    static func runHarnessEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func runHarnessEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], hubLaunch: HubServerLaunch? = nil,
                                  onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?)? {
         switch bot.provider {
-        case "codex": return try await runCodex(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
-        case "cursor": return try await runCursor(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
-        case "gemini": return try await runGemini(bot: bot, prompt: prompt, team: team)
+        case "codex": return try await runCodex(bot: bot, prompt: prompt, session: session, team: team, hubLaunch: hubLaunch, onText: onText)
+        case "cursor": return try await runCursor(bot: bot, prompt: prompt, session: session, team: team, hubLaunch: hubLaunch, onText: onText)
+        case "gemini": return try await runGemini(bot: bot, prompt: prompt, team: team, hubLaunch: hubLaunch)
         default: return nil
         }
     }
@@ -111,7 +112,7 @@ extension BotRunner {
 
     // MARK: Codex
 
-    static func runCodex(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func runCodex(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], hubLaunch: HubServerLaunch? = nil,
                          onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         guard let executable = HarnessCatalog.executable(for: "codex") else { throw BotRunnerError.notInstalled("Codex") }
         let reply = FileManager.default.temporaryDirectory.appendingPathComponent("theo-codex-\(UUID().uuidString).txt")
@@ -120,6 +121,8 @@ extension BotRunner {
         var common = ["--json", "--skip-git-repo-check", "-m", bot.model]
         if let effort { common += ["-c", "model_reasoning_effort=\"\(effort)\""] }
         common += ["-c", "check_for_update_on_startup=false"]
+        // The hub's server for this run only (`-c` overrides never touch ~/.codex/config.toml), its tool calls approved up front.
+        if let hubLaunch { common += ConnectorHubWiring.codexArguments(hubLaunch) }
         var arguments: [String]
         if let session {
             // `exec resume` has no -C / -s: the folder is the process's, the sandbox a config override.
@@ -166,13 +169,25 @@ extension BotRunner {
 
     // MARK: Cursor
 
-    static func runCursor(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    /// Cursor Agent reads `.cursor/mcp.json` in the folder it works in. Bots work in Theo's own bots folder, so this file is Theo's,
+    /// never the owner's; it only holds the hub's server while a Cursor bot's turn with apps runs (`HubSharedConfigTurns`).
+    static var cursorHubConfigFile: URL { workspace.appendingPathComponent(".cursor/mcp.json") }
+
+    static func runCursor(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], hubLaunch: HubServerLaunch? = nil,
                           onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         guard let executable = HarnessCatalog.executable(for: "cursor") else { throw BotRunnerError.notInstalled("Cursor Agent") }
         let fullPrompt = session == nil ? BotPrompts.persona(bot: bot, team: team) + "\n\n" + prompt : prompt
         // ask mode is read-only; the effort is part of the model id (e.g. "gpt-5.2-high"), so there is no flag for it.
         var arguments = ["-p", "--output-format", "stream-json", "--stream-partial-output", "--model", bot.model,
                          "--trust", "--mode", "ask", "--workspace", workspace.path]
+        let configFile = cursorHubConfigFile
+        if let hubLaunch {
+            try? FileManager.default.createDirectory(at: configFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(ConnectorHubWiring.cursorMCPFile(hubLaunch).utf8).write(to: configFile, options: .atomic)
+            // A headless run can't be asked to approve a new MCP server.
+            arguments.append("--approve-mcps")
+        }
+        defer { if hubLaunch != nil { try? FileManager.default.removeItem(at: configFile) } }
         if let session { arguments += ["--resume", session] }
         arguments += [fullPrompt]
         var newSession = session
@@ -226,14 +241,31 @@ extension BotRunner {
 
     // MARK: Gemini
 
-    static func runGemini(bot: NativeBot, prompt: String, team: [NativeBot]) async throws -> (text: String, session: String?) {
+    /// Gemini's settings in Theo's own bots folder, which only hold the hub's server while a Gemini bot's turn with apps runs.
+    static var geminiHubSettingsFile: URL { workspace.appendingPathComponent(".gemini/settings.json") }
+
+    static func runGemini(bot: NativeBot, prompt: String, team: [NativeBot], hubLaunch: HubServerLaunch? = nil) async throws -> (text: String, session: String?) {
         guard let executable = HarnessCatalog.executable(for: "gemini") else { throw BotRunnerError.notInstalled("Gemini CLI") }
         // No session id to resume with, so every turn carries the persona.
         let fullPrompt = BotPrompts.persona(bot: bot, team: team) + "\n\n" + prompt
         var arguments = ["-p", fullPrompt, "--output-format", "json"]
         if !bot.model.isEmpty { arguments += ["-m", bot.model] }
+        // The hub's server for this run: Gemini reads .gemini/settings.json in the folder it works in (Theo's own bots folder, never
+        // the owner's), and only from a folder it trusts, so this run trusts it. Deleted when the turn ends; one Gemini turn with apps
+        // runs at a time (`HubSharedConfigTurns`).
+        var extraEnvironment: [String: String] = [:]
+        let settingsFile = geminiHubSettingsFile
+        if let hubLaunch {
+            try? FileManager.default.createDirectory(at: settingsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.createFile(atPath: settingsFile.path, contents: Data(ConnectorHubWiring.geminiSettings(hubLaunch).utf8),
+                                              attributes: [.posixPermissions: 0o600]) {
+                extraEnvironment["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+            }
+        }
+        defer { if hubLaunch != nil { try? FileManager.default.removeItem(at: settingsFile) } }
         var raw = ""
-        let exit = try await spawnEngine(botID: bot.id, executable: executable, arguments: arguments, logName: "gemini") { line in
+        let exit = try await spawnEngine(botID: bot.id, executable: executable, arguments: arguments, logName: "gemini",
+                                         extraEnvironment: extraEnvironment) { line in
             raw += line + "\n"
         }
         var text: String?

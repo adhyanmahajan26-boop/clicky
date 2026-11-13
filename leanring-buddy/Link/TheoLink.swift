@@ -103,6 +103,9 @@ final class TheoLink: ObservableObject {
 
     var clickyMacChoices: [String] { [Self.localName] + (knownPeerName.map { [$0] } ?? []) }
 
+    /// This Mac's name and the other Mac's, for a Mac named out loud: "work on the Air", "run it on the iMac".
+    var macNames: [String] { clickyMacChoices }
+
     /// The name on the switch: "Adhyan’s MacBook Air" → "MacBook Air".
     static func shortName(_ name: String) -> String {
         name.range(of: #"^.*['’]s\s+"#, options: .regularExpression).map { String(name[$0.upperBound...]) } ?? name
@@ -118,10 +121,10 @@ final class TheoLink: ObservableObject {
         sendDigest()
     }
 
-    /// "air" or "studio", said out loud. False when neither Mac goes by that.
+    /// A Mac named out loud: its full name (`ClickyMachineWords`), or a word of it like "air". False when neither Mac goes by that.
     @discardableResult
     func setClickyMac(word: String) -> Bool {
-        guard let name = clickyMacChoices.first(where: { $0.lowercased().contains(word) }) else { return false }
+        guard let name = clickyMacChoices.first(where: { $0.lowercased().contains(word.lowercased()) }) else { return false }
         setClickyMac(name)
         return true
     }

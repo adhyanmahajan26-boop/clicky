@@ -109,9 +109,17 @@ pub struct State {
     /// When the owner last looked at each chat.
     pub seen: HashMap<String, DateTime<Utc>>,
     pub replying_since: HashMap<String, DateTime<Utc>>,
-    pub connectors: Vec<crate::connectors::Connector>,
+    /// The connector hub's list of apps as last read (`hub::list_apps`), for prompts and the Connectors page.
+    pub hub_apps: Vec<Value>,
+    pub hub_catalog: Option<Vec<Value>>,
+    /// Each app's tools with what they do, kept until the list changes.
+    pub hub_tools: HashMap<String, Vec<Value>>,
+    /// Sign-ins under way or just finished, by app id.
+    pub sign_ins: HashMap<String, Value>,
+    /// Why apps on a Claude account aren't listed (no Claude Code), for the page.
+    pub claude_code_note: Option<String>,
     pub connectors_checked: Option<DateTime<Utc>>,
-    /// A `claude mcp list` is running. It starts every MCP server to check it, so only one runs at a time.
+    /// A check of every app is running. It starts every app (and a `claude mcp list`), so only one runs at a time.
     pub connectors_refreshing: bool,
     pub gateway_recent: Vec<(DateTime<Utc>, String, String)>,
 }
@@ -204,6 +212,9 @@ impl Harness {
             }
         });
         self.resume_interrupted_turns();
+        // Bots' apps from before the connector hub (Claude Code server names) move onto hub apps.
+        let me = self.clone();
+        tokio::spawn(async move { crate::hub::move_old_app_names(&me).await });
         self.fire_hook("app-started", json!({"bots": self.with(|s| s.bots.len())}));
         crate::gateway::apply(self);
     }
@@ -433,8 +444,7 @@ impl Harness {
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.push(self.reach_note(bot));
         if !bot.apps.is_empty() {
-            let names: Vec<String> = bot.apps.iter().map(|a| a.strip_prefix("claude.ai ").unwrap_or(a).to_string()).collect();
-            parts.push(format!("Apps you can use: {}. Their tools are yours to call when the owner's request needs them; any other app's tools are off for you.", names.join(", ")));
+            parts.push(self.apps_note(bot));
         }
         let memory_file = self.paths.memory_file(&bot.id);
         let memory = std::fs::read_to_string(&memory_file).unwrap_or_default();
@@ -447,9 +457,38 @@ impl Harness {
         parts.join("\n\n")
     }
 
+    /// The bot's apps by name, from the hub's list as last read, with what it may do in each.
+    fn apps_note(&self, bot: &Bot) -> String {
+        let known = self.with(|s| s.hub_apps.clone());
+        let names: Vec<String> = bot
+            .apps
+            .iter()
+            .filter_map(|id| {
+                let app = known.iter().find(|a| a.get("id").and_then(|i| i.as_str()) == Some(id.as_str()));
+                if app.and_then(|a| a.get("enabled")).and_then(|e| e.as_bool()) == Some(false) {
+                    return None;
+                }
+                let name = app.and_then(|a| a.get("name")).and_then(|n| n.as_str()).map(str::to_string).unwrap_or_else(|| id.strip_prefix("claude.ai ").unwrap_or(id).to_string());
+                Some(match crate::hub::level_of(bot, id).as_str() {
+                    "read" => format!("{name} (read only)"),
+                    "full" => format!("{name} (anything, sending and deleting included)"),
+                    _ => name,
+                })
+            })
+            .collect();
+        if names.is_empty() {
+            return String::new();
+        }
+        format!(
+            "Apps you can use: {}. Their tools are yours to call when the owner's request needs them; any other app's tools are off for you. Unless an app says otherwise you may look things up and write drafts, but not send, share or delete. A turn that didn't come from the owner's own words (a routine, another bot, a program) never sends, shares or deletes, whatever the app's level.",
+            names.join(", ")
+        )
+    }
+
     /// The first message on engines without a system prompt option.
     fn first_message(&self, bot: &Bot, text: &str) -> String {
-        if bot.provider == "claude" { text.to_string() } else { format!("{}\n\n---\n\n{}", self.persona(bot), text) }
+        // Claude Code and API-key bots take the persona as their system prompt; the other engines read it in the first message.
+        if bot.provider == "claude" || bot.provider.starts_with("api:") { text.to_string() } else { format!("{}\n\n---\n\n{}", self.persona(bot), text) }
     }
 
     // MARK: Claiming a bot
@@ -741,10 +780,10 @@ impl Harness {
                     }
                 });
             };
-            let result = match me.run_turn(&bot, &prompt, session.clone(), &readable, &recall, on_text.clone()).await {
+            let result = match me.run_turn(&bot, &prompt, session.clone(), &readable, &recall, opts.from_owner, on_text.clone()).await {
                 Err(RunError::LostSession) if session.is_some() => {
                     let fresh = me.start_over_prompt(&bot, &conversation_id, &prompt);
-                    me.run_turn(&bot, &fresh, None, &readable, &recall, on_text).await
+                    me.run_turn(&bot, &fresh, None, &readable, &recall, opts.from_owner, on_text).await
                 }
                 other => other,
             };
@@ -919,26 +958,62 @@ impl Harness {
             let p = PathBuf::from(path);
             return if p.is_file() { Some(p) } else { None };
         }
-        engine::locate(provider)
+        match crate::brains::command_line_brain(provider) {
+            Some(brain) => brain.programs.iter().find_map(|program| engine::locate(program)),
+            None => engine::locate(provider),
+        }
+    }
+
+    /// Who answers for `bot` when its engine keeps failing: the owner's chosen stand-in when it works here (and isn't the
+    /// engine that's failing), else Claude Code, only when it is installed and not signed out. None: the error stands.
+    async fn stand_in_for(&self, bot: &Bot) -> Option<(String, String)> {
+        if let Some((engine, model)) = crate::brains::chosen_stand_in(self, &bot.provider) {
+            if crate::brains::usable_without_asking(self, &engine) {
+                let model = if model.is_empty() { crate::brains::command_line_brain(&engine).map(|b| b.default_model.to_string()).unwrap_or_default() } else { model };
+                return Some((engine, model));
+            }
+        }
+        if bot.provider == "claude" {
+            return None;
+        }
+        let claude = self.executable("claude")?;
+        if crate::brains::signed_in(self, "claude", &claude).await == Some(false) {
+            return None;
+        }
+        let model = self.settings.strings("v3.bots.fallbackModels").and_then(|v| v.first().cloned()).filter(|m| m != "off").unwrap_or_else(|| "claude-haiku-5-5".into());
+        Some(("claude".into(), model))
+    }
+
+    /// Whether a stand-in could answer for `bot`, without asking any program (checked before giving up on its engine).
+    fn may_have_stand_in(&self, bot: &Bot) -> bool {
+        let chosen = crate::brains::chosen_stand_in(self, &bot.provider).map(|(engine, _)| crate::brains::usable_without_asking(self, &engine)).unwrap_or(false);
+        chosen || (bot.provider != "claude" && self.executable("claude").is_some())
     }
 
     /// One turn with retries, the fallback chain, and Claude Code standing in for another engine that keeps failing.
-    async fn run_turn(&self, bot: &Bot, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], on_text: impl Fn(&str) + Clone + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
-        match self.run_with_failover(bot, prompt, session.clone(), readable, recall, on_text.clone()).await {
+    #[allow(clippy::too_many_arguments)]
+    async fn run_turn(&self, bot: &Bot, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], from_owner: bool, on_text: impl Fn(&str) + Clone + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
+        match self.run_with_failover(bot, prompt, session.clone(), readable, recall, from_owner, on_text.clone()).await {
             Err(RunError::EngineDown(why)) => {
+                let Some((engine, model)) = self.stand_in_for(bot).await else { return Err(RunError::Failed(why)) };
                 let mut stand_in = bot.clone();
-                stand_in.provider = "claude".into();
-                stand_in.model = self.settings.strings("v3.bots.fallbackModels").and_then(|v| v.first().cloned()).filter(|m| m != "off").unwrap_or_else(|| "claude-haiku-5-5".into());
+                stand_in.provider = engine;
+                stand_in.model = model;
                 stand_in.effort = None;
-                let label = if bot.provider == "opencode" { "OpenCode" } else { &bot.provider };
-                let (text, _) = self.run_on_engine(&stand_in, &stand_in.model.clone(), prompt, None, readable, recall, on_text).await?;
-                Ok((format!("{text}\n\n_({label} kept failing ({}), so this reply came from {}.)_", why.chars().take(80).collect::<String>(), failover::model_label(&stand_in.model)), session))
+                let label = crate::brains::label(&bot.provider);
+                // A stand-in without a system prompt of its own reads the bot's persona in its message, once.
+                let persona_already_in_message = prompt.contains(&self.persona(bot));
+                let stand_in_prompt = if stand_in.provider == "claude" || stand_in.provider.starts_with("api:") || persona_already_in_message { prompt.to_string() } else { self.first_message(&stand_in, prompt) };
+                let (text, _) = self.run_on_engine(&stand_in, &stand_in.model.clone(), &stand_in_prompt, None, readable, recall, from_owner, on_text).await?;
+                let used = if stand_in.provider == "claude" { failover::model_label(&stand_in.model) } else { format!("{} ({})", crate::brains::label(&stand_in.provider), if stand_in.model.is_empty() { "its default model" } else { stand_in.model.as_str() }) };
+                Ok((format!("{text}\n\n_({label} kept failing ({}), so this reply came from {used}.)_", why.chars().take(80).collect::<String>()), session))
             }
             other => other,
         }
     }
 
-    async fn run_with_failover(&self, bot: &Bot, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], on_text: impl Fn(&str) + Clone + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_failover(&self, bot: &Bot, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], from_owner: bool, on_text: impl Fn(&str) + Clone + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
         let configured = self.settings.strings("v3.bots.fallbackModels");
         let off = configured.as_deref() == Some(&["off".to_string()][..]);
         let fallbacks = if bot.provider == "claude" && !off { Plan::chain(&bot.model, configured.as_deref()) } else { vec![] };
@@ -949,7 +1024,7 @@ impl Harness {
         let mut fallback_index: Option<usize> = None;
         let mut first_failure: Option<Failure> = None;
         loop {
-            match self.run_on_engine(bot, &model, prompt, session.clone(), readable, recall, on_text.clone()).await {
+            match self.run_on_engine(bot, &model, prompt, session.clone(), readable, recall, from_owner, on_text.clone()).await {
                 Ok((text, s)) => {
                     if model != bot.model {
                         if let Some(reason) = first_failure {
@@ -963,7 +1038,7 @@ impl Harness {
                     let stopped = self.was_stopped_since(&bot.id, began);
                     let next = if stopped { None } else { plan.next(failure, &model, attempt, fallback_index) };
                     let Some(next) = next else {
-                        if bot.provider != "claude" && matches!(failure, Failure::Transient | Failure::ModelUnavailable) && !off && !stopped && self.executable("claude").is_some() {
+                        if matches!(failure, Failure::Transient | Failure::ModelUnavailable) && !off && !stopped && self.may_have_stand_in(bot) {
                             return Err(RunError::EngineDown(message.chars().take(300).collect()));
                         }
                         return Err(RunError::Failed(message));
@@ -988,10 +1063,18 @@ impl Harness {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn run_on_engine(&self, bot: &Bot, model: &str, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], on_text: impl Fn(&str) + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
-        let is_claude = bot.provider == "claude";
-        let provider = if is_claude { "claude" } else { "opencode" };
-        let label = if is_claude { "Claude Code" } else { "OpenCode" };
+    async fn run_on_engine(&self, bot: &Bot, model: &str, prompt: &str, session: Option<String>, readable: &[PathBuf], recall: &[PathBuf], from_owner: bool, on_text: impl Fn(&str) + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
+        if bot.provider.starts_with("api:") {
+            return self.run_on_api(bot, model, prompt, session, from_owner, on_text).await;
+        }
+        // Anything this build doesn't know runs on OpenCode, as before.
+        let provider: &str = match bot.provider.as_str() {
+            "claude" | "codex" | "cursor" | "gemini" | "grok" => bot.provider.as_str(),
+            _ => "opencode",
+        };
+        let is_claude = provider == "claude";
+        let label = crate::brains::label(provider);
+        let label = label.as_str();
         let Some(program) = self.executable(provider) else { return Err(RunError::NotInstalled(label.into())) };
         let workspace = self.paths.memory_root();
         let _ = std::fs::create_dir_all(&workspace);
@@ -1000,38 +1083,175 @@ impl Harness {
         // This turn's own folder for the system prompt the engine reads; removed when the turn ends, however it ends.
         let turn_folder = TurnFolder(self.paths.turns_dir().join(uuid::Uuid::new_v4().to_string()));
         let mut stdin = None;
-        let args = if is_claude {
-            if session.is_none() {
-                new_session = Some(uuid::Uuid::new_v4().to_string());
-            }
-            let persona = self.persona(bot);
-            let persona_file = turn_folder.0.join("system-prompt.md");
-            let settings_file = turn_folder.0.join("settings.json");
-            let (args, settings) = crate::policy::claude_turn(&self.paths, bot, model, &persona_file, &settings_file, session.as_deref(), new_session.as_deref(), readable, recall);
-            std::fs::create_dir_all(&turn_folder.0)
-                .and_then(|_| std::fs::write(&persona_file, persona.as_bytes()))
-                .and_then(|_| std::fs::write(&settings_file, serde_json::to_vec_pretty(&settings).unwrap_or_default()))
-                .map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
-            stdin = Some(prompt.to_string());
-            args
+        // Cursor, Gemini and Grok read the hub's server from a file their runs share: one of their turns with apps at a time.
+        let shares_config_file = !bot.apps.is_empty() && matches!(provider, "cursor" | "gemini" | "grok");
+        let _shared_config_turn = if shares_config_file { Some(crate::hub::shared_config_lock(&format!("{}:{provider}", self.paths.root.display())).lock_owned().await) } else { None };
+        // The bot's apps for this turn: Claude Code's own route for apps on the owner's Claude account, the connector hub
+        // (with a ticket that ends with the turn) for everything else. A bot whose apps can't be wired still answers, without
+        // them, and says so in the log.
+        let turn_apps = if bot.apps.is_empty() {
+            crate::hub::TurnApps::default()
         } else {
-            let mut a: Vec<String> = vec!["run".into(), "-m".into(), model.into(), "--format".into(), "json".into(), "--dir".into(), workspace.to_string_lossy().to_string()];
-            if let Some(s) = &session {
-                a.push("-s".into());
-                a.push(s.clone());
+            match crate::hub::wire_turn(self, bot, from_owner, &turn_folder.0).await {
+                Ok(wired) => wired,
+                Err(e) => {
+                    eprintln!("[connectors] bot {}: apps are off this turn: {e}", bot.id);
+                    crate::hub::TurnApps::default()
+                }
             }
-            a.push(prompt.into());
-            a
+        };
+        // Files an engine reads its hub server from, removed when the turn ends.
+        let mut written_for_turn = RemoveWhenDone(vec![]);
+        let mut extra_env: Vec<(String, String)> = vec![];
+        let mut codex_reply_file: Option<PathBuf> = None;
+        let effort = bot.effort.clone().filter(|e| !e.is_empty());
+        let args = match provider {
+            "claude" => {
+                if session.is_none() {
+                    new_session = Some(uuid::Uuid::new_v4().to_string());
+                }
+                let persona = self.persona(bot);
+                let persona_file = turn_folder.0.join("system-prompt.md");
+                let settings_file = turn_folder.0.join("settings.json");
+                let (args, settings) = crate::policy::claude_turn(&self.paths, bot, model, &persona_file, &settings_file, session.as_deref(), new_session.as_deref(), readable, recall, &turn_apps);
+                std::fs::create_dir_all(&turn_folder.0)
+                    .and_then(|_| std::fs::write(&persona_file, persona.as_bytes()))
+                    .and_then(|_| std::fs::write(&settings_file, serde_json::to_vec_pretty(&settings).unwrap_or_default()))
+                    .map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
+                stdin = Some(prompt.to_string());
+                args
+            }
+            // Codex, read-only (nobody is there to approve anything). The prompt goes on standard input (`-`); the last
+            // message is also written to a file, read when the stream had none.
+            "codex" => {
+                let reply_file = turn_folder.0.join("codex-reply.txt");
+                let _ = std::fs::create_dir_all(&turn_folder.0);
+                codex_reply_file = Some(reply_file.clone());
+                let mut common: Vec<String> = vec!["--json".into(), "--skip-git-repo-check".into()];
+                if !model.is_empty() {
+                    common.extend(["-m".into(), model.to_string()]);
+                }
+                if let Some(effort) = &effort {
+                    common.extend(["-c".into(), format!("model_reasoning_effort={}", crate::hub::toml_string(effort))]);
+                }
+                common.extend(["-c".into(), "check_for_update_on_startup=false".into()]);
+                if let Some(launch) = &turn_apps.launch {
+                    common.extend(crate::hub::codex_arguments(launch));
+                }
+                let reply = reply_file.to_string_lossy().to_string();
+                stdin = Some(prompt.to_string());
+                match &session {
+                    // `exec resume` has no -C / -s: the folder is the process's, the sandbox a config override.
+                    Some(session) => [vec!["exec".to_string(), "resume".into()], common, vec!["-c".into(), "sandbox_mode=\"read-only\"".into(), "-o".into(), reply, "--".into(), session.clone(), "-".into()]].concat(),
+                    None => [vec!["exec".to_string()], common, vec!["-C".into(), workspace.to_string_lossy().to_string(), "-s".into(), "read-only".into(), "-o".into(), reply, "-".into()]].concat(),
+                }
+            }
+            // Cursor Agent in ask mode (read-only). Its hub server comes from `.cursor/mcp.json` in the folder it works in.
+            "cursor" => {
+                let mut a: Vec<String> = vec!["-p".into(), "--output-format".into(), "stream-json".into(), "--stream-partial-output".into()];
+                if !model.is_empty() {
+                    a.extend(["--model".into(), model.to_string()]);
+                }
+                a.extend(["--trust".into(), "--mode".into(), "ask".into(), "--workspace".into(), workspace.to_string_lossy().to_string()]);
+                if let Some(launch) = &turn_apps.launch {
+                    let file = workspace.join(".cursor").join("mcp.json");
+                    written_for_turn.0.push(file.clone());
+                    std::fs::create_dir_all(workspace.join(".cursor"))
+                        .and_then(|_| std::fs::write(&file, crate::hub::cursor_mcp_file(launch)))
+                        .map_err(|e| RunError::Failed(format!("Couldn't write the bot's apps for Cursor Agent: {e}")))?;
+                    // A headless run can't be asked to approve a new MCP server.
+                    a.push("--approve-mcps".into());
+                }
+                if let Some(session) = &session {
+                    a.extend(["--resume".into(), session.clone()]);
+                }
+                a.push(self.prompt_as_argument(prompt, &turn_folder.0));
+                a
+            }
+            // Gemini CLI: the prompt on standard input (`-p` adds its words after it). No session to resume with, so every
+            // turn carries the persona. Its hub server comes from `.gemini/settings.json` in the folder it works in.
+            "gemini" => {
+                let mut a: Vec<String> = vec!["-p".into(), String::new(), "--output-format".into(), "json".into()];
+                if !model.is_empty() {
+                    a.extend(["-m".into(), model.to_string()]);
+                }
+                if let Some(launch) = &turn_apps.launch {
+                    let file = workspace.join(".gemini").join("settings.json");
+                    written_for_turn.0.push(file.clone());
+                    std::fs::create_dir_all(workspace.join(".gemini"))
+                        .and_then(|_| std::fs::write(&file, crate::hub::gemini_settings(launch)))
+                        .map_err(|e| RunError::Failed(format!("Couldn't write the bot's apps for Gemini CLI: {e}")))?;
+                    crate::paths::make_private(&file);
+                    extra_env.push(("GEMINI_CLI_TRUST_WORKSPACE".into(), "true".into()));
+                }
+                stdin = Some(prompt.to_string());
+                a
+            }
+            // Grok may read and search the web, nothing else, since nobody is there to approve more. Its hub server is in its
+            // own config, and its tools are allowed by exact name (the hub still refuses what the ticket doesn't allow).
+            "grok" => {
+                let mut a: Vec<String> = vec!["-p".into(), self.prompt_as_argument(prompt, &turn_folder.0), "--output-format".into(), "streaming-messages-json".into(), "--permission-mode".into(), "dontAsk".into(), "--tools".into(), "web_search,web_fetch,read_file,grep,list_dir".into(), "--no-subagents".into()];
+                if !model.is_empty() {
+                    a.extend(["-m".into(), model.to_string()]);
+                }
+                if let Some(effort) = &effort {
+                    a.extend(["--reasoning-effort".into(), effort.clone()]);
+                }
+                if let Some(launch) = &turn_apps.launch {
+                    let config = self.grok_config_file();
+                    let current = std::fs::read_to_string(&config).unwrap_or_default();
+                    if let Some(updated) = crate::hub::grok_config_with_hub(&current, launch) {
+                        let _ = config.parent().map(std::fs::create_dir_all);
+                        write_atomic(&config, updated.as_bytes()).map_err(|e| RunError::Failed(format!("Couldn't add the bot's apps to Grok's config: {e}")))?;
+                    }
+                    if self.settings.is_test {
+                        extra_env.push(("THEO_TEST_GROK_CONFIG".into(), config.to_string_lossy().to_string()));
+                    }
+                    for app_id in turn_apps.through_hub.keys() {
+                        for tool in crate::hub::tools_of(self, app_id).await.unwrap_or_default() {
+                            if let Some(exposed) = tool["exposedName"].as_str() {
+                                a.extend(["--allow".into(), format!("mcp__{}__{exposed}", crate::hub::SHARED_HUB_SERVER_NAME)]);
+                            }
+                        }
+                    }
+                }
+                if let Some(session) = &session {
+                    a.extend(["--resume".into(), session.clone()]);
+                }
+                a
+            }
+            _ => {
+                let mut a: Vec<String> = vec!["run".into(), "-m".into(), model.into(), "--format".into(), "json".into(), "--dir".into(), workspace.to_string_lossy().to_string()];
+                if let Some(s) = &session {
+                    a.push("-s".into());
+                    a.push(s.clone());
+                }
+                a.push(prompt.into());
+                if let Some(config) = &turn_apps.opencode_config {
+                    extra_env.push(("OPENCODE_CONFIG_CONTENT".into(), config.clone()));
+                }
+                a
+            }
+        };
+        let mut env: Vec<(String, String)> = vec![("NO_COLOR".into(), "1".into()), ("PWD".into(), workspace.to_string_lossy().to_string())];
+        env.extend(extra_env);
+        let format = match provider {
+            "claude" => Format::Claude,
+            "codex" => Format::Codex,
+            "cursor" => Format::Cursor,
+            "gemini" => Format::Gemini,
+            "grok" => Format::Grok,
+            _ => Format::OpenCode,
         };
         let spec = Spec {
             program,
             args,
-            env: vec![("NO_COLOR".into(), "1".into()), ("PWD".into(), workspace.to_string_lossy().to_string())],
+            env,
             // Theo might itself be running inside Claude Code; the bot's engine mustn't think it's nested.
             remove_env: ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "ANTHROPIC_API_KEY_HELPER"].iter().map(|s| s.to_string()).collect(),
             cwd: workspace,
             limit: Duration::from_secs_f64(self.settings.turn_limit_seconds()),
-            format: if is_claude { Format::Claude } else { Format::OpenCode },
+            format,
             stdin,
         };
         let cancel = Cancel::new();
@@ -1062,8 +1282,24 @@ impl Harness {
                 let _ = f.write_all(outcome.stderr_tail.as_bytes());
             }
         }
-        let text = outcome.text.clone();
-        let resolved = outcome.session_id.clone().or(new_session).or(session.clone());
+        let mut text = outcome.text.clone();
+        if text.trim().is_empty() {
+            if let Some(saved) = codex_reply_file.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+                text = saved;
+            }
+        }
+        drop(written_for_turn);
+        // Gemini's sessions can only be resumed by their place in a list, never by id: every turn starts afresh.
+        let resolved = if provider == "gemini" { None } else { outcome.session_id.clone().or(new_session).or(session.clone()) };
+        if text.trim().is_empty() && !is_claude {
+            let everything = format!("{}\n{}\n{}", outcome.error.clone().unwrap_or_default(), outcome.unread_output, outcome.stderr_tail);
+            if let Some(limit) = crate::brains::usage_limit_message(provider, &everything) {
+                return Err(RunError::Failed(limit));
+            }
+            if let Some(sign_in) = crate::brains::sign_in_problem(provider, &everything) {
+                return Err(RunError::Failed(sign_in));
+            }
+        }
         match outcome.end {
             EndReason::Timeout => {
                 let secs = self.settings.turn_limit_seconds();
@@ -1097,6 +1333,45 @@ impl Harness {
             return Err(RunError::Failed(format!("{label} stopped (exit {status}). Details are in {}.", self.paths.logs_dir().join(format!("bots-{provider}.log")).display())));
         }
         Ok((text, resolved))
+    }
+
+    /// A turn of a bot on an API key (`apichat`): the persona as the system prompt, its earlier messages kept by Theo, its
+    /// memory folder and hub apps as tools. Stoppable like any engine.
+    async fn run_on_api(&self, bot: &Bot, model: &str, prompt: &str, session: Option<String>, from_owner: bool, on_text: impl Fn(&str) + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
+        let cancel = Cancel::new();
+        if self.with(|s| s.stopped.contains(&bot.id)) {
+            return Err(RunError::Failed("Stopped.".into()));
+        }
+        self.procs.lock().unwrap().insert(bot.id.clone(), cancel.clone());
+        let system = self.persona(bot);
+        let result = crate::apichat::run_bot_turn(self, bot, model, system, prompt, session, from_owner, cancel.clone(), on_text).await;
+        let mut procs = self.procs.lock().unwrap();
+        if procs.get(&bot.id).map(|c| Arc::ptr_eq(c, &cancel)).unwrap_or(false) {
+            procs.remove(&bot.id);
+        }
+        result
+    }
+
+    /// The prompt as one command-line argument. Windows caps a command line at 32,767 characters, so a longer message goes in
+    /// a file in the turn's folder and the argument says where it is.
+    fn prompt_as_argument(&self, prompt: &str, turn_folder: &std::path::Path) -> String {
+        if prompt.len() <= 24_000 {
+            return prompt.to_string();
+        }
+        let file = turn_folder.join("message.md");
+        match std::fs::create_dir_all(turn_folder).and_then(|_| std::fs::write(&file, prompt)) {
+            Ok(()) => format!("Your message is long, so it is in this file: {}. Read all of it, then answer it.", file.display()),
+            Err(_) => prompt.chars().take(24_000).collect(),
+        }
+    }
+
+    /// Grok's own config, which is where it reads MCP servers from. A test profile writes its own copy instead (and tells the
+    /// stand-in engine where it is), so tests never touch the owner's.
+    fn grok_config_file(&self) -> PathBuf {
+        if self.settings.is_test {
+            return self.paths.root.join("test-grok-config.toml");
+        }
+        crate::paths::home().join(".grok").join("config.toml")
     }
 
     // MARK: Private messages
@@ -1879,54 +2154,9 @@ impl Harness {
         })
     }
 
-    /// Claude Code's connectors, from `claude mcp list` (it checks each server, so it can take a while).
+    /// Checks every app in the connector hub and reads its list again (`hub::refresh`).
     pub async fn refresh_connectors(&self) -> Result<(), String> {
-        let started_here = self.with(|s| {
-            if s.connectors_refreshing {
-                false
-            } else {
-                s.connectors_refreshing = true;
-                true
-            }
-        });
-        if !started_here {
-            // Another caller's check is running: wait for its result instead of starting every server again.
-            let deadline = Instant::now() + Duration::from_secs(95);
-            while self.with(|s| s.connectors_refreshing) && Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-            return Ok(());
-        }
-        // Cleared however this ends, even if the caller stops waiting.
-        struct ClearWhenDone<'a>(&'a Harness);
-        impl Drop for ClearWhenDone<'_> {
-            fn drop(&mut self) {
-                self.0.with(|s| s.connectors_refreshing = false);
-            }
-        }
-        let _clear = ClearWhenDone(self);
-        self.list_connectors_now().await
-    }
-
-    async fn list_connectors_now(&self) -> Result<(), String> {
-        let program = self.executable("claude").ok_or("Claude Code isn't installed.")?;
-        // Its own process tree, like every engine Theo starts: the servers it checks end with it, even after a timeout.
-        let (_, stdout, _) = engine::run_briefly(&program, &["mcp", "list"], &crate::paths::home(), Duration::from_secs(90)).await.ok_or_else(|| "Claude Code took too long to list connectors, or couldn't start.".to_string())?;
-        let mut list = crate::connectors::parse(&stdout);
-        let now = Utc::now();
-        let mut seen: HashMap<String, String> = std::fs::read(self.paths.root.join("connectors-seen.json")).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
-        for c in list.iter_mut() {
-            if c.status == "connected" {
-                seen.insert(c.name.clone(), now.to_rfc3339());
-            }
-            c.last_connected = seen.get(&c.name).cloned();
-        }
-        let _ = write_atomic(&self.paths.root.join("connectors-seen.json"), &serde_json::to_vec(&seen).unwrap_or_default());
-        self.with(|s| {
-            s.connectors = list;
-            s.connectors_checked = Some(now);
-        });
-        Ok(())
+        crate::hub::refresh(self).await
     }
 
     // MARK: Hooks, usage, doctor
@@ -2075,7 +2305,7 @@ impl Harness {
                 "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
                 "exchanges": s.live_exchanges.iter().map(|(id, e)| json!({"id": id, "from": e.sender, "to": e.target, "room": e.room, "replying": e.replying})).collect::<Vec<_>>(),
                 "threads": threads,
-                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps})).collect::<Vec<_>>(),
+                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps, "appLevels": b.app_levels})).collect::<Vec<_>>(),
                 "groups": s.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "head": g.head_id, "members": g.member_ids})).collect::<Vec<_>>(),
                 "rounds": s.rounds.keys().collect::<Vec<_>>(),
                 "queued": s.queues.iter().filter(|(_, q)| !q.is_empty()).map(|(k, q)| (k.clone(), q.len())).collect::<HashMap<_, _>>(),
@@ -2119,6 +2349,17 @@ pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
 }
 
 /// A bot turn's folder under Turns/, removed when the turn is over.
+/// Files written for one turn only (an engine's config holding the hub's server), removed when the turn ends.
+struct RemoveWhenDone(Vec<PathBuf>);
+
+impl Drop for RemoveWhenDone {
+    fn drop(&mut self) {
+        for file in self.0.drain(..) {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
 struct TurnFolder(PathBuf);
 
 impl Drop for TurnFolder {

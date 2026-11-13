@@ -1,5 +1,6 @@
-//! First run: is Claude Code here and signed in, are git and the GitHub CLI here for coding runs. Read from the programs
-//! themselves (`claude --version`, `claude auth status`, which prints JSON, `git --version`, `gh auth status`).
+//! First run: which brains this computer can think with (an API key, or any of the agents: none is required), is Claude Code
+//! here and signed in for coding runs, are git and the GitHub CLI here. Read from the programs themselves (`claude --version`,
+//! `claude auth status`, which prints JSON, `git --version`, `gh auth status`, and each agent's own check in `brains`).
 
 use crate::harness::Harness;
 use serde_json::{json, Value};
@@ -150,7 +151,57 @@ pub async fn state(h: &Harness) -> Value {
         None => json!({"installed": false, "signedIn": false}),
     };
     let bots = h.with(|s| s.bots.iter().filter(|b| !b.primary).count());
-    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS})
+    let brains = crate::brains::inventory(h).await;
+    let suggested = crate::brains::starting_brain(h, &brains).await.map(|(engine, model)| json!({"engine": engine, "model": model, "label": crate::brains::label(&engine)}));
+    let any_ready = brains["anyReady"].clone();
+    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS,
+           "brains": brains, "suggested": suggested, "anyReady": any_ready,
+           "ownerName": h.settings.string("owner.name").unwrap_or_default(), "suggestedOwnerName": crate::settings::suggested_owner_name()})
+}
+
+/// At the end of setup: Theo was made on Claude Code before anything was checked. When Claude Code can't answer here and the
+/// owner hasn't changed Theo's brain, Theo moves to the brain setup found (an agent that is signed in, or a key). Someone who
+/// picked a brain for Theo keeps it.
+pub async fn move_untouched_theo(h: &Harness) -> Option<(String, String)> {
+    let theo = h.primary()?;
+    let untouched = theo.provider == "claude" && theo.model == "claude-sonnet-5-5";
+    if !untouched {
+        return None;
+    }
+    let brains = crate::brains::inventory(h).await;
+    let claude_ready = brains["agents"].as_array().into_iter().flatten().any(|agent| agent["id"] == "claude" && agent["ready"].as_bool() == Some(true));
+    if claude_ready {
+        return None;
+    }
+    let (engine, model) = crate::brains::starting_brain(h, &brains).await?;
+    let mut moved = theo;
+    moved.provider = engine.clone();
+    moved.model = model.clone();
+    moved.effort = None;
+    h.save_bot(moved);
+    Some((engine, model))
+}
+
+/// The command for one brain's Install or Sign in button (`install:<brain>` or `signin:<brain>`), with the program named by
+/// the full path Theo found it at, for the same reason as `terminal_command`.
+pub fn brain_terminal_command(which: &str, found_program: Option<&Path>) -> Result<String, String> {
+    let (action, brain_id) = which.split_once(':').ok_or("Unknown command.")?;
+    let brain = crate::brains::command_line_brain(brain_id).ok_or("Unknown command.")?;
+    match action {
+        "install" => Ok(if cfg!(windows) { brain.install_on_windows } else { brain.install_elsewhere }.to_string()),
+        "signin" => {
+            let arguments = brain.sign_in_arguments.join(" ");
+            Ok(match found_program {
+                Some(path) => {
+                    let text = path.to_string_lossy();
+                    let program = if cfg!(windows) { format!("& '{}'", text.replace('\'', "''")) } else { format!("'{}'", text.replace('\'', "'\\''")) };
+                    format!("{program} {arguments}").trim_end().to_string()
+                }
+                None => format!("{} {arguments}", brain.programs[0]).trim_end().to_string(),
+            })
+        }
+        _ => Err("Unknown command.".into()),
+    }
 }
 
 /// The command a setup button runs in a terminal. Claude Code and the GitHub CLI are named by the full path Theo found them at:
@@ -174,7 +225,13 @@ pub fn terminal_command(which: &str, claude: Option<&Path>, gh: Option<&Path>) -
 pub fn open_terminal(h: &Harness, which: &str) -> Result<(), String> {
     let claude = h.executable("claude").filter(|p| p.extension().map(|e| e != "py").unwrap_or(true));
     let gh = crate::engine::locate("gh");
-    let command = terminal_command(which, claude.as_deref(), gh.as_deref())?;
+    let command = if which.contains(':') {
+        let brain_id = which.split_once(':').map(|(_, id)| id).unwrap_or_default();
+        let found = crate::brains::command_line_brain(brain_id).and_then(|_| h.executable(brain_id)).filter(|p| p.extension().map(|e| e != "py").unwrap_or(true));
+        brain_terminal_command(which, found.as_deref())?
+    } else {
+        terminal_command(which, claude.as_deref(), gh.as_deref())?
+    };
     let command = command.as_str();
     let spawn = |program: &str, args: &[&str]| std::process::Command::new(program).args(args).spawn().map(|_| ()).map_err(|e| e.to_string());
     if cfg!(target_os = "macos") {
@@ -212,5 +269,17 @@ mod tests {
         assert_eq!(terminal_command("signin", None, None).unwrap(), "claude auth login");
         assert_eq!(terminal_command("gh", None, None).unwrap(), "gh auth login");
         assert!(terminal_command("rm -rf", None, None).is_err());
+    }
+
+    #[test]
+    fn every_brain_has_an_install_and_a_sign_in_button() {
+        for brain in crate::brains::COMMAND_LINE_BRAINS.iter() {
+            assert!(!brain_terminal_command(&format!("install:{}", brain.id), None).unwrap().is_empty());
+            assert!(brain_terminal_command(&format!("signin:{}", brain.id), None).unwrap().starts_with(brain.programs[0]));
+        }
+        assert_eq!(brain_terminal_command("signin:codex", None).unwrap(), "codex login");
+        assert_eq!(brain_terminal_command("signin:gemini", None).unwrap(), "gemini");
+        assert!(brain_terminal_command("install:rm -rf", None).is_err());
+        assert!(brain_terminal_command("format:codex", None).is_err());
     }
 }

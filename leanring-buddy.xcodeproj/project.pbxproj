@@ -32,6 +32,7 @@
 		28F22CBF2F56440300A0FC59 /* Clicky.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Clicky.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		28F22CCC2F56440300A0FC59 /* leanring-buddyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "leanring-buddyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28F22CD62F56440300A0FC59 /* leanring-buddyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "leanring-buddyUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E0C1A2B3C4D5E6F70819203 /* Theo.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Theo.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -85,8 +86,17 @@
 				28F22CC12F56440300A0FC59 /* leanring-buddy */,
 				28F22CCF2F56440300A0FC59 /* leanring-buddyTests */,
 				28F22CD92F56440300A0FC59 /* leanring-buddyUITests */,
+				7E0C1A2B3C4D5E6F70819204 /* Config */,
 				28F22CC02F56440300A0FC59 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		7E0C1A2B3C4D5E6F70819204 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				7E0C1A2B3C4D5E6F70819203 /* Theo.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		28F22CC02F56440300A0FC59 /* Products */ = {
@@ -110,6 +120,7 @@
 				28F22CBC2F56440300A0FC59 /* Frameworks */,
 				28F22CBD2F56440300A0FC59 /* Resources */,
 				8A9D38ADB0EBB70F34029216 /* Stamp Git SHA */,
+				C0EC70A5B1D24E6F8A9B0C11 /* Connector helper */,
 			);
 			buildRules = (
 			);
@@ -265,6 +276,25 @@
 			shellPath = /bin/sh;
 			shellScript = "# Stamps the git commit into the built Info.plist so the running app can report exactly which code it is.\nSHA=$(git -C \"$SRCROOT\" rev-parse HEAD 2>/dev/null || echo unknown)\nif [ -n \"$(git -C \"$SRCROOT\" status --porcelain --untracked-files=no 2>/dev/null)\" ]; then SHA=\"$SHA-dirty\"; fi\nPLIST=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\n/usr/libexec/PlistBuddy -c \"Delete :ClickyGitSHA\" \"$PLIST\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Add :ClickyGitSHA string $SHA\" \"$PLIST\"\n";
 		};
+		C0EC70A5B1D24E6F8A9B0C11 /* Connector helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Connector helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Builds theo-connectors (crossplatform/crates/theo-connectors) into Contents/Helpers and signs it before Xcode signs the app.\n# Without Rust it only warns: Theo then reaches apps through Claude Code, as before the hub.\n/bin/bash \"$SRCROOT/Tools/build-connectors-helper.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -307,6 +337,7 @@
 /* Begin XCBuildConfiguration section */
 		28F22CDE2F56440300A0FC59 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7E0C1A2B3C4D5E6F70819203 /* Theo.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -340,7 +371,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -371,6 +401,7 @@
 		};
 		28F22CDF2F56440300A0FC59 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7E0C1A2B3C4D5E6F70819203 /* Theo.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -404,7 +435,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -434,7 +464,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -473,7 +502,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -509,7 +537,6 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.2;
 				MARKETING_VERSION = 1.0;
@@ -530,7 +557,6 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.2;
 				MARKETING_VERSION = 1.0;
@@ -550,7 +576,6 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.yourcompany.leanring-buddyUITests";
@@ -569,7 +594,6 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 9JAQUUW553;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.yourcompany.leanring-buddyUITests";

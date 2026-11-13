@@ -1,8 +1,8 @@
 //! Settings, kept in one JSON file (the Swift app uses UserDefaults; the keys are the same).
 //!
-//! Keys the harness reads: `test.engine.claude`, `test.engine.opencode` (a stand-in engine, tests only), `test.bots.turnLimit`,
+//! Keys the harness reads: `test.engine.<brain>` (claude, opencode, codex, cursor, gemini, grok: a stand-in engine, tests only), `brains.apiBaseURL.<provider>` (a provider moved, such as a test's stand-in API), `test.bots.turnLimit`,
 //! `test.bots.retryDelays`, `test.routines.run`, `v3.bots.fallbackModels`, `v3.bots.parallelMessages`, `v3.gateway.enabled`,
-//! `v3.gateway.port`, `owner.name`.
+//! `v3.gateway.port`, `owner.name` (empty or missing: prompts say "the owner").
 
 use serde_json::{Map, Value};
 use std::path::PathBuf;
@@ -66,8 +66,9 @@ impl Settings {
         }
     }
 
+    /// What the bots call the owner: the name from Setup or Settings, or "the owner" until one is given.
     pub fn owner_name(&self) -> String {
-        self.string("owner.name").unwrap_or_else(|| "Addy".to_string())
+        owner_name_from(self.string("owner.name").as_deref())
     }
 
     /// The longest one bot turn may take: 7 minutes, or `test.bots.turnLimit` in a test profile.
@@ -92,5 +93,72 @@ impl Settings {
     pub fn gateway_enabled(&self) -> bool { self.bool("v3.gateway.enabled") }
     pub fn gateway_port(&self) -> u16 {
         self.number("v3.gateway.port").map(|n| n as u16).filter(|p| *p > 0).unwrap_or(47380)
+    }
+}
+
+/// What prompts say before the owner has given a name.
+pub const OWNER_UNSET: &str = "the owner";
+
+/// Names go into many prompts, so a long one is cut.
+pub const OWNER_NAME_MAXIMUM_CHARACTERS: usize = 40;
+
+/// A saved name, tidied; "the owner" when nothing usable is saved.
+pub fn owner_name_from(saved: Option<&str>) -> String {
+    let trimmed = saved.unwrap_or("").trim();
+    if trimmed.is_empty() { return OWNER_UNSET.to_string(); }
+    trimmed.chars().take(OWNER_NAME_MAXIMUM_CHARACTERS).collect()
+}
+
+/// The owner's name at the start of a sentence: "The owner sees…" rather than "the owner sees…".
+pub fn owner_starting_sentence(owner: &str) -> String {
+    if owner == OWNER_UNSET { "The owner".to_string() } else { owner.to_string() }
+}
+
+/// What Setup's name field starts with: the computer account's name, capitalised ("sam" → "Sam"), or empty.
+pub fn suggested_owner_name() -> String {
+    let account = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
+    suggested_owner_name_from(&account)
+}
+
+pub fn suggested_owner_name_from(account: &str) -> String {
+    let trimmed = account.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("root") || trimmed.eq_ignore_ascii_case("administrator") { return String::new(); }
+    let mut characters = trimmed.chars();
+    let first = characters.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    (first + characters.as_str()).chars().take(OWNER_NAME_MAXIMUM_CHARACTERS).collect()
+}
+
+#[cfg(test)]
+mod owner_name_tests {
+    use super::*;
+
+    #[test]
+    fn nothing_saved_means_the_owner() {
+        assert_eq!(owner_name_from(None), "the owner");
+        assert_eq!(owner_name_from(Some("   ")), "the owner");
+        assert_eq!(owner_name_from(Some("  Sam ")), "Sam");
+        assert_eq!(owner_name_from(Some(&"x".repeat(90))).chars().count(), OWNER_NAME_MAXIMUM_CHARACTERS);
+    }
+
+    #[test]
+    fn a_settings_file_without_a_name_says_the_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings::load(dir.path().join("settings.json"), false);
+        assert_eq!(settings.owner_name(), "the owner");
+        settings.set("owner.name", "Priya".into());
+        assert_eq!(settings.owner_name(), "Priya");
+    }
+
+    #[test]
+    fn the_owner_starts_a_sentence_with_a_capital() {
+        assert_eq!(owner_starting_sentence(OWNER_UNSET), "The owner");
+        assert_eq!(owner_starting_sentence("Sam"), "Sam");
+    }
+
+    #[test]
+    fn setup_suggests_the_account_name() {
+        assert_eq!(suggested_owner_name_from("priya"), "Priya");
+        assert_eq!(suggested_owner_name_from("Administrator"), "");
+        assert_eq!(suggested_owner_name_from(""), "");
     }
 }

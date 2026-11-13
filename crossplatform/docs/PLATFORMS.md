@@ -9,7 +9,10 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 |---|---|---|---|---|
 | Bots, chats, group chats, private threads, routines | Yes | Yes | Yes | `theo-core`, the same code everywhere |
 | Engine: Claude Code (`claude -p`) on your subscription | Yes | Yes | Yes | Claude Code runs on all three; Theo finds it on PATH, `~/.local/bin`, `%APPDATA%\npm` |
-| Engine: OpenCode bots, with Claude standing in when it fails | Yes | Yes | Yes | |
+| Engine: OpenCode, Codex, Cursor Agent, Gemini CLI and Grok on your own subscriptions | Yes | Yes | Yes | `harness.rs` `run_on_engine`; each gets the connector hub for the turn (see Brains below) |
+| Engine: API keys (Anthropic, OpenAI, Google Gemini, xAI, OpenRouter, Groq, Mistral, DeepSeek, Together, Fireworks, Cerebras; Ollama and LM Studio with no key), with tools | Yes | Yes | Yes | `apichat.rs`, `brains.rs` |
+| API keys | Keychain | Credential Manager | A 0600 file (`Keys/`), as the gateway token | `secrets.rs` (`com.theo.desktop.apikeys`) |
+| A stand-in when a bot's brain keeps failing | Yes | Yes | Yes | The owner's choice in Settings › Brains (`v3.bots.standInBrain`), else Claude Code when it's installed |
 | Tool limits for bots (no shell, writes only in its folder, no cron, secrets unreadable) | Yes | Yes (paths written as `//c/Users/...`; see "Not yet verified") | Yes | Claude Code permission rules, same as the Swift app |
 | Stop, time limit, ending everything an engine started | Process groups, SIGTERM then SIGKILL | Job Objects (the whole tree ends; also when Theo itself dies) | Process groups | `procs.rs` |
 | Engines left running after a crash end at the next launch | Yes | Not needed: the Job Object ends them when Theo dies | Yes | `engines-running.json`, checked by start time and boot id |
@@ -25,14 +28,61 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 | Coding runs: own branch and worktree, commit, push, draft PR | Yes | Yes | Yes | Needs `git`, and `gh` signed in for the PR |
 | Data folder | `~/Library/Application Support/Theo-Desktop` | `%APPDATA%\Theo-Desktop` | `~/.local/share/theo-desktop` | never the Swift app's `Theo` folder |
 
+### Brains
+
+None is required. Setup's brain step offers "paste an API key" first, since it is the quickest start, then lists every agent
+(Claude Code, Codex, Cursor Agent, Gemini CLI, Grok, OpenCode) with its install command and a Sign in button that opens a
+terminal running that agent's own sign-in. Settings › Brains has the same list, the saved keys (only whether one is saved
+ever reaches the window) and the stand-in choice. The first bot, and Theo himself when Claude Code can't answer here and he
+was never changed, think with what setup found: a signed-in agent (Claude Code first), else a key on its preferred model.
+
+How each brain runs a bot's turn, and what it may do (nobody is there to approve anything):
+
+- Claude Code: as before, with its permission rules (`policy.rs`).
+- Codex: `codex exec --json -s read-only`, the prompt on standard input, then `codex exec resume` on its thread.
+- Cursor Agent: `cursor-agent -p --mode ask` (read-only), then `--resume`.
+- Gemini CLI: `gemini -p "" --output-format json` with the prompt on standard input, in its default approval mode. It can't
+  resume a session by id, so every turn starts afresh with the persona.
+- Grok: `grok -p --permission-mode dontAsk` with only web search, web fetch and reading tools, then `--resume`.
+- An API key: Theo's own tool loop (`apichat.rs`, Anthropic Messages or OpenAI-style chat completions, streamed). Its tools
+  are three for its own memory folder (`memory_list`, `memory_read`, `memory_write`, which refuse paths outside it) and the
+  hub apps its level allows; at most 8 rounds of tool calls a turn. Theo keeps its chat history in `APISessions/`.
+
+A signed-out agent or a used-up plan is said plainly in the chat, once, with where to sign in.
+
+### Connectors
+
+Connectors are Theo's own, through the connector hub (`theo-connectors`, [CONNECTORS.md](CONNECTORS.md)), which ships beside
+the app in every installer (a Tauri sidecar: `theo-connectors.exe` next to `theo-desktop.exe`, `/usr/bin/theo-connectors` in
+the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them:
+
+- The Connectors page lists the hub's apps: an MCP address (signed in in the browser, with a pasted token, or nothing), a
+  program on this computer, and the apps on the owner's Claude account. Each server Claude Code has is added as an app on
+  the Claude account the first time the page checks, once, so removing one keeps it removed.
+- Each bot gets each app at a level: read only, read and draft (the default), or everything. A turn that didn't come from the
+  owner's own words (a routine, another bot, the local API) reads and drafts at most: it never sends, shares or deletes.
+- A turn's apps: before the turn Theo writes a ticket (`Connectors/tickets/`, deleted when the turn ends) and starts the
+  engine with the hub as an MCP server called `theo` for that turn only: Claude Code through `--mcp-config` and an allow rule
+  for `mcp__theo`, OpenCode through `OPENCODE_CONFIG_CONTENT`. The other agents call it `theo_apps`, as the Mac does: Codex
+  through `-c mcp_servers.theo_apps.*` overrides, Cursor Agent through `.cursor/mcp.json` and Gemini CLI through a trusted
+  `.gemini/settings.json` in the bots' own folder (written for the turn, removed after it, one such turn at a time), and
+  Grok through its own `~/.grok/config.toml` with each tool allowed by name. An API-key bot calls the hub's `call` itself.
+  The hub only offers and only runs what the ticket allows.
+- A Claude Code bot keeps its direct route to apps on the Claude account (Claude Code's own `mcp__claude_ai_*` tools,
+  allowed tool by tool for its level, with the rest denied). Every other combination goes through the hub.
+- Bots saved before the hub named Claude Code servers ("claude.ai Gmail"). At the first start each becomes the hub app for
+  that server; one whose tools Theo can't tell apart keeps the whole server ("Everything"), as it had.
+- The engine finds the helper beside itself, else `THEO_CONNECTORS_BIN`, else on PATH. A test profile keeps the hub's key in
+  a file (`--key-store file`) and records the sign-in address in `Logs/opened.log` instead of opening a browser.
+
 ### Not in this build yet (the Swift app has them)
 
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
 - Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
 - `[PDF:]` documents, `[CHOOSE:]` cards, `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
-- Harness cards for T3 Code, Codex, Cursor, Grok and Gemini; continuing a harness's own chat.
-- Theo's own MCP server (`claudia_*` tools) isn't ported. Connectors themselves work: they're Claude Code's own (claude.ai and `claude mcp add` servers), listed on the Connectors page, and a bot can use the ones you give it there.
-- API-key bots (Anthropic or OpenAI-compatible keys without Claude Code).
+- Harness cards for T3 Code; coding runs on Codex, Cursor, Grok and Gemini (bots think with them, coding runs use Claude
+  Code); continuing a harness's own chat.
+- Theo's own MCP server (`claudia_*` tools) isn't ported.
 
 ## Clicky (voice and screen helper): Mac only for now
 

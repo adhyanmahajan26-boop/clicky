@@ -1,0 +1,2 @@
+# Built by scripts/build-connectors-helper.mjs before each build (the connector hub, shipped beside the app).
+/binaries/

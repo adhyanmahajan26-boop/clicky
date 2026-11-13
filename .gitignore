@@ -13,3 +13,6 @@ Packages/ClickyCore/.swiftpm/
 __pycache__/
 *.pyc
 *.profraw
+
+# Each person's own signing team (Config/Theo.xcconfig, Tools/setup-signing.sh)
+Config/Signing.local.xcconfig

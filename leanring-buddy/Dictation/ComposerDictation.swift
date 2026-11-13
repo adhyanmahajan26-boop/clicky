@@ -133,11 +133,7 @@ final class ComposerDictation: ObservableObject {
               let manager = CompanionManager.current else { return }
         noteTimer?.cancel()
         ownerID = id
-        // No Sarvam key, no dictation: the note under the box says so and leads to where the key goes.
-        if TheoProducts.dictationAccessNow == .needsKey {
-            refuse(.needsKey)
-            return
-        }
+        // No Sarvam key is fine: Apple's recognizer on this Mac does the listening.
         if manager.dictationController.isBlocked() || manager.dictationController.isCapturing {
             refuse(.busy)
             return
