@@ -94,6 +94,9 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         PrismClient.warm()
         if Self.isHostingUnitTests { return }
+        // Defaults that no longer assume one particular Mac: a Mac that relied on the old ones keeps them (once per Mac).
+        HarnessPrefs.keepEarlierCodingDefaultsOnce()
+        ClickySettings.keepRetiredRepoRootOnce()
         TheoFirstClick.install()
         Self.keepConsoleLog()
         CompanionManager.current = companionManager

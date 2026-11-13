@@ -3,7 +3,7 @@
 //  ClickyCore
 //
 //  Finds `git`, `gh` and `claude` the way the user's Terminal would. A menu-bar
-//  app launched by launchd only gets a bare PATH, so we ask a login shell for
+//  app launched by launchd only gets a bare PATH, so we ask the user's own login shell (LoginShell) for
 //  its PATH once (5 s limit), add ~/.local/bin (where the claude installer
 //  puts its binary), drop duplicates and cache the result.
 //
@@ -84,7 +84,7 @@ public enum ExecutablePath {
     private static func probeLoginShellPath(environment: [String: String], homeDirectory: String) async -> String? {
         let probeCommand = "printf '\(probeMarker)%s\(probeMarker)' \"$PATH\""
         guard let probeResult = try? await ChildProcess.run(
-            executable: "/bin/zsh", arguments: ["-lc", probeCommand], environment: environment,
+            executable: LoginShell.shellPath(environment: environment), arguments: LoginShell.arguments(forCommand: probeCommand, interactive: false), environment: environment,
             workingDirectory: homeDirectory, timeouts: .total(probeTimeoutSeconds)
         ), probeResult.endReason == .exited else { return nil }
         let probeOutput = probeResult.standardOutputText

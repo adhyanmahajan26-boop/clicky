@@ -698,7 +698,7 @@ struct SetupView: View {
 
             if model.voiceSource == .otherMac {
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Address, e.g. http://adhyans-mac-studio-6.local:11240", text: $model.voiceServerURLField)
+                    TextField("Address, e.g. http://my-other-mac.local:11240", text: $model.voiceServerURLField)
                         .textFieldStyle(.roundedBorder)
                     SecureField(model.hasSavedVoiceServerKey ? "Key saved in the Keychain (paste a new one to replace it)" : "Voice server key",
                                 text: $model.voiceServerKeyField)

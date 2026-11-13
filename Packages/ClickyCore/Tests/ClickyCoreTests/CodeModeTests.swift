@@ -835,7 +835,7 @@ private final class MockStepRunner: OutwardStepRunner {
     @Test func keysAndDefaults() {
         #expect(ClickySettings.Keys.codeBashAllowed == "v2.code.bashAllowed")
         #expect(ClickySettings.Keys.codeRepoRoots == "v2.code.repoRoots")
-        #expect(ClickySettings.defaultCodeRepoRoots == ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads", "~/jstest"])
+        #expect(ClickySettings.defaultCodeRepoRoots == ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads"])
     }
 }
 
