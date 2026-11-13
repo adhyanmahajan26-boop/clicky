@@ -16,7 +16,8 @@ Each line is a step in `tests/windows_pc.py`, run on both Windows versions.
 - Setup's Sign in button opens PowerShell running that Claude Code's `auth login`, by its full path.
 - Claude Code from its own Windows installer (`irm https://claude.ai/install.ps1 | iex`) is found in `.local\bin`.
 - Setup's coding step checks git and the GitHub CLI. Making the first bot lands in its chat.
-- Messaging a bot runs the real Claude Code. When it's signed out, the chat shows the sign-in card with a Sign in button.
+- Messaging a bot runs the real Claude Code. When it's signed out, the chat shows the sign-in card with a Sign in button
+  (Claude Code answers "Not logged in · Please run /login" as if it were a reply; Theo now treats that as signed out).
 - A bot with 37,000+ characters of instructions over hundreds of lines still starts. Windows command lines stop at 32K
   characters (8K through cmd), so instructions and tool rules go in files and the message goes on stdin.
 - Connectors come from the real `claude mcp list` on Windows. A working server shows Connected, and a broken one shows
