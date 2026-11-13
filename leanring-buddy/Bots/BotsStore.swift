@@ -789,19 +789,22 @@ final class BotsStore: ObservableObject {
             note = BotPrompts.planNote(hasOthers: !otherMembers(of: group).isEmpty)
         }
         let first = groupBriefs[room] != nil ? [head.id] : (tagged.isEmpty ? [head.id] : tagged)
-        startGroupTurns(in: group, first: first, note: note, words: command ?? text)
+        // Members the owner addresses without an @ ("Ledger: the break-even") answer too, after the head, even if the head forgets
+        // to hand them anything. A build discussion keeps its own steps.
+        let asked = groupBriefs[room] != nil ? [] : BotMentions.addressed(in: text, bots: otherMembers(of: group).map { ($0.id, $0.name) })
+        startGroupTurns(in: group, first: first, asked: asked, note: note, words: command ?? text)
     }
 
     /// Carrying on earlier work: the head gets that folder's chats to choose from, as a bot in its own chat does, which takes a moment to list.
-    private func startGroupTurns(in group: BotGroup, first: [String], note: String?, words: String) {
+    private func startGroupTurns(in group: BotGroup, first: [String], asked: [String] = [], note: String?, words: String) {
         let room = group.roomID
         guard CodingIntent.asksToContinueChat(words), latestRun(in: room) != nil || CodingIntent.mentionsCodeWork(words) else {
-            startRound(in: group, first: first, openingNote: note)
+            startRound(in: group, first: first, asked: asked, openingNote: note)
             return
         }
         Task { [weak self] in
             self?.groupChatNotes[room] = await self?.recentChatsNote(for: words, room: room)
-            self?.startRound(in: group, first: first, openingNote: note)
+            self?.startRound(in: group, first: first, asked: asked, openingNote: note)
         }
     }
 
@@ -985,6 +988,8 @@ final class BotsStore: ObservableObject {
         /// The owner spoke again: once the bot writing now has finished, these go first, in a new round.
         var nextFirst: [String]?
         var nextNote: String?
+        /// And these, named in that message, answer after them.
+        var nextAsked: [String] = []
     }
 
     /// A short beat between turns, so one message lands before the next bot starts writing.
@@ -993,17 +998,18 @@ final class BotsStore: ObservableObject {
     private static let memberWaitSeconds: TimeInterval = 180
 
     /// Starts a round in a group chat. One already going stops after whoever's writing now, and this one takes over.
-    private func startRound(in group: BotGroup, first: [String], openingNote: String?) {
+    private func startRound(in group: BotGroup, first: [String], asked: [String] = [], openingNote: String?) {
         let room = group.roomID
         if groupRounds[room] != nil {
             groupRounds[room]?.plan.finish()
             groupRounds[room]?.nextFirst = first
             groupRounds[room]?.nextNote = openingNote
+            groupRounds[room]?.nextAsked = asked
             return
         }
         guard let headID = group.headID else { return }
         stoppedExchangeRooms.remove(room)
-        var plan = GroupTurnPlan(headID: headID, first: first)
+        var plan = GroupTurnPlan(headID: headID, first: first, asked: asked)
         let step = plan.start()
         let round = GroupRound(groupID: group.id, plan: plan, openingNote: openingNote)
         groupRounds[room] = round
@@ -1023,9 +1029,10 @@ final class BotsStore: ObservableObject {
         guard case .speak(let botID, let isWrapUp) = step, !round.plan.isFinished else {
             let next = round.nextFirst
             let nextNote = round.nextNote
+            let nextAsked = round.nextAsked
             groupRounds[room] = nil
             if let next {
-                startRound(in: group, first: next, openingNote: nextNote)
+                startRound(in: group, first: next, asked: nextAsked, openingNote: nextNote)
             } else if let brief = groupBriefs.removeValue(forKey: room), let head = head(of: group) {
                 // It ended without the head's outcome, so nothing starts, and whoever's waiting hears so.
                 finishBrief(brief, group: group, head: head, answer: "\(group.name) didn't finish talking it through, so nothing has started.", hasFailed: true)
