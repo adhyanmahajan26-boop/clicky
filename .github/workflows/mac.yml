@@ -1,0 +1,100 @@
+# Theo for Mac (leanring-buddy/ and Packages/ClickyCore/): checks on GitHub's Mac runners that
+# ClickyCore's tests pass and the app still compiles, so Swift changes made away from a Mac are caught.
+# Nothing is signed, installed or published: the app is built with code signing switched off.
+#
+# Cost: the repo is private, so GitHub bills every Mac minute as ten. The path filter keeps this to
+# Swift changes, and a newer push to the same branch or pull request cancels the run before it.
+name: Theo for Mac
+
+on:
+  pull_request:
+    paths:
+      - "leanring-buddy/**"
+      - "leanring-buddyTests/**"
+      - "Packages/**"
+      - "leanring-buddy.xcodeproj/**"
+      - ".github/workflows/mac.yml"
+  push:
+    branches: [main]
+    paths:
+      - "leanring-buddy/**"
+      - "leanring-buddyTests/**"
+      - "Packages/**"
+      - "leanring-buddy.xcodeproj/**"
+      - ".github/workflows/mac.yml"
+  workflow_dispatch:
+
+# Builds and tests only: the job token can read the code and nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clickycore-tests:
+    name: ClickyCore tests
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The owner builds with Xcode 27 (docs/v2/INVENTORY.md). Xcode 26.3 rejects WhiteboardView.swift
+      # (ambiguous cos, type-check time-out), so the newest stable Xcode on the newest runner is used.
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - run: ls -d /Applications/Xcode*; xcodebuild -version && swift --version
+      - uses: actions/cache@v4
+        with:
+          path: Packages/ClickyCore/.build
+          key: clickycore-build-${{ runner.os }}-${{ hashFiles('Packages/ClickyCore/Package.resolved') }}
+          restore-keys: clickycore-build-${{ runner.os }}-
+      # Tests that need a real agent, a scratch repo or a signed-in tool already skip themselves
+      # unless their environment variable is set (CLICKY_SCRATCH_REPO, CLICKY_LIVE_AGENT_REPO,
+      # CLICKY_REAL_CLAUDE_HELP), so none are excluded here.
+      - name: swift test
+        working-directory: Packages/ClickyCore
+        run: swift test
+
+  app-build:
+    name: App builds
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - run: ls -d /Applications/Xcode*; xcodebuild -version
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: app-spm-${{ hashFiles('leanring-buddy.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      # Debug build with signing off: no Apple team, certificate or provisioning profile is needed,
+      # so this runs for anyone. Package versions come only from the committed Package.resolved.
+      - name: xcodebuild
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project leanring-buddy.xcodeproj \
+            -scheme leanring-buddy \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            -disableAutomaticPackageResolution \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "$RUNNER_TEMP/xcodebuild.log" \
+            | grep -E "error:|\*\* BUILD" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" "$RUNNER_TEMP/xcodebuild.log"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: ${{ runner.temp }}/xcodebuild.log
