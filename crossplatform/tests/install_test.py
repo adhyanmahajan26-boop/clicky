@@ -6,7 +6,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCRIPT = HERE.parent / "install" / "install-linux.sh"
 ARCH = "aarch64" if os.uname().machine in ("arm64", "aarch64") else "x86_64"
 APP = b"#!/bin/sh\necho theo\n"
-STATE = {"tamper": False, "auth": [], "builds": ["202611130300", "202611120100"]}
+STATE = {"tamper": False, "auth": [], "paths": [], "builds": ["202611130300", "202611120100"]}
 
 
 def release(build):
@@ -26,7 +26,10 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         STATE["auth"].append(self.headers.get("Authorization"))
+        STATE["paths"].append(self.path)
         p = self.path
+        if p.startswith("/repos/private/"):   # what GitHub answers for a private repo the request can't see
+            return self.send(b'{"message":"Not Found"}', code=404)
         if p == "/repos/o/r/releases/latest":
             return self.send(json.dumps(release(STATE["builds"][0])).encode())
         if p.startswith("/repos/o/r/releases/tags/build-"):
@@ -55,8 +58,48 @@ def run(home, *args, env=None):
     return r.returncode, r.stdout + r.stderr
 
 
+def no_gh_path(home):
+    """A PATH whose first `gh` fails, so a signed-in gh on this machine can't add a token."""
+    bin_dir = pathlib.Path(home, "no-gh-bin"); bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "gh"; stub.write_text("#!/bin/sh\nexit 1\n"); stub.chmod(0o755)
+    return str(bin_dir) + os.pathsep + os.environ["PATH"]
+
+
+def where_releases_come_from(results):
+    """The releases repo: one file in a checkout, written into the published copy, plain words for a private repo."""
+    repo_file = SCRIPT.parent / "releases-repo"
+    checkout_repo = repo_file.read_text().strip()
+    with tempfile.TemporaryDirectory() as home:
+        no_token = {"THEO_GITHUB_TOKEN": "", "GH_TOKEN": "", "GITHUB_TOKEN": "", "PATH": no_gh_path(home)}
+        code, out = run(home, env=dict(no_token, THEO_RELEASES_REPO="private/r"))
+        results["private_repo_said_plainly"] = (code != 0 and "this build's updates are private" in out and "private/r" in out
+                                                and "gh auth login" not in out)
+        code, out = run(home, env={"THEO_RELEASES_REPO": "private/r"})
+        results["private_repo_with_a_token_says_it_cant_read"] = code != 0 and "can't read that repo" in out
+        # From a checkout, with no THEO_RELEASES_REPO: the repo comes from install/releases-repo.
+        code, out = run(home, env=dict(no_token, THEO_RELEASES_REPO=""))
+        asked = [path for path in STATE["paths"] if path.startswith("/repos/%s/" % checkout_repo)]
+        results["checkout_reads_releases_repo_file"] = bool(asked)
+        # A copy on its own (as from curl | bash) that nobody stamped doesn't guess.
+        loose = pathlib.Path(home, "loose-install-linux.sh"); loose.write_text(SCRIPT.read_text())
+        r = subprocess.run(["bash", str(loose), "--no-launch"], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, HOME=home, THEO_INSTALL_ANY_OS="1", THEO_RELEASES_REPO="", **no_token))
+        results["unstamped_copy_asks_for_a_repo"] = r.returncode != 0 and "doesn't say where" in (r.stdout + r.stderr)
+        # The release's copy has its repo written in (Tools/install/stamp-installer.py) and needs nothing else.
+        stamped = pathlib.Path(home, "stamped-install-linux.sh")
+        subprocess.run([sys.executable, str(HERE.parents[1] / "Tools/install/stamp-installer.py"), str(SCRIPT), str(stamped),
+                        "--repo", "o/r"], check=True)
+        r = subprocess.run(["bash", str(stamped), "--no-launch"], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, HOME=home, THEO_INSTALL_ANY_OS="1", THEO_RELEASES_REPO="",
+                                    THEO_GITHUB_API="http://127.0.0.1:%d" % PORT, XDG_DATA_HOME=os.path.join(home, ".local/share"),
+                                    DISPLAY="", **no_token))
+        results["stamped_copy_installs_with_no_settings"] = (r.returncode == 0
+                                                             and pathlib.Path(home, ".local/opt/theo/BUILD").read_text().strip() == STATE["builds"][0])
+
+
 def main():
     results = {}
+    where_releases_come_from(results)
     with tempfile.TemporaryDirectory() as home:
         opt = pathlib.Path(home, ".local/opt/theo")
         code, out = run(home)

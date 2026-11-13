@@ -6,6 +6,10 @@
 # Usage: Tools/install/test-install.sh <scratch folder> <newer Theo zip> [--no-github]
 #   The newer zip must be a Theo build newer than the latest published release (e.g. from
 #   CLICKY_RELEASE_DRY_RUN=1 Tools/release.sh). --no-github skips the test against the real releases repo.
+#   The installer in the repo names no signer of its own, so the runs that install where no Theo is yet
+#   get THEO_SIGNER_REQUIREMENT for the newer zip's signer (Tools/install/signer-requirement.sh), except
+#   the fake-GitHub ones, which read the release's SIGNER file. Tools/install/test-install-stand-in.py
+#   covers the signer and repo decisions on any machine, without real builds.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +22,9 @@ mkdir -p "$ROOT/apps" "$ROOT/home/.Trash" "$ROOT/fake" "$ROOT/zips" "$ROOT/logs"
 APP="$ROOT/apps/Theo.app"
 NEWSHA="$(shasum -a 256 "$NEWZIP" | awk '{print $1}')"
 NEWBUILD="$(unzip -p "$NEWZIP" 'Theo.app/Contents/Info.plist' | plutil -extract CFBundleVersion raw -)"
+mkdir -p "$ROOT/zips/signer"; ditto -x -k "$NEWZIP" "$ROOT/zips/signer"
+SIGNER_RULE="$("$HERE/signer-requirement.sh" "$ROOT/zips/signer/Theo.app")" || { echo "the newer zip has no usable signature"; exit 1; }
+export THEO_SIGNER_REQUIREMENT="$SIGNER_RULE"
 PASS=0; FAIL=0; N=0
 
 ok()   { PASS=$((PASS+1)); printf 'PASS  %s\n' "$1"; }
@@ -69,6 +76,11 @@ codesign --force --deep --sign - "$W/Theo.app" 2>/dev/null
 ditto -c -k --keepParent "$W/Theo.app" "$ROOT/zips/adhoc.zip"
 run --dir "$ROOT/apps" --from "$ROOT/zips/adhoc.zip" --sha256 "$(shasum -a 256 "$ROOT/zips/adhoc.zip" | awk '{print $1}')" --no-launch --force
 [ $RC != 0 ] && has "not Theo's" && ok "an app signed by another identity is refused" || bad "ad-hoc signed" "$LOG"
+# ---- 6b. no named signer: the installed Theo's own rule still refuses the ad hoc copy
+N=$((N+1)); LOG="$ROOT/logs/$N.log"
+env -u THEO_SIGNER_REQUIREMENT bash "$INSTALLER" --dir "$ROOT/apps" --from "$ROOT/zips/adhoc.zip" \
+  --sha256 "$(shasum -a 256 "$ROOT/zips/adhoc.zip" | awk '{print $1}')" --no-launch --force > "$LOG" 2>&1; RC=$?
+[ $RC != 0 ] && has "not by the same signer" && ok "upgrading checks the installed Theo's own signer" || bad "installed signer" "$LOG"
 
 # ---- 7. a different app signed by Theo's own team: refused (bundle id)
 W="$ROOT/zips/other"; mkdir -p "$W"; ditto -x -k "$NEWZIP" "$W"
@@ -94,13 +106,16 @@ PORT=$((47900 + RANDOM % 80))
 FAKE="$ROOT/fake"; NAME="Theo-$NEWBUILD.zip"; BASE="http://127.0.0.1:$PORT"
 mkdir -p "$FAKE/repos/test/theo/releases" "$FAKE/dl" "$FAKE/api-assets"
 cp "$NEWZIP" "$FAKE/dl/$NAME"; cp "$NEWZIP" "$FAKE/api-assets/1"
-printf '%s  %s\n' "$NEWSHA" "$NAME" > "$FAKE/dl/SHA256SUMS"; cp "$FAKE/dl/SHA256SUMS" "$FAKE/api-assets/2"
+printf '%s\n' "$SIGNER_RULE" > "$FAKE/dl/SIGNER"; cp "$FAKE/dl/SIGNER" "$FAKE/api-assets/4"
+printf '%s  %s\n%s  SIGNER\n' "$NEWSHA" "$NAME" "$(shasum -a 256 "$FAKE/dl/SIGNER" | awk '{print $1}')" > "$FAKE/dl/SHA256SUMS"
+cp "$FAKE/dl/SHA256SUMS" "$FAKE/api-assets/2"
 cp "$INSTALLER" "$FAKE/dl/install.sh"
 cat > "$FAKE/repos/test/theo/releases/latest" <<JSON
 {"tag_name":"build-$NEWBUILD","body":"Fake release for installer tests (no sha256 line: the SUMS file must be used).",
  "assets":[{"name":"$NAME","browser_download_url":"$BASE/dl/$NAME","url":"$BASE/api-assets/1"},
            {"name":"SHA256SUMS","browser_download_url":"$BASE/dl/SHA256SUMS","url":"$BASE/api-assets/2"},
-           {"name":"install.sh","browser_download_url":"$BASE/dl/install.sh","url":"$BASE/api-assets/3"}]}
+           {"name":"install.sh","browser_download_url":"$BASE/dl/install.sh","url":"$BASE/api-assets/3"},
+           {"name":"SIGNER","browser_download_url":"$BASE/dl/SIGNER","url":"$BASE/api-assets/4"}]}
 JSON
 # A static file server that also logs the Authorization header it receives.
 ( cd "$FAKE" && exec python3 -c '
@@ -119,7 +134,13 @@ N=$((N+1)); LOG="$ROOT/logs/$N.log"
 env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin THEO_GITHUB_API="$BASE" THEO_RELEASES_REPO=test/theo \
   bash "$INSTALLER" --dir "$ROOT/apps" --no-launch > "$LOG" 2>&1; RC=$?
 [ $RC = 0 ] && [ "$(build "$APP")" = "$NEWBUILD" ] && grep -q "GET /dl/$NAME" "$ROOT/logs/fake-github.log" \
-  && ok "public repo: latest release, checksum from SHA256SUMS" || bad "fake GitHub, no token" "$LOG"
+  && ok "public repo: latest release, checksum from SHA256SUMS, signer from SIGNER" || bad "fake GitHub, no token" "$LOG"
+
+N=$((N+1)); LOG="$ROOT/logs/$N.log"
+env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin THEO_GITHUB_API="$BASE" THEO_RELEASES_REPO=test/private \
+  bash "$INSTALLER" --dir "$ROOT/apps" --no-launch > "$LOG" 2>&1; RC=$?
+[ $RC != 0 ] && has "this build's updates are private" && ! has "gh auth login" \
+  && ok "a private repo is said plainly" || bad "private repo message" "$LOG"
 
 rm -rf "$APP"
 N=$((N+1)); LOG="$ROOT/logs/$N.log"

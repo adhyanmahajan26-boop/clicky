@@ -771,10 +771,10 @@ private struct UpdatesRows: View {
                 }
             }
             RowDivider()
-            // The updates repo is private. A Mac signed in with `gh auth login` needs nothing here; another Mac can
-            // paste a GitHub token that can read it, kept in the Keychain.
+            // Public updates need nothing here. A private updates repo needs a GitHub token that can read it (kept in
+            // the Keychain), or a Mac signed in with `gh auth login`.
             SettingRow(title: "GitHub token", detail: hasSavedToken ? "Saved in the Keychain. Paste a new one to replace it."
-                       : "Only if this Mac isn't signed in to GitHub (gh auth login): a token that can read the updates repo.") {
+                       : "Only for private updates: a GitHub token that can read the updates repo. Public builds need nothing here.") {
                 HStack(spacing: 6) {
                     SecureField(hasSavedToken ? "Saved" : "Token", text: $tokenField).textFieldStyle(.roundedBorder).frame(width: 160)
                     Button("Save") {
