@@ -360,6 +360,14 @@ struct ClickyTeamTests {
         #expect(!ProjectWords.asksOnlyForFolder("new folder called moon-site and build a page in it"))
     }
 
+    /// A name made of dots or holding a slash would put a full-access coding agent outside ~/Projects (the Rust port had this).
+    @Test func aNewFolderNameNeverLeavesProjects() {
+        for words in ["make a new folder called ..", "make a new folder called .", "new folder named ../../.ssh", "new project called /etc"] {
+            let name = ProjectWords.newFolderName(in: words)
+            #expect(name.map { !$0.contains("/") && !$0.allSatisfy { $0 == "." } } ?? true, "\(words) gave \(String(describing: name))")
+        }
+    }
+
     @Test func existingProjects() {
         #expect(ProjectWords.namedProject(in: "make these changes in the planets quiz", among: projects) == "planets-quiz")
         #expect(ProjectWords.namedProject(in: "moon-phases-page project में title बदल", among: projects) == "moon-phases-page")

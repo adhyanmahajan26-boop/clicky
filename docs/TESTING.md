@@ -51,6 +51,8 @@ defaults write com.personal.clicky.test-mba v3.bots.freshStart -bool true
 
 To use Accessibility and Speech, start the profile through LaunchServices (`open -g -n Clicky.app --args --profile test-x`), not from a shell, so the app answers for its own permissions. Never ask for a permission in a test.
 
+Products: a fresh test profile has nothing on until Setup's "Pick products" step (or `v2.setup.completed`, which keeps all three on). `uiSetDefaults {key: "test.demos.time", value: 4.5}` holds every product demo at that second for a screenshot; remove it to let them loop. Dictation is blocked without a Sarvam key: `uiTestKey {provider: "sarvam", value: "anything"}` unblocks it (restart the profile so the cached key list sees it).
+
 With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. Set `uiSet test.sarvam.base = http://127.0.0.1:8765` and `uiTestKey {provider: "sarvam", value: "anything"}`. For a live test with the owner's saved key: `uiSet test.sarvam.useOwnerKey = true` (the key is read where it is, never copied or shown).
 
 ## Rules

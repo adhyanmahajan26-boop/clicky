@@ -14,6 +14,7 @@ struct TodayView: View {
     @ObservedObject var store: BotsStore
     @ObservedObject var selection: BotsSelection
     @State private var notes: [ClaudiaLibrary.Item] = []
+    @ObservedObject private var products = TheoProducts.shared
 
     var body: some View {
         ScrollView {
@@ -33,7 +34,7 @@ struct TodayView: View {
                         }
                         .buttonStyle(.plain).help("Start a voice call")
                     }
-                    Text("Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left.")
+                    Text(products.isOn(.clicky) ? "Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left." : "Open a bot on the left. Clicky is off; turn it on in Settings \u{203A} Products.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
                 section("Your team") {
@@ -47,7 +48,8 @@ struct TodayView: View {
                     .padding(18)
                 }
                 section("Bots", trailing: ("New group chat", { NotificationCenter.default.post(name: .theoNewGroupChat, object: nil) })) {
-                    let listed = store.bots.filter { !$0.primary }
+                    // Clicky's helpers go with Clicky (Settings › Products).
+                    let listed = store.bots.filter { !$0.primary && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) }
                     if listed.isEmpty { empty("No bots yet. Use the new-bot button at the top of the sidebar.") }
                     ForEach(listed) { bot in
                         row(icon: AnyView(BotAvatar(bot: bot, size: 32, state: .idle)), title: bot.name, detail: store.liveStatus(of: bot),
@@ -68,10 +70,17 @@ struct TodayView: View {
                     }
                 }
                 section("Companion") {
-                    row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
-                        detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
-                        trailing: (CompanionManager.current?.isClickyCursorEnabled ?? true) ? "Awake" : "Asleep") {
-                        selection.pane = .clicky
+                    if products.isOn(.clicky) {
+                        row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
+                            detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
+                            trailing: (CompanionManager.current?.isClickyCursorEnabled ?? true) ? "Awake" : "Asleep") {
+                            selection.pane = .clicky
+                        }
+                    } else {
+                        row(icon: AnyView(IconTile(symbol: TheoProduct.clicky.symbol, colors: TheoProduct.clicky.colors, size: 28)), title: "Clicky",
+                            detail: "Off. Watch its demo and turn it on in Products.", trailing: "Off") {
+                            selection.openSettings(.products)
+                        }
                     }
                 }
                 section("Schedules") {

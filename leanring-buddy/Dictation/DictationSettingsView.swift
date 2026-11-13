@@ -17,6 +17,7 @@ struct DictationSettingsContent: View {
     @AppStorage(DictationSettings.languageKey) private var language = "auto"
     @AppStorage(DictationSettings.dictionaryKey) private var dictionary = ""
     @ObservedObject private var keys = ProviderKeys.shared
+    @ObservedObject private var products = TheoProducts.shared
     @State private var newWord = ""
     @State private var tryItText = ""
     @AppStorage(ComposerDictationSettings.enabledKey) private var composerEnabled = true
@@ -30,6 +31,7 @@ struct DictationSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            accessSection
             TheoSection(title: "In the chat box", hint: "Your words go in at the cursor as you speak, and nothing is sent until you send it. No sounds. \u{201C}Hey \(ClickySettings.assistantName)\u{201D} pauses while you dictate.") {
                 SettingRow(title: "Dictation", detail: "Click the mic in a chat's message box to talk.") {
                     Toggle("Dictation in the chat box", isOn: $composerEnabled).toggleStyle(.switch).labelsHidden()
@@ -96,10 +98,10 @@ struct DictationSettingsContent: View {
                     .padding(12)
                 }
             }
-            TheoSection(title: "Hears you with", hint: "Theo always listens on this Mac too, so if Sarvam can't be reached your words still go in.") {
-                engineRow(.automatic, logo: "sarvam", symbol: nil, title: "Sarvam, when its key is saved", detail: keys.hasKey(for: "sarvam") ? "Indian languages and Hinglish, key saved" : "Using Apple on this Mac until a key is saved", available: true)
+            TheoSection(title: "Hears you with", hint: "Dictation needs a Sarvam key. Apple on this Mac listens along, so if Sarvam can't be reached your words still go in.") {
+                engineRow(.automatic, logo: "sarvam", symbol: nil, title: "Sarvam", detail: keys.hasKey(for: "sarvam") ? "Indian languages and Hinglish, key saved" : "Needs its API key: dictation is blocked until it's saved", available: true)
                 RowDivider(inset: 54)
-                engineRow(.apple, logo: nil, symbol: "apple.logo", title: "Apple, on this Mac", detail: "Private and free, works offline", available: true)
+                engineRow(.apple, logo: nil, symbol: "apple.logo", title: "Apple, on this Mac", detail: "Private and offline, with the Sarvam key still saved", available: true)
                 RowDivider()
                 SettingRow(title: "Language", detail: language == "auto" ? "Sarvam works out the language by itself." : nil) {
                     Picker("Language", selection: $language) {
@@ -129,6 +131,25 @@ struct DictationSettingsContent: View {
             }
         }
         .onAppear { apply() }
+    }
+
+    /// Off, or blocked for want of a key: said first, with the way out right there.
+    @ViewBuilder private var accessSection: some View {
+        switch products.dictationAccess {
+        case .ready:
+            EmptyView()
+        case .needsKey:
+            TheoSection(title: "Needs a Sarvam API key", hint: "Dictation is blocked until a key is saved: the shortcut and the mic say so instead of listening. The key stays in the Keychain.") {
+                SarvamKeyField().padding(12)
+            }
+        case .off:
+            TheoSection(title: "Dictation is off", hint: "It's a product of its own. Turn it on to use the shortcut and the chat box's mic.") {
+                SettingRow(title: "Use Dictation", detail: TheoProduct.dictation.requirement) {
+                    Toggle("Use Dictation", isOn: Binding(get: { products.isOn(.dictation) }, set: { products.set(.dictation, on: $0) }))
+                        .toggleStyle(.switch).labelsHidden()
+                }
+            }
+        }
     }
 
     private var lines: [String] {

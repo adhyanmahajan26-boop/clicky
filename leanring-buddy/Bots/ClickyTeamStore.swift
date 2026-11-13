@@ -443,6 +443,12 @@ extension BotsStore {
     /// `room` and `note`: a bot's screen job, whose card goes in that bot's chat.
     func orderClicky(_ order: String, ownerWords: String?, room: String? = nil, note: String? = nil, cameFromOtherMac: Bool = false, onReport: ((String) -> Void)? = nil) {
         guard let ceo = primary else { return }
+        // Clicky turned off (Settings › Products): the order goes nowhere, and the chat says why.
+        guard TheoProducts.isOn(.clicky) else {
+            post(BotChatMessage(author: Self.noteAuthor, text: CompanionManager.clickyOffLine), to: room ?? ceo.id)
+            onReport?(CompanionManager.clickyOffLine)
+            return
+        }
         if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order), TheoLink.shared.setClickyMac(word: word) {
             let line = "Clicky's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
             post(BotChatMessage(author: Self.clickyID, text: line), to: ceo.id)

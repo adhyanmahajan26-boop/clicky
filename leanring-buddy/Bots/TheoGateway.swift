@@ -73,7 +73,8 @@ final class TheoGateway {
 
     /// Starts or stops it to match the setting. Called at launch and whenever the setting changes.
     func apply() {
-        if Self.isEnabled {
+        // The local API reaches Theo's bots and routines, so it's off while Theo (the product) is.
+        if Self.isEnabled && TheoProducts.isOn(.theo) {
             if TheoGatewayToken.read() == nil { TheoGatewayToken.renew() }
             if listener == nil || listeningPort != Self.port { start() }
         } else {
