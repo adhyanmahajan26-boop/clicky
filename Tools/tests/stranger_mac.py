@@ -26,6 +26,44 @@ PROVIDER_ID = "custom-stand-in"
 AGENTS = ["claude", "codex", "cursor", "opencode", "gemini", "grok", "t3"]
 
 
+def why_it_exited_at_launch(instance_log_file):
+    """The end of the instance's own log and the newest crash report macOS wrote for it, as text for the test's output."""
+    lines = ["--- last lines of %s ---" % instance_log_file]
+    try:
+        lines += instance_log_file.read_text(errors="replace").splitlines()[-60:]
+    except OSError as error:
+        lines.append("(couldn't read it: %s)" % error)
+    crash_reports_folder = REAL_HOME / "Library/Logs/DiagnosticReports"
+    newest_crash_report = None
+    # macOS takes a few seconds to write the report after the process is gone.
+    for _ in range(40):
+        recent_reports = [report for report in crash_reports_folder.glob("Clicky*.ips") if time.time() - report.stat().st_mtime < 120]
+        if recent_reports:
+            newest_crash_report = max(recent_reports, key=lambda report: report.stat().st_mtime)
+            break
+        time.sleep(0.5)
+    if newest_crash_report is None:
+        lines.append("--- no crash report for Clicky in %s ---" % crash_reports_folder)
+        return "\n".join(lines)
+    lines.append("--- crash report %s ---" % newest_crash_report.name)
+    try:
+        # An .ips file is one line of JSON (a header), then the report itself as JSON.
+        report = json.loads(newest_crash_report.read_text(errors="replace").split("\n", 1)[1])
+        lines.append("exception: %s" % json.dumps(report.get("exception")))
+        lines.append("termination: %s" % json.dumps(report.get("termination")))
+        for name in ("asi", "lastExceptionBacktrace"):
+            if report.get(name):
+                lines.append("%s: %s" % (name, json.dumps(report[name])[:3000]))
+        images = report.get("usedImages", [])
+        crashed_thread = next((thread for thread in report.get("threads", []) if thread.get("triggered")), None)
+        for frame in (crashed_thread or {}).get("frames", [])[:30]:
+            image_name = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex", -1) < len(images) else "?"
+            lines.append("  %s  %s + %s" % (image_name, frame.get("symbol", "?"), frame.get("symbolLocation", "?")))
+    except (OSError, ValueError, IndexError, KeyError) as error:
+        lines.append("(couldn't read the report: %s)" % error)
+    return "\n".join(lines)
+
+
 class Profile:
     """One test profile of Theo: its own home folder, preferences domain and control inbox."""
 
@@ -87,6 +125,8 @@ class Profile:
             if self.send({"cmd": "uiState"}, timeout=1).get("ok"):
                 return True
             if self.process.poll() is not None:
+                # Say why here: on a build machine the log file is gone with the machine.
+                print(why_it_exited_at_launch(self.root / "test-instance.log"), flush=True)
                 raise SystemExit("%s exited at launch (%s). See %s" % (self.argument, self.process.returncode, self.root / "test-instance.log"))
         raise SystemExit("%s didn't answer in 60 s." % self.argument)
 
