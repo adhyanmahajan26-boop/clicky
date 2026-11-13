@@ -699,7 +699,7 @@ final class BotsStore: ObservableObject {
         // It keeps its time when it goes over, so it sits in the same place in the chat on both Macs.
         let fields = ["target": target, "text": text, "command": command ?? "", "id": message.id, "at": String(message.sortDate.timeIntervalSince1970), "fromMac": TheoLink.localName]
         let problem = engine.flatMap { EngineReadiness.problem(with: $0) }
-        switch DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected, engineHere: problem == nil, engineThere: true) {
+        switch DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), pair: DeviceRoles.pair, engineHere: problem == nil, engineThere: true) {
         case .runHere, .engineOnOtherMac, .tryHere:
             return false
         case .sendAcross:
@@ -944,7 +944,7 @@ final class BotsStore: ObservableObject {
         let owner = brief.ownerWords ?? ""
         // The owner's own last message decides, not an older one still in the window: `owner` holds what they said to the group, newest first.
         let room = brief.reportsTo == nil ? group.roomID : ceo.id
-        let namedMac = CodingDeviceWords.named(in: owner) ?? ProjectWords.labeled("Mac", in: answer)
+        let namedMac = CodingDeviceWords.named(in: owner, macNames: TheoLink.shared.macNames) ?? ProjectWords.labeled("Mac", in: answer)
         var mac = runMac(named: namedMac, room: room)
         var folder = projectChoice(ownerWords: owner, answer: answer, macName: mac)
         let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
@@ -1470,7 +1470,7 @@ final class BotsStore: ObservableObject {
         guard BotsStore.ownerAskedToBuild(pitch.text) || (ProjectWords.chatToContinue(in: answer) != nil && CodingIntent.asksToContinueChat(pitch.text)) else { return nil }
         let ownerWords = recentOwnerWords(in: room) ?? pitch.text
         // The Mac the owner or the bot named, else the one this chat's coding goes on.
-        let namedMac = CodingDeviceWords.named(in: ownerWords) ?? ProjectWords.labeled("Mac", in: answer)
+        let namedMac = CodingDeviceWords.named(in: ownerWords, macNames: TheoLink.shared.macNames) ?? ProjectWords.labeled("Mac", in: answer)
         var mac = runMac(named: namedMac, room: room)
         // Only a folder the owner spoke of: one a page the bot read mentions doesn't count. Carrying on a chat, it's the folder that chat is in.
         let continued = ProjectWords.chatToContinue(in: answer).map { HarnessChatChoice(idOrTitle: $0) }
@@ -1540,7 +1540,7 @@ final class BotsStore: ObservableObject {
             }
             return
         }
-        let mac = runMac(named: CodingDeviceWords.named(in: words), room: room)
+        let mac = runMac(named: CodingDeviceWords.named(in: words, macNames: TheoLink.shared.macNames), room: room)
         let folder = projectChoice(ownerWords: words, answer: nil, macName: mac)
         if folder.repo == nil, folder.newFolder == nil, latestRun(in: room) != nil {
             sendToCoder(words, room: room)
@@ -2358,10 +2358,9 @@ extension BotsStore {
         // A test profile can hold a copy of real bots, signed in as the owner: their schedules must never fire there.
         if TheoProfile.isTest, !UserDefaults.standard.bool(forKey: "test.routines.run") { return }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        // Each routine fires once, on the Mac Settings › Devices says.
+        // Each routine fires once, on the Mac Settings › Devices says. Each Mac has its own setting, and both weigh both
+        // settings the same way (`DeviceRouting.routinesFireHere`), so exactly one of two linked Macs fires them.
         guard DeviceRoles.runsHere(.routines) else { return }
-        // Each Mac has its own setting. If both say themselves and they're linked, the Mac Studio does it.
-        if TheoLink.shared.isConnected, peerDevice?.firesRoutines == true, DeviceRoles.thisMac != .macStudio { return }
         let now = Date()
         for routine in routines where !routine.paused && (routine.nextRunAt ?? .distantFuture) <= now {
             let due = routine.nextRunAt ?? now
@@ -2927,7 +2926,8 @@ extension BotsStore {
         let flag = "v3.routines.syncStamped"
         guard !UserDefaults.standard.bool(forKey: flag) else { return }
         UserDefaults.standard.set(true, forKey: flag)
-        guard DeviceRouting.route(.routines, choice: DeviceRoles.choice(.routines), thisMac: DeviceRoles.thisMac, paired: true, otherMacOnline: true) == .runHere else { return }
+        let linked = MacPair(thisMac: DeviceRoles.thisMac, otherMac: DeviceRoles.otherMac, paired: true, otherMacOnline: true)
+        guard DeviceRouting.route(.routines, choice: DeviceRoles.choice(.routines), pair: linked) == .runHere else { return }
         let now = Date()
         for routine in routines { linkRoutineStamps.changed[routine.id] = now }
         writeLinkStamps()
@@ -3057,7 +3057,10 @@ extension BotsStore {
         case "clickyMac":
             if let theirs = try? decoder.decode(ClickyMacItem.self, from: data) { TheoLink.shared.applyClickyMac(theirs) }
         case "device":
-            if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) { peerDevice = theirs }
+            if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) {
+                peerDevice = theirs
+                DeviceRoles.rememberOtherMac(theirs)
+            }
         case "runs":
             guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }
             // Each Mac is the only one writing its own runs.

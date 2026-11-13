@@ -452,30 +452,38 @@ struct BotProtocolTests {
 
     // MARK: Devices
 
-    @Test func botsAndCodingFollowTheMacYoureOnAndRoutinesStayOnTheStudio() {
+    private let studioMac = LinkedMac(id: "B-STUDIO", name: "Adhyan’s Mac Studio", isDesktop: true)
+    private let airMac = LinkedMac(id: "A-AIR", name: "Adhyan’s MacBook Air", isDesktop: false)
+
+    private func linkedPair(on thisMac: LinkedMac, paired: Bool = true, online: Bool = true) -> MacPair {
+        MacPair(thisMac: thisMac, otherMac: thisMac == studioMac ? airMac : studioMac, paired: paired, otherMacOnline: online)
+    }
+
+    @Test func botsAndCodingFollowTheMacYoureOnAndRoutinesStayOnTheAlwaysOnMac() {
         #expect(DeviceFeature.bots.defaultChoice == .any)
-        #expect(DeviceFeature.routines.defaultChoice == .macStudio)
-        for mac in [DeviceKind.macStudio, .macBookAir] {
-            #expect(DeviceRouting.route(.bots, choice: DeviceFeature.bots.defaultChoice, thisMac: mac, paired: true, otherMacOnline: true) == .runHere)
+        #expect(DeviceFeature.routines.defaultChoice == .any)
+        for mac in [studioMac, airMac] {
+            #expect(DeviceRouting.route(.bots, choice: DeviceFeature.bots.defaultChoice, pair: linkedPair(on: mac)) == .runHere)
         }
-        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, thisMac: .macStudio, paired: true, otherMacOnline: true) == .runHere)
-        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, thisMac: .macBookAir, paired: true, otherMacOnline: true) == .sendAcross)
-        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, thisMac: .macBookAir, paired: true, otherMacOnline: false) == .waitForOtherMac)
+        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, pair: linkedPair(on: studioMac)) == .runHere)
+        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, pair: linkedPair(on: airMac)) == .sendAcross)
+        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, pair: linkedPair(on: airMac, online: false)) == .waitForOtherMac)
         // With only one Mac there's nowhere else for them to go.
-        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, thisMac: .macBookAir, paired: false, otherMacOnline: false) == .runHere)
+        #expect(DeviceRouting.route(.routines, choice: DeviceFeature.routines.defaultChoice, pair: linkedPair(on: airMac, paired: false, online: false)) == .runHere)
     }
 
     @Test func botsCanStillBePutOnOneMacByHand() {
-        #expect(DeviceRouting.route(.bots, choice: .macStudio, thisMac: .macBookAir, paired: true, otherMacOnline: true) == .sendAcross)
-        #expect(DeviceRouting.route(.bots, choice: .macStudio, thisMac: .macStudio, paired: true, otherMacOnline: true) == .runHere)
+        #expect(DeviceRouting.route(.bots, choice: .otherMac, pair: linkedPair(on: airMac)) == .sendAcross)
+        #expect(DeviceRouting.route(.bots, choice: .thisMac, pair: linkedPair(on: studioMac)) == .runHere)
         #expect(DeviceFeature.bots.anyChoiceTitle == "The Mac you're using")
-        #expect(DeviceFeature.routines.anyChoiceTitle == "Any")
+        #expect(DeviceFeature.routines.anyChoiceTitle == "The always-on Mac")
+        #expect(DeviceFeature.clicky.anyChoiceTitle == "Any")
     }
 
     // MARK: The other Mac can be away
 
-    private func turn(_ choice: DeviceChoice, on mac: DeviceKind = .macBookAir, paired: Bool = true, online: Bool, here: Bool, there: Bool = true) -> BotTurnRoute {
-        DeviceRouting.botTurn(choice: choice, thisMac: mac, paired: paired, otherMacOnline: online, engineHere: here, engineThere: there)
+    private func turn(_ choice: DeviceChoice, on mac: LinkedMac? = nil, paired: Bool = true, online: Bool, here: Bool, there: Bool = true) -> BotTurnRoute {
+        DeviceRouting.botTurn(choice: choice, pair: linkedPair(on: mac ?? airMac, paired: paired, online: online), engineHere: here, engineThere: there)
     }
 
     @Test func theDefaultNeverDependsOnTheOtherMac() {
@@ -485,16 +493,16 @@ struct BotProtocolTests {
     }
 
     @Test func setToTheOtherMacAndItsReachable() {
-        #expect(turn(.macStudio, online: true, here: true) == .sendAcross)
-        #expect(turn(.macStudio, online: true, here: false) == .sendAcross)
+        #expect(turn(.otherMac, online: true, here: true) == .sendAcross)
+        #expect(turn(.otherMac, online: true, here: false) == .sendAcross)
     }
 
     @Test func setToTheOtherMacAndItsAwayWithTheEngineHere() {
-        #expect(turn(.macStudio, online: false, here: true) == .waitForOtherMac(canRunHere: true))
+        #expect(turn(.otherMac, online: false, here: true) == .waitForOtherMac(canRunHere: true))
     }
 
     @Test func setToTheOtherMacAndItsAwayWithNoEngineHere() {
-        #expect(turn(.macStudio, online: false, here: false) == .waitForOtherMac(canRunHere: false))
+        #expect(turn(.otherMac, online: false, here: false) == .waitForOtherMac(canRunHere: false))
     }
 
     @Test func noEngineHereGoesAcrossOnlyWhenTheOtherMacCanHelp() {
@@ -630,11 +638,23 @@ struct BotProtocolTests {
     }
 
     @Test func theMacTheOwnerNamedForARun() {
-        #expect(CodingDeviceWords.named(in: "run it on the Studio") == "studio")
-        #expect(CodingDeviceWords.named(in: "build this on my MacBook Air") == "air")
-        #expect(CodingDeviceWords.named(in: "send it to mac studio please") == "studio")
-        #expect(CodingDeviceWords.named(in: "open it in visual studio") == nil)
-        #expect(CodingDeviceWords.named(in: "put the page on the web") == nil)
+        let addysMacs = ["Adhyan’s Mac Studio", "Adhyan’s MacBook Air"]
+        #expect(CodingDeviceWords.named(in: "run it on the Studio", macNames: addysMacs) == "Adhyan’s Mac Studio")
+        #expect(CodingDeviceWords.named(in: "build this on my MacBook Air", macNames: addysMacs) == "Adhyan’s MacBook Air")
+        #expect(CodingDeviceWords.named(in: "build this on my mac book", macNames: addysMacs) == "Adhyan’s MacBook Air")
+        #expect(CodingDeviceWords.named(in: "send it to mac studio please", macNames: addysMacs) == "Adhyan’s Mac Studio")
+        #expect(CodingDeviceWords.named(in: "open it in visual studio", macNames: addysMacs) == nil)
+        #expect(CodingDeviceWords.named(in: "put the page on the web", macNames: addysMacs) == nil)
+        // Any Macs, by their own names.
+        let samsMacs = ["Sam’s MacBook Pro", "Sam’s iMac"]
+        #expect(CodingDeviceWords.named(in: "run it on the Pro", macNames: samsMacs) == "Sam’s MacBook Pro")
+        #expect(CodingDeviceWords.named(in: "build it on my iMac", macNames: samsMacs) == "Sam’s iMac")
+        #expect(CodingDeviceWords.named(in: "run it on the Studio", macNames: samsMacs) == nil)
+        // Two MacBooks: "the MacBook" names neither, the word that tells them apart does.
+        let twoMacBooks = ["Sam’s MacBook Pro", "Sam’s MacBook Air"]
+        #expect(CodingDeviceWords.named(in: "run it on the MacBook", macNames: twoMacBooks) == nil)
+        #expect(CodingDeviceWords.named(in: "run it on the Air", macNames: twoMacBooks) == "Sam’s MacBook Air")
+        #expect(CodingDeviceWords.named(in: "run it on the MacBook Pro", macNames: twoMacBooks) == "Sam’s MacBook Pro")
     }
 
     @Test func aRequestToCarryOnIsRecognised() {

@@ -29,8 +29,8 @@ enum SettingsTab {
         case products, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
-        /// The pages this Mac has: Studio is on a Mac Studio only.
-        static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
+        /// The pages this Mac has: Studio is on the Mac the hidden screens live on.
+        @MainActor static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
 
         /// Its Hairline icon.
         var icon: String {

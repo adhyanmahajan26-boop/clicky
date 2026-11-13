@@ -52,7 +52,7 @@ public enum HarnessGuide {
              BotProtocol.pdfHowTo + " " +
              "Never say something happened until Theo's own line in the chat, a run card or a reply shows it."),
             ("Two Macs",
-             "Theo runs on the Mac Studio and the MacBook Air and keeps them in step. A message is answered on the Mac \(owner) typed it on, with that Mac's folders and coding runs, " +
+             "Theo can run on two linked Macs and keeps them in step. A message is answered on the Mac \(owner) typed it on, with that Mac's folders and coding runs, " +
              "unless \(owner) set it to the other Mac. When the other Mac is away, say so plainly; a run that waited long for it asks \(owner) before it starts.")
         ]
         var text = "# Theo's bot harness: the guide\n\n" +
