@@ -75,7 +75,8 @@ final class VoiceFastPathExecutor {
 
     /// Safari in front, or any Safari / browser window titled with Netflix.
     static func isNetflixOrSafariLikelyPlaying(frontmost: ActionTargetFacts?) -> Bool {
-        if let frontmost, ActionTierClassifier.isProtectedFromActions(frontmost) { return true }
+        // Media keys reach whatever is playing, so Safari in front still counts here whatever "leave Safari alone" says.
+        if let frontmost, ActionTierClassifier.isProtectedFromActions(frontmost, leavesSafariAlone: true) { return true }
         let browserBundleIdentifiers = Set(ActionBrowserChoice.knownBrowsers.map(\.bundleIdentifier)).union(ActionTierClassifier.safariBundleIdentifiers)
         for runningApplication in NSWorkspace.shared.runningApplications where browserBundleIdentifiers.contains(runningApplication.bundleIdentifier ?? "") {
             let applicationElement = TypeForMeAccessibility.applicationElement(processIdentifier: runningApplication.processIdentifier)

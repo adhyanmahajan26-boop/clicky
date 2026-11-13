@@ -164,9 +164,10 @@ final class ActionExecutor {
     private func resolveFrontmost(includingFocusedElement: Bool) -> ResolvedActionTarget {
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
         let processIdentifier = frontmostApplication.processIdentifier
-        let focusedElement = includingFocusedElement ? TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) : nil
+        // Never ask Theo's own process over AX from here (it would wait on itself).
+        let focusedElement = includingFocusedElement && processIdentifier != getpid() ? TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) : nil
         let facts = Self.facts(processIdentifier: processIdentifier, element: focusedElement, groundingElement: nil)
-        let windowFrame = Self.focusedWindow(processIdentifier: processIdentifier).flatMap(TypeForMeAccessibility.frameCG)
+        let windowFrame = processIdentifier == getpid() ? Self.theoWindowFrameCG() : Self.focusedWindow(processIdentifier: processIdentifier).flatMap(TypeForMeAccessibility.frameCG)
         return ResolvedActionTarget(facts: facts, axElement: focusedElement, processIdentifier: processIdentifier,
                                     frameCG: focusedElement.flatMap(TypeForMeAccessibility.frameCG) ?? windowFrame,
                                     runningApplication: frontmostApplication)
@@ -257,12 +258,29 @@ final class ActionExecutor {
         return (windowValue as! AXUIElement)
     }
 
+    /// Theo's key (else first) main window, in CG coordinates.
+    static func theoWindowFrameCG() -> CGRect? {
+        guard let window = NSApp.keyWindow.flatMap({ TheoMainWindows.windows().contains($0) ? $0 : nil }) ?? TheoMainWindows.windows().first else { return nil }
+        return ScreenTopology.cg(fromAppKit: window.frame, flipH: ScreenTopology.mainDisplayHeight)
+    }
+
     static func facts(processIdentifier: pid_t, element: AXUIElement?, groundingElement: GroundingElement?) -> ActionTargetFacts {
         let runningApplication = NSRunningApplication(processIdentifier: processIdentifier)
         var facts = ActionTargetFacts()
         facts.bundleIdentifier = runningApplication?.bundleIdentifier
         facts.applicationName = runningApplication?.localizedName ?? groundingElement?.applicationName
         facts.isOwnApplication = processIdentifier == getpid() || (runningApplication?.bundleIdentifier != nil && runningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier)
+        if processIdentifier == getpid() {
+            // Theo's own window: everything from AppKit and the grounding element, nothing over AX (it would wait on itself).
+            let keyMainWindow = NSApp.keyWindow.flatMap { TheoMainWindows.windows().contains($0) ? $0 : nil }
+            facts.windowIdentifier = groundingElement?.windowID ?? keyMainWindow.map { CGWindowID($0.windowNumber) }
+            facts.windowTitle = groundingElement?.windowTitle ?? keyMainWindow?.title
+            facts.isOwnMainWindow = TheoMainWindows.contains(facts.windowIdentifier)
+            facts.isSecureEventInputOn = IsSecureEventInputEnabled()
+            facts.groundingRole = groundingElement?.role
+            facts.label = groundingElement?.label ?? groundingElement?.value
+            return facts
+        }
         facts.isSecureEventInputOn = IsSecureEventInputEnabled()
         facts.groundingRole = groundingElement?.role
         facts.windowTitle = groundingElement?.windowTitle
@@ -628,7 +646,10 @@ final class ActionExecutor {
         guard let frame = target.frameCG, frame.width > 0, frame.height > 0 else { return .failed(reason: "couldn't find where to click") }
         let point = CGPoint(x: frame.midX, y: frame.midY)
         // Never click through another app's window (or Clicky's own).
-        if let expectedProcessIdentifier = target.processIdentifier {
+        if target.processIdentifier == getpid() {
+            // Theo's own main window (the classifier refuses anything else of Theo's): checked from the window list.
+            guard TheoMainWindows.isOnTop(at: point) else { return .failed(reason: "something is covering it") }
+        } else if let expectedProcessIdentifier = target.processIdentifier {
             let systemWideElement = AXUIElementCreateSystemWide()
             var hitElement: AXUIElement?
             if AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &hitElement) == .success, let hitElement {
@@ -645,6 +666,7 @@ final class ActionExecutor {
     /// Theo's own cursor flies to the target; the click is AXPress, then a press on whatever supports one at that
     /// point, then a click posted to the app's process. The real pointer and keyboard focus are never touched.
     private func backgroundClick(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
+        if target.processIdentifier == getpid() { return .failed(reason: "Theo's own window can't be pressed in the background") }
         let frame = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
         let point = frame.flatMap { $0.width > 0 && $0.height > 0 ? CGPoint(x: $0.midX, y: $0.midY) : nil }
         if let point {

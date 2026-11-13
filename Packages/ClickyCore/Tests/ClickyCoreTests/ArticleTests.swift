@@ -436,15 +436,18 @@ struct ArticleActionsTests {
         #expect(ActionDSL.highlightTarget(long + "a") == nil)
     }
 
-    @Test func readingAndNotesAreFreeButSafariStaysProtected() {
+    @Test func readingAndNotesAreFreeAndSafariOnlyProtectedWhenLeftAlone() {
         let chrome = ActionTargetFacts(bundleIdentifier: "com.google.Chrome", applicationName: "Google Chrome", windowTitle: "Article")
         let safari = ActionTargetFacts(bundleIdentifier: "com.apple.Safari", applicationName: "Safari", windowTitle: "Article")
         let notes = ActionStep.notes(ArticleNotes(title: "", summary: "s", items: []))
         let context = ActionTurnContext(ownerTranscript: "highlight the important things")
         #expect(ActionTierClassifier.classify(.readArticle, target: chrome, context: context).tier == .free)
         #expect(ActionTierClassifier.classify(notes, target: chrome, context: context).tier == .free)
-        #expect(ActionTierClassifier.classify(.readArticle, target: safari, context: context).tier == .refused)
-        #expect(ActionTierClassifier.classify(.readArticle, target: safari, context: ActionTurnContext(ownerTranscript: "make notes on this safari article")).tier == .free)
+        #expect(ActionTierClassifier.classify(.readArticle, target: safari, context: context).tier == .free)
+        let leftAlone = ActionTurnContext(ownerTranscript: "highlight the important things", leavesSafariAlone: true)
+        #expect(ActionTierClassifier.classify(.readArticle, target: safari, context: leftAlone).tier == .refused)
+        #expect(ActionTierClassifier.classify(.readArticle, target: safari, context: ActionTurnContext(ownerTranscript: "make notes on this safari article",
+                                                                                                         leavesSafariAlone: true)).tier == .free)
         #expect(ActionTierClassifier.classify(.readArticle, target: ActionTargetFacts(isOwnApplication: true), context: context).tier == .refused)
     }
 

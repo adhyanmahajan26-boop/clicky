@@ -96,10 +96,11 @@ struct ActionEnterTierTests {
                                              role: "AXTextArea", label: "Write your prompt to Claude")
     static let messages = ActionTargetFacts(bundleIdentifier: "com.apple.MobileSMS", applicationName: "Messages", role: "AXTextArea", label: "iMessage")
 
+    /// With "leave Safari alone" on, so the Safari follow-up rules below are what's tested (off is the default; see ActionsTests).
     func decide(_ step: ActionStep, _ target: ActionTargetFacts, said transcript: String, current: String? = nil,
                 followUp: ActionSafariFollowUp = ActionSafariFollowUp(), now: Date = Date()) -> ActionTierDecision {
         ActionTierClassifier.classify(step, target: target, context: ActionTurnContext(ownerTranscript: transcript, currentTranscript: current,
-                                                                                       safariFollowUp: followUp, now: now))
+                                                                                       safariFollowUp: followUp, now: now, leavesSafariAlone: true))
     }
 
     @Test func ownerSaidItPressesEnterRightAway() {
@@ -212,6 +213,34 @@ struct ActionEnterTierTests {
         #expect(TerminalTTYLookup.isClaudeCode(name: "claude", executablePath: nil))
         #expect(!TerminalTTYLookup.isClaudeCode(name: "node", executablePath: "/opt/homebrew/bin/node"))
         #expect(!TerminalTTYLookup.isClaudeCode(name: "zsh", executablePath: "/bin/zsh"))
+    }
+
+    // MARK: Return on a selected item
+
+    /// Live 2026-11-13: Spotify, "play Ambarsaria" → click the song, then Return. The Return was dropped as
+    /// "typed only", so the song was selected but never played.
+    @Test func returnOnASelectedItemIsPressed() {
+        let spotifyRow = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium", role: "AXRow")
+        let row = decide(Self.returnKey, spotifyRow, said: "Amasya song for me can you play it")
+        #expect(row.tier == .free)
+        #expect(!row.dropsReturn)
+        // Focus Clicky can't read (Spotify keeps its AX tree mostly off): pressed after the usual countdown.
+        let unknownFocus = ActionTargetFacts(bundleIdentifier: "com.spotify.client", applicationName: "Spotify", windowTitle: "Spotify Premium")
+        let unknown = decide(Self.returnKey, unknownFocus, said: "Amasya song for me can you play it")
+        #expect(unknown.tier == .countdown)
+        #expect(!unknown.dropsReturn)
+        let finderFile = ActionTargetFacts(bundleIdentifier: "com.apple.finder", applicationName: "Finder", role: "AXTextField", subrole: nil, label: "report.pdf")
+        // A text field (even Finder's rename box) keeps the typing rules: no Return unless asked.
+        #expect(decide(Self.returnKey, finderFile, said: "rename it").dropsReturn)
+    }
+
+    @Test func returnStillWaitsInTextFieldsAndMessages() {
+        let document = ActionTargetFacts(bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", windowTitle: "Untitled", role: "AXTextArea")
+        #expect(decide(Self.returnKey, document, said: "write hello").dropsReturn)
+        #expect(decide(Self.returnKey, Self.messages, said: "tell mom hi").dropsReturn)
+        let messagesNoFocus = ActionTargetFacts(bundleIdentifier: "com.apple.MobileSMS", applicationName: "Messages")
+        #expect(decide(Self.returnKey, messagesNoFocus, said: "tell mom hi").dropsReturn)
+        #expect(!decide(Self.returnKey, Self.messages, said: "send it").dropsReturn)
     }
 
     // MARK: Safari follow-ups

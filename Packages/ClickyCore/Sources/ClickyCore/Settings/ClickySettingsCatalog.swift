@@ -155,6 +155,8 @@ public enum ClickySettingsCatalog {
                             explanation: "Let Clicky do things on screen when asked: open apps and links, search, click, type, highlight, summarize (with safety tiers)."),
         ClickySettingsEntry(key: ClickySettings.Keys.actionsCountdownSeconds, kind: .number(defaultValue: 1.5, range: 0.5...5, step: 0.5),
                             explanation: "Seconds Clicky shows a typing or click step before doing it (any key, mouse move or \"stop\" cancels)."),
+        ClickySettingsEntry(key: ClickySettings.Keys.actionsLeaveSafariAlone, kind: .toggle(defaultValue: false),
+                            explanation: "Leave Safari alone unless you name it (no clicks, keys or scrolling there). Netflix windows are always left alone unless named."),
         // Article highlights and notes (P8).
         ClickySettingsEntry(key: ClickySettings.Keys.articleScrollOCRFallback, kind: .toggle(defaultValue: true),
                             explanation: "When a page has no readable text, let Clicky scroll the article and read it from screenshots (it scrolls back; never clicks or types)."),
