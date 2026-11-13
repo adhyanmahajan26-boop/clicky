@@ -150,6 +150,8 @@ def launch_env(with_token=False):
     env = dict(os.environ)
     # The window's DevTools port, so the test can click through it as a person would.
     env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--remote-debugging-port=%d" % CDP_PORT
+    # Newer WebView2 runtimes ignore that when the app passes its own arguments, so Theo adds the port itself.
+    env["THEO_WEBVIEW_DEVTOOLS_PORT"] = str(CDP_PORT)
     for k in ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"]:
         env.pop(k, None)
     if with_token and TOKEN:
@@ -167,11 +169,17 @@ def allow_devtools(on=True):
     if on:
         k = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE)
         winreg.SetValueEx(k, EXE_NAME, 0, winreg.REG_SZ, "--remote-debugging-port=%d" % CDP_PORT)
+        # Theo's own switch, in this user's environment so Explorer passes it on too (told to reload it).
+        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(k, "THEO_WEBVIEW_DEVTOOLS_PORT", 0, winreg.REG_SZ, str(CDP_PORT))
     else:
-        try:
-            winreg.DeleteValue(winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE), EXE_NAME)
-        except OSError:
-            pass
+        for key, name in ((path, EXE_NAME), ("Environment", "THEO_WEBVIEW_DEVTOOLS_PORT")):
+            try:
+                winreg.DeleteValue(winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE), name)
+            except OSError:
+                pass
+    result = ctypes.c_ulong()
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))  # WM_SETTINGCHANGE
 
 
 def open_from_start_menu(with_token=False, extra_args=None):

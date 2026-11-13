@@ -178,6 +178,20 @@ fn main() {
     let app = builder
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // The window is made here rather than by tauri.conf.json ("create": false), so that a test of the installed app on
+            // Windows can ask for WebView2's DevTools port. Newer WebView2 runtimes no longer take WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+            // or its registry switch when the app passes its own arguments, so THEO_WEBVIEW_DEVTOOLS_PORT adds it to those.
+            let window_config = app.config().app.windows.first().cloned().ok_or("tauri.conf.json has no window")?;
+            #[allow(unused_mut)]
+            let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?;
+            #[cfg(windows)]
+            if let Some(port) = std::env::var("THEO_WEBVIEW_DEVTOOLS_PORT").ok().and_then(|p| p.trim().parse::<u16>().ok()) {
+                // wry's own defaults (no mini menu, no SmartScreen inside the app, autoplay), plus the port on 127.0.0.1.
+                window = window.additional_browser_args(&format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port={port}"
+                ));
+            }
+            window.build()?;
             // The same flags as theod, so the test suite can drive the app itself: --data DIR, --test.
             let args: Vec<String> = std::env::args().collect();
             let root = args.iter().position(|a| a == "--data").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from).unwrap_or_else(theo_core::paths::default_root);
