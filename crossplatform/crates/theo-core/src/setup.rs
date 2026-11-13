@@ -11,6 +11,9 @@ async fn run(program: &Path, args: &[&str], secs: u64) -> Option<(i32, String)> 
     pre.extend(args.iter().map(|s| s.to_string()));
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(pre).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    // Its own process group (and no console window on Windows), like every engine Theo starts: a probe in Theo's own
+    // group would make anything that ends an engine's group end Theo with it.
+    crate::procs::configure(&mut cmd);
     let out = tokio::time::timeout(Duration::from_secs(secs), cmd.output()).await.ok()?.ok()?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     text.push_str(&String::from_utf8_lossy(&out.stderr));

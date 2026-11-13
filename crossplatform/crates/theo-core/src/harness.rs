@@ -1892,6 +1892,8 @@ impl Harness {
         args.extend(["mcp".to_string(), "list".to_string()]);
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(args).current_dir(crate::paths::home()).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        // Its own process group, like every engine Theo starts (see setup::run).
+        crate::procs::configure(&mut cmd);
         let out = tokio::time::timeout(Duration::from_secs(90), cmd.output()).await.map_err(|_| "Claude Code took too long to list connectors.".to_string())?.map_err(|e| e.to_string())?;
         let mut list = crate::connectors::parse(&String::from_utf8_lossy(&out.stdout));
         let now = Utc::now();

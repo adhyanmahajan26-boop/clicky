@@ -1334,11 +1334,14 @@ def s09():
     P({"cmd": "setupDone"})
     done_after = P({"cmd": "setupState"}, timeout=90)["result"]["completed"]
     refused = P({"cmd": "openTerminal", "which": "rm -rf ~"})
+    # The checks run like engines, in a process group of their own: Theo itself must never look like an engine left
+    # behind (the app's suite counted the app and its web views as 3 engines left after its setup screen ran them).
+    theo_counted_as_engine = T.pid() in T.engine_pids()
     text = json.dumps(inn)
     ok = (out["claude"]["installed"] and not out["claude"]["signedIn"] and inn["claude"]["signedIn"] and inn["claude"]["plan"] == "max"
-          and "git" in inn and "gh" in inn and not done_before and done_after and not refused.get("ok") and "email" not in text and "orgId" not in text)
+          and "git" in inn and "gh" in inn and not done_before and done_after and not refused.get("ok") and "email" not in text and "orgId" not in text and not theo_counted_as_engine)
     return ok, {"signed_out": out["claude"]["signedIn"], "signed_in": inn["claude"]["signedIn"], "git": inn["git"].get("installed"), "gh": inn["gh"],
-                "completed": [done_before, done_after], "unknown_terminal_command_refused": not refused.get("ok")}
+                "completed": [done_before, done_after], "unknown_terminal_command_refused": not refused.get("ok"), "theo_counted_as_engine": theo_counted_as_engine}
 
 
 # ---------------------------------------------------------------- Real model (opt-in: THEO_REAL=1, needs Claude Code signed in)
