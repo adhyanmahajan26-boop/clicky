@@ -38,6 +38,7 @@ RESULTS = []
 # end that only reaches the model if the whole of them did.
 WRITER_INSTRUCTIONS = "You are Writer.\n" + "".join('Rule %d: keep "quotes" & ampersands | pipes ^ carets %%%%PATH%%%% intact.\n' % i for i in range(600)) + "Last rule: the secret word is CANARY-%s."
 CONSOLE = []
+DEVTOOLS_NOTE = {}
 _pw = None
 _browser = None
 
@@ -72,7 +73,7 @@ def check(step, fn, must=True):
 
 def write_summary(mode):
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "results.json").write_text(json.dumps({"mode": mode, "windows": windows_version(), "results": RESULTS, "console": CONSOLE[-200:]}, indent=1, default=str), encoding="utf-8")
+    (OUT / "results.json").write_text(json.dumps({"mode": mode, "windows": windows_version(), "results": RESULTS, "devtools": DEVTOOLS_NOTE, "console": CONSOLE[-200:]}, indent=1, default=str), encoding="utf-8")
     lines = ["## Theo on a Windows PC (%s): %s" % (mode, windows_version()), "", "| Step | Result |", "|---|---|"]
     for r in RESULTS:
         mark = {"PASS": "✅ pass", "FAIL": "❌ FAIL", "INFO": "ℹ️ info"}[r["verdict"]]
@@ -286,6 +287,29 @@ def webview_state():
             found["webview2_" + ("machine" if hive == winreg.HKEY_LOCAL_MACHINE else "user")] = winreg.QueryValueEx(winreg.OpenKey(hive, path), "pv")[0]
         except OSError:
             pass
+    # What WebView2 was started with, what it listens on, and any policy that could switch DevTools off.
+    try:
+        code, out = run(["powershell", "-NoProfile", "-Command",
+                         "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | Where-Object { $_.CommandLine -notmatch '--type=' } | "
+                         "ForEach-Object { $_.ProcessId.ToString() + ' ' + $_.CommandLine }"], timeout=60)
+        found["webview2_browser_cmdline"] = out.strip()[-1500:]
+        pids = set(re.findall(r"^(\d+) ", out, re.M)) | {str(p) for p in theo_pids()}
+        code, out = run(["netstat", "-ano", "-p", "TCP"], timeout=60)
+        found["listening"] = [l.strip() for l in out.splitlines() if "LISTENING" in l and l.split()[-1] in pids][:10]
+    except Exception as e:
+        found["process_error"] = repr(e)[:300]
+    policies = {}
+    for hive, name in [(winreg.HKEY_LOCAL_MACHINE, "HKLM"), (winreg.HKEY_CURRENT_USER, "HKCU")]:
+        for path in (r"SOFTWARE\Policies\Microsoft\Edge", r"SOFTWARE\Policies\Microsoft\Edge\WebView2",
+                     r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"):
+            try:
+                k = winreg.OpenKey(hive, path)
+                for i in range(winreg.QueryInfoKey(k)[1]):
+                    v = winreg.EnumValue(k, i)
+                    policies["%s\\%s\\%s" % (name, path, v[0])] = str(v[1])[:200]
+            except OSError:
+                pass
+    found["policies"] = policies
     try:
         found["main_window"] = main_window()
     except Exception as e:
@@ -339,8 +363,19 @@ def connect():
             _browser = _pw.chromium.connect_over_cdp("http://127.0.0.1:%d" % CDP_PORT, timeout=5000)
             break
         except Exception:
-            if time.time() - t0 > 120:
-                raise RuntimeError("Theo's window never opened its DevTools port: %s" % json.dumps(webview_state(), default=str))
+            if time.time() - t0 > 90:
+                if DEVTOOLS_NOTE.get("fallback_tried"):
+                    raise RuntimeError("Theo's window never opened its DevTools port: %s" % json.dumps(webview_state(), default=str))
+                # Some Windows versions start a shortcut through Explorer, and WebView2 there didn't take the test's switch.
+                # Started from its program instead (still the installed app), so the rest of the run can see the window.
+                DEVTOOLS_NOTE["fallback_tried"] = True
+                DEVTOOLS_NOTE["start_menu_launch"] = webview_state()
+                quit_theo()
+                _pw = sync_playwright().start()
+                exe = pathlib.Path(installed()["location"]) / EXE_NAME
+                subprocess.Popen([str(exe)], env=launch_env(), close_fds=True, creationflags=0x00000008)
+                wait_ping(60)
+                t0 = time.time()
             time.sleep(1)
     page = wait_until(lambda: next((p for c in _browser.contexts for p in c.pages if "tauri" in p.url or "localhost" in p.url), None), 30)
     if page is None:
@@ -450,7 +485,7 @@ def fresh(setup_exe, msi=None):
         cmd = text_of(page, "#setup .su-cmd")
         shot = screenshot("setup-claude-not-installed")
         ok = took is not None and not found and "Not installed" in row and "irm https://claude.ai/install.ps1 | iex" in cmd
-        return ok, {"started_in_s": took, "claude_already_here": [str(f) for f in found], "row": row, "command_shown": cmd, "welcome": shot1}, shot
+        return ok, {"started_in_s": took, "devtools_via_direct_start": DEVTOOLS_NOTE.get("fallback_tried", False), "claude_already_here": [str(f) for f in found], "row": row, "command_shown": cmd, "welcome": shot1}, shot
     if not check("Opened from the Start menu: first-run setup; Claude Code not installed, with the Windows install command", no_claude_yet):
         return
 
@@ -875,6 +910,8 @@ if __name__ == "__main__":
                 pass
         write_summary(mode)
         allow_devtools(False)
+        if DEVTOOLS_NOTE:
+            print("DevTools from the Start menu launch: " + json.dumps(DEVTOOLS_NOTE, default=str)[:6000], flush=True)
     failed = [r for r in RESULTS if r["verdict"] == "FAIL"]
     print("\n%d steps, %d failed" % (len(RESULTS), len(failed)))
     sys.exit(1 if failed else 0)
