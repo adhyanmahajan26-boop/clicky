@@ -6,6 +6,7 @@
 //  damaged save file never costing the owner what it held.
 //
 
+import ClickyCore
 import Foundation
 import Testing
 @testable import Clicky
@@ -145,6 +146,24 @@ struct HarnessDurabilityTests {
         #expect(denied.contains { $0.hasSuffix("/link-memory/**)") })
         // With nothing to recall, the whole chats folder is denied, as before.
         #expect(BotRunner.secretReadRules().contains("Read(/\(chats)/**)"))
+    }
+
+    /// Air-readiness finding: asked "what did Addy tell Clicky?" in its own chat, Clicky's Memory helper couldn't read Clicky's log under
+    /// the read lock and answered from an old session. It may read (never write) that log; other bots still may not.
+    @Test func clickysMemoryHelperMayReadClickysLogAndNoOtherBotMay() {
+        let log = "/" + BotMemory.clickyLogFolder.path + "/**"
+        var helper = BotImport.starters[0]
+        helper.owner = BotsStore.clickyID
+        helper.duty = ClickyDuty.memory.rawValue
+        let allowed = BotRunner.claudeAllowedTools(for: helper)
+        #expect(allowed.contains("Read(\(log))"))
+        #expect(allowed.contains("Grep(\(log))"))
+        #expect(!allowed.contains("Edit(\(log))") && !allowed.contains("Write(\(log))"))
+        #expect(!BotRunner.secretReadRules().contains { $0.contains("/clicky-memory") })
+        var researcher = helper
+        researcher.duty = ClickyDuty.researcher.rawValue
+        #expect(!BotRunner.claudeAllowedTools(for: researcher).contains("Read(\(log))"))
+        #expect(!BotRunner.claudeAllowedTools(for: BotImport.starters[0]).contains("Read(\(log))"))
     }
 
     @Test func otherBotsFoldersAreDeniedButTheSharedSkillsAreNot() {

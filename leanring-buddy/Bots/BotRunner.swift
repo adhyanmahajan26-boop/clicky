@@ -203,6 +203,11 @@ enum BotRunner {
         let projects = "/" + BotsT3.projectsFolder.path + "/**"
         var tools = ["WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
         for place in [memoryFolder, projects] { tools += ["Read(\(place))", "Grep(\(place))", "Glob(\(place))"] }
+        // Clicky's Memory helper reads Clicky's log (read only): without it the read lock left it guessing from an old session.
+        if BotMemory.isClickyMemoryHelper(bot) {
+            let log = "/" + BotMemory.clickyLogFolder.path + "/**"
+            tools += ["Read(\(log))", "Grep(\(log))", "Glob(\(log))"]
+        }
         tools += BotReadScope.readRules(for: readable)
         tools += recall.flatMap { ["Read(/\($0))", "Grep(/\($0))"] }
         for connector in BotConnectors.known where bot.apps.contains(connector.id) {

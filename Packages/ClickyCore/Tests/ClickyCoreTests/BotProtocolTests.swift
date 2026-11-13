@@ -596,7 +596,10 @@ struct BotProtocolTests {
         let words = BotAwareness.shortJob(oneLongSentence)
         #expect(words.hasSuffix("tidy…") || words.hasSuffix("and…") || words.hasSuffix("ledgers…") || words.hasSuffix("the…") || words.hasSuffix("keeps…"))
         #expect(!words.contains("  "))
-        #expect(BotAwareness.shortJob("Short job.") == "Short job.")
+        #expect(BotAwareness.shortJob("Short job.") == "Short job.")        // Said in the "who you are" block without a full stop after the ellipsis.
+        let ceo = "CEO for Adhyan. Manages department heads (COM, COP, CTO, HEAD MANAGMENT, and ops leads) and delivers a morning brief covering stock/invoices, pricing, websites, mail, and overall ops."
+        let block = BotAwareness.whoYouAre(BotIdentityFacts(name: "CEO", owner: "Addy", job: BotAwareness.shortJob(ceo)))
+        #expect(block.contains("…") && !block.contains("…."))
     }
 
     @Test func messagesFromTheOtherMacInTheMiddleAreStillHeard() {

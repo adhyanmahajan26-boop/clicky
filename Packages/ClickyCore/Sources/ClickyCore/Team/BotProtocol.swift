@@ -677,7 +677,9 @@ public enum BotAwareness {
         let job = facts.job.trimmingCharacters(in: .whitespacesAndNewlines)
         var opening = "Who you are: you're \(facts.name), \(facts.owner)'s " + (facts.isCEO ? "CEO bot" : "bot")
         if !job.isEmpty { opening += ". Your job: \(job.hasSuffix(".") ? String(job.dropLast()) : job)" }
-        lines.append(opening + ".")
+        // A job cut short ends in an ellipsis: no full stop after it.
+        let jobEndsOpen = job.hasSuffix("…")
+        lines.append(jobEndsOpen ? opening : opening + ".")
         for team in facts.managesTeams { lines.append("You manage the \(team) team.") }
         if let team = facts.teams.first(where: { !facts.managesTeams.contains($0) }) {
             if let manager = facts.managerName {

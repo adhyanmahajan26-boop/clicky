@@ -2097,6 +2097,12 @@ enum BotPrompts {
             parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
         } else if bot.owner != nil {
             // Clicky's team gets what it needs in each job.
+            if BotMemory.isClickyMemoryHelper(bot) {
+                // Asked in its own chat, nothing comes with the question: it reads the log, never an old session's memory of it.
+                let log = BotMemory.clickyLogFolder.path
+                parts.append("Clicky's log is \(log)/said.jsonl (what \(ownerName) said to Clicky, one JSON line each, oldest first) and " +
+                             "\(log)/summaries.jsonl. When asked what was said, Grep it or read its end; don't answer from an earlier session's memory of it.")
+            }
         } else {
             // What it remembers goes in the prompt itself, capped, so nothing depends on the bot choosing to read the file (Hermes's MEMORY.md).
             parts.append(BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath))
