@@ -90,7 +90,7 @@ final class ActionExecutor {
     /// `previousTargetProcessIdentifier`: the app the task's previous step acted on (key steps go there when a
     /// notification alert or one of Theo's panels is in front; ClickyCore ActionKeyTarget).
     func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String,
-                 previousTargetProcessIdentifier: pid_t? = nil) -> ResolvedActionTarget {
+                 previousTargetProcessIdentifier: pid_t? = nil, previousStepBroughtAppForward: Bool = false) -> ResolvedActionTarget {
         switch step {
         case .openApp(let name, let bundleIdentifier):
             guard let candidate = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier) else {
@@ -116,7 +116,7 @@ final class ActionExecutor {
             return resolveFrontmost(includingFocusedElement: true)
 
         case .key:
-            return resolveKeyTarget(previousTargetProcessIdentifier: previousTargetProcessIdentifier)
+            return resolveKeyTarget(previousTargetProcessIdentifier: previousTargetProcessIdentifier, previousStepBroughtAppForward: previousStepBroughtAppForward)
 
         case .scroll(let elementID, _, _):
             if let elementID { return resolveElement(elementID, in: groundedTurn) }
@@ -166,7 +166,7 @@ final class ActionExecutor {
 
     /// A key step's app: the frontmost one, unless that's a notification alert or one of Theo's panels while the task
     /// was working in another app that's still running (ClickyCore ActionKeyTarget).
-    private func resolveKeyTarget(previousTargetProcessIdentifier: pid_t?) -> ResolvedActionTarget {
+    private func resolveKeyTarget(previousTargetProcessIdentifier: pid_t?, previousStepBroughtAppForward: Bool) -> ResolvedActionTarget {
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
         let isOwnApplication = frontmostApplication.processIdentifier == getpid()
         let showsOwnMainWindow = isOwnApplication && (NSApp.keyWindow.map { TheoMainWindows.windows().contains($0) } ?? false)
@@ -175,7 +175,8 @@ final class ActionExecutor {
             frontmost: ActionKeyTarget.Frontmost(processIdentifier: frontmostApplication.processIdentifier, bundleIdentifier: frontmostApplication.bundleIdentifier,
                                                  isOwnApplication: isOwnApplication, showsOwnMainWindow: showsOwnMainWindow),
             previousTargetProcessIdentifier: previousTargetProcessIdentifier,
-            previousTargetIsRunning: previousApplication.map { !$0.isTerminated } ?? false)
+            previousTargetIsRunning: previousApplication.map { !$0.isTerminated } ?? false,
+            previousStepBroughtAppForward: previousStepBroughtAppForward)
         guard chosenProcessIdentifier != frontmostApplication.processIdentifier, let previousApplication else {
             return resolveApplication(frontmostApplication, includingFocusedElement: true)
         }

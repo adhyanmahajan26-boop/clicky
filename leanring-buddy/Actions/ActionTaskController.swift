@@ -60,6 +60,8 @@ final class ActionTaskController {
         /// The app the last step that ran acted on: a key step goes there when a notification alert or one of
         /// Theo's panels has come to the front (ActionKeyTarget).
         var lastTargetProcessIdentifier: pid_t?
+        /// The last step that ran was switch_window / open_app: a key right after it goes to that app.
+        var lastStepBroughtAppForward = false
         let agentID: String
         var phase: Phase = .executing
         var pendingConfirmation: PendingConfirmation?
@@ -231,7 +233,8 @@ final class ActionTaskController {
             }
 
             let target = executor.resolve(step, groundedTurn: groundedTurn, ownerTranscript: task.loop.ownerTranscript,
-                                          previousTargetProcessIdentifier: task.lastTargetProcessIdentifier)
+                                          previousTargetProcessIdentifier: task.lastTargetProcessIdentifier,
+                                          previousStepBroughtAppForward: task.lastStepBroughtAppForward)
             if let failure = target.failure {
                 task.loop.record(step, tier: nil, tierReason: nil, outcome: .skipped(reason: failure))
                 publish()
@@ -288,7 +291,15 @@ final class ActionTaskController {
             }
             if decision.dropsReturn, let line = decision.spokenLine, case .done = result.outcome { companionManager.speakCodeModeLine(line) }
             if task.isCancelled { return }
-            if case .done = result.outcome, let actedProcessIdentifier = target.processIdentifier { task.lastTargetProcessIdentifier = actedProcessIdentifier }
+            if case .done = result.outcome {
+                if let actedProcessIdentifier = target.processIdentifier ?? target.runningApplication?.processIdentifier {
+                    task.lastTargetProcessIdentifier = actedProcessIdentifier
+                }
+                switch step {
+                case .switchWindow, .openApp: task.lastStepBroughtAppForward = true
+                default: task.lastStepBroughtAppForward = false
+                }
+            }
             task.loop.record(step, tier: decision.tier, tierReason: decision.reason, outcome: result.outcome)
             if case .refused(let reason) = result.outcome { speakRefusal("i didn't \(step.shortDescription): \(reason).") }
             if let pageText = result.pageText { task.loop.pendingPageText = pageText }

@@ -33,14 +33,20 @@ public enum ActionKeyTarget {
     }
 
     /// The app the key goes to: the app the task's previous step acted on (if it's still running) when what's in front
-    /// is a system alert or notification, or one of Theo's own panels; otherwise the frontmost app. Theo's main window
-    /// in front stays Theo, so the rule that a key there waits for a yes still applies.
-    public static func processIdentifier(frontmost: Frontmost, previousTargetProcessIdentifier: Int32?, previousTargetIsRunning: Bool) -> Int32 {
+    /// is a system alert or notification, or one of Theo's own panels, or when that step was the switch to (or opening
+    /// of) the app; otherwise the frontmost app. Theo's main window in front stays Theo, so the rule that a key there
+    /// waits for a yes still applies.
+    /// `previousStepBroughtAppForward`: the previous step was switch_window / open_app. macOS can still call another app
+    /// frontmost while it moves to that app's Space (Air, 2026-11-13: "switch to Safari" then ctrl+cmd+f went to WhatsApp,
+    /// because Safari was full screen in its own Space).
+    public static func processIdentifier(frontmost: Frontmost, previousTargetProcessIdentifier: Int32?, previousTargetIsRunning: Bool,
+                                         previousStepBroughtAppForward: Bool = false) -> Int32 {
         guard let previous = previousTargetProcessIdentifier, previousTargetIsRunning, previous != frontmost.processIdentifier else {
             return frontmost.processIdentifier
         }
+        if frontmost.isOwnApplication && frontmost.showsOwnMainWindow { return frontmost.processIdentifier }
         let isTransientSystemUI = frontmost.bundleIdentifier.map(transientSystemBundleIdentifiers.contains) ?? false
         let isOwnPanel = frontmost.isOwnApplication && !frontmost.showsOwnMainWindow
-        return isTransientSystemUI || isOwnPanel ? previous : frontmost.processIdentifier
+        return isTransientSystemUI || isOwnPanel || previousStepBroughtAppForward ? previous : frontmost.processIdentifier
     }
 }

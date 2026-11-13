@@ -41,4 +41,21 @@ struct ActionKeyTargetTests {
         #expect(ActionKeyTarget.processIdentifier(frontmost: theoPanel, previousTargetProcessIdentifier: spotifyProcessIdentifier,
                                                   previousTargetIsRunning: true) == spotifyProcessIdentifier)
     }
+
+    /// Air, 2026-11-13: "switch to Safari" (full screen in its own Space), then ctrl+cmd+f went to WhatsApp, which
+    /// macOS still called frontmost mid-switch.
+    @Test func aKeyRightAfterSwitchingGoesToTheAppSwitchedTo() {
+        let safariProcessIdentifier: Int32 = 700
+        let whatsApp = ActionKeyTarget.Frontmost(processIdentifier: 800, bundleIdentifier: "net.whatsapp.WhatsApp")
+        #expect(ActionKeyTarget.processIdentifier(frontmost: whatsApp, previousTargetProcessIdentifier: safariProcessIdentifier,
+                                                  previousTargetIsRunning: true, previousStepBroughtAppForward: true) == safariProcessIdentifier)
+        // After a click (not a switch), a new app in front is where the key belongs: the click may have opened it.
+        #expect(ActionKeyTarget.processIdentifier(frontmost: whatsApp, previousTargetProcessIdentifier: safariProcessIdentifier,
+                                                  previousTargetIsRunning: true, previousStepBroughtAppForward: false) == 800)
+        // Theo's main window in front still keeps the key, so it waits for a yes.
+        let theoMainWindow = ActionKeyTarget.Frontmost(processIdentifier: theoProcessIdentifier, bundleIdentifier: "com.personal.clicky",
+                                                       isOwnApplication: true, showsOwnMainWindow: true)
+        #expect(ActionKeyTarget.processIdentifier(frontmost: theoMainWindow, previousTargetProcessIdentifier: safariProcessIdentifier,
+                                                  previousTargetIsRunning: true, previousStepBroughtAppForward: true) == theoProcessIdentifier)
+    }
 }
