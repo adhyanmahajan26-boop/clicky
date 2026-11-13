@@ -150,7 +150,8 @@ pub async fn state(h: &Harness) -> Value {
         None => json!({"installed": false, "signedIn": false}),
     };
     let bots = h.with(|s| s.bots.iter().filter(|b| !b.primary).count());
-    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS})
+    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS,
+           "ownerName": h.settings.string("owner.name").unwrap_or_default(), "suggestedOwnerName": crate::settings::suggested_owner_name()})
 }
 
 /// The command a setup button runs in a terminal. Claude Code and the GitHub CLI are named by the full path Theo found them at:

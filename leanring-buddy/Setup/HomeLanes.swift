@@ -29,10 +29,9 @@ struct HomeLanes: View {
         let asleep = team.filter { states[$0.id] == .idle }
         // Cards answered in the last ten minutes stay as their folded lines, so the answer shows where it was given.
         let justAnswered = folds.folds.filter { Date().timeIntervalSince($0.value.at) < 600 }.sorted { $0.value.at > $1.value.at }.prefix(4).map(\.key)
-        let keyCard = products.isOn(.dictation) && products.dictationAccess == .needsKey
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
-                if needing.count + (keyCard ? 1 : 0) > 0 { StatusPill(text: "\(needing.count + (keyCard ? 1 : 0)) need you", tone: .warn) }
+                if needing.count > 0 { StatusPill(text: "\(needing.count) need you", tone: .warn) }
                 if !failed.isEmpty { StatusPill(text: "\(failed.count) failed", tone: .bad) }
                 if !working.isEmpty { StatusPill(text: "\(working.count) working", tone: .working) }
                 if !done.isEmpty { StatusPill(text: "\(done.count) done", tone: .done) }
@@ -40,10 +39,9 @@ struct HomeLanes: View {
             }
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
-                    laneTitle("Needs you", count: needing.count + (keyCard ? 1 : 0))
-                    if needing.isEmpty && !keyCard && justAnswered.isEmpty { quiet("Nothing needs you right now.") }
+                    laneTitle("Needs you", count: needing.count)
+                    if needing.isEmpty && justAnswered.isEmpty { quiet("Nothing needs you right now.") }
                     ForEach(needing) { bot in needsCard(bot) }
-                    if keyCard { SarvamKeyCard() }
                     ForEach(justAnswered, id: \.self) { card in folds.line(card) }
                     if !failed.isEmpty {
                         laneTitle("Failed", count: failed.count).padding(.top, 6)

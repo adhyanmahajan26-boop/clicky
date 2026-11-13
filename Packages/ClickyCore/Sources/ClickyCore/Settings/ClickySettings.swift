@@ -159,6 +159,8 @@ public enum ClickySettings {
         public static let updateAutoCheck = "v2.update.autoCheck"
         /// Bool, default false: the setup window was finished once (it opens by itself until then).
         public static let setupCompleted = "v2.setup.completed"
+        /// String, default "": what the bots call the owner (`OwnerName`). Empty or missing means "the owner".
+        public static let ownerName = "v4.owner.name"
     }
 
     public static var qwenReferenceClipPath: String {
@@ -534,6 +536,23 @@ public enum ClickySettings {
     public static var isSetupCompleted: Bool {
         get { defaults.object(forKey: Keys.setupCompleted) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.setupCompleted) }
+    }
+
+    /// What the bots call the owner: the saved name, or "the owner" until one is given (`OwnerName`).
+    public static var ownerName: String {
+        get { OwnerName.resolved(saved: defaults.string(forKey: Keys.ownerName)) }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.ownerName) }
+    }
+
+    /// The name as typed, for setup's and Settings' field: empty when none is saved.
+    public static var savedOwnerName: String { defaults.string(forKey: Keys.ownerName) ?? "" }
+
+    /// Once, at launch: a Mac that finished setup before the name was a setting keeps the name its bots knew.
+    public static func migrateOwnerNameIfNeeded() {
+        let savedValueExists = defaults.object(forKey: Keys.ownerName) != nil
+        if let migratedName = OwnerName.migratedName(savedValueExists: savedValueExists, setupCompleted: isSetupCompleted) {
+            defaults.set(migratedName, forKey: Keys.ownerName)
+        }
     }
 
     /// The API key for Claude Code when the owner picked API-key mode, else nil.

@@ -320,10 +320,14 @@ async function renderSettings() {
   const [doc, gw, st] = await Promise.all([invoke({ cmd: "doctor" }), invoke({ cmd: "gateway" }), invoke({ cmd: "status" })]);
   const rows = (doc.result.findings || []).map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}</div>`).join("");
   const g = gw.result;
-  $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><h2>Health check</h2><div class="list">${rows}</div>`
+  const ownerName = st.result.ownerName || "";
+  $("#pane").innerHTML = `<div class="column"><h1>Settings</h1>`
+    + `<h2>You</h2><div class="list"><div class="crow"><span class="tx"><b>Your name</b><small style="white-space:normal">What your bots call you. Empty: they say "the owner".</small></span><span class="act"><input id="owner-name" value="${esc(ownerName)}" maxlength="40" placeholder="Your first name"></span></div></div>`
+    + `<h2>Health check</h2><div class="list">${rows}</div>`
     + `<h2>Local API</h2><div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`
     + `<h2>This computer</h2><div class="list" id="login-row"></div><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
   $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettings(); };
+  $("#owner-name").oninput = (e) => saveOwnerName(e.target.value);
   // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
   const drawLogin = (on) => {
     if (typeof on !== "boolean" || !$("#login-row")) return;
@@ -435,12 +439,17 @@ const TEMPLATES = [
   ["Writer", "Drafts emails, posts and docs", "You are Writer. Draft clear, short writing in the owner's voice and ask before anything is sent.", { fin: "slate", trim: "#F4F4F5", eye: "tall", top: "handle", extra: "pencil" }],
 ];
 async function startSetup() {
-  setup = { step: 0, st: null, look: TEMPLATES[0][3], name: TEMPLATES[0][0], desc: TEMPLATES[0][1], instr: TEMPLATES[0][2], made: null };
+  setup = { step: 0, st: null, owner: "", look: TEMPLATES[0][3], name: TEMPLATES[0][0], desc: TEMPLATES[0][1], instr: TEMPLATES[0][2], made: null };
   $("#setup").hidden = false;
   drawSetup();
   setup.st = (await invoke({ cmd: "setupState" })).result;
+  // The name the bots will use: what's saved, else the computer account's name, saved straight away so what's shown is what they're told.
+  setup.owner = (setup.st && (setup.st.ownerName || setup.st.suggestedOwnerName)) || "";
+  if (setup.st && !setup.st.ownerName && setup.owner) await saveOwnerName(setup.owner);
   drawSetup();
 }
+// Empty clears it: the bots then say "the owner".
+function saveOwnerName(name) { return invoke({ cmd: "setSetting", key: "owner.name", value: name.trim().slice(0, 40) || null }); }
 function setupFace() {
   const s = setup.st;
   if (setup.step === 4) return "done";
@@ -456,6 +465,7 @@ function drawSetup() {
   if (step === 0) {
     body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Meet Theo</h1>`
       + `<p class="lead">Theo runs a team of AI bots on your own Claude subscription: chats, group chats, routines and coding runs. Bots can't loop, schedule things or start coding without you saying so.</p>`
+      + `<div class="su-fields"><label>What should your bots call you? <input id="su-owner" value="${esc(setup.owner)}" maxlength="40" placeholder="Your first name"></label></div>`
       + `<p class="muted">This takes a minute: check Claude Code, then make your first bot.</p><div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
   } else if (step === 1) {
     const ready = c && c.installed && c.signedIn;
@@ -494,6 +504,7 @@ function drawSetup() {
   root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
   root.querySelectorAll("[data-tpl]").forEach((b) => b.onclick = () => { const t = TEMPLATES.find((x) => x[0] === b.dataset.tpl); Object.assign(setup, { name: t[0], desc: t[1], instr: t[2], look: t[3] }); drawSetup(); });
   wire(root);
+  if (step === 0 && $("#su-owner")) $("#su-owner").oninput = (e) => { setup.owner = e.target.value; saveOwnerName(setup.owner); };
   if (step === 3) {
     const get = mountMaker($("#su-maker"), setup.look, (l) => (setup.look = l));
     $("#su-name").oninput = (e) => { setup.name = e.target.value; root.querySelector("[data-create]").disabled = !setup.name.trim(); root.querySelector("[data-create]").textContent = `Make ${setup.name || "it"}`; };

@@ -86,7 +86,7 @@ enum SettingsTab {
             case .link: return "Both Macs run as one Theo: the same bots, group chats, chats and memory."
             case .permissions: return "What Theo needs to hear, see and point."
             case .updates: return "Keep Theo current."
-            case .about: return "The Dock icon and the setup guide."
+            case .about: return "Your name, the Dock icon and the setup guide."
             }
         }
 
@@ -808,6 +808,10 @@ struct AboutSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             TheoSection(title: "", hint: nil) {
+                SettingRow(title: "Your name", detail: "What your bots call you. Empty: they say \u{201C}the owner\u{201D}.") {
+                    OwnerNameField().frame(width: 220)
+                }
+                RowDivider()
                 SettingRow(title: "Show Theo in the Dock", detail: "Off: Theo lives only in the menu bar.") {
                     Toggle("Dock", isOn: $showsInDock).toggleStyle(.switch).labelsHidden()
                         .onChange(of: showsInDock) { _, value in

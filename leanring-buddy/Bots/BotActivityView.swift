@@ -2,7 +2,7 @@
 //  BotActivityView.swift
 //  leanring-buddy
 //
-//  Everything the bots said to each other and to Addy, in one line of time across every chat, with who said it to whom and
+//  Everything the bots said to each other and to the owner, in one line of time across every chat, with who said it to whom and
 //  what went wrong picked out. It's the place to see where a piece of work got stuck.
 //
 
@@ -21,7 +21,7 @@ struct ActivityItem: Identifiable {
 
 extension BotsStore {
     private func activityName(_ id: String) -> String {
-        if id == "user" { return "Addy" }
+        if id == "user" { return "You" }
         if id == Self.clickyID { return "Clicky" }
         if id == "routine" { return "Call" }
         return bot(id)?.name ?? group(forRoom: id)?.name ?? (id == Self.teamID ? "Project room" : id)
@@ -37,7 +37,7 @@ extension BotsStore {
             for message in record.messages where message.at >= since {
                 var text = message.text
                 var from = activityName(message.author)
-                var to = message.author == room ? "Addy" : activityName(room)
+                var to = message.author == room ? "You" : activityName(room)
                 // A private thread: from one bot to the other.
                 if let partner = BotDMThread.partner(of: message.author, in: room) { to = activityName(partner) }
                 var failed = false

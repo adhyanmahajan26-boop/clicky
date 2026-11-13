@@ -1015,7 +1015,7 @@ def p_gw_msg():
     status, body = req("POST", "/v1/bots/%s/messages" % bid("Ledger"), {"text": "status?", "source": "ci-job", "wait": True, "timeout": 30}, token=tok)
     c = last_call("Ledger", mark)
     shown = any("From ci-job" in m["text"] for m in T.chat(bid("Ledger"), 10))
-    told = c is not None and "not from Addy typing" in c["prompt"]
+    told = c is not None and "not from the owner typing" in c["prompt"]
     return status == 200 and body.get("reply") == "fake engine ok" and shown and told, {"status": status, "body": body, "shown_as_program": shown, "told_not_owner": told}
 
 

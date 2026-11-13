@@ -292,7 +292,7 @@ public enum BotProtocol {
     /// The one way to reach another bot, from any chat. Inside a group chat @Name also hands that bot the next turn there, and nowhere else.
     public static func reachHowTo(reachable: [(name: String, description: String)], owner: String) -> String {
         let how = "To message another bot, put a line [TELL: their exact name: what you need] in your reply, from any chat. It's private: they answer you, and you then carry on where you were and tell \(owner) what came of it. " +
-            "\(owner) sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Just do it: don't explain to \(owner) how you reach them, and never ask \(owner) to pass a message on or add anyone to a group."
+            "\(OwnerName.startingSentence(owner)) sees a small card and can open it. Only that line reaches them. @Name means something only inside a group chat, where it hands that bot the next turn. Just do it: don't explain to \(owner) how you reach them, and never ask \(owner) to pass a message on or add anyone to a group."
         return reachable.isEmpty ? how + " No other bots are on right now." : how + " Who you can reach: \(reachableList(reachable))."
     }
 
@@ -373,22 +373,24 @@ public enum BotProtocol {
     public static let pdfHowTo = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: " +
         "Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so."
 
-    public static let screenHowTo =
-        "Addy's Mac Studio has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
+    public static func screenHowTo(owner: String) -> String {
+        "\(OwnerName.startingSentence(owner))'s Mac Studio has hidden screens set aside for you, and \(owner) watches them in the Studio panel. For a simple job in an " +
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
-        "Clicky does it on a free tile without touching Addy's own monitors, then tells you what happened. Say a job happened only if " +
+        "Clicky does it on a free tile without touching \(owner)'s own monitors, then tells you what happened. Say a job happened only if " +
         "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +
-        "To have Clicky's research agents look something up in Addy's browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
-        "If Addy asks for a bot to get a screen, put a line [GIVE SCREEN: bot name: screen name, own, shared or none]; Addy confirms it on a card. " +
+        "To have Clicky's research agents look something up in \(owner)'s browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
+        "If \(owner) asks for a bot to get a screen, put a line [GIVE SCREEN: bot name: screen name, own, shared or none]; \(owner) confirms it on a card. " +
         "Writing or changing code doesn't go through this: use a ```prompt block."
+    }
 
     /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
-    public static let routineHowTo =
-        "Routines: when Addy asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
+    public static func routineHowTo(owner: String) -> String {
+        "Routines: when \(owner) asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
         "cron or schedule tool or skill: Theo runs routines for you. Say what you'll do and when, then add a ```routine " +
         "block with JSON {\"name\": short name, \"when\": \"daily 08:00\" | \"weekdays 08:30\" | \"weekly mon 09:00\" | " +
         "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Theo then runs it on " +
-        "time, and Addy can pause, run or delete it."
+        "time, and \(owner) can pause, run or delete it."
+    }
 
     /// How any bot starts a coding run. Bots don't edit code themselves: a harness does it in its own branch.
     public static func codingHowTo(harnessLabel: String) -> String {
@@ -431,15 +433,15 @@ public enum BotProtocol {
 
     // MARK: A group chat's discussion, step by step
 
-    public static func planNote(hasOthers: Bool, owner: String = "Addy") -> String {
+    public static func planNote(hasOthers: Bool, owner: String) -> String {
         hasOthers
             ? "Lay out your plan for the group in a few lines, so they can pick it apart. No ```prompt block yet, and don't say anything has been sent or started."
-            : mergeNote
+            : mergeNote(owner: owner)
     }
 
     public static let critiqueNote = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt."
 
-    public static let mergeNote = "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model Addy chose as soon as you've written it, and you'll see it in the list of runs. Theo makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder."
+    public static func mergeNote(owner: String) -> String { "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model \(owner) chose as soon as you've written it, and you'll see it in the list of runs. Theo makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder." }
 
     // MARK: What a group member reads
 
@@ -448,7 +450,7 @@ public enum BotProtocol {
                                        transcript: [(speaker: String, text: String)], includesScreenHowTo: Bool, turnNote: String) -> String {
         var parts = firstTimeIntro
         parts.append(groupChatHowTo(others: others))
-        if includesScreenHowTo { parts.append(screenHowTo) }
+        if includesScreenHowTo { parts.append(screenHowTo(owner: owner)) }
         let lines = transcript.map { "\($0.speaker): \($0.text)" }.joined(separator: "\n\n")
         parts.append("New in the \"\(groupName)\" group chat since you last spoke:\n\n\(lines)")
         parts.append("(\(turnNote))")
@@ -660,7 +662,7 @@ public enum BotAwareness {
         }
         if !facts.ready.isEmpty { lines.append("Ready on the \(facts.thisMac): \(facts.ready.joined(separator: ", ")).") }
         if let other = facts.otherMac {
-            var line = "\(facts.owner)'s other Mac, the \(other), is \(facts.otherMacConnected ? "connected" : "not connected right now")"
+            var line = "\(OwnerName.startingSentence(facts.owner))'s other Mac, the \(other), is \(facts.otherMacConnected ? "connected" : "not connected right now")"
             if facts.otherMacHasScreens { line += "; it has the hidden screens for [SCREEN:] jobs and the research browser" }
             lines.append(line + ".")
         } else {
