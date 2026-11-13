@@ -168,9 +168,67 @@ struct BotProtocolTests {
             #expect(turns < 10)
         }
         #expect(step == .speak(botID: "head", isWrapUp: true))
-        // Two turns each at most, then the wrap-up.
-        #expect(plan.spoke["a"] == 2)
-        #expect(plan.spoke["b"] == 2)
+        // A can hand on to b, who hadn't answered; b can't hand back to a, who had. One turn each, then the wrap-up.
+        #expect(plan.spoke["a"] == 1)
+        #expect(plan.spoke["b"] == 1)
+    }
+
+    // MARK: Members can't hand out turns that aren't theirs (T03)
+
+    @Test func aMembersMentionCantBringBackBotsThatAlreadyAnswered() {
+        // T03's failing round: the head asks all four; the last member @-names everyone, which used to give two of them a second turn.
+        var plan = GroupTurnPlan(headID: "atlas", first: [])
+        _ = plan.start()
+        let members = ["ledger", "scout", "forge", "hijacker"]
+        var step = plan.turnEnded(by: "atlas", mentions: members, canHandOut: true, others: members)
+        var order: [String] = ["atlas"]
+        while case .speak(let bot, let isWrapUp) = step {
+            order.append(bot)
+            if isWrapUp { step = plan.turnEnded(by: bot, mentions: [], canHandOut: false, others: members); break }
+            // Every member tries to grab turns for everyone else, the head included.
+            step = plan.turnEnded(by: bot, mentions: ["atlas"] + members, canHandOut: true, others: members)
+        }
+        #expect(order == ["atlas", "ledger", "scout", "forge", "hijacker", "atlas"])
+        #expect(step == .finished)
+        #expect(members.allSatisfy { plan.spoke[$0] == 1 })
+        #expect(plan.spoke["atlas"] == 2)
+    }
+
+    @Test func aMemberCanStillHandOnToABotThatHasntAnswered() {
+        var plan = GroupTurnPlan(headID: "head", first: [])
+        _ = plan.start()
+        #expect(plan.turnEnded(by: "head", mentions: ["a"], canHandOut: true, others: ["a", "b"]) == .speak(botID: "a", isWrapUp: false))
+        #expect(plan.turnEnded(by: "a", mentions: ["b"], canHandOut: true, others: ["a", "b"]) == .speak(botID: "b", isWrapUp: false))
+        #expect(plan.turnEnded(by: "b", mentions: ["a"], canHandOut: true, others: ["a", "b"]) == .speak(botID: "head", isWrapUp: true))
+    }
+
+    @Test func theHeadCanStillBringABotBackOnce() {
+        var plan = GroupTurnPlan(headID: "head", first: ["a"])
+        #expect(plan.start() == .speak(botID: "a", isWrapUp: false))
+        #expect(plan.turnEnded(by: "a", mentions: [], canHandOut: true, others: ["a"]) == .speak(botID: "head", isWrapUp: true))
+        var second = GroupTurnPlan(headID: "head", first: ["head", "a"])
+        _ = second.start()
+        #expect(second.turnEnded(by: "head", mentions: [], canHandOut: true, others: ["a"]) == .speak(botID: "a", isWrapUp: false))
+    }
+
+    @Test func membersTheOwnerNamesAnswerEvenIfTheHeadAnswersAlone() {
+        // T03's other failing round: the head answered everything itself and named nobody.
+        var plan = GroupTurnPlan(headID: "atlas", first: [], asked: ["ledger", "scout", "forge", "hijacker"])
+        #expect(plan.start() == .speak(botID: "atlas", isWrapUp: false))
+        var step = plan.turnEnded(by: "atlas", mentions: [], canHandOut: true, others: ["ledger", "scout", "forge", "hijacker"])
+        var order: [String] = []
+        while case .speak(let bot, let isWrapUp) = step, !isWrapUp {
+            order.append(bot)
+            step = plan.turnEnded(by: bot, mentions: [], canHandOut: true, others: ["ledger", "scout", "forge", "hijacker"])
+        }
+        #expect(order == ["ledger", "scout", "forge", "hijacker"])
+        #expect(step == .speak(botID: "atlas", isWrapUp: true))
+    }
+
+    @Test func askedMembersComeAfterTaggedOnesAndNeverTwice() {
+        var plan = GroupTurnPlan(headID: "head", first: ["b"], asked: ["a", "b", "head"])
+        #expect(plan.queue == ["b", "a"])
+        _ = plan.start()
     }
 
     @Test func theCapStillEndsWithOneWrapUp() {

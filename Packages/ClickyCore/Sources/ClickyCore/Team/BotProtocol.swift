@@ -168,7 +168,10 @@ public enum BotMentions {
 // MARK: - Who speaks next in a group chat
 
 /// Members take turns one at a time, in the order the head named them, each reading everything said so far; then the head writes
-/// one wrap-up and it stops. A member can hand something on with @Name, which puts that bot next, as long as the cap on turns holds.
+/// one wrap-up and it stops. Who speaks is decided by the owner and the head: members the owner's message names get a turn after
+/// the head even if the head forgets them, and the head can bring anyone in (twice at most). A member can hand something on with
+/// @Name only to a bot that hasn't answered in this round yet, so a member can't pull others back in or keep a round going, and
+/// the wrap-up is always the head's.
 public struct GroupTurnPlan: Equatable, Sendable {
     public static let maximumTurns = 8
     /// A bot speaks twice at most in a round, so two members can't keep handing to each other.
@@ -191,11 +194,14 @@ public struct GroupTurnPlan: Equatable, Sendable {
     public private(set) var needsWrapUp = false
 
     /// `first`: who was tagged, or the head when nobody was. A head who's tagged too reads it first.
-    public init(headID: String, first: [String]) {
+    /// `asked`: members the owner's message names without tagging ("Ledger: the break-even"): they answer after whoever goes
+    /// first, in the order named, whether or not the head hands them anything.
+    public init(headID: String, first: [String], asked: [String] = []) {
         self.headID = headID
         var seen = Set<String>()
         let unique = (first.isEmpty ? [headID] : first).filter { seen.insert($0).inserted }
-        self.queue = unique.contains(headID) ? [headID] + unique.filter { $0 != headID } : unique
+        let ordered = unique.contains(headID) ? [headID] + unique.filter { $0 != headID } : unique
+        self.queue = ordered + asked.filter { $0 != headID && seen.insert($0).inserted }
     }
 
     /// Who goes first.
@@ -215,7 +221,10 @@ public struct GroupTurnPlan: Equatable, Sendable {
         if canHandOut {
             // The head has the wrap-up anyway, so naming the head brings nobody in.
             let wanted = mentions.filter { id in
-                id != botID && id != headID && others.contains(id) && !queue.contains(id) && (spoke[id] ?? 0) < Self.maximumTurnsPerBot
+                guard id != botID, id != headID, others.contains(id), !queue.contains(id) else { return false }
+                // The head may bring a bot back once; a member can only bring in someone who hasn't answered yet, so
+                // a member's @Name can't hand out extra turns to bots that already had theirs.
+                return botID == headID ? (spoke[id] ?? 0) < Self.maximumTurnsPerBot : (spoke[id] ?? 0) == 0
             }
             if botID == headID {
                 queue += wanted
@@ -271,7 +280,7 @@ public enum BotProtocol {
 
     /// In a group chat: @Name for this chat, [TELL:] for anything private.
     public static func groupChatHowTo(others: [(name: String, description: String)]) -> String {
-        "In this group chat, @Name hands that bot the next turn here, so use it only to hand something on. For a private message to any bot, use a line [TELL: their exact name: what you need] instead. " +
+        "In this group chat, @Name hands that bot the next turn here, so use it only to hand something on (a member can hand on only to a bot that hasn't answered yet in this round). For a private message to any bot, use a line [TELL: their exact name: what you need] instead. " +
             "The others here: \(reachableList(others))."
     }
 
@@ -321,7 +330,8 @@ public enum BotProtocol {
     /// A member's turn.
     public static func memberTurnNote(name: String, headName: String) -> String {
         "It's your turn, \(name), and nobody else is writing. Read everything above first. Don't repeat a point already made: agree in a few words or add what's new. " +
-            "Answer the part you were given. Use @Name only to hand something on; \(headName) wraps up after the last answer, so don't summarise for the group."
+            "Answer the part you were given. Use @Name only to hand something to a bot that hasn't answered yet in this round; " +
+            "\(headName) wraps up after the last answer, so don't write a wrap-up or summarise for the group."
     }
 
     /// The head closes the round.
