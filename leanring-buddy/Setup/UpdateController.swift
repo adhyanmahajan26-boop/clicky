@@ -61,7 +61,11 @@ final class UpdateController: ObservableObject {
         if case .installing = state { return }
         let previousState = state
         if !quietly { state = .checking }
-        var request = URLRequest(url: ClickySettings.updateFeedURL)
+        guard let feedURL = ClickySettings.updateFeedURL else {
+            if !quietly { state = .failed("This build doesn't say where its updates come from, so it can't check for new ones.") }
+            return
+        }
+        var request = URLRequest(url: feedURL)
         request.timeoutInterval = 20
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let token = await accessToken()
@@ -71,9 +75,8 @@ final class UpdateController: ObservableObject {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 if quietly { state = previousState } else {
-                    state = .failed(statusCode != 404 ? "The update check answered \(statusCode)."
-                                    : token == nil ? "This Mac isn't signed in to GitHub, so it can't see your private updates. Run gh auth login in Terminal, or paste a token below."
-                                    : "No updates published yet.")
+                    state = .failed(UpdateFeed.checkFailureMessage(statusCode: statusCode, sentToken: token != nil,
+                                                                   repository: UpdateFeed.bundledReleasesRepository))
                 }
                 return
             }
@@ -124,7 +127,8 @@ final class UpdateController: ObservableObject {
 
     // MARK: - Steps
 
-    /// The updates repo is private: a saved token, or this Mac's own GitHub sign-in, so there's nothing to paste.
+    /// Only needed when the updates repo is private: a saved token, or this Mac's own GitHub sign-in, so there's
+    /// nothing to paste. A public repo needs neither (the check and download work without one).
     private func accessToken() async -> String? {
         if let token = ClickySecrets.read(.updateToken) { return token }
         guard let gh = BotsT3.gh else { return nil }

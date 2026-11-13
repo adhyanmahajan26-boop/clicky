@@ -153,7 +153,7 @@ public enum ClickySettings {
         /// String, default "": the display Claudia uses for itself (its spark, boards, notes and the windows it opens).
         /// A display's localized name; empty means wherever the pointer is.
         public static let claudiaScreenName = "v2.screen.claudia"
-        /// String, default "": the updates feed (a GitHub "latest release" API URL). Empty = UpdateFeed.defaultFeedURL.
+        /// String, default "": the updates feed (a GitHub "latest release" API URL). Empty = this build's releases repo (UpdateFeed.bundledFeedURL).
         public static let updateFeedURL = "v2.update.feedURL"
         /// Bool, default true: check for an update at launch and every 6 hours (installing always waits for the owner).
         public static let updateAutoCheck = "v2.update.autoCheck"
@@ -480,10 +480,12 @@ public enum ClickySettings {
         set { defaults.set(newValue, forKey: Keys.claudiaScreenName) }
     }
 
-    public static var updateFeedURL: URL {
+    /// Where this Mac checks for updates: the saved feed if there is one, else this build's releases repo.
+    /// Nil when neither is set (a build made without THEO_RELEASES_REPO).
+    public static var updateFeedURL: URL? {
         let text = (defaults.string(forKey: Keys.updateFeedURL) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // https only (plain http just for a loopback test feed).
-        return URL(string: text).flatMap { $0.scheme == "https" || ($0.scheme == "http" && $0.host == "127.0.0.1") ? $0 : nil } ?? UpdateFeed.defaultFeedURL
+        return URL(string: text).flatMap { $0.scheme == "https" || ($0.scheme == "http" && $0.host == "127.0.0.1") ? $0 : nil } ?? UpdateFeed.bundledFeedURL
     }
     public static var isUpdateAutoCheckEnabled: Bool { defaults.object(forKey: Keys.updateAutoCheck) as? Bool ?? true }
 

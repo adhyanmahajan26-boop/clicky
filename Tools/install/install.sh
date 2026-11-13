@@ -7,8 +7,19 @@
 # A download made by curl never gets macOS's quarantine flag, so Theo opens without the
 # "Apple could not verify" dialog and no paid Apple Developer account is needed. In return,
 # this script checks what it downloads instead: the zip's SHA-256 must match the release's
-# checksum, and the app inside must have a valid signature from Theo's signing team with
-# Theo's bundle id. Anything else is refused and nothing is changed.
+# checksum, and the app inside must have a valid signature from Theo's signer with Theo's
+# bundle id. When Theo is already installed, the new app must also satisfy the installed app's
+# own signature rule, so an upgrade can never swap in someone else's build and macOS keeps
+# Theo's permissions. Anything else is refused and nothing is changed.
+#
+# Who Theo's signer is (the "signer rule", a code requirement), first one found:
+#   1. THEO_SIGNER_REQUIREMENT, if you set it;
+#   2. the rule Tools/release.sh wrote into this copy of the script when it published it;
+#   3. the release's SIGNER file, only when the release's SHA256SUMS lists it and it matches;
+#   4. when upgrading, the installed Theo's own rule.
+# A rule must pin Theo's bundle id and one Apple team or one certificate (the two forms in
+# docs/INSTALL.md, "Signing"); anything looser is refused. Nobody's team is written in the
+# script in the repo: a copy run from a checkout reads the release's SIGNER file.
 #
 # Options
 #   --version <build>   install that build (202611121716 or build-202611121716); default: latest
@@ -18,6 +29,8 @@
 #   --sha256 <hex>      the checksum the --from zip must have
 #   --no-launch         don't open Theo afterwards
 #   --force             reinstall the same build, allow an older build, or quit a Theo that won't quit
+#   --allow-new-signer  upgrade even though the new build has another signer than the installed
+#                       Theo (macOS then asks for every permission again)
 #   --uninstall         remove Theo (your chats, bots and settings are kept)
 #   --purge             with --uninstall, also move Theo's data to the Trash and remove its
 #                       settings, saved keys and macOS permissions
@@ -25,29 +38,36 @@
 #   -h, --help          show this help
 #
 # Environment
-#   THEO_RELEASES_REPO  GitHub repo with the releases (owner/name)
+#   THEO_RELEASES_REPO  GitHub repo with the releases (owner/name). Default: the repo this copy
+#                       was published to, or THEO_RELEASES_REPO in Config/Theo.xcconfig when the
+#                       script runs from a checkout of Theo's source
 #   THEO_INSTALL_DIR    same as --dir
-#   THEO_GITHUB_TOKEN   token for a private releases repo (GH_TOKEN, GITHUB_TOKEN or a
-#                       signed-in `gh` work too)
+#   THEO_GITHUB_TOKEN   only for a private releases repo: a token that can read it (GH_TOKEN,
+#                       GITHUB_TOKEN or a signed-in `gh` work too). A public repo needs nothing.
+#   THEO_SIGNER_REQUIREMENT  the signer rule to use (see above)
 #
 # The release layout this expects (Tools/release.sh makes it): tag build-<yyyyMMddHHmm>, one
-# asset Theo-<build>.zip, and the checksum in a SHA256SUMS asset ("<hex>  Theo-<build>.zip")
-# or, for older releases, a "sha256: <hex>" line in the release notes.
+# asset Theo-<build>.zip, the checksum in a SHA256SUMS asset ("<hex>  Theo-<build>.zip") or,
+# for older releases, a "sha256: <hex>" line in the release notes, and a SIGNER asset with the
+# signer rule (listed in SHA256SUMS).
 #
 # Everything runs from main() at the very end, so a download cut off halfway runs nothing.
 
 set -euo pipefail
 
-RELEASES_REPO="${THEO_RELEASES_REPO:-adhyanmahajan26-boop/claudia-releases}"
+# Tools/release.sh fills these two in, in the copy of this script it publishes with a release
+# (Tools/install/stamp-installer.py). They stay empty in the repo.
+PUBLISHED_RELEASES_REPO=""
+PUBLISHED_SIGNER_REQUIREMENT=''
+
+RELEASES_REPO="${THEO_RELEASES_REPO:-}"
 GITHUB_API="${THEO_GITHUB_API:-https://api.github.com}"   # tests point this at a local fake
 BUNDLE_ID="com.personal.clicky"
 # Who must have signed Theo, as a code requirement (the language macOS uses for permissions).
-# A zip whose app doesn't satisfy it is refused. Today: the Apple Development certificate of
-# team 9JAQUUW553. With a self-signed certificate it would be
-#   identifier "com.personal.clicky" and certificate leaf = H"<SHA-1 of the certificate>"
-# (docs/INSTALL.md, "Signing options").
-SIGNER_REQUIREMENT='identifier "com.personal.clicky" and anchor apple generic and certificate leaf[subject.OU] = "9JAQUUW553"'
-SIGNER_REQUIREMENT="${THEO_SIGNER_REQUIREMENT:-$SIGNER_REQUIREMENT}"
+# Chosen in choose_signer_rule (see the top of this file); a zip whose app doesn't satisfy it is refused.
+SIGNER_REQUIREMENT=""
+SIGNER_SOURCE=""
+RELEASE_SIGNER_FILE=""
 APP_NAME="Theo.app"
 EXECUTABLE="Clicky"
 MIN_MACOS="14.2"
@@ -58,6 +78,7 @@ FROM=""
 FROM_SHA=""
 LAUNCH=1
 FORCE=0
+ALLOW_NEW_SIGNER=0
 MODE="install"
 PURGE=0
 ASSUME_YES=0
@@ -83,11 +104,13 @@ Options
   --sha256 <hex>      the checksum the --from zip must have
   --no-launch         don't open Theo afterwards
   --force             reinstall the same build, allow an older one, or quit a Theo that won't quit
+  --allow-new-signer  upgrade to a build from another signer (macOS asks for permissions again)
   --uninstall         remove Theo (chats, bots and settings are kept)
   --purge             with --uninstall: also remove Theo's data, saved keys and macOS permissions
   --yes               don't ask before --purge
 
-Environment: THEO_RELEASES_REPO (owner/name), THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (private repo).
+Environment: THEO_RELEASES_REPO (owner/name), THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (only for a private
+repo), THEO_SIGNER_REQUIREMENT.
 HELP
 }
 
@@ -102,11 +125,11 @@ parse_args() {
       --sha256) [ $# -ge 2 ] || die "--sha256 needs a checksum"; FROM_SHA="$2"; shift ;;
       --no-launch) LAUNCH=0 ;;
       --force) FORCE=1 ;;
+      --allow-new-signer) ALLOW_NEW_SIGNER=1 ;;
       --uninstall) MODE="uninstall" ;;
       --purge) PURGE=1 ;;
       --yes|-y) ASSUME_YES=1 ;;
       -h|--help) usage; exit 0 ;;
-      --print-signer-requirement) printf '%s\n' "$SIGNER_REQUIREMENT"; exit 0 ;;   # for release.sh
       *) die "unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -114,6 +137,27 @@ parse_args() {
   if [ "$PURGE" = 1 ] && [ "$MODE" != "uninstall" ]; then die "--purge only goes with --uninstall"; fi
   if [ -n "$FROM" ] && [ -z "$FROM_SHA" ]; then die "--from needs --sha256, so the zip can be checked"; fi
   return 0
+}
+
+# THEO_RELEASES_REPO in Config/Theo.xcconfig, when this script runs from a checkout of Theo's source
+# (Tools/install/install.sh). Nothing when it was piped from curl.
+checkout_releases_repo() {
+  local script_path="${BASH_SOURCE[0]:-}"
+  [ -n "$script_path" ] && [ -f "$script_path" ] || return 0
+  local config; config="$(cd "$(dirname "$script_path")/../.." 2>/dev/null && pwd)/Config/Theo.xcconfig"
+  [ -f "$config" ] || return 0
+  sed -n 's/^[[:space:]]*THEO_RELEASES_REPO[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' "$config" | head -n 1
+}
+
+choose_releases_repo() {
+  [ -n "$RELEASES_REPO" ] || RELEASES_REPO="$PUBLISHED_RELEASES_REPO"
+  [ -n "$RELEASES_REPO" ] || RELEASES_REPO="$(checkout_releases_repo)"
+  [ -n "$RELEASES_REPO" ] || die "this copy of the installer doesn't say where Theo's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install.sh attached to a release."
+  case "$RELEASES_REPO" in
+    */*/*|/*|*/) die "THEO_RELEASES_REPO must look like owner/name (got '$RELEASES_REPO')" ;;
+    */*) ;;
+    *) die "THEO_RELEASES_REPO must look like owner/name (got '$RELEASES_REPO')" ;;
+  esac
 }
 
 # ---------- checks ----------
@@ -166,9 +210,32 @@ curl_github() { # url out-file [accept]
   curl "${args[@]}" "$url"
 }
 
+# Reads one GitHub API URL into a file and prints the HTTP status (000 when GitHub couldn't be reached).
+github_status() { # url out-file
+  local -a args=(-sSL --retry 3 --retry-delay 2 --connect-timeout 20 -H "Accept: application/vnd.github+json" -o "$2" -w '%{http_code}')
+  if [ -n "$AUTH_HEADER_FILE" ]; then args+=(-H "@$AUTH_HEADER_FILE"); fi
+  curl "${args[@]}" "$1" 2>/dev/null || true
+}
+
+# Says plainly why the release couldn't be read. GitHub answers 404 for a private repo it won't show,
+# so without a token that is what the person is told, not a sign-in step they may have no way to do.
+explain_release_failure() { # http status, url
+  case "$1" in
+    404)
+      if [ -z "$AUTH_HEADER_FILE" ]; then
+        die "this build's updates are private: $RELEASES_REPO can't be read without access. Ask whoever gave you Theo for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
+      fi
+      die "couldn't read $2: no such release in $RELEASES_REPO, or the GitHub token can't read that repo." ;;
+    401) die "GitHub refused the token (THEO_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN or gh's). A public releases repo needs no token: unset it and try again." ;;
+    403|429) die "GitHub is limiting requests from this network right now. Try again in a while." ;;
+    000|"") die "couldn't reach GitHub ($GITHUB_API). Check the internet connection and try again." ;;
+    *) die "GitHub answered $1 for $2." ;;
+  esac
+}
+
 # Reads the release JSON with JavaScript for Automation (built into every Mac, no jq or Python needed)
 # and prints: tag, zip name, zip download URL, zip API URL, SHA256SUMS download URL, SHA256SUMS API URL,
-# and the "sha256:" line from the notes, one per line ("-" when missing).
+# the "sha256:" line from the notes, SIGNER download URL and SIGNER API URL, one per line ("-" when missing).
 release_fields() {
   osascript -l JavaScript - "$1" <<'JXA'
 ObjC.import('Foundation');
@@ -179,10 +246,12 @@ function run(argv) {
   var zip = assets.filter(function (a) { return /^Theo-.*\.zip$/i.test(a.name) && !/(windows|linux)/i.test(a.name); })[0]
          || assets.filter(function (a) { return /\.zip$/i.test(a.name); })[0];
   var sums = assets.filter(function (a) { return a.name === 'SHA256SUMS'; })[0];
+  var signer = assets.filter(function (a) { return a.name === 'SIGNER'; })[0];
   var line = ((r.body || '').split(/\r?\n/).filter(function (l) { return /^\s*sha256:/i.test(l); })[0] || '');
   var noteSha = line.replace(/^\s*sha256:\s*/i, '').trim();
   return [r.tag_name || '-', zip ? zip.name : '-', zip ? zip.browser_download_url : '-', zip ? zip.url : '-',
-          sums ? sums.browser_download_url : '-', sums ? sums.url : '-', noteSha || '-'].join('\n');
+          sums ? sums.browser_download_url : '-', sums ? sums.url : '-', noteSha || '-',
+          signer ? signer.browser_download_url : '-', signer ? signer.url : '-'].join('\n');
 }
 JXA
 }
@@ -207,21 +276,25 @@ fetch_release() {
     url="$api/tags/$tag"
   fi
   step "Finding Theo ($VERSION) in $RELEASES_REPO"
-  if ! curl_github "$url" "$WORK/release.json"; then
-    if [ -z "$AUTH_HEADER_FILE" ]; then
-      die "couldn't read $RELEASES_REPO. If it's private, sign in with \`gh auth login\` or set THEO_GITHUB_TOKEN."
-    fi
-    die "couldn't read $url (no such release, or the token can't see the repo)."
-  fi
+  local status; status="$(github_status "$url" "$WORK/release.json")"
+  [ "$status" = 200 ] || explain_release_failure "$status" "$url"
   local fields; fields="$(release_fields "$WORK/release.json")" || die "couldn't read the release details"
-  local tag zip_name zip_url zip_api sums_url sums_api note_sha
-  { read -r tag; read -r zip_name; read -r zip_url; read -r zip_api; read -r sums_url; read -r sums_api; read -r note_sha; } <<EOF
+  local tag zip_name zip_url zip_api sums_url sums_api note_sha signer_url signer_api
+  { read -r tag; read -r zip_name; read -r zip_url; read -r zip_api; read -r sums_url; read -r sums_api; read -r note_sha
+    read -r signer_url; read -r signer_api; } <<EOF
 $fields
 EOF
   [ "$zip_name" != "-" ] || die "release $tag has no Theo zip"
   if [ "$sums_url" != "-" ]; then
     download_asset "$sums_url" "$sums_api" "$WORK/SHA256SUMS" || die "couldn't download SHA256SUMS"
-    EXPECTED_SHA="$(awk -v n="$zip_name" '{ f=$2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$WORK/SHA256SUMS")"
+    EXPECTED_SHA="$(sum_for "SHA256SUMS" "$zip_name")"
+    # The SIGNER file counts only when SHA256SUMS lists it and it matches: the same sign-off as the zip.
+    local signer_sha; signer_sha="$(sum_for "SHA256SUMS" "SIGNER")"
+    if [ "$signer_url" != "-" ] && [ -n "$signer_sha" ]; then
+      download_asset "$signer_url" "$signer_api" "$WORK/SIGNER" || die "couldn't download the release's SIGNER file"
+      [ "$(sha256_of "$WORK/SIGNER")" = "$(lowercase "$signer_sha")" ] || die "the release's SIGNER file doesn't match SHA256SUMS. Nothing was installed."
+      RELEASE_SIGNER_FILE="$WORK/SIGNER"
+    fi
   else
     EXPECTED_SHA="$note_sha"
   fi
@@ -230,6 +303,12 @@ EOF
   ZIP="$WORK/$zip_name"
   download_asset "$zip_url" "$zip_api" "$ZIP" || die "the download failed"
 }
+
+sum_for() { # SHA256SUMS file (in $WORK), asset name: prints its checksum, or nothing
+  awk -v n="$2" '{ f=$2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$WORK/$1"
+}
+sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+lowercase() { printf '%s' "$1" | tr 'A-F' 'a-f'; }
 
 fetch_from() {
   EXPECTED_SHA="$FROM_SHA"
@@ -242,8 +321,8 @@ fetch_from() {
 
 verify_checksum() {
   local actual expected
-  actual="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
-  expected="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
+  actual="$(sha256_of "$ZIP")"
+  expected="$(lowercase "$EXPECTED_SHA")"
   [ "$actual" = "$expected" ] || die "the download doesn't match its checksum (expected $expected, got $actual). Nothing was installed."
   step "Checksum OK ($actual)"
 }
@@ -255,10 +334,36 @@ signer_of() { # "team X", "certificate <sha1>" or "ad hoc"
   if [ -n "$team" ] && [ "$team" != "not set" ]; then echo "team $team"; return; fi
   codesign -d -r- "$1" 2>&1 | sed -n 's/.*certificate leaf = H"\([0-9a-f]*\)".*/certificate \1/p' | grep . || echo "unknown signer"
 }
-bundle_id_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true; }
-build_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$1/Contents/Info.plist" 2>/dev/null || echo 0; }
+bundle_id_of() { plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist" 2>/dev/null || true; }
+build_of() { plutil -extract CFBundleVersion raw -o - "$1/Contents/Info.plist" 2>/dev/null || echo 0; }
+designated_requirement_of() { codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'; }
 
-# Unzips into the work folder and checks the app is Theo, signed by Theo's team. Sets NEW_APP.
+# A signer rule is accepted only in one of the two forms Tools/install/signer-requirement.sh writes:
+# Theo's bundle id plus one Apple team, or Theo's bundle id plus one certificate. Anything looser
+# ("any Apple-issued certificate", an "or", a different bundle id) would let someone else's build in.
+signer_rule_is_strict() {
+  local id_pattern='identifier "com\.personal\.clicky"'
+  printf '%s\n' "$1" | grep -Eqx "$id_pattern and anchor apple generic and certificate leaf\[subject\.OU\] = \"?[A-Z0-9]{10}\"?" && return 0
+  printf '%s\n' "$1" | grep -Eqx "$id_pattern and certificate leaf = H\"[0-9a-fA-F]{40}\"" && return 0
+  return 1
+}
+
+# Sets SIGNER_REQUIREMENT and SIGNER_SOURCE (see the top of this file). Empty when nothing names a signer;
+# the installed Theo's own rule is checked separately when upgrading.
+choose_signer_rule() {
+  local rule="" source=""
+  if [ -n "${THEO_SIGNER_REQUIREMENT:-}" ]; then rule="$THEO_SIGNER_REQUIREMENT"; source="THEO_SIGNER_REQUIREMENT"
+  elif [ -n "$PUBLISHED_SIGNER_REQUIREMENT" ]; then rule="$PUBLISHED_SIGNER_REQUIREMENT"; source="this installer"
+  elif [ -n "$RELEASE_SIGNER_FILE" ]; then rule="$(head -n 1 "$RELEASE_SIGNER_FILE" | tr -d '\r')"; source="the release's SIGNER file"
+  fi
+  if [ -n "$rule" ] && ! signer_rule_is_strict "$rule"; then
+    die "the signer rule from $source is too loose to trust: $rule. Nothing was installed."
+  fi
+  SIGNER_REQUIREMENT="$rule"
+  SIGNER_SOURCE="$source"
+}
+
+# Unzips into the work folder and checks the app is Theo, signed by Theo's signer. Sets NEW_APP.
 unpack_and_verify() {
   mkdir -p "$WORK/unpacked"
   ditto -x -k "$ZIP" "$WORK/unpacked" || die "couldn't unzip the download"
@@ -268,10 +373,21 @@ unpack_and_verify() {
   xattr -dr com.apple.quarantine "$NEW_APP" 2>/dev/null || true
   codesign --verify --deep --strict "$NEW_APP" 2>/dev/null || die "the app's signature isn't valid. Nothing was installed."
   [ "$(bundle_id_of "$NEW_APP")" = "$BUNDLE_ID" ] || die "the zip doesn't contain Theo. Nothing was installed."
-  if ! codesign --verify -R "=$SIGNER_REQUIREMENT" "$NEW_APP" 2>/dev/null; then
-    die "the app is signed by '$(signer_of "$NEW_APP")', not Theo's signing identity. Nothing was installed."
+  if [ -n "$SIGNER_REQUIREMENT" ] && ! codesign --verify -R "=$SIGNER_REQUIREMENT" "$NEW_APP" 2>/dev/null; then
+    die "the app is signed by '$(signer_of "$NEW_APP")', not Theo's signing identity (from $SIGNER_SOURCE). Nothing was installed."
   fi
-  step "Signature OK ($(signer_of "$NEW_APP"), build $(build_of "$NEW_APP"))"
+}
+
+# When Theo is already installed, the new app must satisfy the installed app's designated requirement: the rule
+# macOS keeps Theo's permissions against, and the same check Theo's own Update button makes.
+verify_same_signer_as_installed() { # installed app
+  local installed_rule; installed_rule="$(designated_requirement_of "$1")"
+  if [ -n "$installed_rule" ] && codesign --verify -R "=$installed_rule" "$NEW_APP" 2>/dev/null; then return 0; fi
+  if [ "$ALLOW_NEW_SIGNER" = 1 ]; then
+    warn "the new build is signed by '$(signer_of "$NEW_APP")', the installed Theo by '$(signer_of "$1")'. Going ahead (--allow-new-signer): macOS will ask for Theo's permissions again."
+    return 0
+  fi
+  die "the new build is signed by '$(signer_of "$NEW_APP")', not by the same signer as the Theo in $1 ('$(signer_of "$1")'), so macOS would ask for every permission again. Nothing was installed. If you expected a new signer, run again with --allow-new-signer."
 }
 
 # ---------- install ----------
@@ -314,14 +430,23 @@ quit_running() { # app path; returns 0 if Theo was running
 }
 
 do_install() {
-  WORK="$(mktemp -d -t theo-install)"
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/theo-install.XXXXXX")"
   trap cleanup EXIT
-  if [ -n "$FROM" ]; then fetch_from; else fetch_release; fi
+  if [ -n "$FROM" ]; then fetch_from; else choose_releases_repo; fetch_release; fi
   verify_checksum
+  choose_signer_rule
   unpack_and_verify
 
   choose_dir
   local dest="$INSTALL_DIR/$APP_NAME"
+  local installed_theo=""
+  if [ -e "$dest" ] && [ "$(bundle_id_of "$dest")" = "$BUNDLE_ID" ]; then installed_theo="$dest"; fi
+  if [ -n "$installed_theo" ]; then
+    verify_same_signer_as_installed "$installed_theo"
+  elif [ -z "$SIGNER_REQUIREMENT" ]; then
+    die "can't tell who should have signed this build: nothing names Theo's signer (no SIGNER file in the release, and Theo isn't installed here yet). Set THEO_SIGNER_REQUIREMENT (docs/INSTALL.md, \"Signing\"), or use the install.sh attached to the release. Nothing was installed."
+  fi
+  step "Signature OK ($(signer_of "$NEW_APP"), build $(build_of "$NEW_APP"))"
   local new_build; new_build="$(build_of "$NEW_APP")"
   local was_running=0 upgrading=0
   if [ -e "$dest" ]; then
