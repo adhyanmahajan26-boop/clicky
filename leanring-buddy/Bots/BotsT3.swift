@@ -3,7 +3,7 @@
 //  leanring-buddy
 //
 //  Hands the Project room's final prompt to T3 Code and follows it through:
-//  a project (a new git repo under ~/Projects, or a new branch in a worktree
+//  a project (a new git repo in the projects folder, ~/Projects unless changed in Settings, or a new branch in a worktree
 //  of a repo Addy named), a thread on Opus 5.5 at high effort, then the run
 //  tracked until it ends. The result comes back to the room as a report:
 //  the agent's summary, what changed, Theo's own test run, and a draft PR
@@ -104,16 +104,29 @@ struct RunFileChange: Codable, Equatable, Identifiable {
 }
 
 enum BotsT3 {
-    /// The coding model T3 Code builds with: Opus 5.5 through T3 Code's Claude provider.
+    /// The coding model T3 Code builds with when the owner hasn't picked one in Settings › Harnesses: Opus 5.5 through
+    /// T3 Code's Claude provider (`t3 thread start` needs a provider and a model). Only reached by someone who has T3 Code
+    /// and sends builds to it; every other harness starts on its own default model.
     static let provider = "claudeAgent"
     static let model = "claude-opus-5-5"
     static let effort = "high"
     static let modelName = "Claude Opus 5.5"
 
-    /// The t3 launcher T3 Code writes into its data folder (Cursor Assistant build first).
+    /// A private build of T3 Code ("T3 Code Cursor Assistant") that one Mac may have. It's used only where it's
+    /// installed; a Mac without it never looks for it and gets stock T3 Code.
+    enum PrivateT3Build {
+        static let launcherPath = ".t3-claudia/bin/t3"
+        static let appName = "T3 Code Cursor Assistant.app"
+        static let bundleIdentifier = "com.addy.claudia.t3code"
+    }
+
+    /// Stock T3 Code's launcher in its data folder.
+    static let stockLauncherPath = ".t3/bin/t3"
+
+    /// The t3 launcher T3 Code writes into its data folder: the private build's when it's installed, else stock T3 Code's.
     static var cli: URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return [".t3-claudia/bin/t3", ".t3/bin/t3"].map { home.appendingPathComponent($0) }
+        return [PrivateT3Build.launcherPath, stockLauncherPath].map { home.appendingPathComponent($0) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
@@ -205,9 +218,12 @@ enum BotsT3 {
     /// The same again after the instructions: a quick model follows whatever it read last.
     static let newFolderReminder = "\n\nRemember: this project's folder already exists and you're in it. Keep everything in the current folder."
 
-    /// Where the project folders are, in words an agent's shell understands. A test profile's folders are its own, while its agents keep the
-    /// owner's real home, so "~/Projects" would send them into the owner's real folders.
-    static var projectsWords: String { TheoProfile.isTest ? projectsFolder.path : "~/Projects" }
+    /// Where the project folders are, in words an agent's shell understands ("~/Projects" unless the owner moved it). A test profile's
+    /// folders are its own, while its agents keep the owner's real home, so "~/…" would send them into the owner's real folders.
+    static var projectsWords: String {
+        TheoProfile.isTest ? projectsFolder.path
+            : ProjectsFolder.words(forPath: projectsFolder.path, homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
+    }
 
     /// What goes to an agent. In a test profile "~/Projects" means that profile's folder, whoever wrote it.
     static func forAgent(_ text: String) -> String {
@@ -399,7 +415,8 @@ enum BotsT3 {
 
     /// The T3 Code app whose data folder a `t3` launcher uses.
     private static func app(forCLI cli: URL) -> URL? {
-        let names = cli.path.contains(".t3-claudia") ? ["T3 Code Cursor Assistant.app"] : ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code (Alpha).app"]
+        let stockNames = ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code (Alpha).app"]
+        let names = cli.path.hasSuffix(PrivateT3Build.launcherPath) ? [PrivateT3Build.appName] + stockNames : stockNames
         return names.map { URL(fileURLWithPath: "/Applications/\($0)") }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
@@ -460,7 +477,7 @@ enum BotsT3 {
 
     /// T3 Code opens where it last was; with a display picked for Theo, its window goes there instead.
     @MainActor private static func moveT3ToTheosScreen() {
-        let app = ["com.addy.claudia.t3code", "com.t3tools.t3code"].lazy
+        let app = [PrivateT3Build.bundleIdentifier, "com.t3tools.t3code"].lazy
             .compactMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }.first
         ClaudiaScreen.moveFrontWindow(of: app)
     }
@@ -496,8 +513,9 @@ enum BotsT3 {
         return !remotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The projects folder (Settings › Harnesses, `v2.code.projectsFolder`, default ~/Projects). Not made until the first project needs it.
     static var projectsFolder: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
+        URL(fileURLWithPath: ClickySettings.projectsFolderPath(homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path), isDirectory: true)
     }
 
     /// The owner's project folders.
@@ -519,7 +537,7 @@ enum BotsT3 {
         case failed(String)
     }
 
-    /// A new folder in ~/Projects on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
+    /// A new folder in the projects folder on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
     static func makeProject(named name: String) async -> MadeProject {
         let exact = projectsFolder.appendingPathComponent(slug(name), isDirectory: true)
         if FileManager.default.fileExists(atPath: exact.path) { return .alreadyThere(exact) }
@@ -544,7 +562,7 @@ enum BotsT3 {
     }
 
     static func newProjectFolder(title: String) throws -> URL {
-        let projects = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
+        let projects = projectsFolder
         var folder = projects.appendingPathComponent(slug(title), isDirectory: true)
         var suffix = 2
         while FileManager.default.fileExists(atPath: folder.path) {
@@ -824,21 +842,12 @@ enum BotsT3 {
     /// A command-line tool by name: the usual install folders, then the login shell's PATH (node from
     /// pnpm or nvm lives in the home folder, which a Mac app's PATH doesn't include).
     static func tool(_ name: String) -> URL? {
+        // The real home's folders first: in a test profile the home folder is the profile's own.
         let home = TheoProfile.realHome
         if let found = executable(["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)",
                                    "\(home)/Library/pnpm/\(name)", "/usr/bin/\(name)"]) { return found }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "command -v \(name)"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return nil }
-        let path = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        process.waitUntilExit()
-        return path.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+        // Then Theo's one finder, which asks the owner's own login shell for its PATH.
+        return HarnessCatalog.locate(binary: name)
     }
 
     private static func executable(_ paths: [String]) -> URL? {

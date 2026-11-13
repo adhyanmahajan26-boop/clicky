@@ -104,44 +104,10 @@ final class ClaudeCodeBridge {
 
     // MARK: - Locating the CLI
 
-    /// Apps launched from Xcode or Finder don't inherit the user's shell PATH,
-    /// so we check the usual install locations first and fall back to asking
-    /// a login shell where `claude` lives.
+    /// Apps launched from Xcode or Finder don't inherit the user's shell PATH. HarnessCatalog.locate is Theo's one
+    /// finder: the usual install folders (including ~/.claude/local), then the owner's own login shell's PATH.
     static func locateClaudeCodeExecutable() -> URL? {
-        let homeDirectoryPath = FileManager.default.homeDirectoryForCurrentUser.path
-        let commonInstallPaths = [
-            "\(homeDirectoryPath)/.local/bin/claude",
-            "\(homeDirectoryPath)/.claude/local/claude",
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude"
-        ]
-
-        for installPath in commonInstallPaths where FileManager.default.isExecutableFile(atPath: installPath) {
-            return URL(fileURLWithPath: installPath)
-        }
-
-        let loginShellProcess = Process()
-        loginShellProcess.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        loginShellProcess.arguments = ["-lc", "command -v claude"]
-        let loginShellOutputPipe = Pipe()
-        loginShellProcess.standardOutput = loginShellOutputPipe
-        loginShellProcess.standardError = FileHandle.nullDevice
-
-        do {
-            try loginShellProcess.run()
-            loginShellProcess.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        let loginShellOutputData = loginShellOutputPipe.fileHandleForReading.readDataToEndOfFile()
-        let resolvedPath = String(data: loginShellOutputData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        guard !resolvedPath.isEmpty, FileManager.default.isExecutableFile(atPath: resolvedPath) else {
-            return nil
-        }
-        return URL(fileURLWithPath: resolvedPath)
+        HarnessCatalog.locate(binary: "claude")
     }
 
     /// The launch a request with these settings uses (writes the prompt file).

@@ -90,8 +90,12 @@ public enum ClickySettings {
         public static let voiceGalleryPrevious = "v2.voice.gallery.previous"
         /// Bool, default false: the code agent may get Bash (set true only by a passing sandbox probe).
         public static let codeBashAllowed = "v2.code.bashAllowed"
-        /// [String], default ["~/Projects", "~/Developer"]: folders scanned for local clones.
+        /// [String], default CodeRepoRoots.defaultRoots: folders scanned for local clones.
         public static let codeRepoRoots = "v2.code.repoRoots"
+        /// String, default "~/Projects": where new project folders go and where the owner's projects are listed (ProjectsFolder).
+        public static let projectsFolder = "v2.code.projectsFolder"
+        /// Bool: keepRetiredRepoRootOnce has run on this Mac.
+        public static let codeRetiredRepoRootChecked = "v2.code.retiredRepoRootChecked"
         /// Bool, default true: "stop" / "Hey Theo" interrupt Clicky while it talks or acts.
         public static let wakeBargeIn = "v2.wake.bargeIn"
         /// Bool, default false: also search Desktop/Documents/Downloads for repos (macOS asks the owner once).
@@ -133,7 +137,7 @@ public enum ClickySettings {
         public static let voiceFastPathEnabled = "v2.voice.fastPath"
         /// "subscription" (default: Claude Code's own sign-in) or "apiKey" (the Anthropic API key in the Keychain is passed as ANTHROPIC_API_KEY).
         public static let brainAuthMode = "v2.brain.authMode"
-        /// String, default "": a Qwen voice server on another Mac (e.g. http://adhyans-mac-studio.local:11240). Its key is in the Keychain.
+        /// String, default "": a Qwen voice server on another Mac (e.g. http://my-other-mac.local:11240). Its key is in the Keychain.
         public static let remoteVoiceServerURL = "v2.voice.remote.url"
         /// Bool, default false: silent mode. Clicky still listens and answers (captions, marks,
         /// boards, actions) but never speaks. "silent mode" / "talk again" or the panel toggle.
@@ -346,11 +350,47 @@ public enum ClickySettings {
     // MARK: - P5 Code mode
 
     /// The home folder itself is scanned one level deep, ~/Projects and ~/Developer three, the rest two (LocalRepoIndexer.maximumDepth(forRoot:)).
-    public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads", "~/jstest"]
+    public static let defaultCodeRepoRoots = ["~/Projects", "~/Developer", "~", "~/Documents", "~/Downloads"]
     public static var isKeepWarmAgentEnabled: Bool { defaults.object(forKey: Keys.keepWarmAgent) as? Bool ?? false }
     public static var isKeepWarmAgentApproved: Bool { defaults.object(forKey: Keys.keepWarmAgentApproved) as? Bool ?? false }
     public static var isCodeBashAllowed: Bool { defaults.object(forKey: Keys.codeBashAllowed) as? Bool ?? false }
-    public static var codeRepoRoots: [String] { defaults.stringArray(forKey: Keys.codeRepoRoots) ?? defaultCodeRepoRoots }
+    public static var codeRepoRoots: [String] {
+        defaults.stringArray(forKey: Keys.codeRepoRoots)
+            ?? CodeRepoRoots.defaultRoots(projectsFolderSetting: defaults.string(forKey: Keys.projectsFolder), homeDirectory: NSHomeDirectory())
+    }
+
+    /// Once per Mac: a Mac that scanned ~/jstest by default before keeps scanning it (CodeRepoRoots.rootsToKeepEarlierDefault).
+    public static func keepRetiredRepoRootOnce(homeDirectory: String = NSHomeDirectory()) {
+        guard !defaults.bool(forKey: Keys.codeRetiredRepoRootChecked) else { return }
+        defaults.set(true, forKey: Keys.codeRetiredRepoRootChecked)
+        let retiredRootPath = ProjectsFolder.resolvedPath(setting: CodeRepoRoots.retiredDefaultRoot, homeDirectory: homeDirectory)
+        var isDirectory: ObjCBool = false
+        let retiredRootExists = FileManager.default.fileExists(atPath: retiredRootPath, isDirectory: &isDirectory) && isDirectory.boolValue
+        if let rootsToSave = CodeRepoRoots.rootsToKeepEarlierDefault(savedRoots: defaults.stringArray(forKey: Keys.codeRepoRoots), retiredRootExists: retiredRootExists) {
+            defaults.set(rootsToSave, forKey: Keys.codeRepoRoots)
+        }
+    }
+
+    /// What the projects folder setting holds ("~/Projects" unless the owner changed it).
+    public static var projectsFolderSetting: String {
+        get {
+            let saved = (defaults.string(forKey: Keys.projectsFolder) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return saved.isEmpty ? ProjectsFolder.defaultSetting : saved
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == ProjectsFolder.defaultSetting {
+                defaults.removeObject(forKey: Keys.projectsFolder)
+            } else {
+                defaults.set(trimmed, forKey: Keys.projectsFolder)
+            }
+        }
+    }
+
+    /// The projects folder as an absolute path in `homeDirectory`. Not created here: whoever makes the first project makes it.
+    public static func projectsFolderPath(homeDirectory: String = NSHomeDirectory()) -> String {
+        ProjectsFolder.resolvedPath(setting: projectsFolderSetting, homeDirectory: homeDirectory)
+    }
     /// The owner's project picks (ProjectAliasBook): an alias match wins outright.
     public static var projectAliases: [String: String] {
         (defaults.dictionary(forKey: Keys.codeProjectAliases) as? [String: String]) ?? [:]
