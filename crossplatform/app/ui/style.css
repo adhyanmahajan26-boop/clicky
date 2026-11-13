@@ -121,3 +121,7 @@ dialog { width: 640px; max-width: calc(100vw - 32px); }
 .su-fields input { display: block; width: 100%; margin-top: 4px; background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 14px var(--body); }
 .su-try { margin: 0; padding-left: 18px; color: var(--t1); line-height: 1.8; }
 .btn[disabled] { opacity: .45; cursor: default; }
+
+/* Connectors: which bots may use each one. */
+.apps-for { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 12px 56px; }
+.apps-for .muted { font-size: 12px; margin-right: 4px; }

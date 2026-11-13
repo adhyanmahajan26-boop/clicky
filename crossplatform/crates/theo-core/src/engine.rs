@@ -49,6 +49,9 @@ pub struct Spec {
     pub cwd: PathBuf,
     pub limit: Duration,
     pub format: Format,
+    /// Written to the engine's standard input, then closed. The prompt goes here rather than on the command line: Windows
+    /// caps a command line at 32,767 characters (8,191 through cmd.exe) and cmd.exe cuts an argument at its first line break.
+    pub stdin: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -198,6 +201,10 @@ impl StreamParser {
 }
 
 /// How a program is started: a Python stand-in through Python, a .cmd or .bat through cmd on Windows.
+///
+/// An npm-installed program on Windows is a `.cmd` shim (`%APPDATA%\npm\claude.cmd`). Going through cmd.exe would cut every
+/// argument at its first line break and cap the whole command at 8,191 characters, so the shim is read and what it points
+/// at is started directly: the package's own `.exe`, or its script with Node.
 pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
     let ext = program.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if ext == "py" {
@@ -205,9 +212,56 @@ pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
         return (PathBuf::from(python), vec![program.to_string_lossy().to_string()]);
     }
     if cfg!(windows) && (ext == "cmd" || ext == "bat") {
+        if let Some(direct) = std::fs::read_to_string(program).ok().and_then(|text| npm_shim_target(&text, program.parent().unwrap_or(std::path::Path::new(".")))) {
+            return direct;
+        }
         return (PathBuf::from("cmd"), vec!["/C".into(), program.to_string_lossy().to_string()]);
     }
     (program.to_path_buf(), vec![])
+}
+
+/// What an npm `.cmd` shim runs, read from the shim itself: `"%dp0%\node_modules\pkg\bin\tool.exe" %*` is that `.exe`;
+/// `"%_prog%" "%dp0%\node_modules\pkg\cli.js" %*` is that script with Node (the shim's own `node.exe` beside it if there
+/// is one, as npm does). None when the shim isn't npm's or what it names isn't there.
+pub fn npm_shim_target(shim_text: &str, shim_dir: &std::path::Path) -> Option<(PathBuf, Vec<String>)> {
+    if shim_text.len() > 64 * 1024 {
+        return None;
+    }
+    let mut target: Option<String> = None;
+    for marker in ["\"%dp0%\\", "\"%~dp0\\"] {
+        let mut rest = shim_text;
+        while let Some(start) = rest.find(marker) {
+            let after = &rest[start + marker.len()..];
+            let Some(end) = after.find('"') else { break };
+            let candidate = &after[..end];
+            // The program the shim runs is the last quoted path in it; the ones before are the `node.exe` checks.
+            if !candidate.eq_ignore_ascii_case("node.exe") && !candidate.eq_ignore_ascii_case("node") {
+                target = Some(candidate.to_string());
+            }
+            rest = &after[end..];
+        }
+    }
+    let relative = target?;
+    if relative.split(['\\', '/']).any(|part| part == "..") {
+        return None;
+    }
+    let mut path = shim_dir.to_path_buf();
+    for part in relative.split(['\\', '/']).filter(|p| !p.is_empty()) {
+        path.push(part);
+    }
+    if !path.is_file() {
+        return None;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "exe" => Some((path, vec![])),
+        "js" | "cjs" | "mjs" => {
+            let beside = shim_dir.join("node.exe");
+            let node = if beside.is_file() { beside } else { locate("node").unwrap_or_else(|| PathBuf::from("node")) };
+            Some((node, vec![path.to_string_lossy().to_string()]))
+        }
+        _ => None,
+    }
 }
 
 /// Splits a byte stream into lines, keeping at most `MAX_LINE` of each.
@@ -239,7 +293,7 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     let (program, mut pre_args) = command_for(&spec.program);
     pre_args.extend(spec.args.iter().cloned());
     let mut cmd = tokio::process::Command::new(&program);
-    cmd.args(&pre_args).current_dir(&spec.cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    cmd.args(&pre_args).current_dir(&spec.cwd).stdin(if spec.stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() }).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     for key in &spec.remove_env {
         cmd.env_remove(key);
     }
@@ -252,6 +306,14 @@ pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>
     let tree = Arc::new(ProcessTree::attach(&child)?);
     if let Some(r) = &registry {
         r.add(&tree);
+    }
+    if let (Some(text), Some(mut input)) = (spec.stdin.clone(), child.stdin.take()) {
+        // Written on its own task: an engine that answers before it has read everything mustn't block on a full pipe.
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = input.write_all(text.as_bytes()).await;
+            let _ = input.shutdown().await;
+        });
     }
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -389,4 +451,42 @@ pub fn locate(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // What npm (cmd-shim) writes to %APPDATA%\npm\claude.cmd for a package whose bin is an .exe, and for one whose bin is a
+    // Node script.
+    const EXE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+    const JS_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.js\" %*\r\n";
+
+    #[test]
+    fn npm_shims_run_their_target_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let (program, pre) = npm_shim_target(EXE_SHIM, dir.path()).expect("the exe shim resolves");
+        assert_eq!(program, exe);
+        assert!(pre.is_empty());
+
+        let script = dir.path().join("node_modules/opencode-ai/bin/opencode.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, b"").unwrap();
+        std::fs::write(dir.path().join("node.exe"), b"").unwrap();
+        let (program, pre) = npm_shim_target(JS_SHIM, dir.path()).expect("the script shim resolves");
+        assert_eq!(program, dir.path().join("node.exe"));
+        assert_eq!(pre, vec![script.to_string_lossy().to_string()]);
+    }
+
+    #[test]
+    fn other_batch_files_are_left_to_cmd() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(npm_shim_target("@echo off\r\necho hi %*\r\n", dir.path()).is_none());
+        // A shim whose target isn't there, or that climbs out of its folder, isn't followed.
+        assert!(npm_shim_target(EXE_SHIM, dir.path()).is_none());
+        assert!(npm_shim_target("\"%dp0%\\..\\..\\evil.exe\" %*", dir.path()).is_none());
+    }
 }

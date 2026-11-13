@@ -171,11 +171,9 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
         args.push("--resume".into());
         args.push(session.clone());
     }
-    args.push("--".into());
-    args.push(prompt);
     let cancel = Cancel::new();
     h.coding_procs.lock().unwrap().insert(run.id.clone(), cancel.clone());
-    let spec = Spec { program, args, env: vec![("NO_COLOR".into(), "1".into())], remove_env: vec!["CLAUDECODE".into(), "CLAUDE_CODE_ENTRYPOINT".into()], cwd: folder.clone(), limit: Duration::from_secs(3600), format: Format::Claude };
+    let spec = Spec { program, args, env: vec![("NO_COLOR".into(), "1".into())], remove_env: vec!["CLAUDECODE".into(), "CLAUDE_CODE_ENTRYPOINT".into()], cwd: folder.clone(), limit: Duration::from_secs(3600), format: Format::Claude, stdin: Some(prompt) };
     let outcome = engine::run(spec, cancel.clone(), Some(h.registry.clone()), |_| {}).await;
     h.coding_procs.lock().unwrap().remove(&run.id);
     if cancel.is_cancelled() {

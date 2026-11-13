@@ -262,7 +262,14 @@ async function renderConnectors(refresh = false) {
     const small = c.status === "failed" ? `<small class="w-bad">${esc(c.reason || "Not answering")}${c.lastConnected ? ` · worked ${ago(c.lastConnected)} ago` : ""}</small>`
       : c.status === "needsSignIn" ? `<small class="w-ask">Sign in so bots can use it</small>` : `<small>${esc(c.target)}</small>`;
     const act = c.status === "needsSignIn" ? `<button class="btn pri sm" data-signin="${esc(c.name)}">Sign in</button>` : c.status === "failed" ? `<button class="btn sm" data-refresh>Try again</button>` : "";
-    return `<div class="crow"><span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(kind === "ok" ? "ok" : kind === "needs" ? "needs" : kind === "failed" ? "failed" : "none")}</span><span class="tx"><b>${esc(c.name)}</b>${small}</span>${TP.pill(kind, word)}<span class="act">${act}</span></div>`;
+    // Who may use it: a bot only gets a connector's tools when it's switched on here (the Mac app's per-bot apps).
+    const server = c.server || c.name;
+    const who = state.bots.filter((b) => b.enabled !== false).map((b) => {
+      const on = (b.apps || []).includes(server);
+      return `<button type="button" class="btn sm${on ? " pri" : ""}" data-app="${esc(server)}" data-botapp="${esc(b.id)}" aria-pressed="${on}">${esc(b.name)}</button>`;
+    }).join("");
+    return `<div class="crow"><span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(kind === "ok" ? "ok" : kind === "needs" ? "needs" : kind === "failed" ? "failed" : "none")}</span><span class="tx"><b>${esc(c.name)}</b>${small}</span>${TP.pill(kind, word)}<span class="act">${act}</span></div>`
+      + `<div class="apps-for"><span class="muted">Bots that can use it</span>${who}</div>`;
   }).join("");
   $("#pane").innerHTML = `<div class="column"><div><h1>Connectors</h1><p class="muted">The apps Claude Code can reach for your bots. Checked ${ago(r.result.checked)} ago.</p>`
     + `<div class="pills">${TP.pill("ok", `${n("connected")} connected`)}${n("needsSignIn") ? TP.pill("needs", `${n("needsSignIn")} need sign-in`) : ""}${n("failed") ? TP.pill("failed", `${n("failed")} can't connect`) : ""}<button class="btn sm" data-refresh>Check again</button></div></div>`
@@ -270,6 +277,15 @@ async function renderConnectors(refresh = false) {
     + `<div id="signin-help"></div></div>`;
   sigs.connectors = true;
   $("#pane").querySelectorAll("[data-refresh]").forEach((b) => b.onclick = () => { b.disabled = true; renderConnectors(true); });
+  $("#pane").querySelectorAll("[data-botapp]").forEach((b) => b.onclick = async () => {
+    const bot = state.bots.find((x) => x.id === b.dataset.botapp);
+    if (!bot) return;
+    const apps = (bot.apps || []).filter((a) => a !== b.dataset.app);
+    if (b.getAttribute("aria-pressed") !== "true") apps.push(b.dataset.app);
+    await invoke({ cmd: "botUpdate", id: bot.id, apps });
+    state = (await invoke({ cmd: "botsState" })).result || state;
+    renderConnectors();
+  });
   $("#pane").querySelectorAll("[data-signin]").forEach((b) => b.onclick = () => {
     $("#signin-help").innerHTML = `<div class="tc ask"><div class="tc-h"><span class="app">${esc(b.dataset.signin.slice(0, 1))}${TP.badge("needs")}</span><span class="who"><b>${esc(b.dataset.signin)}</b> · Connector</span>${TP.pill("needs", "Needs sign-in")}</div>`
       + `<div class="tc-q">Sign in to ${esc(b.dataset.signin)}</div><p>claude.ai connectors sign in on claude.ai; others sign in from Claude Code's own <code>/mcp</code> menu. Then check again.</p>`
@@ -303,8 +319,15 @@ async function renderSettings() {
   const g = gw.result;
   $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><h2>Health check</h2><div class="list">${rows}</div>`
     + `<h2>Local API</h2><div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`
-    + `<h2>This computer</h2><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
+    + `<h2>This computer</h2><div class="list" id="login-row"></div><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
   $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettings(); };
+  // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
+  const drawLogin = (on) => {
+    if (typeof on !== "boolean" || !$("#login-row")) return;
+    $("#login-row").innerHTML = `<div class="crow"><span class="tx"><b>Open Theo when you sign in</b><small style="white-space:normal">Theo starts in the tray, so routines run without you opening it. Closing the window keeps Theo running; quit it from the tray icon.</small></span>${TP.pill(on ? "ok" : "none", on ? "On" : "Off")}<span class="act"><button class="btn sm" id="login-toggle">${on ? "Turn off" : "Turn on"}</button></span></div>`;
+    $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
+  };
+  window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
 }
 
 /* ---------------- the loop ---------------- */
@@ -426,7 +449,7 @@ function notifyChanges() {
       try { localStorage.setItem("theo.notified", JSON.stringify([...notified].slice(-200))); } catch (e) {}
       if (document.hasFocus() && view.kind === "bot" && view.id === f.id) continue;
       const title = `${nameOf(f.id)} ${f.state === "needs" ? "needs you" : "failed"}`;
-      window.__TAURI__.core.invoke("notify", { title, body: f.detail || f.word }).catch(() => {});
+      window.__TAURI__.core.invoke("notify", { title, body: f.detail || f.word }).then(() => console.info("theo-notified", title)).catch((e) => console.error("theo-notify-failed", title, String(e)));
     }
   }
   prevFaces = now;

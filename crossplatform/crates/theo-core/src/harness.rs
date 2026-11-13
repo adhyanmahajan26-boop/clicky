@@ -192,6 +192,8 @@ impl Harness {
         if ended > 0 {
             eprintln!("[theo] ended {ended} engine(s) left running by the last session");
         }
+        // Turn folders a crash left behind.
+        let _ = std::fs::remove_dir_all(self.paths.turns_dir());
         self.load();
         self.settle_stale_routine_runs();
         let me = self.clone();
@@ -430,6 +432,10 @@ impl Harness {
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.push(self.reach_note(bot));
+        if !bot.apps.is_empty() {
+            let names: Vec<String> = bot.apps.iter().map(|a| a.strip_prefix("claude.ai ").unwrap_or(a).to_string()).collect();
+            parts.push(format!("Apps you can use: {}. Their tools are yours to call when the owner's request needs them; any other app's tools are off for you.", names.join(", ")));
+        }
         let memory_file = self.paths.memory_file(&bot.id);
         let memory = std::fs::read_to_string(&memory_file).unwrap_or_default();
         parts.push(prompts::memory_section(&memory, &memory_file.to_string_lossy()));
@@ -991,12 +997,18 @@ impl Harness {
         let _ = std::fs::create_dir_all(&workspace);
         let _ = std::fs::create_dir_all(self.paths.memory_dir(&bot.id));
         let mut new_session = None;
+        // This turn's own folder for the system prompt the engine reads; removed when the turn ends, however it ends.
+        let turn_folder = TurnFolder(self.paths.turns_dir().join(uuid::Uuid::new_v4().to_string()));
+        let mut stdin = None;
         let args = if is_claude {
             if session.is_none() {
                 new_session = Some(uuid::Uuid::new_v4().to_string());
             }
             let persona = self.persona(bot);
-            crate::policy::claude_args(&self.paths, bot, model, &persona, prompt, session.as_deref(), new_session.as_deref(), readable, recall)
+            let persona_file = turn_folder.0.join("system-prompt.md");
+            std::fs::create_dir_all(&turn_folder.0).and_then(|_| std::fs::write(&persona_file, persona.as_bytes())).map_err(|e| RunError::Failed(format!("Couldn't write the bot's instructions for its engine: {e}")))?;
+            stdin = Some(prompt.to_string());
+            crate::policy::claude_args(&self.paths, bot, model, &persona_file, session.as_deref(), new_session.as_deref(), readable, recall)
         } else {
             let mut a: Vec<String> = vec!["run".into(), "-m".into(), model.into(), "--format".into(), "json".into(), "--dir".into(), workspace.to_string_lossy().to_string()];
             if let Some(s) = &session {
@@ -1015,6 +1027,7 @@ impl Harness {
             cwd: workspace,
             limit: Duration::from_secs_f64(self.settings.turn_limit_seconds()),
             format: if is_claude { Format::Claude } else { Format::OpenCode },
+            stdin,
         };
         let cancel = Cancel::new();
         if self.with(|s| s.stopped.contains(&bot.id)) {
@@ -2058,7 +2071,7 @@ impl Harness {
                 "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
                 "exchanges": s.live_exchanges.iter().map(|(id, e)| json!({"id": id, "from": e.sender, "to": e.target, "room": e.room, "replying": e.replying})).collect::<Vec<_>>(),
                 "threads": threads,
-                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description})).collect::<Vec<_>>(),
+                "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps})).collect::<Vec<_>>(),
                 "groups": s.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "head": g.head_id, "members": g.member_ids})).collect::<Vec<_>>(),
                 "rounds": s.rounds.keys().collect::<Vec<_>>(),
                 "queued": s.queues.iter().filter(|(_, q)| !q.is_empty()).map(|(k, q)| (k.clone(), q.len())).collect::<HashMap<_, _>>(),
@@ -2099,4 +2112,13 @@ pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
     };
     let lines: Vec<String> = sorted.iter().map(|f| format!("{} **{}**: {}", match f.0.as_str() { "fail" => "✗", "warn" => "!", _ => "✓" }, f.1, f.2)).collect();
     format!("{head}\n\n{}", lines.join("\n"))
+}
+
+/// A bot turn's folder under Turns/, removed when the turn is over.
+struct TurnFolder(PathBuf);
+
+impl Drop for TurnFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

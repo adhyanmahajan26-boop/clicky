@@ -32,10 +32,19 @@ def arg_after(flag):
 
 model = arg_after("--model") or arg_after("-m") or ""
 system = arg_after("--append-system-prompt") or ""
-prompt = args[-1] if args else ""
+system_file = arg_after("--append-system-prompt-file")
+if system_file:
+    # As Claude Code does: the file is read once, at the start.
+    with open(system_file, encoding="utf-8") as f:
+        system = f.read()
+is_opencode = bool(args) and args[0] == "run"
+if not is_opencode and "-p" in args and "--" not in args:
+    # `claude -p` with no prompt argument reads the prompt from standard input, as Theo now sends it.
+    prompt = sys.stdin.buffer.read().decode("utf-8")
+else:
+    prompt = args[-1] if args else ""
 resume = "--resume" in args or "-s" in args
 coding = "bypassPermissions" in args
-is_opencode = bool(args) and args[0] == "run"
 pgid = os.getpgid(0) if not WIN else None
 
 

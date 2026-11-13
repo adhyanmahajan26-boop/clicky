@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const IRREVERSIBLE: [&str; 8] = ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill", "Agent", "Task"];
 
-pub fn allowed_tools(paths: &Paths, bot_id: &str, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
+pub fn allowed_tools(paths: &Paths, bot_id: &str, apps: &[String], readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
     let memory = format!("{}/**", rule_path(&paths.memory_dir(bot_id)));
     let projects = format!("{}/**", rule_path(&paths.projects_dir()));
     let mut tools = vec!["WebSearch".to_string(), "WebFetch".to_string(), format!("Edit({memory})"), format!("Write({memory})")];
@@ -28,6 +28,14 @@ pub fn allowed_tools(paths: &Paths, bot_id: &str, readable: &[PathBuf], recall: 
         let rule = rule_path(file);
         tools.push(format!("Read({rule})"));
         tools.push(format!("Grep({rule})"));
+    }
+    // The connectors the owner gave this bot (Connectors page), each by its server's name in `claude mcp list`.
+    for app in apps {
+        if let Some(rule) = crate::connectors::tool_rule(app) {
+            if !tools.contains(&rule) {
+                tools.push(rule);
+            }
+        }
     }
     tools
 }
@@ -59,7 +67,7 @@ pub fn secret_read_rules(paths: &Paths, recall: &[PathBuf]) -> Vec<String> {
             }
         }
     }
-    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
+    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), format!("{root}/Turns/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
     denied.into_iter().map(|p| format!("Read({p})")).collect()
 }
 
@@ -77,14 +85,16 @@ pub fn other_bots_folders(paths: &Paths, bot_id: &str) -> Vec<String> {
     out
 }
 
-/// The whole argument list for a Claude Code bot turn.
-pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona: &str, prompt: &str, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
-    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model, "--permission-mode", "dontAsk", "--append-system-prompt", persona]
+/// The whole argument list for a Claude Code bot turn. The bot's system prompt is read from `persona_file` and the owner's
+/// message goes in on standard input: both can be long and many lines, and Windows can't carry that on a command line.
+pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona_file: &Path, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
+    let persona_file = persona_file.to_string_lossy().to_string();
+    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model, "--permission-mode", "dontAsk", "--append-system-prompt-file", &persona_file]
         .iter()
         .map(|s| s.to_string())
         .collect();
     args.push("--allowedTools".into());
-    args.extend(allowed_tools(paths, &bot.id, readable, recall));
+    args.extend(allowed_tools(paths, &bot.id, &bot.apps, readable, recall));
     args.push("--disallowedTools".into());
     args.extend(IRREVERSIBLE.iter().map(|s| s.to_string()));
     args.extend(secret_read_rules(paths, recall));
@@ -107,8 +117,6 @@ pub fn claude_args(paths: &Paths, bot: &crate::model::Bot, model: &str, persona:
         }
         _ => {}
     }
-    args.push("--".into());
-    args.push(prompt.into());
     args
 }
 
