@@ -219,7 +219,7 @@ enum BotMemory {
 
     /// Written at launch, so it always matches this build's rules. Only rewritten when it changed.
     static func writeGuide(owner: String) {
-        let text = HarnessGuide.markdown(owner: owner)
+        let text = HarnessGuide.markdown(owner: owner, projectsFolder: BotsT3.projectsWords)
         if (try? String(contentsOf: guideFile, encoding: .utf8)) != text { try? text.write(to: guideFile, atomically: true, encoding: .utf8) }
     }
 
