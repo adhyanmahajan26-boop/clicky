@@ -13,6 +13,8 @@ on:
       - "leanring-buddyTests/**"
       - "Packages/**"
       - "leanring-buddy.xcodeproj/**"
+      - "Tools/build-connectors-helper.sh"
+      - "crossplatform/crates/theo-connectors/**"
       - ".github/workflows/mac.yml"
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - "leanring-buddyTests/**"
       - "Packages/**"
       - "leanring-buddy.xcodeproj/**"
+      - "Tools/build-connectors-helper.sh"
+      - "crossplatform/crates/theo-connectors/**"
       - ".github/workflows/mac.yml"
   workflow_dispatch:
 
