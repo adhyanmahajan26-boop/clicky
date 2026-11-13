@@ -62,6 +62,8 @@ struct CategoryScreen: View {
     @State private var reporting = false
     @State private var editingLook = false
     @State private var pickingLeader = false
+    /// The New bot sheet, opened from this page: the bot it makes joins this team.
+    @State private var makingNewBot = false
 
     private static let symbols = ["person.3.fill", "person.2.fill", "folder.fill", "briefcase.fill", "envelope.fill", "hammer.fill", "chart.line.uptrend.xyaxis", "paintbrush.fill",
                                   "megaphone.fill", "book.fill", "house.fill", "sparkles", "dollarsign.circle.fill", "graduationcap.fill"]
@@ -280,6 +282,8 @@ struct CategoryScreen: View {
                 Text("Members").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 Spacer()
                 Menu {
+                    Button("Make a new bot…") { makingNewBot = true }
+                    Divider()
                     if others.isEmpty { Text("Every bot is already here") }
                     ForEach(others) { bot in Button(bot.name) { store.addMember(bot.id, to: sectionID) } }
                 } label: {
@@ -294,12 +298,27 @@ struct CategoryScreen: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
                 ForEach(members) { bot in memberCard(bot, isLeader: section.leaderID == bot.id) }
                 if members.isEmpty {
-                    Text("Add bots with “Add bot”, or drag them onto this category in the sidebar.")
-                        .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
-                        .frame(maxWidth: .infinity, minHeight: 90)
-                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+                    VStack(spacing: 10) {
+                        Text("Make a new bot for this team, add one you have with “Add bot”, or drag one onto this category in the sidebar.")
+                            .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
+                            .multilineTextAlignment(.center)
+                        Button { makingNewBot = true } label: {
+                            Label("Make a new bot", systemImage: "plus")
+                        }
+                        .buttonStyle(.theoSecondary).pointerCursor()
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, minHeight: 90)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                 }
+            }
+        }
+        .sheet(isPresented: $makingNewBot) {
+            NewBotSheet(store: store, joiningTeamName: section.name) { newBot in
+                // The bot lands in this team, and the page stays put so it shows up under Members straight away.
+                if let newBot { store.addMember(newBot.id, to: sectionID) }
+                makingNewBot = false
             }
         }
     }

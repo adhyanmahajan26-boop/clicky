@@ -205,6 +205,8 @@ enum BotModels {
 
 struct NewBotSheet: View {
     @ObservedObject var store: BotsStore
+    /// Set when the sheet was opened from a team page: the new bot joins that team once it's made.
+    var joiningTeamName: String? = nil
     let onDone: (NativeBot?) -> Void
     @State private var stencil: BotStencil?
     @State private var name = ""
@@ -240,7 +242,8 @@ struct NewBotSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("New bot").font(.system(size: 20, weight: .semibold))
-                Text("Pick a starting point. Everything can be changed before and after you create it.")
+                Text(joiningTeamName.map { "Pick a starting point. It joins \($0) once it's made, and everything can be changed before and after." }
+                     ?? "Pick a starting point. Everything can be changed before and after you create it.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
