@@ -185,6 +185,10 @@ struct BotInspector: View {
                 if on { draft?.apps.append(id) } else { draft?.apps.removeAll { $0 == id } }
                 commit()
             }
+            AppLevelRows(bot: bot) { appID, level in
+                draft?.appLevels = AppLevelRows.levels(draft?.appLevels, setting: appID, to: level)
+                commit()
+            }
         }
     }
 

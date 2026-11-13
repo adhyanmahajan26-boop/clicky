@@ -120,6 +120,7 @@
 				28F22CBC2F56440300A0FC59 /* Frameworks */,
 				28F22CBD2F56440300A0FC59 /* Resources */,
 				8A9D38ADB0EBB70F34029216 /* Stamp Git SHA */,
+				C0EC70A5B1D24E6F8A9B0C11 /* Connector helper */,
 			);
 			buildRules = (
 			);
@@ -274,6 +275,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# Stamps the git commit into the built Info.plist so the running app can report exactly which code it is.\nSHA=$(git -C \"$SRCROOT\" rev-parse HEAD 2>/dev/null || echo unknown)\nif [ -n \"$(git -C \"$SRCROOT\" status --porcelain --untracked-files=no 2>/dev/null)\" ]; then SHA=\"$SHA-dirty\"; fi\nPLIST=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\n/usr/libexec/PlistBuddy -c \"Delete :ClickyGitSHA\" \"$PLIST\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Add :ClickyGitSHA string $SHA\" \"$PLIST\"\n";
+		};
+		C0EC70A5B1D24E6F8A9B0C11 /* Connector helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Connector helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Builds theo-connectors (crossplatform/crates/theo-connectors) into Contents/Helpers and signs it before Xcode signs the app.\n# Without Rust it only warns: Theo then reaches apps through Claude Code, as before the hub.\n/bin/bash \"$SRCROOT/Tools/build-connectors-helper.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

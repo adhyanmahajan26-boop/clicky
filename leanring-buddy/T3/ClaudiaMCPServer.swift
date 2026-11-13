@@ -25,7 +25,9 @@ enum ClaudiaMCPServer {
         let required: [String]
     }
 
-    static let tools: [Tool] = [
+    static var tools: [Tool] { baseTools.map { $0.name == "claudia_app" && ConnectorHub.isAvailable ? HubAppBridge.toolDescription() : $0 } }
+
+    static let baseTools: [Tool] = [
         Tool(name: "claudia_ask",
              description: "Hand a request to Theo, the user's on-screen companion on this Mac. She looks at the user's screens and answers with her own brain: spoken out loud, with numbered marks on the real screen, a whiteboard for concepts, background research with Haiku agents, or actions (open apps and sites, search, click, type, highlight an article). Use it for anything to do with the user's screen or for explaining something visually. Returns her answer's words.",
              properties: ["text": ["type": "string", "description": "What to ask or tell Theo, in plain words (as the user would say it)."],
@@ -136,6 +138,12 @@ enum ClaudiaMCPServer {
         case "claudia_attachments": command = ["cmd": "attachments"]
         case "claudia_status": command = ["cmd": "status"]
         case "claudia_app":
+            // Theo's own connector hub when this build has it (no Claude Code needed); else the Haiku lookup from before the hub.
+            if ConnectorHub.isAvailable {
+                let answer = HubAppBridge.run(app: arguments["app"] as? String ?? "", request: arguments["request"] as? String ?? "",
+                                              tool: arguments["tool"] as? String, toolArguments: arguments["arguments"] as? [String: Any])
+                return text(answer.text, isError: !answer.ok)
+            }
             let answer = ConnectorBridge.run(app: arguments["app"] as? String ?? "", request: arguments["request"] as? String ?? "")
             return text(answer.text, isError: !answer.ok)
         default: return text("Unknown tool \(name).", isError: true)
@@ -239,8 +247,76 @@ enum ClaudiaMCPServer {
     }
 }
 
+/// `claudia_app` on Theo's connector hub: any app the owner added to Theo (not only the six claude.ai ones), for any outside agent
+/// (T3 Code's agents, a bot on another engine), with no Claude Code needed for apps that aren't claude-account ones. Each call gets
+/// its own short ticket that allows reading, plus drafts, exactly what `claudia_app` allowed before: nothing is sent, deleted or
+/// changed beyond a draft.
+enum HubAppBridge {
+    static func toolDescription() -> ClaudiaMCPServer.Tool {
+        let apps = ((try? ConnectorHub.listNow()) ?? []).filter(\.enabled)
+        let names = apps.isEmpty ? "none yet (add them in Theo's Connectors page)" : apps.map { "\($0.id) (\($0.name))" }.joined(separator: ", ")
+        var appProperty: [String: Any] = ["type": "string", "description": "The app's id."]
+        if !apps.isEmpty { appProperty["enum"] = apps.map(\.id) }
+        return ClaudiaMCPServer.Tool(
+            name: "claudia_app",
+            description: "Use one of the apps the user added to Theo: \(names). Give `tool` and `arguments` to run one of the app's tools; " +
+                "call with just `app` to list its tools. Apps through the user's Claude account also take a plain-words `request`. " +
+                "Reading and drafts only: nothing is sent, deleted or changed.",
+            properties: ["app": appProperty,
+                         "request": ["type": "string", "description": "What to find or read, in plain words (apps through a Claude account)."],
+                         "tool": ["type": "string", "description": "One of the app's tools, by name."],
+                         "arguments": ["type": "object", "description": "The tool's arguments."]],
+            required: ["app"])
+    }
+
+    static func run(app requestedApp: String, request: String, tool requestedTool: String?, toolArguments: [String: Any]?) -> (ok: Bool, text: String) {
+        let apps: [HubAppRecord]
+        do { apps = try ConnectorHub.listNow() } catch { return (false, error.localizedDescription) }
+        guard let app = apps.first(where: { $0.id.lowercased() == requestedApp.lowercased() }) else {
+            return (false, "Unknown app \(requestedApp). Use one of: \(apps.map(\.id).joined(separator: ", ")).")
+        }
+        guard app.enabled else { return (false, "\(app.name) is switched off in Theo's Connectors page.") }
+        let tools: [HubTool]
+        do { tools = try ConnectorHub.toolsNow(appID: app.id) } catch { return (false, error.localizedDescription) }
+        let trimmedRequest = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Which tool: the one named, else the plain-words lookup a Claude-account app offers, else the list to pick from.
+        let toolName: String
+        var argumentsToSend = toolArguments ?? [:]
+        if let requestedTool, !requestedTool.isEmpty {
+            guard let match = tools.first(where: { $0.name == requestedTool || $0.exposedName == requestedTool }) else {
+                return (false, "\(app.name) has no tool \(requestedTool). Its tools: \(tools.map(\.name).joined(separator: ", ")).")
+            }
+            toolName = match.name
+        } else if app.isClaudeAccount, !trimmedRequest.isEmpty, tools.contains(where: { $0.name == "ask" }) {
+            toolName = "ask"
+            argumentsToSend = ["request": trimmedRequest]
+        } else {
+            let lines = tools.map { tool in "- \(tool.name) (\(tool.effect)): \(tool.description ?? tool.title ?? "")" }
+            return (true, "\(app.name)'s tools. Call claudia_app again with `tool` and `arguments`:\n" + lines.joined(separator: "\n"))
+        }
+        // Reading, and drafts (the one kind of change claudia_app ever made); the hub refuses anything else.
+        let isDraft = toolName.lowercased().contains("draft") && tools.first(where: { $0.name == toolName })?.effect == "change"
+        let level: HubAccessLevel = isDraft ? .readAndDraft : .read
+        guard JSONSerialization.isValidJSONObject(argumentsToSend),
+              let argumentsData = try? JSONSerialization.data(withJSONObject: argumentsToSend) else { return (false, "Those arguments aren't JSON.") }
+        let ticket: URL
+        do {
+            ticket = try ConnectorHub.issueTicket(botID: "claudia-app", apps: [app.id: level], ownerAsked: true, expiresIn: 300)
+        } catch { return (false, error.localizedDescription) }
+        defer { ConnectorHub.revokeTicket(ticket) }
+        do {
+            let result = try ConnectorHub.callNow(appID: app.id, tool: toolName, argumentsJSON: argumentsData, ticket: ticket)
+            let body = result.text.isEmpty ? String(decoding: result.resultJSON, as: UTF8.self) : result.text
+            return (!result.isError, body)
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+}
+
 /// Lets bots on OpenCode or Grok use the claude.ai connectors (Gmail, Notion, Google) that only Claude Code
-/// can reach: a Haiku run with just that app's reading tools (and Gmail drafts) does the lookup.
+/// can reach: a Haiku run with just that app's reading tools (and Gmail drafts) does the lookup. Used only when this build has no
+/// connector helper; with it, `HubAppBridge` answers.
 enum ConnectorBridge {
     static let apps: [String: [String]] = [
         "gmail": ["search_threads", "get_thread", "get_message", "list_labels", "list_drafts", "get_draft", "create_draft"]
