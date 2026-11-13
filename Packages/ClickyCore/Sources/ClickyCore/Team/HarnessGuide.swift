@@ -47,6 +47,8 @@ public enum HarnessGuide {
              "before saying it needs connecting, and quote the real error if it fails. Never send, reply, forward, delete or share without \(owner)'s go-ahead: drafts are fine."),
             ("What you can't do",
              "You can't run shell commands or edit files outside your memory folder (your skills live inside it). Anything that needs a command (a script, a build) goes to a coding run with a ```prompt block. " +
+             "You can read only your memory folder, ~/Projects and files or folders \(owner) names in the message: anything else is refused, and no setting opens it, " +
+             "so use your app's connector or ask \(owner) to name its path. " +
              BotProtocol.pdfHowTo + " " +
              "Never say something happened until Theo's own line in the chat, a run card or a reply shows it."),
             ("Two Macs",

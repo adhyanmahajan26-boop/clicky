@@ -561,9 +561,13 @@ public struct BotPlaceFacts: Equatable, Sendable {
     /// The other Mac has the hidden screens and the research browser.
     public var otherMacHasScreens: Bool
     public var thisMacHasScreens: Bool
+    /// The bot's engine has file tools (every engine but a plain model API). Then it hears what it may read (BotReadScope),
+    /// so it asks for a path instead of trying a folder its instructions mention and asking the owner to "allow" a tool.
+    public var canReadFiles: Bool
 
     public init(owner: String, thisMac: String, ownerMac: String? = nil, whyHere: String? = nil, codingMac: String? = nil, projects: [String] = [], projectsFolder: String = "~/Projects", ready: [String] = [],
-                otherMac: String? = nil, otherMacConnected: Bool = false, otherMacHasScreens: Bool = false, thisMacHasScreens: Bool = false) {
+                otherMac: String? = nil, otherMacConnected: Bool = false, otherMacHasScreens: Bool = false, thisMacHasScreens: Bool = false, canReadFiles: Bool = true) {
+        self.canReadFiles = canReadFiles
         self.projectsFolder = projectsFolder
         self.owner = owner
         self.thisMac = thisMac
@@ -632,6 +636,11 @@ public enum BotAwareness {
         let more = facts.projects.count - shown.count
         let names = shown.isEmpty ? "none yet" : shown.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
         lines.append("Folders and coding runs from this chat are on the \(facts.codingMac) (\(facts.projectsFolder): \(names)).")
+        if facts.canReadFiles {
+            // BotReadScope: nothing else is readable, and no setting widens it, so the only way in is the owner's own words.
+            lines.append("You can read only your memory folder, \(facts.projectsFolder) and files or folders \(facts.owner) names in the message; " +
+                         "for anything else, use your app's connector or ask \(facts.owner) to name its path.")
+        }
         if !facts.ready.isEmpty { lines.append("Ready on the \(facts.thisMac): \(facts.ready.joined(separator: ", ")).") }
         if let other = facts.otherMac {
             var line = "\(facts.owner)'s other Mac, the \(other), is \(facts.otherMacConnected ? "connected" : "not connected right now")"
