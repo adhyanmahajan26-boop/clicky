@@ -67,6 +67,17 @@ impl Look {
     const TOPS: [&'static str; 14] = ["none", "ball", "twin", "handle", "dish", "flag", "bolt", "hardhat", "cap", "beanie", "beret", "tophat", "crown", "headset"];
     const EXTRAS: [&'static str; 7] = ["none", "bowtie", "tie", "scarf", "bezel", "pencil", "star"];
 
+    /// Every part the app can draw (theo-pixel.js: FIN, TRIMS, EYES, TOPS and HATS, EXTRAS). Anything else would break
+    /// the drawing, or put text of its own into the page.
+    pub fn is_known(&self) -> bool {
+        const KNOWN_TOPS: [&str; 15] = ["none", "ball", "twin", "handle", "dish", "flag", "bolt", "heart", "hardhat", "cap", "beanie", "beret", "tophat", "crown", "headset"];
+        Self::FINS.contains(&self.fin.as_str())
+            && Self::TRIMS.contains(&self.trim.as_str())
+            && Self::EYES.contains(&self.eye.as_str())
+            && KNOWN_TOPS.contains(&self.top.as_str())
+            && Self::EXTRAS.contains(&self.extra.as_str())
+    }
+
     /// Theo's own face, and a stable one for any other bot from its id. No finish or trim is a status colour.
     pub fn for_bot(id: &str) -> Look {
         if id == "theo" {
@@ -324,5 +335,25 @@ pub mod dm {
         let rest = name.strip_prefix("dm-")?;
         let id = format!("{}{}", PREFIX, rest);
         members(&id).map(|_| id)
+    }
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    #[test]
+    fn every_picked_look_is_one_the_app_can_draw() {
+        for id in ["theo", "a", "researcher", "bot-42", "Ünïcode"] {
+            assert!(Look::for_bot(id).is_known(), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_look_with_unknown_parts_is_refused() {
+        let good = Look::for_bot("x");
+        assert!(!Look { trim: "#FFF\"><b>".into(), ..good.clone() }.is_known());
+        assert!(!Look { fin: "gold".into(), ..good.clone() }.is_known());
+        assert!(!Look { top: "<img>".into(), ..good }.is_known());
     }
 }

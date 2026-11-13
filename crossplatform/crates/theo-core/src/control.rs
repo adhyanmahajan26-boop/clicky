@@ -127,6 +127,8 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         "botLook" => {
             let Some(mut bot) = s(cmd, "id").and_then(|id| h.bot(&id)) else { return err("No such bot.") };
             let Ok(look) = serde_json::from_value::<Look>(cmd.get("look").cloned().unwrap_or_default()) else { return err("Needs a look.") };
+            // The app draws a look straight into its page, so only the parts it knows are kept.
+            if !look.is_known() { return err("That look has a part Theo doesn't know.") };
             bot.look = Some(look);
             h.save_bot(bot);
             ok(json!({"saved": true}))

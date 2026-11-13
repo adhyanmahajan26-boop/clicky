@@ -1285,6 +1285,30 @@ def s06():
     return ok, {"first": [(c["name"], c["status"]) for c in r1], "notion_later": r2[0]}
 
 
+@test("S08", "Three connector checks at once start one claude mcp list, and each gets its answer", "connectors")
+def s08():
+    import threading
+    (T.FAKE_DIR / "fake-mcp").write_text("claude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\n", encoding="utf-8")
+    (T.FAKE_DIR / "fake-mcp-sleep").write_text("3", encoding="utf-8")
+    mark = T.calls_mark()
+    answers = []
+    def ask():
+        r = P({"cmd": "connectors", "refresh": True}, timeout=60)
+        answers.append([c["name"] for c in r.get("result", {}).get("connectors", [])])
+    try:
+        threads = [threading.Thread(target=ask) for _ in range(3)]
+        for t in threads:
+            t.start()
+            time.sleep(0.3)
+        for t in threads:
+            t.join(90)
+    finally:
+        (T.FAKE_DIR / "fake-mcp-sleep").unlink(missing_ok=True)
+    lists = [c for c in T.calls(mark) if c.get("args", [])[:2] == ["mcp", "list"]]
+    ok = len(lists) == 1 and len(answers) == 3 and all(a == ["Notion"] for a in answers)
+    return ok, {"mcp_list_runs": len(lists), "answers": answers}
+
+
 @test("S07", "A [CHOOSE:] question is yellow until the owner answers", "cards")
 def s07():
     b = fresh_bot("Choosy")

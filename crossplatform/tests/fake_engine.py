@@ -131,6 +131,8 @@ if args[:2] == ["auth", "status"]:
     print(json.dumps({"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none", "subscriptionType": "max" if signed_in else None}))
     sys.exit(0 if signed_in else 1)
 if args[:2] == ["mcp", "list"]:
+    # A real check starts every server and can take seconds.
+    time.sleep(float(read("fake-mcp-sleep", "0") or 0))
     sys.stdout.write(read("fake-mcp", "Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\n"))
     sys.exit(0)
 
