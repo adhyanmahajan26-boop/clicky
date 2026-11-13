@@ -99,8 +99,9 @@ pub fn describe(h: &Harness, inventory_agents: &[Value]) -> Value {
     let chosen = pick(picked.as_deref(), &agents);
     let target = chosen.as_ref().map(|(id, _)| id.clone());
     let ready = target.as_ref().map(|id| agents.iter().any(|agent| &agent.id == id && agent.ready)).unwrap_or(false);
+    let runs_on_key = target.as_ref().map(|id| inventory_agents.iter().any(|agent| agent["id"].as_str() == Some(id.as_str()) && agent["runsOnKey"].as_bool() == Some(true))).unwrap_or(false);
     json!({
-        "target": target, "label": target.as_deref().map(crate::brains::label), "ready": ready, "picked": picked,
+        "target": target, "label": target.as_deref().map(crate::brains::label), "ready": ready, "runsOnKey": runs_on_key, "picked": picked,
         "pickedMissing": chosen.as_ref().map(|(_, fell_back)| *fell_back).unwrap_or(picked.is_some()),
         "choices": CODING_AGENTS.iter().map(|id| json!({"id": id, "label": crate::brains::label(id)})).collect::<Vec<_>>(),
     })
@@ -404,7 +405,13 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
     // A signed-out agent works on the owner's saved key, the Mac's "use my API key". A signed-in one keeps its subscription.
     let signed_in = crate::brains::signed_in(&h, &agent, &program).await;
     if signed_in == Some(false) {
-        env.extend(crate::brains::agent_key_environment(&h, &agent));
+        let keys = crate::brains::agent_key_environment_for_model(&h, &agent, model.as_deref());
+        if !keys.is_empty() {
+            // Paid API use, so the owner hears it: which key, never the key.
+            let providers = crate::brains::key_provider_labels(&agent, &keys).join(" and ");
+            h.post(ChatMessage::note(format!("{label} is signed out here, so \"{}\" uses your saved {providers} key, which your provider bills you for.", run.title)), &run.room);
+        }
+        env.extend(keys);
     }
     let cancel = Cancel::new();
     h.coding_procs.lock().unwrap().insert(run.id.clone(), cancel.clone());

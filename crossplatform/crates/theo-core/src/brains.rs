@@ -116,10 +116,56 @@ pub fn agent_key_variables(agent_id: &str) -> &'static [(&'static str, &'static 
 /// The owner's saved keys an agent can use, as environment variables. Only for an agent that isn't signed in: a key handed
 /// to a signed-in agent would move its work from the owner's subscription to paid API use.
 pub fn agent_key_environment(harness: &Harness, agent_id: &str) -> Vec<(String, String)> {
+    agent_key_environment_for_model(harness, agent_id, None)
+}
+
+/// The provider an OpenCode model id names (`anthropic/claude-…`), in Theo's provider ids. `opencode/…` is OpenCode's own
+/// (its free models need no key).
+fn opencode_model_provider(model: &str) -> Option<&'static str> {
+    let prefix = model.split_once('/')?.0;
+    Some(match prefix {
+        "anthropic" => "anthropic",
+        "openai" => "openai",
+        "google" | "gemini" => "gemini",
+        "xai" => "xai",
+        "groq" => "groq",
+        "openrouter" => "openrouter",
+        "mistral" => "mistral",
+        "deepseek" => "deepseek",
+        "togetherai" | "together" => "together",
+        "fireworks" | "fireworks-ai" => "fireworks",
+        "cerebras" => "cerebras",
+        _ => return None,
+    })
+}
+
+/// The same, for a run on `model`: OpenCode only gets the key of the provider that model is on (none for its own models),
+/// so a run never carries more keys than it needs. With no model named, every key it reads.
+pub fn agent_key_environment_for_model(harness: &Harness, agent_id: &str, model: Option<&str>) -> Vec<(String, String)> {
+    let only_provider: Option<Option<&str>> = match (agent_id, model) {
+        ("opencode", Some(model)) => Some(opencode_model_provider(model)),
+        _ => None,
+    };
     agent_key_variables(agent_id)
         .iter()
+        .filter(|(provider, _)| only_provider.map(|only| only == Some(*provider)).unwrap_or(true))
         .filter_map(|(provider, variable)| api_key(harness, provider).map(|key| (variable.to_string(), key)))
         .collect()
+}
+
+/// The names of the providers whose saved keys `environment` carries ("OpenAI"), for saying which key a run is on. Never
+/// the key itself.
+pub fn key_provider_labels(agent_id: &str, environment: &[(String, String)]) -> Vec<String> {
+    let mut labels: Vec<String> = vec![];
+    for (provider, variable) in agent_key_variables(agent_id) {
+        if environment.iter().any(|(name, _)| name == variable) {
+            let label = KNOWN_PROVIDERS.iter().find(|known| known.id == *provider).map(|known| known.label).unwrap_or(provider).to_string();
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    labels
 }
 
 /// How a model API takes requests: Anthropic's Messages API, or the OpenAI-style chat endpoint everyone else offers.
@@ -513,6 +559,14 @@ mod tests {
         assert!(is_known_engine("api:anthropic"));
         assert!(!is_known_engine("api:nobody"));
         assert!(!is_known_engine("api:"));
+    }
+
+    #[test]
+    fn a_run_on_a_key_names_the_provider_never_the_key() {
+        let environment = vec![("OPENAI_API_KEY".to_string(), "sk-secret".to_string()), ("CODEX_API_KEY".to_string(), "sk-secret".to_string())];
+        assert_eq!(key_provider_labels("codex", &environment), vec!["OpenAI".to_string()]);
+        assert_eq!(opencode_model_provider("anthropic/claude-haiku-5-5"), Some("anthropic"));
+        assert_eq!(opencode_model_provider("opencode/deepseek-v4.1-flash-free"), None);
     }
 
     #[test]

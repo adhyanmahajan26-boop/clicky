@@ -56,8 +56,9 @@ Coding runs use any coding agent, none required (`coding.rs`, the Mac's `Harness
 owner's pick in Settings › Coding runs (`coding.target`) when it's installed here, else the first one ready in the Mac's order
 (Claude Code, Codex, Cursor Agent, OpenCode, Grok, Gemini CLI), else the first one installed. "Ready" is signed in, or signed
 out with a saved API key the agent reads (Claude Code `ANTHROPIC_API_KEY`, Codex `OPENAI_API_KEY`/`CODEX_API_KEY`, Grok
-`XAI_API_KEY`, Gemini CLI `GEMINI_API_KEY`, OpenCode every provider's), which is then handed to it for the run; a signed-in
-agent never gets a key, so its work stays on the subscription. With no agent at all the run fails with what to install.
+`XAI_API_KEY`, Gemini CLI `GEMINI_API_KEY`, OpenCode only the key of its model's provider), which is then handed to it for
+the run and the chat says so ("Codex is signed out here, so … uses your saved OpenAI key"), as do Setup and Settings; a
+signed-in agent never gets a key, so its work stays on the subscription. With no agent at all the run fails with what to install.
 The coding model and effort (`coding.model`, `coding.effort`) are for the picked agent (Claude Code when none is picked);
 any other agent runs on its own default. Each runs headless with write access in the run's folder:
 

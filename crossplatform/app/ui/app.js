@@ -426,14 +426,14 @@ async function renderSettings() {
 function codingRowHTML(c, row) {
   if (!c) return "";
   if (!c.target) return row("Coding agent", "&lt;/&gt;", "None yet: install any coding agent in the Brain step (OpenCode's free models need no account). Chats and routines don't need one.", TP.pill("none", "Not installed"), "");
-  const line = (c.pickedMissing ? "Your pick isn't installed here, so " : "") + `${esc(c.label)} ${c.ready ? "runs the coding" : "will run the coding once it's signed in"}${c.picked ? "" : " (the first one ready; pick another in Settings)"}.`;
-  return row("Coding agent", "&lt;/&gt;", line, c.ready ? TP.pill("ok", "Ready") : TP.pill("needs", "Signed out"), "");
+  const line = (c.pickedMissing ? "Your pick isn't installed here, so " : "") + `${esc(c.label)} ${c.runsOnKey ? "runs the coding on your saved API key (it's signed out), which your provider bills you for" : c.ready ? "runs the coding" : "will run the coding once it's signed in"}${c.picked ? "" : " (the first one ready; pick another in Settings)"}.`;
+  return row("Coding agent", "&lt;/&gt;", line, c.runsOnKey ? TP.pill("needs", "On your API key") : c.ready ? TP.pill("ok", "Ready") : TP.pill("needs", "Signed out"), "");
 }
 function codingSettingsHTML(c) {
   if (!c) return "";
   const options = [`<option value="auto"${c.picked ? "" : " selected"}>Automatic${!c.picked && c.label ? ` (${esc(c.label)})` : ""}</option>`]
     .concat(c.choices.map((a) => `<option value="${esc(a.id)}"${c.picked === a.id ? " selected" : ""}>${esc(a.label)}</option>`)).join("");
-  const line = c.target ? `${esc(c.label)} ${c.ready ? "does the work" : "will do the work once it's signed in"}${c.pickedMissing ? ", because your pick isn't installed here" : ""}.` : "No coding agent is installed yet. Any one of the agents above will do.";
+  const line = c.target ? `${esc(c.label)} ${c.runsOnKey ? "does the work on your saved API key, since it's signed out (your provider bills you for it)" : c.ready ? "does the work" : "will do the work once it's signed in"}${c.pickedMissing ? ", because your pick isn't installed here" : ""}.` : "No coding agent is installed yet. Any one of the agents above will do.";
   return `<h2>Coding runs</h2><div class="list"><div class="crow"><span class="tx"><b>Coding agent</b><small style="white-space:normal">${line}</small></span><span class="act many"><select id="coding-target" aria-label="Coding agent">${options}</select></span></div></div>`;
 }
 
@@ -455,8 +455,8 @@ function brainsHTML(b) {
   const saved = keyed.filter((a) => a.hasKey);
   const keyRows = saved.map((a) => `<div class="crow"><span class="tx"><b>${esc(a.label)}</b><small>API key saved</small></span>${TP.pill("ok", "Ready")}<span class="act"><button class="btn sm ghost" data-key-remove="${esc(a.id)}">Remove</button></span></div>`).join("");
   const agentRows = b.agents.map((a) => {
-    const pill = a.ready && a.signedIn === true ? TP.pill("ok", "Signed in") : a.ready ? TP.pill("ok", "Installed") : a.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
-    const line = a.ready ? "Thinks with your own subscription." : a.installed ? esc(a.signInHint) : `Install: <code>${esc(a.install)}</code>`;
+    const pill = a.ready && a.signedIn === true ? TP.pill("ok", "Signed in") : a.ready ? TP.pill("ok", "Installed") : a.runsOnKey ? TP.pill("needs", "On your API key") : a.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
+    const line = a.ready ? "Thinks with your own subscription." : a.runsOnKey ? `Signed out: coding runs on it use your saved API key, which your provider bills you for. ${esc(a.signInHint)}` : a.installed ? esc(a.signInHint) : `Install: <code>${esc(a.install)}</code>`;
     const act = a.ready ? "" : a.installed ? `<button class="btn sm" data-term="signin:${esc(a.id)}">Sign in</button>` : `<button class="btn sm" data-term="install:${esc(a.id)}">Install</button>`;
     return `<div class="crow" data-brain="${esc(a.id)}"><span class="tx"><b>${esc(a.label)}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
   }).join("");

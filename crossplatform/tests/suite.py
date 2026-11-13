@@ -1315,7 +1315,7 @@ def t24c():
     return all(checks.values()), dict(checks, run=r, words=words)
 
 
-@test("T24d", "A signed-out agent with a saved key does the run on that key; a signed-in one never gets the key", "coding")
+@test("T24d", "A signed-out agent with a saved key does the run on that key and says so; a signed-in one never gets the key", "coding")
 def t24d():
     T.fake("ok"); work, remote = sandbox_repo()
     try:
@@ -1332,6 +1332,13 @@ def t24d():
         P({"cmd": "uiRunStart", "prompt": "In the current folder create key/%s-b.md containing b. Nothing else." % n, "title": title2, "folder": str(work)})
         r2 = wait_runs(lambda x: x["title"] == title2)[-1]
         key_env = [c.get("keyVars") for c in T.calls(mark) if c.get("coding")]
+        said = [m["text"] for m in T.chat("theo", 30)]
+        key_note = [t for t in said if title2 in t and "signed out" in t and "saved OpenAI key" in t]
+        signed_in_note = [t for t in said if title in t and "saved" in t and "key" in t and title2 not in t]
+        settings = P({"cmd": "brains"}).get("result", {})
+        codex_row = next((a for a in settings.get("agents", []) if a.get("id") == "codex"), {})
+        on_key_shown = codex_row.get("runsOnKey") is True and settings.get("coding", {}).get("runsOnKey") is True
+        everything_said = "\n".join(said)
     finally:
         (T.FAKE_DIR / "fake-auth").write_text("in")
         P({"cmd": "apiKeyRemove", "provider": "openai"})
@@ -1342,8 +1349,12 @@ def t24d():
         "signed_in_got_no_key": bool(signed_in_env) and all(not v for v in signed_in_env),
         "key_run_done": r2["phase"] == "done",
         "key_run_got_the_key": bool(key_env) and all(v == ["CODEX_API_KEY", "OPENAI_API_KEY"] for v in key_env),
+        "chat_said_it_runs_on_the_key": len(key_note) == 1,
+        "nothing_said_for_the_signed_in_run": not signed_in_note,
+        "settings_say_on_your_key": on_key_shown,
+        "key_never_in_the_chat": "sk-test-coding-key" not in everything_said,
     }
-    return all(checks.values()), dict(checks, signed_in_env=signed_in_env, key_env=key_env)
+    return all(checks.values()), dict(checks, signed_in_env=signed_in_env, key_env=key_env, key_note=key_note)
 
 
 # ---------------------------------------------------------------- Pixel faces, cards and connectors (spec sections 3, 6, 7)
