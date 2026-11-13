@@ -2118,8 +2118,8 @@ enum BotPrompts {
         parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
         if bot.owner == nil { parts.append(reachNote(for: bot)) }
         if bot.provider.hasPrefix("api:") {
-            // No file tools on this engine: Theo reads the memory file in for it.
-            parts.append("You run directly on a model API, with no tools: you can't read files, run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
+            // Theo reads the memory file in for it; its tools (its memory folder and its apps) are listed by `APIChatToolbox`.
+            parts.append("You run directly on a model API: you can't run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
         } else if bot.owner != nil {
             // Clicky's team gets what it needs in each job.
             if BotMemory.isClickyMemoryHelper(bot) {

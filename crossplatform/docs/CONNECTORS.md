@@ -83,7 +83,7 @@ and says to use `set-secret`, which reads the value from standard input so it ne
 | `signout <id>` | `{"ok":true,"app":"<id>","status":"needsSignIn"}`. Forgets the tokens and pasted token; keeps the client the hub registered. |
 | `check [<id>]` | `{"ok":true,"apps":[{"id","status","reason","toolCount"}]}`. Reconnects (refreshing a token first if needed) and records the result. All claude-account apps share one `claude mcp list`. |
 | `tools <id>` | `{"ok":true,"app":"<id>","tools":[{"name","exposedName","title"?,"description"?,"inputSchema","effect","readOnly"}]}` |
-| `call <id> <tool> --args '<json>' --ticket <file>` | `{"ok":true,"app":"<id>","tool":"<tool>","result":<MCP CallToolResult>}`. A tool that ran but failed is `ok:true` with `result.isError:true`; a call the ticket doesn't allow is `ok:false`. For API-key bots (package 4). |
+| `call <id> <tool> --args '<json>' --ticket <file>` | `{"ok":true,"app":"<id>","tool":"<tool>","result":<MCP CallToolResult>}`. A tool that ran but failed is `ok:true` with `result.isError:true`; a call the ticket doesn't allow is `ok:false`. For API-key bots: the Mac app's `leanring-buddy/Providers/APIChatTools.swift` lists each app's `tools`, offers the model only those its level allows, and runs each call it makes with the turn's ticket. |
 | `serve --ticket <file>` | An MCP server on standard input and output (see Bot turns). Refuses to start with a missing or expired ticket. |
 | `ticket issue --json '<ticket>'` | `{"ok":true,"ticket":"<file>"}`. Writes the ticket into `tickets/` and clears tickets that expired over an hour ago. |
 | `ticket revoke <file>` | `{"ok":true}`. Deletes it (only ever a file inside `tickets/`). |

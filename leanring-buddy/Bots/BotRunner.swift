@@ -405,7 +405,7 @@ enum BotRunner {
 
     static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                                     ownerAsked: Bool = false, onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
-        if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
+        if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, ownerAsked: ownerAsked, onText: onText) }
         // Theo's connector hub for this turn: a ticket for the bot's apps that go through it (only those, at its level for each),
         // and the hub as an MCP server the brain starts. The ticket is deleted when the turn ends, which stops its apps at once.
         let hubPlan = await ConnectorHub.turnPlan(for: bot, ownerAsked: ownerAsked)
@@ -569,10 +569,11 @@ enum BotRunner {
 }
 
 extension BotRunner {
-    /// A bot on the owner's API key: stoppable like a process, and held to the same time limit.
-    static func runAPI(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    /// A bot on the owner's API key: stoppable like a process, and held to the same time limit. Its tools (memory folder, apps)
+    /// run inside the turn, so the limit covers them too.
+    static func runAPI(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], ownerAsked: Bool,
                        onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
-        let task = Task { try await APIChat.runBot(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
+        let task = Task { try await APIChat.runBot(bot: bot, prompt: prompt, session: session, team: team, ownerAsked: ownerAsked, onText: onText) }
         BotProcesses.shared.setTask(bot.id, task)
         let watchdog = Task.detached {
             try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
