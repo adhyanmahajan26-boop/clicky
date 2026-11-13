@@ -47,7 +47,9 @@ that signature.
 
 The install itself is copy-then-rename beside the destination, so a failure never leaves a
 half-replaced app; on an upgrade the running Theo is asked to quit (SIGTERM, the same way the
-test suites stop it) and is reopened afterwards. `/Applications` is used when it's writable
+test suites stop it) and is reopened afterwards. A `Clicky --mcp` helper (Theo's MCP server, run by
+Claude Code, T3 Code or OpenCode) is left running: it belongs to another session, keeps the old copy until that
+session restarts it, and quitting it would cut that session's tools. `/Applications` is used when it's writable
 without a password (it is for administrator accounts), otherwise `~/Applications`. No `sudo`.
 
 ## Permissions (Accessibility, Screen Recording, Microphone)

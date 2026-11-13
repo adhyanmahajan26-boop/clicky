@@ -286,9 +286,16 @@ choose_dir() {
 }
 
 # Process ids of Theo running from this exact app (any profile).
-running_pids() { # app path
-  local exe="$1/Contents/MacOS/$EXECUTABLE"
-  ps -axo pid=,comm= | awk -v exe="$exe" '{ pid=$1; $1=""; sub(/^ /, ""); if ($0 == exe) print pid }'
+running_pids() { # app path; the app's own processes, never a `Clicky --mcp` helper
+  local exe="$1/Contents/MacOS/$EXECUTABLE" pid
+  # Claude Code (Theo's plugin), T3 Code and OpenCode run `Clicky --mcp` from the installed app as their MCP server.
+  # Quitting one would cut another session's tools; it keeps running from the old copy and starts the new one next time.
+  ps -axo pid=,comm= | awk -v exe="$exe" '{ pid=$1; $1=""; sub(/^ /, ""); if ($0 == exe) print pid }' | while read -r pid; do
+    case " $(ps -o args= -p "$pid" 2>/dev/null) " in
+      *" --mcp "*) ;;
+      *) echo "$pid" ;;
+    esac
+  done
 }
 
 quit_running() { # app path; returns 0 if Theo was running
