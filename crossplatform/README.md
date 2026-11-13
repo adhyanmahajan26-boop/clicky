@@ -8,11 +8,12 @@ now; [docs/PLATFORMS.md](docs/PLATFORMS.md) says what each would take elsewhere.
 crossplatform/
   crates/theo-core/   the engine: bots, chats, turns, limits, routines, recovery, local API, hooks, usage, doctor, coding runs
   crates/theod/       the engine as a background program, driven through a control inbox (for servers and tests)
+  crates/theo-connectors/  the connector hub: Theo's own apps, sign-ins and safety rule, for every brain, Mac and Windows (docs/CONNECTORS.md)
   app/                the desktop app: Tauri 2, a plain HTML/JS window on the Theo Pixel kit (app/ui/kit), the same engine inside
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests
   install/            one-line installers: install-linux.sh, install.ps1
   tools/              naming installers for a release and writing SHA256SUMS
-  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), PIXEL.md (faces, cards, connectors), screenshots/
+  docs/               PLATFORMS.md (what runs where), WINDOWS-PC.md (what is proven on Windows, and the real-PC check), DISTRIBUTION.md (installing, releases, signing), CONNECTORS.md (the connector hub's contract), PIXEL.md (faces, cards, connectors), screenshots/
 ```
 
 ## Why Rust and Tauri
