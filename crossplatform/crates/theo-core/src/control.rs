@@ -86,6 +86,18 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             h.stop_group(&id);
             ok(json!({"stopped": id}))
         }
+        "setupState" => ok(crate::setup::state(h).await),
+        "setupDone" => {
+            h.settings.set("setup.completed", true.into());
+            ok(json!({"completed": true}))
+        }
+        "openTerminal" => {
+            let which = s(cmd, "which").unwrap_or_default();
+            match crate::setup::open_terminal(&which) {
+                Ok(()) => ok(json!({"opened": which})),
+                Err(e) => err(&e),
+            }
+        }
         "chatSeen" => {
             let Some(id) = s(cmd, "id") else { return err("Needs id.") };
             h.chat_seen(&id);

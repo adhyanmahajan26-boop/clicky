@@ -1296,6 +1296,24 @@ def s07():
     return st1 == "needs" and st2 != "needs", {"asking": st1, "after_answer": st2}
 
 
+
+@test("S09", "First run: Claude Code found, signed in or out from claude auth status, git and the GitHub CLI checked, no account details passed on", "setup")
+def s09():
+    (T.FAKE_DIR / "fake-auth").write_text("out")
+    out = P({"cmd": "setupState"}, timeout=90)["result"]
+    (T.FAKE_DIR / "fake-auth").write_text("in")
+    inn = P({"cmd": "setupState"}, timeout=90)["result"]
+    done_before = inn["completed"]
+    P({"cmd": "setupDone"})
+    done_after = P({"cmd": "setupState"}, timeout=90)["result"]["completed"]
+    refused = P({"cmd": "openTerminal", "which": "rm -rf ~"})
+    text = json.dumps(inn)
+    ok = (out["claude"]["installed"] and not out["claude"]["signedIn"] and inn["claude"]["signedIn"] and inn["claude"]["plan"] == "max"
+          and "git" in inn and "gh" in inn and not done_before and done_after and not refused.get("ok") and "email" not in text and "orgId" not in text)
+    return ok, {"signed_out": out["claude"]["signedIn"], "signed_in": inn["claude"]["signedIn"], "git": inn["git"].get("installed"), "gh": inn["gh"],
+                "completed": [done_before, done_after], "unknown_terminal_command_refused": not refused.get("ok")}
+
+
 # ---------------------------------------------------------------- Real model (opt-in: THEO_REAL=1, needs Claude Code signed in)
 
 def real_engine():

@@ -33,22 +33,24 @@
   </main>
   <dialog id="bot-dialog">
     <form method="dialog" id="bot-form">
-      <h2>New bot</h2>
-      <div class="maker"><span id="maker-face"></span><div class="maker-states" id="maker-states"></div></div>
-      <div class="btns"><button type="button" class="btn sm" id="shuffle">Shuffle</button></div>
-      <label>Name <input name="name" required maxlength="40"></label>
-      <label>What it does <input name="description" maxlength="120"></label>
-      <label>Instructions <textarea name="instructions" rows="4"></textarea></label>
-      <label>Model
-        <select name="model">
-          <option value="claude-sonnet-5-5">Sonnet</option>
-          <option value="claude-haiku-5-5">Haiku</option>
-          <option value="claude-opus-5-5">Opus</option>
-        </select>
-      </label>
-      <menu><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn pri">Create</button></menu>
+      <h2 id="bot-dialog-title">New bot</h2>
+      <div id="maker"></div>
+      <div id="bot-fields">
+        <label>Name <input name="name" required maxlength="40"></label>
+        <label>What it does <input name="description" maxlength="120"></label>
+        <label>Instructions <textarea name="instructions" rows="3"></textarea></label>
+        <label>Model
+          <select name="model">
+            <option value="claude-sonnet-5-5">Sonnet</option>
+            <option value="claude-haiku-5-5">Haiku</option>
+            <option value="claude-opus-5-5">Opus</option>
+          </select>
+        </label>
+      </div>
+      <menu><button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn pri" id="bot-dialog-ok">Create</button></menu>
     </form>
   </dialog>
+  <div id="setup" hidden></div>
   <script src="kit/theo-pixel.js"></script>
   <script src="app.js"></script>
 </body>

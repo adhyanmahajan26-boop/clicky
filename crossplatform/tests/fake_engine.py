@@ -123,6 +123,13 @@ def script_reply():
 
 log()
 
+if args == ["--version"]:
+    print("2.1.0 (Claude Code, stand-in)")
+    sys.exit(0)
+if args[:2] == ["auth", "status"]:
+    signed_in = read("fake-auth", "in").strip() != "out"
+    print(json.dumps({"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none", "subscriptionType": "max" if signed_in else None}))
+    sys.exit(0 if signed_in else 1)
 if args[:2] == ["mcp", "list"]:
     sys.stdout.write(read("fake-mcp", "Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\n"))
     sys.exit(0)

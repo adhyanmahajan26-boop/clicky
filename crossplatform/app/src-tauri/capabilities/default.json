@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The main window can call Theo's engine.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "notification:default"]
 }

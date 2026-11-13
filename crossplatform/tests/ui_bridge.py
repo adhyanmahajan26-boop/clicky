@@ -10,7 +10,7 @@ import lib as T  # noqa: E402
 
 UI = HERE.parent / "app" / "ui"
 SHIM = """<script>window.__TAURI__ = { core: { invoke: async (name, args) => {
-  if (name !== 'control') return null;
+  if (name !== 'control') { (window.__calls = window.__calls || []).push([name, args]); return null; }
   const r = await fetch('/invoke', { method: 'POST', body: JSON.stringify(args.cmd) }); return r.json(); } } };</script>"""
 
 
@@ -49,6 +49,7 @@ CREW = {
 
 
 def seed():
+    T.setd("setup.completed", True)
     T.setd("test.engine.claude", str(T.FAKE)); T.setd("test.bots.retryDelays", [0.2]); T.setd("v3.bots.fallbackModels", ["off"])
     (T.FAKE_DIR / "fake-mcp").write_text("Checking MCP server health...\n\nclaude.ai Notion: https://mcp.notion.com/mcp - \u2714 Connected\nclaude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - \u2714 Connected\nclaude.ai Linear: https://mcp.linear.app/mcp - ! Needs authentication\nsentry: npx @sentry/mcp-server - \u2718 Failed to connect\nclaude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - \u2714 Connected\n", encoding="utf-8")
     T.fake_script([
@@ -89,7 +90,12 @@ def seed():
 
 if __name__ == "__main__":
     T.fresh(); T.start()
-    seed()
+    if os.environ.get("THEO_BRIDGE_SETUP"):
+        # A first run: nothing set up, Claude Code signed out.
+        T.setd("test.engine.claude", str(T.FAKE)); T.setd("test.engine.gh", str(T.FAKE_GH))
+        (T.FAKE_DIR / "fake-auth").write_text("out")
+    else:
+        seed()
     if os.environ.get("THEOD_BIN"):
         print("seeded the app", flush=True)
         import time

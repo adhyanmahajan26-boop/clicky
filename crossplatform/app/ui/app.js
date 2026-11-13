@@ -97,6 +97,7 @@ function renderHead() {
 }
 
 /* ---------------- cards ---------------- */
+const INSTALL = /win/i.test(navigator.platform || navigator.userAgent) ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash";
 const SIGNIN = /\/login|invalid api key|isn't installed|not logged in|sign in/i;
 function failureCard(m, latest) {
   const reason = m.text.replace(/^Couldn't reply:\s*/, "");
@@ -108,7 +109,7 @@ function failureCard(m, latest) {
       + `<div class="tc-q">${missing ? "Install Claude Code on this computer" : "Sign in to Claude Code"}</div>`
       + `<p>${missing ? "Theo runs bots on Claude Code, which isn't installed here yet." : "Theo runs bots on your Claude subscription, and Claude Code on this computer is signed out."}</p>`
       + `<div class="tc-obj"><span class="app"><b>C</b>${TP.badge("needs")}</span><span class="tx"><b>Claude Code</b><small>${missing ? "https://claude.com/claude-code" : "Run this in a terminal, then try again"}</small></span>${TP.pill("needs", missing ? "Not installed" : "Signed out")}</div>`
-      + `<div class="tc-field"><span>${missing ? "npm install -g @anthropic-ai/claude-code" : "claude auth login"}</span><button class="btn sm" data-copy="${missing ? "npm install -g @anthropic-ai/claude-code" : "claude auth login"}">Copy</button></div>`
+      + `<div class="tc-field"><span>${missing ? INSTALL : "claude auth login"}</span><button class="btn sm" data-copy="${missing ? INSTALL : "claude auth login"}">Copy</button></div>`
       + `<div class="btns"><button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
   }
   return `<div class="tc bad"><div class="tc-h">${botHTML(m.author, 28, { state: "failed" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · Reply</span>${TP.pill("failed", "Failed")}</div>`
@@ -320,6 +321,7 @@ function updateTray() {
 async function refresh() {
   try { state = (await invoke({ cmd: "botsState" })).result || state; } catch (e) { console.error(e); }
   updateTray();
+  notifyChanges();
   renderSidebar(); renderHead();
   if (view.kind === "bot" || view.kind === "group") await renderChat();
   else if (view.kind === "home") renderHome();
@@ -350,22 +352,170 @@ $("#input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shi
 $("#input").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
 document.querySelectorAll(".row.nav[data-pane]").forEach((r) => r.onclick = () => open({ kind: r.dataset.pane }));
 
-/* Make your bot: a look, shown awake and in the five main states. */
-let draft = null;
-function shuffle() {
-  const pick = (a) => a[Math.floor(Math.random() * a.length)];
-  draft = { fin: pick(Object.keys(TP.FIN)), trim: pick(Object.values(TP.TRIMS)), eye: pick(Object.keys(TP.EYES)), top: pick(TP.TOPS.concat(TP.HATS)), extra: pick(TP.EXTRAS) };
-  $("#maker-face").innerHTML = TP.bot(draft, "awake", 96, { badge: false });
-  $("#maker-states").innerHTML = ["working", "needs", "failed", "done", "idle"].map((s) => TP.bot(draft, s, 36)).join("");
+/* ---------------- Make your bot ---------------- */
+// Body, trim, eyes, what's on top and an extra, with the look shown awake and in the five main states.
+const pickOne = (a) => a[Math.floor(Math.random() * a.length)];
+function randomLook() {
+  return { fin: pickOne(Object.keys(TP.FIN)), trim: pickOne(Object.values(TP.TRIMS)), eye: pickOne(Object.keys(TP.EYES)), top: pickOne(TP.TOPS.concat(TP.HATS)), extra: pickOne(TP.EXTRAS) };
 }
-$("#shuffle").onclick = shuffle;
-$("#new-bot").onclick = () => { shuffle(); $("#bot-dialog").showModal(); };
+function eyeSVG(eye) {
+  const g = TP.EYES[eye], w = g[0].length, h = g.length, gap = 1, W = w * 2 + gap;
+  let r = "";
+  g.forEach((line, y) => [...line].forEach((ch, x) => { if (ch === "#") { r += `<rect x="${x}" y="${y}" width=".8" height=".8" rx=".2"/>`; r += `<rect x="${x + w + gap}" y="${y}" width=".8" height=".8" rx=".2"/>`; } }));
+  return `<svg viewBox="-.5 -.5 ${W + 0.2} ${h + 0.2}" class="eyes-sw"><g fill="currentColor">${r}</g></svg>`;
+}
+function mountMaker(el, look, onChange) {
+  let cur = Object.assign({}, look);
+  const label = { none: "None", ball: "Ball", twin: "Twin", handle: "Handle", dish: "Dish", flag: "Flag", bolt: "Bolt", heart: "Heart", hardhat: "Hard hat", cap: "Cap", beanie: "Beanie", beret: "Beret", tophat: "Top hat", crown: "Crown", headset: "Headset", bowtie: "Bow tie", tie: "Tie", scarf: "Scarf", bezel: "Bezel", pencil: "Pencil", star: "Star" };
+  const row = (title, items) => `<div class="mk-row"><div class="mk-h">${title}</div><div class="mk-items">${items}</div></div>`;
+  function draw() {
+    const sel = (k, v) => (cur[k] === v ? " on" : "");
+    el.innerHTML = `<div class="maker"><div class="mk-preview">${TP.bot(cur, "awake", 150, { badge: false })}<div class="mk-states">${["working", "needs", "failed", "done", "idle"].map((s) => `<span title="${TP.STATES[s].label}">${TP.bot(cur, s, 36)}</span>`).join("")}</div>`
+      + `<button type="button" class="btn sm" data-shuffle>Shuffle</button></div><div class="mk-opts">`
+      + row("Body", Object.entries(TP.FIN).map(([k, f]) => `<button type="button" class="sw${sel("fin", k)}" data-k="fin" data-v="${k}" title="${k}" style="background:linear-gradient(${f.a},${f.b})"></button>`).join(""))
+      + row("Trim", Object.entries(TP.TRIMS).map(([k, c]) => `<button type="button" class="sw${sel("trim", c)}" data-k="trim" data-v="${c}" title="${k}" style="background:${c}"></button>`).join(""))
+      + row("Eyes", Object.keys(TP.EYES).map((e) => `<button type="button" class="chip eye${sel("eye", e)}" data-k="eye" data-v="${e}" title="${e}">${eyeSVG(e)}</button>`).join(""))
+      + row("On top", TP.TOPS.concat(TP.HATS).map((x) => `<button type="button" class="chip face${sel("top", x)}" data-k="top" data-v="${x}" title="${label[x] || x}">${TP.bot(Object.assign({}, cur, { top: x }), "awake", 34, { badge: false, frame: 0 })}<small>${label[x] || x}</small></button>`).join(""))
+      + row("Extra", TP.EXTRAS.map((x) => `<button type="button" class="chip face${sel("extra", x)}" data-k="extra" data-v="${x}" title="${label[x] || x}">${TP.bot(Object.assign({}, cur, { extra: x }), "awake", 34, { badge: false, frame: 0 })}<small>${label[x] || x}</small></button>`).join(""))
+      + `</div></div>`;
+    el.querySelectorAll("[data-k]").forEach((b) => b.onclick = () => { cur[b.dataset.k] = b.dataset.v; draw(); onChange && onChange(cur); });
+    el.querySelector("[data-shuffle]").onclick = () => { cur = randomLook(); draw(); onChange && onChange(cur); };
+  }
+  draw();
+  return () => cur;
+}
+
+let botDialogMode = { kind: "new" };
+let makerLook = null;
+function openBotDialog(mode) {
+  botDialogMode = mode;
+  const editing = mode.kind === "look";
+  const look = editing ? lookOf(mode.id) : randomLook();
+  makerLook = mountMaker($("#maker"), look, null);
+  $("#bot-dialog-title").textContent = editing ? `How ${nameOf(mode.id)} looks` : "New bot";
+  $("#bot-fields").style.display = editing ? "none" : "";
+  $("#bot-fields").querySelectorAll("input,textarea").forEach((i) => (i.required = !editing && i.name === "name"));
+  $("#bot-dialog-ok").textContent = editing ? "Save" : "Create";
+  $("#bot-dialog").showModal();
+}
+$("#new-bot").onclick = () => openBotDialog({ kind: "new" });
+$("#head-face").onclick = () => { if (view.kind === "bot") openBotDialog({ kind: "look", id: view.id }); };
 $("#bot-form").onsubmit = async (e) => {
   if (e.submitter && e.submitter.value !== "ok") return;
+  const look = makerLook();
+  if (botDialogMode.kind === "look") { await invoke({ cmd: "botLook", id: botDialogMode.id, look }); Object.keys(sigs).forEach((k) => delete sigs[k]); return refresh(); }
   const f = new FormData(e.target);
   const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: "claude", model: f.get("model") });
-  if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look: draft }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
+  if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
 };
+
+/* ---------------- notifications ---------------- */
+// A bot that starts needing you, or fails, gets a system notification, once, unless you're looking at its chat.
+let prevFaces = null;
+const notified = new Set((() => { try { return JSON.parse(localStorage.getItem("theo.notified") || "[]"); } catch (e) { return []; } })());
+function notifyChanges() {
+  const now = Object.fromEntries(state.faces.map((f) => [f.id, f]));
+  if (prevFaces) {
+    for (const f of state.faces) {
+      if (f.state !== "needs" && f.state !== "failed") continue;
+      // New when the state or the moment it began changed: failing again is news too.
+      if (prevFaces[f.id] && prevFaces[f.id].state === f.state && prevFaces[f.id].since === f.since) continue;
+      const key = `${f.id}|${f.state}|${f.since || ""}`;
+      if (notified.has(key)) continue;
+      notified.add(key);
+      try { localStorage.setItem("theo.notified", JSON.stringify([...notified].slice(-200))); } catch (e) {}
+      if (document.hasFocus() && view.kind === "bot" && view.id === f.id) continue;
+      const title = `${nameOf(f.id)} ${f.state === "needs" ? "needs you" : "failed"}`;
+      window.__TAURI__.core.invoke("notify", { title, body: f.detail || f.word }).catch(() => {});
+    }
+  }
+  prevFaces = now;
+}
+
+/* ---------------- first run ---------------- */
+const SETUP_STEPS = ["Welcome", "Claude Code", "Coding", "Your first bot", "Done"];
+let setup = null;
+const TEMPLATES = [
+  ["Researcher", "Looks things up and sums them up", "You are Researcher. Read what you're asked about on the web and in files you're given, and answer in a few clear sentences with sources.", { fin: "sky", trim: "#F4F4F5", eye: "round", top: "twin", extra: "none" }],
+  ["Builder", "Writes and fixes code", "You are Builder, an engineer. When asked for code, plan it briefly and hand it to a coding run.", { fin: "bone", trim: "#5B8DEF", eye: "wide", top: "handle", extra: "none" }],
+  ["Writer", "Drafts emails, posts and docs", "You are Writer. Draft clear, short writing in the owner's voice and ask before anything is sent.", { fin: "slate", trim: "#F4F4F5", eye: "tall", top: "handle", extra: "pencil" }],
+];
+async function startSetup() {
+  setup = { step: 0, st: null, look: TEMPLATES[0][3], name: TEMPLATES[0][0], desc: TEMPLATES[0][1], instr: TEMPLATES[0][2], made: null };
+  $("#setup").hidden = false;
+  drawSetup();
+  setup.st = (await invoke({ cmd: "setupState" })).result;
+  drawSetup();
+}
+function setupFace() {
+  const s = setup.st;
+  if (setup.step === 4) return "done";
+  if (setup.step === 1 && s && !(s.claude.installed && s.claude.signedIn)) return "needs";
+  if (setup.step === 3 && !setup.name.trim()) return "needs";
+  return "awake";
+}
+function drawSetup() {
+  const s = setup.st, step = setup.step, c = s && s.claude;
+  const steps = SETUP_STEPS.map((n, i) => `<div class="su-step${i === step ? " on" : ""}${i < step ? " done" : ""}">${i < step ? TP.badge("done", "pg") : `<i class="num">${i + 1}</i>`}${n}</div>`).join("");
+  let body = "";
+  const checking = `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
+  if (step === 0) {
+    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Meet Theo</h1>`
+      + `<p class="lead">Theo runs a team of AI bots on your own Claude subscription: chats, group chats, routines and coding runs. Bots can't loop, schedule things or start coding without you saying so.</p>`
+      + `<p class="muted">This takes a minute: check Claude Code, then make your first bot.</p><div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
+  } else if (step === 1) {
+    const ready = c && c.installed && c.signedIn;
+    const pill = !c ? TP.pill("checking", "Checking") : ready ? TP.pill("ok", "Signed in") : c.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
+    const line = !c ? "Looking for it on this computer…" : ready ? `${esc(c.version)}${c.plan ? ` · Claude ${esc(c.plan[0].toUpperCase() + c.plan.slice(1))}` : ""}` : c.installed ? "Installed, but signed out. Sign in once with your Claude account." : "Not installed yet. It's free; your Claude subscription pays for what bots do.";
+    const act = !c || ready ? "" : `<button class="btn pri sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button>`;
+    body = `<h1>Claude Code</h1><p class="lead">Theo's bots think with Claude Code, signed in with your Claude account. Nothing goes through anyone else's server.</p>`
+      + `<div class="list"><div class="crow"><span class="app"><b>C</b>${c ? TP.badge(ready ? "ok" : c.installed ? "needs" : "none") : ""}</span><span class="tx"><b>Claude Code</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div></div>`
+      + (c && !ready ? `<div class="tc-field su-cmd"><span>${esc(c.installed ? c.signIn : c.install)}</span><button class="btn sm" data-copy="${esc(c.installed ? c.signIn : c.install)}">Copy</button></div><p class="muted">${c.installed ? "Sign in opens a terminal with this command; your browser finishes the sign-in." : "Install opens a terminal with Claude Code's own installer."} Then check again.</p>` : "")
+      + `<div class="btns"><button class="btn pri" data-next${ready ? "" : " disabled"}>Continue</button><button class="btn" data-recheck>Check again</button>${!ready && c ? `<button class="btn ghost" data-next>Skip for now</button>${TP.pill("needs", "Sign in to continue")}` : ""}</div>`;
+  } else if (step === 2) {
+    const g = s && s.git, h = s && s.gh;
+    const r = (name, icon, line, pill, act) => `<div class="crow"><span class="app">${icon}</span><span class="tx"><b>${name}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
+    body = `<h1>Coding runs</h1><p class="lead">Optional. When you ask a bot to build or fix something, a coding agent works on its own branch, commits, and with GitHub pushes and opens a draft pull request.</p>`
+      + (!s ? checking : `<div class="list">${r("git", "g", g.installed ? esc(g.version) : "Not installed. Get it from git-scm.com or your package manager.", g.installed ? TP.pill("ok", "Installed") : TP.pill("none", "Not installed"), "")}`
+      + r("GitHub CLI", "gh", !h.installed ? "Not installed: runs still commit, they just don't push. cli.github.com" : h.signedIn ? "Signed in: runs can push and open draft PRs." : "Signed out: sign in to push and open draft PRs.",
+          !h.installed ? TP.pill("none", "Not installed") : h.signedIn ? TP.pill("ok", "Signed in") : TP.pill("needs", "Signed out"), h.installed && !h.signedIn ? `<button class="btn sm" data-term="gh">Sign in</button>` : "") + `</div>`)
+      + `<div class="btns"><button class="btn pri" data-next>Continue</button><button class="btn" data-recheck>Check again</button></div>`;
+  } else if (step === 3) {
+    body = `<h1>Your first bot</h1><p class="lead">Pick what it does and how it looks. You can change both later.</p>`
+      + `<div class="pills su-tpl">${TEMPLATES.map(([n]) => `<button type="button" class="btn sm${setup.name === n ? " pri" : ""}" data-tpl="${n}">${n}</button>`).join("")}</div>`
+      + `<div class="su-fields"><label>Name <input id="su-name" value="${esc(setup.name)}" maxlength="40"></label><label>What it does <input id="su-desc" value="${esc(setup.desc)}" maxlength="120"></label></div><div id="su-maker"></div>`
+      + `<div class="btns"><button class="btn pri" data-create${setup.name.trim() ? "" : " disabled"}>Make ${esc(setup.name || "it")}</button><button class="btn ghost" data-next>Skip</button></div>`;
+  } else {
+    const missing = c && !(c.installed && c.signedIn);
+    const who = setup.made ? setup.name : "a bot";
+    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "done", 84, { badge: false })}</div><h1>You're all set</h1>`
+      + `<p class="lead">Things to try:</p><ul class="su-try"><li>Ask ${esc(who)} something in its chat.</li><li>Ask Theo to get ${esc(who)} to look into something and report back.</li><li>Say "every weekday at 8, send me a brief" to set up a routine.</li></ul>`
+      + (missing ? `<div class="tc-line">${TP.badge("needs", "pg")}<span><b>Claude Code is ${c.installed ? "signed out" : "not installed"}</b> · bots can't answer until it is</span><button class="btn sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button></div>` : "")
+      + `<div class="btns"><button class="btn pri" data-finish>Open Theo</button></div>`;
+  }
+  $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Theo</b></div>${steps}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
+  const root = $("#setup");
+  root.querySelectorAll("[data-next]").forEach((b) => b.onclick = () => { setup.step++; drawSetup(); });
+  root.querySelectorAll("[data-recheck]").forEach((b) => b.onclick = async () => { setup.st = null; drawSetup(); setup.st = (await invoke({ cmd: "setupState" })).result; drawSetup(); });
+  root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
+  root.querySelectorAll("[data-tpl]").forEach((b) => b.onclick = () => { const t = TEMPLATES.find((x) => x[0] === b.dataset.tpl); Object.assign(setup, { name: t[0], desc: t[1], instr: t[2], look: t[3] }); drawSetup(); });
+  wire(root);
+  if (step === 3) {
+    const get = mountMaker($("#su-maker"), setup.look, (l) => (setup.look = l));
+    $("#su-name").oninput = (e) => { setup.name = e.target.value; root.querySelector("[data-create]").disabled = !setup.name.trim(); root.querySelector("[data-create]").textContent = `Make ${setup.name || "it"}`; };
+    $("#su-desc").oninput = (e) => (setup.desc = e.target.value);
+    root.querySelector("[data-create]").onclick = async () => {
+      const r = await invoke({ cmd: "botCreate", name: setup.name.trim(), description: setup.desc, instructions: setup.instr || `You are ${setup.name.trim()}.`, provider: "claude", model: "claude-sonnet-5-5" });
+      if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look: get() }); setup.made = r.result.id; setup.step = 4; drawSetup(); }
+    };
+  }
+  root.querySelectorAll("[data-finish]").forEach((b) => b.onclick = async () => {
+    await invoke({ cmd: "setupDone" }); $("#setup").hidden = true;
+    open(setup.made ? { kind: "bot", id: setup.made } : { kind: "home" });
+  });
+}
+
 document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "n") { e.preventDefault(); $("#new-bot").click(); } });
 setInterval(refresh, 500);
 render();
+invoke({ cmd: "setupState" }).then((r) => { if (r.ok && !r.result.completed) startSetup(); });

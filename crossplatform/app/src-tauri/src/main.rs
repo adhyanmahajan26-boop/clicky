@@ -26,6 +26,13 @@ fn set_tray(app: tauri::AppHandle, state: String, count: usize, label: String) -
     Ok(())
 }
 
+/// A system notification: "<Bot> needs you" or "<Bot> failed", with one line of detail.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn control(harness: tauri::State<'_, Arc<Harness>>, cmd: serde_json::Value) -> Result<serde_json::Value, String> {
     Ok(theo_core::control::handle(&harness, &cmd).await)
@@ -33,6 +40,7 @@ async fn control(harness: tauri::State<'_, Arc<Harness>>, cmd: serde_json::Value
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // The same flags as theod, so the test suite can drive the app itself: --data DIR, --test.
             let args: Vec<String> = std::env::args().collect();
@@ -64,7 +72,7 @@ fn main() {
                 .build(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![control, set_tray])
+        .invoke_handler(tauri::generate_handler![control, set_tray, notify])
         .build(tauri::generate_context!())
         .expect("Theo couldn't start");
     app.run(|handle, event| {

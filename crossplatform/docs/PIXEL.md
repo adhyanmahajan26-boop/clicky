@@ -47,7 +47,33 @@ failure mark. Rows sort needs sign-in, can't connect, connected; each failed row
 The tray icon is the micro face of the most urgent state (failed, then needs you, then working) with the count beside it
 on a Mac menu bar and in the tooltip elsewhere; calm is the awake face.
 
+## First run
+
+A new data folder opens on setup (`setup.completed` unset), five steps with Theo's face following along (yellow while a
+step still wants something, smiling at the end, finished steps ticked):
+
+1. Welcome.
+2. Claude Code: found or not, signed in or not, from `claude --version` and `claude auth status` (its JSON; the account's
+   email and ids are never passed on). Sign in or Install opens a terminal with `claude auth login` or Claude Code's own
+   installer (`curl -fsSL https://claude.ai/install.sh | bash`, or `irm https://claude.ai/install.ps1 | iex` on Windows);
+   only those commands can be opened. Continue waits for a sign-in; Skip for now is there too.
+3. Coding runs (optional): git and the GitHub CLI, with `gh auth login` the same way.
+4. Your first bot: Researcher, Builder or Writer to start from, and Make your bot.
+5. Done: things to try, and anything still missing as a folded line with its button.
+
+## Make your bot
+
+Preview at 150 px awake, with the five main states at 36 px under it, and option rows: Body (9 finishes), Trim (7), Eyes (5,
+drawn as their light pattern), On top (antennas and hats), Extra, and Shuffle. Used in setup, New bot, and by clicking a
+bot's face in its chat header to change how it looks.
+
+## Notifications
+
+A bot that starts needing you, or fails, gets one system notification ("Designer failed · Tool crashed: …"), through
+Tauri's notification plugin: Notification Center on a Mac, toasts on Windows, the desktop's notification daemon on
+Linux. Not for states that were already there when the app opened, not twice for the same event, and not while you're
+looking at that bot's chat.
+
 ## Not in this build
 
-Setup's seven steps and Settings › Products (the desktop app has no setup flow yet), the notch, alerts as system
-notifications, and Make your bot's full option rows (the New bot dialog shows the look in five states with Shuffle).
+The notch, voice (Talking, Listening), and the Clicky and Dictation product pages: those are Mac-only.
