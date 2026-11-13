@@ -630,8 +630,11 @@ struct TheoProductionTests {
 
     @Test @MainActor func everyCategoryGetsAManagerUnlessSwitchedOff() {
         let store = BotsStore.shared
-        let first = aBot("manager-test-first")
-        let second = aBot("manager-test-second")
+        // aBot copies Theo's starter, which is primary: these two are ordinary members.
+        var first = aBot("manager-test-first")
+        first.primary = false
+        var second = aBot("manager-test-second")
+        second.primary = false
         store.save(first)
         store.save(second)
         let ceoItem = store.primary.map { BotsLayout.item(forBot: $0.id) } ?? "bot:theo"
