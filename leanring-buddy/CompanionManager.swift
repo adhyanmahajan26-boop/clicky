@@ -2157,13 +2157,16 @@ final class CompanionManager: ObservableObject {
     /// When an answer fails, Theo says why in plain words instead of going quiet.
     private func speakErrorFallback(for error: Error) {
         let brainName = BrainModel(setting: selectedModel).provider.displayName
+        let isOnAPIKey = BrainModel(setting: selectedModel).provider == .api
         let line: String
         switch error {
         case ClaudeCodeBridgeError.claudeCodeNotInstalled:
-            line = "I can't find \(brainName) on this Mac. Open my Setup guide to install it and sign in."
-        case ClaudeCodeBridgeError.claudeCodeReportedError(let message)
-            where message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("login"):
-            line = "I'm signed out of \(brainName). Sign in again from my Setup guide, then ask me again."
+            line = "I can't find \(brainName) on this Mac. Open my Setup guide to install it, or paste an API key there instead."
+        case ClaudeCodeBridgeError.claudeCodeReportedError(let message) where BrainTrouble.isSignInProblem(message):
+            // An API key isn't "signed out": it was turned down, and the fix is in Settings.
+            line = isOnAPIKey
+                ? "Your \(BrainAvailability.name(of: selectedModel)) key was turned down. \(BrainTrouble.signInFix(for: .api))"
+                : "I'm signed out of \(brainName). Sign in again from my Setup guide, then ask me again."
         case ClaudeCodeBridgeError.claudeCodeReportedError(let message) where message.localizedCaseInsensitiveContains("limit"):
             line = "You've hit your usage limit for now. Try again a bit later."
         default:

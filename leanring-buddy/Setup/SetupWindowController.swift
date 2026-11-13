@@ -8,7 +8,8 @@
 //  the Mac voice). Each half has a Test button that does a real call.
 //
 //  It opens by itself until it has been finished once, and again whenever
-//  Claude Code is missing or Clicky is opened while it's already running
+//  no brain at all can think here (no signed-in agent and no API key; Claude
+//  Code isn't required) or Clicky is opened while it's already running
 //  (a menu-bar icon can hide behind a MacBook's notch).
 //
 
@@ -153,7 +154,7 @@ final class SetupModel: ObservableObject {
             return
         }
         guard let claudeCodeExecutablePath = claudeCodePath else {
-            brainTestStatus = "Claude Code isn't installed yet. Press Install, then Check."
+            brainTestStatus = "Claude Code isn't installed yet. Press Install, then Check, or pick another brain (an API key works too)."
             return
         }
         if authMode == .apiKey, !hasSavedAPIKey {
@@ -325,20 +326,22 @@ final class SetupModel: ObservableObject {
         } else {
             lines.append("✓ Speech Recognition" + (speechRecognizer?.supportsOnDeviceRecognition == true ? " (on-device)" : ""))
         }
-        checkLines = lines + ["… checking Claude Code"]
+        let brainModel = BrainModel(setting: ClickyModels.main)
+        checkLines = lines + ["… checking the brain (\(BrainAvailability.name(of: brainModel.setting)))"]
         let claudeCodeExecutablePath = claudeCodePath
         Task {
             var claudeLines: [String] = []
-            if let claudeCodeExecutablePath {
+            if !brainModel.isClaude {
+                // Claude Code isn't needed for another brain: only that brain is asked.
+                let (succeeded, output) = await Self.runOtherBrainTestCall(brainModel)
+                claudeLines.append(succeeded ? "✓ Brain answers: \(output)" : "✗ Brain: \(output)")
+            } else if let claudeCodeExecutablePath {
                 let version = await Self.runQuietly(executablePath: claudeCodeExecutablePath, arguments: ["--version"])
                 claudeLines.append("✓ Claude Code \(version.isEmpty ? "(version unknown)" : version)")
-                let brainModel = BrainModel(setting: ClickyModels.main)
-                let (succeeded, output) = brainModel.isClaude
-                    ? await Self.runClaudeTestCall(executablePath: claudeCodeExecutablePath)
-                    : await Self.runOtherBrainTestCall(brainModel)
+                let (succeeded, output) = await Self.runClaudeTestCall(executablePath: claudeCodeExecutablePath)
                 claudeLines.append(succeeded ? "✓ Brain answers: \(output)" : "✗ Brain: \(output)")
             } else {
-                claudeLines.append("✗ Claude Code isn't installed: press Install above")
+                claudeLines.append("✗ Claude Code isn't installed: press Install above, or pick another brain (an API key works too)")
             }
             let speechOutput = companionManager.speechOutputClient
             if speechOutput.usesQwenLocalVoice {
@@ -413,9 +416,9 @@ enum SetupWindowController {
     private static var window: NSWindow?
     private static var model: SetupModel?
 
-    /// True when the window should open at launch: never finished, or Claude Code is missing.
+    /// True when the window should open at launch: never finished, or nothing at all can think here.
     static var isNeededAtLaunch: Bool {
-        !ClickySettings.isSetupCompleted || ClaudeCodeBridge.locateClaudeCodeExecutable() == nil
+        !ClickySettings.isSetupCompleted || !BrainAvailability.inventory.hasUsableBrain
     }
 
     static func show(companionManager: CompanionManager, showPanel: @escaping () -> Void) {
@@ -632,7 +635,7 @@ struct SetupView: View {
             HStack(spacing: 6) {
                 Image(systemName: model.claudeCodePath == nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .foregroundColor(model.claudeCodePath == nil ? .orange : .green)
-                Text(model.claudeCodePath == nil ? "Claude Code isn't installed" : "Claude Code found")
+                Text(model.claudeCodePath == nil ? "Claude Code isn't installed (only needed to think with Claude)" : "Claude Code found")
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
                 if model.claudeCodePath == nil {
@@ -640,7 +643,7 @@ struct SetupView: View {
                 }
                 Button("Check") { model.refreshClaudeCodePath() }
             }
-            Text("Theo thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor or OpenCode.")
+            Text("Theo thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor, OpenCode, or any API key from Settings \u{203A} Models & API keys. None is required.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 

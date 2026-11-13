@@ -8,6 +8,8 @@
 //  argv, $TMPDIR/clicky-session, the app's environment), with the main
 //  brain's model. A plain Foundation Process, off the main actor, at most
 //  60 s. Returns nil on any failure (the answer then goes on without a board).
+//  Any other brain (an API key, Codex, Cursor, OpenCode) gets the schema in its
+//  instructions and answers with the JSON as text (`repairOnAnyBrain`).
 //
 
 import ClickyCore
@@ -24,6 +26,8 @@ enum WhiteboardRepairRunner {
     }
 
     static func repair(brokenBoardText: String, model: String) async -> RepairResult {
+        let brainModel = BrainModel(setting: ClickyModels.resolve(model))
+        guard brainModel.isClaude else { return await repairOnAnyBrain(brokenBoardText: brokenBoardText, brainModel: brainModel) }
         guard let systemPromptFileURL = try? ClaudeArgs.writePromptFile(named: WBRepairRequest.systemPromptFileName,
                                                                         contents: WBRepairRequest.systemPromptText) else { return RepairResult(outcome: nil, usage: nil) }
         let request = WBRepairRequest(brokenBoardText: brokenBoardText, model: model, systemPromptFileURL: systemPromptFileURL)
@@ -35,6 +39,26 @@ enum WhiteboardRepairRunner {
         let usage = AgentUsage.fromResultLine(Data(resultText.utf8), model: model)
         let outcome = WBRepairRequest.board(fromCLIResult: resultText)
         return RepairResult(outcome: outcome?.isUsable == true ? outcome : nil, usage: usage)
+    }
+
+    /// One turn on a brain without `--json-schema`: the schema goes in the instructions and the board comes back as text.
+    private static func repairOnAnyBrain(brokenBoardText: String, brainModel: BrainModel) async -> RepairResult {
+        let brokenText = "Broken whiteboard:\n" + String(brokenBoardText.prefix(WBRepairRequest.maximumBrokenTextLength))
+        let repairTask = Task { @MainActor in
+            try await BrainCLIRunner.runTurn(model: brainModel, systemPrompt: WBRepairRequest.systemPromptTextForAnyBrain,
+                                             contentBlocks: [.text(brokenText)], onTextChunk: { _ in })
+        }
+        let timeout = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+            repairTask.cancel()
+        }
+        defer { timeout.cancel() }
+        guard let turn = try? await repairTask.value else {
+            print("⚠️ Board repair: \(brainModel.provider.displayName) gave no answer")
+            return RepairResult(outcome: nil, usage: nil)
+        }
+        let outcome = WBRepairRequest.board(fromAnswerText: turn.text)
+        return RepairResult(outcome: outcome?.isUsable == true ? outcome : nil, usage: nil)
     }
 
     nonisolated private static func runCLI(_ request: WBRepairRequest, executableURL: URL) -> String? {

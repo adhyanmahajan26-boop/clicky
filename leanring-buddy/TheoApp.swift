@@ -20,6 +20,8 @@ struct TheoApp: App {
         // Before anything builds a prompt: a Mac set up when the owner's name and the call language were built in keeps them.
         ClickySettings.migrateOwnerNameIfNeeded()
         CallSettings.migrateLanguageIfNeeded()
+        // Helpers now follow the main brain; a Mac set up when they were always Haiku keeps Haiku.
+        ClickyModels.keepEarlierHelperDefaultOnce(setupWasCompleted: ClickySettings.isSetupCompleted)
         // AppKit and SwiftUI each add these to the Edit menu; the text fields still have them on right click.
         UserDefaults.standard.set(true, forKey: "NSDisabledDictationMenuItem")
         UserDefaults.standard.set(true, forKey: "NSDisabledCharacterPaletteMenuItem")

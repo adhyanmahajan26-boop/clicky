@@ -119,14 +119,14 @@ public enum SetupStep: Int, CaseIterable, Sendable {
         case .welcome: return "Welcome"
         case .products: return "Pick products"
         case .permissions: return "Permissions"
-        case .harnesses: return "Harnesses"
+        case .harnesses: return "Brain"
         case .keys: return "API keys"
         case .voice: return "Voice"
         case .done: return "Done"
         }
     }
 
-    /// Harnesses are for Theo's coding runs and Clicky's brain; Voice is how Theo and Clicky sound. Dictation needs
+    /// The brain step (an API key first, then coding agents) is for Theo and Clicky; Voice is how Theo and Clicky sound. Dictation needs
     /// neither; its optional Sarvam key is on the keys step. Before anything is picked, every step shows, so the list doesn't jump about.
     public static func shown(for products: Set<TheoProduct>) -> [SetupStep] {
         guard !products.isEmpty else { return allCases }

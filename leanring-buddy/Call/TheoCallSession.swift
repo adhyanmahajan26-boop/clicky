@@ -22,7 +22,19 @@ enum CallSettings {
     static let languageKey = "v2.call.language"
     static let hearKey = "v2.call.ears"
 
-    static var model: String { UserDefaults.standard.string(forKey: modelKey) ?? "claude-sonnet-5-5" }
+    /// What calls think with. Unset: Claude Sonnet when Claude Code is ready (as calls always were), else Clicky's own
+    /// brain, else whatever this Mac can think with.
+    static var model: String {
+        let saved = UserDefaults.standard.string(forKey: modelKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !saved.isEmpty { return saved }
+        return automaticModel
+    }
+
+    /// The model a call uses when none was picked.
+    static var automaticModel: String {
+        if BrainAvailability.isClaudeReady { return ClickyModels.sonnet }
+        return BrainAvailability.startingModel(current: ClickyModels.main) ?? ClickyModels.sonnet
+    }
 
     enum Language: String, CaseIterable, Identifiable {
         case auto, hinglish, english, hindi
@@ -179,7 +191,7 @@ final class TheoCallSession: ObservableObject {
     private let audio: CallAudio
     private let isLive: Bool
     private let store: BotsStore
-    private var brain: ClaudeConversation?
+    private var brain: ConversationBrain?
     private var ears: CallEars?
     private var voice: CallVoice?
     private var gate = VoiceActivityGate(endSeconds: 0.55)
@@ -224,7 +236,7 @@ final class TheoCallSession: ObservableObject {
         startVoice()
         startEars()
         let prompt = CallPrompt.system(store: store, usesSarvamVoice: voice is SarvamCallVoice, language: language)
-        let brain = ClaudeConversation(model: CallSettings.model, systemPrompt: prompt, promptFileName: CallPrompt.fileName, effort: "low")
+        let brain = ConversationBrains.make(model: CallSettings.model, systemPrompt: prompt, promptFileName: CallPrompt.fileName, effort: "low")
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {

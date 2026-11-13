@@ -29,7 +29,7 @@ enum ClaudeCodeBridgeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .claudeCodeNotInstalled:
-            return "Claude Code isn't installed. Install it, then run `claude auth login` in Terminal."
+            return BrainTrouble.notInstalled(brainName: "Claude Code", provider: .claude)
         case .claudeCodeReportedError(let message):
             return "Claude Code error: \(message)"
         case .claudeCodeExitedWithoutResult(let exitCode, let standardErrorOutput):
