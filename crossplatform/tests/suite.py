@@ -1250,6 +1250,102 @@ def t27():
 
 
 
+@test("T24b", "Coding runs on every agent, not only Claude Code: worktree, commit, push, draft PR, follow-up", "coding")
+def t24b():
+    T.fake("ok"); work, remote = sandbox_repo(); results = {}
+    try:
+        for agent in ["codex", "cursor", "opencode", "grok", "gemini"]:
+            picked = P({"cmd": "harnessSet", "codingTarget": agent}).get("result", {})
+            n = T.nonce(); title = "On %s %s" % (agent, n); mark = T.calls_mark()
+            P({"cmd": "uiRunStart", "prompt": "In the current folder create agents/%s.md containing the single line: %s %s. Nothing else." % (agent, agent, n), "title": title, "folder": str(work)})
+            r = wait_runs(lambda x: x["title"] == title)[-1]
+            has, text = remote_has(remote, r.get("branch") or "", "agents/%s.md" % agent)
+            P({"cmd": "uiRunFollowup", "run": r["id"], "text": "Also create agents/%s-more.md containing more %s. Nothing else." % (agent, n)})
+            time.sleep(1); r2 = wait_runs(lambda x: x["title"] == title)[-1]
+            more, _ = remote_has(remote, r2.get("branch") or "", "agents/%s-more.md" % agent)
+            coding_calls = [c for c in T.calls(mark) if c.get("coding")]
+            ran_on = sorted({c.get("agent") for c in coding_calls})
+            # Gemini CLI can't resume by id, so its follow-up starts afresh in the same folder.
+            resumed = agent == "gemini" or any(c.get("resume") for c in coding_calls[1:])
+            pr = [p for p in prs() if p["head"] == r.get("branch")]
+            results[agent] = {"picked": picked.get("codingTarget"), "phase": r["phase"], "harness": r.get("harness"), "pushed": text, "followup_pushed": more,
+                              "ran_on": ran_on, "resumed": resumed, "draft_prs": len(pr), "summary": (r.get("summary") or "")[:120]}
+            results[agent]["ok"] = (picked.get("codingTarget") == agent and r["phase"] == "done" and r2["phase"] == "done" and r.get("harness") == agent
+                                    and has and text == "%s %s" % (agent, n) and more and ran_on == [agent] and resumed and len(pr) == 1)
+    finally:
+        P({"cmd": "harnessSet", "codingTarget": "auto"})
+    return all(v["ok"] for v in results.values()), results
+
+
+@test("T24c", "No Claude Code: a coding run picks the agent that's there, and with none says what to install", "coding")
+def t24c():
+    T.fake("ok"); work, remote = sandbox_repo()
+    gone = str(T.ROOT / "not-installed")
+    try:
+        # The owner picked Claude Code, but it isn't on this computer: the first ready agent (Codex) does it, and the chat says so.
+        P({"cmd": "harnessSet", "codingTarget": "claude"})
+        T.setd("test.engine.claude", gone)
+        n = T.nonce(); title = "Fallback " + n
+        P({"cmd": "uiRunStart", "prompt": "In the current folder create fb/%s.md containing fallback %s. Nothing else." % (n, n), "title": title, "folder": str(work)})
+        r = wait_runs(lambda x: x["title"] == title)[-1]
+        has, _ = remote_has(remote, r.get("branch") or "", "fb/%s.md" % n)
+        said = [m["text"] for m in T.chat("theo", 30)]
+        fell_back_note = any("isn't installed here" in t and "Codex" in t for t in said)
+        state = P({"cmd": "brains"}).get("result", {}).get("coding", {})
+        # Nothing at all: the run fails with words that name what to install, never "Claude Code isn't installed".
+        for agent in ["codex", "cursor", "gemini", "grok", "opencode"]:
+            T.setd("test.engine.%s" % agent, gone)
+        title2 = "Nothing " + n
+        P({"cmd": "uiRunStart", "prompt": "In the current folder create none/%s.md containing x. Nothing else." % n, "title": title2, "folder": str(work)})
+        r2 = wait_runs(lambda x: x["title"] == title2)[-1]
+        words = r2.get("summary") or ""
+        nothing = P({"cmd": "brains"}).get("result", {}).get("coding", {})
+    finally:
+        for agent in ["claude", "opencode"] + AGENTS:
+            T.setd("test.engine.%s" % agent, str(T.FAKE))
+        P({"cmd": "harnessSet", "codingTarget": "auto"})
+    checks = {
+        "ran_on_codex": r.get("harness") == "codex" and r["phase"] == "done" and has,
+        "chat_said_why": fell_back_note,
+        "settings_say_codex": state.get("target") == "codex" and state.get("pickedMissing") is True,
+        "nothing_fails_plainly": r2["phase"] == "failed" and "No coding agent is installed" in words and "OpenCode" in words,
+        "no_claude_code_demand": "Claude Code isn't installed" not in words,
+        "settings_say_none": nothing.get("target") is None,
+    }
+    return all(checks.values()), dict(checks, run=r, words=words)
+
+
+@test("T24d", "A signed-out agent with a saved key does the run on that key; a signed-in one never gets the key", "coding")
+def t24d():
+    T.fake("ok"); work, remote = sandbox_repo()
+    try:
+        # Nothing is sent anywhere: the key's check goes to a closed port on this computer.
+        T.setd("brains.apiBaseURL.openai", "http://127.0.0.1:9/v1")
+        P({"cmd": "apiKeySet", "provider": "openai", "key": "sk-test-coding-key"})
+        P({"cmd": "harnessSet", "codingTarget": "codex"})
+        n = T.nonce(); title = "Signed in " + n; mark = T.calls_mark()
+        P({"cmd": "uiRunStart", "prompt": "In the current folder create key/%s-a.md containing a. Nothing else." % n, "title": title, "folder": str(work)})
+        r = wait_runs(lambda x: x["title"] == title)[-1]
+        signed_in_env = [c.get("keyVars") for c in T.calls(mark) if c.get("coding")]
+        (T.FAKE_DIR / "fake-auth").write_text("out")
+        title2 = "On key " + n; mark = T.calls_mark()
+        P({"cmd": "uiRunStart", "prompt": "In the current folder create key/%s-b.md containing b. Nothing else." % n, "title": title2, "folder": str(work)})
+        r2 = wait_runs(lambda x: x["title"] == title2)[-1]
+        key_env = [c.get("keyVars") for c in T.calls(mark) if c.get("coding")]
+    finally:
+        (T.FAKE_DIR / "fake-auth").write_text("in")
+        P({"cmd": "apiKeyRemove", "provider": "openai"})
+        T.setd("brains.apiBaseURL.openai", None)
+        P({"cmd": "harnessSet", "codingTarget": "auto"})
+    checks = {
+        "signed_in_run_done": r["phase"] == "done",
+        "signed_in_got_no_key": bool(signed_in_env) and all(not v for v in signed_in_env),
+        "key_run_done": r2["phase"] == "done",
+        "key_run_got_the_key": bool(key_env) and all(v == ["CODEX_API_KEY", "OPENAI_API_KEY"] for v in key_env),
+    }
+    return all(checks.values()), dict(checks, signed_in_env=signed_in_env, key_env=key_env)
+
+
 # ---------------------------------------------------------------- Pixel faces, cards and connectors (spec sections 3, 6, 7)
 
 def fresh_bot(name):

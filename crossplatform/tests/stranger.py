@@ -222,10 +222,10 @@ def git(folder, *args):
     return subprocess.run(["git", *args], cwd=folder, capture_output=True, text=True)
 
 
-@step(4, "A project folder in a non-default place, and a coding run there with a stand-in harness")
+@step(4, "A project folder in a non-default place, and a coding run there on a stand-in Codex (no Claude Code)")
 def coding_run_elsewhere():
-    # Windows and Linux coding runs only run on Claude Code today (coding.rs): the stand-in plays it.
-    T.setd("test.engine.claude", str(T.FAKE))
+    # No Claude Code: the only coding agent here is Codex (the stand-in plays it), and the run picks it by itself.
+    T.setd("test.engine.codex", str(T.FAKE))
     T.setd("test.engine.gh", str(T.FAKE_GH))
     T.fake("ok")
     elsewhere = T.ROOT / "Work Stuff" / "side projects"
@@ -261,8 +261,9 @@ def coding_run_elsewhere():
         "repo_run_has_its_worktree": bool(repo_calls) and any(same(line.split()[0], repo_calls[-1]["cwd"]) for line in worktrees.splitlines() if line.strip()),
         "repo_run_finished": repo_run.get("phase") in ("done", "finished", "ready"),
         "nothing_in_a_projects_folder_in_home": not (T.ROOT / "home" / "Projects").exists(),
+        "ran_on_codex_without_claude_code": run.get("harness") == "codex" and bool(coding_calls) and all(c.get("agent") == "codex" for c in coding_calls + repo_calls),
     }
-    T.setd("test.engine.claude", str(T.ROOT / "no-claude-code-here"))
+    T.setd("test.engine.codex", str(T.ROOT / "not-installed"))
     return all(checks.values()), dict(checks, run=run, repo_run_phase=repo_run.get("phase"), worktrees=worktrees)
 
 

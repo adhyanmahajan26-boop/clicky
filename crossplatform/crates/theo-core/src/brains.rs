@@ -96,6 +96,32 @@ pub fn command_line_brain(id: &str) -> Option<&'static CommandLineBrain> {
     COMMAND_LINE_BRAINS.iter().find(|brain| brain.id == id)
 }
 
+/// The environment variables each agent reads a saved API key from, as (provider id, variable): the Mac's
+/// `HarnessCatalog.setups` key variables and `openCodeKeys`. Cursor's key is its own (not a model API key), so it has none here.
+pub fn agent_key_variables(agent_id: &str) -> &'static [(&'static str, &'static str)] {
+    match agent_id {
+        "claude" => &[("anthropic", "ANTHROPIC_API_KEY")],
+        "codex" => &[("openai", "OPENAI_API_KEY"), ("openai", "CODEX_API_KEY")],
+        "grok" => &[("xai", "XAI_API_KEY")],
+        "gemini" => &[("gemini", "GEMINI_API_KEY")],
+        "opencode" => &[
+            ("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY"), ("gemini", "GOOGLE_GENERATIVE_AI_API_KEY"), ("xai", "XAI_API_KEY"),
+            ("groq", "GROQ_API_KEY"), ("openrouter", "OPENROUTER_API_KEY"), ("mistral", "MISTRAL_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY"),
+            ("together", "TOGETHER_AI_API_KEY"), ("fireworks", "FIREWORKS_API_KEY"), ("cerebras", "CEREBRAS_API_KEY"),
+        ],
+        _ => &[],
+    }
+}
+
+/// The owner's saved keys an agent can use, as environment variables. Only for an agent that isn't signed in: a key handed
+/// to a signed-in agent would move its work from the owner's subscription to paid API use.
+pub fn agent_key_environment(harness: &Harness, agent_id: &str) -> Vec<(String, String)> {
+    agent_key_variables(agent_id)
+        .iter()
+        .filter_map(|(provider, variable)| api_key(harness, provider).map(|key| (variable.to_string(), key)))
+        .collect()
+}
+
 /// How a model API takes requests: Anthropic's Messages API, or the OpenAI-style chat endpoint everyone else offers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WireStyle {
@@ -299,7 +325,8 @@ pub async fn inventory(harness: &Harness) -> Value {
         })
         .collect();
     let any_ready = agents.iter().chain(keys.iter()).any(|brain| brain["ready"].as_bool() == Some(true));
-    json!({"agents": agents, "apis": keys, "anyReady": any_ready, "standIn": harness.settings.string(STAND_IN_SETTING)})
+    let coding = crate::coding::describe(harness, &agents);
+    json!({"agents": agents, "apis": keys, "anyReady": any_ready, "standIn": harness.settings.string(STAND_IN_SETTING), "coding": coding})
 }
 
 async fn agent_state(harness: &Harness, brain: &CommandLineBrain) -> Value {
@@ -310,8 +337,11 @@ async fn agent_state(harness: &Harness, brain: &CommandLineBrain) -> Value {
     };
     let install = if cfg!(windows) { brain.install_on_windows } else { brain.install_elsewhere };
     let ready = found.is_some() && signed_in != Some(false);
+    // Signed out but with a saved key it reads: it can still do coding runs, on that key.
+    let runs_on_key = found.is_some() && !ready && !agent_key_environment(harness, brain.id).is_empty();
     json!({
         "id": brain.id, "label": brain.label, "kind": "agent", "installed": found.is_some(), "signedIn": signed_in, "ready": ready,
+        "codingReady": ready || runs_on_key, "runsOnKey": runs_on_key,
         "install": install, "signIn": sign_in_line(brain), "signInHint": brain.sign_in_hint, "defaultModel": brain.default_model,
     })
 }

@@ -1,5 +1,5 @@
-//! First run: which brains this computer can think with (an API key, or any of the agents: none is required), is Claude Code
-//! here and signed in for coding runs, are git and the GitHub CLI here. Read from the programs themselves (`claude --version`,
+//! First run: which brains this computer can think with (an API key, or any of the agents: none is required), which agent
+//! does coding runs (`coding::describe`), is Claude Code here and signed in, are git and the GitHub CLI here. Read from the programs themselves (`claude --version`,
 //! `claude auth status`, which prints JSON, `git --version`, `gh auth status`, and each agent's own check in `brains`).
 
 use crate::harness::Harness;
@@ -154,7 +154,8 @@ pub async fn state(h: &Harness) -> Value {
     let brains = crate::brains::inventory(h).await;
     let suggested = crate::brains::starting_brain(h, &brains).await.map(|(engine, model)| json!({"engine": engine, "model": model, "label": crate::brains::label(&engine)}));
     let any_ready = brains["anyReady"].clone();
-    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS,
+    let coding = brains["coding"].clone();
+    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "coding": coding, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS,
            "brains": brains, "suggested": suggested, "anyReady": any_ready,
            "ownerName": h.settings.string("owner.name").unwrap_or_default(), "suggestedOwnerName": crate::settings::suggested_owner_name()})
 }

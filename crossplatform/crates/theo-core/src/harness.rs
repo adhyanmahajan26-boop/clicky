@@ -1354,7 +1354,7 @@ impl Harness {
 
     /// The prompt as one command-line argument. Windows caps a command line at 32,767 characters, so a longer message goes in
     /// a file in the turn's folder and the argument says where it is.
-    fn prompt_as_argument(&self, prompt: &str, turn_folder: &std::path::Path) -> String {
+    pub(crate) fn prompt_as_argument(&self, prompt: &str, turn_folder: &std::path::Path) -> String {
         if prompt.len() <= 24_000 {
             return prompt.to_string();
         }

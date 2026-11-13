@@ -87,13 +87,16 @@ elif not is_opencode and "-p" in args and "--" not in args:
 else:
     prompt = args[-1] if args else ""
 resume = "--resume" in args or "-s" in args or args[:2] == ["exec", "resume"]
-coding = "bypassPermissions" in args
+# A coding run: Claude Code with bypassPermissions, or any agent Theo starts for one (coding.rs sets THEO_CODING_RUN).
+coding = "bypassPermissions" in args or os.environ.get("THEO_CODING_RUN") == "1"
 pgid = os.getpgid(0) if not WIN else None
 
 
 def log(extra=None):
     entry = {"t": time.time(), "mode": mode, "pid": os.getpid(), "pgid": pgid, "model": model, "resume": resume, "coding": coding,
-             "opencode": is_opencode, "agent": agent, "cwd": os.getcwd(), "args": args, "allowed": allowed, "denied": denied, "system": system, "prompt": prompt}
+             "opencode": is_opencode, "agent": agent, "cwd": os.getcwd(), "args": args, "allowed": allowed, "denied": denied, "system": system, "prompt": prompt,
+             # Which API key variables it was handed (names only, never the values).
+             "keyVars": sorted(v for v in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY") if os.environ.get(v))}
     if extra:
         entry.update(extra)
     # One file per call: appends from engines running at once can interleave on Windows.
@@ -140,9 +143,15 @@ def coding_agent():
     if "time.sleep(240)" in prompt:
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(240)"])
         log({"child": child.pid})
-        init()
-        say("running the long command")
+        if agent == "claude":
+            init()
+            say("running the long command")
         child.wait()
+    if agent != "claude":
+        # The other agents work in the folder Theo names (-C / --workspace / --dir), as they do for real.
+        place = arg_after("-C") or arg_after("--workspace") or arg_after("--dir")
+        if place:
+            os.chdir(place)
     made = []
     for path, text in re.findall(r"create ([\w./-]+) containing(?: the single line)?:?\s*(.+?)(?:\.\s|$|\. Nothing|\. Change)", prompt):
         path = path.rstrip(".")
@@ -150,8 +159,12 @@ def coding_agent():
         with open(path, "w", encoding="utf-8") as f:
             f.write(text.strip().rstrip(".") + "\n")
         made.append(path)
+    said = "Done: " + (", ".join(made) if made else "nothing to change")
+    if agent != "claude":
+        agent_answer(said)
+        return
     init()
-    say("Done: " + (", ".join(made) if made else "nothing to change"))
+    say(said)
     done()
 
 
@@ -194,6 +207,11 @@ def agent_answer(text):
         out({"type": "result", "subtype": "success", "is_error": False, "result": text, "session_id": session})
     elif agent == "gemini":
         sys.stdout.write(json.dumps({"session_id": session, "response": text, "stats": {"models": {}}}, indent=2) + "\n")
+    elif agent == "opencode":
+        # `opencode run --format json`: each event carries the session's id.
+        out({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+        out({"type": "text", "sessionID": session, "part": {"type": "text", "text": text}})
+        out({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish", "tokens": {"input": 10, "output": 5, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}})
     elif agent == "grok":
         out({"type": "assistant", "text": "a note between tool calls"})
         out({"type": "result", "result": text, "session_id": session, "is_error": False})
@@ -283,6 +301,10 @@ if args[:2] == ["login", "status"] or args in (["status"], ["models"]):
     signed_in = read("fake-auth", "in").strip() != "out"
     print("Logged in using ChatGPT" if signed_in else "Not logged in")
     sys.exit(0 if signed_in else 1)
+
+if coding and agent != "claude" and mode in ("ok", "script", "reply", "slow"):
+    coding_agent()
+    sys.exit(0)
 
 if agent in ("codex", "cursor", "gemini", "grok") and mode != "mcp":
     if mode == "signedout-agent":

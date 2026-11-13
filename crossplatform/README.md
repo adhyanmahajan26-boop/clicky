@@ -54,10 +54,10 @@ Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf` t
 built app too: `THEOD_BIN=app/src-tauri/target/release/theo-desktop python3 tests/suite.py` (under `xvfb-run` on a Linux
 server).
 
-Running Theo's bots needs Claude Code installed and signed in (`claude auth login`), or OpenCode; connectors don't (the hub
+Running Theo's bots needs any one brain: an API key, or Claude Code, Codex, Cursor Agent, Gemini CLI, Grok or OpenCode signed in; connectors don't (the hub
 ships beside the app, [docs/CONNECTORS.md](docs/CONNECTORS.md)). Building the app builds the hub's helper first
 (`app/scripts/build-connectors-helper.mjs`, run by `tauri build` and `tauri dev`); a plain `cargo build` in `app/src-tauri`
-needs it run once by hand (`node app/scripts/build-connectors-helper.mjs --debug`). Coding runs need `git` and `gh`. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
+needs it run once by hand (`node app/scripts/build-connectors-helper.mjs --debug`). Coding runs need any coding agent (Claude Code, Codex, Cursor Agent, OpenCode, Grok or Gemini CLI), `git`, and `gh` for pull requests. Data lives in its own folder (see PLATFORMS.md), never the Swift app's.
 
 ## Status
 
