@@ -306,7 +306,7 @@ CODE_STATUS_RUNNING = {"ok": True, "error": None, "result": {
 CODE_STATUS_REVIEW = {"ok": True, "error": None, "result": {
     "busy": False, "enabled": True, "panelMode": "review", "panelVisible": True, "phase": "Ready for review", "preflight": "OK",
     "task": {"action": "edit", "repo": "clicky-scratch", "instructions": "add a function multiply with a test", "flow": "review"},
-    "review": {"header": "Review changes", "worktree": "/Users/adhyanmahajan/Projects/clicky-scratch-worktrees/multiply",
+    "review": {"header": "Review changes", "worktree": os.path.join(os.path.expanduser("~"), "Projects", "clicky-scratch-worktrees", "multiply"),
                "buttons": ["approve", "discard"], "changedFiles": ["utils.py", "tests/test_utils.py"], "blockers": []}}}
 
 # Real first-run barge-in turns: the cancelled first turn has no engine; the follow-up is qwen.

@@ -77,8 +77,10 @@ extension BotsStore {
         }
         let forwarded = forwardedTurns[room]
         let projects = forwarded != nil ? (peerDevice?.projects.map(\.name) ?? []) : hereProjects
-        // Run on this Mac for the other one, its folders are the other Mac's. Only a test profile's folder isn't "~/Projects" there.
-        let projectsFolder = forwarded != nil && TheoProfile.isTest ? (peerDevice?.projectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
+        // Run on this Mac for the other one, its folders are the other Mac's, in the projects folder that Mac has set.
+        // A test profile's folder is written out in full: its agents keep the owner's real home.
+        let peerProjectsFolder = peerDevice.map { TheoProfile.isTest ? $0.projectsFolder : ProjectsFolder.words(forOtherMacPath: $0.projectsFolder) }
+        let projectsFolder = forwarded != nil ? (peerProjectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
         // Bots & coding is set to this Mac, and the owner typed on the other: its folders and runs are this Mac's.
         let typedOn = ownerMacs[room].map(TheoLink.shortName)
         let why = forwarded?.why ?? typedOn.map { _ in "Bots & coding is set to this Mac" }
