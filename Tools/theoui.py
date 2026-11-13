@@ -3,7 +3,8 @@
 
   theoui.py cmd '{"cmd":"uiWindows"}'     any control command, JSON reply on stdout
   theoui.py start [--tab bots] [binary]   start the test profile (with no Dock icon, never takes focus)
-  theoui.py stop                          quit the test profile instance this tool started
+  theoui.py stop [--hard]                 quit every instance of this test profile (SIGKILL after 20 s, or at once)
+  theoui.py instances                     the pids of every running instance of this test profile
   theoui.py shot NAME [window-number]     screenshot of one Theo window only -> <out>/NAME.png
   theoui.py text [window-number]          the text on screen with boxes (window points)
   theoui.py clicktext "words" [index]     finds the words on screen and clicks them, like a person would
@@ -54,9 +55,83 @@ def running_pid():
         return None
 
 
+def profile_pids(profile_arg=None):
+    """Every running process started with `--profile <this profile>`, found by its arguments, not the pid file.
+
+    The pid file only ever holds the newest launch, so an instance that outlived its stop (or one started some other
+    way) was invisible to stop() and a second copy ran beside it. Exact match on the argument after --profile, so
+    the owner's Theo (no --profile) and other testers' profiles are never touched.
+    """
+    target = profile_arg or PROFILE_ARG
+    listing = subprocess.run(["ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True).stdout
+    found = []
+    for line in listing.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        pid, words = int(parts[0]), parts[1].split()
+        if pid == os.getpid():
+            continue
+        for index, word in enumerate(words[:-1]):
+            if word == "--profile" and words[index + 1] == target:
+                found.append(pid)
+                break
+        else:
+            if f"--profile={target}" in words:
+                found.append(pid)
+    return found
+
+
+def _alive(pid):
+    """Running, not just a zombie waiting for its parent to collect it."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def stop_pids(pids, hard=False, wait=20.0):
+    """SIGTERM (or SIGKILL) each, then SIGKILL whatever is still there after `wait` seconds. Returns any survivors."""
+    pids = [p for p in dict.fromkeys(pids) if p]
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL if hard else signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.time() + (0 if hard else wait)
+    while time.time() < deadline and any(_alive(p) for p in pids):
+        time.sleep(0.25)
+    for pid in pids:
+        if _alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    deadline = time.time() + 5
+    while time.time() < deadline and any(_alive(p) for p in pids):
+        time.sleep(0.1)
+    return [p for p in pids if _alive(p)]
+
+
+def tracked_instance(found=None):
+    """The pid file's id, only while that process still carries this profile (a stale file's id can be reused)."""
+    found = profile_pids() if found is None else found
+    tracked = running_pid()
+    return tracked if tracked in found else None
+
+
 def start(binary, tab=None):
-    if running_pid():
-        return running_pid()
+    found = profile_pids()
+    # A stale pid file whose id now belongs to another program isn't a running Theo: launch one.
+    current = tracked_instance(found)
+    strays = [p for p in found if p != current]
+    if strays:
+        # Two copies of one profile share a home folder, control inbox and link port: never let a second one run.
+        stop_pids(strays)
+    if current:
+        return current
     ROOT.mkdir(parents=True, exist_ok=True)
     # Theo's monitor comes from the real profile, so a test window can never open on the owner's main display.
     for key in ["v2.screen.claudia", "v2.screen.claudia.side", "v2.screen.claudia.sideFor"]:
@@ -77,11 +152,15 @@ def start(binary, tab=None):
     raise SystemExit("The test instance didn't answer in 100 tries.")
 
 
-def stop():
-    pid = running_pid()
-    if pid:
-        os.kill(pid, signal.SIGTERM)
+def stop(hard=False):
+    """Stops every instance of this profile, the pid file's and any other, and waits until they're gone."""
+    found = profile_pids()
+    # The pid file's id only counts while that process still carries this profile: a stale file's id can belong to
+    # an unrelated program by now.
+    tracked = tracked_instance(found)
+    left = stop_pids(([tracked] if tracked else []) + found, hard=hard)
     PIDFILE.unlink(missing_ok=True)
+    return left
 
 
 def shot(name, number=None):
@@ -146,7 +225,11 @@ if __name__ == "__main__":
             del rest[index:index + 2]
         print(start(rest[0] if rest else DEFAULT_BINARY, tab))
     elif action == "stop":
-        stop()
+        left = stop(hard="--hard" in sys.argv[2:])
+        if left:
+            raise SystemExit(f"Still running after SIGKILL: {left}")
+    elif action == "instances":
+        print(json.dumps(profile_pids()))
     elif action == "text":
         number, pieces = read_screen(int(sys.argv[2]) if len(sys.argv) > 2 else None)
         for piece in pieces:

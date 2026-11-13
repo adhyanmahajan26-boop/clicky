@@ -219,9 +219,8 @@ struct NewBotSheet: View {
 
     /// The engines a bot can run on, and the model each starts with (changed later in its settings).
     static let engines: [(id: String, label: String, model: String)] = [
-        ("claude", "Claude Code", "claude-sonnet-5-5"), ("codex", "Codex", "gpt-5.6-luna"), ("cursor", "Cursor", "auto"),
-        ("opencode", "OpenCode", "opencode/deepseek-v4.1-flash-free"), ("grok", "Grok", "grok-4.6"), ("gemini", "Gemini", "gemini-3-pro"),
-    ]
+        ("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor"), ("opencode", "OpenCode"), ("grok", "Grok"), ("gemini", "Gemini"),
+    ].map { ($0.0, $0.1, EngineSetupRules.starterModels[$0.0] ?? "") }
     /// The engines installed on this Mac (all of them until the check has run).
     private var installedEngines: [(id: String, label: String, model: String)] {
         let center = HarnessCenter.shared

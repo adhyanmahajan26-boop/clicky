@@ -327,6 +327,20 @@ final class HarnessTerminalModel: ObservableObject {
     private var ticks = 0
     private var wasSignedIn = false
 
+    /// Theo/Harness/gemini-sign-in, with .gemini/settings.json that turns Gemini's auto-update off.
+    static func geminiSignInFolder() -> URL? {
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let folder = support.appendingPathComponent("Theo/Harness/gemini-sign-in", isDirectory: true)
+        let settings = folder.appendingPathComponent(".gemini/settings.json")
+        do {
+            try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try EngineSetupRules.geminiQuietSettingsData().write(to: settings, options: .atomic)
+            return folder
+        } catch {
+            return nil
+        }
+    }
+
     init(task: HarnessTerminalTask) {
         self.task = task
         wasSignedIn = HarnessCenter.shared.status(for: task.info.id).loggedIn == true
@@ -334,9 +348,17 @@ final class HarnessTerminalModel: ObservableObject {
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         // A test must not open browser tabs on the owner's screen.
         if TheoProfile.isTest { environment["NO_OPEN_BROWSER"] = "1"; environment["BROWSER"] = "/usr/bin/true" }
+        var folder = FileManager.default.homeDirectoryForCurrentUser.path
+        // Gemini checks for updates (and installs them) from its interactive screen, which is what a sign-in is. It runs in
+        // a folder of Theo's own whose settings turn that off, so the installed version stays as it is and the owner's
+        // ~/.gemini is never written to.
+        if task.info.id == "gemini", task.kind == .signIn, let quiet = Self.geminiSignInFolder() {
+            folder = quiet.path
+            environment.merge(EngineSetupRules.geminiSignInEnvironment) { _, new in new }
+        }
         session = TerminalSessions.shared.start(id: "setup:\(task.id)", title: task.title, command: "/bin/zsh",
                                                 arguments: ["-lc", task.shellCommand()], environment: environment,
-                                                workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
+                                                workingDirectory: folder)
         failedToStart = session == nil
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
         RunLoop.main.add(timer, forMode: .common)

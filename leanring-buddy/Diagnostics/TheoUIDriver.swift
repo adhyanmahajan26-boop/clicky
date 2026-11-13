@@ -665,6 +665,8 @@ extension TheoUIDriver {
             // A throwaway key for the local stand-in server, in the test profile's own Keychain service.
             guard let provider = command["provider"] as? String else { respond(false, nil, "Needs provider."); return true }
             if let value = command["value"] as? String { ProviderKeychain.set(value, for: provider) } else { ProviderKeychain.delete(provider) }
+            // Everything that shows keys (the keys page, Dictation's access) sees it now, not after a restart.
+            ProviderKeys.shared.refreshSaved()
             respond(true, ["hasKey": ProviderKeychain.get(provider) != nil], nil)
         case "uiSpeak":
             // Clicky's voice on a line, at zero volume; then uiSpeakStop says how long it took to go quiet.

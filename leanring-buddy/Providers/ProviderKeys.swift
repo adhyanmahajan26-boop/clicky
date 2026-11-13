@@ -288,6 +288,12 @@ final class ProviderKeys: ObservableObject {
 
     var providers: [ProviderInfo] { ProviderInfo.builtIn.map(ProviderOverrides.applied(to:)) + CustomProviders.all }
 
+    /// After the Keychain changed behind the store's back (a test key): what's saved and its masks, read again.
+    func refreshSaved() {
+        reloadSaved()
+        revision += 1
+    }
+
     private func reloadSaved() {
         var saved: Set<String> = []
         var newMasks: [String: String] = [:]

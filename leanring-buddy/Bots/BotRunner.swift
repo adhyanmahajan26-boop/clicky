@@ -262,6 +262,11 @@ enum BotRunner {
     /// Runs the turn; `onText` gets the reply so far as it streams in.
     static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
+        // A test profile can make an engine count as signed out (`test.engines.missing`): local turns see it too, with the
+        // same words a signed-out engine gives, not only the turns that would go to the other Mac.
+        if TheoProfile.isTest, UserDefaults.standard.stringArray(forKey: "test.engines.missing")?.contains(bot.provider) == true {
+            throw BotRunnerError.failed("\(HarnessCatalog.label(bot.provider)) isn't signed in. Sign in, then try again.")
+        }
         do {
             let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
             // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.

@@ -230,6 +230,21 @@ final class ConnectorHealth: ObservableObject {
         return state.label
     }
 
+    /// Servers in either listing that aren't one of Theo's known connectors (a claude.ai connector added on the web, a
+    /// local MCP server), so every server the engines see shows on the Connectors screen.
+    func otherServers() -> [(name: String, engine: String, state: ConnectorState)] {
+        let knownClaude = Set(BotConnectors.known.compactMap(\.claudeServer))
+        let knownOpenCode = Set(BotConnectors.known.compactMap(\.openCodeServer))
+        let fromClaude = claude.filter { !knownClaude.contains($0.key) }.map { (name: $0.key, engine: "Claude", state: $0.value) }
+        let fromOpenCode = openCode.filter { !knownOpenCode.contains($0.key) && !(claude[$0.key] != nil) }.map { (name: $0.key, engine: "OpenCode", state: $0.value) }
+        return (fromClaude + fromOpenCode).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// "claude.ai Runway (runway.team)" as "Runway (runway.team)".
+    static func displayName(_ server: String) -> String {
+        server.hasPrefix("claude.ai ") ? String(server.dropFirst("claude.ai ".count)) : server
+    }
+
     // MARK: Bots stuck on an app
 
     func block(of botID: String) -> Block? { blocks[botID] }

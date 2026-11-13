@@ -7,6 +7,7 @@
 //  mode): nobody is there to approve anything.
 //
 
+import ClickyCore
 import Foundation
 
 extension BotRunner {
@@ -241,6 +242,11 @@ extension BotRunner {
             text = object["response"] as? String
         }
         guard let text, !text.isEmpty else {
+            // Signed out is something the owner fixes with a sign-in, not a failure to show as raw output: the chat gets
+            // the sign-in card for these words.
+            if EngineSetupRules.geminiNeedsSignIn(exitStatus: exit.status, output: raw + "\n" + exit.logTail) {
+                throw BotRunnerError.failed(EngineSetupRules.geminiSignedOut)
+            }
             throw BotRunnerError.failed("Gemini CLI didn't answer (exit \(exit.status)): \((exit.logTail.isEmpty ? raw : exit.logTail).suffix(200))")
         }
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), nil)
