@@ -187,7 +187,7 @@ struct HarnessCard: View {
         } else if !status.installed {
             StatusPill(text: "Not installed", tone: .neutral)
         } else if usesKey {
-            StatusPill(text: "API key", tone: .info)
+            StatusPill(text: "API key", tone: .good)
         } else if status.loggedIn == false {
             StatusPill(text: "Signed out", tone: .warn)
         } else if status.loggedIn == true {
@@ -493,7 +493,7 @@ struct HarnessTerminalSheet: View {
 
     @ViewBuilder private var stateView: some View {
         switch model.phase {
-        case .running: StatusPill(text: task.kind == .signIn ? "Waiting for sign-in" : "Running", tone: .neutral, busy: true)
+        case .running: StatusPill(text: task.kind == .signIn ? "Waiting for sign-in" : task.kind == .install ? "Installing" : "Running", tone: task.kind == .signIn ? .warn : .checking)
         case .succeeded(let detail): StatusPill(text: detail, tone: .good)
         case .exited(let code): StatusPill(text: code == 0 ? "Finished" : "Exited with \(code)", tone: code == 0 ? .good : .bad)
         }

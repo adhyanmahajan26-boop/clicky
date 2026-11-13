@@ -67,57 +67,13 @@ enum BotConnectors {
 
     static func bridged(_ connector: BotConnector) -> Bool { bridgedApps.contains(connector.id) }
 
-    enum Status: Equatable {
-        case connected, needsSignIn, missing, unknown
+    /// connected, needsSignIn, failed(reason), missing, unknown. The wording of both listings is ClickyCore's ConnectorListing,
+    /// checked against real `claude mcp list` and `opencode mcp list` output.
+    typealias Status = ConnectorState
 
-        var label: String {
-            switch self {
-            case .connected: return "Connected"
-            case .needsSignIn: return "Needs sign-in"
-            case .missing: return "Not connected"
-            case .unknown: return "Checking…"
-            }
-        }
-    }
-
-    /// `claude mcp list`: "claude.ai Gmail: https://… - ✔ Connected".
-    static func parseClaude(_ listing: String) -> [String: Status] {
-        var statuses: [String: Status] = [:]
-        for line in stripANSI(listing).split(separator: "\n") {
-            guard let colon = line.range(of: ": ") else { continue }
-            let name = String(line[..<colon.lowerBound]).trimmingCharacters(in: .whitespaces)
-            if line.contains("✔") || line.localizedCaseInsensitiveContains("connected") && !line.contains("!") && !line.contains("✘") {
-                statuses[name] = .connected
-            } else if line.localizedCaseInsensitiveContains("needs authentication") {
-                statuses[name] = .needsSignIn
-            } else {
-                statuses[name] = .missing
-            }
-        }
-        return statuses
-    }
-
-    /// `opencode mcp list`: "●  ✓ theo connected" / "●  ✗ notion needs authentication".
-    static func parseOpenCode(_ listing: String) -> [String: Status] {
-        var statuses: [String: Status] = [:]
-        for raw in stripANSI(listing).split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard line.hasPrefix("●") else { continue }
-            let words = line.dropFirst().split(separator: " ").map(String.init)
-            guard words.count >= 2 else { continue }
-            let name = words[1]
-            let rest = words.dropFirst(2).joined(separator: " ").lowercased()
-            if words[0] == "✓" { statuses[name] = .connected }
-            else if rest.contains("auth") { statuses[name] = .needsSignIn }
-            else { statuses[name] = .missing }
-        }
-        return statuses
-    }
-
-    static func stripANSI(_ text: String) -> String {
-        text.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\[[0-9;]*m", with: "", options: .regularExpression)
-    }
+    static func parseClaude(_ listing: String) -> [String: Status] { ConnectorListing.parseClaude(listing) }
+    static func parseOpenCode(_ listing: String) -> [String: Status] { ConnectorListing.parseOpenCode(listing) }
+    static func stripANSI(_ text: String) -> String { ConnectorListing.stripANSI(text) }
 
     /// Runs an engine's listing command and returns its output (empty if the engine isn't installed).
     static func listing(_ provider: BrainProvider) async -> String {
@@ -142,8 +98,9 @@ enum BotConnectors {
     }
 
     /// claude.ai connectors are added on the web; Claude Code picks them up from the account.
+    @MainActor
     static func openClaudeConnectors() {
-        if let url = URL(string: "https://claude.ai/settings/connectors") { NSWorkspace.shared.open(url) }
+        if let url = URL(string: "https://claude.ai/settings/connectors") { TheoOpen.url(url) }
     }
 
     /// Adds a hosted connector to OpenCode's config, then starts its sign-in (it opens the browser).

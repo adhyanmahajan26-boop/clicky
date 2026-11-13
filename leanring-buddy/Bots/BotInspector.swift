@@ -406,7 +406,8 @@ struct LookButton: View {
     var body: some View {
         Button { open = true } label: {
             BotAvatar(bot: bot, size: 52, state: .idle)
-                .overlay(alignment: .bottomTrailing) {
+                // Top corner: the bottom one is the status badge's.
+                .overlay(alignment: .topTrailing) {
                     Image(systemName: "paintbrush.pointed.fill").font(.system(size: 8)).foregroundColor(.white)
                         .padding(4).background(Circle().fill(Color.black.opacity(0.7)))
                 }
@@ -444,26 +445,30 @@ struct FlowChips: View {
     }
 }
 
-/// The apps a bot can use, as logo tiles: tap to give or take one away, with a dot for its connection.
+/// The apps a bot can use, as logo tiles: tap to give or take one away. Each tile wears a tick, "?" or cross on its corner
+/// for whether the app works for this bot's engine.
 struct AppsGrid: View {
     let selected: Set<String>
     let provider: String
     let onToggle: (String, Bool) -> Void
-    @ObservedObject private var status = ConnectorStatus.shared
+    @ObservedObject private var health = ConnectorHealth.shared
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 8)], spacing: 8) {
             ForEach(BotConnectors.known) { connector in
                 let on = selected.contains(connector.id)
+                let state = health.state(for: connector, provider: provider)
                 Button { onToggle(connector.id, !on) } label: {
                     VStack(spacing: 6) {
-                        AppLogo(connector: connector, size: 28)
+                        ZStack(alignment: .bottomTrailing) {
+                            AppLogo(connector: connector, size: 28)
+                            if let badge = Self.badge(state) {
+                                PixelBadge(tone: badge, size: 15, ring: DS.Colors.surface1).offset(x: 6, y: 5)
+                            }
+                        }
                         Text(connector.name.replacingOccurrences(of: " (screen, voice, notes)", with: ""))
                             .font(.system(size: 10.5, weight: .medium)).lineLimit(1)
-                        HStack(spacing: 3) {
-                            Circle().fill(status.color(for: connector, provider: provider)).frame(width: 5, height: 5)
-                            Text(status.label(for: connector, provider: provider)).font(.system(size: 9)).foregroundColor(DS.Colors.textTertiary)
-                        }
+                        Text(health.label(for: connector, provider: provider)).font(.system(size: 9.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, minHeight: 78)
                     .background(RoundedRectangle(cornerRadius: 11).fill(on ? DS.Colors.accent.opacity(0.16) : DS.Colors.hover))
@@ -473,9 +478,19 @@ struct AppsGrid: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .help(health.label(for: connector, provider: provider))
             }
         }
-        .onAppear { status.refreshIfStale() }
+        .onAppear { health.refreshIfStale() }
+    }
+
+    static func badge(_ state: ConnectorState) -> PixelTone? {
+        switch state {
+        case .connected: return .ok
+        case .needsSignIn: return .needs
+        case .failed: return .failed
+        case .missing, .unknown: return nil
+        }
     }
 }
 
@@ -495,50 +510,3 @@ struct AppLogo: View {
     }
 }
 
-/// Whether each connector works for Claude and for OpenCode/Grok, checked in the background now and then.
-@MainActor
-final class ConnectorStatus: ObservableObject {
-    static let shared = ConnectorStatus()
-    @Published private(set) var claude: [String: BotConnectors.Status] = [:]
-    @Published private(set) var openCode: [String: BotConnectors.Status] = [:]
-    private var checkedAt: Date?
-
-    func refreshIfStale() {
-        guard checkedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
-        checkedAt = Date()
-        Task {
-            async let claudeText = BotConnectors.listing(.claude)
-            async let openCodeText = BotConnectors.listing(.opencode)
-            let (claudeListing, openCodeListing) = await (claudeText, openCodeText)
-            claude = BotConnectors.parseClaude(claudeListing)
-            openCode = BotConnectors.parseOpenCode(openCodeListing)
-        }
-    }
-
-    func state(for connector: BotConnector, provider: String) -> BotConnectors.Status {
-        if connector.isSkill { return .connected }
-        if claude.isEmpty && openCode.isEmpty { return .unknown }
-        let claudeState = connector.claudeServer.flatMap { claude[$0] } ?? .missing
-        if provider == "claude" { return claudeState }
-        if BotConnectors.bridged(connector) { return claudeState }
-        return connector.openCodeServer.flatMap { openCode[$0] } ?? .missing
-    }
-
-    func color(for connector: BotConnector, provider: String) -> Color {
-        switch state(for: connector, provider: provider) {
-        case .connected: return DS.Colors.success
-        case .needsSignIn: return DS.Colors.warning
-        case .unknown: return .gray
-        case .missing: return Color.white.opacity(0.25)
-        }
-    }
-
-    func label(for connector: BotConnector, provider: String) -> String {
-        switch state(for: connector, provider: provider) {
-        case .connected: return provider == "claude" || !BotConnectors.bridged(connector) ? "Connected" : "Via Claude"
-        case .needsSignIn: return "Sign in"
-        case .unknown: return "Checking"
-        case .missing: return "Not connected"
-        }
-    }
-}

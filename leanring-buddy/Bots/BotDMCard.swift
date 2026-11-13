@@ -147,37 +147,41 @@ struct BotWaitingCard: View {
     @ObservedObject private var link = TheoLink.shared
     let id: String
     let text: String
+    /// Held for the owner: which Mac it should run on (0 the other Mac, 1 this one).
+    @State private var pickedHere = false
+
+    private var other: String { TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "other Mac") }
+    private var here: String { TheoLink.shortName(TheoLink.localName) }
 
     var body: some View {
         if let waiting = link.waiting(id) {
-            VStack(alignment: .leading, spacing: 8) {
-                ChatNote(text: text)
-                if waiting.isStale {
-                    ChatNote(text: "This waited over a day, so it won't go now. Send it again if you still want it.")
-                } else if waiting.heldForOwner == true {
-                    HStack(spacing: 8) {
-                        Button("Start on your \(TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "other Mac"))") { _ = link.sendHeld(id) }
-                            .buttonStyle(.theo(.primary, .small))
-                            .disabled(!link.isConnected)
+            if waiting.isStale {
+                // Same rule as before: over a day old, it won't go by itself.
+                PixelFoldedLine(tone: .failed, did: "This waited over a day", about: "so it won't go now. Send it again if you still want it.")
+            } else if waiting.heldForOwner == true {
+                PixelCard(tone: .needs, lead: .app(symbol: "desktopcomputer", state: .needs), name: "Your Macs", context: "held for your \(other)",
+                          question: "Where should this run?", detail: text,
+                          buttons: [
+                            PixelCardButton(title: "Start", primary: true) {
+                                if pickedHere { store.runWaitingHere(id) } else { _ = link.sendHeld(id) }
+                            },
+                            PixelCardButton(title: "Don't start it") { _ = link.takeWaiting(id) },
+                          ]) {
+                    VStack(spacing: 6) {
+                        PixelRadioRow(title: "Start on your \(other)", detail: link.isConnected ? "Connected · the project lives there" : "Not reachable right now", isOn: !pickedHere) { pickedHere = false }
                         if waiting.canRunHere {
-                            Button("Run it on this \(TheoLink.shortName(TheoLink.localName))") { store.runWaitingHere(id) }
-                                .buttonStyle(.theo(.secondary, .small))
+                            PixelRadioRow(title: "Run it on this \(here)", isOn: pickedHere) { pickedHere = true }
                         }
-                        Button("Don't start it") { _ = link.takeWaiting(id) }
-                            .buttonStyle(.theo(.secondary, .small))
                     }
-                    .pointerCursor()
-                    .padding(.leading, 54)
-                } else if waiting.canRunHere {
-                    Button("Run it on this \(TheoLink.shortName(TheoLink.localName)) instead") { store.runWaitingHere(id) }
-                        .buttonStyle(.theo(.secondary, .small))
-                        .pointerCursor()
-                        .padding(.leading, 54)
                 }
+            } else {
+                PixelCard(tone: .quiet, lead: .app(symbol: "desktopcomputer", state: nil), name: "Your Macs", context: "waiting for your \(other)",
+                          question: "Waiting for your \(other) to come back", detail: text,
+                          buttons: waiting.canRunHere ? [PixelCardButton(title: "Run it on this \(here) instead") { store.runWaitingHere(id) }] : [])
             }
         } else {
             // It's gone now, or was run here. This Mac said so at the time.
-            ChatNote(text: "This waited for your other Mac.")
+            PixelFoldedLine(tone: .quiet, did: "This waited for your other Mac", about: nil)
         }
     }
 }

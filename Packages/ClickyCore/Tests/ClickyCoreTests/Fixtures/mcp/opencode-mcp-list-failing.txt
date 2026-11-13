@@ -1,0 +1,29 @@
+[0m
+┌  MCP Servers
+│
+●  ✓ theo [90mconnected
+│      [90m/Applications/Theo.app/Contents/MacOS/Clicky --mcp
+│
+●  ✓ content-studio [90mconnected
+│      [90m~/.local/bin/uv run --script ~/ai/content-studio/server.py
+│
+●  ✗ broken-stdio [90mfailed
+│      MCP error -32000: Connection closed
+│      [90m/usr/bin/false
+│
+●  ✗ missing-binary [90mfailed
+│      ENOENT: no such file or directory, posix_spawn '/nonexistent/mcp-server'
+│      [90m/nonexistent/mcp-server
+│
+●  ✗ broken-http [90mfailed
+│      SSE error: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+│      [90mhttp://127.0.0.1:9/mcp
+│
+●  ⚠ needs-auth-http [90mneeds authentication
+│      [90mhttps://mcp.notion.com/mcp
+│
+●  ○ off-server [90mdisabled
+│      [90m/usr/bin/false
+│
+└  7 server(s)
+

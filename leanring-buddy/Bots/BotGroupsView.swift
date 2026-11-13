@@ -421,7 +421,7 @@ private struct SpeakingClickyAvatar: View {
     let isActive: Bool
 
     var body: some View {
-        let pose: CrewPose = companion.voiceState == .responding ? .talking : isActive ? .working : .awake
+        let pose: PixelState = companion.voiceState == .responding ? .talking : companion.voiceState == .listening ? .listening : isActive ? .working : .awake
         CrewAvatar(look: BotsStore.shared.clickyBot.crewLook, size: size, pose: pose)
     }
 }

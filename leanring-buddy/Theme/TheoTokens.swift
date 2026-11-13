@@ -54,11 +54,15 @@ enum DS {
         static let overlayCompanionOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
         static let blue = adaptive(dark: 0x5B8DEF, light: 0x3B6FD4)
         static let blue400 = blue
-        static let success = adaptive(dark: 0x3FB87A, light: 0x1F9D63)
-        static let successText = adaptive(dark: 0x3FB87A, light: 0x15794B)
-        static let warningText = adaptive(dark: 0xE5A94B, light: 0x8F5E12)
-        static let warning = adaptive(dark: 0xE5A94B, light: 0xB7791F)
-        static let destructiveText = adaptive(dark: 0xE5594F, light: 0xD1453B)
+        // Status colours belong to status alone (kit/tokens.json): green working, yellow needs you, red failed. Fills are the
+        // same on both themes; words get a darker shade on white so they stay readable. The accent is never a status.
+        static let success = adaptive(dark: 0x22D391, light: 0x22D391)
+        static let successText = adaptive(dark: 0x22D391, light: 0x0A7F54)
+        static let warningText = adaptive(dark: 0xFFD938, light: 0x7A5B00)
+        static let warning = adaptive(dark: 0xFFD938, light: 0xFFD938)
+        static let destructiveText = adaptive(dark: 0xFF6B7C, light: 0xC7283B)
+        /// Red as a fill (a failed step, a badge).
+        static let destructive = adaptive(dark: 0xFF4A5E, light: 0xFF4A5E)
 
         static func adaptive(dark: UInt32, light: UInt32, darkAlpha: CGFloat = 1, lightAlpha: CGFloat = 1) -> Color {
             dynamic { NSColor(hex: $0 ? dark : light, alpha: $0 ? darkAlpha : lightAlpha) }
@@ -70,6 +74,9 @@ enum DS {
                 return NSColor(hex: value.hex, alpha: value.alpha)
             }
         }
+
+        /// A colour that's worked out per theme, dark first.
+        static func dynamicColor(_ make: @escaping (Bool) -> NSColor) -> Color { dynamic(make) }
 
         private static func dynamic(_ make: @escaping (Bool) -> NSColor) -> Color {
             Color(nsColor: NSColor(name: nil) { make($0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) })

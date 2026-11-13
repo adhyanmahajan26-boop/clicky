@@ -53,6 +53,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var duty: String?
     /// Its crew figure, from Make your bot. Nil: the standard look for its job.
     var look: CrewLook?
+    /// Its last run or reply that failed, until the owner opens its chat, retries, or gives it new work (BotCrew).
+    var lastFailure: BotFailureRecord?
 
     var isOn: Bool { enabled ?? true }
     var crewLook: CrewLook { look ?? .standard(id: id, name: name, isPrimary: primary) }
@@ -251,7 +253,14 @@ final class BotsStore: ObservableObject {
     private var linkSavedRoutines: [BotRoutine] = []
     private var linkSavedLayout = BotsLayout()
     /// The conversation on screen, which collects no unread count.
-    var viewing: String? { didSet { if let viewing { unread[viewing] = nil } } }
+    var viewing: String? {
+        didSet {
+            guard let viewing else { return }
+            unread[viewing] = nil
+            // Opening a bot's chat is seeing its failure.
+            if viewing != oldValue { clearFailure(of: viewing) }
+        }
+    }
     private var routineTimer: Timer?
     private var runningRoutines: Set<String> = []
     /// A group routine run waiting on the head's opening turn, by room: it may come back [SILENT].
@@ -445,6 +454,20 @@ final class BotsStore: ObservableObject {
     }
 
     /// Test profile only: a run on a card, with nothing behind it.
+    /// Test profile: a bot shown as replying, with or without words so far (thinking vs working).
+    func setReplyingForTest(_ botID: String, text: String?) {
+        guard TheoProfile.isTest else { return }
+        replying[botID] = text
+        if text == nil { replyingIn[botID] = nil } else { replyingIn[botID] = botID }
+        BotLiveText.shared.set(text, for: botID)
+    }
+
+    /// Test profile: an unread result (the orange dot).
+    func setUnreadForTest(_ conversationID: String, count: Int) {
+        guard TheoProfile.isTest else { return }
+        unread[conversationID] = count > 0 ? count : nil
+    }
+
     func injectRunForTest(_ run: T3Run) {
         guard TheoProfile.isTest else { return }
         t3Runs.removeAll { $0.id == run.id }
@@ -1212,6 +1235,9 @@ final class BotsStore: ObservableObject {
     func reply(bot: NativeBot, in conversationID: String, prompt: String, session: String?, handsOnWhenStopped: Bool = false, fromOwner: Bool = true, mayUseScreen: Bool = false,
                privately: BotDMTurn? = nil, quietAllowed: Bool = false, then: @escaping (String?) -> Void) {
         stopped.remove(bot.id)
+        // New work: a failure the owner hasn't opened yet, and a connector it was stuck on, stop showing.
+        clearFailure(of: bot.id)
+        ConnectorHealth.shared.clearBlock(of: bot.id)
         // A new turn, not a carry-on from before: an earlier Stop in this chat isn't about it.
         if privately == nil { stoppedExchangeRooms.remove(conversationID) }
         replying[bot.id] = ""
@@ -1253,9 +1279,13 @@ final class BotsStore: ObservableObject {
                 answer = nil
                 if self?.stopped.contains(bot.id) != true {
                     self?.post(BotChatMessage(author: bot.id, text: "Couldn't reply: \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
+                    // The bot turns red until the owner opens its chat or tries again.
+                    self?.recordFailure(of: bot.id, reason: BotFailureWords.plain(error))
                 }
             }
             guard let self else { return }
+            // A bot that reached for an app it can't use (it needs a sign-in, or isn't answering) says so: the app's card shows.
+            if let said = answer { ConnectorHealth.shared.noteTurn(bot: bot, answer: said, room: conversationID) }
             // Orders in the reply don't show in the chat. The CEO's to Clicky, a group chat or a harness turn into their own cards;
             // anyone's [TELL:] to another bot becomes a private exchange.
             var orders: [String] = []
@@ -1802,6 +1832,12 @@ final class BotsStore: ObservableObject {
     private func upsert(_ run: T3Run) {
         var run = run
         if run.origin == nil { run.origin = TheoLink.localName }
+        let previousPhase = t3Runs.first(where: { $0.id == run.id })?.phase
+        if run.phase == "failed", previousPhase != "failed", run.stoppedByOwner != true, let botID = run.room, bot(botID) != nil {
+            // Stopping a run is the owner's own doing; anything else that ends it badly turns its bot red.
+            recordFailure(of: botID, reason: BotFailureWords.run(run), step: BotFailureWords.step(of: run), runID: run.id)
+        }
+        if run.phase == "running", previousPhase == nil, let botID = run.room { clearFailure(of: botID) }
         if let index = t3Runs.firstIndex(where: { $0.id == run.id }) {
             // What's been found out about its chat meanwhile stays: the copy being saved can be from before.
             if run.sessionID == nil { run.sessionID = t3Runs[index].sessionID }

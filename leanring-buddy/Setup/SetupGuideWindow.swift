@@ -103,11 +103,14 @@ enum SetupGuideWindowController {
 
 // MARK: - Views
 
-/// Theo's own face, for the guide's brand mark.
+/// Theo's own face, for the guide's brand mark. `state` is the setup's own status: ready normally, needs while the step
+/// still wants something, talking while a voice sample plays, done on the last step.
 private struct TheoMark: View {
     let size: CGFloat
+    var state: PixelState = .awake
+
     var body: some View {
-        if let theo = BotsStore.shared.primary { BotAvatar(bot: theo, size: size, state: .idle) }
+        CrewAvatar(look: BotsStore.shared.primary?.crewLook ?? .theo, size: size, pose: state, name: "Theo")
     }
 }
 
@@ -115,6 +118,16 @@ struct SetupGuideView: View {
     @ObservedObject var model: SetupGuideModel
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var products = TheoProducts.shared
+    @ObservedObject private var voicePreview = VoicePreviewPlayer.shared
+
+    /// The face in the sidebar follows the step.
+    private var setupState: PixelState {
+        if model.step == .done { return .done }
+        if voicePreview.playing != nil { return .talking }
+        if model.step == .products && !model.canContinue { return .needs }
+        if model.step == .keys && products.isOn(.dictation) && products.dictationAccess == .needsKey { return .needs }
+        return .awake
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -140,7 +153,7 @@ struct SetupGuideView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                TheoMark(size: 32)
+                TheoMark(size: 32, state: setupState)
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Theo").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
                     Text("Setup").font(TheoType.micro).foregroundColor(DS.Colors.textTertiary)
@@ -153,15 +166,16 @@ struct SetupGuideView: View {
                 let isDone = step.rawValue < model.step.rawValue
                 Button { model.step = step } label: {
                     HStack(spacing: 10) {
-                        ZStack {
-                            Circle().fill(isCurrent ? DS.Colors.accent : DS.Colors.hover)
-                            if isDone {
-                                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
-                            } else {
-                                Text("\(number + 1)").font(.system(size: 11, weight: .bold)).foregroundColor(isCurrent ? .white : DS.Colors.textTertiary)
+                        if isDone {
+                            // A finished step wears the white tick.
+                            PixelBadge(tone: .done, size: 20, animated: false).frame(width: 22, height: 22)
+                        } else {
+                            ZStack {
+                                Circle().fill(isCurrent ? DS.Colors.accent : DS.Colors.hover)
+                                Text("\(number + 1)").font(.system(size: 11, weight: .bold)).foregroundColor(isCurrent ? DS.Colors.textOnAccent : DS.Colors.textTertiary)
                             }
+                            .frame(width: 22, height: 22)
                         }
-                        .frame(width: 22, height: 22)
                         Text(step.title).font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
                             .foregroundColor(isCurrent ? DS.Colors.textPrimary : DS.Colors.textSecondary)
                         Spacer()
@@ -183,8 +197,33 @@ struct SetupGuideView: View {
         .background(DS.Colors.sidebar)
     }
 
+    /// What the step still wants, or how it's going, on the left of the footer.
+    @ViewBuilder private var footerHint: some View {
+        switch model.step {
+        case .products:
+            if !model.canContinue {
+                StatusPill(text: "Pick at least one", tone: .warn)
+            } else if products.isOn(.dictation) && products.dictationAccess == .needsKey {
+                HStack(spacing: 8) {
+                    StatusPill(text: "Dictation still needs its key", tone: .warn)
+                    Text("You can add it later.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                }
+            }
+        case .keys:
+            if products.isOn(.dictation) && products.dictationAccess == .needsKey {
+                StatusPill(text: "Dictation needs a key", tone: .warn)
+            } else {
+                Text("You can skip this").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
     private var footer: some View {
         HStack {
+            footerHint
+            Spacer().frame(width: 12)
             if model.step != .welcome {
                 Button("Back") { model.back() }.buttonStyle(.theoGhost).keyboardShortcut(.cancelAction)
             }
@@ -195,9 +234,6 @@ struct SetupGuideView: View {
             if model.step == .done {
                 Button("Open Theo") { model.finish() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
             } else {
-                if model.step == .products && !model.canContinue {
-                    Text("Pick at least one").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-                }
                 Button(model.step == .welcome ? "Get started" : "Continue") { model.next() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
                     .disabled(!model.canContinue)
             }
@@ -253,7 +289,7 @@ struct SetupGuideView: View {
                 StepHeader(title: "How should Theo sound?", subtitle: "Theo always listens for \u{201C}hey Theo\u{201D}. Answers can be spoken or shown as captions.")
                 VoiceSettingsContent()
             }
-        case .done: DoneStep(setup: model.setup, products: products)
+        case .done: DoneStep(model: model, setup: model.setup, products: products)
         }
     }
 }
@@ -285,7 +321,7 @@ private struct WelcomeStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            TheoMark(size: 72)
+            TheoMark(size: 72, state: .awake)
             Text("Hi, I'm Theo").font(.system(size: 30, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
             Text("Three products, one app. Next you'll see a short demo of each and turn on only the ones you want. Setup takes about two minutes.")
                 .font(.system(size: 15)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
@@ -312,13 +348,15 @@ private struct WelcomeStep: View {
 }
 
 private struct DoneStep: View {
+    @ObservedObject var model: SetupGuideModel
     @ObservedObject var setup: SetupModel
     @ObservedObject var products: TheoProducts
     @ObservedObject private var look = LookSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            IconTile(symbol: "checkmark", colors: TileColors.lime, size: 56)
+            // Theo smiling: the done face.
+            TheoMark(size: 84, state: .done)
             Text("You're all set").font(.system(size: 28, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
             if products.picked.isEmpty {
                 Text("Nothing is on yet. Go back to Pick products and turn on at least one.").font(TheoType.body).foregroundColor(DS.Colors.warningText)
@@ -329,10 +367,10 @@ private struct DoneStep: View {
                     tip(line)
                 }
             }
+            // Anything still missing, as a folded line with its button: it never blocks starting.
             if products.dictationAccess == .needsKey {
-                TheoSection(title: "Dictation is waiting for its key", hint: "It stays blocked until a Sarvam key is saved. Add it here or later in Settings \u{203A} Dictation.") {
-                    SarvamKeyField().padding(12)
-                }
+                PixelFoldedLine(tone: .needs, did: "Dictation is waiting for its key", about: "add it any time",
+                                undo: ("Add it", { BotsSelection.shared.openSettings(.keys); model.finish() }))
             }
             TheoSection(title: "Theo's screen", hint: "Theo opens its windows here and leaves your main screen alone.") {
                 SettingRow(title: "Monitor") {

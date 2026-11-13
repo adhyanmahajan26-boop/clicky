@@ -86,10 +86,7 @@ struct DevicesSettingsContent: View {
             }
             Spacer()
             if let build { Text("build \(String(build))").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textTertiary) }
-            HStack(spacing: 5) {
-                Circle().fill(isOnline ? Color(hex: 0x4ADE80) : DS.Colors.textDisabled).frame(width: 7, height: 7)
-                Text(isOnline ? "Online" : "Offline").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
-            }
+            StatusPill(text: isOnline ? "Online" : "Offline", tone: isOnline ? .good : .neutral)
         }
         .padding(12)
     }

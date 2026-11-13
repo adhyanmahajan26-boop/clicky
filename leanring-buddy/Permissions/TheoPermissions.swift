@@ -96,7 +96,7 @@ enum TheoPermissions {
         NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
     }
 
-    private static func openSettingsPane(_ anchor: String) {
+    static func openSettingsPane(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") { NSWorkspace.shared.open(url) }
     }
 }
