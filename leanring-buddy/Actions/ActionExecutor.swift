@@ -540,10 +540,32 @@ final class ActionExecutor {
                 guard let processIdentifier = target.processIdentifier else { return (.failed(reason: "no app to scroll"), nil) }
                 await VirtualCursor.shared.move(toCG: scrollPoint)
                 let lines = Int32(amount * 3)
+                // Something on the page under the point, to see afterwards whether the page really moved.
+                let elementUnderScrollPoint = BackgroundInput.element(atCG: scrollPoint)
+                let frameBeforeScroll = elementUnderScrollPoint.flatMap { TypeForMeAccessibility.frameCG(of: $0) }
                 let method = BackgroundInput.scroll(processIdentifier: processIdentifier, at: scrollPoint,
                                                     verticalLines: direction == .up ? lines : (direction == .down ? -lines : 0),
                                                     horizontalLines: direction == .left ? lines : (direction == .right ? -lines : 0))
-                return method.map { (.done(detail: "scrolled (\($0))"), nil) } ?? (.failed(reason: "couldn't scroll"), nil)
+                guard let method else { return (.failed(reason: "couldn't scroll"), nil) }
+                // A wheel event posted to the app's process is dropped by some apps (Safari's pages): it used to be
+                // reported as "scrolled" while nothing moved. When the page under the point didn't move and that
+                // point shows the target app, scroll there with the real pointer for a moment and put the pointer back.
+                if method == "pid scroll wheel", let elementUnderScrollPoint, let frameBeforeScroll {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    let frameAfterScroll = TypeForMeAccessibility.frameCG(of: elementUnderScrollPoint)
+                    let pageMoved = frameAfterScroll != nil && frameAfterScroll != frameBeforeScroll
+                    let pointShowsTargetApp = BackgroundInput.processIdentifier(of: elementUnderScrollPoint) == processIdentifier
+                    if !pageMoved && pointShowsTargetApp {
+                        let ownerPointerLocation = CGEvent(source: nil)?.location
+                        scroll(at: scrollPoint, direction: direction, amount: amount)
+                        if let ownerPointerLocation {
+                            SyntheticEvents.mouseEvent(.mouseMoved, at: ownerPointerLocation)?.post(tap: .cghidEventTap)
+                            onSyntheticPointerEvent()
+                        }
+                        return (.done(detail: "scrolled (real pointer, the app ignored a background scroll)"), nil)
+                    }
+                }
+                return (.done(detail: "scrolled (\(method))"), nil)
             }
             scroll(at: scrollPoint, direction: direction, amount: amount)
             return (.done(detail: nil), nil)
