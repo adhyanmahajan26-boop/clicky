@@ -168,7 +168,7 @@ extension BotsStore {
         let description = bot.description.trimmingCharacters(in: .whitespacesAndNewlines)
         let firstSentence = bot.instructions.split(whereSeparator: { ".\n".contains($0) }).first.map(String.init) ?? ""
         let job = description.isEmpty ? firstSentence : description
-        return BotIdentityFacts(name: bot.name, owner: BotPrompts.ownerName, job: String(job.prefix(160)), isCEO: bot.primary, teams: teams.map(\.name),
+        return BotIdentityFacts(name: bot.name, owner: BotPrompts.ownerName, job: BotAwareness.shortJob(job), isCEO: bot.primary, teams: teams.map(\.name),
                                 managerName: manager(of: bot)?.name, managesTeams: teams.filter { $0.leaderID == bot.id }.map(\.name),
                                 ceoName: primary?.name, apps: BotConnectors.known.filter { bot.apps.contains($0.id) }.map(\.name), memoryPath: bot.provider.hasPrefix("api:") ? nil : bot.memoryPath)
     }
@@ -204,6 +204,12 @@ enum BotMemory {
     }
 
     static func file(botID: String) -> URL { root.appendingPathComponent(botID, isDirectory: true).appendingPathComponent("memory.md") }
+
+    /// Clicky's own log (what the owner said to Clicky, and its summaries), beside the memory folders. Clicky's Memory helper keeps it,
+    /// and in its own chat it has to read it: Clicky's jobs hand it search hits, but an owner asking it directly hands it nothing.
+    static var clickyLogFolder: URL { root.deletingLastPathComponent().appendingPathComponent("clicky-memory", isDirectory: true) }
+
+    static func isClickyMemoryHelper(_ bot: NativeBot) -> Bool { bot.owner == BotsStore.clickyID && bot.duty == ClickyDuty.memory.rawValue }
 
     /// The harness guide every bot can read (ClickyCore `HarnessGuide`), next to the memory files, where bots run.
     static var guideFile: URL { root.appendingPathComponent(HarnessGuide.fileName) }

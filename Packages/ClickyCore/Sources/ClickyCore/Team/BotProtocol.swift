@@ -504,8 +504,10 @@ public enum BotCatchUp {
 
     /// The messages after the newest one this session has heard. With no session at all: the chat's latest, if another Mac could have written it.
     /// `messages`: all of them, since what it heard last can be a card or a note. `counts`: the ones that are words to read.
+    /// No session but a record of what was heard here (after /new, or a new engine): only what came after it. /new marks the whole chat
+    /// heard so the fresh session starts clean; handing it the latest messages anyway carried the old session's claims straight back in.
     public static func unheard<Message>(messages: [Message], id: (Message) -> String, heard: String?, hasSession: Bool, isLinked: Bool, counts: (Message) -> Bool = { _ in true }) -> [Message] {
-        guard hasSession else { return isLinked ? Array(messages.filter(counts).suffix(6)) : [] }
+        guard hasSession || heard != nil else { return isLinked ? Array(messages.filter(counts).suffix(6)) : [] }
         if heard == fromTheStart { return Array(messages.filter(counts).suffix(maximumMessages)) }
         guard let heard, let index = messages.lastIndex(where: { id($0) == heard }) else { return [] }
         return Array(messages[messages.index(after: index)...].filter(counts).suffix(maximumMessages))
@@ -622,6 +624,21 @@ public struct BotIdentityFacts: Equatable, Sendable {
 
 public enum BotAwareness {
     public static let maximumProjectsShown = 12
+    public static let maximumJobCharacters = 160
+
+    /// A bot's job line, from its description: whole sentences when they fit, else whole words and an ellipsis. Cut at a fixed
+    /// character count it read "…claims). Se." to the bot, a word it had to guess.
+    public static func shortJob(_ description: String, limit: Int = maximumJobCharacters) -> String {
+        let text = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count > limit else { return text }
+        let head = String(text.prefix(limit))
+        if let sentenceEnd = head.range(of: ". ", options: .backwards), head.distance(from: head.startIndex, to: sentenceEnd.lowerBound) >= limit / 3 {
+            return String(head[..<sentenceEnd.upperBound]).trimmingCharacters(in: .whitespaces)
+        }
+        let words = head.split(separator: " ").dropLast()
+        let cut = words.isEmpty ? head : words.joined(separator: " ")
+        return cut.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:(")) + "…"
+    }
 
     /// Short, refreshed every turn, since a resumed engine session keeps old context.
     public static func whereYouAre(_ facts: BotPlaceFacts) -> String {
@@ -660,7 +677,9 @@ public enum BotAwareness {
         let job = facts.job.trimmingCharacters(in: .whitespacesAndNewlines)
         var opening = "Who you are: you're \(facts.name), \(facts.owner)'s " + (facts.isCEO ? "CEO bot" : "bot")
         if !job.isEmpty { opening += ". Your job: \(job.hasSuffix(".") ? String(job.dropLast()) : job)" }
-        lines.append(opening + ".")
+        // A job cut short ends in an ellipsis: no full stop after it.
+        let jobEndsOpen = job.hasSuffix("…")
+        lines.append(jobEndsOpen ? opening : opening + ".")
         for team in facts.managesTeams { lines.append("You manage the \(team) team.") }
         if let team = facts.teams.first(where: { !facts.managesTeams.contains($0) }) {
             if let manager = facts.managerName {
