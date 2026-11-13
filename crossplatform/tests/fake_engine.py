@@ -265,6 +265,70 @@ elif mode == "oc-overloaded":
     if is_opencode:
         out({"type": "error", "error": {"name": "APIError", "data": {"message": "529 Overloaded: the provider is overloaded"}}}); sys.exit(1)
     init(); say("stand-in answered on " + model); done()
+elif mode == "mcp":
+    # Uses the MCP server Theo gave this turn, the way an engine would: Claude Code's from --mcp-config (only the tools its
+    # permission rules allow, as with dontAsk), OpenCode's from OPENCODE_CONFIG_CONTENT. `fake-mcp-calls.json` lists the
+    # calls to make ([{"tool": "<app>__<tool>", "args": {...}}]); the reply and the call log carry what came back.
+    init()
+    server = None
+    config_file = arg_after("--mcp-config")
+    if config_file:
+        with open(config_file, encoding="utf-8") as f:
+            server = json.load(f).get("mcpServers", {}).get("theo")
+        if server:
+            server = {"command": [server["command"]] + server.get("args", []), "env": server.get("env", {})}
+    elif os.environ.get("OPENCODE_CONFIG_CONTENT"):
+        found = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"]).get("mcp", {}).get("theo")
+        if found:
+            server = {"command": found["command"], "env": found.get("environment", {})}
+    try:
+        calls = json.loads(read("fake-mcp-calls.json", "[]"))
+    except ValueError:
+        calls = []
+    report = {"server": bool(server), "tools": [], "results": {}}
+    if server:
+        env = dict(os.environ); env.update(server["env"])
+        proc = subprocess.Popen(server["command"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True, encoding="utf-8")
+        counter = [0]
+        def rpc(method, params=None):
+            counter[0] += 1
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": counter[0], "method": method, "params": params or {}}) + "\n"); proc.stdin.flush()
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    return {"error": {"message": "server closed"}}
+                message = json.loads(line)
+                if message.get("id") == counter[0]:
+                    return message
+        rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "fake-engine", "version": "1"}})
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"); proc.stdin.flush()
+        listed = rpc("tools/list").get("result", {}).get("tools", [])
+        report["tools"] = [t["name"] for t in listed]
+        def allowed_by_rules(name):
+            if is_opencode:
+                return True
+            rule = "mcp__theo__" + name
+            if any(d in (rule, "mcp__theo") for d in denied):
+                return False
+            return any(a in (rule, "mcp__theo") for a in allowed)
+        for call in calls:
+            name = call["tool"]
+            if not allowed_by_rules(name):
+                report["results"][name] = "not allowed by the engine's rules"
+                continue
+            answer = rpc("tools/call", {"name": name, "arguments": call.get("args", {})})
+            if "error" in answer:
+                report["results"][name] = "error: " + str(answer["error"].get("message"))
+            else:
+                result = answer.get("result", {})
+                text = " ".join(c.get("text", "") for c in result.get("content", []))
+                report["results"][name] = ("refused: " if result.get("isError") else "") + text
+        proc.stdin.close(); proc.wait(10)
+    log({"mcp": report})
+    if is_opencode:
+        out({"type": "text", "part": {"text": "MCP " + json.dumps(report, sort_keys=True)}})
+    else:
+        say("MCP " + json.dumps(report, sort_keys=True)); done()
 elif mode == "tell-par":
     init()
     if "This is a private thread between you and" in prompt:

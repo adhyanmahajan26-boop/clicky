@@ -613,14 +613,15 @@ def fresh(setup_exe, msi=None):
         wait_until(lambda: "theo-broken" in text_of(page, "#pane"), 120)
         listed = P({"cmd": "connectors"}).get("result", {}).get("connectors", [])
         by = {c["name"]: c for c in listed}
-        # Give Researcher the working connector, from the page.
+        # Give Researcher the working connector, from the page (each server Claude Code has shows up as an app on the Claude
+        # account; one whose tools Theo can't tell apart is all or nothing, so "Everything").
         rid = bot_id("Researcher")
-        page.click("[data-app='theo-echo'][data-botapp='%s']" % rid)
+        page.select_option("select[data-app='theo-echo'][data-botapp='%s']" % rid, "full")
         apps = wait_until(lambda: [b for b in P({"cmd": "botsState"})["result"]["bots"] if b["id"] == rid and "theo-echo" in (b.get("apps") or [])], 10)
         shot = screenshot("connectors")
         ok = by.get("theo-echo", {}).get("status") == "connected" and by.get("theo-broken", {}).get("status") == "failed" and bool(apps)
         return ok, {"mcp_add": [a[0], b[0]], "claude_mcp_list": raw[1][-800:], "theo_read": listed, "researcher_apps": apps}, shot
-    check("Connectors: the real `claude mcp list` on Windows, a working one Connected, a broken one Can't connect; give a bot one", connectors)
+    check("Connectors: apps on the Claude account from the real `claude mcp list` on Windows, a working one Connected, a broken one Can't connect; give a bot one", connectors)
 
     def settings():
         page = PAGE["page"]

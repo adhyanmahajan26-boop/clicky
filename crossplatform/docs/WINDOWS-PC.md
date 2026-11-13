@@ -20,8 +20,9 @@ Each line is a step in `tests/windows_pc.py`, run on both Windows versions.
   (Claude Code answers "Not logged in · Please run /login" as if it were a reply; Theo now treats that as signed out).
 - A bot with 37,000+ characters of instructions over hundreds of lines still starts. Windows command lines stop at 32K
   characters (8K through cmd), so instructions and tool rules go in files and the message goes on stdin.
-- Connectors come from the real `claude mcp list` on Windows. A working server shows Connected, and a broken one shows
-  Can't connect with its reason. Giving a bot an app from the Connectors page adds that app's tools to the bot's allowed list.
+- Connectors on the Claude account come from the real `claude mcp list` on Windows (through the connector hub). A working
+  server shows Connected, and a broken one shows Can't connect with its reason. Giving a bot an app from the Connectors page
+  adds that app's tools to the bot's allowed list. The hub's helper is installed beside the app (`install_ps_test.py`).
 - Open at sign-in writes the Windows Run key, and that start opens Theo in the tray with no window.
 - Closing the window keeps Theo running in the tray. A bot that needs you raises a Windows notification (logged as sent by
   Windows' notification API).

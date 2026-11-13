@@ -43,8 +43,8 @@ jobs:
           python-version: "3.12"
       - name: Unit tests
         run: cargo test --workspace
-      - name: Build theod
-        run: cargo build -p theod
+      - name: Build theod and the connector hub's helper
+        run: cargo build -p theod -p theo-connectors
       - name: Linux install script against a stand-in GitHub
         if: runner.os == 'Linux'
         run: python3 tests/install_test.py
@@ -113,7 +113,7 @@ jobs:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
           WEBKIT_DISABLE_COMPOSITING_MODE: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
-        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24 S02 S03 S03b S04
+        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24 S02 S03 S03b S04 C01 C02
       - name: Drive the real app with the suite (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -121,7 +121,7 @@ jobs:
           THEOD_BIN: ${{ github.workspace }}/crossplatform/${{ matrix.app }}
           THEO_TEST_ROOT: ${{ runner.temp }}/theo-app/work
           THEO_START_WAIT: "90"
-        run: python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24 S02 S03 S03b S04
+        run: python tests/suite.py T12 T13 T16 T19 T20 T09 F02 F06 P_usage P_retry_same_model P_quiet_routine T24 S02 S03 S03b S04 C01 C02
       - name: Name the installers and checksum them
         shell: bash
         run: python tools/collect_installers.py app/src-tauri/target/release/bundle dist "ci-${GITHUB_RUN_NUMBER}"
@@ -135,10 +135,11 @@ jobs:
           deb=dist/Theo-ci-${GITHUB_RUN_NUMBER}-linux-amd64.deb
           pkg=$(dpkg-deb -f "$deb" Package)
           sudo apt-get install -y "./$deb"
-          bin=$(dpkg -L "$pkg" | grep -E '^/usr/bin/' | head -1)
+          bin=$(dpkg -L "$pkg" | grep -E '^/usr/bin/' | grep -v theo-connectors | head -1)
+          test -x /usr/bin/theo-connectors || { echo "the connector hub's helper isn't in the package"; exit 1; }
           echo "package $pkg installs $bin"
           THEOD_BIN="$bin" THEO_TEST_ROOT=${{ runner.temp }}/theo-deb/work THEO_START_WAIT=90 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 \
-            dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" python tests/suite.py T12 P_usage
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" python tests/suite.py T12 P_usage C01
       - uses: actions/upload-artifact@v4
         if: always()
         with:

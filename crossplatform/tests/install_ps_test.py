@@ -81,6 +81,8 @@ STATE["tamper"] = False
 code, out = ps("-NoLaunch")
 loc = installed()
 results["installs_without_admin"] = code == 0 and loc is not None and pathlib.Path(loc, "theo-desktop.exe").exists()
+# The connector hub's helper ships beside the app, where the engine looks for it (theo-core/src/hub.rs).
+results["connector_helper_beside_app"] = loc is not None and pathlib.Path(loc, "theo-connectors.exe").exists()
 code, out = ps("-NoLaunch")
 results["already_installed_is_a_no_op"] = code == 0 and "already installed" in out
 data = pathlib.Path(os.environ["APPDATA"], "Theo-Desktop"); data.mkdir(parents=True, exist_ok=True); (data / "keep").write_text("x")

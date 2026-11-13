@@ -25,13 +25,34 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 | Coding runs: own branch and worktree, commit, push, draft PR | Yes | Yes | Yes | Needs `git`, and `gh` signed in for the PR |
 | Data folder | `~/Library/Application Support/Theo-Desktop` | `%APPDATA%\Theo-Desktop` | `~/.local/share/theo-desktop` | never the Swift app's `Theo` folder |
 
+### Connectors
+
+Connectors are Theo's own, through the connector hub (`theo-connectors`, [CONNECTORS.md](CONNECTORS.md)), which ships beside
+the app in every installer (a Tauri sidecar: `theo-connectors.exe` next to `theo-desktop.exe`, `/usr/bin/theo-connectors` in
+the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them:
+
+- The Connectors page lists the hub's apps: an MCP address (signed in in the browser, with a pasted token, or nothing), a
+  program on this computer, and the apps on the owner's Claude account. Each server Claude Code has is added as an app on
+  the Claude account the first time the page checks, once, so removing one keeps it removed.
+- Each bot gets each app at a level: read only, read and draft (the default), or everything. A turn that didn't come from the
+  owner's own words (a routine, another bot, the local API) only reads.
+- A turn's apps: before the turn Theo writes a ticket (`Connectors/tickets/`, deleted when the turn ends) and starts the
+  engine with the hub as an MCP server called `theo` for that turn only: Claude Code through `--mcp-config` and an allow rule
+  for `mcp__theo`, OpenCode through `OPENCODE_CONFIG_CONTENT`. The hub only offers and only runs what the ticket allows.
+- A Claude Code bot keeps its direct route to apps on the Claude account (Claude Code's own `mcp__claude_ai_*` tools,
+  allowed tool by tool for its level, with the rest denied). Every other combination goes through the hub.
+- Bots saved before the hub named Claude Code servers ("claude.ai Gmail"). At the first start each becomes the hub app for
+  that server; one whose tools Theo can't tell apart keeps the whole server ("Everything"), as it had.
+- The engine finds the helper beside itself, else `THEO_CONNECTORS_BIN`, else on PATH. A test profile keeps the hub's key in
+  a file (`--key-store file`) and records the sign-in address in `Logs/opened.log` instead of opening a browser.
+
 ### Not in this build yet (the Swift app has them)
 
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
 - Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
 - `[PDF:]` documents, `[CHOOSE:]` cards, `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
 - Harness cards for T3 Code, Codex, Cursor, Grok and Gemini; continuing a harness's own chat.
-- Theo's own MCP server (`claudia_*` tools) isn't ported. Connectors themselves work: they're Claude Code's own (claude.ai and `claude mcp add` servers), listed on the Connectors page, and a bot can use the ones you give it there.
+- Theo's own MCP server (`claudia_*` tools) isn't ported.
 - API-key bots (Anthropic or OpenAI-compatible keys without Claude Code).
 
 ## Clicky (voice and screen helper): Mac only for now

@@ -25,6 +25,7 @@ pub mod control;
 pub mod coding;
 pub mod faces;
 pub mod connectors;
+pub mod hub;
 pub mod setup;
 
 pub use harness::Harness;
