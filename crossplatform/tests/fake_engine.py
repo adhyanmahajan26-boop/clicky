@@ -246,6 +246,18 @@ elif mode == "flaky":
     init(); say("answered after retry on " + model); done()
 elif mode == "autherr":
     fail("Invalid API key · Please run /login")
+elif mode == "signedout-cli":
+    # What Claude Code on Windows printed when signed out (seen on GitHub's Windows runners): its line as an assistant message
+    # marked with an error, then a result carrying the same line.
+    init()
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}, "error": "authentication_failed"})
+    out({"type": "result", "subtype": "success", "is_error": True, "result": "Not logged in · Please run /login"})
+    sys.exit(1)
+elif mode == "signedout-quiet":
+    # The same line with nothing marking it as an error, and a clean exit.
+    init()
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "result": "Not logged in · Please run /login"})
 elif mode == "usage":
     init(); say("counted")
     done(total_cost_usd=0.0125, usage={"input_tokens": 100, "output_tokens": 40, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 10})

@@ -1077,8 +1077,11 @@ impl Harness {
             EndReason::Cancelled => return Ok((text, resolved)),
             EndReason::Exited => {}
         }
-        if let Some(error) = &outcome.error {
-            if text.is_empty() {
+        // Claude Code signed out answers with its own one line ("Not logged in · Please run /login") as if it were the reply,
+        // so a reply that is only that line, or only the error it reported, is the turn failing, never the bot speaking.
+        let error = outcome.error.clone().or_else(|| protocol::is_sign_in_line(&text).then(|| text.trim().to_string()));
+        if let Some(error) = &error {
+            if text.trim().is_empty() || text.trim() == error.trim() || protocol::is_sign_in_line(&text) {
                 let last = outcome.stderr_tail.lines().last().unwrap_or("").trim().to_string();
                 if session.is_some() && (protocol::says_session_is_lost(error) || protocol::says_session_is_lost(&outcome.stderr_tail)) {
                     return Err(RunError::LostSession);

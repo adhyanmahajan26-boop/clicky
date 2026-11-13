@@ -1291,6 +1291,19 @@ def s03():
     return ok, {"signed_out": f1.get("state"), "detail": f1.get("detail"), "after_open": f2.get("state"), "after_retry": f3.get("state"), "message_not_duplicated": owner_copies == 1}
 
 
+@test("S03b", "Claude Code's own signed-out line is the sign-in card, not a reply: marked as an error or not", "faces")
+def s03b():
+    seen = {}
+    for mode in ("signedout-cli", "signedout-quiet"):
+        T.fake(mode); b = fresh_bot("Signout-" + mode.split("-")[1])
+        T.say(b, "hello"); T.wait_idle()
+        last = T.chat(b, 1)[-1]
+        seen[mode] = {"face": face_of(b).get("state"), "detail": face_of(b).get("detail"), "last_author": last["author"], "last": last["text"][:120]}
+    T.fake("ok")
+    ok = all(v["face"] == "needs" and "Sign in" in (v["detail"] or "") and v["last"].startswith("Couldn't reply") for v in seen.values())
+    return ok, seen
+
+
 @test("S04", "A routine nobody asked for becomes a yes/no card: yellow until answered; yes sets it up once, the card folds", "cards")
 def s04():
     n = T.nonce(); b = fresh_bot("Cardy")

@@ -130,6 +130,14 @@ impl StreamParser {
                         _ => {}
                     }
                 }
+                // Claude Code's own message about a failed request (signed out, no credit, the API down) comes as an assistant
+                // message marked with `error`. It's not the bot speaking, so it's the turn's error, not its reply.
+                "assistant" if event.get("error").map(|e| !e.is_null()).unwrap_or(false) => {
+                    let said: Vec<&str> = event["message"]["content"].as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect();
+                    let said = said.join("\n");
+                    let code = event["error"].as_str().unwrap_or("error");
+                    self.error = Some(if said.trim().is_empty() { format!("Claude Code reported an error ({code}).") } else { said });
+                }
                 "assistant" if !self.saw_delta => {
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
@@ -149,7 +157,8 @@ impl StreamParser {
                     self.usage = TurnUsage::from_claude_result(&event);
                     let result = event.get("result").and_then(|r| r.as_str()).map(str::to_string);
                     if event.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false) || event.get("subtype").and_then(|s| s.as_str()).map(|s| s.starts_with("error")).unwrap_or(false) {
-                        self.error = Some(result.unwrap_or_else(|| "Claude reported an error.".to_string()));
+                        let reported = self.error.take();
+                        self.error = Some(result.filter(|r| !r.trim().is_empty()).or(reported).unwrap_or_else(|| "Claude reported an error.".to_string()));
                     } else {
                         self.final_text = result;
                     }

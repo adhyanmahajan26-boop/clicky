@@ -158,6 +158,21 @@ def launch_env(with_token=False):
     return env
 
 
+def allow_devtools(on=True):
+    """WebView2's own per-app override, so the window opens its DevTools port however Windows starts Theo. On Windows 11 and
+    Server 2025 a Start menu shortcut is started by Explorer, which doesn't pass on the test's environment variables. The
+    value is named after the program and only exists while the test runs."""
+    path = r"Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+    if on:
+        k = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(k, EXE_NAME, 0, winreg.REG_SZ, "--remote-debugging-port=%d" % CDP_PORT)
+    else:
+        try:
+            winreg.DeleteValue(winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE), EXE_NAME)
+        except OSError:
+            pass
+
+
 def open_from_start_menu(with_token=False, extra_args=None):
     """Opens Theo the way a person does: the Start menu shortcut (through the shell, like a click)."""
     lnk = start_menu_shortcut()
@@ -840,6 +855,7 @@ if __name__ == "__main__":
         sys.exit("Windows only.")
     mode = sys.argv[1]
     OUT.mkdir(parents=True, exist_ok=True)
+    allow_devtools(True)
     try:
         if mode == "fresh":
             fresh(str(pathlib.Path(sys.argv[2]).resolve()), str(pathlib.Path(sys.argv[3]).resolve()) if len(sys.argv) > 3 else None)
@@ -858,6 +874,7 @@ if __name__ == "__main__":
             except OSError:
                 pass
         write_summary(mode)
+        allow_devtools(False)
     failed = [r for r in RESULTS if r["verdict"] == "FAIL"]
     print("\n%d steps, %d failed" % (len(RESULTS), len(failed)))
     sys.exit(1 if failed else 0)
