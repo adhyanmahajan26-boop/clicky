@@ -627,4 +627,32 @@ struct TheoProductionTests {
         #expect(message.imageType(at: 1) == "image/png")
         #expect(APIChatMessage(role: "user", text: "look", imagesJPEGBase64: ["AA"]).imageType(at: 0) == "image/jpeg")
     }
+
+    @Test @MainActor func everyCategoryGetsAManagerUnlessSwitchedOff() {
+        let store = BotsStore.shared
+        let first = aBot("manager-test-first")
+        let second = aBot("manager-test-second")
+        store.save(first)
+        store.save(second)
+        let ceoItem = store.primary.map { BotsLayout.item(forBot: $0.id) } ?? "bot:theo"
+        // Never chosen: the first member who isn't the CEO gets the job.
+        var section = BotsLayout.Section(name: "Team", items: [ceoItem, "bot:\(first.id)", "bot:\(second.id)"])
+        store.assignManagerIfNeeded(&section)
+        #expect(section.leaderID == first.id)
+        #expect(section.hasManager)
+        // A manager the owner picked stays.
+        section.leaderID = second.id
+        store.assignManagerIfNeeded(&section)
+        #expect(section.leaderID == second.id)
+        // Switched off: everyone reports to the CEO, and nobody is handed the job.
+        var off = BotsLayout.Section(name: "Flat", items: ["bot:\(first.id)"], wantsManager: false)
+        store.assignManagerIfNeeded(&off)
+        #expect(off.leaderID == nil)
+        // An empty category waits for a bot.
+        var empty = BotsLayout.Section(name: "Empty")
+        store.assignManagerIfNeeded(&empty)
+        #expect(empty.leaderID == nil)
+        store.deleteBot(first.id)
+        store.deleteBot(second.id)
+    }
 }

@@ -757,6 +757,8 @@ struct UpdatesSettingsContent: View {
 
 private struct UpdatesRows: View {
     @ObservedObject var updateController: UpdateController
+    @State private var tokenField = ""
+    @State private var hasSavedToken = ClickySecrets.read(.updateToken) != nil
 
     var body: some View {
         TheoSection(title: "", hint: statusLine) {
@@ -766,6 +768,22 @@ private struct UpdatesRows: View {
                 } else {
                     Button(updateController.state == .checking ? "Checking…" : "Check for updates") { Task { await updateController.check() } }
                         .buttonStyle(.theoSecondary).disabled(updateController.state == .checking)
+                }
+            }
+            RowDivider()
+            // The updates repo is private. A Mac signed in with `gh auth login` needs nothing here; another Mac can
+            // paste a GitHub token that can read it, kept in the Keychain.
+            SettingRow(title: "GitHub token", detail: hasSavedToken ? "Saved in the Keychain. Paste a new one to replace it."
+                       : "Only if this Mac isn't signed in to GitHub (gh auth login): a token that can read the updates repo.") {
+                HStack(spacing: 6) {
+                    SecureField(hasSavedToken ? "Saved" : "Token", text: $tokenField).textFieldStyle(.roundedBorder).frame(width: 160)
+                    Button("Save") {
+                        ClickySecrets.write(.updateToken, value: tokenField.trimmingCharacters(in: .whitespacesAndNewlines))
+                        tokenField = ""
+                        hasSavedToken = ClickySecrets.read(.updateToken) != nil
+                        Task { await updateController.check() }
+                    }
+                    .buttonStyle(.theoSecondary).disabled(tokenField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
