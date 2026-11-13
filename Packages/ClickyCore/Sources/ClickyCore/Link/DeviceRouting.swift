@@ -28,7 +28,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .bots: return "Where a bot answers, and where its folders and coding runs are. Chats stay the same on both Macs."
         case .routines: return "The Mac that fires your routines, so each one runs once. Best on a Mac that's always on."
-        case .studioScreens: return "The hidden screens. Only a Mac Studio has them."
+        case .studioScreens: return "The hidden screens, on one Mac. Experimental, and off until you turn them on in Settings › Studio."
         case .researchBrowser: return "Where Researcher opens blocked pages in your Chrome."
         case .clicky: return "Seeing your screen, pointing, answering."
         case .dictation: return "Talking into the chat box, and the shortcut in any app."
@@ -36,37 +36,80 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    public var defaultChoice: DeviceChoice {
-        switch self {
-        case .routines, .studioScreens, .researchBrowser: return .macStudio
-        case .bots, .clicky, .dictation, .voice: return .any
-        }
-    }
+    public var defaultChoice: DeviceChoice { .any }
 
     /// Work the other Mac can be asked to do. The rest simply doesn't happen here.
     public var canBeSentAcross: Bool { self == .bots || self == .routines || self == .researchBrowser }
 
+    /// With two Macs linked, one of them does this for both, so "Any" means the Mac that's always on (`DeviceRouting.alwaysOnMacIsThisOne`).
+    public var isDoneByOneMac: Bool { self == .routines || self == .studioScreens || self == .researchBrowser }
+
     /// What "Any" means for this feature, in the Settings picker.
-    public var anyChoiceTitle: String { self == .bots ? "The Mac you're using" : "Any" }
+    public var anyChoiceTitle: String {
+        if self == .bots { return "The Mac you're using" }
+        return isDoneByOneMac ? "The always-on Mac" : "Any"
+    }
 }
 
-public enum DeviceChoice: String, CaseIterable, Identifiable, Sendable {
-    case thisMac, macStudio, macBookAir, any
+/// Each Mac keeps its own choices, so these are said from the Mac that holds them.
+public enum DeviceChoice: String, CaseIterable, Identifiable, Codable, Sendable {
+    case thisMac, otherMac, any
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
         case .thisMac: return "This Mac"
-        case .macStudio: return "Mac Studio"
-        case .macBookAir: return "MacBook Air"
+        case .otherMac: return "The other Mac"
         case .any: return "Any"
+        }
+    }
+
+    /// A saved choice. Builds before this one knew only a Mac Studio and a MacBook Air, and saved "macStudio" or "macBookAir":
+    /// on the Mac reading it, that is this Mac or the other one, by what this Mac is. Every Mac that wasn't a Mac Studio counted
+    /// as the MacBook Air, so "macBookAir" on any Mac but a Studio is this Mac.
+    public static func fromSaved(_ saved: String, thisMacWasMacStudio: Bool) -> DeviceChoice? {
+        switch saved {
+        case "macStudio": return thisMacWasMacStudio ? .thisMac : .otherMac
+        case "macBookAir": return thisMacWasMacStudio ? .otherMac : .thisMac
+        default: return DeviceChoice(rawValue: saved)
         }
     }
 }
 
-public enum DeviceKind: Sendable {
-    case macStudio, macBookAir
+/// One Mac, as the routing rules need to know it.
+public struct LinkedMac: Codable, Equatable, Sendable {
+    /// The Mac's own id. It doesn't change when the Mac is renamed, and no two Macs share it.
+    public var id: String
+    /// Its full name, as Theo Link knows it.
+    public var name: String
+    /// No battery: a Mac Studio, Mac mini, iMac or Mac Pro, the kind that stays on.
+    public var isDesktop: Bool
+    /// This Mac's own Routines choice, said from its side. Nil when it isn't known (a build from before it was shared).
+    public var routinesChoice: DeviceChoice?
+
+    public init(id: String, name: String, isDesktop: Bool, routinesChoice: DeviceChoice? = nil) {
+        self.id = id
+        self.name = name
+        self.isDesktop = isDesktop
+        self.routinesChoice = routinesChoice
+    }
+}
+
+/// This Mac and, when two are linked, the other one.
+public struct MacPair: Equatable, Sendable {
+    public var thisMac: LinkedMac
+    /// The other Mac as last heard from. Nil: there's no other Mac, or nothing has been heard from it yet.
+    public var otherMac: LinkedMac?
+    public var paired: Bool
+    public var otherMacOnline: Bool
+
+    public init(thisMac: LinkedMac, otherMac: LinkedMac?, paired: Bool, otherMacOnline: Bool) {
+        self.thisMac = thisMac
+        self.otherMac = otherMac
+        self.paired = paired
+        self.otherMacOnline = otherMacOnline
+    }
 }
 
 public enum DeviceRoute: Equatable, Sendable {
@@ -94,13 +137,13 @@ public enum BotTurnRoute: Equatable, Sendable {
 
 public enum DeviceRouting {
     /// The Mac travels, so nothing here may depend on the other Mac unless the owner set this to that Mac.
-    public static func botTurn(choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool, engineHere: Bool, engineThere: Bool) -> BotTurnRoute {
-        switch route(.bots, choice: choice, thisMac: thisMac, paired: paired, otherMacOnline: otherMacOnline) {
+    public static func botTurn(choice: DeviceChoice, pair: MacPair, engineHere: Bool, engineThere: Bool) -> BotTurnRoute {
+        switch route(.bots, choice: choice, pair: pair) {
         case .sendAcross: return .sendAcross
         case .waitForOtherMac: return .waitForOtherMac(canRunHere: engineHere)
         case .runHere, .notHere:
             if engineHere { return .runHere }
-            return paired && otherMacOnline && engineThere ? .engineOnOtherMac : .tryHere
+            return pair.paired && pair.otherMacOnline && engineThere ? .engineOnOtherMac : .tryHere
         }
     }
 
@@ -168,20 +211,48 @@ public enum DeviceRouting {
         return plan
     }
 
-    /// `paired` false: there's only this Mac, so it does everything it's able to.
-    public static func route(_ feature: DeviceFeature, choice: DeviceChoice, thisMac: DeviceKind, paired: Bool, otherMacOnline: Bool) -> DeviceRoute {
-        // Hidden screens exist only on a Mac Studio, whatever the setting says.
-        if feature == .studioScreens, thisMac != .macStudio { return .notHere }
+    /// `pair.paired` false: there's only this Mac, so it does everything it's able to.
+    public static func route(_ feature: DeviceFeature, choice: DeviceChoice, pair: MacPair) -> DeviceRoute {
+        guard pair.paired else { return .runHere }
         let isHere: Bool
-        switch choice {
-        // The list of routines is the same on both Macs and each fires once, so "Any" can't mean both.
-        case .any where feature == .routines && paired: isHere = thisMac == .macStudio
-        case .any, .thisMac: isHere = true
-        case .macStudio: isHere = thisMac == .macStudio
-        case .macBookAir: isHere = thisMac == .macBookAir
+        if feature == .routines {
+            // The list of routines is the same on both Macs and each fires once, so both Macs have to agree on one of them.
+            isHere = routinesFireHere(thisMacChoice: choice, pair: pair)
+        } else {
+            switch choice {
+            case .thisMac: isHere = true
+            case .otherMac: isHere = false
+            case .any: isHere = feature.isDoneByOneMac ? alwaysOnMacIsThisOne(pair) : true
+            }
         }
-        if isHere || !paired { return .runHere }
+        if isHere { return .runHere }
         guard feature.canBeSentAcross else { return .notHere }
-        return otherMacOnline ? .sendAcross : .waitForOtherMac
+        return pair.otherMacOnline ? .sendAcross : .waitForOtherMac
+    }
+
+    /// Which of two linked Macs fires routines. Each Mac keeps its own Routines choice and tells the other, and both work this out
+    /// from the same two choices, so they reach the same answer on their own. Each choice is a vote: "This Mac" for itself, "The other
+    /// Mac" for the other one, "Any" for neither. More votes wins; a tie (two Anys, or both naming themselves, or both naming the
+    /// other) goes to the Mac that's always on.
+    public static func routinesFireHere(thisMacChoice: DeviceChoice, pair: MacPair) -> Bool {
+        guard pair.paired else { return true }
+        // Nothing heard from the other Mac yet, so its choice isn't known: only a desktop takes them meanwhile.
+        guard let otherMac = pair.otherMac else { return pair.thisMac.isDesktop }
+        let otherMacChoice = otherMac.routinesChoice ?? .any
+        let votesForThisMac = (thisMacChoice == .thisMac ? 1 : 0) + (otherMacChoice == .otherMac ? 1 : 0)
+        let votesForOtherMac = (thisMacChoice == .otherMac ? 1 : 0) + (otherMacChoice == .thisMac ? 1 : 0)
+        if votesForThisMac != votesForOtherMac { return votesForThisMac > votesForOtherMac }
+        return alwaysOnMacIsThisOne(pair)
+    }
+
+    /// Of two linked Macs, the one that does what one Mac does for both when nobody picked: a desktop over a laptop, since it's
+    /// the one left on, and between two of a kind the smaller id. Both Macs know both ids, so they agree.
+    public static func alwaysOnMacIsThisOne(_ pair: MacPair) -> Bool {
+        guard pair.paired else { return true }
+        guard let otherMac = pair.otherMac else { return pair.thisMac.isDesktop }
+        if pair.thisMac.isDesktop != otherMac.isDesktop { return pair.thisMac.isDesktop }
+        if pair.thisMac.id != otherMac.id { return pair.thisMac.id < otherMac.id }
+        // The same id on both (it shouldn't happen): the names decide, and if those match too, both do it rather than neither.
+        return pair.thisMac.name <= otherMac.name
     }
 }

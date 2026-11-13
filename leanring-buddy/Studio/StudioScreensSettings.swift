@@ -15,7 +15,7 @@ struct StudioScreensSection: View {
     @State private var customSizes: Set<String> = []
 
     var body: some View {
-        TheoSection(title: "Screens", hint: "Each one is a virtual display on this Mac Studio. Tiles nobody owns are a shared pool, and a coder's terminal always stays on your own monitors.") {
+        TheoSection(title: "Screens", hint: "Each one is a virtual display on this Mac. Tiles nobody owns are a shared pool, and a coder's terminal always stays on your own monitors.") {
             ForEach($studio.draft.screens) { $spec in
                 if spec.id != studio.draft.screens.first?.id { RowDivider() }
                 card($spec)

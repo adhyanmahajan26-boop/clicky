@@ -1637,7 +1637,7 @@ final class CompanionManager: ObservableObject {
             return
         }
         // "Clicky, work on the Air": the switch, wherever it's said.
-        if !turnOptions.cameFromOtherMac, turnOptions.theoOrder == nil, let word = ClickyMachineWords.choice(in: transcript), TheoLink.shared.setClickyMac(word: word) {
+        if !turnOptions.cameFromOtherMac, turnOptions.theoOrder == nil, let word = ClickyMachineWords.choice(in: transcript, macNames: TheoLink.shared.macNames), TheoLink.shared.setClickyMac(word: word) {
             let line = "Okay, I'll work on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
             showHandsFreeStatusMessage(line)
             if turnOptions.speaksResponse { speakCodeModeLine(line) }

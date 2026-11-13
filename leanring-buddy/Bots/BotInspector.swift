@@ -42,7 +42,7 @@ struct BotInspector: View {
                         .id(bot.provider + bot.model)
                     }
                     authority(bot)
-                    InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "Screens live on the Mac Studio.") {
+                    InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "The hidden screens aren't on this Mac.") {
                         if StudioController.isAvailable { BotScreenPicker(botID: bot.id).labelsHidden() }
                     }
                     InspectorSection("Instructions", hint: "Your words come first. Every bot also learns Theo's harness guide: how to message, hand over, schedule and start code.") {

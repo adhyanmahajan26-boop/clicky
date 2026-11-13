@@ -368,13 +368,13 @@ public enum BotProtocol {
         "and don't also list the options in your words: [CHOOSE: the question | First option: a few words on it | Second option: a few words on it]. " +
         "Two to four options, the one you'd pick first. Most messages need none of this."
 
-    /// Bots' screen jobs run on the Mac Studio's hidden screens, through Clicky.
+    /// Bots' screen jobs run on the hidden screens of whichever Mac has them, through Clicky.
     /// How a bot gets a PDF made: it writes the document, Theo renders it.
     public static let pdfHowTo = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: " +
         "Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so."
 
     public static let screenHowTo =
-        "Addy's Mac Studio has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
+        "Addy's Mac has hidden screens set aside for you, and Addy watches them in the Studio panel. For a simple job in an " +
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
         "Clicky does it on a free tile without touching Addy's own monitors, then tells you what happened. Say a job happened only if " +
         "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +

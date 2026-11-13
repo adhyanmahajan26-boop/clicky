@@ -46,7 +46,8 @@ enum DeviceSnapshotBuilder {
         }
         for provider in ProviderKeys.shared.usableChatProviders { ready["api:\(provider.id)"] = true }
         return DeviceSnapshot(name: TheoLink.localName, projectsFolder: BotsT3.projectsFolder.path, projects: BotsT3.projects(), harnesses: ready,
-                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines))
+                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines),
+                              deviceID: DeviceRoles.thisMacID, isDesktop: DeviceRoles.thisMacIsDesktop, routinesChoice: DeviceRoles.choice(.routines).rawValue)
     }
 }
 
@@ -83,7 +84,7 @@ extension BotsStore {
         let typedOn = ownerMacs[room].map(TheoLink.shortName)
         let why = forwarded?.why ?? typedOn.map { _ in "Bots & coding is set to this Mac" }
         return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac ?? typedOn, whyHere: why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
-                             otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? (DeviceRoles.thisMac != .macStudio)),
+                             otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? !StudioController.isAvailable),
                              thisMacHasScreens: StudioController.isAvailable, canReadFiles: Self.engineReadsFiles(bot))
     }
 
@@ -97,7 +98,7 @@ extension BotsStore {
     /// When this bot's engine can't run on this Mac but can on the other, connected one: that Mac's name, and why. Nil means it runs here.
     func turnGoesAcross(_ bot: NativeBot) -> (mac: String, why: String)? {
         guard let problem = EngineReadiness.problem(with: bot.provider), let peer = TheoLink.shared.peerName,
-              DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected,
+              DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), pair: DeviceRoles.pair,
                                     engineHere: false, engineThere: peerDevice?.harnesses[bot.provider] == true) == .engineOnOtherMac else { return nil }
         return (peer, "\(problem) on the \(TheoLink.shortName(TheoLink.localName))")
     }

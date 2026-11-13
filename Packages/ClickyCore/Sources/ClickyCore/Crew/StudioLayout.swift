@@ -2,18 +2,18 @@
 //  StudioLayout.swift
 //  ClickyCore
 //
-//  Studio screens' rules, with no windows or displays involved: which Macs get them, where tiles sit on a hidden screen,
-//  and who is on which tile.
+//  Studio screens' rules, with no windows or displays involved: where tiles sit on a hidden screen, and who is on which tile.
 //
 
 import CoreGraphics
 import Foundation
 
 public enum StudioGate {
-    /// Mac Studio model identifiers so far (2022, 2023, 2025).
+    /// Mac Studio model identifiers so far (2022, 2023, 2025). Any Mac can have hidden screens now; this is only for reading settings
+    /// saved by builds that knew a Mac Studio and a MacBook Air and nothing else (`DeviceChoice.fromSaved`).
     public static let studioModels: Set<String> = ["Mac13,1", "Mac13,2", "Mac14,13", "Mac14,14", "Mac15,14", "Mac16,9"]
 
-    /// A newer Studio won't be in the list yet, so the Mac's product name counts too.
+    /// A newer Studio won't be in the list yet, so the Mac's product name counts too. Old settings only, as above.
     public static func isMacStudio(model: String, productName: String? = nil) -> Bool {
         studioModels.contains(model) || productName?.localizedCaseInsensitiveContains("Mac Studio") == true
     }

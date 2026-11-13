@@ -449,7 +449,7 @@ extension BotsStore {
             onReport?(CompanionManager.clickyOffLine)
             return
         }
-        if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order), TheoLink.shared.setClickyMac(word: word) {
+        if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order, macNames: TheoLink.shared.macNames), TheoLink.shared.setClickyMac(word: word) {
             let line = "Clicky's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
             post(BotChatMessage(author: Self.clickyID, text: line), to: ceo.id)
             onReport?(line)
@@ -599,7 +599,7 @@ extension BotsStore {
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
-        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords), room: ceo.id)
+        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords, macNames: TheoLink.shared.macNames), room: ceo.id)
         let folder = projectChoice(ownerWords: ownerWords, answer: prompt, macName: mac)
         submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: folder.repo, room: ceo.id, harness: harness,
                    modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac) { started, problem in
@@ -612,7 +612,11 @@ extension BotsStore {
     func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
         guard StudioController.isAvailable else {
             if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
-                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's hidden screens right now: your other Mac isn't connected."), to: room)
+                let link = TheoLink.shared
+                let line = link.isPaired
+                    ? "I can't reach the hidden screens on your \(TheoLink.shortName(link.knownPeerName ?? "other Mac")) right now: it isn't connected."
+                    : "There are no hidden screens on this Mac."
+                post(BotChatMessage(author: bot.id, text: line), to: room)
             }
             return
         }
