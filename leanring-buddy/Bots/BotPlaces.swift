@@ -52,6 +52,12 @@ enum DeviceSnapshotBuilder {
 
 extension BotsStore {
     /// The facts for this chat's "where you are" block, for this bot's turn.
+    /// A bot on a plain model API has no file tools (Theo reads its memory in for it), so it isn't told what it may read.
+    static func engineReadsFiles(_ bot: NativeBot?) -> Bool {
+        guard let bot else { return true }
+        return !bot.provider.hasPrefix("api:")
+    }
+
     func placeFacts(room: String, bot: NativeBot? = nil) -> BotPlaceFacts {
         let link = TheoLink.shared
         let here = TheoLink.shortName(TheoLink.localName)
@@ -66,7 +72,8 @@ extension BotsStore {
         // This turn is about to run on the other Mac, and the bot should hear so from that Mac's side.
         if let bot, let across = turnGoesAcross(bot), let other = otherName {
             return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: other, ownerMac: here, whyHere: across.why, codingMac: here, projects: hereProjects, projectsFolder: BotsT3.projectsWords,
-                                 ready: peerReadyLabels, otherMac: here, otherMacConnected: true, otherMacHasScreens: StudioController.isAvailable, thisMacHasScreens: peerDevice?.hasScreens ?? false)
+                                 ready: peerReadyLabels, otherMac: here, otherMacConnected: true, otherMacHasScreens: StudioController.isAvailable, thisMacHasScreens: peerDevice?.hasScreens ?? false,
+                                 canReadFiles: Self.engineReadsFiles(bot))
         }
         let forwarded = forwardedTurns[room]
         let projects = forwarded != nil ? (peerDevice?.projects.map(\.name) ?? []) : hereProjects
@@ -77,7 +84,7 @@ extension BotsStore {
         let why = forwarded?.why ?? typedOn.map { _ in "Bots & coding is set to this Mac" }
         return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac ?? typedOn, whyHere: why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
                              otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? (DeviceRoles.thisMac != .macStudio)),
-                             thisMacHasScreens: StudioController.isAvailable)
+                             thisMacHasScreens: StudioController.isAvailable, canReadFiles: Self.engineReadsFiles(bot))
     }
 
     private var peerReadyLabels: [String] {

@@ -392,6 +392,17 @@ struct BotProtocolTests {
         #expect(text.contains("Never offer a folder on one Mac and run on the other"))
     }
 
+    /// Day-one finding: a bot whose instructions mention a local folder outside its read scope tried it, was refused, and asked
+    /// the owner to "allow Glob", which no setting does. It's now told what it may read, and the way to reach anything else.
+    @Test func whereYouAreSaysWhatTheBotMayRead() {
+        let text = BotAwareness.whereYouAre(place)
+        #expect(text.contains("You can read only your memory folder, ~/Projects and files or folders Addy names in the message"))
+        #expect(text.contains("ask Addy to name its path"))
+        var noTools = place
+        noTools.canReadFiles = false
+        #expect(!BotAwareness.whereYouAre(noTools).contains("You can read only"))
+    }
+
     @Test func aTurnFromTheOtherMacSaysSo() {
         var facts = place
         facts.thisMac = "Mac Studio"
