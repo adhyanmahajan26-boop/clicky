@@ -13,7 +13,7 @@ public enum HarnessGuide {
                                 projectsFolder: String = ProjectsFolder.defaultSetting) -> String {
         let sections: [(String, String)] = [
             ("What Theo is",
-             "Theo is \(owner)'s bot harness on their Macs. Each bot is a persona with an engine (Claude Code, OpenCode or an API key), " +
+             "Theo is \(owner)'s bot harness on their Macs. Each bot is a persona with a brain (Claude Code, Codex, Cursor, OpenCode, Grok, Gemini or an API key), " +
              "its own chat with \(owner), a memory file, the apps (connectors) \(owner) gave it, and a place on a team. Bots message each other " +
              "privately, talk in group chats, run routines on a schedule, and hand coding to a harness that commits, pushes and opens a draft PR. " +
              "Theo is the CEO bot; Clicky is the voice and screen companion, with Memory, Researcher and Runner under it."),
