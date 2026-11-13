@@ -1172,12 +1172,15 @@ def t26():
 def t27():
     T.fake("ok"); work, _ = sandbox_repo(); n = T.nonce(); title = "Long " + n; mark = T.calls_mark()
     P({"cmd": "uiRunStart", "prompt": "This tests stopping a run. Run python3 -c 'import time; time.sleep(240)' then create long/%s.md containing x." % n, "title": title, "folder": str(work)})
-    child = T.wait_until(lambda: next((c["child"] for c in T.calls(mark) if c.get("child")), None), 20)
+    logged = T.wait_until(lambda: next((c for c in T.calls(mark) if c.get("child")), None), 20) or {}
+    # Checked against the time this child started: Windows reuses process ids quickly, and an id an earlier test's engine
+    # had would otherwise carry that engine's start time and read as not running.
+    child, child_started = logged.get("child"), logged.get("t")
     rid = next(r["id"] for r in T.state()["runs"] if r["title"] == title)
-    running_before = T.alive(child)
+    running_before = T.alive(child, child_started)
     P({"cmd": "uiStopRun", "id": rid}); time.sleep(3)
     r = next(r for r in T.state()["runs"] if r["id"] == rid)
-    still = T.alive(child)
+    still = T.alive(child, child_started)
     said = any(title in m["text"] and "stopped" in m["text"].lower() for m in T.chat("theo", 20))
     return running_before and not still and r["phase"] == "stopped" and said, {"agent_command_running_before": running_before, "still_running_after_stop": still, "phase": r["phase"], "chat_said_stopped": said}
 
