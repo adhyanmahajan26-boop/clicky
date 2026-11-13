@@ -87,7 +87,10 @@ final class ActionExecutor {
 
     // MARK: - Resolve (read only)
 
-    func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String) -> ResolvedActionTarget {
+    /// `previousTargetProcessIdentifier`: the app the task's previous step acted on (key steps go there when a
+    /// notification alert or one of Theo's panels is in front; ClickyCore ActionKeyTarget).
+    func resolve(_ step: ActionStep, groundedTurn: GroundedTurn, ownerTranscript: String,
+                 previousTargetProcessIdentifier: pid_t? = nil) -> ResolvedActionTarget {
         switch step {
         case .openApp(let name, let bundleIdentifier):
             guard let candidate = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier) else {
@@ -113,7 +116,7 @@ final class ActionExecutor {
             return resolveFrontmost(includingFocusedElement: true)
 
         case .key:
-            return resolveFrontmost(includingFocusedElement: true)
+            return resolveKeyTarget(previousTargetProcessIdentifier: previousTargetProcessIdentifier)
 
         case .scroll(let elementID, _, _):
             if let elementID { return resolveElement(elementID, in: groundedTurn) }
@@ -161,8 +164,30 @@ final class ActionExecutor {
                                     processIdentifier: groundingElement.processIdentifier, frameCG: liveFrame)
     }
 
+    /// A key step's app: the frontmost one, unless that's a notification alert or one of Theo's panels while the task
+    /// was working in another app that's still running (ClickyCore ActionKeyTarget).
+    private func resolveKeyTarget(previousTargetProcessIdentifier: pid_t?) -> ResolvedActionTarget {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
+        let isOwnApplication = frontmostApplication.processIdentifier == getpid()
+        let showsOwnMainWindow = isOwnApplication && (NSApp.keyWindow.map { TheoMainWindows.windows().contains($0) } ?? false)
+        let previousApplication = previousTargetProcessIdentifier.flatMap { NSRunningApplication(processIdentifier: $0) }
+        let chosenProcessIdentifier = ActionKeyTarget.processIdentifier(
+            frontmost: ActionKeyTarget.Frontmost(processIdentifier: frontmostApplication.processIdentifier, bundleIdentifier: frontmostApplication.bundleIdentifier,
+                                                 isOwnApplication: isOwnApplication, showsOwnMainWindow: showsOwnMainWindow),
+            previousTargetProcessIdentifier: previousTargetProcessIdentifier,
+            previousTargetIsRunning: previousApplication.map { !$0.isTerminated } ?? false)
+        guard chosenProcessIdentifier != frontmostApplication.processIdentifier, let previousApplication else {
+            return resolveApplication(frontmostApplication, includingFocusedElement: true)
+        }
+        return resolveApplication(previousApplication, includingFocusedElement: true)
+    }
+
     private func resolveFrontmost(includingFocusedElement: Bool) -> ResolvedActionTarget {
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else { return ResolvedActionTarget(failure: "no app is in front") }
+        return resolveApplication(frontmostApplication, includingFocusedElement: includingFocusedElement)
+    }
+
+    private func resolveApplication(_ frontmostApplication: NSRunningApplication, includingFocusedElement: Bool) -> ResolvedActionTarget {
         let processIdentifier = frontmostApplication.processIdentifier
         // Never ask Theo's own process over AX from here (it would wait on itself).
         let focusedElement = includingFocusedElement && processIdentifier != getpid() ? TypeForMeAccessibility.focusedElement(processIdentifier: processIdentifier) : nil
