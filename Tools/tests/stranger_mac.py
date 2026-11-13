@@ -200,6 +200,10 @@ def step_first_run(theo, record):
     theo.result({"cmd": "uiPixel", "action": "products", "on": {"theo": True, "clicky": False, "dictation": False}})
     opened = theo.result({"cmd": "uiPixel", "action": "setup", "step": "done"})
     pressed = theo.send({"cmd": "uiPress", "label": "Open Theo", "window": opened.get("window")})
+    if not pressed.get("ok"):
+        # SwiftUI can leave the in-process accessibility tree empty (no accessibility client has asked yet), so the label
+        # isn't found. Return presses the same button: "Open Theo" is the step's default action.
+        pressed = dict(theo.send({"cmd": "uiKey", "key": "return", "window": opened.get("window")}), by="return")
     deadline = time.time() + 20
     while time.time() < deadline and theo.read_default("v2.setup.completed") != "1":
         time.sleep(0.5)
@@ -217,7 +221,7 @@ def step_first_run(theo, record):
         "theo_answered": "Stand-in here" in reply,
         "no_claude_code_words": "claude" not in reply.lower(),
     }
-    return all(checks.values()), dict(checks, pressed=pressed.get("ok"), theo={k: theo_bot.get(k) for k in ("provider", "model")}, reply=reply[:300])
+    return all(checks.values()), dict(checks, pressed=pressed.get("by", "label") if pressed.get("ok") else False, theo={k: theo_bot.get(k) for k in ("provider", "model")}, reply=reply[:300])
 
 
 def step_owner_name(theo, record):
@@ -291,7 +295,7 @@ def step_coding_run(theo):
         "ran_inside_the_chosen_folder": bool(ran) and pathlib.Path(ran["cwd"]).resolve().is_relative_to(elsewhere.resolve()),
         "nothing_made_in_the_default_projects_folder": not default_projects.exists() or not any(default_projects.iterdir()),
     }
-    return all(checks.values()), dict(checks, started=started, ran=ran, codex=(harnesses.get("harnesses") or {}).get("codex") if isinstance(harnesses, dict) else None)
+    return all(checks.values()), dict(checks, started=started, ran=ran, codex=next((h for h in harnesses.get("harnesses") or [] if h.get("id") == "codex"), None))
 
 
 def step_two_laptops(binary):
