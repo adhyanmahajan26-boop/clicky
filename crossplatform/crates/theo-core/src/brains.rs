@@ -499,7 +499,12 @@ pub fn usage_limit_message(engine: &str, output: &str) -> Option<String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
     static CODEX_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(hit|reached) your usage limit|usage limit (reached|exceeded)|quota exceeded").unwrap());
-    static CURSOR_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)out of usage|increase your limit").unwrap());
+    static CURSOR_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)out of usage|increase your limit|usage limit reached").unwrap());
+    static GROK_BALANCE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)usage balance exhausted|402 payment required").unwrap());
+    // Grok bills a prepaid balance: there's no reset to wait for, only a top-up.
+    if engine == "grok" && GROK_BALANCE.is_match(output) {
+        return Some("Grok's usage balance is used up. Top it up in your xAI account, then try again.".to_string());
+    }
     static RESET_PHRASE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)(try again|resets?|available again)[^.\n"]*"#).unwrap());
     let (limit_pattern, plan_name) = match engine {
         "codex" => (&*CODEX_LIMIT, "Codex's ChatGPT"),
@@ -586,6 +591,11 @@ mod tests {
         );
         assert_eq!(usage_limit_message("cursor", "You're out of usage"), Some("Cursor's usage limit is reached; it resets later.".to_string()));
         assert_eq!(usage_limit_message("claude", "usage limit reached"), None);
+        assert_eq!(
+            usage_limit_message("cursor", "ActionRequiredError: Weekly usage limit reached. It resets in 4 days. Buy credits to keep going now."),
+            Some("Cursor's usage limit is reached; resets in 4 days.".to_string())
+        );
+        assert!(usage_limit_message("grok", "API error (status 402 Payment Required): Grok Build usage balance exhausted").unwrap().contains("balance is used up"));
         assert!(sign_in_problem("gemini", "Please set an Auth method in your settings.json").unwrap().contains("Gemini"));
         assert!(sign_in_problem("grok", "Run `grok login` first").is_some());
         assert_eq!(sign_in_problem("codex", "all good"), None);
