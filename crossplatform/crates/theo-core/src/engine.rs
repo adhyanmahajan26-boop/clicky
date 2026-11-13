@@ -1,0 +1,392 @@
+//! Running one engine process: start it in its own process tree, read its stream, enforce the time limit, stop it.
+
+use crate::procs::{ProcessTree, Registry};
+use crate::usage::TurnUsage;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::sync::Notify;
+
+/// The most of one output line that's looked at. An engine can print an 8 MB line.
+pub const MAX_LINE: usize = 1 << 20;
+/// The most reply text kept in memory.
+pub const MAX_TEXT: usize = 4 << 20;
+
+#[derive(Default)]
+pub struct Cancel {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+impl Cancel {
+    pub fn new() -> Arc<Self> { Arc::new(Self::default()) }
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+    pub fn is_cancelled(&self) -> bool { self.flag.load(Ordering::SeqCst) }
+    pub async fn cancelled(&self) {
+        loop {
+            let waiter = self.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            waiter.await;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Format { Claude, OpenCode }
+
+pub struct Spec {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub remove_env: Vec<String>,
+    pub cwd: PathBuf,
+    pub limit: Duration,
+    pub format: Format,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EndReason { Exited, Timeout, Cancelled }
+
+#[derive(Debug)]
+pub struct Outcome {
+    pub text: String,
+    pub session_id: Option<String>,
+    pub error: Option<String>,
+    pub exit_code: Option<i32>,
+    pub end: EndReason,
+    pub stderr_tail: String,
+    pub usage: Option<TurnUsage>,
+    pub truncated: bool,
+}
+
+/// Reads an engine's stream-json lines into a reply.
+#[derive(Default)]
+pub struct StreamParser {
+    pub text: String,
+    pub session_id: Option<String>,
+    pub error: Option<String>,
+    pub usage: Option<TurnUsage>,
+    pub saw_delta: bool,
+    pub truncated: bool,
+    final_text: Option<String>,
+}
+
+impl StreamParser {
+    fn push(&mut self, piece: &str) {
+        if self.text.len() + piece.len() > MAX_TEXT {
+            let room = MAX_TEXT.saturating_sub(self.text.len());
+            let mut cut = room.min(piece.len());
+            while cut > 0 && !piece.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            self.text.push_str(&piece[..cut]);
+            self.truncated = true;
+        } else {
+            self.text.push_str(piece);
+        }
+    }
+
+    /// One line. True when the visible text changed.
+    pub fn consume(&mut self, line: &str, format: Format) -> bool {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            return false;
+        }
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else { return false };
+        let kind = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if let Some(id) = event.get("session_id").or_else(|| event.get("sessionID")).and_then(|s| s.as_str()) {
+            if !id.is_empty() {
+                self.session_id = Some(id.to_string());
+            }
+        }
+        match format {
+            Format::Claude => match kind {
+                "stream_event" => {
+                    let inner = &event["event"];
+                    match inner["type"].as_str() {
+                        Some("content_block_delta") if inner["delta"]["type"] == "text_delta" => {
+                            if let Some(piece) = inner["delta"]["text"].as_str() {
+                                self.saw_delta = true;
+                                self.push(piece);
+                                return true;
+                            }
+                        }
+                        // A new text block after a tool call reads as a new paragraph.
+                        Some("content_block_start") if inner["content_block"]["type"] == "text" => {
+                            if !self.text.is_empty() && !self.text.ends_with('\n') {
+                                self.push("\n\n");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "assistant" if !self.saw_delta => {
+                    if let Some(blocks) = event["message"]["content"].as_array() {
+                        for block in blocks {
+                            if block["type"] == "text" {
+                                if let Some(t) = block["text"].as_str() {
+                                    if !self.text.is_empty() {
+                                        self.push("\n\n");
+                                    }
+                                    self.push(t);
+                                }
+                            }
+                        }
+                        return true;
+                    }
+                }
+                "result" => {
+                    self.usage = TurnUsage::from_claude_result(&event);
+                    let result = event.get("result").and_then(|r| r.as_str()).map(str::to_string);
+                    if event.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false) || event.get("subtype").and_then(|s| s.as_str()).map(|s| s.starts_with("error")).unwrap_or(false) {
+                        self.error = Some(result.unwrap_or_else(|| "Claude reported an error.".to_string()));
+                    } else {
+                        self.final_text = result;
+                    }
+                }
+                _ => {}
+            },
+            Format::OpenCode => match kind {
+                "text" => {
+                    if let Some(t) = event["part"]["text"].as_str() {
+                        if !self.text.is_empty() {
+                            self.push("\n\n");
+                        }
+                        self.push(t);
+                        return true;
+                    }
+                }
+                "error" => {
+                    let message = event["error"]["data"]["message"].as_str().or_else(|| event["error"]["message"].as_str()).unwrap_or("OpenCode reported an error.");
+                    self.error = Some(message.to_string());
+                }
+                "step_finish" => {
+                    let part = &event["part"];
+                    let tokens = &part["tokens"];
+                    let n = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+                    let step = TurnUsage {
+                        input_tokens: n(&tokens["input"]),
+                        output_tokens: n(&tokens["output"]) + n(&tokens["reasoning"]),
+                        cache_read_tokens: n(&tokens["cache"]["read"]),
+                        cache_write_tokens: n(&tokens["cache"]["write"]),
+                        cost_usd: part["cost"].as_f64(),
+                    };
+                    if !step.is_empty() {
+                        self.usage.get_or_insert_with(TurnUsage::default).add(&step);
+                    }
+                }
+                _ => {}
+            },
+        }
+        false
+    }
+
+    pub fn finish(&mut self) {
+        if self.text.trim().is_empty() {
+            if let Some(t) = self.final_text.take() {
+                self.text = t;
+            }
+        }
+    }
+}
+
+/// How a program is started: a Python stand-in through Python, a .cmd or .bat through cmd on Windows.
+pub fn command_for(program: &std::path::Path) -> (PathBuf, Vec<String>) {
+    let ext = program.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if ext == "py" {
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        return (PathBuf::from(python), vec![program.to_string_lossy().to_string()]);
+    }
+    if cfg!(windows) && (ext == "cmd" || ext == "bat") {
+        return (PathBuf::from("cmd"), vec!["/C".into(), program.to_string_lossy().to_string()]);
+    }
+    (program.to_path_buf(), vec![])
+}
+
+/// Splits a byte stream into lines, keeping at most `MAX_LINE` of each.
+struct LineSplitter {
+    buffer: Vec<u8>,
+    overflowing: bool,
+}
+
+impl LineSplitter {
+    fn feed(&mut self, chunk: &[u8], out: &mut Vec<String>) {
+        for &byte in chunk {
+            if byte == b'\n' {
+                if !self.overflowing {
+                    out.push(String::from_utf8_lossy(&self.buffer).to_string());
+                }
+                self.buffer.clear();
+                self.overflowing = false;
+            } else if self.buffer.len() < MAX_LINE {
+                self.buffer.push(byte);
+            } else {
+                // A line that never ends is dropped whole: half of a JSON object is noise.
+                self.overflowing = true;
+            }
+        }
+    }
+}
+
+pub async fn run(spec: Spec, cancel: Arc<Cancel>, registry: Option<Arc<Registry>>, on_text: impl Fn(&str) + Send + Sync + 'static) -> std::io::Result<Outcome> {
+    let (program, mut pre_args) = command_for(&spec.program);
+    pre_args.extend(spec.args.iter().cloned());
+    let mut cmd = tokio::process::Command::new(&program);
+    cmd.args(&pre_args).current_dir(&spec.cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    for key in &spec.remove_env {
+        cmd.env_remove(key);
+    }
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    cmd.kill_on_drop(false);
+    crate::procs::configure(&mut cmd);
+    let mut child = cmd.spawn()?;
+    let tree = Arc::new(ProcessTree::attach(&child)?);
+    if let Some(r) = &registry {
+        r.add(&tree);
+    }
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let format = spec.format;
+    let on_text = Arc::new(on_text);
+
+    let parser = Arc::new(std::sync::Mutex::new(StreamParser::default()));
+    let reader = {
+        let parser = parser.clone();
+        let on_text = on_text.clone();
+        tokio::spawn(async move {
+            let mut stdout = stdout;
+            let mut splitter = LineSplitter { buffer: vec![], overflowing: false };
+            let mut chunk = vec![0u8; 64 * 1024];
+            let mut last_shown = std::time::Instant::now() - Duration::from_secs(1);
+            loop {
+                let n = match stdout.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                let mut lines = vec![];
+                splitter.feed(&chunk[..n], &mut lines);
+                let mut changed = false;
+                {
+                    let mut p = parser.lock().unwrap();
+                    for line in &lines {
+                        changed |= p.consume(line, format);
+                    }
+                }
+                // The live text is shown at most 20 times a second, however fast the engine floods.
+                if changed && last_shown.elapsed() >= Duration::from_millis(50) {
+                    let text = parser.lock().unwrap().text.chars().take(20_000).collect::<String>();
+                    on_text(&text);
+                    last_shown = std::time::Instant::now();
+                }
+            }
+            if !splitter.buffer.is_empty() && !splitter.overflowing {
+                let line = String::from_utf8_lossy(&splitter.buffer).to_string();
+                parser.lock().unwrap().consume(&line, format);
+            }
+        })
+    };
+    let err_reader = tokio::spawn(async move {
+        let mut stderr = stderr;
+        let mut tail: Vec<u8> = vec![];
+        let mut chunk = vec![0u8; 16 * 1024];
+        loop {
+            match stderr.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    tail.extend_from_slice(&chunk[..n]);
+                    if tail.len() > 256 * 1024 {
+                        tail.drain(..tail.len() - 64 * 1024);
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&tail).to_string()
+    });
+
+    let mut end = EndReason::Exited;
+    let status = tokio::select! {
+        s = child.wait() => s.ok(),
+        _ = tokio::time::sleep(spec.limit) => { end = EndReason::Timeout; None }
+        _ = cancel.cancelled() => { end = EndReason::Cancelled; None }
+    };
+    let status = match status {
+        Some(s) => Some(s),
+        None => {
+            // Asked nicely first, then made to stop: something that ignores SIGTERM still ends.
+            tree.terminate();
+            match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+                Ok(s) => {
+                    tree.kill();
+                    s.ok()
+                }
+                Err(_) => {
+                    tree.kill();
+                    tokio::time::timeout(Duration::from_secs(5), child.wait()).await.ok().and_then(|s| s.ok())
+                }
+            }
+        }
+    };
+    // The engine is done. Whatever it left in its tree (a tool child that ignores SIGTERM) goes with it, and a child that
+    // slipped out and still holds the output pipe can't hold the turn open: reading stops shortly after.
+    if tree.alive() {
+        tree.terminate();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tree.kill();
+    }
+    let _ = tokio::time::timeout(Duration::from_millis(1500), reader).await;
+    let stderr_tail = tokio::time::timeout(Duration::from_millis(500), err_reader).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+    if let Some(r) = &registry {
+        r.remove(&tree);
+    }
+    let mut p = std::mem::take(&mut *parser.lock().unwrap());
+    p.finish();
+    on_text(&p.text.chars().take(20_000).collect::<String>());
+    Ok(Outcome {
+        text: p.text,
+        session_id: p.session_id,
+        error: p.error,
+        exit_code: status.and_then(|s| s.code()),
+        end,
+        stderr_tail: stderr_tail.chars().rev().take(20_000).collect::<Vec<_>>().into_iter().rev().collect(),
+        usage: p.usage,
+        truncated: p.truncated,
+    })
+}
+
+/// Where an engine's program is: on PATH, or where its installer puts it.
+pub fn locate(name: &str) -> Option<PathBuf> {
+    let home = crate::paths::home();
+    let exts: Vec<&str> = if cfg!(windows) { vec![".exe", ".cmd", ".bat", ""] } else { vec![""] };
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.extend([
+        home.join(".local/bin"),
+        home.join(format!(".{name}/local")),
+        home.join(format!(".{name}/bin")),
+        home.join(".npm-global/bin"),
+        home.join(".bun/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+    ]);
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(appdata).join("npm"));
+    }
+    for dir in dirs {
+        for ext in &exts {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}

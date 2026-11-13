@@ -1,0 +1,11 @@
+[package]
+name = "theod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+theo-core = { path = "../theo-core" }
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
