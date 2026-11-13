@@ -51,7 +51,11 @@ struct AppSignInCard: View {
     }
 
     static func scope(_ connector: BotConnector) -> String {
-        BotConnectors.bridged(connector) ? "Read and draft only. Never sends or deletes." : "Used by your bots on this Mac."
+        if let hub = connector.hub {
+            // A hub app: every brain reaches it the same way, and each bot's settings say how far it may go.
+            return hub.isClaudeAccount ? "Through your Claude account. Each bot's settings say what it may do." : "Signed in inside Theo. Each bot's settings say what it may do."
+        }
+        return BotConnectors.bridged(connector) ? "Read and draft only. Never sends or deletes." : "Used by your bots on this Mac."
     }
 
     private func signIn() {

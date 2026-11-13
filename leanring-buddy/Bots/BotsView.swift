@@ -1643,8 +1643,9 @@ struct ConnectorsScreen: View {
     /// The row whose details are open.
     @State private var openRow: String?
 
+    /// Every app on the screen. Before the hub, Notion Calendar shares Notion's row; in the hub it is an app of its own.
     private var connectors: [BotConnector] {
-        BotConnectors.known.filter { $0.id != "calendar" }
+        BotConnectors.known.filter { $0.id != "calendar" || $0.hub != nil }
             .enumerated()
             .sorted { left, right in
                 let leftOrder = health.state(of: left.element).sortOrder
@@ -1659,8 +1660,11 @@ struct ConnectorsScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Connectors").font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
-                    Text("Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only.")
+                    Text(headerWords)
                         .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let problem = health.hubProblem, ConnectorHub.isAvailable {
+                    Text(problem).font(TheoType.caption).foregroundColor(PixelTone.failed.text).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
                     summaryPills
@@ -1682,6 +1686,7 @@ struct ConnectorsScreen: View {
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
                 otherServersSection
+                if ConnectorHub.isAvailable { AddConnectorSection(note: $note) }
             }
             .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 32)
             .frame(maxWidth: 820, alignment: .leading)
@@ -1690,9 +1695,18 @@ struct ConnectorsScreen: View {
         .task { await health.refresh() }
     }
 
+    /// With the hub every brain reaches the same apps; without it, the old split between Claude and the other engines.
+    private var headerWords: String {
+        if ConnectorHub.isAvailable {
+            return "Theo's own apps, the same for every bot whatever its engine. Sign in here, then give an app to a bot in its settings and say how far it may go. Apps through your Claude account still need Claude Code."
+        }
+        return "Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only. "
+            + ConnectorHub.helperMissingWords
+    }
+
     /// "6 connected", "1 needs sign-in", "1 can't connect".
     @ViewBuilder private var summaryPills: some View {
-        let states = BotConnectors.known.filter { $0.id != "calendar" && !$0.isSkill }.map { health.state(of: $0) }
+        let states = connectors.filter { !$0.isSkill }.map { health.state(of: $0) }
         let connected = states.filter { [.connected, .claudeOnly, .othersOnly].contains($0) }.count
         let signIn = states.filter { $0 == .needsSignIn }.count
         let failed = states.filter { if case .failed = $0 { return true }; return false }.count
@@ -1707,7 +1721,8 @@ struct ConnectorsScreen: View {
 
     /// One row per connector: its tile, who uses it (each bot's micro face, then the names), one status pill and one button.
     private func row(_ connector: BotConnector) -> some View {
-        let users = bots.filter { $0.apps.contains(connector.id) || (connector.id == "notion" && $0.apps.contains("calendar")) }
+        let users = bots.filter { $0.apps.contains(connector.id) || (connector.id == "notion" && connector.hub == nil && $0.apps.contains("calendar")) }
+        let hubRecord = health.hubRecord(of: connector)
         let state = health.state(of: connector)
         let waiting = health.botsWaiting(on: connector.id).compactMap { store.bot($0) }
         let pill = state.pill
@@ -1737,6 +1752,13 @@ struct ConnectorsScreen: View {
             StatusPill(text: pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
             Group {
                 switch state {
+                case .needsSignIn where hubRecord?.takesPastedToken == true:
+                    // A token is pasted in the row's details.
+                    Button("Add token") { withAnimation(DS.Motion.hover) { openRow = connector.id } }
+                        .buttonStyle(.theo(.primary, .small))
+                case .missing where hubRecord?.enabled == false:
+                    Button(working == connector.id ? "Turning on…" : "Turn on") { turnOn(connector) }
+                        .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
                 case .needsSignIn:
                     Button(working == connector.id ? "Signing in…" : "Sign in") { signIn(connector, bot: waiting.first) }
                         .buttonStyle(.theo(.primary, .small)).disabled(working != nil)
@@ -1765,7 +1787,13 @@ struct ConnectorsScreen: View {
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(DS.Motion.hover) { openRow = openRow == connector.id ? nil : connector.id } }
         .pointerCursor()
-        if openRow == connector.id { details(connector, state: state, users: users) }
+        if openRow == connector.id {
+            if let hubRecord {
+                HubAppDetails(connector: connector, record: hubRecord, users: users, note: $note)
+            } else {
+                details(connector, state: state, users: users)
+            }
+        }
         }
     }
 
@@ -1811,6 +1839,10 @@ struct ConnectorsScreen: View {
                             Group {
                                 if server.state == .needsSignIn, server.name.hasPrefix("claude.ai") {
                                     Button("Sign in") { BotConnectors.openClaudeConnectors() }.buttonStyle(.theo(.primary, .small))
+                                } else if ConnectorHub.isAvailable, server.engine == "Claude" {
+                                    // Kept as an app Theo reaches through the Claude account, so it can be given to bots.
+                                    Button(working == server.name ? "Adding…" : "Add to Theo") { addClaudeServer(server.name) }
+                                        .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
                                 } else if server.state.isFailed {
                                     Button("Try again") { Task { await health.refresh() } }.buttonStyle(.theo(.secondary, .small))
                                 } else {
@@ -1838,8 +1870,10 @@ struct ConnectorsScreen: View {
             return (ConnectorListing.plainReason(reason, app: connector.name) + worked, PixelTone.failed.text)
         case .claudeOnly:
             return ("Bots on OpenCode and Grok can't use it yet", DS.Colors.textTertiary)
+        case .missing where health.hubRecord(of: connector)?.enabled == false:
+            return ("Off: no bot can use it until it's on", DS.Colors.textTertiary)
         default:
-            return connector.id == "notion" ? ("Includes Notion Calendar", DS.Colors.textTertiary) : nil
+            return connector.id == "notion" && connector.hub == nil ? ("Includes Notion Calendar", DS.Colors.textTertiary) : nil
         }
     }
 
@@ -1871,6 +1905,36 @@ struct ConnectorsScreen: View {
         working = connector.id
         Task {
             note = await health.signIn(connector, forBot: bot)
+            working = nil
+            await health.refresh()
+        }
+    }
+
+    private func turnOn(_ connector: BotConnector) {
+        working = connector.id
+        Task {
+            do {
+                try await ConnectorHub.setEnabled(connector.id, true)
+                note = "\(connector.name) is on."
+            } catch {
+                note = error.localizedDescription
+            }
+            working = nil
+            await health.refresh()
+        }
+    }
+
+    /// A server Claude Code has that Theo doesn't yet, added to the hub as an app reached through the Claude account.
+    private func addClaudeServer(_ serverName: String) {
+        let appID = ConnectorHubNewApp.id(fromName: ConnectorHealth.displayName(serverName), taken: Set(health.hubApps.map(\.id)))
+        working = serverName
+        Task {
+            do {
+                try await ConnectorHub.add(entry: ConnectorHubNewApp.claudeAccount(id: appID, server: serverName))
+                note = "Added \(ConnectorHealth.displayName(serverName)). Give it to a bot in the bot's settings."
+            } catch {
+                note = error.localizedDescription
+            }
             working = nil
             await health.refresh()
         }

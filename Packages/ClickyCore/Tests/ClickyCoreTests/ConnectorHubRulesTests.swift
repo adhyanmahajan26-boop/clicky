@@ -220,4 +220,12 @@ struct ConnectorHubRulesTests {
         #expect(entry?["args"] as? [String] == ["-y", "@scope/server files", "/Users/a/Notes"])
         #expect(ConnectorHubNewApp.local(id: "x", name: "X", commandLine: "   ", home: "/Users/a") == nil)
     }
+
+    @Test func aClaudeCodeServerBecomesAClaudeAccountApp() {
+        let entry = ConnectorHubNewApp.claudeAccount(id: "runway-runway-team", server: "claude.ai Runway (runway.team)")
+        #expect(entry["kind"] as? String == "claude-account")
+        #expect(entry["server"] as? String == "claude.ai Runway (runway.team)")
+        #expect(entry["name"] as? String == "Runway (runway.team)")
+        #expect(ConnectorHubNewApp.claudeAccount(id: "studio", server: "content-studio")["name"] as? String == "content-studio")
+    }
 }

@@ -495,6 +495,13 @@ public enum ConnectorHubNewApp {
         return candidate
     }
 
+    /// A server Claude Code already has ("claude.ai Runway"), kept as an app Theo reaches through the owner's Claude account.
+    /// Its name drops the "claude.ai " Claude Code puts in front.
+    public static func claudeAccount(id: String, server: String) -> [String: Any] {
+        let name = server.hasPrefix("claude.ai ") ? String(server.dropFirst("claude.ai ".count)) : server
+        return ["id": id, "name": name, "kind": "claude-account", "server": server]
+    }
+
     /// A remote app at `address`, signed in with `signIn` ("oauth", "token" or "none"). Nil when the address isn't one the hub
     /// takes: https, or plain http only on this Mac.
     public static func remote(id: String, name: String, address: String, signIn: String) -> [String: Any]? {
