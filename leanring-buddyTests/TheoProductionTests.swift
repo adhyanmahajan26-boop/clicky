@@ -47,6 +47,249 @@ struct TheoProductionTests {
         BotsSelection.shared.pane = .home
     }
 
+    // MARK: Bots reading each other
+
+    @MainActor private func aBot(_ id: String = "tester") -> NativeBot {
+        var bot = BotImport.starters[0]
+        bot.id = id
+        bot.name = "Tester"
+        return bot
+    }
+
+    @Test @MainActor func aBotStillReadsWhatWasPostedUnderItsName() {
+        // Theo heading a group, asking it something: the question is under his name, and his session has never seen it.
+        let bot = aBot()
+        var record = BotConversationRecord()
+        record.sessions[bot.id] = "session"
+        record.messages = [BotChatMessage(author: "user", text: "old"), BotChatMessage(author: bot.id, text: "Which database should we use?")]
+        record.seen[bot.id] = 1
+        let shown = BotPrompts.transcriptMessages(in: record, for: bot).map(\.text)
+        #expect(shown.contains("Which database should we use?"))
+    }
+
+    @Test @MainActor func stopMarksTheRoomEvenWithNothingLive() {
+        // A carry-on can be waiting with no exchange live: it mustn't run right after Stop.
+        let store = BotsStore.shared
+        let room = "stop-\(UUID().uuidString)"
+        store.stopPrivateMessages(in: room)
+        #expect(store.stoppedExchangeRooms.contains(room))
+    }
+
+    @Test @MainActor func catchUpFindsItsPlaceWhenTheNewestHeardIsACard() {
+        // Both Macs used apart: a card sorts just before what was said on the other Mac.
+        let store = BotsStore.shared
+        let bot = aBot()
+        let card = BotChatMessage(author: bot.id, text: "", card: "dm:x:y")
+        let now = BotChatMessage(author: "user", text: "and now")
+        var record = BotConversationRecord()
+        record.sessions[bot.id] = "session"
+        record.heard = [bot.id: card.id]
+        record.messages = [BotChatMessage(author: "user", text: "said here"), card, BotChatMessage(author: "user", text: "said on the Air"), now]
+        let words = store.catchUp(in: record, bot: bot, before: now.id)
+        #expect(words.contains("said on the Air"))
+        #expect(!words.contains("said here"))
+    }
+
+    @Test @MainActor func aThreadStartedOnBothMacsCatchesUp() {
+        let store = BotsStore.shared
+        let target = aBot("target")
+        var sender = aBot("sender")
+        sender.name = "Sender"
+        let context = BotDMContext(rootRoom: "room", ownerWords: nil, fromOwner: false)
+        var record = BotConversationRecord()
+        record.sessions[target.id] = "session"
+        record.heard = [target.id: BotCatchUp.fromTheStart]
+        record.messages = [BotChatMessage(author: sender.id, text: "said on the Air"), BotChatMessage(author: sender.id, text: "the new message")]
+        let words = store.privateMessageWords(for: target, from: sender, message: "the new message", record: record, hasSession: true, context: context)
+        #expect(words.contains("said on the Air"))
+        // Lots of it stays within what a catch-up may hold.
+        record.messages = (0..<60).map { BotChatMessage(author: sender.id, text: "line \($0) " + String(repeating: "x", count: 3000)) } + [BotChatMessage(author: sender.id, text: "the new message")]
+        let long = store.privateMessageWords(for: target, from: sender, message: "the new message", record: record, hasSession: true, context: context)
+        #expect(long.count < BotCatchUp.maximumCharactersTotal + 4000)
+        #expect(long.contains("line 59"))
+    }
+
+    @Test @MainActor func aBotSkipsOnlyTheAnswersItsSessionWrote() {
+        let bot = aBot()
+        let own = BotChatMessage(author: bot.id, text: "my last answer")
+        var record = BotConversationRecord()
+        record.sessions[bot.id] = "session"
+        record.messages = [own, BotChatMessage(author: bot.id, text: "my words from the other Mac"), BotChatMessage(author: "user", text: "and you?")]
+        record.ownAnswers = [bot.id: [own.id]]
+        #expect(BotPrompts.transcriptMessages(in: record, for: bot).map(\.text) == ["my words from the other Mac", "and you?"])
+        // With no session it wouldn't know what it said.
+        record.sessions[bot.id] = nil
+        #expect(BotPrompts.transcriptMessages(in: record, for: bot).map(\.text).contains("my last answer"))
+    }
+
+    @Test func aPrivateTurnKeepsItsPlaceOnTheOtherMac() {
+        let turn = BotDMTurn(exchangeID: "x1", askerID: "theo", context: BotDMContext(rootRoom: "theo", ownerWords: "build it", fromOwner: true), mayMessage: false)
+        let fields = turn.linkFields(chain: "studio#3")
+        let back = BotDMTurn(linkFields: fields)
+        #expect(fields["chain"] == "studio#3")
+        #expect(back?.exchangeID == "x1")
+        #expect(back?.askerID == "theo")
+        #expect(back?.context.rootRoom == "theo")
+        #expect(back?.context.ownerWords == "build it")
+        #expect(back?.context.fromOwner == true)
+        #expect(back?.mayMessage == false)
+        // A turn that isn't part of any exchange has none of this.
+        #expect(BotDMTurn(linkFields: ["bot": "coder"]) == nil)
+    }
+
+    @Test func memoryMovesOldestFirst() {
+        #expect(BotMemory.oldFolders == [".t3-backup-20261105/bots", ".t3/bots"])
+    }
+
+    // MARK: Routines on both Macs
+
+    private func routine(_ id: String, _ instruction: String = "do it", paused: Bool = false, next: Date? = nil, runs: [BotRoutine.Run] = []) -> BotRoutine {
+        var routine = BotRoutine(name: id, target: "theo", instruction: instruction, schedule: BotRoutine.Schedule.parse("every 10 min")!)
+        routine.id = id
+        routine.paused = paused
+        routine.nextRunAt = next
+        routine.runs = runs
+        return routine
+    }
+
+    @Test func aRunIsntAnEdit() {
+        let base = routine("a")
+        var ran = base
+        ran.nextRunAt = Date(timeIntervalSince1970: 100)
+        ran.runs = [BotRoutine.Run(startedAt: Date(), status: "done")]
+        #expect(BotRoutineSync.edits(of: [ran]) == BotRoutineSync.edits(of: [base]))
+        var paused = base
+        paused.paused = true
+        #expect(BotRoutineSync.edits(of: [paused]) != BotRoutineSync.edits(of: [base]))
+    }
+
+    @Test func aPauseOnOneMacSurvivesTheOtherMacFiringIt() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let run = BotRoutine.Run(startedAt: now, status: "done")
+        // The Air paused it and the Studio fired it since: its next time moved, its edit didn't.
+        var air = LinkMerge.Stamps()
+        air.changed["a"] = now.addingTimeInterval(-60)
+        var studio = LinkMerge.Stamps()
+        studio.changed["a"] = now.addingTimeInterval(-3600)
+        var onAir = routine("a", paused: true, next: now.addingTimeInterval(-600))
+        onAir.createdAt = now
+        var onStudio = routine("a", next: now.addingTimeInterval(600), runs: [run])
+        onStudio.createdAt = now
+        let there = BotRoutineSync.merged(local: [onStudio], localStamps: studio, remote: [onAir], remoteStamps: air, now: now)
+        let here = BotRoutineSync.merged(local: [onAir], localStamps: air, remote: [onStudio], remoteStamps: studio, now: now)
+        #expect(there.items == here.items)
+        #expect(there.items[0].paused)
+        #expect(there.items[0].runs == [run])
+        #expect(there.items[0].nextRunAt == now.addingTimeInterval(600))
+    }
+
+    @Test func aRoutineArrivingDoesntFireForAMissedSlot() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let merged = BotRoutineSync.merged(local: [], localStamps: .init(), remote: [routine("a", next: now.addingTimeInterval(-3600))], remoteStamps: .init(), now: now)
+        #expect((merged.items[0].nextRunAt ?? .distantPast) > now)
+    }
+
+    @Test func theSameJobOnBothMacsBecomesOne() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let next = now.addingTimeInterval(60)
+        let there = BotRoutineSync.merged(local: [routine("b", next: next)], localStamps: .init(), remote: [routine("a", paused: true, next: next)], remoteStamps: .init(), now: now)
+        let here = BotRoutineSync.merged(local: [routine("a", paused: true, next: next)], localStamps: .init(), remote: [routine("b", next: next)], remoteStamps: .init(), now: now)
+        // The one that's running stays, and both Macs choose the same.
+        #expect(there.items.map(\.id) == ["b"])
+        #expect(here.items.map(\.id) == ["b"])
+        #expect(there.stamps.gone["a"] != nil)
+        #expect(BotRoutineSync.merged(local: [routine("a"), routine("c", "another job")], localStamps: .init(), remote: [], remoteStamps: .init(), now: now).items.count == 2)
+    }
+
+    @Test func aDeletedRoutineStaysDeleted() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var gone = LinkMerge.Stamps()
+        gone.gone["a"] = now
+        var older = LinkMerge.Stamps()
+        older.changed["a"] = now.addingTimeInterval(-60)
+        let merged = BotRoutineSync.merged(local: [routine("a", next: now)], localStamps: older, remote: [], remoteStamps: gone, now: now)
+        #expect(merged.items.isEmpty)
+    }
+
+    // MARK: A run's words
+
+    private func claudeEvent(_ text: String, at: String) -> [String: Any] {
+        ["type": "assistant", "timestamp": at, "message": ["content": [["type": "text", "text": text]]]]
+    }
+
+    @Test func aContinuedChatsOldAnswerIsntThisRuns() {
+        let start = ISO8601DateFormatter().date(from: "2026-11-05T10:00:00Z")!
+        let old = claudeEvent("the old answer", at: "2026-11-05T09:00:00.123Z")
+        // Its message never went in: nothing to report, rather than the last turn's answer.
+        #expect(HarnessCoding.lastClaudeAnswer(in: [old], since: start) == nil)
+        #expect(HarnessCoding.lastClaudeAnswer(in: [old, claudeEvent("the new answer", at: "2026-11-05T10:00:05.000Z")], since: start) == "the new answer")
+        #expect(HarnessCoding.eventDate(["timestamp": "2026-11-05T10:00:00Z"]) == start)
+    }
+
+    @Test func aFolderIsLookedUpByItsRealPathToo() {
+        #expect(HarnessChats.spellings(of: "/tmp").contains("/private/tmp"))
+        #expect(HarnessChats.spellings(of: "/tmp").contains("/tmp"))
+    }
+
+    // MARK: Continuing a harness chat
+
+    @Test func aChatIsContinuedByItsOwnIdOnEveryHarness() {
+        func args(_ harness: String, resume: String? = "abc") -> [String] { HarnessCoding.interactiveArguments(harness: harness, model: nil, effort: nil, folder: "/f", resume: resume) }
+        #expect(args("claude").starts(with: ["--resume", "abc"]))
+        #expect(args("codex").starts(with: ["resume", "abc"]))
+        #expect(args("cursor").starts(with: ["--resume", "abc"]))
+        #expect(args("gemini").starts(with: ["--resume", "abc"]))
+        #expect(args("grok").starts(with: ["--resume", "abc"]))
+        #expect(args("opencode").starts(with: ["--session", "abc"]))
+        // Never "the last one in this folder" once the session is known.
+        let known = HarnessCoding.interactiveArguments(harness: "claude", model: nil, effort: nil, folder: "/f", continues: true, resume: "abc")
+        #expect(!known.contains("--continue"))
+        let new = HarnessCoding.interactiveArguments(harness: "claude", model: nil, effort: nil, folder: "/f", newSessionID: "id-1")
+        #expect(new.starts(with: ["--session-id", "id-1"]))
+    }
+
+    @Test func aNewChatCanHaveItsIdFromTheStart() {
+        func args(_ harness: String) -> [String] { HarnessCoding.interactiveArguments(harness: harness, model: nil, effort: nil, folder: "/f", newSessionID: "id-1") }
+        #expect(args("claude").starts(with: ["--session-id", "id-1"]))
+        #expect(args("gemini").starts(with: ["--session-id", "id-1"]))
+        #expect(args("grok").starts(with: ["--session-id", "id-1"]))
+        // Cursor hands out the id, so its new chat is resumed.
+        #expect(args("cursor").starts(with: ["--resume", "id-1"]))
+        // These have no such flag: their runs wait their turn instead.
+        #expect(!args("codex").contains("id-1"))
+        #expect(!args("opencode").contains("id-1"))
+        func headless(_ harness: String) -> [String] { HarnessCoding.headlessArguments(harness: harness, model: nil, effort: nil, folder: "/f", prompt: "hi", outFile: "/o", newSessionID: "id-1") }
+        #expect(headless("claude").contains("--session-id"))
+        #expect(headless("gemini").contains("--session-id"))
+        #expect(headless("grok").contains("--session-id"))
+        let cursor = headless("cursor")
+        #expect(cursor.contains("--resume") && !cursor.contains("--session-id"))
+        #expect(!headless("codex").contains("id-1"))
+        #expect(!headless("opencode").contains("id-1"))
+    }
+
+    @Test func aHeadlessRunContinuesByIdToo() {
+        func args(_ harness: String) -> [String] { HarnessCoding.headlessArguments(harness: harness, model: nil, effort: nil, folder: "/f", prompt: "hi", outFile: "/o", resume: "abc") }
+        #expect(args("claude").contains("--resume"))
+        // `codex exec resume` has no -C or -s: the folder is the process's, the sandbox a config value.
+        let codex = args("codex")
+        #expect(codex.starts(with: ["exec", "resume"]))
+        #expect(!codex.contains("-C") && !codex.contains("-s"))
+        #expect(args("opencode").contains("--session"))
+        #expect(args("grok").contains("--resume"))
+    }
+
+    @Test func aBotsMemoryIsntInT3CodesFolder() {
+        let bot = BotImport.starters[0]
+        #expect(!bot.memoryPath.contains("/.t3"))
+        #expect(bot.memoryPath.hasSuffix("/Theo/Bots/memory/theo/memory.md"))
+        #expect(!BotRunner.workspace.path.contains("/.t3"))
+        for tool in BotRunner.claudeAllowedTools(for: bot) where tool.hasPrefix("Edit(") || tool.hasPrefix("Write(") {
+            #expect(!tool.contains("/.t3"))
+            #expect(tool.contains("(//"))
+        }
+    }
+
     // MARK: Icons
 
     /// A symbol name macOS doesn't know draws nothing at all, so every one in the source is checked.

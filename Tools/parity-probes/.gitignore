@@ -1,0 +1,9 @@
+results/
+shots/
+calls.jsonl
+fake-mode
+fake-reply
+fake-flaky
+fake-down-model
+*.log
+__pycache__/

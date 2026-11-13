@@ -1,0 +1,18 @@
+{
+ "probe": "gateway_auth",
+ "verdict": "PASS",
+ "seconds": 1.3,
+ "evidence": {
+  "ok": 200,
+  "no_token": 401,
+  "wrong_token": 401,
+  "foreign_host": 403,
+  "browser_origin": 403,
+  "via_lan_ip": null,
+  "listening": [
+   "127.0.0.1:47391"
+  ],
+  "token_in_files": ""
+ },
+ "at": "2026-11-12T21:30:51"
+}

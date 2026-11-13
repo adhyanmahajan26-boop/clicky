@@ -46,6 +46,27 @@ struct TodayView: View {
                     .frame(maxWidth: .infinity)
                     .padding(18)
                 }
+                section("Bots", trailing: ("New group chat", { NotificationCenter.default.post(name: .theoNewGroupChat, object: nil) })) {
+                    let listed = store.bots.filter { !$0.primary }
+                    if listed.isEmpty { empty("No bots yet. Use the new-bot button at the top of the sidebar.") }
+                    ForEach(listed) { bot in
+                        row(icon: AnyView(BotAvatar(bot: bot, size: 32, state: .idle)), title: bot.name, detail: store.liveStatus(of: bot),
+                            trailing: store.layout.hidden.contains("bot:\(bot.id)") ? "Hidden" : store.categories(of: bot.id).first?.name) {
+                            selection.pane = .bot(bot.id)
+                        }
+                    }
+                }
+                let groups = store.groups.filter { $0.headID != nil }
+                if !groups.isEmpty {
+                    section("Group chats") {
+                        ForEach(groups) { group in
+                            row(icon: AnyView(GroupAvatar(bots: store.members(of: group), size: 32)), title: group.name,
+                                detail: "Led by \(store.head(of: group)?.name ?? "nobody") · \(store.members(of: group).count) bots", trailing: nil) {
+                                selection.pane = group.id == BotGroup.projectID ? .team : .group(group.id)
+                            }
+                        }
+                    }
+                }
                 section("Companion") {
                     row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
                         detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
@@ -93,7 +114,7 @@ struct TodayView: View {
                     }
                 }
             }
-            .padding(.horizontal, 32).padding(.vertical, 40)
+            .padding(.horizontal, 32).padding(.vertical, 28)
             .frame(maxWidth: 860)
             .frame(maxWidth: .infinity)
         }
@@ -106,9 +127,13 @@ struct TodayView: View {
         return hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func section<Content: View>(_ title: String, trailing: (title: String, action: () -> Void)? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+            HStack {
+                Text(title).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
+                Spacer()
+                if let trailing { Button(trailing.title, action: trailing.action).buttonStyle(.theo(.ghost, .small)) }
+            }
             VStack(spacing: 0) { content() }
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))

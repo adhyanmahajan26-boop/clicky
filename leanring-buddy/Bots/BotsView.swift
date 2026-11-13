@@ -53,6 +53,8 @@ final class BotsSelection: ObservableObject {
 struct BotsRootView: View {
     @ObservedObject var store: BotsStore
     @ObservedObject var selection: BotsSelection
+    /// Status lines show a streaming reply's first line; this changes only when that line does.
+    @ObservedObject private var headlines = BotLiveHeadline.shared
     /// Inside Theo's home window, Connectors is its own tab instead.
     var showsConnectors = true
 
@@ -60,6 +62,14 @@ struct BotsRootView: View {
     @State private var showsInspector = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var dictation = ComposerDictation.shared
+
+    private var showsStudioPanel: Bool {
+        guard StudioController.hasPanel, studio.panelVisible else { return false }
+        if case .settings = selection.pane { return false }
+        return true
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -70,18 +80,8 @@ struct BotsRootView: View {
             }
             Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1).ignoresSafeArea(.container, edges: .top)
             detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: showsStudioPanel ? 460 : nil, maxWidth: .infinity, maxHeight: .infinity)
                 .background(DS.Colors.background)
-                .overlay(alignment: .topTrailing) {
-                    if inspectorTarget != nil && !showsInspector {
-                        Button { withAnimation(DS.Motion.panel) { showsInspector = true } } label: {
-                            Image(systemName: "sidebar.right").font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
-                                .frame(width: 30, height: 30).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain).help("Settings for this chat")
-                        .padding(.top, 15).padding(.trailing, 12)
-                    }
-                }
                 .overlay {
                     if showsInspector, let target = inspectorTarget {
                         ZStack(alignment: .trailing) {
@@ -97,7 +97,6 @@ struct BotsRootView: View {
                             .frame(width: 340)
                             .background(DS.Colors.surface1)
                             .overlay(alignment: .leading) { Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1) }
-                            .shadow(color: .black.opacity(0.28), radius: 24, x: -2)
                             .overlay(alignment: .topTrailing) {
                                 Button { withAnimation(DS.Motion.panel) { showsInspector = false } } label: {
                                     Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
@@ -109,10 +108,17 @@ struct BotsRootView: View {
                         }
                     }
                 }
+            if showsStudioPanel {
+                Rectangle().fill(DS.Colors.borderSubtle).frame(width: 1).ignoresSafeArea(.container, edges: .top)
+                StudioPanel(store: store, selection: selection)
+                    .frame(width: 344)
+                    .transition(.move(edge: .trailing))
+            }
         }
         .background(DS.Colors.background)
         .modifier(TheoAppearanceRoot())
         .onChange(of: selection.pane) { _, _ in showsInspector = false }
+        .onReceive(NotificationCenter.default.publisher(for: .theoNewGroupChat)) { _ in editingGroup = Self.blankGroup }
         .onReceive(NotificationCenter.default.publisher(for: .theoShowBotSettings)) { _ in
             if inspectorTarget != nil { withAnimation(DS.Motion.panel) { showsInspector = true } }
         }
@@ -124,103 +130,54 @@ struct BotsRootView: View {
     @State private var namingSectionFor: String?
     @State private var sectionName = ""
     @State private var confirmingDelete: String?
-    @State private var showsHidden = false
 
     private static let blankGroup = BotGroup(id: "", name: "", symbol: "person.2.fill", headID: nil, memberIDs: [])
 
+    /// The Hairline sidebar: Theo, search, four rows, the teams, and Clicky at the bottom. Group chats and bots outside a
+    /// team live on Home and in the ⌘K search.
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(spacing: 1) {
-                HStack(spacing: 0) {
-                    navRow(.home, "house", "Home")
-                    Button { addingBot = true } label: {
-                        Image(systemName: "square.and.pencil").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
-                            .frame(width: 28, height: 30).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).help("New bot")
-                    .keyboardShortcut("n", modifiers: .command)
-                    Menu {
-                        Button { editingGroup = Self.blankGroup } label: { Label("New group chat", systemImage: "person.2") }
-                        Button(action: newCategory) { Label("New category", systemImage: "folder.badge.plus") }
-                    } label: {
-                        Image(systemName: "ellipsis").font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
-                            .frame(width: 28, height: 30).contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("New group chat or category")
-                }
-                HStack(spacing: 8) {
-                    NavIcon(symbol: "magnifyingglass", size: 20)
-                    TextField("Search", text: $query).textFieldStyle(.plain).font(.system(size: 13, weight: .medium)).focused($searchFocused)
-                    if !query.isEmpty {
-                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(DS.Colors.textTertiary) }.buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8).frame(height: 32)
-                .background(RoundedRectangle(cornerRadius: 8).fill(searchFocused ? DS.Colors.hover : .clear))
-                .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
-            }
-            .padding(.horizontal, 8)
+            workspaceRow
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 8)
+            searchField
+                .padding(.horizontal, 10).padding(.bottom, 10)
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 0) {
                     if !query.isEmpty {
-                        sectionTitle("Results")
+                        sectionTitle("Results", count: searchResults.count)
                         ForEach(searchResults, id: \.self) { item in itemRow(item) }
                         if searchResults.isEmpty {
-                            Text("No bots match").font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.vertical, 6)
+                            Text("Nothing matches").font(.system(size: 12)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 20).padding(.vertical, 6)
                         }
                     } else {
-                        let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) }
-                        sectionTitle("Pinned").dropTarget { items in items.forEach { store.setPinned(true, $0) } }
-                        ForEach(pinned, id: \.self) { item in itemRow(item) }
-                        let loose = looseItems
-                        sectionTitle("Categories", add: ("New category", newCategory))
-                        ForEach(store.rootSections) { section in sectionTree(section, depth: 0) }
-                        if store.rootSections.isEmpty {
-                            emptyHint("Make a category, add bots, pick a leader", action: newCategory)
-                        }
-                        // Only what's there. New ones come from the buttons at the top.
-                        if !loose.bots.isEmpty {
-                            sectionTitle("Bots", add: ("New bot", { addingBot = true }))
-                                .dropTarget { items in items.forEach { unfile($0) } }
-                            ForEach(loose.bots, id: \.self) { item in itemRow(item) }
-                        }
-                        if !loose.groups.isEmpty {
-                            sectionTitle("Group chats", add: ("New group chat", { editingGroup = Self.blankGroup }))
-                                .dropTarget { items in items.forEach { unfile($0) } }
-                            ForEach(loose.groups, id: \.self) { item in itemRow(item) }
-                        }
-                        let hidden = store.layout.hidden.filter(itemExists)
-                        if !hidden.isEmpty {
-                            Button { withAnimation(DS.Motion.hover) { showsHidden.toggle() } } label: {
-                                HStack(spacing: 4) {
-                                    Text("Hidden").font(.system(size: 11, weight: .semibold))
-                                    Text("\(hidden.count)").font(.system(size: 11))
-                                    Image(systemName: showsHidden ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
-                                }
-                                .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)
+                        hairlineRow("home", "Home", isSelected: selection.pane == .home) { selection.pane = .home }
+                        if StudioController.hasPanel {
+                            hairlineRow("studio", "Studio", trailing: studio.isOn ? "\(studio.liveCount) live" : (studio.remoteView?.tiles.isEmpty == false ? "\(studio.remoteView?.tiles.count ?? 0) live" : nil), isSelected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0) {
+                                withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() }
                             }
-                            .buttonStyle(.plain)
-                            if showsHidden { ForEach(hidden, id: \.self) { item in itemRow(item).opacity(0.55) } }
                         }
+                        hairlineRow("routines", "Routines", trailing: store.routines.isEmpty ? nil : "\(store.routines.filter { !$0.paused }.count)",
+                                    isSelected: selection.pane == .routines) { selection.pane = .routines }
+                        hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
+                        let pinned = store.layout.pinned.filter { itemExists($0) && !store.isHidden($0) && !isCEO($0) }
+                        if !pinned.isEmpty {
+                            sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
+                            ForEach(pinned, id: \.self) { item in itemRow(item) }
+                        }
+                        ForEach(store.rootSections) { section in teamSection(section, depth: 0) }
                     }
                 }
-                .padding(.horizontal, 8).padding(.bottom, 10)
+                .padding(.bottom, 10)
             }
-            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+            clickyPill
+                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 6)
             HStack(spacing: 2) {
-                navIcon(.notes, "note.text", "Notes")
-                navIcon(.routines, "clock.arrow.circlepath", store.routines.isEmpty ? "Routines" : "Routines: \(store.routines.filter { !$0.paused }.count) active")
-                navIcon(.activity, "bubble.left.and.text.bubble.right", "Activity")
-                if showsConnectors { navIcon(.connectors, "puzzlepiece.extension", "Connectors") }
-                Button { selection.openSettings(.look) } label: {
-                    NavIcon(symbol: "gearshape", size: 20).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(SidebarButtonStyle(isSelected: false)).help("Settings (⌘,)")
+                hairlineRow("connectors", "Connectors", isSelected: selection.pane == .connectors, inset: 0) { selection.pane = .connectors }
+                hairlineRow("settings", "Settings", isSelected: false, inset: 0) { selection.openSettings(.look) }
             }
-            .padding(.horizontal, 8).padding(.vertical, 6)
+            .padding(.horizontal, 10).padding(.bottom, 12)
         }
-        .frame(width: 248)
+        .frame(width: 264)
         .background(DS.Colors.sidebar)
         .sheet(item: $editingGroup) { group in
             GroupEditor(store: store, group: group) { saved in
@@ -278,19 +235,6 @@ struct BotsRootView: View {
 
     private struct NamingRequest: Identifiable { let item: String; var id: String { item } }
 
-    private var routinesSubtitle: String {
-        let active = store.routines.filter { !$0.paused }.count
-        return store.routines.isEmpty ? "Scheduled jobs" : "\(active) active · \(store.routines.count - active) paused"
-    }
-
-    private func iconTile(_ symbol: String) -> some View {
-        ZStack {
-            Circle().fill(DS.Colors.hover)
-            Image(systemName: symbol).font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary)
-        }
-        .frame(width: 34, height: 34)
-    }
-
     // MARK: Items
 
     private func itemExists(_ item: String) -> Bool {
@@ -306,17 +250,6 @@ struct BotsRootView: View {
         return store.group(String(item.dropFirst(6)))?.name ?? "this group chat"
     }
 
-    /// Items in no section, not pinned and not hidden.
-    private var looseItems: (groups: [String], bots: [String]) {
-        let placed = Set(store.layout.pinned + store.layout.hidden + store.layout.sections.flatMap(\.items))
-        let groups = store.groups.filter { $0.headID != nil }.map { "group:\($0.id)" }.filter { !placed.contains($0) }
-        let order = BotImport.starters.map(\.id)
-        var bots = store.bots.sorted { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
-            .map { "bot:\($0.id)" }.filter { !placed.contains($0) }
-        if !placed.contains("clicky") { bots.insert("clicky", at: 0) }
-        return (groups, bots)
-    }
-
     private func pane(for item: String) -> BotsPane {
         if item == "clicky" { return .clicky }
         if item.hasPrefix("bot:") { return .bot(String(item.dropFirst(4))) }
@@ -324,24 +257,26 @@ struct BotsRootView: View {
         return id == BotGroup.projectID ? .team : .group(id)
     }
 
-    @ViewBuilder private func itemRow(_ item: String, inTeam: Bool = false) -> some View {
+    private func isCEO(_ item: String) -> Bool { item == store.primary.map { "bot:\($0.id)" } }
+
+    @ViewBuilder private func itemRow(_ item: String) -> some View {
         Group {
             if item == "clicky" {
-                sidebarRow(.clicky, title: "Clicky", leads: store.layout.sections.contains { $0.leaderID == BotsStore.clickyID },
-                           unread: store.unread[BotsStore.clickyID] ?? 0, busy: store.isClickyBusy, inTeam: inTeam) {
-                    ClickyAvatar(size: 22, isActive: store.isClickyBusy)
-                }
+                let clicky = store.clickyBot
+                teamRow(.clicky, bot: clicky, unread: store.unread[BotsStore.clickyID] ?? 0)
             } else if item.hasPrefix("bot:"), let bot = store.bot(String(item.dropFirst(4))) {
-                sidebarRow(.bot(bot.id), title: bot.name, star: bot.primary, leads: store.layout.sections.contains { $0.leaderID == bot.id },
-                           unread: store.unread[bot.id] ?? 0,
-                           busy: store.replying[bot.id] != nil, dimmed: !bot.isOn, inTeam: inTeam) {
-                    BotAvatar(bot: bot, size: inTeam ? 22 : 24, state: store.replying[bot.id] != nil ? .thinking : .idle)
-                }
+                teamRow(.bot(bot.id), bot: bot, unread: store.unread[bot.id] ?? 0)
             } else if let group = store.group(String(item.dropFirst(6))) {
                 let members = store.members(of: group)
                 let busy = members.contains { store.replying[$0.id] != nil }
-                sidebarRow(pane(for: item), title: group.name, unread: store.unread[group.roomID] ?? 0, busy: busy, inTeam: inTeam) {
-                    GroupAvatar(bots: members, size: 20)
+                rowButton(pane(for: item)) {
+                    GroupAvatar(bots: members, size: 32)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(group.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        Text(busy ? "Working" : "\(members.count) bots").font(.system(size: 11.5)).foregroundColor(busy ? DS.Colors.textSecondary : DS.Colors.textTertiary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if (store.unread[group.roomID] ?? 0) > 0 { Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6) }
                 }
             }
         }
@@ -350,6 +285,126 @@ struct BotsRootView: View {
             Text(itemName(item)).font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Capsule().fill(DS.Colors.accent))
         }
+    }
+
+    /// A bot's row: a 32 pt figure, its name, one line of what it's doing, and a tiny view of its tile while it works.
+    private func teamRow(_ pane: BotsPane, bot: NativeBot, unread: Int) -> some View {
+        let pose = store.crewPose(of: bot).pose
+        let working = pose == .working
+        return rowButton(pane) {
+            BotAvatar(bot: bot, size: 32, state: .idle)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(bot.name).font(.system(size: 13, weight: unread > 0 ? .semibold : .medium))
+                        .foregroundColor(bot.isOn ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
+                    if store.layout.sections.contains(where: { $0.leaderID == bot.id }) {
+                        Image(systemName: "crown.fill").font(.system(size: 8)).foregroundColor(DS.Colors.gold).help("Manager")
+                    }
+                }
+                Text(store.liveStatus(of: bot)).font(.system(size: 11.5)).foregroundColor(working ? DS.Colors.textSecondary : DS.Colors.textTertiary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if StudioController.isAvailable, working || pose == .needs, let tile = studio.roster.tile(of: bot.id) {
+                StudioTileThumb(studio: studio, tile: tile).frame(width: 38, height: 24)
+            } else if unread > 0 {
+                Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6)
+            }
+        }
+    }
+
+    private func rowButton<Content: View>(_ pane: BotsPane, @ViewBuilder content: () -> Content) -> some View {
+        Button { selection.pane = pane } label: {
+            HStack(spacing: 10) { content() }
+                .padding(.horizontal, 8).frame(height: 42)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
+        .padding(.horizontal, 10)
+    }
+
+    /// Home, Studio, Routines, Notes, Connectors, Settings.
+    private func hairlineRow(_ icon: String, _ title: String, trailing: String? = nil, isSelected: Bool, live: Bool = false, inset: CGFloat = 10, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                HairlineIcon(name: icon, size: 20, color: isSelected ? DS.Colors.textPrimary : DS.Colors.textSecondary, selected: isSelected, live: live)
+                Text(title).font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary).lineLimit(1).fixedSize()
+                Spacer(minLength: 0)
+                if let trailing { Text(trailing).font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1) }
+            }
+            .padding(.horizontal, 8).frame(height: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarButtonStyle(isSelected: isSelected))
+        .padding(.horizontal, inset)
+    }
+
+    /// Theo on top: its figure, how the team's doing, and the new-bot button.
+    private var workspaceRow: some View {
+        let ceo = store.primary
+        let on = ceo.map { selection.pane == .bot($0.id) } ?? false
+        let others = store.bots.filter { !$0.primary }.count
+        return HStack(spacing: 4) {
+            Button { if let ceo { selection.pane = .bot(ceo.id) } } label: {
+                HStack(spacing: 10) {
+                    if let ceo { BotAvatar(bot: ceo, size: 30, state: .idle) }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(ceo?.name ?? "Theo").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        Text("CEO · \(store.workingCount) of \(others) bots working").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button { addingBot = true } label: {
+                HairlineIcon(name: "compose", size: 20, color: DS.Colors.textSecondary)
+                    .frame(width: 24, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("New bot (⌘N)")
+            .keyboardShortcut("n", modifiers: .command)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? DS.Colors.selected : DS.Colors.hover))
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            HairlineIcon(name: "search", size: 18, color: DS.Colors.textTertiary, live: searchFocused)
+            TextField("Search or jump to…", text: $query).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundColor(DS.Colors.textTertiary) }.buttonStyle(.plain)
+            } else {
+                Text("⌘K").font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
+                    .padding(.horizontal, 5).frame(height: 18)
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            }
+        }
+        .padding(.horizontal, 8).frame(height: 32)
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(searchFocused ? DS.Colors.borderStrong : DS.Colors.borderSubtle, lineWidth: 1))
+        .background(Button("") { searchFocused = true }.keyboardShortcut("k", modifiers: .command).opacity(0))
+    }
+
+    /// Clicky at the bottom, with what it's listening for.
+    private var clickyPill: some View {
+        let micDown = CompanionManager.current?.wakeWordController.isMicUnavailable == true
+        let listening = ClickySettings.isWakeWordEnabled && !store.isClickyBusy && !micDown
+        return Button { selection.pane = .clicky } label: {
+            HStack(spacing: 10) {
+                ClickyAvatar(size: 34, isActive: store.isClickyBusy)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Clicky").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text(dictation.isActive ? "Dictating\u{2026}" : store.isClickyBusy ? "Working" : micDown ? "Mic unavailable" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
+                        .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if listening || dictation.isActive { ListeningWave() }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selection.pane == .clicky ? DS.Colors.selected : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func itemMenu(_ item: String) -> some View {
@@ -374,6 +429,9 @@ struct BotsRootView: View {
                 }
             }
             Button(bot.isOn ? "Turn off" : "Turn on") { store.setEnabled(!bot.isOn, botID: bot.id) }
+            if StudioController.isAvailable {
+                Menu("Give a screen") { BotScreenPicker(botID: bot.id).pickerStyle(.inline) }
+            }
             if !bot.primary && bot.owner == nil { Button("Make primary") { store.makePrimary(bot.id) } }
         } else if item.hasPrefix("group:"), let group = store.group(String(item.dropFirst(6))) {
             Divider()
@@ -402,87 +460,51 @@ struct BotsRootView: View {
         if item.hasPrefix("group:") { store.deleteGroup(String(item.dropFirst(6))) }
     }
 
-    /// A category with its bots and its sub-categories: a team header, then its members indented under a guide line
-    /// in the team's colour. Drop bots on the header to file them.
-    private func sectionTree(_ section: BotsLayout.Section, depth: Int) -> AnyView {
-        // The manager is always in its own team, first, even when it's pinned too. Its members sit under it.
+    /// A team: a small label with its count (click for the team page, right-click for the rest), then its bots. The
+    /// manager goes first, and sub-teams follow under it. Drop bots on the label to file them.
+    private func teamSection(_ section: BotsLayout.Section, depth: Int) -> AnyView {
+        // Theo has the top row and Clicky the pill at the bottom, so neither repeats in a team.
         let manager = section.leaderID.map(BotsLayout.item(forBot:)).flatMap { item in
-            section.items.contains(item) && itemExists(item) && !store.isHidden(item) ? item : nil
+            section.items.contains(item) && itemExists(item) && !store.isHidden(item) && !isCEO(item) && item != "clicky" ? item : nil
         }
-        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) && $0 != manager }
+        let items = section.items.filter { itemExists($0) && !store.isPinned($0) && !store.isHidden($0) && $0 != manager && !isCEO($0) && $0 != "clicky" }
         let children = store.subsections(of: section.id)
-        // Folded unless opened, and always open on the bot you're looking at.
         let holdsSelection = (manager.map { [$0] } ?? []).contains { pane(for: $0) == selection.pane } || items.contains { pane(for: $0) == selection.pane }
-        let collapsed = (section.collapsed ?? true) && !holdsSelection
-        let line = Color(hex: CategoryTile.swatch(for: section).from).opacity(0.38)
-        let rows = (manager == nil ? items.count : 1) + children.count
-        return AnyView(VStack(alignment: .leading, spacing: 2) {
-            sectionHeader(section, collapsed: collapsed, depth: depth)
+        let collapsed = (section.collapsed ?? false) && !holdsSelection
+        return AnyView(VStack(alignment: .leading, spacing: 0) {
+            teamLabel(section, count: store.members(of: section).count, collapsed: collapsed)
             if !collapsed {
-                VStack(alignment: .leading, spacing: 1) {
-                    if let manager {
-                        itemRow(manager)
-                            .background(alignment: .leading) { TeamGuideLine(isLast: children.isEmpty).stroke(line, lineWidth: 1).frame(width: 13) }
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(items.enumerated()), id: \.element) { index, item in
-                                itemRow(item, inTeam: true)
-                                    .background(alignment: .leading) { TeamGuideLine(isLast: index == items.count - 1).stroke(line, lineWidth: 1).frame(width: 13) }
-                            }
-                        }
-                        .padding(.leading, 18)
-                        .background(alignment: .leading) { if !children.isEmpty { Rectangle().fill(line).frame(width: 1).padding(.leading, 1) } }
-                    } else {
-                        ForEach(Array(items.enumerated()), id: \.element) { index, item in
-                            itemRow(item, inTeam: true)
-                                .background(alignment: .leading) { TeamGuideLine(isLast: index == rows - 1).stroke(line, lineWidth: 1).frame(width: 13) }
-                                .padding(.leading, 0)
-                        }
-                    }
-                    ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                        sectionTree(child, depth: depth + 1)
-                            .background(alignment: .leading) { TeamGuideLine(isLast: rows - children.count + index == rows - 1, tickAt: 22).stroke(line, lineWidth: 1).frame(width: 13) }
-                    }
-                    if manager == nil && items.isEmpty && children.isEmpty {
-                        Text("Drag bots here").font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary)
-                            .padding(.horizontal, 12).padding(.vertical, 4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).strokeBorder(DS.Colors.hover, style: StrokeStyle(lineWidth: 1, dash: [4])))
-                            .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
-                    }
+                if let manager { itemRow(manager) }
+                ForEach(items, id: \.self) { item in itemRow(item) }
+                ForEach(children) { child in teamSection(child, depth: depth + 1) }
+                if manager == nil && items.isEmpty && children.isEmpty {
+                    Text("Drag bots here").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                        .padding(.horizontal, 12).frame(height: 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(DS.Colors.borderSubtle, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                        .padding(.horizontal, 18)
+                        .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
                 }
-                .padding(.leading, 18)
             }
-        }
-        .padding(.top, depth == 0 ? 3 : 0).padding(.bottom, depth == 0 ? 5 : 0))
+        })
     }
 
-    /// The team header: a coloured tile with a group glyph, the name in semibold, who runs it, how many, and a chevron.
-    /// It sits on a wash of the team's colour, so it never reads as just another bot.
-    private func sectionHeader(_ section: BotsLayout.Section, collapsed: Bool, depth: Int) -> some View {
-        let manager = section.leaderID.flatMap { store.bot($0) }
+    private func teamLabel(_ section: BotsLayout.Section, count: Int, collapsed: Bool) -> some View {
         let members = store.members(of: section)
-        let busy = members.contains { store.replying[$0.id] != nil }
-        let swatch = CategoryTile.swatch(for: section)
-        let open = selection.pane == .category(section.id)
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        return HStack(spacing: 0) {
+        return HStack(spacing: 4) {
             Button { selection.pane = .category(section.id) } label: {
-                HStack(spacing: 9) {
-                    CategoryTile(section: section, size: 22)
-                    Text(section.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                        .help(manager.map { "Manager: \($0.name)" } ?? "No manager")
-                    Spacer(minLength: 2)
-                    if busy { PulseDot(color: DS.Colors.accent) }
-                    Text("\(members.count)").font(.system(size: 10.5, weight: .semibold)).foregroundColor(DS.Colors.textSecondary)
-                        .padding(.horizontal, 6).frame(height: 18)
-                        .background(Capsule().fill(Color(hex: swatch.from).opacity(0.18)))
-                        .help("\(members.count) in this team")
+                HStack {
+                    Text(section.name.uppercased()).font(.system(size: 11, weight: .medium)).tracking(0.66)
+                        .foregroundColor(selection.pane == .category(section.id) ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text("\(count)").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
                 }
-                .padding(.leading, 6).frame(height: 32).contentShape(Rectangle())
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .contextMenu {
                 Button("Open team page") { selection.pane = .category(section.id) }
+                Button(collapsed ? "Show the team" : "Fold the team") { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } }
                 Menu("Manager") {
                     Button("No manager (everyone reports to \(store.primary?.name ?? "the CEO"))") { store.setLeader(nil, of: section.id) }
                     ForEach(members) { bot in Button(bot.name) { store.setLeader(bot.id, of: section.id) } }
@@ -497,17 +519,9 @@ struct BotsRootView: View {
                     store.deleteSection(section.id)
                 }
             }
-            Button { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } } label: {
-                Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .bold))
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .foregroundColor(DS.Colors.textSecondary)
-                    .frame(width: 26, height: 32).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).help(collapsed ? "Show the team" : "Fold the team")
         }
-        .background(shape.fill(Color(hex: swatch.from).opacity(open ? 0.24 : 0.11)))
-        .overlay(shape.strokeBorder(Color(hex: swatch.from).opacity(open ? 0.55 : 0.2), lineWidth: 1))
-        .contentShape(shape)
+        .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
+        .contentShape(Rectangle())
         .dropTarget { dropped in dropped.forEach { store.move($0, toSection: section.id) } }
     }
 
@@ -525,83 +539,14 @@ struct BotsRootView: View {
         store.setPinned(false, item)
     }
 
-    private func sectionTitle(_ title: String, add: (help: String, action: () -> Void)? = nil,
-                              more: (help: String, action: () -> Void)? = nil) -> some View {
-        HStack(spacing: 2) {
-            Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundColor(DS.Colors.textTertiary)
+    private func sectionTitle(_ title: String, count: Int) -> some View {
+        HStack {
+            Text(title.uppercased()).font(.system(size: 11, weight: .medium)).tracking(0.66).foregroundColor(DS.Colors.textTertiary)
             Spacer()
-            ForEach(Array([more.map { ("folder.badge.plus", $0) }, add.map { ("plus", $0) }].compactMap { $0 }.enumerated()), id: \.offset) { _, button in
-                Button(action: button.1.action) {
-                    MotionSymbol(name: button.0, size: 11, weight: .semibold)
-                        .frame(width: 22, height: 20).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).help(button.1.help)
-            }
+            Text("\(count)").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
         }
-        .padding(.leading, 10).padding(.trailing, 4).padding(.top, 18).padding(.bottom, 4)
+        .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
         .contentShape(Rectangle())
-    }
-
-    /// A quiet "+ …" row under an empty section, so every feature shows from the first launch.
-    private func emptyHint(_ text: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "plus").font(.system(size: 11, weight: .medium))
-                    .frame(width: 22, height: 22)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                Text(text).font(.system(size: 12.5))
-            }
-            .foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 7).frame(height: 32)
-            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarButtonStyle(isSelected: false))
-    }
-
-    /// One sidebar row (docs/DESIGN.md): 32 pt, its avatar, the name, and a trailing dot for work or unread. Inside a team
-    /// it's a little smaller and quieter, under the team's header.
-    private func sidebarRow<Icon: View>(_ pane: BotsPane, title: String, star: Bool = false, leads: Bool = false, unread: Int = 0, busy: Bool = false,
-                                        dimmed: Bool = false, inTeam: Bool = false, @ViewBuilder icon: () -> Icon) -> some View {
-        Button { selection.pane = pane } label: {
-            HStack(spacing: 8) {
-                icon()
-                Text(title).font(.system(size: inTeam ? 12.5 : 13, weight: unread > 0 ? .semibold : inTeam ? .regular : .medium))
-                    .foregroundColor(dimmed ? DS.Colors.textTertiary : inTeam && selection.pane != pane ? DS.Colors.textSecondary : DS.Colors.textPrimary).lineLimit(1)
-                if star { Text("CEO").font(.system(size: 8.5, weight: .bold)).foregroundColor(DS.Colors.accent) }
-                if leads { Image(systemName: "crown.fill").font(.system(size: 8.5)).foregroundColor(DS.Colors.gold).help("Manager") }
-                Spacer(minLength: 0)
-                if busy {
-                    PulseDot(color: DS.Colors.accent)
-                } else if unread > 0 {
-                    Circle().fill(DS.Colors.textPrimary).frame(width: 6, height: 6)
-                }
-            }
-            .padding(.horizontal, 8).frame(height: inTeam ? 30 : 32)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
-    }
-
-    private func navLabel(_ symbol: String, _ title: String, shortcut: String? = nil, trailing: String? = nil, active: Bool = false) -> some View {
-        HStack(spacing: 8) {
-            NavIcon(symbol: symbol, active: active, size: 20)
-            Text(title).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
-            Spacer(minLength: 0)
-            if let trailing { Text(trailing).font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary) }
-        }
-        .padding(.horizontal, 8).frame(height: 32)
-        .contentShape(Rectangle())
-    }
-
-    private func navIcon(_ pane: BotsPane, _ symbol: String, _ title: String) -> some View {
-        Button { selection.pane = pane } label: {
-            NavIcon(symbol: symbol, active: selection.pane == pane, size: 20).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane)).help(title)
-    }
-
-    private func navRow(_ pane: BotsPane, _ symbol: String, _ title: String, trailing: String? = nil) -> some View {
-        Button { selection.pane = pane } label: { navLabel(symbol, title, trailing: trailing, active: selection.pane == pane) }
-            .buttonStyle(SidebarButtonStyle(isSelected: selection.pane == pane))
     }
 
     /// Bots, groups and Clicky whose name matches the search.
@@ -677,19 +622,32 @@ struct BotChatScreen: View {
     @State private var settledIDs: Set<String> = []
     /// The text each bot last streamed here, so its finished message doesn't type out a second time.
     @State private var lastLive: [String: String] = [:]
+    /// Only the newest messages are drawn. The whole chat is one non-lazy stack, so every streamed word laid out all of it:
+    /// on Theo's 167-message chat that kept the main thread pegged for a whole reply. Older ones are a click away.
+    @State private var shownMessages = BotChatScreen.messagesPerPage
+    static let messagesPerPage = 40
     @State private var showsModelSettings = false
     @State private var showsDetails = false
     @State private var editsGroup = false
     @State private var attachments: [URL] = []
+    @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var dictation = ComposerDictation.shared
+    @AppStorage(ComposerDictationSettings.enabledKey) private var dictationEnabled = true
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
     private var groupBots: [NativeBot] { group.map { store.members(of: $0) } ?? [] }
     private var isProjectRoom: Bool { groupID == BotGroup.projectID }
-    private var inProgress: [(NativeBot, String)] {
+    /// Who's writing in this chat right now. A bot answering a private message or another chat isn't: it doesn't show here.
+    private var inProgress: [NativeBot] {
         let ids = bot.map { [$0.id] } ?? groupBots.map(\.id)
-        return ids.compactMap { id in store.replying[id].flatMap { text in store.bot(id).map { ($0, text) } } }
+        return ids.compactMap { id in
+            guard store.replyingIn[id] == conversationID, store.replying[id] != nil else { return nil }
+            return store.bot(id)
+        }
     }
+    /// Stop has something to stop: a bot writing here, a group's round, or private messages this chat set off.
+    private var canStop: Bool { !inProgress.isEmpty || store.isBusy(conversationID) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -704,44 +662,69 @@ struct BotChatScreen: View {
                 ScrollView {
                     // A plain VStack: a lazy one guesses the heights of long replies it hasn't drawn, and
                     // scrolling to the end then lands in empty space until something redraws.
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(Array(record.messages.enumerated()), id: \.element.id) { index, message in
+                    VStack(alignment: .leading, spacing: 14) {
+                        if record.messages.count > shownMessages {
+                            Button("Show earlier messages (\(record.messages.count - shownMessages) more)") { shownMessages += Self.messagesPerPage }
+                                .buttonStyle(.theo(.ghost, .small))
+                                .pointerCursor()
+                                .frame(maxWidth: .infinity)
+                        }
+                        ForEach(Array(record.messages.enumerated()).suffix(shownMessages), id: \.element.id) { index, message in
                             if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
                                 // The pending card gives way to the finished one, which lands at the end of the chat.
                                 if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
+                            } else if let exchange = BotDMThread.parseCard(message.card) {
+                                BotDMCard(store: store, senderID: message.author, targetID: exchange.targetID, exchangeID: exchange.exchangeID, at: message.at)
+                            } else if let waiting = BotWaitingCard.id(of: message.card) {
+                                BotWaitingCard(store: store, id: waiting, text: message.text)
+                            } else if message.author == BotsStore.noteAuthor {
+                                ChatNote(text: message.text)
                             } else if message.author == "user" {
                                 UserBubble(text: message.text)
                             } else if message.author == "routine" {
                                 RoutineMarker(text: message.text, at: message.at)
                             } else if let author = store.bot(message.author) {
-                                BotLine(bot: author, text: message.text,
-                                        showsName: index == 0 || record.messages[index - 1].author != message.author,
-                                        animatesIn: !settledIDs.contains(message.id), isLive: false)
+                                let call = message.text.contains("[CHOOSE:") ? BotCallPrompt.parse(message.text) : nil
+                                let brief = BotMessageCards.brief(for: message)
+                                if let brief {
+                                    BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message.text, besides: author))
+                                } else if call?.remainingText.isEmpty != true {
+                                    BotLine(bot: author, text: call?.remainingText ?? message.text,
+                                            showsName: index == 0 || record.messages[index - 1].author != message.author || record.messages[index - 1].card != nil,
+                                            namesAuthor: bot == nil,
+                                            animatesIn: !settledIDs.contains(message.id), isLive: false)
+                                }
+                                if let call {
+                                    BotCallCard(call: call, author: author, at: message.at,
+                                                   isOpen: !record.messages[(index + 1)...].contains { $0.author == "user" }) { answer in
+                                        if let bot { store.send(answer, command: answer, to: bot.id) } else if let groupID { store.sendToGroup(answer, command: answer, groupID: groupID) }
+                                    }
+                                }
                                 if let runID = message.runID, let run = store.t3Runs.first(where: { $0.id == runID }) {
-                                    T3ResultCard(run: run).padding(.leading, 38)
+                                    T3ResultCard(run: run).padding(.leading, 36)
                                 }
                                 if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
+                                if let card = message.card, card.hasPrefix("screen|") { BotScreenGiftCard(card: card) }
+                                if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
                                 if let prompt = BotsT3.promptBlock(in: message.text) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
+                                    let sentRun = store.t3Runs.first { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) }
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
-                                                    alreadySent: store.t3Runs.contains { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) })
+                                                    alreadySent: sentRun != nil, sentRunHarness: sentRun?.harness)
                                 }
                             }
                         }
                         ForEach(store.t3Runs.filter { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }) { run in
-                            T3RunCard(run: run)
+                            T3RunCard(run: run, bot: bot ?? store.primary)
                         }
-                        ForEach(inProgress, id: \.0.id) { pending in
-                            if pending.1.isEmpty {
-                                ThinkingLine(bot: pending.0, showsName: bot == nil)
-                            } else {
-                                BotLine(bot: pending.0, text: pending.1, showsName: record.messages.last?.author != pending.0.id, animatesIn: true, isLive: true)
-                            }
+                        ForEach(inProgress, id: \.id) { pending in
+                            LiveReplyLine(bot: pending, showsName: record.messages.last?.author != pending.id, namesAuthor: bot == nil,
+                                          proxy: proxy, lastLive: $lastLive)
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
-                    .frame(maxWidth: 720)
-                    .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
+                    .frame(maxWidth: 704)
+                    .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 10)
                     .frame(maxWidth: .infinity)
                 }
                 // A reply typing itself out, or a card opening under it, keeps the newest line in view.
@@ -758,13 +741,6 @@ struct BotChatScreen: View {
                     for delay in [0.3, 1.2, 2.5] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { proxy.scrollTo("end", anchor: .bottom) } }
                 }
                 .modifier(ChatRunScroll(proxy: proxy, runKeys: runKeys))
-                .onChange(of: inProgress.map { "\($0.0.id):\($0.1.count / 200)" }) { _, _ in
-                    for (bot, text) in inProgress where !text.isEmpty { lastLive[bot.id] = text }
-                }
-                .onChange(of: inProgress.map(\.1.count).reduce(0, +) / 240) { _, _ in
-                    // Follows a streaming reply every few lines rather than on every chunk.
-                    proxy.scrollTo("end", anchor: .bottom)
-                }
                 .onDisappear { if store.viewing == conversationID { store.viewing = nil } }
                 .onAppear {
                     store.viewing = conversationID
@@ -787,36 +763,44 @@ struct BotChatScreen: View {
         store.t3Runs.contains { ($0.phase == "running" || $0.phase == "waiting" || $0.phase == "reporting") && ($0.room ?? BotsStore.teamID) == conversationID }
     }
 
-    /// The chat's toolbar (docs/DESIGN.md): avatar, name (opens settings), model, and new chat.
+    /// The bots a document names, for its cover.
+    private func cast(in text: String, besides author: NativeBot) -> [NativeBot] {
+        store.bots.filter { $0.id != author.id && text.localizedCaseInsensitiveContains($0.name) }
+    }
+
+    /// The chat's header: its figure, name, role, a live status line, Studio and everything else under ⋯.
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if let bot {
-                BotAvatar(bot: bot, size: 34, state: inProgress.isEmpty ? .idle : .thinking)
+                BotAvatar(bot: bot, size: 36, state: inProgress.isEmpty ? .idle : .thinking)
                 Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             Text(bot.name).font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                             if bot.primary {
-                                Text("CEO").font(.system(size: 9, weight: .bold)).tracking(0.5).foregroundColor(DS.Colors.accentText)
-                                    .padding(.horizontal, 5).frame(height: 16)
-                                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(DS.Colors.accent.opacity(0.14)))
+                                Text("CEO").font(.system(size: 9.5, weight: .semibold, design: .monospaced)).tracking(0.76).foregroundColor(DS.Colors.accentText)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(DS.Colors.accentSoft))
                             }
                         }
-                        HStack(spacing: 5) {
-                            Circle().fill(!bot.isOn ? DS.Colors.textDisabled : inProgress.isEmpty ? DS.Colors.success : DS.Colors.warning)
-                                .frame(width: 6, height: 6)
-                            Text(statusLine(for: bot)).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                        HStack(spacing: 6) {
+                            if !bot.isOn {
+                                Circle().fill(DS.Colors.textDisabled).frame(width: 7, height: 7)
+                            } else {
+                                LiveDot()
+                            }
+                            Text(statusLine(for: bot)).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                         }
                     }
                 }
                 .buttonStyle(.plain).help("Settings for \(bot.name)")
             } else {
-                GroupAvatar(bots: groupBots, size: 34)
+                GroupAvatar(bots: groupBots, size: 36)
                 Button { editsGroup = true } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(group?.name ?? "Group chat").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                         Text("Led by \(group.flatMap { store.head(of: $0) }?.name ?? "nobody") · \(groupBots.count) bots")
-                            .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                            .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                     }
                 }
                 .buttonStyle(.plain)
@@ -825,38 +809,43 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
-            if bot?.primary == true {
-                Button { TheoCallController.start() } label: {
+            if StudioController.hasPanel {
+                Button { withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() } } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
-                        Text("Call").font(.system(size: 12.5, weight: .semibold))
+                        HairlineIcon(name: "studio", size: 16, color: DS.Colors.textPrimary, selected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0)
+                        Text("Studio")
                     }
-                    .foregroundColor(.white).padding(.horizontal, 12).frame(height: 30)
-                    .background(Capsule().fill(Color(hex: 0x2FA36B)))
-                    .contentShape(Capsule())
                 }
-                .buttonStyle(.plain).help("Start a voice call with \(bot?.name ?? "Theo")")
+                .buttonStyle(.theoSecondary).help("Show or hide your bots' screens")
             }
-            Button {
-                store.clearConversation(conversationID)
-                settledIDs = []
-            } label: {
-                Image(systemName: "square.and.pencil").font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
-                    .frame(width: 30, height: 30).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).help("New chat")
-            .disabled(!inProgress.isEmpty)
+            HairlineIcon(name: "more", size: 18, color: DS.Colors.textSecondary).frame(width: 30, height: 30)
+                .coverMenu(help: "More") {
+                    if bot?.primary == true {
+                        Button { TheoCallController.start() } label: { Label("Call \(bot?.name ?? "Theo")", systemImage: "phone") }
+                    }
+                    Button {
+                        store.clearConversation(conversationID)
+                        settledIDs = []
+                    } label: { Label("New chat", systemImage: "square.and.pencil") }
+                    .disabled(canStop)
+                    if bot != nil {
+                        Divider()
+                        Button { NotificationCenter.default.post(name: .theoShowBotSettings, object: nil) } label: { Label("Settings for this chat", systemImage: "slider.horizontal.3") }
+                    }
+                }
         }
-        // Room on the right for the settings button.
-        .padding(.leading, 20).padding(.trailing, 48).frame(height: 60)
+        .padding(.horizontal, 22).padding(.top, 12).frame(height: 72)
         .overlay(alignment: .bottom) { Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1) }
+        // Runs up under the window's title bar, level with the traffic lights.
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     /// "Working · Claude Sonnet 5.5 · high · 2 routines" under the bot's name.
     private func statusLine(for bot: NativeBot) -> String {
-        var parts = [!bot.isOn ? "Off" : inProgress.isEmpty ? "Ready" : "Working"]
-        parts.append(bot.modelLabel)
+        var parts = [!bot.isOn ? "Off" : inProgress.isEmpty ? "Online" : "Working"]
+        parts.append(bot.modelLabel.replacingOccurrences(of: "Claude ", with: ""))
         if let effort = bot.effort { parts.append(effort) }
+        if bot.primary { parts.append("leads \(store.bots.filter { !$0.primary }.count) bots") }
         for team in store.categories(of: bot.id) {
             parts.append(team.leaderID == bot.id ? "Manages \(team.name)" : "In \(team.name)")
         }
@@ -896,7 +885,12 @@ struct BotChatScreen: View {
     /// The composer (docs/DESIGN.md): text on top; under it @-mentions, the model, and send or stop.
     private var composer: some View {
         let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
+        let dictating = dictation.isActive(for: conversationID)
+        let isFinishing = dictating && dictation.phase == .finishing
         return VStack(alignment: .leading, spacing: 10) {
+            if case .problem(let problem) = dictation.phase, dictation.ownerID == conversationID {
+                ComposerDictationNote(problem: problem, onOpenSettings: dictation.openPermissionSettings, onDismiss: dictation.dismissNote)
+            }
             if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -915,64 +909,104 @@ struct BotChatScreen: View {
                     }
                 }
             }
-            TextField(bot.map { "Message \($0.name)" } ?? "Message \(group?.name ?? "the group")",
+            if dictating {
+                ComposerDictationField(live: dictation.live, isFinishing: isFinishing)
+                ComposerDictationBar(live: dictation.live, isFinishing: isFinishing, onCancel: dictation.cancel, onKeep: dictation.stop)
+            } else {
+            TextField(bot.map { "Message \($0.name), or type / for commands" } ?? "Message \(group?.name ?? "the group")",
                       text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(.system(size: 14))
                 .lineLimit(1...8)
                 .focused($composerFocused)
                 .onSubmit(send)
+                .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 2)
             HStack(spacing: 6) {
                 Button(action: chooseAttachments) {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                    HairlineIcon(name: "plus", size: 18, color: DS.Colors.textSecondary)
+                        .frame(width: 30, height: 30).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).help("Attach files")
-                Menu {
-                    ForEach(mentionable) { member in
-                        Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
+                HairlineIcon(name: "at", size: 18, color: DS.Colors.textSecondary).frame(width: 30, height: 30)
+                    .coverMenu(help: "Mention a bot, or send work to the coding agent") {
+                        ForEach(mentionable) { member in
+                            Button("@\(member.name)") { draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + "@\(member.name) " }
+                        }
+                        Button("@code (straight to the coding agent)") { draft += "@code " }
                     }
-                    Button("@code (straight to the coding agent)") { draft += "@code " }
-                } label: {
-                    Image(systemName: "at").font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
-                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                if let bot {
+                    ModelChip(store: store, bot: bot)
+                    EffortChip(store: store, bot: bot)
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help("Mention a bot, or send work to the coding agent")
-                if let bot { ModelChip(store: store, bot: bot) }
                 Spacer()
-                if !inProgress.isEmpty && isEmpty {
+                if dictationEnabled {
+                    Button { dictation.toggle(conversationID) } label: {
+                        HairlineIcon(name: "mic", size: 18, color: DS.Colors.textSecondary)
+                            .frame(width: 30, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help(dictationHelp)
+                }
+                if canStop && isEmpty {
                     Button {
-                        if let bot { store.stop(bot.id) } else if let groupID { store.stopGroup(groupID) }
+                        if let bot {
+                            if !inProgress.isEmpty { store.stop(bot.id) }
+                            store.stopPrivateMessages(in: conversationID)
+                        } else if let groupID {
+                            store.stopGroup(groupID)
+                        }
                     } label: {
-                        Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
-                            .frame(width: 28, height: 28).background(Circle().fill(DS.Colors.surface))
-                            .overlay(Circle().strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
+                        HairlineIcon(name: "stop", size: 16, color: DS.Colors.textPrimary)
+                            .frame(width: 32, height: 32).background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Colors.surface))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DS.Colors.borderStrong, lineWidth: 1))
                     }
                     .buttonStyle(.plain).help("Stop")
                 } else {
                     Button(action: send) {
-                        Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
-                            .frame(width: 28, height: 28)
-                            .background(Circle().fill(isEmpty ? DS.Colors.textDisabled : DS.Colors.accent))
+                        HairlineIcon(name: "send", size: 18, color: isEmpty ? DS.Colors.textTertiary : DS.Colors.textOnAccent)
+                            .frame(width: 32, height: 32)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(isEmpty ? DS.Colors.surface : DS.Colors.accent))
                     }
                     .buttonStyle(.plain).disabled(isEmpty).help("Send")
                     .keyboardShortcut(.return, modifiers: .command)
                 }
             }
+            }
         }
-        .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(composerFocused ? DS.Colors.accent.opacity(0.6) : DS.Colors.borderSubtle, lineWidth: composerFocused ? 1.5 : 1))
-        .frame(maxWidth: 720)
-        .padding(.horizontal, 24).padding(.bottom, 20).padding(.top, 4)
+        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(DS.Colors.surface1))
+        .background(ComposerDictationAnchor())
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(dictating || composerFocused ? DS.Colors.accent.opacity(dictating ? 1 : 0.6) : DS.Colors.borderStrong, lineWidth: dictating || composerFocused ? 1.5 : 1))
+        .onAppear { attachDictation() }
+        .onDisappear { dictation.detach(conversationID) }
+        .onChange(of: composerFocused) { _, focused in dictation.noteFocus(conversationID, focused: focused) }
+        .frame(maxWidth: 704)
+        .padding(.horizontal, 24).padding(.bottom, 18).padding(.top, 6)
         .frame(maxWidth: .infinity)
         .dropDestination(for: URL.self) { files, _ in
             let local = files.filter(\.isFileURL)
             attachments += local.filter { !attachments.contains($0) }
             return !local.isEmpty
         }
+    }
+
+    private var dictationHelp: String {
+        switch ComposerDictationSettings.shortcut {
+        case .optionSpace: return "Dictate (⌥Space or ⌘⇧D)"
+        case .commandShiftD: return "Dictate (⌘⇧D)"
+        case .micButtonOnly: return "Dictate"
+        }
+    }
+
+    private func attachDictation() {
+        let draft = $draft
+        let focused = $composerFocused
+        dictation.attach(ComposerDictation.Composer(id: conversationID, text: { draft.wrappedValue }, land: { text, cursor in
+            draft.wrappedValue = text
+            focused.wrappedValue = true
+            // The field comes back on the next pass, then its editor can take the cursor.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { ComposerDictation.shared.placeCursor(cursor) }
+        }))
     }
 
     /// Who an @ can reach from here: the group's bots, or the bots this one may message.
@@ -1011,13 +1045,10 @@ struct ModelChip: View {
 
     var body: some View {
         Button { open.toggle() } label: {
-            HStack(spacing: 4) {
-                Text(bot.modelLabel).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
-            }
-            .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
-            .contentShape(Rectangle())
+            Text(bot.modelLabel.replacingOccurrences(of: "Claude ", with: "")).font(.system(size: 12)).lineLimit(1)
+                .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 9).frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.selected))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain).help("Change the model")
         .popover(isPresented: $open, arrowEdge: .top) {
@@ -1058,6 +1089,29 @@ struct ModelChip: View {
     }
 }
 
+/// How hard the bot thinks: Auto until someone picks.
+struct EffortChip: View {
+    @ObservedObject var store: BotsStore
+    let bot: NativeBot
+
+    var body: some View {
+        let levels = HarnessCatalog.info(bot.provider)?.efforts ?? []
+        Text(bot.effort?.capitalized ?? "Auto").font(.system(size: 12)).lineLimit(1)
+            .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 9).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.selected))
+            .coverMenu(help: "How hard it thinks") {
+                Button("Auto") { set(nil) }
+                ForEach(levels, id: \.self) { level in Button(level.capitalized) { set(level) } }
+            }
+    }
+
+    private func set(_ effort: String?) {
+        var edited = bot
+        edited.effort = effort
+        store.save(edited)
+    }
+}
+
 /// Files attached to a message. Engines with file tools get their paths to read. An engine with no tools (a bare API)
 /// gets the text of small text files in the message itself.
 enum BotAttachments {
@@ -1083,16 +1137,16 @@ enum BotAttachments {
 struct UserBubble: View {
     let text: String
     var body: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16, style: .continuous)
         HStack {
             Spacer(minLength: 120)
             Text(text)
-                .font(.system(size: 15)).foregroundColor(DS.Colors.textPrimary).lineSpacing(4)
+                .font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary).lineSpacing(3)
                 .textSelection(.enabled)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4,
-                                                   topTrailingRadius: 16, style: .continuous).fill(DS.Colors.surface))
+                .background(shape.fill(DS.Colors.surface))
+                .overlay(shape.strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
         }
-        .padding(.top, 8)
     }
 }
 
@@ -1103,12 +1157,11 @@ struct ThinkingLine: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                BotAvatar(bot: bot, size: 28, state: .thinking)
-                Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                BotAvatar(bot: bot, size: 26, state: .thinking)
+                if showsName { Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary) }
+                TypingDots()
             }
-            TypingDots().padding(.leading, 38)
         }
-        .padding(.top, 8)
     }
 }
 
@@ -1116,6 +1169,8 @@ struct BotLine: View {
     let bot: NativeBot
     let text: String
     let showsName: Bool
+    /// In a group chat the name goes above the words; in a bot's own chat the figure says who it is.
+    var namesAuthor = true
     /// New replies type in; old ones show at once.
     let animatesIn: Bool
     /// Still streaming from the engine.
@@ -1131,13 +1186,15 @@ struct BotLine: View {
     @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 10) {
             if showsName {
-                HStack(spacing: 10) {
-                    BotAvatar(bot: bot, size: 28, state: typing ? .typing : .idle)
-                    Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                }
-                .padding(.top, 8)
+                BotAvatar(bot: bot, size: 26, state: typing ? .typing : .idle)
+            } else {
+                Color.clear.frame(width: 26, height: 1)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+            if showsName && namesAuthor {
+                Text(bot.name).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
             }
             Group {
                 if typing {
@@ -1154,7 +1211,8 @@ struct BotLine: View {
                 }
             }
             .frame(maxWidth: ChatText.measure, alignment: .leading)
-            .padding(.leading, 38)
+            }
+            .padding(.top, 3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -1170,12 +1228,13 @@ struct BotLine: View {
             total = newText.count
             rate = max(320, Double(total - anchorCount) * 2.5)
         }
-        .task(id: total) {
-            // Marks the reveal done once it has caught up and the stream has ended.
-            while !finished {
-                if !isLive && shownCount(at: Date()) >= total { finished = true; break }
-                try? await Task.sleep(nanoseconds: 120_000_000)
-            }
+        .task(id: "\(total)|\(isLive)") {
+            // Marks the reveal done once it has caught up and the stream has ended. A stale isLive here once kept finished lines
+            // redrawing at 30 fps for good, so this is keyed on it and waits once rather than polling.
+            guard !finished, !isLive else { return }
+            let left = Double(total - shownCount(at: Date())) / rate
+            if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000) + 50_000_000) }
+            if !Task.isCancelled { finished = true }
         }
     }
 
@@ -1264,11 +1323,10 @@ enum BotPalette {
         Swatch(id: "violet", from: 0xA468EB, to: 0xD152B8), Swatch(id: "rose", from: 0xF06A8F, to: 0xE24A58),
         Swatch(id: "slate", from: 0x7C8697, to: 0x4D5666), Swatch(id: "graphite", from: 0x3A3A42, to: 0x1E1E24),
     ]
-    /// A bot's colours: its character's, with Theo's own mark always graphite.
+    /// A bot's colour: its screen glow.
     static func swatch(for bot: NativeBot) -> Swatch {
-        if bot.id == "theo" && bot.avatar == nil { return swatches[9] }
-        let character = BotCharacter.of(bot)
-        return Swatch(id: character.rawValue, from: character.colors.0, to: character.colors.1)
+        let glow = CrewLook.hex(bot.crewLook.glow)
+        return Swatch(id: bot.id, from: glow, to: glow)
     }
 }
 
@@ -1283,63 +1341,15 @@ extension NativeBot {
     }
 }
 
-/// A bot's avatar: its character (BotCharacters.swift), or Theo's own visor tile. At rest it blinks and glances now and
-/// then; while it works it moves and a soft ring breathes around it.
+/// A bot's crew figure, in the pose its real state calls for.
 struct BotAvatar: View {
     let bot: NativeBot
     let size: CGFloat
     let state: BotAvatarState
-    @State private var breathing = false
-
-    private var ownMark: Bool { bot.id == "theo" && bot.avatar == nil }
 
     var body: some View {
-        let swatch = BotPalette.swatch(for: bot)
-        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-        ZStack {
-            if ownMark {
-                shape.fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                shape.fill(LinearGradient(colors: [Color.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center))
-                shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-            }
-            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !bot.isOn {
-                face(time: nil)
-            } else if state != .idle {
-                TimelineView(.animation(minimumInterval: 1.0 / 24)) { timeline in
-                    face(time: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                // Resting: a blink and a glance now and then, drawn only at those moments, so a screen full of bots costs next to nothing.
-                TimelineView(BotRestingSchedule(seed: bot.id)) { timeline in
-                    face(time: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            }
-        }
-        .frame(width: size, height: size)
-        .overlay {
-            if state != .idle {
-                shape.inset(by: -3).stroke(Color(hex: swatch.from).opacity(breathing ? 0.85 : 0.25), lineWidth: 2)
-            }
-        }
-        .opacity(bot.isOn ? 1 : 0.45)
-        .onAppear { restart() }
-        .onChange(of: state) { _, _ in restart() }
-    }
-
-    @ViewBuilder private func face(time: Double?) -> some View {
-        if bot.id == BotsStore.clickyID {
-            ClickyAvatar(size: size, isActive: state != .idle)
-        } else if ownMark {
-            BotFace(seed: bot.id, isTheo: true, size: size, awake: state != .idle && bot.isOn, time: time)
-        } else {
-            BotCharacterView(character: .of(bot), size: size, working: state != .idle && bot.isOn, time: time, phase: BotFace.phase(of: bot.id))
-        }
-    }
-
-    private func restart() {
-        breathing = false
-        guard state != .idle, !DS.Motion.isReduced else { breathing = state != .idle; return }
-        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathing = true }
+        let shown = BotsStore.shared.crewPose(of: bot, state: state)
+        CrewAvatar(look: bot.crewLook, size: size, pose: shown.pose, poseUntil: shown.until, dimmed: !bot.isOn)
     }
 }
 
@@ -1357,159 +1367,6 @@ struct TeamGuideLine: Shape {
         path.move(to: CGPoint(x: 1, y: y))
         path.addLine(to: CGPoint(x: rect.maxX, y: y))
         return path
-    }
-}
-
-/// When a resting face changes: the frames of a blink, and the moment it glances somewhere new.
-struct BotRestingSchedule: TimelineSchedule {
-    let seed: String
-
-    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
-        let phase = BotFace.phase(of: seed)
-        let period = BotFace.blinkPeriod(phase)
-        var next = startDate
-        return AnyIterator {
-            let current = next
-            let t = current.timeIntervalSinceReferenceDate + phase
-            let intoBlink = t.truncatingRemainder(dividingBy: period)
-            let step: TimeInterval
-            if intoBlink < BotFace.blinkSeconds, mode != .lowFrequency {
-                step = 1.0 / 30
-            } else {
-                let toBlink = intoBlink < BotFace.blinkSeconds ? period - intoBlink : period - intoBlink
-                let toGlance = BotFace.glanceSeconds - t.truncatingRemainder(dividingBy: BotFace.glanceSeconds)
-                step = max(1.0 / 30, min(toBlink, toGlance))
-            }
-            next = current.addingTimeInterval(step)
-            return current
-        }
-    }
-}
-
-/// Theo's own mark: a little robot face with an ember visor. While it works, its eyes glow brighter.
-struct BotFace: View {
-    let seed: String
-    let isTheo: Bool
-    let size: CGFloat
-    var awake = false
-    /// Seconds on a running clock; nil draws it still.
-    var time: Double? = nil
-
-    static let blinkSeconds = 0.16
-    static let glanceSeconds = 2.6
-    static func phase(of seed: String) -> Double { Double(seed.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0xFFFF }) / 6553.5 }
-    static func blinkPeriod(_ phase: Double) -> Double { 3.4 + phase.truncatingRemainder(dividingBy: 1.6) }
-
-    private var phase: Double { Self.phase(of: seed) }
-
-    private var traits: (eyes: Int, mouth: Int, antenna: Int) {
-        var hash: UInt64 = 1469598103934665603
-        for byte in seed.utf8 { hash = (hash ^ UInt64(byte)) &* 1099511628211 }
-        return (Int(hash % 5), Int((hash / 5) % 4), Int((hash / 20) % 3))
-    }
-
-    var body: some View {
-        Canvas { context, canvas in
-            let w = canvas.width
-            let eye = Color.white
-            let dark = Color.black.opacity(0.32)
-            let (eyes, mouth, antenna) = isTheo ? (2, 3, 1) : traits
-            let t = (time ?? 0) + phase
-            let moving = time != nil
-            // While it works the whole face bobs. At rest there's a blink every few seconds and a glance left or right.
-            let bob = moving && awake ? sin(t * 1.8) * w * 0.018 : 0
-            let period = Self.blinkPeriod(phase)
-            let blinkPhase = t.truncatingRemainder(dividingBy: period)
-            let blink = moving && blinkPhase < Self.blinkSeconds ? max(0.12, abs(blinkPhase - 0.08) / 0.08) : 1
-            let glance: Double = {
-                guard moving else { return 0 }
-                if awake { return sin(t * 3.2) * w * 0.035 }
-                let slot = Int(t / Self.glanceSeconds) % 4
-                return [0, w * 0.03, 0, -w * 0.03][slot]
-            }()
-            context.translateBy(x: 0, y: bob)
-            // Antenna.
-            if size >= 18 && antenna > 0 {
-                var stem = Path()
-                stem.move(to: CGPoint(x: w * 0.5, y: w * 0.17)); stem.addLine(to: CGPoint(x: w * 0.5, y: w * 0.07))
-                context.stroke(stem, with: .color(eye.opacity(0.85)), lineWidth: max(1, w * 0.035))
-                let r = w * (antenna == 1 ? 0.055 : 0.04)
-                let pulse = moving && awake ? 0.55 + 0.45 * (sin(t * 6) * 0.5 + 0.5) : 0.9
-                context.fill(Path(ellipseIn: CGRect(x: w * 0.5 - r, y: w * 0.07 - r, width: r * 2, height: r * 2)),
-                             with: .color((isTheo ? Color(hex: 0xFF8A5B) : eye).opacity(pulse)))
-            }
-            // Face plate.
-            let plate = CGRect(x: w * 0.17, y: w * 0.24, width: w * 0.66, height: w * 0.56)
-            context.fill(Path(roundedRect: plate, cornerRadius: w * 0.16, style: .continuous), with: .color(dark))
-            let eyeColor = isTheo ? Color(hex: 0xFF8A5B) : eye
-            let glow = awake ? 1.0 : 0.92
-            let cy = plate.minY + plate.height * 0.42
-            var eyeLayer = context
-            eyeLayer.translateBy(x: glance, y: cy)
-            eyeLayer.scaleBy(x: 1, y: blink)
-            eyeLayer.translateBy(x: 0, y: -cy)
-            if awake {
-                // The eyes glow while it works.
-                eyeLayer.addFilter(.shadow(color: eyeColor.opacity(0.9), radius: w * 0.06))
-            }
-            switch eyes {
-            case 0: // round eyes
-                for x in [0.38, 0.62] {
-                    let r = w * 0.065
-                    eyeLayer.fill(Path(ellipseIn: CGRect(x: w * x - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(eyeColor.opacity(glow)))
-                }
-            case 1: // tall eyes
-                for x in [0.39, 0.61] {
-                    eyeLayer.fill(Path(roundedRect: CGRect(x: w * x - w * 0.045, y: cy - w * 0.09, width: w * 0.09, height: w * 0.18), cornerRadius: w * 0.045),
-                                 with: .color(eyeColor.opacity(glow)))
-                }
-            case 2: // visor
-                let visor = CGRect(x: plate.minX + w * 0.07, y: cy - w * 0.055, width: plate.width - w * 0.14, height: w * 0.11)
-                eyeLayer.fill(Path(roundedRect: visor, cornerRadius: w * 0.055), with: .color(eyeColor.opacity(glow)))
-                for x in [0.4, 0.6] {
-                    let r = w * 0.03
-                    eyeLayer.fill(Path(ellipseIn: CGRect(x: w * x - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(.white))
-                }
-            case 3: // happy arcs
-                for x in [0.39, 0.61] {
-                    var arc = Path()
-                    arc.addArc(center: CGPoint(x: w * x, y: cy + w * 0.03), radius: w * 0.07, startAngle: .degrees(200), endAngle: .degrees(340), clockwise: false)
-                    eyeLayer.stroke(arc, with: .color(eyeColor.opacity(glow)), style: StrokeStyle(lineWidth: max(1.2, w * 0.05), lineCap: .round))
-                }
-            default: // one big eye
-                let r = w * 0.11
-                eyeLayer.fill(Path(ellipseIn: CGRect(x: w * 0.5 - r, y: cy - r, width: r * 2, height: r * 2)), with: .color(eyeColor.opacity(glow)))
-                let p = w * 0.045
-                eyeLayer.fill(Path(ellipseIn: CGRect(x: w * 0.5 - p, y: cy - p, width: p * 2, height: p * 2)), with: .color(.black.opacity(0.55)))
-            }
-            // Mouth.
-            guard size >= 18 else { return }
-            let my = plate.minY + plate.height * 0.76
-            switch mouth {
-            case _ where awake && moving:
-                // Talking while it works.
-                let open = (sin(t * 11) * 0.5 + 0.5) * w * 0.06 + w * 0.015
-                context.fill(Path(roundedRect: CGRect(x: w * 0.44, y: my - open / 2, width: w * 0.12, height: open), cornerRadius: open / 2),
-                             with: .color(eye.opacity(0.85)))
-            case 0:
-                var line = Path(); line.move(to: CGPoint(x: w * 0.43, y: my)); line.addLine(to: CGPoint(x: w * 0.57, y: my))
-                context.stroke(line, with: .color(eye.opacity(0.8)), style: StrokeStyle(lineWidth: max(1, w * 0.035), lineCap: .round))
-            case 1:
-                var smile = Path()
-                smile.addArc(center: CGPoint(x: w * 0.5, y: my - w * 0.05), radius: w * 0.07, startAngle: .degrees(30), endAngle: .degrees(150), clockwise: false)
-                context.stroke(smile, with: .color(eye.opacity(0.85)), style: StrokeStyle(lineWidth: max(1, w * 0.035), lineCap: .round))
-            case 2:
-                for i in 0..<3 {
-                    let r = w * 0.016
-                    context.fill(Path(ellipseIn: CGRect(x: w * (0.44 + Double(i) * 0.06) - r, y: my - r, width: r * 2, height: r * 2)), with: .color(eye.opacity(0.8)))
-                }
-            default:
-                context.fill(Path(roundedRect: CGRect(x: w * 0.42, y: my - w * 0.02, width: w * 0.16, height: w * 0.04), cornerRadius: w * 0.02),
-                             with: .color(eyeColor.opacity(0.75)))
-            }
-        }
-        .frame(width: size, height: size)
-        .allowsHitTesting(false)
     }
 }
 
@@ -1661,143 +1518,102 @@ struct ConnectorsScreen: View {
     }
 }
 
-// MARK: - Hand-off to T3 Code
-
-/// A bot's finished build prompt, ready to go: which harness, which folder, and Start.
-struct T3HandoffButton: View {
-    let text: String
-    var room: String = BotsStore.teamID
-    let prominent: Bool
-    var alreadySent = false
-    @ObservedObject private var center = HarnessCenter.shared
-    @ObservedObject private var keys = ProviderKeys.shared
-    @State private var sentHere = false
-    @State private var harness = HarnessPrefs.codingTarget
-    @State private var folder: URL?
-    private var sent: Bool { sentHere || alreadySent }
-
-    /// The folder from the message itself, when it names one.
-    private var namedFolder: URL? { BotsT3.targetRepo(answer: text, pitch: "") }
-
-    var body: some View {
-        let target = folder ?? namedFolder
-        VStack(alignment: .leading, spacing: 8) {
-            if sent {
-                Label("Sent to \(HarnessCatalog.label(harness))", systemImage: "checkmark").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
-            } else {
-                HStack(spacing: 8) {
-                    BrandLogo(id: harness, name: HarnessCatalog.label(harness), size: 24)
-                    Picker("Run on", selection: $harness) {
-                        ForEach(HarnessCatalog.codingTargets, id: \.id) { info in
-                            let status = center.status(for: info.id)
-                            Text(info.label + (status.installed ? "" : " (not installed)")).tag(info.id)
-                        }
-                        if keys.hasKey(for: "cursor") { Text("Cursor cloud agent").tag(CursorCloud.harnessID) }
-                    }
-                    .labelsHidden().frame(width: 180)
-                    Button { chooseFolder() } label: {
-                        Label(target?.lastPathComponent ?? "Choose a folder…", systemImage: "folder").lineLimit(1)
-                    }
-                    .buttonStyle(.theo(.secondary, .small))
-                    .help(target?.path ?? "A git repo gets its own branch and a draft PR. A plain folder is edited in place.")
-                    Spacer(minLength: 0)
-                    Button { start(in: target) } label: { Label(target == nil ? "Start as a new project" : "Start run", systemImage: "play.fill") }
-                        .buttonStyle(.theo(.primary, .small))
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-            }
-        }
-        .padding(.leading, 38)
-        .onAppear { center.refresh() }
-    }
-
-    private func start(in target: URL?) {
-        let prompt = BotsT3.promptBlock(in: text) ?? text
-        BotsStore.shared.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: text, prompt: prompt), repo: target, room: room, harness: harness)
-        sentHere = true
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Use this folder"
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        folder = chosen
-    }
-}
-
 /// A coding run while it works, for someone who has never read a terminal: where it's got to in plain words, with the
 /// raw terminal one click away. Stop asks first.
 struct T3RunCard: View {
     let run: T3Run
+    /// Whose work it is, for its figure and its tile.
+    var bot: NativeBot? = nil
     @ObservedObject private var terminals = TerminalSessions.shared
+    @ObservedObject private var studio = StudioController.shared
     @State private var showsTerminal = false
     @State private var confirmsStop = false
 
     private var engine: String { run.harness.map(HarnessCatalog.label) ?? "T3 Code" }
     private var session: TerminalSession? { terminals.session(for: run.id) }
+    private var tile: StudioTileID? { bot.flatMap { studio.roster.tile(of: $0.id) } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
-                BrandLogo(id: run.harness ?? "t3", name: engine, size: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(run.title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                    Text(detailLine).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                if let bot {
+                    CrewAvatar(look: bot.crewLook, size: 32, pose: run.phase == "waiting" ? .needs : .working, dimmed: !bot.isOn)
+                } else {
+                    BrandLogo(id: run.harness ?? "t3", name: engine, size: 32)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    (Text(bot?.name ?? engine).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                     + Text(" · \(run.title)").font(.system(size: 13)).foregroundColor(DS.Colors.textPrimary)).lineLimit(1)
+                    HStack(spacing: 6) {
+                        RunMacChip(run: run)
+                        Text(detailLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    StatusPill(text: (run.phase == "waiting" ? "Waiting for you · " : run.phase == "reporting" ? "Finishing up · " : "Working · ") + Self.elapsed(since: run.startedAt, now: context.date),
-                               tone: run.phase == "waiting" ? .warn : .info, busy: run.phase != "waiting")
-                }
-                if run.phase != "reporting" {
-                    Button { confirmsStop = true } label: { Label("Stop", systemImage: "stop.fill") }
-                        .buttonStyle(.theo(.secondary, .small)).help(run.harness == nil ? "Stop following this run" : "Stop this run")
+                    HStack(spacing: 6) {
+                        LiveDot(color: run.phase == "waiting" ? DS.Colors.warning : DS.Colors.accent)
+                        Text((run.phase == "waiting" ? "Waiting · " : run.phase == "reporting" ? "Finishing · " : "") + Self.elapsed(since: run.startedAt, now: context.date))
+                            .font(.system(size: 11.5, weight: .medium).monospacedDigit()).foregroundColor(run.phase == "waiting" ? DS.Colors.warningText : DS.Colors.accentText)
+                    }
+                    .padding(.horizontal, 9).frame(height: 22)
+                    .background(Capsule().fill(run.phase == "waiting" ? DS.Colors.warning.opacity(0.13) : DS.Colors.accentSoft))
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(steps) { step in RunStepRow(step: step) }
-            }
+            RunStepBar(fills: RunSteps.fills(phase: run.phase, stage: run.stage), stopping: run.stoppedByOwner == true)
+                .padding(.top, 12)
+            RunTerminalLine(text: terminalLine, waiting: run.phase == "waiting")
+                .padding(.top, 10)
             if run.phase == "waiting" {
-                RunFollowupBox(run: run, placeholder: "Answer it here")
+                RunFollowupBox(run: run, placeholder: "Answer it here").padding(.top, 10)
             }
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                if let tile {
+                    Button { studio.panelVisible = true } label: {
+                        HStack(spacing: 6) { HairlineIcon(name: "eye", size: 15, color: DS.Colors.textPrimary); Text("Watch on Screen \(tile.screen + 1)") }
+                    }
+                    .buttonStyle(.theoSecondary).help("Show its tile in the Studio panel")
+                }
                 if session != nil {
                     Button {
                         withAnimation(DS.Motion.hover) { showsTerminal.toggle() }
                         NotificationCenter.default.post(name: .theoScrollChatToEnd, object: nil)
                     } label: {
-                        Label(showsTerminal ? "Hide terminal" : "Show terminal", systemImage: "terminal")
+                        HStack(spacing: 6) { HairlineIcon(name: "term", size: 15, color: DS.Colors.textSecondary); Text(showsTerminal ? "Hide terminal" : "Show terminal") }
                     }
-                    .buttonStyle(.theo(.ghost, .small))
+                    .buttonStyle(.theoGhost)
                     if showsTerminal {
                         Button { TerminalWindowController.pop(sessionID: run.id) } label: { Image(systemName: "arrow.up.forward.square").frame(width: 14) }
-                            .buttonStyle(.theo(.ghost, .small)).help("Open in its own window")
+                            .buttonStyle(.theoGhost).help("Open in its own window")
                     }
                 } else if run.isRemote {
                     RemoteRunBadge(run: run, showsTerminal: $showsTerminal)
                 } else if run.link != nil || run.harness != nil {
                     Button { BotsT3.openInApp(run) } label: { Label(run.harness == nil ? "Open in T3 Code" : "Watch", systemImage: "arrow.up.forward.app") }
-                        .buttonStyle(.theo(.ghost, .small))
+                        .buttonStyle(.theoGhost)
                 }
                 Spacer(minLength: 0)
+                if run.phase != "reporting" {
+                    Button { confirmsStop = true } label: {
+                        HStack(spacing: 6) { HairlineIcon(name: "stop", size: 15, color: DS.Colors.textSecondary); Text("Stop") }
+                    }
+                    .buttonStyle(.theoGhost).help(run.harness == nil ? "Stop following this run" : "Stop this run")
+                }
             }
-            if showsTerminal, run.isRemote { RemoteRunTerminal(run: run) }
+            .padding(.top, 10)
+            if showsTerminal, run.isRemote { RemoteRunTerminal(run: run).padding(.top, 10) }
             if showsTerminal, let session {
                 // The harness's own terminal, live: watch it work and type into it.
                 TerminalPanel(session: session)
                     .frame(height: 300)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                    .padding(.top, 10)
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-        .padding(.leading, 38)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
         .alert("Stop this run?", isPresented: $confirmsStop) {
             Button("Stop", role: .destructive) { BotsStore.shared.stopRun(run.id) }
             Button("Keep going", role: .cancel) {}
@@ -1807,39 +1623,18 @@ struct T3RunCard: View {
     }
 
     /// The agent's latest words, without Markdown marks, or what it's doing in general until it has said something.
-    private var plainActivity: String {
-        let words = (run.activity ?? "").replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    private var terminalLine: String {
+        if run.stoppedByOwner == true { return "Stopping. What it did so far is being saved." }
+        let words = (run.activity ?? "").replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "`", with: "")
+            .split(whereSeparator: \.isNewline).last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
         return words.isEmpty ? "Reading the code and working out what to change." : words
-    }
-
-    private var steps: [RunStep] {
-        let wrappingUp = run.phase == "reporting"
-        let stopping = run.stoppedByOwner == true
-        let place = run.branch.map { "On its own branch, \($0). Your own files stay as they are." } ?? "In its own folder, \(URL(fileURLWithPath: run.folder).lastPathComponent)."
-        func state(_ name: String, after earlier: [String]) -> RunStep.State {
-            guard wrappingUp, let stage = run.stage else { return .todo }
-            if stage == name { return .active }
-            return earlier.contains(stage) ? .todo : .done
-        }
-        var list = [RunStep(id: "start", title: run.branch == nil ? "Set up a folder" : "Set up its own branch", detail: place, state: .done)]
-        if stopping {
-            list.append(RunStep(id: "code", title: "Stopping", detail: "What it did so far is being saved.", state: .active))
-            return list
-        }
-        list.append(RunStep(id: "code", title: run.phase == "waiting" ? "It has a question for you" : "Changing the code",
-                            detail: wrappingUp ? nil : plainActivity,
-                            state: wrappingUp ? .done : run.phase == "waiting" ? .question : .active))
-        list.append(RunStep(id: "tests", title: "Running the tests", detail: nil, state: state("tests", after: [])))
-        if run.branch != nil {
-            list.append(RunStep(id: "push", title: "Saving and pushing", detail: nil, state: state("push", after: ["tests"])))
-            list.append(RunStep(id: "pr", title: "Opening a draft pull request", detail: nil, state: state("pr", after: ["tests", "push"])))
-        }
-        return list
     }
 
     private var detailLine: String {
         var parts = [engine]
-        if let model = run.model { parts.append(NativeBot.label(for: model)) }
+        if let chat = run.continuedChat { parts.append("Continuing \(chat)") } else if let model = run.model { parts.append(NativeBot.label(for: model)) }
+        if run.chatUnknown == true { parts.append("Couldn't tell which chat it made") }
+        if let branch = run.branch { parts.append(branch) } else { parts.append(URL(fileURLWithPath: run.folder).lastPathComponent) }
         return parts.joined(separator: " · ")
     }
 
@@ -1851,41 +1646,65 @@ struct T3RunCard: View {
     }
 }
 
-struct RunStep: Identifiable {
-    enum State { case done, active, question, todo }
-    let id: String
-    let title: String
-    let detail: String?
-    let state: State
-}
-
-/// One line of a run's progress: a tick, a spinner or an empty circle, and what it means.
-struct RunStepRow: View {
-    let step: RunStep
+/// Branch, Code, Tests, Push, PR: five segments and their names.
+struct RunStepBar: View {
+    let fills: [RunSteps.Fill]
+    var stopping = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Group {
-                switch step.state {
-                case .done: Image(systemName: "checkmark.circle.fill").foregroundColor(DS.Colors.success)
-                case .active: ProgressView().controlSize(.small).scaleEffect(0.7)
-                case .question: Image(systemName: "questionmark.circle.fill").foregroundColor(DS.Colors.warning)
-                case .todo: Image(systemName: "circle").foregroundColor(DS.Colors.textDisabled)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(0..<5, id: \.self) { index in
+                    GeometryReader { box in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(DS.Colors.borderStrong)
+                            if fills[index] != .todo {
+                                Capsule().fill(stopping ? DS.Colors.warning : DS.Colors.accent).frame(width: fills[index] == .done ? box.size.width : box.size.width * 0.4)
+                            }
+                        }
+                    }
+                    .frame(height: 4)
                 }
             }
-            .font(.system(size: 14)).frame(width: 16, height: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(step.title).font(.system(size: 13, weight: step.state == .todo ? .regular : .medium))
-                    .foregroundColor(step.state == .todo ? DS.Colors.textTertiary : DS.Colors.textPrimary)
-                if let detail = step.detail {
-                    Text(detail).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 4) {
+                ForEach(0..<5, id: \.self) { index in
+                    Text(RunSteps.titles[index]).font(.system(size: 10.5)).foregroundColor(fills[index] == .active ? DS.Colors.textPrimary : DS.Colors.textTertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
     }
 }
 
-/// Type a change or an answer on the card itself. It lands on the same branch and pull request.
+/// One line of the run's terminal with a blinking caret. It stays dark in both themes.
+struct RunTerminalLine: View {
+    let text: String
+    var waiting = false
+    @State private var caretOn = true
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("$").foregroundColor(Color(hex: 0x777777))
+            Text(text).foregroundColor(Color(hex: 0xCFCFCF)).lineLimit(1).truncationMode(.head)
+            if !waiting {
+                Rectangle().fill(Color(hex: 0xDDDDDD)).frame(width: 7, height: 13).opacity(caretOn ? 1 : 0)
+                    .task {
+                        guard DS.Motion.level != .off else { return }
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            caretOn.toggle()
+                        }
+                    }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
 struct RunFollowupBox: View {
     let run: T3Run
     var placeholder = "Ask for a change"
@@ -2028,11 +1847,13 @@ struct BotModelSettings: View {
                         }
                     }
                     Section("API keys") {
-                        ForEach(keys.usableChatProviders) { provider in
+                        let offered = keys.usableChatProviders(for: bot.primary ? .theo : .bots)
+                        ForEach(offered) { provider in
                             Text(provider.label).tag("api:\(provider.id)")
                         }
-                        if bot.provider.hasPrefix("api:"), !keys.usableChatProviders.contains(where: { "api:\($0.id)" == bot.provider }) {
-                            Text("\(String(bot.provider.dropFirst(4))) (no key)").tag(bot.provider)
+                        if bot.provider.hasPrefix("api:"), !offered.contains(where: { "api:\($0.id)" == bot.provider }) {
+                            let hasKey = keys.usableChatProviders.contains { "api:\($0.id)" == bot.provider }
+                            Text("\(String(bot.provider.dropFirst(4)))\(hasKey ? "" : " (no key)")").tag(bot.provider)
                         }
                         Text("Add a key…").tag("__add_key")
                     }
@@ -2128,18 +1949,37 @@ struct SidebarButtonStyle: ButtonStyle {
     }
 }
 
-/// A small dot that breathes while a bot works.
-struct PulseDot: View {
-    let color: Color
-    @State private var on = false
-    var body: some View {
-        Circle().fill(color).frame(width: 6, height: 6).opacity(on ? 1 : 0.35)
-            .onAppear { withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { on = true } }
-    }
-}
-
 extension Notification.Name {
     /// Opens the bot settings slide-over (the bot's name in the chat header sends it).
     static let theoShowBotSettings = Notification.Name("TheoShowBotSettings")
     static let theoScrollChatToEnd = Notification.Name("theoScrollChatToEnd")
+    /// Home's "New group chat".
+    static let theoNewGroupChat = Notification.Name("theoNewGroupChat")
+}
+
+/// One bot's reply while it streams. It's the only view that watches the words, so a chunk redraws this line and nothing else.
+private struct LiveReplyLine: View {
+    let bot: NativeBot
+    let showsName: Bool
+    let namesAuthor: Bool
+    let proxy: ScrollViewProxy
+    @Binding var lastLive: [String: String]
+    @ObservedObject private var live = BotLiveText.shared
+
+    private var text: String { live.text[bot.id] ?? "" }
+
+    var body: some View {
+        Group {
+            if text.isEmpty {
+                ThinkingLine(bot: bot, showsName: namesAuthor)
+            } else {
+                BotLine(bot: bot, text: text, showsName: showsName, namesAuthor: namesAuthor, animatesIn: true, isLive: true)
+            }
+        }
+        // Remembered so the finished message doesn't type out a second time.
+        .onChange(of: "\(text.isEmpty) \(text.count / 200)") { _, _ in if !text.isEmpty { lastLive[bot.id] = text } }
+        // Follows the reply every few lines rather than on every chunk.
+        .onChange(of: text.count / 240) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+        .onDisappear { if !text.isEmpty { lastLive[bot.id] = text } }
+    }
 }

@@ -92,6 +92,9 @@ final class TerminalSession: ObservableObject, Identifiable {
         process.send(data: ArraySlice(Array(text.utf8)))
     }
 
+    /// The program on the terminal has said it takes pastes, which a TUI does once it's up and reading keys.
+    var acceptsPaste: Bool { view.getTerminal().bracketedPasteMode }
+
     /// Pastes `text` (bracketed paste, so a TUI treats it as one paste and keeps its newlines) and then, after a
     /// short delay, presses Return.
     func send(text: String, submit: Bool = true) async {

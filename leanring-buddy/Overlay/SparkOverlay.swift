@@ -46,7 +46,7 @@ final class SparkOverlayManager {
         screensObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.isShowingOverlay(), let companionManager = self.companionManager else { return }
-                self.showOverlay(onScreens: NSScreen.screens, companionManager: companionManager)
+                self.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: companionManager)
             }
         }
     }

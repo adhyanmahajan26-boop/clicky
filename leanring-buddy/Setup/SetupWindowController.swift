@@ -850,7 +850,7 @@ final class LookSettings: ObservableObject {
     @Published var placement = ClickySettings.islandPlacement { didSet { if ClickySettings.islandPlacement != placement { ClickySettings.islandPlacement = placement } } }
     @Published var sparkMode = ClickySettings.sparkMode { didSet { if ClickySettings.sparkMode != sparkMode { ClickySettings.sparkMode = sparkMode } } }
     @Published var screenName = ClickySettings.claudiaScreenName { didSet { if ClickySettings.claudiaScreenName != screenName { ClickySettings.claudiaScreenName = screenName } } }
-    @Published private(set) var screenNames = NSScreen.screens.map(\.localizedName)
+    @Published private(set) var screenNames = NSScreen.ownerScreens.map(\.localizedName)
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
@@ -870,7 +870,7 @@ final class LookSettings: ObservableObject {
         if placement != ClickySettings.islandPlacement { placement = ClickySettings.islandPlacement }
         if sparkMode != ClickySettings.sparkMode { sparkMode = ClickySettings.sparkMode }
         if screenName != ClickySettings.claudiaScreenName { screenName = ClickySettings.claudiaScreenName }
-        let names = NSScreen.screens.map(\.localizedName)
+        let names = NSScreen.ownerScreens.map(\.localizedName)
         if names != screenNames { screenNames = names }
     }
 }

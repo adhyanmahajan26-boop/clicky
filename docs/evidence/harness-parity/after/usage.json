@@ -1,0 +1,31 @@
+{
+ "probe": "usage",
+ "verdict": "PASS",
+ "seconds": 5.8,
+ "evidence": {
+  "before": {
+   "turnsWithoutCost": 34,
+   "outputTokens": 0,
+   "inputTokens": 0,
+   "bot": "quill",
+   "turns": 34,
+   "cacheReadTokens": 0,
+   "name": "Quill",
+   "cacheWriteTokens": 0,
+   "costUSD": null
+  },
+  "after": {
+   "costUSD": 0.025,
+   "cacheWriteTokens": 20,
+   "bot": "quill",
+   "cacheReadTokens": 2000,
+   "name": "Quill",
+   "turns": 36,
+   "turnsWithoutCost": 34,
+   "inputTokens": 200,
+   "outputTokens": 80
+  },
+  "api_status": 200
+ },
+ "at": "2026-11-12T21:33:14"
+}

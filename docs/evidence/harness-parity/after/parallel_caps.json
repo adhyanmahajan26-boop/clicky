@@ -1,0 +1,15 @@
+{
+ "probe": "parallel_caps",
+ "verdict": "PASS",
+ "seconds": 19.4,
+ "evidence": {
+  "settled": true,
+  "private_turns": 6,
+  "by_bot": {
+   "quill": 3,
+   "watch": 3
+  },
+  "engine_calls": 8
+ },
+ "at": "2026-11-12T21:33:08"
+}

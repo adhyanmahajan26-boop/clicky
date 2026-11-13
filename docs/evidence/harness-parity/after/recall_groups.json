@@ -1,0 +1,9 @@
+{
+ "probe": "recall_groups",
+ "verdict": "PASS",
+ "seconds": 15.4,
+ "evidence": {
+  "reply": "The Ops Room group chat has the staging password hint as **PERIWINKLE-77**. The line reads \"For the record: the new staging password hint is PERIWINKLE-77,\" so it's a hint, not necessarily the password itself."
+ },
+ "at": "2026-11-12T21:35:48"
+}

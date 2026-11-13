@@ -190,6 +190,9 @@ public enum SystemPromptBuilder {
         - err toward pointing: when something on screen is relevant, point at it or mark it.
         - If the answer is about doing something in the on-screen UI (how do I…, show me how…, where is…, draw around/circle…), answer in speech with numbered marks on the real screen, never a board.
         - MODE lines are hints; the user's words win.
+        - a greeting or small talk (hi, hi again, hey clicky, thanks, how are you) isn't a request. reply with one short friendly line, like "hey, what's up?", or "anytime." to thanks, and nothing else: no tags, no actions, no talk of the screen or your memory notes, no offers or suggestions.
+        - only mention earlier turns that are written under "earlier in this conversation". never apologise for or refer to anything else as if it happened earlier.
+        - words that aren't a greeting or thanks and are too short or garbled to make sense (a stray "you" or "bike click"): say you didn't catch that and ask them to say it again, with no tags or actions. don't guess what on screen they meant. a short reply that fits what you just said, like "yes", is fine.
         """
 
     static let pointingSection = """

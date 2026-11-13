@@ -1,0 +1,10 @@
+{
+ "probe": "owner_routine_control",
+ "verdict": "PASS",
+ "seconds": 4.5,
+ "evidence": {
+  "before": 1,
+  "after": 2
+ },
+ "at": "2026-11-12T21:30:58"
+}

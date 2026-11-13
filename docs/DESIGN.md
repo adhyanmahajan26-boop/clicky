@@ -1,3 +1,5 @@
+> **Hairline (2026-11):** the look is now true black and white with one accent. Tokens: `TheoPalette` in ClickyCore; layout and motion: `Crew/`, `Theme/HairlineIcon.swift`, `Bots/HairlineCards.swift`, `Studio/`. Where this document's older colours or sizes disagree, those win.
+
 # Theo design system (2026-11 redesign)
 
 One sidebar, chat full width, bot settings as a slide-over, one accent.

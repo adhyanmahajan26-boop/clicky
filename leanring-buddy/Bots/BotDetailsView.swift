@@ -16,6 +16,7 @@ import SwiftUI
 
 struct BotDetailsSheet: View {
     @ObservedObject var store: BotsStore
+    @ObservedObject private var usage = BotUsage.shared
     let botID: String
     let onDone: () -> Void
     @State private var tab = 0
@@ -67,7 +68,7 @@ struct BotDetailsSheet: View {
             VStack(alignment: .leading, spacing: 18) {
                 field("Name") { TextField("Name", text: binding.name).textFieldStyle(.roundedBorder) }
                 field("What it does") { TextField("Shown under its name", text: binding.description).textFieldStyle(.roundedBorder) }
-                field("Look") { BotLookPicker(bot: binding) }
+                field("Look") { LookButton(bot: binding) }
                 field("Instructions") {
                     TextEditor(text: binding.instructions)
                         .font(.system(size: 12.5)).frame(minHeight: 120)
@@ -103,6 +104,15 @@ struct BotDetailsSheet: View {
                         if FileManager.default.fileExists(atPath: path) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
                     }
                     .buttonStyle(.link)
+                    Button("Start a fresh session") { store.startFreshSession(botID) }
+                        .buttonStyle(.link)
+                        .help("Its next reply starts a new engine session. Its memory, skills and saved chat carry over.")
+                }
+                field("Usage") {
+                    Text(BotUsageLedger.line(usage.total(botID: botID, days: 7), period: "in the last 7 days"))
+                        .font(.system(size: 12.5)).foregroundColor(.secondary)
+                    Text(BotUsageLedger.line(usage.total(botID: botID, days: 30), period: "in the last 30 days"))
+                        .font(.system(size: 12.5)).foregroundColor(.secondary)
                 }
                 if !binding.wrappedValue.primary {
                     Divider()
@@ -127,49 +137,6 @@ struct BotDetailsSheet: View {
     }
 }
 
-/// A bot's look: the gallery of characters. Theo also has its own mark to go back to.
-struct BotLookPicker: View {
-    @Binding var bot: NativeBot
-    var tile: CGFloat = 44
-    var columns = 8
-
-    var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.fixed(tile + 12), spacing: 6), count: columns), alignment: .leading, spacing: 8) {
-            if bot.id == "theo" { theoTile }
-            ForEach(BotCharacter.allCases) { character in
-                let picked = BotCharacter.of(bot) == character && !(bot.id == "theo" && bot.avatar == nil)
-                Button { bot.avatar = character.rawValue } label: {
-                    VStack(spacing: 3) {
-                        BotCharacterView(character: character, size: tile)
-                        Text(character.title).font(.system(size: 10, weight: picked ? .semibold : .regular))
-                            .foregroundColor(picked ? DS.Colors.textPrimary : DS.Colors.textTertiary).lineLimit(1)
-                    }
-                    .padding(.vertical, 5).frame(width: tile + 12)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(picked ? DS.Colors.selected : .clear))
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(picked ? DS.Colors.accent : .clear, lineWidth: 1.5))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).help(character.title)
-            }
-        }
-    }
-
-    private var theoTile: some View {
-        Button { bot.avatar = nil } label: {
-            VStack(spacing: 3) {
-                BotAvatar(bot: { var own = bot; own.avatar = nil; return own }(), size: tile, state: .idle)
-                Text("Theo").font(.system(size: 10, weight: bot.avatar == nil ? .semibold : .regular))
-                    .foregroundColor(bot.avatar == nil ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-            }
-            .padding(.vertical, 5).frame(width: tile + 12)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bot.avatar == nil ? DS.Colors.selected : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(bot.avatar == nil ? DS.Colors.accent : .clear, lineWidth: 1.5))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).help("Theo's own mark")
-    }
-}
-
 // MARK: - Routines
 
 /// Every routine, in one place: watch the schedules, pause, resume, run now, delete, and see the runs.
@@ -189,6 +156,9 @@ struct RoutinesScreen: View {
                 Button { adding = true } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.theoSecondary)
             }
             .padding(.horizontal, 24).padding(.vertical, 18)
+            if let note = store.routinesElsewhereNote {
+                Text(note).font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 24).padding(.bottom, 12)
+            }
             Divider().overlay(DS.Colors.hover)
             ScrollView {
                 if store.routines.isEmpty {
@@ -311,7 +281,7 @@ struct RoutineList: View {
     }
 
     private func statusDot(_ status: String) -> some View {
-        Circle().fill(status == "done" ? DS.Colors.success : status == "running" ? DS.Colors.blue : status == "failed" ? DS.Colors.destructiveText : DS.Colors.textTertiary)
+        Circle().fill(status == "done" || status == "quiet" ? DS.Colors.success : status == "running" ? DS.Colors.blue : status == "failed" ? DS.Colors.destructiveText : DS.Colors.textTertiary)
             .frame(width: 7, height: 7).padding(.top, 4)
     }
 
@@ -450,15 +420,7 @@ struct GroupAvatar: View {
 
     @ViewBuilder private func cell(_ shown: [NativeBot], _ index: Int, _ tile: CGFloat) -> some View {
         if index < shown.count {
-            let bot = shown[index]
-            if bot.id == "theo" && bot.avatar == nil {
-                let swatch = BotPalette.swatch(for: bot)
-                RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous)
-                    .fill(LinearGradient(colors: [Color(hex: swatch.from), Color(hex: swatch.to)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: tile, height: tile)
-            } else {
-                BotCharacterView(character: .of(bot), size: tile)
-            }
+            CrewAvatar(look: shown[index].crewLook, size: tile, moves: false, interactive: false)
         } else {
             RoundedRectangle(cornerRadius: tile * 0.3, style: .continuous).fill(DS.Colors.hover).frame(width: tile, height: tile)
         }

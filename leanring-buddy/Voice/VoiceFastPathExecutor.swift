@@ -248,7 +248,7 @@ final class VoiceFastPathExecutor {
             return status == .success ? .done(detail: "minimized", acknowledgement: command.acknowledgement())
                                       : .failed(reason: "AX \(status.rawValue)", spokenLine: "Couldn't minimize it.")
         }
-        let screensLeftToRight = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
+        let screensLeftToRight = NSScreen.ownerScreens.sorted { $0.frame.minX < $1.frame.minX }
         let currentScreen = Self.screen(containingCG: CGPoint(x: windowFrameCG.midX, y: windowFrameCG.midY)) ?? NSScreen.main
         guard let currentScreen else { return .failed(reason: "no screen", spokenLine: "Couldn't find the screen.") }
         let targetScreen: NSScreen

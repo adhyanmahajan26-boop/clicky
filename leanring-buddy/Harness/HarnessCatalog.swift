@@ -320,12 +320,17 @@ enum HarnessDetector {
                 }
             } else {
                 let text = HarnessCatalog.output(of: executable, ["status"], timeout: 20).lowercased()
-                status.loggedIn = text.contains("logged in") && !text.contains("not logged in") && !text.contains("authentication required")
+                // Nothing back (a check that timed out while the Mac was busy) says nothing: the card was stuck on "signed out"
+                // for four days after the 5 Nov install. Unknown keeps runs going, and the next check settles it.
+                status.loggedIn = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil
+                    : text.contains("logged in") && !text.contains("not logged in") && !text.contains("authentication required")
             }
         case "grok":
             // `grok models` prints "You are logged in with grok.com." and the model list.
             let text = HarnessCatalog.output(of: executable, ["models"], timeout: 15)
-            if text.lowercased().contains("logged in") {
+            if text.lowercased().contains("not authenticated") {
+                status.loggedIn = false
+            } else if text.lowercased().contains("logged in") {
                 status.loggedIn = !text.lowercased().contains("not logged in")
                 if status.loggedIn == true {
                     status.account = text.split(separator: "\n").first { $0.lowercased().contains("logged in") }
@@ -516,6 +521,8 @@ final class HarnessCenter: ObservableObject {
     // MARK: Reading
 
     func status(for harness: String) -> HarnessStatus { statuses[harness] ?? HarnessStatus(id: harness) }
+    /// Whether that harness has been checked yet since Theo started.
+    func hasStatus(for harness: String) -> Bool { statuses[harness] != nil }
     func models(for harness: String) -> [HarnessModel] { models[harness] ?? [] }
     /// Harnesses that are installed and not signed out.
     var readyHarnesses: [HarnessInfo] { HarnessCatalog.all.filter { status(for: $0.id).ready } }
@@ -575,10 +582,10 @@ final class HarnessCenter: ObservableObject {
     // MARK: Refreshing
 
     /// Detects every harness and reloads the model lists in the background. Skipped when run less than a
-    /// minute ago unless `force`.
-    func refresh(force: Bool = false) {
+    /// minute ago (or `maximumAge` seconds, for a check that's only there to stay roughly current) unless `force`.
+    func refresh(force: Bool = false, maximumAge: TimeInterval = 60) {
         if isRefreshing { return }
-        if !force, let lastRefresh, Date().timeIntervalSince(lastRefresh) < 60 { return }
+        if !force, let lastRefresh, Date().timeIntervalSince(lastRefresh) < maximumAge { return }
         lastRefresh = Date()
         isRefreshing = true
         let cachedCursorAge = HarnessModels.readCache().map { Date().timeIntervalSince($0.fetchedAt) } ?? .infinity

@@ -77,9 +77,9 @@ enum BackgroundWebTree {
     private static var releaseTask: Task<Void, Never>?
     private static var quitObserver: NSObjectProtocol?
 
-    static func hold(_ processIdentifier: pid_t, bundleIdentifier: String?) {
+    static func hold(_ processIdentifier: pid_t, bundleIdentifier: String?, evenInFront: Bool = false) {
         guard let bundleIdentifier, ActionExecutor.chromiumBrowserBundleIdentifiers.contains(bundleIdentifier),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier else { return }
+              evenInFront || NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier else { return }
         if heldProcess != processIdentifier {
             release()
             let application = AXUIElementCreateApplication(processIdentifier)

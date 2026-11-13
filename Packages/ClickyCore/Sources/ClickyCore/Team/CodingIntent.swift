@@ -55,6 +55,16 @@ public enum CodingIntent {
             || words.range(of: #"(?i)\b"# + things + #"\b.{0,30}\b(cancel|stop|kill|abort)\b"#, options: .regularExpression) != nil
     }
 
+    /// "Carry on that chat", "continue the earlier thread", "pick up where the agent left off": earlier harness work, not a new run.
+    public static func asksToContinueChat(_ text: String) -> Bool {
+        normalized(text).range(of: #"(?i)\b(continue|carry on|resume|pick up|go on with|keep going)\b.{0,50}\b(chat|thread|session|conversation|run|where|left off|earlier|existing|previous|last)\b"#, options: .regularExpression) != nil
+    }
+
+    /// The words are about code or a harness at all, so "let's continue where we left off" in a chat about something else isn't taken for a coding chat.
+    public static func mentionsCodeWork(_ text: String) -> Bool {
+        normalized(text).range(of: #"(?i)\b(code|coding|repo|folder|project|thread|session|harness|t3|codex|claude code|cursor|opencode|open code|gemini|grok)\b"#, options: .regularExpression) != nil
+    }
+
     /// An idea or a build, which the group talks through before anyone acts on it.
     public static func wantsDiscussion(_ text: String) -> Bool {
         normalized(text).range(of: #"(?i)\b(idea|plan|critique|discuss|what do you think|build|make|create|website|app|game|feature|design|prompt)\b"#, options: .regularExpression) != nil
@@ -95,7 +105,12 @@ public enum ProjectWords {
     /// Only a folder asked for, with nothing to build in it yet.
     public static func asksOnlyForFolder(_ text: String) -> Bool {
         guard let name = newFolderName(in: text) else { return false }
-        return CodingIntent.normalized(text).replacingOccurrences(of: name, with: "").range(of: #"(?i)\b(website|site|app|page|game|tool|script|dashboard|build|code|fix|write|add)\b"#, options: .regularExpression) == nil
+        let words = CodingIntent.normalized(text)
+        if words.replacingOccurrences(of: name, with: "").range(of: #"(?i)\b(website|site|app|page|game|tool|script|dashboard|build|code|fix|write|add)\b"#, options: .regularExpression) != nil { return false }
+        // "...called moon and put hello.txt in it" asks for more than the folder. Only polite words can follow its name.
+        guard let after = words.range(of: name, options: .caseInsensitive) else { return true }
+        let tail = words[after.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: "\"'`.,!? \n"))
+        return tail.isEmpty || tail.range(of: #"(?i)^(please|thanks|thank you|for me|now|here|in (my )?projects|on (this|the|my)( mac)?( \w+){0,2})$"#, options: .regularExpression) != nil
     }
 
     /// The project these words talk about, out of the ones there are: "changes in the planets quiz", "moon-phases-page project".
@@ -113,6 +128,15 @@ public enum ProjectWords {
 
     public static func asksToWork(_ text: String) -> Bool {
         CodingIntent.normalized(text).range(of: #"(?i)\b(change|changes|fix|update|edit|add|improve|continue|work|modify|redo|build|make)\b|बदल|ठीक"#, options: .regularExpression) != nil
+    }
+
+    /// "Continue: <chat id or title>" on a line of its own, next to a ```prompt block. An id can hold anything, colons too.
+    public static func chatToContinue(in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?im)^\s*\*{0,2}Continue:\*{0,2}\s*(.+?)\s*$"#),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let value = text[range].trimmingCharacters(in: CharacterSet(charactersIn: "`\"'* "))
+        return value.isEmpty ? nil : value
     }
 
     /// What a bot wrote, inline or on its own line: "Repo: ~/Projects/foo", "New folder: foo".

@@ -232,6 +232,7 @@ final class GroundingCoordinator {
     /// (push-to-talk key-down / first words of a hands-free utterance).
     func prewarm() {
         guard prewarmTask == nil else { return }
+        PrismClient.warm()
         prewarmStartDate = Date()
         lastPrewarmReadyDate = nil
         prewarmTask = Task { [weak self] in
@@ -537,10 +538,18 @@ final class GroundingCoordinator {
 
     // MARK: - Capture warm-up
 
+    private var lastWarmUpScreens = ""
+
     /// (Re)starts the background warm-up: throwaway captures every 1.5 s
     /// (first after 0.5 s) until one passes the black check or there are no
     /// app windows to judge, for at most 30 s.
     func startCaptureWarmUp(reason: String) {
+        // It's throwaway captures of the owner's monitors, so it stays out of the way of anything playing, and of a
+        // notification that didn't actually change the screens.
+        let screens = NSScreen.screens.map { "\($0.frame)" }.sorted().joined()
+        if reason.contains("ScreenParameters"), screens == lastWarmUpScreens { return }
+        lastWarmUpScreens = screens
+        guard !StudioController.somethingIsPlaying() else { return }
         captureWarmUp.start(at: Date())
         captureWarmUpTask?.cancel()
         let startDate = Date()

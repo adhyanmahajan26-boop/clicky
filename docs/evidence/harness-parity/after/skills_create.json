@@ -1,0 +1,14 @@
+{
+ "probe": "skills_create",
+ "verdict": "PASS",
+ "seconds": 26.9,
+ "evidence": {
+  "new_skill_files": [
+   "memory/pip/skills/theo-release/SKILL.md"
+  ],
+  "skill_head": "---\nname: theo-release\ndescription: Use when Addy asks to cut, build, or install a new Theo release (Theo.app). Gives the fixed order of steps, run as a coding run.\n---\n\n# Theo release\n\nAddy's standard release order. Every step runs in the order below. Stop at the first failure and report it.\n\nI can",
+  "memory_md": "- Addy's dog is called Biscuit-7731.\n- Addy's Theo release steps are saved as the skill theo-release (skills/theo-release/SKILL.md). Follow it for any release.\n- Old filler lines were removed on 2026-11-12 to get under the memory limit.\n",
+  "reply": "Saved the release procedure as the `theo-release` skill, so I'll follow it next time. I can't run the release myself, so when you want one, I'll pass it to a coding run on the Mac Studio with those five steps in order. I also cleared the memory file down to the dog fact and a pointer to the skill. It was almost all filler lines."
+ },
+ "at": "2026-11-12T21:34:38"
+}

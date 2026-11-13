@@ -22,6 +22,7 @@
 //
 
 import AppKit
+import AVFoundation
 import ClickyCore
 import SwiftUI
 
@@ -236,6 +237,12 @@ enum TheoUIDriver {
         let (window, point) = target(topWindow, at: topPoint)
         // A SwiftUI Picker or Menu is a popup button: reach its menu directly, since an inactive app can't track a popup.
         if !rightClick, let popup = popUpButton(in: window, at: point) {
+            // A SwiftUI Menu fills its items as it opens.
+            if let menu = popup.menu {
+                menu.delegate?.menuNeedsUpdate?(menu)
+                menu.delegate?.menuWillOpen?(menu)
+                menu.update()
+            }
             let titles = popup.itemTitles
             if let item, let index = titles.firstIndex(where: { $0.lowercased() == item.lowercased() }) {
                 popup.selectItem(at: index)
@@ -243,6 +250,33 @@ enum TheoUIDriver {
                 if let menuItem = popup.item(at: index), let action = menuItem.action, popup.action == nil {
                     NSApp.sendAction(action, to: menuItem.target, from: menuItem)
                 }
+            } else if let item, let found = popup.menu.flatMap({ Self.menuItem(named: item, in: $0) }), let action = found.action {
+                // In a submenu, like "All folders".
+                NSApp.sendAction(action, to: found.target, from: found)
+            }
+            if let menu = popup.menu { menu.delegate?.menuDidClose?(menu) }
+            if titles.isEmpty, let menu = popup.menu {
+                // Some only fill while they're really open: open it for a moment, read it, pick from it, close it.
+                var shown: [String] = []
+                let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: menu, queue: nil) { _ in
+                    shown = menu.items.map(\.title)
+                    RunLoop.main.perform(inModes: [.eventTracking, .common]) {
+                        MainActor.assumeIsolated {
+                            if let item {
+                                if let index = menu.items.firstIndex(where: { $0.title.lowercased() == item.lowercased() }) {
+                                    menu.performActionForItem(at: index)
+                                } else if let found = Self.menuItem(named: item, in: menu), let parent = found.menu, let index = parent.items.firstIndex(of: found) {
+                                    parent.performActionForItem(at: index)
+                                }
+                            }
+                            menu.cancelTracking()
+                        }
+                    }
+                }
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: popup.bounds.height), in: popup)
+                NotificationCenter.default.removeObserver(observer)
+                completion(shown)
+                return
             }
             completion(titles)
             return
@@ -272,6 +306,14 @@ enum TheoUIDriver {
         }
         if let observer { NotificationCenter.default.removeObserver(observer) }
         completion(titles)
+    }
+
+    private static func menuItem(named name: String, in menu: NSMenu) -> NSMenuItem? {
+        for item in menu.items {
+            if item.title.lowercased() == name.lowercased() { return item }
+            if let submenu = item.submenu, let found = menuItem(named: name, in: submenu) { return found }
+        }
+        return nil
     }
 
     private static func popUpButton(in window: NSWindow, at point: CGPoint) -> NSPopUpButton? {
@@ -440,6 +482,8 @@ enum TheoUIDriver {
             default: break
             }
             settle { respond(true, state(), nil) }
+        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults", "uiLink", "uiBotPrompt":
+            respond(true, CrewTestCommands.run(name, command, in: target), nil)
         case "uiHitMap": respond(true, hitMap(target!), nil)
         case "uiTree":
             let roles = (command["roles"] as? [String]).map(Set.init)
@@ -572,6 +616,49 @@ extension TheoUIDriver {
             guard let key = command["key"] as? String else { respond(false, nil, "Needs key."); return true }
             UserDefaults.standard.set(command["value"], forKey: key)
             respond(true, ["key": key], nil)
+        case "uiChatsList":
+            // {harness, folder}: the chats the Chat menu would offer.
+            guard let harness = command["harness"] as? String, let folder = command["folder"] as? String else { respond(false, nil, "Needs harness and folder."); return true }
+            Task { @MainActor in
+                let chats = await HarnessChats.list(harness: harness, folder: folder)
+                respond(true, chats.map { ["id": $0.id, "title": $0.title, "age": HarnessChatText.age(of: $0.updatedAt)] }, nil)
+            }
+        case "uiGroupStop":
+            // {id}: what Stop in a group chat does.
+            guard let id = command["id"] as? String else { respond(false, nil, "Needs id."); return true }
+            BotsStore.shared.stopGroup(id)
+            respond(true, ["stopped": id], nil)
+        case "uiBotStop":
+            // {bot}: what Stop in a bot's chat does.
+            guard let id = command["bot"] as? String else { respond(false, nil, "Needs bot."); return true }
+            BotsStore.shared.stop(id)
+            respond(true, ["stopped": id], nil)
+        case "uiRunPane":
+            // {run}: the screen of a run's terminal, what "Watch" shows.
+            guard let id = command["run"] as? String, let terminal = TerminalSessions.shared.session(for: id) else { respond(false, nil, "No terminal for that run."); return true }
+            respond(true, ["text": String(terminal.screenText().suffix(3000)), "running": terminal.isRunning, "acceptsPaste": terminal.acceptsPaste], nil)
+        case "uiRunFollowup":
+            // {run, text}: what the box on a run's card does.
+            guard let id = command["run"] as? String, let text = command["text"] as? String, let run = BotsStore.shared.t3Runs.first(where: { $0.id == id }) else { respond(false, nil, "Needs run and text."); return true }
+            BotsStore.shared.sendFollowup(text, on: run)
+            respond(true, ["sent": id], nil)
+        case "uiRunStart":
+            // {prompt, title, folder, harness, model, effort, room, mac, chat}: what Start on a run's card does, with the same choices.
+            guard let prompt = command["prompt"] as? String, let title = command["title"] as? String else { respond(false, nil, "Needs prompt and title."); return true }
+            let chat = (command["chat"] as? String).map { HarnessChatChoice(idOrTitle: $0) }
+            BotsStore.shared.submitToT3(prompt: prompt, title: title, repo: (command["folder"] as? String).map { URL(fileURLWithPath: $0, isDirectory: true) }, room: command["room"] as? String ?? BotsStore.teamID,
+                                        harness: command["harness"] as? String, modelChoice: command["model"] as? String, effortChoice: command["effort"] as? String, macName: command["mac"] as? String, continuing: chat) { didStart, problem in
+                // {await: true}: the answer is whether it really started.
+                if command["await"] as? Bool == true { respond(true, ["didStart": didStart, "problem": problem ?? ""], nil) }
+            }
+            if command["await"] as? Bool != true { respond(true, ["started": title], nil) }
+        case "uiPrismEval":
+            guard let cases = command["cases"] as? String, let out = command["out"] as? String else { respond(false, nil, "Needs cases and out."); return true }
+            Task { @MainActor in respond(true, await PrismEval.run(casesPath: cases, outPath: out), nil) }
+        case "uiSarvamSocketCheck":
+            Task { @MainActor in respond(true, await PrismEval.socketCheck(), nil) }
+        case "uiSarvamLiveCheck":
+            Task { @MainActor in respond(true, await PrismEval.liveCheck(), nil) }
         case "uiTestKey":
             // A throwaway key for the local stand-in server, in the test profile's own Keychain service.
             guard let provider = command["provider"] as? String else { respond(false, nil, "Needs provider."); return true }
@@ -641,6 +728,82 @@ extension TheoUIDriver {
             guard let manager = CompanionManager.current else { respond(false, nil, "No manager."); return true }
             manager.dictationController.showForTest(state: command["state"] as? String ?? "listening")
             settle { respond(true, ["window": manager.dictationController.pill.windowNumber as Any? ?? NSNull()], nil) }
+        case "uiBrowserResearch":
+            // {action: state|read|signedIn|askPermission|answer, url, accountWords, signedOutWords, answer, always, localHost}. Opens windows in the owner's real Chrome, on a
+            // hidden screen. Only yes or no comes back about an account, and never a page's words except through read's count.
+            let browser = BrowserResearcher.shared
+            if let always = command["always"] as? Bool { UserDefaults.standard.set(always, forKey: "test.research.alwaysBrowser") }
+            if let local = command["localHost"] as? Bool { browser.testAllowsLocalHost = local }
+            switch command["action"] as? String ?? "state" {
+            case "read":
+                guard let url = (command["url"] as? String).flatMap(URL.init(string:)) else { respond(false, nil, "Needs url."); return true }
+                Task { @MainActor in
+                    switch await browser.read(url) {
+                    case .page(let title, let text): respond(true, ["read": true, "hasTitle": title != nil, "characters": text.count, "state": browser.testState()], nil)
+                    case .skipped(let reason): respond(true, ["read": false, "reason": reason, "state": browser.testState()], nil)
+                    }
+                }
+            case "signedIn":
+                guard let url = (command["url"] as? String).flatMap(URL.init(string:)) else { respond(false, nil, "Needs url."); return true }
+                Task { @MainActor in
+                    let found = await browser.testSignedIn(url, accountWords: command["accountWords"] as? [String] ?? [], signedOutWords: command["signedOutWords"] as? [String] ?? [])
+                    respond(true, found, nil)
+                }
+            case "askPermission":
+                // Brings up macOS's prompt on the owner's screen. Only when they've said they're ready.
+                Task { @MainActor in
+                    let answer = await browser.askForPermission()
+                    respond(true, ["permission": answer.rawValue], nil)
+                }
+            case "answer":
+                let done = command["answer"] as? String == "done"
+                for id in browser.checks.keys { browser.answer(id, with: done ? .done : .skip) }
+                respond(true, browser.testState(), nil)
+            default:
+                respond(true, browser.testState(), nil)
+            }
+        case "uiComposerDictation":
+            // {action: state|toggle|stop|cancel|dismiss|feed|key|cursor|permissions|noMic, bot, path, realTime, stopAtEnd, key, up, at, microphone, speech}
+            let dictation = ComposerDictation.shared
+            let owner = command["bot"] as? String ?? dictation.ownerID ?? BotsStore.shared.primary?.id ?? ""
+            switch command["action"] as? String ?? "state" {
+            case "toggle": dictation.toggle(owner)
+            case "stop": dictation.stop()
+            case "cancel": dictation.cancel()
+            case "dismiss": dictation.dismissNote()
+            case "feed":
+                guard let path = command["path"] as? String,
+                      dictation.feed(fileURL: URL(fileURLWithPath: path), realTime: command["realTime"] as? Bool ?? true, stopAtEnd: command["stopAtEnd"] as? Bool ?? false) else {
+                    respond(false, dictation.testReport(), "Needs a path, a readable file and dictation listening.")
+                    return true
+                }
+            case "key":
+                let taken = dictation.testKey(command["key"] as? String ?? "", isUp: command["up"] as? Bool ?? false)
+                settle { respond(true, ["taken": taken].merging(dictation.testReport()) { first, _ in first }, nil) }
+                return true
+            case "cursor":
+                guard dictation.testMoveCursor(command["at"] as? Int ?? 0) else { respond(false, nil, "The field isn't focused."); return true }
+            case "readMicFormat":
+                // What the no-mic guard would say on this Mac. Reads the format only: no tap, nothing started, and it
+                // only looks if macOS has already said yes, so it can't bring up a prompt.
+                guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+                    respond(false, nil, "The microphone isn't already allowed, so this doesn't look.")
+                    return true
+                }
+                let engine = AVAudioEngine()
+                let node = engine.inputNode
+                respond(true, ["usable": node.hasUsableMicFormat, "hardwareRate": node.inputFormat(forBus: 0).sampleRate,
+                               "hardwareChannels": node.inputFormat(forBus: 0).channelCount, "engineRunning": engine.isRunning], nil)
+                return true
+            case "noMic":
+                // Runs the real no-usable-mic path, stopping before any tap. Nothing is opened.
+                dictation.testNoUsableMicrophone = command["on"] as? Bool ?? true
+            case "permissions":
+                dictation.testPermissions = ((command["microphone"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)),
+                                             (command["speech"] as? String).flatMap(ComposerDictationPermission.init(rawValue:)))
+            default: break
+            }
+            settle { respond(true, dictation.testReport(), nil) }
         case "uiDictationFeed":
             guard let manager = CompanionManager.current, let path = command["path"] as? String else { respond(false, nil, "Needs path."); return true }
             var target = DictationInserter.Target.frontmost

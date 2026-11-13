@@ -1,0 +1,9 @@
+{
+ "probe": "usage",
+ "verdict": "ERROR",
+ "seconds": 0.1,
+ "evidence": {
+  "exc": "Traceback (most recent call last):\n  File \"/Users/adhyanmahajan/jstest/theo-parity/parity/probes.py\", line 435, in <module>\n    try: v, ev = PROBES[n]()\n  File \"/Users/adhyanmahajan/jstest/theo-parity/parity/probes.py\", line 328, in p_usage\n    before = next((b for b in send({\"cmd\": \"botsUsage\", \"days\": 1}).get(\"result\", {}).get(\"bots\", []) if b[\"bot\"] == \"quill\"), {\"turns\": 0, \"outputTokens\": 0})\nAttributeError: 'NoneType' object has no attribute 'get'\n"
+ },
+ "at": "2026-11-12T21:36:27"
+}

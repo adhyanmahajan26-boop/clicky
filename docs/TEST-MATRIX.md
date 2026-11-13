@@ -8,6 +8,68 @@ How to read the evidence: screenshots are of Theo's own window, in `docs/evidenc
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
 
+## Round 4 (2026-11-05): the bot harness
+
+Everything ran in test profiles with Claude Haiku, or OpenCode free, or Cursor Auto. "Two profiles" means two linked test profiles on one Mac Studio, one of them standing in for the Air. The real Air is a separate pass: `AIR-TESTS.md` in the evidence folder. Evidence is under `~/jstest/theo-ui/harness-core/` (`evidence/live/`, `shots/`).
+
+| | What | Evidence |
+|---|---|---|
+| ✅ | Bot to bot: one collapsed card in the sender's chat, opens to both messages | `shots/dm-collapsed.png`, `dm-expanded.png` |
+| ✅ | The other bot's own chat stays clean (0 new messages), the sender quotes the answer | `live/smoke-after-review.txt` |
+| ✅ | A message with brackets in it arrives whole (`is arr[0] safe?`) | `live/smoke-after-review.txt` |
+| ✅ | A second exchange remembers the first; threads sync between two profiles in the same order | `live/team1.txt`, `order-retest.txt` |
+| ✅ | A word game between bots ends after 3 round trips | `live/team1.txt` |
+| ⚠️ | The plain line at the limit didn't show live, because the models stopped first. Unit-tested only | `BotProtocolTests` |
+| ✅ | A routine that messages two bots: one note, two cards, one result. Before: 3 or 4 full copies | `live/routine-brief.txt` |
+| ✅ | A routine where Theo asks two group chats: one note, one result holding both answers. Before: a follow-up per group | `live/smoke-final-one.txt` |
+| ✅ | Routines on both Macs: one made on the "Air" reaches the "Studio" in about a second and fires only there; its history shows on both; Pause and Delete from the "Air" apply on the "Studio" | `live/smoke-final-two.txt`, `live/smoke-routine-fires.txt` |
+| ✅ | Theo has a group plan and build something: exactly one run, no stray folder | `live/smoke-final-one.txt` |
+| ✅ | A continued T3 Code thread (fork, Haiku) stays one run, and the same thread carries on | `live/smoke-final-one.txt` |
+| ✅ | A run sent to the other Mac reports that Mac's real answer: refused for a missing folder, started for a real one | `live/smoke-final-two.txt` |
+| ✅ | Other Mac away and the run continues a chat there: no "run it here", and the chat says why | `live/smoke-final-two.txt` |
+| ✅ | Bots & coding set to the Studio: "where you are" names both Macs and why, and the run card defaults to the Studio | `live/smoke-final-two.txt` |
+| ✅ | New folder with a name that exists: a clear note, and nothing else is made or picked | `live/new-folder-existing.txt`, `shots/existing-folder.png` |
+| ✅ | Restarting Theo doesn't mark everything as just changed, so the Mac started last no longer overrides newer edits | `live/smoke-routine-fires.txt` |
+| ⚠️ | Unit-tested or read in the code, not forced live: a private turn run on the other Mac, the member waiting when the owner speaks, a continued chat whose message never went in, git failing on a new folder, continuing with a remote latest run, the chats list in a group turn | unit tests where testable |
+| ✅ | Group: one at a time, later bots refer to earlier ones, one wrap-up | `live/smoke-after-review.txt`, `shots/group-chat.png` |
+| ✅ | Stop on a group stops all of it at once | `live/group2.txt` |
+| ✅ | Build discussion: plan, a critique from each, merge, exactly one run, no stray folder | `live/smoke-build-isolated.txt` |
+| ✅ | One way to write: `[TELL: name: msg]`, `@Name` only in groups; assembled prompts unit-tested | `BotProtocolTests` |
+| ✅ | Purpose: a bot asked about someone else's work passes it to them | `live/team1.txt` |
+| ✅ | Where you are / who you are on every bot turn; right Mac named on both profiles | `live/devices1.txt`, unit tests |
+| ✅ | A folder and a run stay on the Mac they were asked on | `live/devices2.txt` |
+| ✅ | A run sent to the other Mac shows on both; a follow-up reaches that exact run | `live/devices2.txt`, `devices3.txt` |
+| ✅ | Engine missing here: answered on the other Mac and says so | `live/devices2.txt` |
+| ✅ | Other Mac offline: the chat says so at once, "Run it here" works, a queued message goes once on reconnect | `live/devices3.txt`, `devices4.txt`, `shots/waiting-card.png` |
+| ✅ | Routing: reachable / unreachable with an engine here / with none here | `DeviceRoutingTests` |
+| ✅ | Reconnect merge: no duplicates, no reordering, same-second messages, catch-up cap | `BotChatMergeTests`, `live/order-retest.txt` |
+| ✅ | Bot memory moved out of `~/.t3`, written with the bot's real permission, synced | `live/order-retest.txt` |
+| ✅ | Devices settings read right on both profiles | `shots/devices-settings-air.png`, `-studio.png` |
+| ✅ | Folder menu on a run's card: recent projects, New folder…, Choose a folder…; every harness | `live/click-test.txt`, `shots/folder-popover-final.png`, `card-final-new.png` |
+| ⚠️ | The macOS panel behind Choose a folder… wasn't opened, because it takes focus. `canCreateDirectories` is set in code | `RunChoices.swift` |
+| ✅ | PR run on theo-pr-sandbox: draft PR #15 | `live/pr-run.txt` |
+| ✅ | Continue a chat: Claude Code | `live/chats1.txt`, `shots/continued-run.png` |
+| ✅ | Continue a chat: T3 Code fork | `live/chats1.txt` |
+| ✅ | Continue a chat: OpenCode free | `live/opencode.txt` |
+| ✅ | Continue a chat: Codex | `live/continue-codex.txt` |
+| ✅ | Continue a chat: Grok | `live/continue-codex.txt` |
+| ✅ | Continue a chat: Cursor, on Auto | `live/continue-cursor-auto.txt` |
+| ⚠️ | Continue a chat: Gemini is not signed in on the Studio and has no chats. Reader unit-tested only | `HarnessChatFilesTests` |
+| ⏳ | Continue a chat: stock T3 Code on the Air, with stock left stock | `AIR-TESTS.md` |
+| ✅ | A plan limit shows the real reason: "Cursor Agent can't run this on your plan: …" | `live/smoke-after-review.txt` |
+| ✅ | Each new run keeps its own chat: Grok takes its id up front, Cursor gets one from `create-chat`, and both continue in that same chat | `live/chat-identity.txt` |
+| ✅ | Each new run keeps its own chat: two OpenCode runs started at once in one folder take turns and end with their own chats | `live/chat-identity.txt` |
+| ⚠️ | Same, for Gemini (`--session-id`) and Codex (takes turns): unit-tested only. Gemini isn't signed in here, and Codex is off limits in this job | `HarnessChatGateTests`, `TheoProductionTests` |
+| ⚠️ | "Couldn't tell which chat it made" on a run's card, and the follow-up that won't guess: the logic is unit-tested, the card wasn't made to show it live | `HarnessChatGateTests` |
+| ✅ | Research with the Macs apart runs on this Mac and says so, without waiting | `live/research-apart.txt` |
+| ✅ | A bot's research sent to the other Mac brings the real brief back to that bot. Before: "didn't come back", or an old brief | `live/research-apart.txt` |
+| ✅ | Upgrade: the release build opens a copy of the Studio's real data. 14 of 14 bots, 8 runs, 6 routines, 12 chats and 507 messages match, nothing starts by itself, and memory files move byte for byte. No model calls | `live/upgrade-real-data.txt` |
+| ⏳ | All of it on the real Air, on another network | `AIR-TESTS.md` |
+
+With the Macs apart, two things still can't run here. A routine set up on the Air waits for the Mac that fires routines, and the chat says so. Hidden screens exist only on a Mac Studio, and a bot says so at once.
+
+Tests on the final commit: ClickyCore 1,255 passed, app 100 passed.
+
 ## Round 3 (2026-11-02): Clicky's team
 
 Quick checks on Haiku (Clicky and Theo on Sonnet) in a test profile, one per flow. Screenshots: `~/jstest/theo-final/round3/`.

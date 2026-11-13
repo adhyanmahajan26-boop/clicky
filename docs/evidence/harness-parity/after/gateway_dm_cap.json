@@ -1,0 +1,12 @@
+{
+ "probe": "gateway_dm_cap",
+ "verdict": "PASS",
+ "seconds": 66.6,
+ "evidence": {
+  "status": 202,
+  "settled": true,
+  "engine_calls": 8,
+  "watch_turns": 3
+ },
+ "at": "2026-11-12T21:32:23"
+}

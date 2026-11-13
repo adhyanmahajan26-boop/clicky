@@ -292,6 +292,9 @@ final class CallAudio {
         engine.connect(channel.playerNode, to: channel.timePitchUnit, format: SharedEnginePlayerChannel.playbackFormat)
         engine.connect(channel.timePitchUnit, to: engine.mainMixerNode, format: SharedEnginePlayerChannel.playbackFormat)
         if withMicrophone {
+            guard engine.inputNode.hasUsableMicFormat else {
+                throw HandsFreeListeningSessionError(message: "This Mac has no usable microphone right now.")
+            }
             let converter = self.converter
             engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: engine.inputNode.outputFormat(forBus: 0)) { buffer, _ in converter.append(buffer) }
         }

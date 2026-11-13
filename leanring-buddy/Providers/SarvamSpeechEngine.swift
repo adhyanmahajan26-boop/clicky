@@ -55,7 +55,13 @@ final class SarvamSpeechEngine: SpeechEngine {
                 (SarvamVoiceConfig.language, SarvamVoiceConfig.speaker, SarvamVoiceConfig.model, SarvamVoiceConfig.pace)
             }
             guard let client = SarvamClient.fromKeychain() else { throw SarvamError.missingKey }
-            return try await client.synthesize(text: speech, languageSetting: language, speaker: speaker, model: model, pace: pace)
+            do {
+                return try await client.synthesizeOverSocket(text: speech, languageSetting: language, speaker: speaker, model: model, pace: pace)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                return try await client.synthesize(text: speech, languageSetting: language, speaker: speaker, model: model, pace: pace)
+            }
         }
     }
 

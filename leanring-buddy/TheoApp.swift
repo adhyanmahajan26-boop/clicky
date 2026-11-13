@@ -91,6 +91,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        PrismClient.warm()
         if Self.isHostingUnitTests { return }
         TheoFirstClick.install()
         Self.keepConsoleLog()
@@ -115,6 +116,10 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             companionManager.start()
             pill = NotchPanelController(companionManager: companionManager)
             pill?.start()
+        } else {
+            // Theo Link starts inside the companion. A test profile links by address only (no Bonjour), so it can come back up
+            // after a restart like the real one does, which is what the two-Mac tests need to see.
+            TheoLink.shared.start()
         }
         // The test tools' way in, only when asked for (it can run answers and actions).
         var startsDebugInbox = CommandLine.arguments.contains("--debug-inbox")
@@ -130,11 +135,16 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         let inbox = ClaudiaControlInbox(companionManager: companionManager)
         inbox.start()
         controlInbox = inbox
-        if !TheoProfile.isTest {
+        // Theo's local API for scripts on this Mac, only when the owner turned it on.
+        TheoGateway.shared.apply()
+        TheoHooks.fire(.appStarted, ["bots": BotsStore.shared.bots.count, "profile": TheoProfile.isTest ? "test" : "real"])
+        if !TheoProfile.isTest || ClaudiaUIServer.port != 0 {
             uiServer = ClaudiaUIServer(controlInbox: inbox, companionManager: companionManager)
             uiServer?.start()
-            openAtLogin()
         }
+        if !TheoProfile.isTest { openAtLogin() }
+
+        // The hidden screens come up when a bot first needs one. Making them moves a monitor, so not on every launch.
 
         // A Dock app with its own window, unless that's turned off in Settings.
         NSApp.setActivationPolicy(ClickySettings.showsInDock && !TheoProfile.isTest ? .regular : .accessory)
@@ -171,6 +181,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        StudioController.shared.shutDown()
         if Self.isHostingUnitTests { return }
         pill?.stop()
         companionManager.stop()

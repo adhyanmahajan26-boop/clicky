@@ -103,6 +103,25 @@ final class UpdateController: ObservableObject {
         }
     }
 
+    /// The other Mac asked: checks, and installs once nothing's going on here. Gives up after half an hour.
+    func installWhenIdle() {
+        Task { @MainActor [weak self] in
+            for _ in 0..<30 {
+                guard let self else { return }
+                await self.check(quietly: true)
+                guard self.availableRelease != nil else { return }
+                let store = BotsStore.shared
+                let busy = !store.replying.isEmpty || store.isClickyBusy || TheoCallController.isActive
+                    || store.t3Runs.contains { !$0.isRemote && ["running", "waiting", "reporting"].contains($0.phase) }
+                if !busy {
+                    self.installAvailableUpdate()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+        }
+    }
+
     // MARK: - Steps
 
     /// The updates repo is private: a saved token, or this Mac's own GitHub sign-in, so there's nothing to paste.

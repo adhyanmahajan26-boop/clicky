@@ -11,6 +11,7 @@
 //
 
 import ClickyCore
+import Darwin
 import Foundation
 
 enum BotRunnerError: LocalizedError {
@@ -19,6 +20,10 @@ enum BotRunnerError: LocalizedError {
     case freeLimit
     /// A subscription engine's usage limit (Codex / Cursor); the message says when it resets.
     case usageLimit(String)
+    /// The engine doesn't have this session any more (it's on the other Mac, or was cleaned up).
+    case lostSession
+    /// A non-Claude engine kept failing the way that passes: the turn goes to Claude Code instead (`BotFailover`).
+    case engineDown(String)
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +31,8 @@ enum BotRunnerError: LocalizedError {
         case .failed(let message): return message
         case .freeLimit: return "OpenCode's free models have hit their usage limit."
         case .usageLimit(let message): return message
+        case .lostSession: return "The engine has lost this chat's session."
+        case .engineDown(let message): return message
         }
     }
 }
@@ -43,38 +50,142 @@ final class FallbackSessions: @unchecked Sendable {
 final class BotProcesses: @unchecked Sendable {
     static let shared = BotProcesses()
     private let lock = NSLock()
-    private var running: [String: Process] = [:]
+    private struct Running {
+        let token: ObjectIdentifier
+        let isRunning: () -> Bool
+        let stop: () -> Void
+    }
+    private var running: [String: Running] = [:]
     /// Replies running over the API have a task instead of a process.
     private var tasks: [String: Task<(text: String, session: String?), Error>] = [:]
 
     func setTask(_ botID: String, _ task: Task<(text: String, session: String?), Error>?) { lock.withLock { tasks[botID] = task } }
 
-    func set(_ botID: String, _ process: Process) { lock.withLock { running[botID] = process } }
-    func remove(_ botID: String, _ process: Process) {
-        lock.withLock { if running[botID] === process { running[botID] = nil } }
+    func set(_ botID: String, _ process: Process) {
+        lock.withLock { running[botID] = Running(token: ObjectIdentifier(process), isRunning: { process.isRunning }, stop: { process.terminate() }) }
+    }
+    /// An engine in its own process group: stopping it takes everything it started with it, even what ignores SIGTERM.
+    func set(_ botID: String, _ child: ChildProcess, executable: String) {
+        lock.withLock {
+            running[botID] = Running(token: ObjectIdentifier(child), isRunning: { !child.isFinished }, stop: { child.cancel() })
+            groups[ObjectIdentifier(child)] = (child.processGroupIdentifier, Self.startTime(of: child.processGroupIdentifier) ?? 0)
+            writeGroupsLocked()
+        }
+    }
+    func remove(_ botID: String, _ object: AnyObject) {
+        lock.withLock {
+            if running[botID]?.token == ObjectIdentifier(object) { running[botID] = nil }
+            if groups.removeValue(forKey: ObjectIdentifier(object)) != nil { writeGroupsLocked() }
+        }
+    }
+
+    // MARK: Engines left behind by a crash
+
+    /// The engine process groups running now, on disk, so the next launch can end any that a crash left behind
+    /// (they would otherwise run to the end of their task, using the owner's subscription with nobody listening).
+    private var groups: [ObjectIdentifier: (pgid: pid_t, started: UInt64)] = [:]
+    static var groupsFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Theo/engines-running.json")
+    }
+
+    private func writeGroupsLocked() {
+        let boot = Self.bootTime
+        let list = groups.values.map { ["pgid": Int($0.pgid), "started": $0.started, "boot": boot] as [String: Any] }
+        if let data = try? JSONSerialization.data(withJSONObject: list) { try? data.write(to: Self.groupsFile, options: .atomic) }
+    }
+
+    /// When the Mac last started up (seconds since 1970). Process ids from before a restart mean nothing after it.
+    static var bootTime: UInt64 {
+        var boot = timeval()
+        var size = MemoryLayout<timeval>.size
+        var name: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        guard sysctl(&name, 2, &boot, &size, nil, 0) == 0 else { return 0 }
+        return UInt64(boot.tv_sec)
+    }
+
+    /// The processes in a process group right now.
+    static func members(ofGroup pgid: pid_t) -> [pid_t] {
+        var pids = [pid_t](repeating: 0, count: 512)
+        let bytes = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pgid), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard bytes > 0 else { return [] }
+        return Array(pids.prefix(Int(bytes) / MemoryLayout<pid_t>.size)).filter { $0 > 0 }
+    }
+
+    /// When a process started (seconds since 1970), so a process id that's been reused since is never mistaken for it.
+    static func startTime(of pid: pid_t) -> UInt64? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info.pbi_start_tvsec
+    }
+
+    /// At launch: any engine group from before that's still running is ended. Only a process that started at the
+    /// recorded time is touched, never a later one that got the same id. Returns how many were ended.
+    @discardableResult static func endLeftovers() -> Int {
+        guard let data = try? Data(contentsOf: groupsFile),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return 0 }
+        var ended = 0
+        let boot = bootTime
+        for entry in list {
+            guard let pgid = (entry["pgid"] as? Int).map(pid_t.init), pgid > 1,
+                  let started = (entry["started"] as? NSNumber)?.uint64Value, started > 0 else { continue }
+            // After a restart of the Mac every id in the file belongs to something else.
+            if let recordedBoot = (entry["boot"] as? NSNumber)?.uint64Value, recordedBoot != boot { continue }
+            if let leaderStarted = startTime(of: pgid) {
+                // The engine itself is still running: only if it's the same process, never a later one with that id.
+                guard leaderStarted == started else { continue }
+            } else {
+                // The engine is gone (a CLI exits when Theo's end of its output pipe closes) but what it started can live on
+                // in its group: tools, servers. While any of them is alive macOS gives no new process that id, so the
+                // group is still the engine's. Only processes that started after the engine are counted.
+                guard entry["boot"] != nil,
+                      members(ofGroup: pgid).contains(where: { (startTime(of: $0) ?? 0) >= started }) else { continue }
+            }
+            if killpg(pgid, SIGKILL) == 0 { ended += 1 }
+        }
+        try? FileManager.default.removeItem(at: groupsFile)
+        return ended
     }
     /// Stops the bot's reply; false when nothing was running.
+    /// When Stop was last pressed for each bot, so a turn waiting to retry doesn't start again after it.
+    private var stoppedAt: [String: Date] = [:]
+    func wasStopped(_ botID: String, since: Date) -> Bool { lock.withLock { (stoppedAt[botID] ?? .distantPast) >= since } }
+
     @discardableResult func stop(_ botID: String) -> Bool {
+        lock.withLock { stoppedAt[botID] = Date() }
         if let task = lock.withLock({ tasks.removeValue(forKey: botID) }) {
             task.cancel()
             return true
         }
-        guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning else { return false }
-        process.terminate()
+        guard let process = lock.withLock({ running.removeValue(forKey: botID) }), process.isRunning() else { return false }
+        process.stop()
         return true
     }
 }
 
 enum BotRunner {
-    /// The longest one bot turn may take.
-    static let turnLimitSeconds: Double = 420
+    /// The longest one bot turn may take. A test profile can shorten it (`test.bots.turnLimit`) to test a stuck engine.
+    static var turnLimitSeconds: Double {
+        if TheoProfile.isTest, let limit = UserDefaults.standard.object(forKey: "test.bots.turnLimit") as? Double, limit > 0 { return limit }
+        return 420
+    }
 
-    /// Where bots run: the folder that holds their memory files (~/.t3/bots), so reading and keeping
-    /// memory never needs a permission nobody is there to give.
-    static var workspace: URL {
-        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".t3/bots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder
+    /// The engine a bot runs. A test profile can swap in a stand-in program (`test.engine.claude` or `test.engine.opencode`) to test
+    /// an engine that crashes, hangs or talks nonsense, without touching the real one.
+    static func executable(for provider: BrainProvider) -> URL? {
+        if TheoProfile.isTest, let path = UserDefaults.standard.string(forKey: "test.engine.\(provider.rawValue)"), !path.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+        }
+        return BrainCLIRunner.locateExecutable(for: provider)
+    }
+
+    /// Where bots run: the folder that holds their memory files, so reading and keeping memory never needs a permission nobody is there to
+    /// give. Theo's own folder: ~/.t3 belongs to T3 Code.
+    static var workspace: URL { BotMemory.root }
+
+    /// An engine's words for "that session doesn't exist".
+    static func saysSessionIsLost(_ text: String) -> Bool {
+        text.range(of: #"(?i)no conversation found|session[^\n]{0,60}not found|no such session|unknown session|could not find (the )?session|no (saved )?session|invalid session|valid session|thread[^\n]{0,40}not found"#, options: .regularExpression) != nil
     }
 
     /// Theo's MCP tools a bot may use on its own.
@@ -82,9 +193,18 @@ enum BotRunner {
 
     /// The Claude tools a bot may use without asking: reading and the web, its memory file, and the
     /// connectors of its own apps.
-    static func claudeAllowedTools(for bot: NativeBot) -> [String] {
-        let memoryFolder = "~/.t3/bots/\(bot.id)/**"
-        var tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
+    /// Reading is confined the way writing is: its own memory folder, the project folders coding runs use, and whatever the owner's own
+    /// words named this turn (`readable`, from BotReadScope). The shared guide beside the memory folders is in the engine's working folder,
+    /// which it may always read; the other bots' folders there are denied (`otherBotsFolders`).
+    /// `recall`: its own saved chats (with the owner, its groups, its private threads), which it may search but never write.
+    static func claudeAllowedTools(for bot: NativeBot, readable: [String] = [], recall: [String] = []) -> [String] {
+        // Two slashes: an absolute path, in Claude Code's permission rules.
+        let memoryFolder = "/" + BotMemory.file(botID: bot.id).deletingLastPathComponent().path + "/**"
+        let projects = "/" + BotsT3.projectsFolder.path + "/**"
+        var tools = ["WebSearch", "WebFetch", "Edit(\(memoryFolder))", "Write(\(memoryFolder))"]
+        for place in [memoryFolder, projects] { tools += ["Read(\(place))", "Grep(\(place))", "Glob(\(place))"] }
+        tools += BotReadScope.readRules(for: readable)
+        tools += recall.flatMap { ["Read(/\($0))", "Grep(/\($0))"] }
         for connector in BotConnectors.known where bot.apps.contains(connector.id) {
             if connector.id == "theo" {
                 // Research, notes and the app bridge; never the screen or Theo's voice, with nobody watching.
@@ -96,23 +216,75 @@ enum BotRunner {
         return tools
     }
 
+    /// Files no bot reads, whatever a page or another bot talks it into: sign-ins and keys, shell history, the browser's and Mail's
+    /// stores, and Theo's own records of every chat (bots, chats, routines, groups). A bot can read the web and send requests to any
+    /// address (WebFetch), so anything it can read it could send out. Deny rules win over the allowed Read.
+    /// Every other bot's memory folder: the engine's working folder holds them all, and a working folder is readable without a rule.
+    static func otherBotsFolders(than botID: String) -> [String] {
+        let root = BotMemory.root
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        // The shared skills folder (with its copies of each bot's skills) is for every bot.
+        return folders.filter { $0.lastPathComponent != botID && $0.lastPathComponent != BotSkills.sharedFolder.lastPathComponent
+            && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .map { "Read(/\($0.path)/**)" }
+    }
+
+    /// `recall`: the saved chats this bot may search. Every other file in the chats folder is denied one by one, since a deny rule
+    /// wins over any allow and can't make an exception for them.
+    static func secretReadRules(recall: [String] = []) -> [String] {
+        let home = ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gh/**", "~/.config/gcloud/**", "~/.azure/**", "~/.kube/**",
+                    "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials", "~/.zsh_history", "~/.bash_history",
+                    "~/.claude.json", "~/.claude/.credentials.json", "~/.clicky/**", "~/.codex/auth.json", "~/.grok/**", "~/.gemini/**", "~/.cursor/**",
+                    "~/.local/share/opencode/auth.json", "~/Library/Keychains/**", "~/Library/Cookies/**", "~/Library/Mail/**",
+                    "~/Library/Messages/**", "~/Library/Application Support/Google/Chrome/**"]
+        // Theo's own records sit beside the bots' memory folders: absolute paths, since a test profile keeps them under its own home.
+        let theo = BotMemory.root.deletingLastPathComponent().path
+        let chats = BotMemory.root.deletingLastPathComponent().appendingPathComponent("chats", isDirectory: true)
+        let mine = Set(recall.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        let others = ((try? FileManager.default.contentsOfDirectory(at: chats, includingPropertiesForKeys: nil)) ?? [])
+            .map(\.standardizedFileURL.path).filter { !mine.contains($0) }
+        let records = (mine.isEmpty ? ["/\(theo)/chats/**"] : others.flatMap { ["/\($0)", "/\($0)/**"] }) +
+            ["/\(theo)/*.json", "/\(theo)/*.json.*", "/\(theo)/*.lastgood",
+             // The other Mac's copies of every bot's memory, kept for the three-way merge.
+             "/\(theo)/link-memory/**"]
+        let anywhere = ["//**/.env", "//**/.env.*"]
+        return (home + records + anywhere).map { "Read(\($0))" }
+    }
+
     /// Connector tools a bot never runs on its own, since nobody is there to say yes: sending, replying,
     /// forwarding, deleting, sharing, spam and cancelling. Drafts and new pages are fine.
     static let irreversibleTools = ConnectorBridge.writeTools.filter { name in
         ["send", "reply", "forward", "trash", "delete", "spam", "share", "cancel", "clear"].contains { name.contains($0) }
-    } + ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill"]
+    } + ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill",
+         // Helpers inside a turn: they run under the same rules, but nothing counts them, so one turn could start any number.
+         "Agent", "Task"]
 
     /// Runs the turn; `onText` gets the reply so far as it streams in.
-    static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func run(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         do {
-            return try await runOnEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText)
-        } catch BotRunnerError.freeLimit {
-            // OpenCode's free models are used up for now: this turn runs on Claude Haiku instead, so the
-            // bot still answers. Its OpenCode session stays for when the free models are back.
+            let first = try await runWithFailover(bot: bot, prompt: prompt, session: session, team: team, readable: readable, recall: recall, onText: onText)
+            // A claude.ai connector still loading at the start looks "disconnected" to the bot: one more go, a little later.
+            let names = BotConnectors.known.filter { bot.apps.contains($0.id) && $0.claudeServer?.hasPrefix("claude.ai") == true }.map(\.name)
+            let missing = bot.provider == "claude" ? ConnectorClaims.saysMissing(first.text, names: names) : []
+            guard !missing.isEmpty, !Task.isCancelled else { return first }
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled,
+                  let second = try? await runOnEngine(bot: bot, prompt: ConnectorClaims.retryNote(missing), session: first.session ?? session, team: team, readable: readable, recall: recall, onText: onText),
+                  !second.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return first }
+            return second
+        } catch let error as BotRunnerError {
+            // OpenCode's free models are used up for now, or a non-Claude engine kept failing (overloaded, rate-limited, down):
+            // this turn runs on Claude Code instead, so the bot still answers. Its own session stays for when that engine is back.
+            let why: String
+            switch error {
+            case .freeLimit: why = "OpenCode's free models hit their usage limit"
+            case .engineDown(let message): why = "\(HarnessCatalog.label(bot.provider)) kept failing (\(message.prefix(80)))"
+            default: throw error
+            }
             var standIn = bot
             standIn.provider = "claude"
-            standIn.model = fallbackModel
+            standIn.model = standInModel
             standIn.effort = nil
             standIn.thinking = nil
             standIn.fast = nil
@@ -124,13 +296,18 @@ enum BotRunner {
             // The stand-in keeps its own Claude session per OpenCode session, so follow-ups keep their context.
             let key = "\(bot.id)#\(session ?? "new")"
             let standInSession = FallbackSessions.shared.get(key)
-            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, onText: onText)
+            let result = try await runOnEngine(bot: standIn, prompt: claudePrompt, session: standInSession, team: team, readable: readable, recall: recall, onText: onText)
             if let claudeSession = result.session { FallbackSessions.shared.set(key, claudeSession) }
-            return (result.text + "\n\n_(OpenCode's free models hit their usage limit, so this reply came from Claude Haiku.)_", session)
+            return (result.text + "\n\n_(\(why), so this reply came from \(BotModels.label(standInModel, on: "claude")).)_", session)
         }
     }
 
     static let fallbackModel = "claude-haiku-5-5"
+    /// The Claude model that stands in for another engine: the first of the fallback chain when one is set, else Haiku.
+    static var standInModel: String {
+        guard let first = configuredFallbacks?.first, first != "off", !first.isEmpty else { return fallbackModel }
+        return first
+    }
 
     /// OpenCode logs "Free usage limit reached" and keeps retrying without printing anything, so a turn
     /// would sit there until the time limit. This checks its log for that error since `start`.
@@ -149,14 +326,14 @@ enum BotRunner {
         }
     }
 
-    private static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot],
+    static func runOnEngine(bot: NativeBot, prompt: String, session: String?, team: [NativeBot], readable: [String] = [], recall: [String] = [],
                                     onText: @escaping @MainActor (String) -> Void) async throws -> (text: String, session: String?) {
         if bot.provider.hasPrefix("api:") { return try await runAPI(bot: bot, prompt: prompt, session: session, team: team, onText: onText) }
         if let result = try await runHarnessEngine(bot: bot, prompt: prompt, session: session, team: team, onText: onText) { return result }
         if bot.provider == "grok" { return try await runGrok(bot: bot, prompt: prompt, session: session, team: team) }
         let isClaude = bot.provider == "claude"
         let provider: BrainProvider = isClaude ? .claude : .opencode
-        guard let executable = BrainCLIRunner.locateExecutable(for: provider) else {
+        guard let executable = executable(for: provider) else {
             throw BotRunnerError.notInstalled(provider.displayName)
         }
         var arguments: [String]
@@ -167,7 +344,9 @@ enum BotRunner {
                          // Only the allowed tools run: the user's own permission mode (auto) mustn't widen it.
                          "--permission-mode", "dontAsk",
                          "--append-system-prompt", BotPrompts.persona(bot: bot, team: team),
-                         "--allowedTools"] + claudeAllowedTools(for: bot) + ["--disallowedTools"] + irreversibleTools
+                         "--allowedTools"] + claudeAllowedTools(for: bot, readable: readable, recall: recall) + ["--disallowedTools"] + irreversibleTools + secretReadRules(recall: recall) +
+                         // Bash outright: Claude Code lets read-only commands (ls, cat, grep) run in the working folder without a rule.
+                         ["Bash"] + otherBotsFolders(than: bot.id)
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
             var settings: [String: Bool] = [:]
             if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }
@@ -189,45 +368,45 @@ enum BotRunner {
             arguments += [prompt]
         }
 
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        process.currentDirectoryURL = workspace
         var environment = ProcessInfo.processInfo.environment
         scrubClaudeEnvironment(&environment)
         environment["NO_COLOR"] = "1"
         environment["PWD"] = workspace.path
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: bot.provider)) { _, new in new }
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardInput = FileHandle.nullDevice
         let errorLog = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Clicky/bots-\(provider.rawValue).log")
         try? FileManager.default.createDirectory(at: errorLog.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: errorLog.path) {
-            FileManager.default.createFile(atPath: errorLog.path, contents: nil)
+        // Its own process group, so a stop or the time limit takes down everything the engine started (tools, MCP servers),
+        // escalating to SIGKILL when something ignores SIGTERM, and nothing left over can hold the turn open.
+        let (lineStream, lineSink) = AsyncStream<String>.makeStream()
+        let child: ChildProcess
+        do {
+            child = try ChildProcess.launch(executable: executable.path, arguments: arguments, environment: environment,
+                                            workingDirectory: workspace.path, timeouts: .total(turnLimitSeconds),
+                                            // The reply is built from the lines; only stderr's tail is read afterwards. An engine that
+                                            // floods for the whole turn limit mustn't also pile up its output in memory a second time.
+                                            captureLimit: 256 * 1024) { line in
+                lineSink.yield(String(decoding: line, as: UTF8.self))
+            }
+        } catch {
+            lineSink.finish()
+            throw BotRunnerError.failed("\(provider.displayName) couldn't start: \(error)")
         }
-        let errorHandle = try? FileHandle(forWritingTo: errorLog)
-        errorHandle?.seekToEndOfFile()
-        process.standardError = errorHandle ?? FileHandle.nullDevice
-        try process.run()
-        BotProcesses.shared.set(bot.id, process)
-        defer { BotProcesses.shared.remove(bot.id, process) }
-        // A turn that runs past the limit is stopped, so one stuck bot can't hold up the Project room.
-        let watchdog = Task.detached {
-            try? await Task.sleep(nanoseconds: UInt64(turnLimitSeconds * 1_000_000_000))
-            if process.isRunning { process.terminate() }
+        BotProcesses.shared.set(bot.id, child, executable: executable.path)
+        defer { BotProcesses.shared.remove(bot.id, child) }
+        let finished = Task.detached { () -> ChildProcessResult in
+            let result = await child.waitForExit()
+            lineSink.finish()
+            return result
         }
-        defer { watchdog.cancel() }
         let started = Date()
         let limitCheck = Task.detached {
             guard !isClaude else { return false }
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                if !process.isRunning { return false }
+                if child.isFinished { return false }
                 if openCodeHitFreeLimit(since: started) {
-                    process.terminate()
+                    child.cancel()
                     return true
                 }
             }
@@ -235,17 +414,56 @@ enum BotRunner {
         }
 
         var parser = BotStreamParser(isClaude: isClaude)
-        for await line in lines(of: output.fileHandleForReading) where parser.consume(line) {
-            let text = parser.text
-            await onText(text)
+        // The live bubble redraws at most 20 times a second: an engine that floods text can't swamp the main thread,
+        // whose work per redraw grows with the length of the reply.
+        // The bubble shows at most the first 20,000 characters while it streams, so the cost of a redraw stays bounded too.
+        func live(_ text: String) -> String { text.utf8.count > 20_000 ? String(text.prefix(20_000)) : text }
+        var lastShown = Date.distantPast
+        var gap: TimeInterval = 0.05
+        var unshown = false
+        for await line in lineStream where parser.consume(line) {
+            guard Date().timeIntervalSince(lastShown) >= gap else { unshown = true; continue }
+            let began = Date()
+            unshown = false
+            await onText(live(parser.text))
+            lastShown = Date()
+            // Never more than a fifth of the time on redraws, however slow they get.
+            gap = max(0.05, lastShown.timeIntervalSince(began) * 4)
         }
-        process.waitUntilExit()
-        try? errorHandle?.close()
+        if unshown { await onText(live(parser.text)) }
+        let ended = await finished.value
+        // Every turn the engine reported on counts, a failed one too: it was paid for.
+        let used = parser.usage
+        await MainActor.run { BotUsage.shared.record(botID: bot.id, usage: used) }
+        let errorText = ended.standardErrorText
+        if !errorText.isEmpty {
+            if !FileManager.default.fileExists(atPath: errorLog.path) { FileManager.default.createFile(atPath: errorLog.path, contents: nil) }
+            if let handle = try? FileHandle(forWritingTo: errorLog) {
+                handle.seekToEndOfFile()
+                handle.write(Data(String(errorText.suffix(20_000)).utf8))
+                try? handle.close()
+            }
+        }
         if parser.text.isEmpty, await limitCheck.value { throw BotRunnerError.freeLimit }
         limitCheck.cancel()
-        if let error = parser.error, parser.text.isEmpty { throw BotRunnerError.failed(error) }
-        if parser.text.isEmpty && process.terminationStatus != 0 {
-            throw BotRunnerError.failed("\(provider.displayName) stopped (exit \(process.terminationStatus)). " +
+        if ended.endReason == .totalTimeout {
+            let minutes = Int((turnLimitSeconds / 60).rounded())
+            let limit = minutes >= 1 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : "\(Int(turnLimitSeconds)) seconds"
+            guard !parser.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw BotRunnerError.failed("\(provider.displayName) didn't finish within \(limit), so Theo stopped it.")
+            }
+            return (parser.text + "\n\n_(Cut off: this reply didn't finish within \(limit), so Theo stopped it.)_", parser.sessionID ?? newSessionID ?? session)
+        }
+        if let error = parser.error, parser.text.isEmpty {
+            // The engine's own words are often only on stderr ("--resume requires a valid session ID"), with a bare error result on stdout.
+            let lastError = errorText.split(whereSeparator: \.isNewline).last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+            if session != nil, saysSessionIsLost(error) || saysSessionIsLost(String(errorText.suffix(4000))) { throw BotRunnerError.lostSession }
+            throw BotRunnerError.failed(error == "Claude reported an error." && !lastError.isEmpty ? "Claude reported an error: \(lastError.prefix(300))" : error)
+        }
+        let status = ended.exitStatus ?? -1
+        if parser.text.isEmpty && status != 0 {
+            if session != nil, saysSessionIsLost(String(errorText.suffix(4000))) { throw BotRunnerError.lostSession }
+            throw BotRunnerError.failed("\(provider.displayName) stopped (\(ended.terminatingSignal.map { "signal \($0)" } ?? "exit \(status)")). " +
                                         "Details are in ~/Library/Logs/Clicky/bots-\(provider.rawValue).log.")
         }
         return (parser.text, parser.sessionID ?? newSessionID ?? session)
@@ -343,6 +561,10 @@ extension BotRunner {
             if event["type"] as? String == "result", event["is_error"] as? Bool != true { text = event["result"] as? String }
         }
         guard let text, !text.isEmpty else {
+            let output = String(decoding: data.suffix(4000), as: UTF8.self)
+            if session != nil, saysSessionIsLost(output) { throw BotRunnerError.lostSession }
+            // Its sign-in instructions aren't for the chat.
+            if output.contains("grok login") { throw BotRunnerError.failed("Grok isn't signed in on this Mac. Sign in from Settings › Harnesses.") }
             throw BotRunnerError.failed("Grok didn't answer: \(String(decoding: data.suffix(200), as: UTF8.self))")
         }
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), newSession)
@@ -394,6 +616,8 @@ struct BotStreamParser {
     private(set) var text = ""
     private(set) var sessionID: String?
     private(set) var error: String?
+    /// What the turn used, when the engine said (ClickyCore `BotTurnUsage`).
+    private(set) var usage: BotTurnUsage?
     /// A Claude reply can span several assistant messages around tool calls.
     private var messageHasText = false
 
@@ -424,6 +648,7 @@ struct BotStreamParser {
             text += chunk
             return true
         case "result":
+            if let used = BotTurnUsage.fromClaudeResult(event) { usage = used }
             if event["is_error"] as? Bool == true {
                 error = event["result"] as? String ?? "Claude reported an error."
                 return false
@@ -452,6 +677,9 @@ struct BotStreamParser {
                 ($0["data"] as? [String: Any])?["message"] as? String ?? $0["message"] as? String
             }
             error = detail ?? "OpenCode reported an error."
+            return false
+        case "step_finish":
+            if let step = BotTurnUsage.fromOpenCodeStep(event) { usage = (usage ?? BotTurnUsage()) + step }
             return false
         default:
             return false

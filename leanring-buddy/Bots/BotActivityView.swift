@@ -38,6 +38,8 @@ extension BotsStore {
                 var text = message.text
                 var from = activityName(message.author)
                 var to = message.author == room ? "Addy" : activityName(room)
+                // A private thread: from one bot to the other.
+                if let partner = BotDMThread.partner(of: message.author, in: room) { to = activityName(partner) }
                 var failed = false
                 if let jobID = Self.delegationID(of: message), let job = delegation(jobID) {
                     if text.isEmpty {
@@ -65,6 +67,8 @@ extension BotsStore {
 
     func pane(forRoom room: String) -> BotsPane {
         if room == Self.clickyID { return .clicky }
+        // A private thread opens on one of its two bots, whose settings list it.
+        if let pair = BotDMThread.members(of: room) { return .bot(pair.first) }
         if let group = group(forRoom: room) { return .group(group.id) }
         return .bot(room)
     }

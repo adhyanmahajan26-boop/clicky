@@ -1,0 +1,18 @@
+{
+ "probe": "catchup_recent",
+ "verdict": "PASS",
+ "seconds": 15.2,
+ "evidence": {
+  "engine_calls": 1,
+  "runs": [
+   {
+    "finishedAt": "2026-11-12T16:00:42Z",
+    "id": "5D3AC9DD-8FE2-431D-AAFA-E04733A10C8C",
+    "startedAt": "2026-11-12T16:00:37Z",
+    "status": "done",
+    "summary": "fake engine ok"
+   }
+  ]
+ },
+ "at": "2026-11-12T21:30:50"
+}

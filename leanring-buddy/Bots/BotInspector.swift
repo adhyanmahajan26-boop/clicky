@@ -42,14 +42,24 @@ struct BotInspector: View {
                         .id(bot.provider + bot.model)
                     }
                     authority(bot)
-                    InspectorSection("Instructions") {
+                    InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "Screens live on the Mac Studio.") {
+                        if StudioController.isAvailable { BotScreenPicker(botID: bot.id).labelsHidden() }
+                    }
+                    InspectorSection("Instructions", hint: "Your words come first. Every bot also learns Theo's harness guide: how to message, hand over, schedule and start code.") {
                         TextEditor(text: Binding(get: { draft?.instructions ?? "" }, set: { draft?.instructions = $0; saveSoon() }))
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)
                             .padding(8).frame(minHeight: 130)
                             .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
+                        Button { NSWorkspace.shared.open(BotMemory.guideFile) } label: {
+                            Label("Read the harness guide", systemImage: "book")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.theo(.ghost, .small))
+                        .pointerCursor()
                     }
                     apps(bot)
                     schedules(bot)
+                    BotPrivateThreadsList(store: store, botID: bot.id)
                     if !bot.primary {
                         if bot.owner == nil {
                             Button {
@@ -238,7 +248,7 @@ struct ClickyInspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 12) {
-                    ClickyAvatar(size: 46)
+                    LookButton(bot: Binding(get: { store.clickyBot }, set: { if let look = $0.look { store.setLook(look, for: BotsStore.clickyID) } }))
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Clicky").font(.system(size: 17, weight: .semibold))
                         Text("Your screen companion. Sees your screens, points, draws boards, researches and acts on Theo's own screen.")
@@ -401,13 +411,12 @@ struct LookButton: View {
                         .padding(4).background(Circle().fill(Color.black.opacity(0.7)))
                 }
         }
-        .buttonStyle(.plain).help("Change its look")
-        .popover(isPresented: $open) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Pick a look").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                BotLookPicker(bot: $bot, tile: 46, columns: 4)
+        .buttonStyle(.plain).help("Make your bot")
+        .sheet(isPresented: $open) {
+            MakeYourBotSheet(name: bot.name, look: bot.crewLook, isClicky: bot.id == BotsStore.clickyID) { saved in
+                if let saved { bot.look = saved }
+                open = false
             }
-            .padding(14)
         }
     }
 }

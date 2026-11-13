@@ -1,0 +1,12 @@
+{
+ "probe": "parallel_delegation",
+ "verdict": "FAIL",
+ "seconds": 14.1,
+ "evidence": {
+  "private_turns": 2,
+  "start_gap_s": 5.11,
+  "whole_turn_s": 14.0,
+  "pip_reply": "all done"
+ },
+ "at": "2026-11-12T21:36:27"
+}

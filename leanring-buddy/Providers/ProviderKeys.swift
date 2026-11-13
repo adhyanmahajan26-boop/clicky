@@ -8,6 +8,7 @@
 //
 
 import Combine
+import ClickyCore
 import Foundation
 import Security
 
@@ -110,7 +111,7 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
                      baseURL: "https://api.mistral.ai/v1", consoleURL: "https://console.mistral.ai/api-keys", keyHint: "Your Mistral key"),
         ProviderInfo(id: "deepseek", label: "DeepSeek", blurb: "DeepSeek's reasoning and flash models", group: .models, kind: .openAICompatible,
                      baseURL: "https://api.deepseek.com", consoleURL: "https://platform.deepseek.com/api_keys", keyHint: "sk-…"),
-        ProviderInfo(id: "sarvam", label: "Sarvam AI", blurb: "Indian-language chat, Bulbul voices and Saaras listening", group: .models, kind: .openAICompatible,
+        ProviderInfo(id: "sarvam", label: "Sarvam AI", blurb: "Indian-language chat, Bulbul voices, Saaras listening and Prism fast decisions", group: .models, kind: .openAICompatible,
                      baseURL: "https://api.sarvam.ai/v2", consoleURL: "https://dashboard.sarvam.ai", keyHint: "sk_…",
                      knownModels: ["sarvam-105b", "glm5.3", "gemma4", "deepseekv4.1-flash-1017"]),
         ProviderInfo(id: "together", label: "Together", blurb: "Hosted open models", group: .models, kind: .openAICompatible,
@@ -320,6 +321,16 @@ final class ProviderKeys: ObservableObject {
     /// Providers bots, Theo and Clicky can run on right now.
     var usableChatProviders: [ProviderInfo] { providers.filter(isUsable) }
 
+    /// The ones the owner left on for this kind of picker.
+    func usableChatProviders(for use: ProviderUse) -> [ProviderInfo] {
+        usableChatProviders.filter { ProviderUses.allows(use, providerID: $0.id) }
+    }
+
+    func setUse(_ use: ProviderUse, isOn: Bool, for providerID: String) {
+        ProviderUses.set(isOn, use: use, providerID: providerID)
+        revision += 1
+    }
+
     func models(for provider: ProviderInfo) -> [String] {
         let live = modelLists[provider.id] ?? []
         return live.isEmpty ? provider.knownModels : live
@@ -336,6 +347,7 @@ final class ProviderKeys: ObservableObject {
 
     func remove(_ providerID: String) {
         ProviderKeychain.delete(providerID)
+        ProviderUses.forget(providerID: providerID)
         testResults[providerID] = nil
         modelLists[providerID] = nil
         storeModels()

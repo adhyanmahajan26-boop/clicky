@@ -1,0 +1,27 @@
+{
+ "probe": "skills_reuse",
+ "verdict": "PASS",
+ "seconds": 16.2,
+ "evidence": {
+  "reply": "Here's the release order, from Addy's theo-release skill. Stop at the first failure and report it.\n\n1. Run the unit tests. If any fail, stop.\n2. Bump the build number to today's date and time, in the project's existing format. Don't commit unless asked.\n3. Do a dry run: `CLICKY_RELEASE_DRY_RUN=1 Tools/release.sh`. Continue only if it finishes without errors.\n4. Run the real release with `Tools/release.sh`.\n5. Back up `/Applications/Theo.app` to a dated folder before installing.\n6. Install only when nothing is playing audio.\n\nI can't run shell commands myself, so this would go to a coding run o",
+  "steps_matched": [
+   "dry",
+   "back",
+   "nothing is playing",
+   "build number",
+   "unit test"
+  ],
+  "skill": [
+   "memory/pip/skills/theo-release/SKILL.md"
+  ],
+  "engine_read_skill_files": [
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md",
+   "/Users/adhyanmahajan/Library/Application Support/Theo-Test-parity/home/Library/Application Support/Theo/Bots/memory/pip/skills/theo-release/SKILL.md"
+  ]
+ },
+ "at": "2026-11-12T21:34:55"
+}

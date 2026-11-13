@@ -21,14 +21,22 @@ import SwiftUI
 @MainActor
 final class TheoLink: ObservableObject {
     static let shared = TheoLink()
-    static let port: NWEndpoint.Port = 47331
+    /// A test profile can use a port of its own (`test.link.port`), beside the owner's real link.
+    static var port: NWEndpoint.Port {
+        if TheoProfile.isTest, let chosen = NWEndpoint.Port(rawValue: UInt16(UserDefaults.standard.integer(forKey: "test.link.port"))), chosen.rawValue != 0 { return chosen }
+        return 47331
+    }
     private static let serviceType = "_theolink._tcp"
     private static let hostKey = "v3.link.host"
     private static let identity = "theo-link"
     private static let clickyMacKey = "v3.clicky.mac"
     private static let clickyMacAtKey = "v3.clicky.macChangedAt"
     private static let knownPeerKey = "v3.link.knownPeer"
-    nonisolated static let localName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    /// A test profile can go by another name (`test.link.name`), to stand in for the other Mac.
+    nonisolated static let localName: String = {
+        if TheoProfile.isTest, let name = UserDefaults.standard.string(forKey: "test.link.name"), !name.isEmpty { return name }
+        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }()
 
     @Published private(set) var isPaired = false
     @Published private(set) var peerName: String?
@@ -46,8 +54,10 @@ final class TheoLink: ObservableObject {
     private var retryTimer: Timer?
     private var foundPeers: [NWEndpoint] = []
     private var waitingOrders: [String: (String) -> Void] = [:]
+    private var waitingReplies: [String: ([String: String]?) -> Void] = [:]
     private var isSyncQueued = false
-    private var waitingRequests: [(action: String, fields: [String: String])] = []
+    /// What waits for the other Mac, kept on disk so a restart doesn't lose it.
+    @Published private(set) var waitingRequests: [LinkWaitingRequest] = []
     private var connectionState = "none"
     private var isConnectionReady = false
     private var failedDials = 0
@@ -55,6 +65,9 @@ final class TheoLink: ObservableObject {
     private static let dialTimeoutSeconds: UInt64 = 15
 
     private let queue = DispatchQueue(label: "theo.link")
+    private static var waitingFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/link-waiting.json")
+    }
     private static var secretFile: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clicky/link-secret")
     }
@@ -85,7 +98,8 @@ final class TheoLink: ObservableObject {
     @Published private(set) var knownPeerName = UserDefaults.standard.string(forKey: TheoLink.knownPeerKey)
 
     /// Everything asked of Clicky, by voice, in its chat or through Theo, happens on the chosen Mac.
-    var clickyRunsHere: Bool { !isPaired || (clickyMac.map { $0 == Self.localName } ?? isWorkMac) }
+    /// Settings › Devices decides. Any means each Mac's Clicky works by itself; only a choice of Mac stops it here.
+    var clickyRunsHere: Bool { DeviceRoles.runsHere(.clicky) }
 
     var clickyMacChoices: [String] { [Self.localName] + (knownPeerName.map { [$0] } ?? []) }
 
@@ -165,10 +179,26 @@ final class TheoLink: ObservableObject {
             code = normalized
             isPaired = true
         }
+        waitingRequests = (try? Data(contentsOf: Self.waitingFile)).flatMap { try? LinkCoding.decoder.decode([LinkWaitingRequest].self, from: $0) } ?? []
     }
 
     func start() {
         if isPaired { startNetworking() }
+    }
+
+    /// Test profile only: a link of its own. `dialHost` empty: it only listens.
+    func startForTest(code typed: String, port: Int, dialHost: String, dialPort: Int) -> Bool {
+        guard TheoProfile.isTest, LinkPairing.normalized(typed) != nil else { return false }
+        UserDefaults.standard.set(port, forKey: "test.link.port")
+        UserDefaults.standard.set(dialPort, forKey: "test.link.dialPort")
+        UserDefaults.standard.set(dialHost, forKey: Self.hostKey)
+        return pair(typed: typed)
+    }
+
+    /// Test profile only: the link goes down, or comes back.
+    func setLinkEnabledForTest(_ enabled: Bool) {
+        guard TheoProfile.isTest else { return }
+        enabled ? restart() : stopNetworking()
     }
 
     /// A new code for this Mac, to type on the other one.
@@ -229,18 +259,13 @@ final class TheoLink: ObservableObject {
         guard let code else { return }
         let params = parameters(code: code)
         problem = nil
-        if let listener = try? NWListener(using: params, on: Self.port) {
-            listener.service = NWListener.Service(name: localName, type: Self.serviceType)
-            listener.stateUpdateHandler = { [weak self] state in
-                if case .failed(let error) = state { Task { @MainActor in self?.problem = "Can't listen: \(error.localizedDescription)" } }
+        listen(params)
+        guard !TheoProfile.isTest else {
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.dialIfNeeded() }
             }
-            listener.newConnectionHandler = { [weak self] incoming in
-                Task { @MainActor in self?.accept(incoming) }
-            }
-            listener.start(queue: queue)
-            self.listener = listener
-        } else {
-            problem = "Port \(Self.port.rawValue) is taken on this Mac."
+            dialIfNeeded()
+            return
         }
         let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: params)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
@@ -261,7 +286,63 @@ final class TheoLink: ObservableObject {
         dialIfNeeded()
     }
 
+    /// Bumped whenever networking stops, so a listener retry from before never comes back to life after it.
+    private var networkingGeneration = 0
+    /// Listener failures in a row. Back to 0 once one is listening, so a failure days later gets the full set of retries.
+    private var listenFailures = 0
+
+    /// Listens for the other Mac. A listener can fail to start or fail later (the port not yet let go after a restart, a network
+    /// change, waking from sleep): it tries again every few seconds instead of leaving this Mac unreachable until Theo restarts.
+    private func listen(_ params: NWParameters) {
+        let generation = networkingGeneration
+        let retry: @MainActor (String) -> Void = { [weak self] why in
+            guard let self, self.networkingGeneration == generation else { return }
+            self.problem = why
+            self.listener?.cancel()
+            self.listener = nil
+            let attempt = self.listenFailures
+            self.listenFailures += 1
+            guard attempt < 120 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(min(30, 1 + attempt * 2)) * 1_000_000_000)
+                guard let self, self.networkingGeneration == generation, self.listener == nil else { return }
+                self.listen(params)
+            }
+        }
+        guard let listener = try? NWListener(using: params, on: Self.port) else {
+            retry("Port \(Self.port.rawValue) is taken on this Mac.")
+            return
+        }
+        // A test profile links by address only, so the owner's Macs never see it on the network.
+        if !TheoProfile.isTest { listener.service = NWListener.Service(name: localName, type: Self.serviceType) }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            switch state {
+            case .failed(let error):
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    retry("Can't listen: \(error.localizedDescription)")
+                }
+            case .ready:
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    self.listenFailures = 0
+                    guard self.problem?.hasPrefix("Can't listen") == true || self.problem?.hasPrefix("Port ") == true else { return }
+                    self.problem = nil
+                }
+            default: break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] incoming in
+            Task { @MainActor in self?.accept(incoming) }
+        }
+        listener.start(queue: queue)
+        self.listener = listener
+    }
+
     private func stopNetworking() {
+        networkingGeneration += 1
+        listenFailures = 0
+        failWaitingReplies()
         retryTimer?.invalidate()
         retryTimer = nil
         digestTimer?.invalidate()
@@ -282,7 +363,9 @@ final class TheoLink: ObservableObject {
         guard connection == nil, let code else { return }
         let manual = host
         if !manual.isEmpty {
-            dial(.hostPort(host: NWEndpoint.Host(manual), port: Self.port), code: code)
+            // Two test profiles on one Mac listen on different ports: `test.link.dialPort` is the other one's.
+            let dialled = TheoProfile.isTest ? NWEndpoint.Port(rawValue: UInt16(UserDefaults.standard.integer(forKey: "test.link.dialPort"))).flatMap { $0.rawValue == 0 ? nil : $0 } : nil
+            dial(.hostPort(host: NWEndpoint.Host(manual), port: dialled ?? Self.port), code: code)
             return
         }
         for endpoint in foundPeers {
@@ -345,7 +428,15 @@ final class TheoLink: ObservableObject {
         newConnection.start(queue: queue)
     }
 
+    /// Nobody will answer now: whoever's waiting hears at once, not when its time runs out.
+    private func failWaitingReplies() {
+        let waiting = waitingReplies
+        waitingReplies.removeAll()
+        for reply in waiting.values { reply(nil) }
+    }
+
     private func connectionEnded() {
+        failWaitingReplies()
         connection?.cancel()
         connection = nil
         connectionState = "none"
@@ -399,8 +490,8 @@ final class TheoLink: ObservableObject {
             digestTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.sendDigest() }
             }
-            for waiting in waitingRequests { _ = request(waiting.action, waiting.fields) }
-            waitingRequests.removeAll()
+            sendWhatWaited(to: envelope.name.map(Self.shortName) ?? "other Mac")
+            HarnessCenter.shared.refresh()
             if (envelope.build ?? 0) > localBuild {
                 // The other Mac is ahead: offer the update here too, so they don't drift.
                 Task { await CompanionManager.current?.updateController.check(quietly: true) }
@@ -409,8 +500,13 @@ final class TheoLink: ObservableObject {
             guard let theirs = envelope.digests else { return }
             let store = BotsStore.shared
             Task {
-                let mine = await self.currentDigests()
+                var mine = await self.currentDigests()
+                // Each Mac describes itself, so what to compare the other's description with is the copy of it held here.
+                mine["device"] = store.peerDevice.map { LinkCoding.digest($0) }
                 let wanted = theirs.filter { mine[$0.key] != $0.value && store.wantsLinkItem($0.key) }.map(\.key)
+                // A bot's memory that's the same on both: that's the other Mac's copy now, for the next merge.
+                for (key, value) in theirs where key.hasPrefix("botMemory/") && mine[key] == value { BotMemory.agreed(botID: String(key.dropFirst("botMemory/".count))) }
+                if let skills = theirs["skills"], mine["skills"] == skills { BotSkills.agreed(botIDs: store.bots.map(\.id)) }
                 if wanted.isEmpty {
                     if mine == theirs || Set(theirs.keys).isSubset(of: Set(mine.keys)) { self.lastSync = Date() }
                 } else {
@@ -425,6 +521,9 @@ final class TheoLink: ObservableObject {
             guard let key = envelope.key, let payload = envelope.payload else { return }
             BotsStore.shared.applyLinkPayload(key, payload)
             lastSync = Date()
+            // A bot's memory or the skills just merged here: fingerprints go back at once, so both Macs record the other's copy
+            // (BotMemory.agreed) before anyone edits again. A tidy-up made before that would meet a Mac with no copy to compare.
+            if key.hasPrefix("botMemory/") || key == "skills" { syncSoon() }
         case .request:
             guard let action = envelope.key, let payload = envelope.payload,
                   let fields = try? LinkCoding.decoder.decode([String: String].self, from: payload) else { return }
@@ -443,6 +542,25 @@ final class TheoLink: ObservableObject {
         }
     }
 
+    /// Asks the other Mac something and waits for its answer. Nil when it isn't connected or doesn't answer in time.
+    func ask(_ action: String, _ fields: [String: String], timeoutSeconds: Double = 20) async -> [String: String]? {
+        let replyID = UUID().uuidString
+        var withReply = fields
+        withReply["replyID"] = replyID
+        guard request(action, withReply) else { return nil }
+        return await withCheckedContinuation { continuation in
+            waitingReplies[replyID] = { continuation.resume(returning: $0) }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                self?.waitingReplies.removeValue(forKey: replyID)?(nil)
+            }
+        }
+    }
+
+    func replyArrived(_ replyID: String, fields: [String: String]) {
+        waitingReplies.removeValue(forKey: replyID)?(fields)
+    }
+
     /// Asks the other Mac to do something. False when it isn't connected.
     func request(_ action: String, _ fields: [String: String]) -> Bool {
         guard isConnected, let payload = try? LinkCoding.encoder.encode(fields) else { return false }
@@ -451,10 +569,70 @@ final class TheoLink: ObservableObject {
     }
 
     /// Like `request`, but if the other Mac's away it goes as soon as it's back. True when it went now.
-    func requestWhenConnected(_ action: String, _ fields: [String: String]) -> Bool {
-        if request(action, fields) { return true }
-        waitingRequests.append((action, fields))
-        return false
+    /// Waits for the other Mac. Returns its id, for the card that says so.
+    func queueForOtherMac(_ action: String, _ fields: [String: String], room: String?, label: String?, canRunHere: Bool) -> String {
+        let waiting = LinkWaitingRequest(action: action, fields: fields, room: room, label: label, canRunHere: canRunHere)
+        waitingRequests.append(waiting)
+        saveWaiting()
+        return waiting.id
+    }
+
+    func waiting(_ id: String) -> LinkWaitingRequest? { waitingRequests.first { $0.id == id } }
+
+    /// Start on a held run's card: it goes to the other Mac now. False when that Mac is away again (it stays held).
+    func sendHeld(_ id: String) -> Bool {
+        guard isConnected, let item = waiting(id), !item.isStale else { return false }
+        guard request(item.action, item.fields) else { return false }
+        _ = takeWaiting(id)
+        if let room = item.room, let label = item.label {
+            BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: "\(label) went to your \(TheoLink.shortName(peerName ?? knownPeerName ?? "other Mac"))."), to: room)
+        }
+        return true
+    }
+
+    /// Takes something out of the queue, to run here instead.
+    func takeWaiting(_ id: String) -> LinkWaitingRequest? {
+        guard let index = waitingRequests.firstIndex(where: { $0.id == id }) else { return nil }
+        let taken = waitingRequests.remove(at: index)
+        saveWaiting()
+        return taken
+    }
+
+    private func saveWaiting() {
+        let file = Self.waitingFile
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? LinkCoding.encoder.encode(waitingRequests) { try? data.write(to: file, options: .atomic) }
+    }
+
+    /// The Macs have met again: what waited goes now, and the chat says so. Anything over a day old isn't what the owner wants any more, and the chat says that too.
+    private func sendWhatWaited(to macName: String) {
+        // Runs already held for the owner stay held: only Start on their card sends them.
+        let fresh = waitingRequests.filter { $0.heldForOwner != true }
+        guard !fresh.isEmpty else { return }
+        let plan = DeviceRouting.planForReconnect(fresh.map { .init(id: $0.id, action: $0.action, title: $0.fields["title"], prompt: $0.fields["prompt"], at: $0.at) })
+        let askFirst = Set(plan.askFirst)
+        waitingRequests.removeAll { item in fresh.contains(where: { $0.id == item.id }) && !askFirst.contains(item.id) }
+        for index in waitingRequests.indices where askFirst.contains(waitingRequests[index].id) { waitingRequests[index].heldForOwner = true }
+        saveWaiting()
+        for item in fresh {
+            guard !plan.duplicates.contains(item.id) else { continue }
+            let isStale = plan.stale.contains(item.id)
+            let isHeld = askFirst.contains(item.id)
+            if plan.send.contains(item.id) { _ = request(item.action, item.fields) }
+            guard let room = item.room, let label = item.label else { continue }
+            let repeats = fresh.filter { plan.duplicates.contains($0.id) && $0.fields["title"] == item.fields["title"] && $0.fields["prompt"] == item.fields["prompt"] }.count
+            let once = repeats > 0 ? " You asked for it \(repeats + 1) times; it's here once." : ""
+            if isHeld {
+                let waited = DeviceRouting.waitedText(since: item.at)
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor,
+                                                     text: "Your \(macName) is back. \(label) waited \(waited), so it hasn't started: press Start if you still want it.\(once)",
+                                                     card: BotWaitingCard.card(id: item.id)), to: room)
+            } else {
+                BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: isStale
+                                                     ? "\(label) didn't go: your \(macName) was away for over a day. Send it again if you still want it."
+                                                     : "Your \(macName) is back, so \(label) went to it.\(once)"), to: room)
+            }
+        }
     }
 
     private func sendDigest() {
@@ -468,11 +646,33 @@ final class TheoLink: ObservableObject {
     private func currentDigests() async -> [String: String] {
         var digests = BotsStore.shared.linkDigests
         let memory = BotsStore.shared.memoryStore
-        digests["memory"] = await Task.detached {
-            LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
+        let botIDs = BotsStore.shared.bots.map(\.id)
+        let fromDisk = await Task.detached { () -> [String: String] in
+            var found = BotMemory.digests(botIDs: botIDs)
+            found["skills"] = BotSkillSync.digest(BotSkills.copies(botIDs: botIDs))
+            found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
+            return found
         }.value
+        digests.merge(fromDisk) { _, new in new }
         return digests
     }
+}
+
+/// Something waiting for the other Mac to come back.
+struct LinkWaitingRequest: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var action: String
+    var fields: [String: String]
+    /// The chat that's told when it goes. Nil: nothing in a chat is waiting on it.
+    var room: String?
+    /// How the chat refers to it: "your message", "**Moon page**".
+    var label: String?
+    var canRunHere: Bool
+    var at = Date()
+    /// A run that waited long enough that the owner says Start before it goes, now the other Mac is back.
+    var heldForOwner: Bool?
+    /// Waited so long it isn't what the owner wants any more.
+    var isStale: Bool { DeviceRouting.hasWaitedTooLong(since: at) }
 }
 
 struct ClickyMacItem: Codable {
@@ -485,7 +685,7 @@ struct ClickyMacSwitch: View {
     @ObservedObject private var link = TheoLink.shared
 
     var body: some View {
-        if link.clickyMacChoices.count > 1 {
+        if link.clickyMacChoices.count > 1, DeviceRoles.choice(.clicky) != .any {
             HStack(spacing: 8) {
                 Text("Clicky works on").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                 Spacer(minLength: 0)
@@ -572,7 +772,7 @@ struct LinkSettingsContent: View {
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            Text("Bots, group chats, chats, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
+            Text("Bots, group chats, chats, private messages between bots, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }

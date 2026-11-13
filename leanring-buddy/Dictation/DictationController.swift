@@ -144,8 +144,13 @@ final class DictationCapture {
     private var appleFinished: CheckedContinuation<Void, Never>?
     private(set) var appleText = ""
     private(set) var appleError: String?
+    private var hasTap = false
+    /// For tests: behaves as a Mac with no usable mic, with nothing opened.
+    var pretendsNoUsableMicrophone = false
     let tape = DictationTape()
     var onLevel: ((CGFloat) -> Void)?
+    /// The recognizer's words so far, each time they change.
+    var onWords: ((String) -> Void)?
 
     /// Starts Apple's recognizer, on this Mac when it can. False when it isn't allowed or has no such language.
     @discardableResult
@@ -172,7 +177,10 @@ final class DictationCapture {
             let failure = error?.localizedDescription
             Task { @MainActor in
                 guard let self else { return }
-                if let text, !text.isEmpty { self.appleText = text }
+                if let text, !text.isEmpty {
+                    self.appleText = text
+                    self.onWords?(text)
+                }
                 if let failure { self.appleError = failure }
                 if isFinal || failure != nil { self.finishApple() }
             }
@@ -185,11 +193,13 @@ final class DictationCapture {
         appleFinished = nil
     }
 
-    /// Opens the microphone.
+    /// Opens the microphone. With no usable mic it throws before touching a tap: a tap on an empty format raises an
+    /// Objective-C exception, and the app crashes seconds later.
     func startMicrophone() throws {
+        guard !pretendsNoUsableMicrophone, engine.inputNode.hasUsableMicFormat else { throw DictationMicError.noUsableMicrophone }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.removeTap(onBus: 0)
+        hasTap = true
         let request = self.request
         let tape = self.tape
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -202,6 +212,13 @@ final class DictationCapture {
         try engine.start()
     }
 
+    private func closeMicrophone() {
+        guard hasTap else { return }
+        hasTap = false
+        if engine.isRunning { engine.stop() }
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
     /// Takes one buffer from a test file, in place of the mic.
     func feed(_ buffer: AVAudioPCMBuffer) {
         request?.append(buffer)
@@ -211,8 +228,7 @@ final class DictationCapture {
 
     /// The mic closes; Apple gets a moment to finish its last words.
     func finish() async {
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        closeMicrophone()
         guard let request else { return }
         request.endAudio()
         await withTaskGroup(of: Void.self) { group in
@@ -235,8 +251,7 @@ final class DictationCapture {
     }
 
     func cancel() {
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        closeMicrophone()
         task?.cancel()
         task = nil
         request = nil
@@ -341,11 +356,11 @@ final class DictationController: ObservableObject {
 
     /// Follows the permission and the setting; called whenever either may have changed.
     func refresh(accessibilityGranted: Bool) {
-        if accessibilityGranted && DictationSettings.isEnabled { keys.start() } else { keys.stop() }
+        if accessibilityGranted && DictationSettings.isEnabled && DeviceRoles.runsHere(.dictation) { keys.start() } else { keys.stop() }
     }
 
     private func keysPressed() {
-        guard !isBlocked(), capture == nil else { return }
+        guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             showFailure("Theo needs the microphone")
             return
@@ -370,7 +385,7 @@ final class DictationController: ObservableObject {
             hub.releaseMicrophone(for: .dictation)
             capture.cancel()
             self.capture = nil
-            showFailure("The microphone didn't start")
+            showFailure(error is DictationMicError ? "No usable microphone" : "The microphone didn't start")
         }
     }
 
@@ -499,7 +514,9 @@ final class DictationController: ObservableObject {
         var text = raw
         var cleanupNote = "off"
         var lateCleanup: Task<String?, Never>?
-        if DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw) {
+        let skipsCleanup = await readsCleanAlready(raw)
+        if skipsCleanup { cleanupNote = "already clean" }
+        if DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw), !skipsCleanup {
             let cleanupStart = Date()
             let cleaning = cleanupTask(for: raw)
             if let cleaned = await Self.value(of: cleaning, within: Self.cleanupBudgetSeconds) {
@@ -538,6 +555,13 @@ final class DictationController: ObservableObject {
     private var lastCleanupSeconds: TimeInterval = 0
     private var lastCleanupModelSeconds: TimeInterval = 0
 
+    /// Prism says the words already read as written text, so they needn't wait for Haiku. Anything else goes to Haiku as before.
+    func readsCleanAlready(_ text: String) async -> Bool {
+        guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(text), PrismClient.isOn, ProviderKeys.shared.hasKey(for: "sarvam"),
+              FastDecisions.worthAskingAboutCleanup(text) else { return false }
+        return FastDecisions.skipsCleanup(await PrismClient.decide("dictation", FastDecisions.dictationNeedsCleanup(text: text), timeout: 0.3))
+    }
+
     private func cleanupTask(for text: String) -> Task<String?, Never> {
         warmCleaner()
         guard let cleaner else { return Task { nil } }
@@ -569,9 +593,8 @@ final class DictationController: ObservableObject {
         }
     }
 
-    private func sarvamTranscript(of tape: DictationTape) async throws -> String {
+    private func sarvamTranscript(of tape: DictationTape, language: (id: String, title: String, sarvam: String, apple: String?) = DictationSettings.currentLanguage) async throws -> String {
         guard let client = SarvamClient.fromKeychain() else { throw SarvamError.missingKey }
-        let language = DictationSettings.currentLanguage
         // Hinglish needs its own mode: Hindi and English each stay in their own words.
         let mode: SarvamClient.STTMode = language.id == "hinglish" || language.id == "auto" ? .codemix : .transcribe
         let keyterms = DictationSettings.dictionary.words
@@ -581,6 +604,34 @@ final class DictationController: ObservableObject {
             pieces.append(result.transcript)
         }
         return pieces.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: The composer
+
+    var isCapturing: Bool { capture != nil }
+
+    func warmCleanerForComposer() { warmCleaner() }
+
+    /// The composer's final words: Sarvam if it's in use (what Apple heard if that fails), then the same clean-up as the
+    /// chord. A slow clean-up doesn't hold the words back.
+    func composerWords(heard: String, tape: DictationTape, language: (id: String, title: String, sarvam: String, apple: String?)) async -> String {
+        defer { stopCleanerWhenIdle() }
+        var words = heard
+        if DictationSettings.usesSarvam, !tape.isEmpty {
+            do {
+                let sarvamWords = try await sarvamTranscript(of: tape, language: language)
+                if !sarvamWords.isEmpty { words = sarvamWords }
+            } catch {
+                print("⚠️ Dictation: Sarvam failed, using Apple's words: \(error.localizedDescription)")
+            }
+        }
+        words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return "" }
+        let raw = DictationCleanup.localPass(words, dictionary: DictationSettings.dictionary)
+        guard DictationSettings.usesCleanup, DictationCleanup.needsModelPass(raw) else { return raw }
+        if await readsCleanAlready(raw) { return raw }
+        if let cleaned = await Self.value(of: cleanupTask(for: raw), within: Self.cleanupBudgetSeconds), let cleaned { return cleaned }
+        return raw
     }
 
     // MARK: Test files

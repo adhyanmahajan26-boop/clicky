@@ -118,8 +118,8 @@ enum BotBlocks {
 
 /// One chat text style, for a finished reply and one still typing, so nothing re-wraps when typing ends.
 enum ChatText {
-    static let size: CGFloat = 15
-    static let lineSpacing: CGFloat = 6
+    static let size: CGFloat = 14
+    static let lineSpacing: CGFloat = 4
     /// A comfortable line length, about 75 characters.
     static let measure: CGFloat = 640
     static let font = Font.system(size: size)
@@ -366,7 +366,10 @@ struct T3ResultCard: View {
                 BrandLogo(id: run.harness ?? "t3", name: engine, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(run.title).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                    Text(detailLine).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        RunMacChip(run: run)
+                        Text(detailLine).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 StatusPill(text: isStopped ? "Stopped" : run.phase == "failed" ? "Failed" : run.pullRequest != nil ? "Draft PR" : "Done",
@@ -420,7 +423,7 @@ struct T3ResultCard: View {
                             Button(info.label) {
                                 // A plain folder has no repo on the run, but it's still the owner's folder.
                                 BotsStore.shared.submitToT3(prompt: prompt, title: run.title, repo: (run.repo ?? (run.baseCommit == nil ? run.folder : nil)).map { URL(fileURLWithPath: $0, isDirectory: true) },
-                                                            room: run.room ?? BotsStore.teamID, harness: info.id)
+                                                            room: run.room ?? BotsStore.teamID, harness: info.id, macName: run.origin)
                             }
                         }
                     } label: { Label("Try on another harness", systemImage: "arrow.triangle.2.circlepath") }
@@ -475,6 +478,8 @@ struct T3ResultCard: View {
 
     private var detailLine: String {
         var parts = [engine]
+        if let chat = run.continuedChat { parts.append("Continuing \(chat)") }
+        if run.chatUnknown == true { parts.append("Couldn't tell which chat it made") }
         if let branch = run.branch { parts.append(branch) }
         if let finished = run.finishedAt {
             let minutes = max(1, Int((finished.timeIntervalSince(run.startedAt) / 60).rounded()))

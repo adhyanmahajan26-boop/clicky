@@ -55,11 +55,13 @@ extension BotsStore {
     /// Clicky as a member of a team: its name, its brain, its place in the chart.
     var clickyBot: NativeBot {
         let brain = BrainModel(setting: ClickyModels.main)
-        return NativeBot(id: Self.clickyID, name: "Clicky",
+        var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
                          instructions: "You are Clicky, Addy's screen companion. You manage a small team and report to the CEO.",
                          hue: 20, accentHue: 40, primary: false, provider: "claude",
                          model: brain.isClaude ? brain.modelIdentifier : ClickyModels.sonnet, effort: nil, apps: [], category: "personal")
+        clicky.look = Self.savedClickyLook
+        return clicky
     }
 
     /// The bots Clicky spawned, in the order of their duties.
@@ -213,7 +215,7 @@ extension BotsStore {
             if let worker {
                 let session = self.conversation(worker.id).sessions[worker.id]
                 let prompt = session == nil ? BotPrompts.firstMessage(bot: worker, team: self.bots, text: plan.prompt) : plan.prompt
-                self.reply(bot: worker, in: worker.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
+                self.reply(bot: worker, in: worker.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false, mayUseScreen: ownerWords != nil) { [weak self] answer in
                     self?.jobAnswered(job.id, duty: duty, answer: answer, ownerWords: ownerWords, memoryKind: plan.memoryKind, room: worker.id)
                 }
             } else {
@@ -286,16 +288,19 @@ extension BotsStore {
         }
     }
 
+    /// Runner passes a task to a bot: in the private thread of those two, so the bot's own chat with the owner stays as it was.
     private func handOff(_ id: String, to target: NativeBot, message: String) {
+        let runnerID = delegation(id)?.workerID ?? Self.clickyID
         let runner = delegation(id)?.workerName ?? "Runner"
-        post(BotChatMessage(author: delegation(id)?.workerID ?? Self.clickyID, text: message), to: target.id)
+        let thread = BotDMThread.id(runnerID, target.id)
+        post(BotChatMessage(author: runnerID, text: message), to: thread)
         Task { [weak self] in
             while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard let self else { return }
-            let session = self.conversation(target.id).sessions[target.id]
+            let session = self.conversation(thread).sessions[target.id]
             let words = ClickyTeamPrompts.handOffPrompt(message: message, from: runner)
             let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: words) : words
-            self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
+            self.reply(bot: target, in: thread, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
                 guard let answer, !answer.isEmpty else {
                     self?.finish(id, result: "\(target.name) stopped before answering.", succeeded: false)
                     return
@@ -449,7 +454,9 @@ extension BotsStore {
             TheoLink.shared.sendOrderToOtherMac(order, ownerWords: ownerWords, onReport: onReport)
             return
         }
-        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? ceo.id)
+        // "...and send it to Theo": the card lands in that bot's chat, and the bot answers it.
+        let handedTo = room == nil ? ClickyHandoff.target(in: order, among: bots.filter(\.isOn).map(\.name)).flatMap { name in bots.first { $0.name == name } } : nil
+        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? handedTo?.id ?? ceo.id)
         add(job)
         guard let manager = CompanionManager.current else {
             finish(job.id, result: "Clicky isn't running.", succeeded: false)
@@ -467,6 +474,7 @@ extension BotsStore {
                     let report = error == nil ? (said.isEmpty ? "Done." : said) : "Clicky couldn't do that: \(error?.localizedDescription ?? "it stopped")."
                     self?.finish(job.id, result: report, succeeded: error == nil)
                     onReport?(report)
+                    if error == nil, let handedTo { self?.acknowledgeHandoff(to: handedTo, task: order, result: report) }
                 }
             })
             options.isOwnersWords = false
@@ -475,6 +483,18 @@ extension BotsStore {
             options.theoOrder = ClickyTheoOrder(ownerWords: ownerWords)
             options.cameFromOtherMac = cameFromOtherMac
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
+        }
+    }
+
+    /// The bot Clicky's card went to says it has it, in its own chat.
+    private func acknowledgeHandoff(to bot: NativeBot, task: String, result: String) {
+        Task { [weak self] in
+            while self?.replying[bot.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+            guard let self else { return }
+            let session = self.conversation(bot.id).sessions[bot.id]
+            let asked = ClickyHandoff.acknowledgement(task: task, result: result)
+            let prompt = session == nil ? BotPrompts.firstMessage(bot: bot, team: self.bots, text: asked) : asked
+            self.reply(bot: bot, in: bot.id, prompt: prompt, session: session, handsOnWhenStopped: false, fromOwner: false) { _ in }
         }
     }
 
@@ -503,27 +523,35 @@ extension BotsStore {
         let chats = groups.filter { $0.headID != nil }
         let group = chats.first { BotsStore.searchName($0.name) == wanted }
         let bot = everyone.first { BotsStore.searchName($0.name) == wanted }
-        let words = withTeamWork(message, ownerWords: ownerWords)
         let report: (String, String) -> Void = { [weak self] who, answer in
             self?.post(BotChatMessage(author: ceo.id, text: "**\(who):** \(answer)"), to: ceo.id)
             // On a call the prompt itself isn't for reading out.
             let spoken = answer.components(separatedBy: "```prompt").first ?? answer
             onReport?("\(who) answered: \(spoken)")
         }
-        if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
-            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { answer in report(chat.name, answer) }
-        } else if let target = bot ?? everyone.first(where: { BotsStore.searchName($0.name).contains(wanted) }), target.isOn {
-            post(BotChatMessage(author: ceo.id, text: words), to: target.id)
-            Task { [weak self] in
-                while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-                guard let self else { return }
-                let session = self.conversation(target.id).sessions[target.id]
-                let asked = ClickyTeamPrompts.task(words, from: ceo.name)
-                let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: asked) : asked
-                self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { answer in
-                    report(target.name, answer?.isEmpty == false ? answer! : "stopped before answering.")
-                }
+        if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil), onReport == nil {
+            // With any other messages from the same turn it goes through the same place, so he carries on once.
+            let context = BotDMContext(rootRoom: ceo.id, ownerWords: ownerWords, fromOwner: ownerWords != nil)
+            runPrivateMessages([(chat.name, message)], from: ceo, room: ceo.id, context: context) { _ in }
+        } else if let chat = group ?? (bot == nil ? chats.first(where: { BotsStore.searchName($0.name).contains(wanted) }) : nil) {
+            // On a call the answer goes to the call. A round in a group counts as a message too, or Theo could keep asking the group forever.
+            let verdict = (directMessageBudgets[budgetKey(ceo.id)] ?? BotDMBudget()).verdict(roundTripsSoFar: 0)
+            if let line = BotDMBudget.capLine(verdict, sender: ceo.name, target: chat.name) {
+                post(BotChatMessage(author: Self.noteAuthor, text: line), to: ceo.id)
+                onReport?(line)
+                return
             }
+            directMessageBudgets[budgetKey(ceo.id), default: BotDMBudget()].noteSent()
+            let words = withTeamWork(message, ownerWords: ownerWords)
+            post(BotChatMessage(author: Self.noteAuthor, text: "\(ceo.name) asked \(chat.name) in their group chat."), to: ceo.id)
+            sendToGroup(fromCEO: words, ceo: ceo, groupID: chat.id, ownerWords: ownerWords) { answer in
+                report(chat.name, answer)
+            }
+        } else if let target = bot ?? everyone.first(where: { BotsStore.searchName($0.name).contains(wanted) }), target.isOn {
+            // Privately, like any bot's message. On a call the answer goes back to the call.
+            if onReport != nil { ownerSpoke(in: ceo.id) }
+            let context = BotDMContext(rootRoom: ceo.id, ownerWords: ownerWords, fromOwner: ownerWords != nil, onReport: onReport)
+            runPrivateMessages([(target.name, message)], from: ceo, room: ceo.id, context: context) { _ in }
         } else {
             let names = (chats.map(\.name) + everyone.filter(\.isOn).map(\.name)).joined(separator: ", ")
             report(name, "There's nobody by that name that's on. Who's here: \(names).")
@@ -565,107 +593,131 @@ extension BotsStore {
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
-        let folder = projectChoice(ownerWords: ownerWords, answer: prompt)
+        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords), room: ceo.id)
+        let folder = projectChoice(ownerWords: ownerWords, answer: prompt, macName: mac)
         submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: folder.repo, room: ceo.id, harness: harness,
-                   modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder) { started, problem in
+                   modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac) { started, problem in
             onReport?(started ? "It's started on \(HarnessCatalog.label(harness)), and it shows on its card in your chat." : problem ?? "The run didn't start.")
         }
     }
 
-    /// A bot's job for the work screen: Clicky does it there, and the bot hears how it went and can carry on.
-    /// `onReport`: for a job from the other Mac; otherwise the bot carries on here.
+    /// A bot's job for a hidden screen: Clicky does it on a tile the owner can watch, and the bot hears how it went and can carry
+    /// on. If it couldn't be done, the chat says so straight away. `onReport`: for a job from the other Mac.
     func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
-        guard let screen = ClaudiaScreen.picked else {
-            if TheoLink.shared.isWorkMac {
-                post(BotChatMessage(author: bot.id, text: "The right-hand screen isn't connected, so I can't work on it right now."), to: room)
-            } else if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
-                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's screen right now: your other Mac isn't connected."), to: room)
+        guard StudioController.isAvailable else {
+            if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
+                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's hidden screens right now: your other Mac isn't connected."), to: room)
             }
             return
         }
         let turns = (screenTurns[bot.id] ?? 0) + 1
         guard turns <= Self.maximumScreenTurns else {
-            post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) steps on the screen, so I'll stop here. Tell me to keep going if you want more."), to: room)
+            post(BotChatMessage(author: bot.id, text: "I've done \(Self.maximumScreenTurns) jobs on the hidden screens, so I'll stop here. Tell me to keep going if you want more."), to: room)
             return
         }
-        screenTurns[bot.id] = turns
-        ActionConfinement.keep(to: CGDisplayBounds(screen.displayID), named: screen.localizedName)
-        let note = "(this comes from \(bot.name), one of Addy's bots, not from the user's voice. do it only on the display called \(screen.localizedName), the right-hand screen: open what's needed there and leave the other screens alone. nobody hears the answer. say briefly what you did and what's on the screen now.)"
-        orderClicky(task, ownerWords: nil, room: room, note: note, cameFromOtherMac: true) { [weak self] report in
-            if let onReport { onReport(report) } else { self?.continueAfterScreen(bot: bot, room: room, report: report) }
+        Task { [weak self] in
+            guard let self else { return }
+            let studio = StudioController.shared
+            guard await studio.wakeForWork() else {
+                let said = studio.isEnabled
+                    ? "The hidden screens are asleep while something's playing, because waking them can interrupt it. Nothing was done, so ask again when it's stopped."
+                    : "I can't do that: the hidden screens are off, so nothing was done. Addy can turn them on in Settings › Studio."
+                if let onReport { onReport(said) } else { self.post(BotChatMessage(author: bot.id, text: said), to: room) }
+                return
+            }
+            self.screenTurns[bot.id] = turns
+            StudioScreenTask.shared.run(task, bot: bot) { [weak self] result in
+                if let onReport {
+                    onReport(result.report)
+                } else if result.finished {
+                    self?.continueAfterScreen(bot: bot, room: room, report: result.report)
+                } else {
+                    self?.post(BotChatMessage(author: bot.id, text: result.report), to: room)
+                }
+            }
         }
+    }
+
+    /// A bot's research job: Clicky's agents do it in the owner's browser on hidden tiles, and the bot hears the brief.
+    func researchForBot(_ question: String, bot: NativeBot, room: String) {
+        guard let research = CompanionManager.current?.researchController else {
+            post(BotChatMessage(author: bot.id, text: "I couldn't start the research: Clicky isn't ready on this Mac. Nothing was done."), to: room)
+            return
+        }
+        let route = DeviceRoles.route(.researchBrowser)
+        let otherMac = TheoLink.shortName(TheoLink.shared.peerName ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        // Set to the other Mac and it's there: the work happens there, and its brief comes back here.
+        if route == .sendAcross {
+            post(BotChatMessage(author: Self.noteAuthor, text: "Researching on your \(otherMac)."), to: room)
+            Task { [weak self] in
+                let reply = await TheoLink.shared.ask("research", ["question": question], timeoutSeconds: Self.researchWaitSeconds + 15)
+                guard let self else { return }
+                if let brief = reply?["answer"], !brief.isEmpty {
+                    self.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
+                } else if let problem = reply?["message"], !problem.isEmpty {
+                    self.post(BotChatMessage(author: bot.id, text: problem), to: room)
+                } else {
+                    self.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" on your \(otherMac) didn't come back, so I don't have an answer."), to: room)
+                }
+            }
+            return
+        }
+        guard !research.isRunning else {
+            post(BotChatMessage(author: bot.id, text: "Clicky's agents are already researching something, so I didn't start this: \(question)"), to: room)
+            return
+        }
+        if route == .waitForOtherMac { post(BotChatMessage(author: Self.noteAuthor, text: ResearchController.researchingHereLine(otherMac: otherMac)), to: room) }
+        research.start(ResearchTrigger.parse(question) ?? ResearchRequest(source: .topic(question), question: question), speaks: false)
+        let run = research.runNumber
+        Task { [weak self] in
+            let brief = await Self.brief(of: research, run: run)
+            guard let self else { return }
+            if let brief {
+                self.continueAfterScreen(bot: bot, room: room, report: "the research on \"\(question)\" is done. The brief: \(brief)")
+            } else {
+                self.post(BotChatMessage(author: bot.id, text: "The research on \"\(question)\" didn't come back with anything."), to: room)
+            }
+        }
+    }
+
+    static let researchWaitSeconds: TimeInterval = 300
+
+    /// Waits for that research run to end. Its brief, or nil when it ended without one or ran out of time.
+    static func brief(of research: ResearchController, run: Int) async -> String? {
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let deadline = Date().addingTimeInterval(researchWaitSeconds)
+        while Date() < deadline, research.isRunning, research.runNumber == run { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        guard research.runNumber == run, !research.isRunning, let brief = research.lastStatus["brief"] as? String, !brief.isEmpty else { return nil }
+        return brief
+    }
+
+    /// A screen for a bot, on a card: nothing changes until the owner confirms it.
+    func proposeScreen(_ gift: (bot: String, screen: String), from bot: NativeBot, room: String) {
+        guard let target = bots.first(where: { $0.name.compare(gift.bot, options: .caseInsensitive) == .orderedSame }) else {
+            post(BotChatMessage(author: bot.id, text: "I couldn't find a bot called \(gift.bot), so nothing changed."), to: room)
+            return
+        }
+        guard let choice = BotScreenGift.choice(for: gift.screen, in: StudioController.shared.config) else {
+            post(BotChatMessage(author: bot.id, text: "There's no free screen matching \"\(gift.screen)\". You can make one in Settings › Studio › Screens. Nothing changed."), to: room)
+            return
+        }
+        post(BotChatMessage(author: bot.id, text: "Confirm this and it's done:", card: "screen|\(target.id)|\(choice.tag)"), to: room)
     }
 
     func continueAfterScreen(bot: NativeBot, room: String, report: String) {
         guard replying[bot.id] == nil else { return }
         let session = conversation(room).sessions[bot.id]
-        let words = "Clicky did that on the screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell Addy how it went."
-        reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: bots, text: words) : words, session: session) { _ in }
+        // A bot doing this for another bot's private message tells that bot; the owner isn't in that thread.
+        let reader = BotDMThread.partner(of: bot.id, in: room).flatMap { self.bot($0)?.name } ?? BotPrompts.ownerName
+        let words = "Clicky did that on a hidden screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell \(reader) how it went."
+        reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: bots, text: words) : words, session: session, fromOwner: !BotDMThread.isThread(room), mayUseScreen: true) { [weak self] answer in
+            // The bot that asked hears how it went, and tells the owner.
+            guard let self, BotDMThread.isThread(room), let answer, !answer.isEmpty, let asked = self.exchangeRooms[room], let asker = self.bot(asked.senderID) else { return }
+            self.carryOn(asker, room: asked.room, replies: [(bot.name, answer)], notes: [], lastRound: [], context: asked.context, askerID: nil, exchangeID: nil) { _ in }
+        }
     }
 
     nonisolated private static let maximumScreenTurns = 8
-
-    nonisolated private static let maximumDirectMessages = 12
-
-    /// For a bot's turn: who it can reach, and how.
-    func directMessageNote(for bot: NativeBot) -> String {
-        let names = reachable(from: bot).map { $0.description.isEmpty ? $0.name : "\($0.name) (\($0.description.prefix(70)))" }.joined(separator: "; ")
-        return "You can privately message any of these, whichever chat you're in: \(names). Put a line [TELL: their exact name: what you need] in your reply and it goes to them directly, with nobody added to a group. They answer you privately and you then carry on and tell Addy here. Writing their name or saying you'll hand it over doesn't reach them: only that line does. Never ask Addy to add someone to a group for this."
-    }
-
-    /// One bot messages another in private. The other answers in its own chat, and the first carries on where it was asked.
-    func sendDirectMessage(from sender: NativeBot, to name: String, message: String, room: String, ownerWords: String?) {
-        func carryOn(_ note: String, partner: String? = nil) {
-            Task { [weak self] in
-                while self?.replying[sender.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-                guard let self else { return }
-                let session = self.conversation(room).sessions[sender.id]
-                self.directPartner[sender.id] = partner
-                let words = note + "\n\nCarry on and tell Addy where things stand. You don't need to thank or confirm with them."
-                self.reply(bot: sender, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: sender, team: self.bots, text: words) : words, session: session) { _ in }
-            }
-        }
-        guard directMessagesSent < Self.maximumDirectMessages else {
-            post(BotChatMessage(author: sender.id, text: "I've stopped messaging the others for now, to keep this from going in circles. Tell me if you want me to keep going."), to: room)
-            return
-        }
-        directMessagesSent += 1
-        let wanted = Self.searchName(name)
-        let candidates = reachable(from: sender)
-        guard let target = candidates.first(where: { Self.searchName($0.name) == wanted }) ?? candidates.first(where: { Self.searchName($0.name).contains(wanted) }) else {
-            carryOn("There's nobody called \(name) you can message. Who you can reach: \(candidates.map(\.name).joined(separator: ", ")).")
-            return
-        }
-        post(BotChatMessage(author: sender.id, text: "Messaged \(target.name) privately."), to: room)
-        post(BotChatMessage(author: sender.id, text: message), to: target.id)
-        Task { [weak self] in
-            while self?.replying[target.id] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-            guard let self else { return }
-            let session = self.conversation(target.id).sessions[target.id]
-            var words = "Private message from \(sender.name): \(message)\n\nJust write your answer: it goes back to \(sender.name) by itself, so don't message them, and the exchange ends there."
-            if !target.primary { words = "(\(self.projectsNote))\n\n" + words }
-            self.directPartner[target.id] = sender.id
-            let prompt = session == nil ? BotPrompts.firstMessage(bot: target, team: self.bots, text: words) : words
-            self.reply(bot: target, in: target.id, prompt: prompt, session: session, handsOnWhenStopped: true, fromOwner: false) { [weak self] answer in
-                guard let self else { return }
-                guard let answer, !answer.isEmpty else {
-                    carryOn("\(target.name) didn't answer.", partner: target.id)
-                    return
-                }
-                // A coder's final prompt for work the owner asked for starts the run, in the chat the owner asked in.
-                if let owner = ownerWords, let prompt = BotsT3.promptBlock(in: answer), BotsStore.ownerAskedToBuild(owner) {
-                    let folder = self.projectChoice(ownerWords: owner, answer: answer)
-                    if folder.repo != nil || folder.newFolder != nil || !BotsStore.isAboutExistingCode(owner) {
-                        let choices = self.codingChoices(from: owner)
-                        self.submitToT3(prompt: prompt, title: BotsT3.projectTitle(in: answer, prompt: prompt), repo: folder.repo, room: room, harness: choices.harness,
-                                        modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder)
-                    }
-                }
-                let spoken = answer.components(separatedBy: "```prompt").first ?? answer
-                carryOn("\(target.name) answered you privately: \(spoken)", partner: target.id)
-            }
-        }
-    }
 
     /// Letters and digits only, so "IT guys" is found however it's written or heard.
     nonisolated static func searchName(_ name: String) -> String {
@@ -673,7 +725,7 @@ extension BotsStore {
     }
 
     /// When work is passed on, what Clicky's team found on that subject goes with it, once.
-    private func withTeamWork(_ message: String, ownerWords: String?) -> String {
+    func withTeamWork(_ message: String, ownerWords: String?) -> String {
         let asked = message + "\n" + (ownerWords ?? "")
         guard asked.range(of: #"(?i)\b(clicky|research|researcher|data|collected|brief|bundle|notes?|findings?|photos?)\b|रिसर्च"#, options: .regularExpression) != nil else { return message }
         let fresh = CodingIntent.relevantWork(for: asked, in: memoryStore.teamWork().map(\.text)).filter { !passedOnWork.contains($0) }
@@ -698,7 +750,10 @@ extension BotsStore {
             let engine = run.harness.map(HarnessCatalog.label) ?? "T3 Code"
             let model = run.model.map { " on \(NativeBot.label(for: $0))" } ?? ""
             let doing = run.activity.map { "; latest: \($0.prefix(120))" } ?? ""
-            return "- \"\(run.title)\" in \(engine)\(model): \(run.phase), folder \(run.folder)\(doing)"
+            let place = run.origin.map { " on the \(TheoLink.shortName($0))" } ?? ""
+            // A finished run's own report in full, so nobody has to guess from its first line.
+            let report = run.finishedAt != nil ? run.fullReport.map { "\n  Its report: \($0.prefix(1500))" } ?? "" : ""
+            return "- \"\(run.title)\" in \(engine)\(model)\(place): \(run.phase), folder \(run.folder)\(doing)\(report)"
         }
         return "Coding runs right now, and this is the real state:\n" + lines.joined(separator: "\n")
     }
@@ -727,7 +782,7 @@ extension BotsStore {
         guard bot.primary, !rosterForCEO.isEmpty else { return "" }
         let work = memoryStore.teamWorkContext()
         return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n\(projectsNote)\n" +
-            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply; their answer comes back here. Don't ask Addy how to reach them." +
+            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply. Between bots it's private: Addy sees a small card, their answer comes back to you here, and you tell Addy what came of it. Just do it: don't explain to Addy how you reach them, and don't ask how." +
             (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
     }
 

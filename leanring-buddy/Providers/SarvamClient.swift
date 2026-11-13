@@ -267,6 +267,44 @@ struct SarvamClient {
         }
     }
 
+    /// One WAV for `text`, over Sarvam's socket. REST took 2.8 to 21 s for a line here, and the socket about half a second.
+    func synthesizeOverSocket(text: String, languageSetting: String, speaker: String, model: String, pace: Double, timeout: TimeInterval = 8) async throws -> Data {
+        guard let url = SarvamWire.ttsURL(model: model) else { throw SarvamError.badResponse("Bad address") }
+        let parameters = Self.languageParameters(forSetting: languageSetting)
+        let task = session.webSocketTask(with: SarvamWire.socketRequest(url, apiKey: apiKey))
+        task.resume()
+        defer { task.cancel(with: .normalClosure, reason: nil) }
+        let rate = 24000
+        try await task.send(.string(SarvamWire.ttsConfig(speaker: Self.resolveSpeaker(speaker, model: model, languageSetting: languageSetting),
+                                                         languageCode: parameters.code, pace: pace, codec: "linear16", sampleRate: rate)))
+        try await task.send(.string(SarvamWire.ttsText(text)))
+        try await task.send(.string(SarvamWire.ttsFlush))
+        let deadline = Task { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)); task.cancel(with: .goingAway, reason: nil) }
+        defer { deadline.cancel() }
+        var samples = Data()
+        while true {
+            let message: URLSessionWebSocketTask.Message
+            do { message = try await task.receive() } catch { throw SarvamError.transport(error.localizedDescription) }
+            guard case .string(let body) = message else { continue }
+            switch SarvamWire.parseTTS(body) {
+            case .audio(let audio, _): samples.append(audio)
+            case .final:
+                guard !samples.isEmpty else { throw SarvamError.badResponse("No audio") }
+                return Self.wav(pcm16: samples, sampleRate: rate)
+            case .error(let problem): throw SarvamError.badResponse(problem)
+            case .other: continue
+            }
+        }
+    }
+
+    /// A WAV header around mono 16-bit samples.
+    static func wav(pcm16 samples: Data, sampleRate: Int) -> Data {
+        func little<T: FixedWidthInteger>(_ value: T) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        var file = Data("RIFF".utf8) + little(UInt32(36 + samples.count)) + Data("WAVEfmt ".utf8) + little(UInt32(16)) + little(UInt16(1)) + little(UInt16(1))
+        file += little(UInt32(sampleRate)) + little(UInt32(sampleRate * 2)) + little(UInt16(2)) + little(UInt16(16)) + Data("data".utf8) + little(UInt32(samples.count))
+        return file + samples
+    }
+
     /// Audio should be under 30 s on the REST endpoint.
     func transcribe(audio: Data, fileName: String = "audio.wav", mimeType: String = "audio/wav",
                     model: String = "saaras:v4", mode: STTMode = .transcribe, languageCode: String = "unknown", keyterms: [String] = []) async throws -> (transcript: String, languageCode: String?) {

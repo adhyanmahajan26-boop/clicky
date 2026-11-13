@@ -34,8 +34,9 @@ struct TheoButtonStyle: ButtonStyle {
     @State private var hovering = false
 
     private var height: CGFloat { size == .small ? 26 : size == .large ? 38 : 30 }
-    private var padding: CGFloat { size == .small ? 10 : size == .large ? 18 : 12 }
-    private var font: Font { .system(size: size == .small ? 12 : size == .large ? 14 : 13, weight: .medium) }
+    private var padding: CGFloat { size == .small ? 10 : size == .large ? 18 : 13 }
+    private var font: Font { .system(size: size == .small ? 12 : size == .large ? 14 : 12.5, weight: .medium) }
+    private var radius: CGFloat { size == .small ? 8 : 9 }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -43,9 +44,9 @@ struct TheoButtonStyle: ButtonStyle {
             .foregroundColor(foreground)
             .padding(.horizontal, padding)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(background(pressed: configuration.isPressed)))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(border, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(background(pressed: configuration.isPressed)))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(border, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .scaleEffect(configuration.isPressed && isEnabled ? 0.98 : 1)
             .opacity(isEnabled ? 1 : 0.45)
             .animation(.easeOut(duration: 0.12), value: hovering)
@@ -55,7 +56,7 @@ struct TheoButtonStyle: ButtonStyle {
 
     private var foreground: Color {
         switch kind {
-        case .primary: return .white
+        case .primary: return DS.Colors.textOnAccent
         case .secondary: return DS.Colors.textPrimary
         case .ghost: return hovering ? DS.Colors.textPrimary : DS.Colors.textSecondary
         case .destructive: return DS.Colors.destructiveText
@@ -65,7 +66,7 @@ struct TheoButtonStyle: ButtonStyle {
     private func background(pressed: Bool) -> Color {
         switch kind {
         case .primary: return DS.Colors.accentFill.opacity(pressed ? 0.8 : hovering ? 0.92 : 1)
-        case .secondary: return pressed ? DS.Colors.selected : hovering ? DS.Colors.surface : DS.Colors.surface1
+        case .secondary: return pressed ? DS.Colors.selected : hovering ? DS.Colors.surface.opacity(0.7) : DS.Colors.surface
         case .ghost: return pressed ? DS.Colors.selected : hovering ? DS.Colors.hover : .clear
         case .destructive: return pressed ? DS.Colors.destructiveText.opacity(0.22) : hovering ? DS.Colors.destructiveText.opacity(0.14) : .clear
         }
@@ -93,14 +94,14 @@ extension ButtonStyle where Self == TheoButtonStyle {
 /// A symbol on a small coloured tile, as in Raycast's lists.
 struct IconTile: View {
     let symbol: String
-    var colors: [Color] = [Color(hex: 0x3A3A42), Color(hex: 0x26262C)]
+    var colors: [Color] = TileColors.graphite
     var size: CGFloat = 22
     var symbolColor: Color = .white
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
             .fill(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 0.5))
             .overlay(Image(systemName: symbol).font(.system(size: size * 0.52, weight: .semibold)).foregroundColor(symbolColor))
             .frame(width: size, height: size)
             .accessibilityHidden(true)
@@ -118,7 +119,7 @@ enum TileColors {
     static let violet = [Color(hex: 0xA468EB), Color(hex: 0xD152B8)]
     static let rose = [Color(hex: 0xF06A8F), Color(hex: 0xE24A58)]
     static let slate = [Color(hex: 0x7C8697), Color(hex: 0x4D5666)]
-    static let graphite = [Color(hex: 0x3A3A42), Color(hex: 0x26262C)]
+    static let graphite = [DS.Colors.surface, DS.Colors.surface]
 }
 
 /// A service's real logo from the asset catalog (Assets.xcassets/Logos), on a neutral tile. An id with no logo

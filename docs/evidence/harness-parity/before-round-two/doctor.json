@@ -1,0 +1,9 @@
+{
+ "probe": "doctor",
+ "verdict": "FAIL",
+ "seconds": 9.0,
+ "evidence": {
+  "note": "fake engine ok"
+ },
+ "at": "2026-11-12T21:37:08"
+}

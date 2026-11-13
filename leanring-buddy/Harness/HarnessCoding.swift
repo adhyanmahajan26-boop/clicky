@@ -13,6 +13,7 @@
 //  Run ids: "term:<uuid>", "tmux:<session>" or "headless:<uuid>".
 //
 
+import ClickyCore
 import AppKit
 import Foundation
 
@@ -34,14 +35,29 @@ enum HarnessCoding {
     /// for this run and may not be watching: Claude accepts edits, Codex writes the workspace and asks for
     /// anything beyond it, Cursor/OpenCode auto-approve, Grok and Gemini accept edits.
     /// `gitFolder`: the repo's own .git, which sits outside a worktree. Codex's sandbox has to be able to write there, or it can't commit.
-    /// `continues`: picks up the last conversation in that folder, for a follow-up after the terminal has gone.
-    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil, continues: Bool = false) -> [String] {
+    /// `resume`: carries on that exact chat. Every harness's own flag, checked with its --help.
+    /// `continues`: picks up the last conversation in that folder: only for an old run whose session was never recorded.
+    /// `newSessionID`: a new chat's id, for the harnesses that take one (Claude Code, Gemini, Grok) or hand one out (Cursor), so a follow-up can name it.
+    static func interactiveArguments(harness: String, model: String?, effort: String?, folder: String, gitFolder: String? = nil, continues: Bool = false, resume: String? = nil, newSessionID: String? = nil) -> [String] {
         var args: [String] = []
-        if continues {
+        if let resume {
+            switch harness {
+            case "claude", "cursor", "gemini", "grok": args += ["--resume", resume]
+            case "codex": args += ["resume", resume]
+            case "opencode": args += ["--session", resume]
+            default: break
+            }
+        } else if continues {
             switch harness {
             case "claude", "cursor", "grok": args += ["--continue"]
             case "codex": args += ["resume", "--last"]
             case "gemini": args += ["--resume", "latest"]
+            default: break
+            }
+        } else if let newSessionID {
+            switch harness {
+            case "claude", "gemini", "grok": args += ["--session-id", newSessionID]
+            case "cursor": args += ["--resume", newSessionID]
             default: break
             }
         }
@@ -73,35 +89,51 @@ enum HarnessCoding {
         return args
     }
 
-    /// The headless (no tmux) command: the prompt is part of it.
-    static func headlessArguments(harness: String, model: String?, effort: String?, folder: String, prompt: String, outFile: String) -> [String] {
+    /// The headless (no tmux) command: the prompt is part of it. `resume`: carries on that exact chat. `newSessionID`: as in `interactiveArguments`.
+    static func headlessArguments(harness: String, model: String?, effort: String?, folder: String, prompt: String, outFile: String, resume chat: String? = nil, newSessionID: String? = nil) -> [String] {
         var args: [String] = []
+        // Cursor's own new chat is resumed like any other. The rest name theirs below.
+        let resume = chat ?? (harness == "cursor" ? newSessionID : nil)
+        let newChat = chat == nil && harness != "cursor" ? newSessionID.map { ["--session-id", $0] } ?? [] : []
         switch harness {
         case "claude":
-            args = ["-p", "--output-format", "json", "--permission-mode", "auto"]
+            args = ["-p", "--output-format", "json", "--permission-mode", "auto"] + newChat
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             args += ["--", prompt]
         case "codex":
-            args = ["exec", "--json", "--skip-git-repo-check", "-C", folder]
-            if let model { args += ["-m", model] }
-            if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
-            args += ["-c", "check_for_update_on_startup=false", "-s", "workspace-write", "-o", outFile, "--", prompt]
+            // `exec resume` has no -C or -s: the folder is the process's, the sandbox a config override.
+            if let resume {
+                args = ["exec", "resume", "--json", "--skip-git-repo-check"]
+                if let model { args += ["-m", model] }
+                if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+                args += ["-c", "check_for_update_on_startup=false", "-c", "sandbox_mode=\"workspace-write\"", "-o", outFile, "--", resume, prompt]
+            } else {
+                args = ["exec", "--json", "--skip-git-repo-check", "-C", folder]
+                if let model { args += ["-m", model] }
+                if let effort { args += ["-c", "model_reasoning_effort=\"\(effort)\""] }
+                args += ["-c", "check_for_update_on_startup=false", "-s", "workspace-write", "-o", outFile, "--", prompt]
+            }
         case "cursor":
             args = ["-p", "--output-format", "text", "--force", "--trust", "--workspace", folder]
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["--model", model] }
             args += [prompt]
         case "opencode":
             args = ["run", "--format", "json", "--dir", folder]
+            if let resume { args += ["--session", resume] }
             if let model { args += ["-m", model] }
             if let effort { args += ["--variant", effort] }
             args += [prompt]
         case "grok":
-            args = ["-p", prompt, "--output-format", "streaming-messages-json", "--permission-mode", "auto"]
+            args = ["-p", prompt, "--output-format", "streaming-messages-json", "--permission-mode", "auto"] + newChat
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["-m", model] }
             if let effort { args += ["--reasoning-effort", effort] }
         case "gemini":
-            args = ["-p", prompt, "--output-format", "json", "--approval-mode", "auto_edit"]
+            args = ["-p", prompt, "--output-format", "json", "--approval-mode", "auto_edit"] + newChat
+            if let resume { args += ["--resume", resume] }
             if let model { args += ["-m", model] }
         default: break
         }
@@ -141,7 +173,17 @@ enum HarnessCoding {
 
     // MARK: Starting
 
-    static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil) async throws -> T3Run {
+    /// A new run's place in the queue, for a harness that doesn't say which chat it made.
+    private struct NewChatTurn: Sendable {
+        var key: HarnessChatGate.Key
+        var ticket: UUID
+        /// The chats in the folder just before it started.
+        var before: Set<String>
+    }
+
+    /// `onWaiting`: it has to wait for an earlier new run in the same folder to show its chat.
+    static func start(harness: String, prompt: String, title: String, repo: URL?, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil,
+                      onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
         guard let executable = HarnessCatalog.executable(for: harness) else {
             throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so the coding run can't start there. Pick another coding target in Settings.")
         }
@@ -153,6 +195,7 @@ enum HarnessCoding {
         var run: T3Run
         let workdir: URL
         var plainFolder = false
+        var isNewProject = false
         var gitFolder: String?
         var topLevel: URL?
         if let repo { topLevel = await BotsT3.gitTopLevel(of: repo) }
@@ -164,12 +207,12 @@ enum HarnessCoding {
         } else if let topLevel, !(await BotsT3.hasRemote(topLevel)) {
             // A project of the owner's that lives only here: changes go right in it, on its own history.
             workdir = topLevel
-            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await BotsT3.headCommit(in: topLevel)
             run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo = topLevel {
             // A branch in its own worktree, like T3 Code's: Addy's checkout is never touched.
             let branch = "theo/\(BotsT3.slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: repo).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await BotsT3.headCommit(in: repo)
             let trees = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Theo/worktrees", isDirectory: true)
             try FileManager.default.createDirectory(at: trees, withIntermediateDirectories: true)
@@ -180,18 +223,30 @@ enum HarnessCoding {
             run.baseBranch = await BotsT3.currentBranch(in: repo)
             gitFolder = repo.appendingPathComponent(".git").path
         } else {
-            workdir = try BotsT3.newProjectFolder(title: newFolder ?? title)
+            workdir = try await BotsT3.newGitProject(title: newFolder ?? title)
             BotsT3.saveBrief(prompt, title: title, engine: HarnessCatalog.label(harness))
-            try await BotsT3.shell(git, ["init", "-q", "-b", "main"], in: workdir)
-            try await BotsT3.startEmpty(in: workdir)
             let base = try await BotsT3.shell(git, ["rev-parse", "HEAD"], in: workdir).trimmingCharacters(in: .whitespacesAndNewlines)
             run = T3Run(id: "", title: title, folder: workdir.path, baseCommit: base)
+            isNewProject = true
         }
         run.harness = harness
         run.model = model ?? HarnessCatalog.label(harness)
         run.effort = effort ?? "default"
         run.prompt = prompt
-        var message = prompt + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote)
+        // Where a harness can be told a new chat's id, or hands one out, the run knows its chat from the start.
+        var newSessionID = HarnessChatGate.takesNewChatID.contains(harness) ? UUID().uuidString.lowercased() : nil
+        if harness == "cursor" { newSessionID = await cursorNewChat(executable: executable, folder: workdir) }
+        run.sessionID = newSessionID
+        // The others don't say, so a new run waits its turn in that folder, and its chat is the one that then appears there.
+        var turn: NewChatTurn?
+        if newSessionID == nil {
+            let key = HarnessChatGate.Key(harness: harness, folder: workdir.path)
+            let ticket = UUID()
+            await NewChatTurns.shared.wait(key, ticket: ticket, onWaiting: onWaiting)
+            turn = NewChatTurn(key: key, ticket: ticket, before: Set(await HarnessChats.list(harness: harness, folder: workdir.path).map(\.id)))
+            run.startedAt = Date()
+        }
+        var message = BotsT3.forAgent((isNewProject ? BotsT3.newFolderNote(workdir) : "") + prompt + (isNewProject ? BotsT3.newFolderReminder : "") + (plainFolder ? BotsT3.plainFolderNote : BotsT3.deliveryNote))
         if let branch = run.branch, let named = repo, let repo = topLevel {
             // The prompt names the project's own path; without this the agent goes there and works in Addy's checkout.
             message = "You are already in a git worktree of \(repo.path), at \(workdir.path), on branch \(branch). " +
@@ -199,24 +254,98 @@ enum HarnessCoding {
                 BotsT3.subfolderNote(named, in: repo) + message
         }
 
-        // A saved key can't go through tmux without showing up in a process's arguments, so that run takes Theo's own terminal.
+        do {
+            // A saved key can't go through tmux without showing up in a process's arguments, so that run takes Theo's own terminal.
+            if useTmux, let tmux, HarnessCatalog.apiKeyEnvironment(for: harness).isEmpty {
+                let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
+                let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
+                let command = (["env"] + unset + [executable.path] +
+                               interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path, gitFolder: gitFolder, newSessionID: newSessionID)).map(quoted).joined(separator: " ")
+                try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", workdir.path, "-x", "180", "-y", "50", command])
+                run.id = "tmux:\(session)"
+                try await deliver(message, to: session, tmux: tmux)
+                PaneWatch.reset(session)
+            } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder, newSessionID: newSessionID) {
+                run.id = terminal.id
+                await deliver(message, to: terminal, isFirstPrompt: true)
+                PaneWatch.reset(terminal.id)
+                PaneWatch.delivered(terminal.id)
+            } else {
+                run.id = "headless:\(UUID().uuidString.lowercased())"
+                startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: workdir, prompt: message, newSessionID: newSessionID)
+            }
+        } catch {
+            if let turn { await NewChatTurns.shared.leave(turn.key, ticket: turn.ticket) }
+            throw error
+        }
+        if let turn { findNewChat(of: run.id, turn: turn, since: run.startedAt) }
+        return run
+    }
+
+    /// Cursor hands out a new chat's id, filed under the folder it's asked in. Nil when it won't, and the run waits its turn like the others.
+    private static func cursorNewChat(executable: URL, folder: URL) async -> String? {
+        let text = await Task.detached { HarnessChats.output(of: executable, ["create-chat"], in: folder.path) }.value
+        let id = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return UUID(uuidString: id) == nil ? nil : id
+    }
+
+    /// Watches the folder for the chat a new run makes, and then lets the next one go. No chat in time, or more than one, means it can't be told, and it says so.
+    private static func findNewChat(of runID: String, turn: NewChatTurn, since: Date) {
+        Task.detached {
+            await NewChatTurns.shared.started(turn.key, ticket: turn.ticket)
+            let deadline = Date().addingTimeInterval(HarnessChatGate.waitSeconds)
+            var found = HarnessNewChat.notYet
+            while found == .notYet, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let chats = await HarnessChats.list(harness: turn.key.harness, folder: turn.key.folder)
+                found = HarnessNewChat.find(before: turn.before, chats: chats, since: since.addingTimeInterval(-5))
+            }
+            await BotsStore.shared.noteChat(of: runID, found)
+            await NewChatTurns.shared.leave(turn.key, ticket: turn.ticket)
+        }
+    }
+
+    /// Carries on a chat this harness already has, in its own folder and terminal. `run` already says which folder and chat.
+    static func continueChat(_ chatID: String, run original: T3Run, harness: String, message words: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+        let message = BotsT3.forAgent(words)
+        guard let executable = HarnessCatalog.executable(for: harness) else {
+            throw BotsT3Error.failed("\(HarnessCatalog.label(harness)) isn't installed on this Mac, so that chat can't carry on here.")
+        }
+        var run = original
+        let isCodingTarget = harness == HarnessPrefs.codingTarget
+        // Its own model carries on with it unless one was asked for: a resumed chat doesn't need another.
+        let model = modelChoice ?? (isCodingTarget ? HarnessPrefs.codingModel : nil)
+        let effort = effortChoice ?? (isCodingTarget ? HarnessPrefs.codingEffort : nil)
+        let folder = URL(fileURLWithPath: run.folder, isDirectory: true)
+        run.harness = harness
+        run.model = model ?? HarnessCatalog.label(harness)
+        run.effort = effort ?? "default"
+        // A finished run's agent stays open in its terminal, ready for a follow-up, and that can hold this very chat. A run still going is left alone.
+        await closeFinishedTerminals(harness: harness, folder: run.folder)
         if useTmux, let tmux, HarnessCatalog.apiKeyEnvironment(for: harness).isEmpty {
-            let session = "theo-\(BotsT3.slug(title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
+            let session = "theo-\(BotsT3.slug(run.title).prefix(30))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let unset = HarnessCatalog.scrubbedVariableNames.flatMap { ["-u", $0] }
             let command = (["env"] + unset + [executable.path] +
-                           interactiveArguments(harness: harness, model: model, effort: effort, folder: workdir.path, gitFolder: gitFolder)).map(quoted).joined(separator: " ")
-            try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", workdir.path, "-x", "180", "-y", "50", command])
+                           interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, resume: chatID)).map(quoted).joined(separator: " ")
+            try await BotsT3.shell(tmux, ["new-session", "-d", "-s", session, "-c", folder.path, "-x", "180", "-y", "50", command])
             run.id = "tmux:\(session)"
             try await deliver(message, to: session, tmux: tmux)
             PaneWatch.reset(session)
-        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: workdir, title: title, gitFolder: gitFolder) {
+        } else if let terminal = await startTerminal(harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: nil, resume: chatID) {
             run.id = terminal.id
-            await deliver(message, to: terminal, isFirstPrompt: true)
-            PaneWatch.reset(terminal.id)
+            var screenBefore = ""
+            guard await deliver(message, to: terminal, isFirstPrompt: true, beforeSending: { screenBefore = $0 }) else {
+                let screen = await terminal.screenText()
+                await TerminalSessions.shared.close(terminal.id)
+                throw BotsT3Error.failed(isOpenElsewhereScreen(screen)
+                    ? "That chat is open somewhere else. Close it there, then try again."
+                    : "\(HarnessCatalog.label(harness)) is showing a question instead of the chat, so nothing went in. Try it in \(HarnessCatalog.label(harness)) itself.")
+            }
+            PaneWatch.reset(terminal.id, screenBefore: screenBefore)
             PaneWatch.delivered(terminal.id)
         } else {
             run.id = "headless:\(UUID().uuidString.lowercased())"
-            startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: workdir, prompt: message)
+            startHeadless(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, prompt: message, resume: chatID)
         }
         return run
     }
@@ -239,9 +368,9 @@ enum HarnessCoding {
     // MARK: In-app terminal
 
     @MainActor
-    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) async -> TerminalSession? {
+    private static func startTerminal(harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?, resume: String? = nil, newSessionID: String? = nil) async -> TerminalSession? {
         let id = "term:\(UUID().uuidString.lowercased())"
-        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder)
+        let args = interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, resume: resume, newSessionID: newSessionID)
         // No self-updates mid-run: OpenCode's update dialog swallowed the prompt.
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
@@ -250,14 +379,21 @@ enum HarnessCoding {
                                              arguments: args, environment: environment, workingDirectory: folder.path)
     }
 
+    @MainActor
+    private static func closeFinishedTerminals(harness: String, folder: String) {
+        for other in BotsStore.shared.t3Runs where other.harness == harness && other.folder == folder && (other.phase == "done" || other.phase == "failed") {
+            if TerminalSessions.shared.session(for: other.id) != nil { TerminalSessions.shared.close(other.id) }
+        }
+    }
+
     /// A fresh terminal under an existing run's id.
     @MainActor
-    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?) -> TerminalSession? {
+    private static func restartTerminal(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, title: String, gitFolder: String?, resume: String?) -> TerminalSession? {
         var environment = TerminalSession.defaultEnvironment()
         environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         environment.merge(HarnessCatalog.apiKeyEnvironment(for: harness)) { _, new in new }
         return TerminalSessions.shared.start(id: id, title: "\(HarnessCatalog.label(harness)) · \(title)", command: executable.path,
-                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, continues: true),
+                                             arguments: interactiveArguments(harness: harness, model: model, effort: effort, folder: folder.path, gitFolder: gitFolder, continues: resume == nil, resume: resume),
                                              environment: environment, workingDirectory: folder.path)
     }
 
@@ -279,19 +415,23 @@ enum HarnessCoding {
 
     /// Waits for the TUI to settle (answering a folder-trust question on the way), then pastes the text and presses Return.
     /// False when a question on the screen meant the text couldn't go in.
+    /// `beforeSending`: the screen just before the text goes in. A resumed chat shows its old turns, and their "Worked for 1m" isn't this turn ending.
     @MainActor
     @discardableResult
-    private static func deliver(_ text: String, to terminal: TerminalSession, isFirstPrompt: Bool) async -> Bool {
+    private static func deliver(_ text: String, to terminal: TerminalSession, isFirstPrompt: Bool, beforeSending: ((String) -> Void)? = nil) async -> Bool {
         var previous = ""
         var stable = 0
         var answeredTrust = 0
-        for _ in 0..<36 {
+        var waited = 0
+        for _ in 0..<60 {
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard terminal.isRunning else { return false }
             let screen = terminal.screenText().trimmingCharacters(in: .whitespacesAndNewlines)
             stable = (screen == previous && screen.count > 20) ? stable + 1 : 0
             previous = screen
             if stable >= 2 {
+                // Still starting up: a quiet screen isn't enough. Typed now, the prompt lands in the bare terminal and its Return is lost.
+                if isFirstPrompt, !terminal.acceptsPaste, !isQuestionScreen(screen), waited < 25 { waited += 1; continue }
                 if isFirstPrompt, answeredTrust < 3, answerTrustScreen(screen, terminal: terminal) {
                     answeredTrust += 1
                     stable = 0
@@ -312,6 +452,7 @@ enum HarnessCoding {
         // Still on a question screen after all that: don't type the prompt into it.
         let final = terminal.screenText()
         if Self.isQuestionScreen(final) { return false }
+        beforeSending?(final)
         await terminal.send(text: text)
         // Some TUIs (Codex) read the Return right after a paste as part of the paste, and the prompt sits unsent.
         for _ in 0..<3 {
@@ -363,9 +504,15 @@ enum HarnessCoding {
         let tail = screen.split(separator: "\n", omittingEmptySubsequences: false).suffix(16).joined(separator: "\n")
         if tail.range(of: #"(?i)\(y/n\)|\[y/n\]|yes, proceed|allow once|approve this|enter to confirm|trust this folder|do you trust|esc to cancel(?!,\s*\d)"#,
                       options: .regularExpression) != nil { return true }
+        if isOpenElsewhereScreen(tail) { return true }
         // "Do you want to…" in an agent's report is only words. A dialog offers the choices under it.
         return tail.range(of: #"(?i)do you want to"#, options: .regularExpression) != nil
             && tail.range(of: #"(?im)^\W*(1\.\s*yes|(❯|›|>)\s*(1\.\s*)?yes)\b"#, options: .regularExpression) != nil
+    }
+
+    /// Codex won't share a chat: "This conversation is open in another app. Close it there and press R to continue here."
+    static func isOpenElsewhereScreen(_ screen: String) -> Bool {
+        screen.range(of: #"(?i)conversation is open in another app|close it there and press r"#, options: .regularExpression) != nil
     }
 
     /// A harness's own line saying a turn ended ("✻ Baked for 19s", "─ Worked for 1m 12s ─"), not prose that happens to say so.
@@ -412,7 +559,8 @@ enum HarnessCoding {
         try await BotsT3.shell(tmux, ["send-keys", "-t", session, "Enter"])
     }
 
-    static func sendFollowup(_ text: String, to run: T3Run) async throws {
+    static func sendFollowup(_ words: String, to run: T3Run) async throws {
+        let text = BotsT3.forAgent(words)
         // An agent waiting on a question gets just the answer, typed straight in.
         let answersQuestion = run.phase == "waiting"
         let label = HarnessCatalog.label(run.harness ?? "")
@@ -439,13 +587,20 @@ enum HarnessCoding {
             let model = run.model == HarnessCatalog.label(harness) ? (harness == "codex" ? codexPlanModel() : nil) : run.model
             let effort = run.effort == "default" ? nil : run.effort
             let gitFolder = run.repo.map { URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent(".git").path }
-            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder) else {
+            // That run's own session, by id. Only a run from before sessions were recorded falls back on the newest in the folder.
+            var session = run.sessionID
+            if session == nil, run.chatUnknown == true {
+                throw BotsT3Error.failed("Theo couldn't tell which \(label) chat this run made, and its terminal has closed, so this can't carry on by itself. Start a new run in that folder and pick the chat from its Chat menu.")
+            }
+            if session == nil { session = await HarnessChats.session(startedFor: run) }
+            guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder, resume: session) else {
                 throw BotsT3Error.failed("The \(HarnessCatalog.label(harness)) terminal couldn't start.")
             }
-            if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true)) {
+            var screenBefore = ""
+            if !(await deliver(followUpMessage, to: terminal, isFirstPrompt: true, beforeSending: { screenBefore = $0 })) {
                 throw BotsT3Error.failed("\(label) is showing a question on its screen, so that couldn't go in. Open it from the run's card to answer, then send it again.")
             }
-            PaneWatch.reset(run.id)
+            PaneWatch.reset(run.id, screenBefore: screenBefore)
             PaneWatch.delivered(run.id)
             return
         }
@@ -612,7 +767,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         guard terminal.isRunning else {
-            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane)
+            let summary = transcriptSummary(for: run) ?? paneSummary(terminal.pane, prompt: run.prompt, followups: run.followups ?? [])
             return BotsT3.ThreadState(status: terminal.exitCode == 0 ? "completed" : "failed", busy: false, waitingForAnswer: false,
                                       lastMessage: summary.isEmpty ? "The \(HarnessCatalog.label(run.harness ?? "")) session ended without a report." : summary,
                                       worktree: run.worktree, pullRequest: nil)
@@ -639,7 +794,7 @@ enum HarnessCoding {
         }
         // A plan's limit or a model it can't use: the agent would sit there (OpenCode retries for hours), so say so now.
         // The agent's own output can carry those words too, so a working agent only counts when it says it's retrying.
-        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression),
+        if let blocked = tail.range(of: #"(?i)free limit reached|free usage exceeded|usage limit reached|usage beyond what's included|is not supported when using|out of credits|quota exceeded"#, options: .regularExpression),
            tail[tail.lineRange(for: blocked)].range(of: "(?i)retrying", options: .regularExpression) != nil || (!working && !saysFinished && unchanged >= 8) {
             let raw = tail[tail.lineRange(for: blocked)].trimmingCharacters(in: CharacterSet(charactersIn: "│┃■⬝ \n"))
             // OpenCode's "[retrying in 6h 10m attempt #1" says nothing useful here.
@@ -654,7 +809,7 @@ enum HarnessCoding {
                                       worktree: run.worktree, pullRequest: nil)
         }
         if settled {
-            let summary = transcriptSummary(for: run) ?? paneSummary(pane)
+            let summary = transcriptSummary(for: run) ?? paneSummary(pane, prompt: run.prompt, followups: run.followups ?? [])
             return BotsT3.ThreadState(status: "completed", busy: false, waitingForAnswer: false, lastMessage: summary,
                                       worktree: run.worktree, pullRequest: nil)
         }
@@ -665,6 +820,12 @@ enum HarnessCoding {
     /// Signs a run did its work even if every poll missed it being busy: a finished line, or a new commit or changed file.
     private static func workHappened(_ run: T3Run, pane: String) -> Bool {
         if pane.range(of: #"(?i)worked for \d|(crunched|baked|brewed|cooked|churned|sauteed|cogitated) for \d"#, options: .regularExpression) != nil { return true }
+        // A plain folder has no git to ask: a file changed since the run began says it.
+        if run.baseCommit == nil, run.repo == nil {
+            let folder = URL(fileURLWithPath: run.worktree ?? run.folder, isDirectory: true)
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])) ?? []
+            if files.contains(where: { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) > run.startedAt }) { return true }
+        }
         let process = Process()
         let pipe = Pipe()
         process.executableURL = BotsT3.git
@@ -688,21 +849,30 @@ enum HarnessCoding {
         return now != base
     }
 
-    private static func paneSummary(_ pane: String) -> String {
-        // The agent's words, without the TUI's frames, status bars and hints.
-        let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$"#
+    private static func paneSummary(_ pane: String, prompt: String? = nil, followups: [String] = []) -> String {
+        // The agent's words, without the TUI's frames, status bars and hints, and without the prompt it was given showing back.
+        let chrome = #"(?i)shift\+tab|ctrl\+|tab agents|\bmcp\b|\[dashboard\]|auto mode|worktree |openai codex|^\W*(❯|›|>)\W*$|^(❯|›)\s|^cursor agent$|^v\d{4}\.\d|^tip: |run everything$"#
+        let promptStart = prompt.map { String($0.prefix(40)) }
+        // What Theo typed shows back wrapped across lines (the prompt, a follow-up, the delivery note): a line that's a piece of it isn't the agent's.
+        let squeeze: (String) -> String = { $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+        let typed = squeeze(([prompt ?? ""] + followups + [BotsT3.deliveryNote, BotsT3.plainFolderNote, BotsT3.newFolderReminder]).joined(separator: " "))
         let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map { line in
             line.trimmingCharacters(in: CharacterSet(charactersIn: "│┃╹▀╭╮╰╯─ ")).trimmingCharacters(in: .whitespaces)
         }
-        .filter { $0.range(of: chrome, options: .regularExpression) == nil }
+        .filter { line in
+            guard line.range(of: chrome, options: .regularExpression) == nil else { return false }
+            guard !line.isEmpty else { return true }
+            let squeezed = squeeze(line)
+            if squeezed.count >= 16, typed.contains(squeezed) { return false }
+            guard let promptStart else { return true }
+            return !line.hasPrefix(promptStart)
+        }
         return lines.suffix(40).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: Transcripts
 
-    private static func mangled(_ path: String) -> String {
-        String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-    }
+    private static func mangled(_ path: String) -> String { HarnessChatFiles.claudeFolderName(for: path) }
 
     private static func newestFiles(in folder: URL, suffix: String, after date: Date, recursive: Bool = false) -> [URL] {
         let fm = FileManager.default
@@ -744,13 +914,23 @@ enum HarnessCoding {
     /// The agent's last words from its own transcript: Claude's project log, Codex's rollout file, Cursor's
     /// agent transcript. Nil for the others (the caller falls back to the pane).
     static func transcriptSummary(for run: T3Run) -> String? {
-        guard let harness = run.harness else { return nil }
+        // With its chat unknown, another chat in the folder could get quoted as this run's.
+        guard let harness = run.harness, run.chatUnknown != true else { return nil }
         let folder = run.worktree ?? run.folder
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let resolved = URL(fileURLWithPath: folder).resolvingSymlinksInPath().path
+        let spellings = HarnessChats.spellings(of: folder)
         switch harness {
         case "claude":
-            for path in Set([folder, resolved]) {
+            // Its own session when it's known: another chat in the same folder has other words.
+            if let session = run.sessionID {
+                for path in spellings {
+                    let file = home.appendingPathComponent(".claude/projects/\(mangled(path))/\(session).jsonl")
+                    guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                    return lastClaudeAnswer(in: jsonLines(file), since: run.startedAt)
+                }
+                return nil
+            }
+            for path in spellings {
                 let dir = home.appendingPathComponent(".claude/projects/\(mangled(path))", isDirectory: true)
                 for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) {
                     for event in jsonLines(file).reversed() where event["type"] as? String == "assistant" {
@@ -766,10 +946,12 @@ enum HarnessCoding {
             for day in days {
                 let parts = calendar.dateComponents([.year, .month, .day], from: day)
                 let dir = sessions.appendingPathComponent(String(format: "%04d/%02d/%02d", parts.year!, parts.month!, parts.day!), isDirectory: true)
-                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") {
+                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt) where file.lastPathComponent.hasPrefix("rollout-") && (run.sessionID.map { file.lastPathComponent.contains($0) } ?? true) {
                     guard let meta = jsonLines(file, keeping: 200_000_000).first?["payload"] as? [String: Any], let cwd = meta["cwd"] as? String,
-                          cwd == folder || cwd == resolved else { continue }
+                          spellings.contains(cwd) else { continue }
                     for event in jsonLines(file).reversed() {
+                        // A chat carried on holds its older answers: this run's start is as far back as its words go.
+                        if let at = eventDate(event), at < run.startedAt { break }
                         let payload = event["payload"] as? [String: Any]
                         if event["type"] as? String == "event_msg", payload?["type"] as? String == "task_complete",
                            let last = payload?["last_agent_message"] as? String, !last.isEmpty { return last }
@@ -779,15 +961,37 @@ enum HarnessCoding {
                 }
             }
         case "cursor":
-            for path in Set([folder, resolved]) {
+            for path in spellings {
                 let dir = home.appendingPathComponent(".cursor/projects/\(mangled(path).trimmingCharacters(in: CharacterSet(charactersIn: "-")))/agent-transcripts", isDirectory: true)
-                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt, recursive: true) {
-                    for event in jsonLines(file).reversed() where event["role"] as? String == "assistant" {
-                        if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
+                for file in newestFiles(in: dir, suffix: ".jsonl", after: run.startedAt, recursive: true) where run.sessionID.map({ file.path.contains($0) }) ?? true {
+                    // Its events have no times, but what's after the last thing it was told is its answer to that.
+                    for event in jsonLines(file).reversed() {
+                        if event["role"] as? String == "user" { break }
+                        if event["role"] as? String == "assistant", let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
                     }
                 }
             }
         default: break
+        }
+        return nil
+    }
+
+    /// When a transcript's event happened.
+    static func eventDate(_ event: [String: Any]) -> Date? {
+        guard let text = event["timestamp"] as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
+    }
+
+    /// Claude Code's last words since this run started. A chat carried on holds its older answers, and those aren't this run's: with its message
+    /// never gone in, there's nothing to report.
+    static func lastClaudeAnswer(in events: [[String: Any]], since: Date) -> String? {
+        for event in events.reversed() where event["type"] as? String == "assistant" {
+            if let at = eventDate(event), at < since { return nil }
+            if let text = textBlocks((event["message"] as? [String: Any])?["content"]) { return text }
         }
         return nil
     }
@@ -810,7 +1014,7 @@ enum HarnessCoding {
         runsFolder.appendingPathComponent(id.replacingOccurrences(of: "headless:", with: "") + ".json")
     }
 
-    private static func startHeadless(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, prompt: String) {
+    private static func startHeadless(id: String, harness: String, executable: URL, model: String?, effort: String?, folder: URL, prompt: String, resume: String? = nil, newSessionID: String? = nil) {
         activeLock.withLock { _ = active.insert(id) }
         let out = runsFolder.appendingPathComponent(id.replacingOccurrences(of: "headless:", with: "") + ".out")
         let reply = out.appendingPathExtension("reply")
@@ -818,7 +1022,7 @@ enum HarnessCoding {
         DispatchQueue.global(qos: .utility).async {
             let process = Process()
             process.executableURL = executable
-            process.arguments = headlessArguments(harness: harness, model: model, effort: effort, folder: folder.path, prompt: prompt, outFile: reply.path)
+            process.arguments = headlessArguments(harness: harness, model: model, effort: effort, folder: folder.path, prompt: prompt, outFile: reply.path, resume: resume, newSessionID: newSessionID)
             process.currentDirectoryURL = folder
             var environment = HarnessCatalog.childEnvironment()
             environment["PWD"] = folder.path
@@ -874,4 +1078,24 @@ enum HarnessCoding {
                                   lastMessage: "Theo restarted while the run was going; the work so far is in the project folder.",
                                   worktree: run.worktree, pullRequest: nil)
     }
+}
+
+/// Whose turn it is to start a new run, for a harness that can't say which chat it made.
+actor NewChatTurns {
+    static let shared = NewChatTurns()
+    private var gate = HarnessChatGate()
+
+    func wait(_ key: HarnessChatGate.Key, ticket: UUID, onWaiting: (@MainActor @Sendable () -> Void)?) async {
+        var told = false
+        while gate.ask(key, ticket: ticket) == .wait {
+            if !told {
+                told = true
+                if let onWaiting { await onWaiting() }
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
+    func started(_ key: HarnessChatGate.Key, ticket: UUID) { gate.started(key, ticket: ticket) }
+    func leave(_ key: HarnessChatGate.Key, ticket: UUID) { gate.leave(key, ticket: ticket) }
 }

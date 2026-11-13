@@ -11,15 +11,19 @@
 //
 
 import AppKit
+import ClickyCore
 import Foundation
 
 enum BotsT3Error: LocalizedError {
     case noCLI
     case failed(String)
+    /// The thread asked for is already one of Theo's runs: that run's id.
+    case alreadyARun(String)
 
     var errorDescription: String? {
         switch self {
         case .noCLI: return "T3 Code's t3 command isn't installed on this Mac (open T3 Code once to install it)."
+        case .alreadyARun: return "That thread is already one of Theo's runs."
         case .failed(let message): return message
         }
     }
@@ -38,8 +42,10 @@ struct T3Run: Codable, Identifiable, Equatable {
     /// The repo Addy named, when the work goes on a branch of it.
     var repo: String?
     var branch: String?
-    /// The commit the run started from, for the diff.
+    /// The commit the run started from, for the diff. A follow-up moves it on, so its report says what that follow-up changed.
     var baseCommit: String?
+    /// Where the branch was cut from, which never moves: what's past it on the branch is the run's own work, not the owner's.
+    var forkCommit: String?
     var link: String?
     /// "running", "waiting" (the agent asked something), "done" or "failed".
     var phase: String = "running"
@@ -79,6 +85,14 @@ struct T3Run: Codable, Identifiable, Equatable {
     var stoppedByOwner: Bool?
     /// What it was asked, so a failed run can try again on another harness.
     var prompt: String?
+    /// What was typed to the agent after the first prompt, so its report never quotes them back as its own words.
+    var followups: [String]?
+    /// It carries on an existing chat of its harness: that chat's title.
+    var continuedChat: String?
+    /// The exact session of its harness, so a follow-up never lands in another one. (T3 Code's is `id`.)
+    var sessionID: String?
+    /// Its harness doesn't say which chat a new run made, and Theo couldn't tell. It never guesses.
+    var chatUnknown: Bool?
 }
 
 /// One file a run changed.
@@ -179,7 +193,25 @@ enum BotsT3 {
 
     /// What a follow-up ends with: a plain folder stays out of git, everything else commits.
     static func followupNote(for run: T3Run) -> String {
-        run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
+        if run.continuedChat != nil { return continuedNote }
+        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
+    }
+
+    /// A new project's folder is made first and the agent starts inside it, whatever a bot's prompt says about making one.
+    static func newFolderNote(_ folder: URL) -> String {
+        "You're already in this project's folder, \(folder.path). Work right here: don't make another folder or go anywhere else, whatever the instructions below say about where it goes.\n\n"
+    }
+
+    /// The same again after the instructions: a quick model follows whatever it read last.
+    static let newFolderReminder = "\n\nRemember: this project's folder already exists and you're in it. Keep everything in the current folder."
+
+    /// Where the project folders are, in words an agent's shell understands. A test profile's folders are its own, while its agents keep the
+    /// owner's real home, so "~/Projects" would send them into the owner's real folders.
+    static var projectsWords: String { TheoProfile.isTest ? projectsFolder.path : "~/Projects" }
+
+    /// What goes to an agent. In a test profile "~/Projects" means that profile's folder, whoever wrote it.
+    static func forAgent(_ text: String) -> String {
+        TheoProfile.isTest ? text.replacingOccurrences(of: "~/Projects", with: projectsFolder.path) : text
     }
 
     /// Told to the agent when the folder Addy named has no git: edit it where it is, and leave git out of it.
@@ -226,11 +258,14 @@ enum BotsT3 {
 
     /// Creates the project (or a branch of `repo`) and starts the work on `harness` (the default coding target
     /// when nil): T3 Code's own thread, or a harness in Theo's terminal.
-    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil) async throws -> T3Run {
+    static func submit(prompt: String, title: String, repo: URL?, harness: String? = nil, modelChoice: String? = nil, effortChoice: String? = nil, newFolder: String? = nil, continuing: HarnessChatChoice? = nil, onWaiting: (@MainActor @Sendable () -> Void)? = nil) async throws -> T3Run {
         let target = harness ?? HarnessPrefs.codingTarget
+        if let continuing { return try await continueChat(continuing, prompt: prompt, title: title, folder: repo, harness: target, modelChoice: modelChoice, effortChoice: effortChoice) }
         if target == CursorCloud.harnessID { return try await CursorCloud.start(prompt: prompt, title: title, repo: repo) }
-        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder) }
+        if target != "t3" { return try await HarnessCoding.start(harness: target, prompt: prompt, title: title, repo: repo, modelChoice: modelChoice, effortChoice: effortChoice, newFolder: newFolder, onWaiting: onWaiting) }
         guard let cli else { throw BotsT3Error.noCLI }
+        // Everything below talks to T3 Code's server, so it's opened first when it's closed. Its CLI with no server up writes into T3 Code's folder.
+        await openServerIfNeeded(cli: cli)
         var arguments = ["thread", "start"]
         var run: T3Run
         var plainFolder = false
@@ -244,33 +279,32 @@ enum BotsT3 {
             run = T3Run(id: "", title: title, folder: repo.path)
         } else if let topLevel, !(await hasRemote(topLevel)) {
             // A project of the owner's that lives only here: changes go right in it, on its own history.
-            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-"]
             run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
         } else if let repo, let topLevel {
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
-            let base = try await shell(git, ["rev-parse", "HEAD"], in: topLevel).trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-", "--worktree", base, "--branch", branch]
             run = T3Run(id: "", title: title, folder: topLevel.path, repo: topLevel.path, branch: branch, baseCommit: base)
             run.baseBranch = await currentBranch(in: topLevel)
             subfolder = subfolderNote(repo, in: topLevel)
         } else {
-            let folder = try newProjectFolder(title: newFolder ?? title)
+            let folder = try await newGitProject(title: newFolder ?? title)
             saveBrief(prompt, title: title, engine: "T3 Code")
-            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
-            try await startEmpty(in: folder)
             let base = try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
             try await shell(cli, ["project", "add", folder.path, "--title", title])
             arguments += [folder.path, "-"]
             run = T3Run(id: "", title: title, folder: folder.path, baseCommit: base)
+            subfolder = newFolderNote(folder)
         }
         // Settings › Harnesses can pick another model; Claude Opus 5.5 at high effort otherwise.
         let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
         let chosenEffort = effortChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
-        let message = subfolder + prompt + (plainFolder ? plainFolderNote : deliveryNote)
+        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote))
         run.model = chosenModel
         run.effort = chosenEffort
         run.prompt = prompt
@@ -288,6 +322,50 @@ enum BotsT3 {
         run.link = launched["link"] as? String
         // T3 Code isn't brought forward by itself, since that takes focus from whatever the owner is doing. "Watch" on the card opens it.
         return run
+    }
+
+    /// What a continued chat ends with. It's the owner's chat in the owner's folder, so what happens to git is up to them.
+    static let continuedNote = "\n\n---\nWhen you're done, end with a short report: what you did, how to run it, the tests and their results, and anything left undone."
+
+    /// Carries on a chat the harness already has, in its own folder: no new branch or worktree, and its own session, by id.
+    static func continueChat(_ choice: HarnessChatChoice, prompt: String, title: String, folder: URL?, harness: String, modelChoice: String?, effortChoice: String?) async throws -> T3Run {
+        guard let folder else { throw BotsT3Error.failed("That needs the folder the chat is in. Pick a folder first.") }
+        let label = harness == "t3" ? "T3 Code" : HarnessCatalog.label(harness)
+        // T3 Code's threads can only be listed with its server up.
+        if harness == "t3", let cli { await openServerIfNeeded(cli: cli) }
+        let chats = await HarnessChats.list(harness: harness, folder: folder.path)
+        guard let chat = choice.match(in: chats) ?? choice.title.map({ HarnessChat(id: choice.idOrTitle, title: $0, updatedAt: Date()) }) else {
+            throw BotsT3Error.failed("\(label) has no chat called \"\(choice.idOrTitle)\" in \(folder.lastPathComponent).")
+        }
+        var run = T3Run(id: "", title: title, folder: folder.path)
+        run.continuedChat = chat.title
+        run.sessionID = chat.id
+        run.prompt = prompt
+        run.baseCommit = (try? await shell(git, ["rev-parse", "HEAD"], in: folder))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = prompt + continuedNote
+        guard harness == "t3" else {
+            return try await HarnessCoding.continueChat(chat.id, run: run, harness: harness, message: message, modelChoice: modelChoice, effortChoice: effortChoice)
+        }
+        // A thread's id is its run's id. One Theo already follows carries on as that run: a second under the same id would wipe out its branch, pull request and report.
+        if await MainActor.run(body: { BotsStore.shared.t3Runs.contains { $0.id == chat.id } }) { throw BotsT3Error.alreadyARun(chat.id) }
+        guard let cli else { throw BotsT3Error.noCLI }
+        _ = try await startThread(cli: cli, arguments: ["thread", "send", chat.id, "-"], message: message)
+        run.id = chat.id
+        return run
+    }
+
+    /// Opens T3 Code hidden when its server isn't up, without taking focus, and waits for it a while.
+    private static func openServerIfNeeded(cli: URL) async {
+        guard !HarnessChats.isT3ServerUp, let app = app(forCLI: cli) else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.hides = true
+        let front = await MainActor.run { BackgroundInput.FrontmostSnapshot.capture() }
+        if let started = try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration) {
+            let identifier = started.processIdentifier
+            await MainActor.run { front.restore(ifStolenBy: [identifier]) }
+        }
+        for _ in 0..<20 where !HarnessChats.isT3ServerUp { try? await Task.sleep(nanoseconds: 1_500_000_000) }
     }
 
     /// `t3 thread start`, opening T3 Code first when its server isn't running: hidden and without taking focus, so
@@ -360,10 +438,11 @@ enum BotsT3 {
     }
 
     /// Brings the run's project up in the T3 Code app.
-    /// Stops a T3 Code thread as its Stop button does.
-    static func stopThread(_ run: T3Run) async {
-        guard let cli else { return }
-        _ = try? await shell(cli, ["thread", "stop", run.id])
+    /// Stops a T3 Code thread as its Stop button does. False when it couldn't: stock T3 Code has no such command.
+    @discardableResult
+    static func stopThread(_ run: T3Run) async -> Bool {
+        guard let cli else { return false }
+        return (try? await shell(cli, ["thread", "stop", run.id])) != nil
     }
 
     static func openInApp(_ run: T3Run) {
@@ -396,9 +475,19 @@ enum BotsT3 {
             .write(to: folder.appendingPathComponent("\(slug(title)).md"), atomically: true, encoding: .utf8)
     }
 
+    /// The commit a run starts from. A repo that has no commit yet (just `git init`) gets the same empty "Start" commit a new
+    /// folder gets, instead of failing with git's "ambiguous argument 'HEAD'".
+    static func headCommit(in folder: URL) async throws -> String {
+        if let head = try? await shell(git, ["rev-parse", "--verify", "-q", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty {
+            return head
+        }
+        try await startEmpty(in: folder)
+        return try await shell(git, ["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// A first, empty commit, so the run's diff has something to start from.
     static func startEmpty(in folder: URL) async throws {
-        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
+        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
     }
 
     /// Whether a repo pushes anywhere.
@@ -412,9 +501,46 @@ enum BotsT3 {
     }
 
     /// The owner's project folders.
-    static func projectNames() -> [String] {
-        let found = (try? FileManager.default.contentsOfDirectory(at: projectsFolder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-        return found.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }.map(\.lastPathComponent).sorted()
+    static func projectNames() -> [String] { projects().map(\.name).sorted() }
+
+    /// The owner's project folders on this Mac, newest first.
+    static func projects() -> [DeviceProject] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey]
+        let found = (try? FileManager.default.contentsOfDirectory(at: projectsFolder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+        return found.compactMap { url -> DeviceProject? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isDirectory == true else { return nil }
+            return DeviceProject(name: url.lastPathComponent, path: url.path, modifiedAt: values.contentModificationDate)
+        }.sorted { ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast) }
+    }
+
+    enum MadeProject {
+        case made(URL)
+        case alreadyThere(URL)
+        case failed(String)
+    }
+
+    /// A new folder in ~/Projects on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
+    static func makeProject(named name: String) async -> MadeProject {
+        let exact = projectsFolder.appendingPathComponent(slug(name), isDirectory: true)
+        if FileManager.default.fileExists(atPath: exact.path) { return .alreadyThere(exact) }
+        do {
+            return .made(try await newGitProject(title: name))
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// A new project folder with git and an empty first commit. If git can't do that the folder goes again: one left behind with no git would get picked next time.
+    static func newGitProject(title: String) async throws -> URL {
+        let folder = try newProjectFolder(title: title)
+        do {
+            try await shell(git, ["init", "-q", "-b", "main"], in: folder)
+            try await startEmpty(in: folder)
+            return folder
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
     }
 
     static func newProjectFolder(title: String) throws -> URL {
@@ -471,12 +597,15 @@ enum BotsT3 {
         let engine = run.harness.map { HarnessCatalog.label($0) } ?? "T3 Code"
         let usedModel = run.model.map(NativeBot.label(for:)) ?? modelName
         let usedEffort = run.effort ?? effort
-        let modelPart = usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
+        // A continued chat keeps the model it was on, which Theo doesn't always know. It isn't claimed.
+        let knowsModel = run.continuedChat == nil || (run.model != nil && run.model != run.harness.map { HarnessCatalog.label($0) })
+        let modelPart = !knowsModel ? nil : usedEffort == "default" ? usedModel : "\(usedModel), \(usedEffort) effort"
         // Whatever the agent left uncommitted is committed, so the diff and the PR hold all of it. In a repo the owner
         // named that's only safe in the run's own worktree, never the checkout they work in.
         var commitProblem: String?
         var leftOut: [String] = []
-        if (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
+        // A chat the owner picked to continue is theirs: its agent commits or not, as it always has, in the folder itself.
+        if run.continuedChat == nil, (run.repo == nil && run.baseCommit != nil) || state.worktree != nil || run.worktree != nil {
             do {
                 leftOut = try await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
             } catch {
@@ -489,10 +618,11 @@ enum BotsT3 {
             ? "Stopped **\(run.title)** in \(engine) after \(minutes) min. " + ((run.changedFiles ?? []).isEmpty ? "It hadn't changed anything yet." : "The work so far is kept on its branch.")
             : failed
             ? "**\(run.title)** stopped in \(engine) (\(state.status)) after \(minutes) min."
-            : "**\(run.title)** is done in \(engine): \(modelPart), \(minutes) min."]
+            : "**\(run.title)** is done in \(engine)\(modelPart.map { ": \($0)," } ?? ",") \(minutes) min."]
         if !stopped, let summary = state.lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
-            // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card.
-            let first = summary.components(separatedBy: "\n\n").first ?? summary
+            // The chat gets the first paragraph in plain words; the agent's whole report folds up on the card. A heading alone says nothing.
+            let paragraphs = summary.components(separatedBy: "\n\n")
+            let first = paragraphs.first { !$0.hasPrefix("#") } ?? paragraphs.first ?? summary
             lines.append(first.count > 500 ? String(first.prefix(500)) + "…" : first)
             run.fullReport = trimmedSummary(summary)
         }
@@ -515,7 +645,7 @@ enum BotsT3 {
                     problems.append("Theo didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
                 } else {
                     onStage?("push")
-                    let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.baseCommit, baseBranch: run.baseBranch,
+                    let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.forkCommit ?? run.baseCommit, baseBranch: run.baseBranch,
                                                 body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel, onStage: onStage)
                     run.pullRequest = outcome.url ?? run.pullRequest
                     if let problem = outcome.problem { problems.append(problem) }
@@ -647,6 +777,10 @@ enum BotsT3 {
         guard let remote = try? await shell(git, ["remote", "get-url", "origin"], in: folder), remote.contains("github.com") else {
             return (nil, "This repo has no GitHub remote, so the work stays on the local branch.")
         }
+        // GitHub is the truth: a pull request this branch already has (opened by an earlier try whose answer got lost, a slow
+        // network, a restart) is used again rather than opening a second one or refusing to push.
+        var existing = existing
+        if existing == nil { existing = await openPullRequest(for: branch, in: folder) }
         // The branch was cut from wherever the owner was. Commits of theirs that aren't on GitHub yet would go up with it.
         if existing == nil, let base,
            let count = try? await shell(git, ["rev-list", "--count", base, "--not", "--remotes=origin"], in: folder),
@@ -670,8 +804,17 @@ enum BotsT3 {
             let output = try await shell(gh, arguments, in: folder, limit: 60)
             return (output.split(separator: "\n").last { $0.hasPrefix("https://") }.map(String.init), nil)
         } catch {
+            // It may have been made anyway (gh timed out after GitHub said yes).
+            if let made = await openPullRequest(for: branch, in: folder) { return (made, nil) }
             return (nil, "The branch is pushed, but the pull request failed: \(error.localizedDescription.suffix(200))")
         }
+    }
+
+    /// The open pull request for this branch on GitHub, if there is one.
+    private static func openPullRequest(for branch: String, in folder: URL) async -> String? {
+        guard let gh, let output = try? await shell(gh, ["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url"], in: folder, limit: 30) else { return nil }
+        let url = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.hasPrefix("https://") ? url : nil
     }
 
     // MARK: Processes

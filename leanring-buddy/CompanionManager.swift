@@ -417,7 +417,7 @@ final class CompanionManager: ObservableObject {
     func putSparkOnScreens(greeting: Bool) {
         guard TheoLink.shared.clickyRunsHere else { return }
         if !greeting { sparkOverlay.hasShownOverlayBefore = true }
-        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
     }
 
@@ -505,7 +505,7 @@ final class CompanionManager: ObservableObject {
     /// Setup's "Test the spark": the overlay has to be up to show it.
     func showOverlayForSparkTest() {
         guard !isOverlayVisible else { return }
-        sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+        sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
         isOverlayVisible = true
         scheduleTransientHideIfNeeded()
     }
@@ -778,7 +778,7 @@ final class CompanionManager: ObservableObject {
         wakeWordVoiceStateCancellable = $voiceState.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.wakeWordController.refreshSpeechSuppression() }
         }
-        wakeWordController.start()
+        if DeviceRoles.runsHere(.voice) { wakeWordController.start() }
     }
 
     /// The wake phrase fired: the same set-up as a push-to-talk key-down
@@ -806,7 +806,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
         if !isClickyCursorEnabled && !isOverlayVisible && TheoLink.shared.clickyRunsHere {
             sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
             isOverlayVisible = true
         }
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -936,7 +936,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
         if !isOverlayVisible {
             sparkOverlay.hasShownOverlayBefore = true
-            sparkOverlay.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+            sparkOverlay.showOverlay(onScreens: NSScreen.ownerScreens, companionManager: self)
             isOverlayVisible = true
         }
 
@@ -1403,6 +1403,80 @@ final class CompanionManager: ObservableObject {
     /// v2.whiteboard.auto is on (and the user didn't say "no board"), or the
     /// turn carries MODE: whiteboard ("draw a diagram", "whiteboard that").
     /// Otherwise the missing-ability sentence keeps saying it can't draw boards.
+    private struct FastPressHandled: Error {}
+
+    /// "Press Continue", "click this and that": Prism picks from what's on screen, and each press goes through the usual safety tiers.
+    /// False when it isn't clear, and this is a normal Claude turn on the same screens.
+    private func pressWithPrism(transcript: String, groundedTurn: GroundedTurn, turnOptions: TurnOptions, turnRecord: TurnRecord?) async throws -> Bool {
+        guard turnOptions.isOwnersWords, turnOptions.extraUserText == nil, turnOptions.forcedModeHint == nil, PrismClient.isOn, ClickySettings.isActionsEnabled,
+              ProviderKeys.shared.hasKey(for: "sarvam"), let steps = FastDecisions.pressRequest(transcript) else { return false }
+        var grounded = groundedTurn
+        // A new press replaces whatever Clicky was still doing, the same as any new request.
+        if actionTaskController.isActive { actionTaskController.cancel(reason: "you asked something new", stopsSpeech: false, speaksLine: false) }
+        // The whole phrase first: "press terms and conditions" is one button.
+        // But Prism can settle on the first of two things, so with several steps it only counts if the label really has them both.
+        if let pick = await prismPick(words: transcript, groundedTurn: grounded),
+           steps.count == 1 || pick.label.range(of: #"(?i)\band\b|&"#, options: .regularExpression) != nil {
+            turnRecord?.markTiming("prismPicked")
+            if turnOptions.speaksResponse { speakCodeModeLine("Pressing \(String(pick.label.prefix(40))).") }
+            _ = await actionTaskController.press(elementID: pick.elementID, label: pick.label, ownerWords: transcript, groundedTurn: grounded, speaks: turnOptions.speaksResponse)
+            turnRecord?.markTiming("pressDone")
+            return true
+        }
+        guard steps.count > 1 else { return false }
+        for (index, step) in steps.enumerated() {
+            if index > 0 {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                grounded = try await groundingCoordinator.prepareTurn(keyUpDate: Date())
+            }
+            guard let pick = await prismPick(words: step, groundedTurn: grounded) else {
+                if index == 0 { return false }
+                // Some done, the rest isn't clear: Claude takes what's left, once this turn has ended.
+                let rest = steps[index...].joined(separator: " and then ")
+                var options = TurnOptions()
+                options.speaksResponse = turnOptions.speaksResponse
+                options.isOwnersWords = true
+                options.skipsFastPress = true
+                Task { @MainActor [weak self] in
+                    for _ in 0..<40 where self?.voiceState != .idle { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    self?.sendTranscriptToClaudeWithScreenshot(transcript: rest, turnOptions: options)
+                }
+                return true
+            }
+            if index == 0 { turnRecord?.markTiming("prismPicked") }
+            if turnOptions.speaksResponse { speakCodeModeLine("Pressing \(String(pick.label.prefix(40))).") }
+            let pressed = await actionTaskController.press(elementID: pick.elementID, label: pick.label, ownerWords: step, groundedTurn: grounded, speaks: turnOptions.speaksResponse)
+            turnRecord?.markTiming("pressDone")
+            if !pressed { return true }
+        }
+        return true
+    }
+
+    private func prismPick(words: String, groundedTurn: GroundedTurn) async -> (elementID: Int, label: String)? {
+        let pressable: Set<GroundingRole> = [.button, .link, .checkBox, .radio, .tab, .popUp, .menu, .menuItem, .cell, .row]
+        var entries = groundedTurn.registry.orderedIDs.compactMap { groundedTurn.registry.entries[$0] }.filter { entry in
+            let element = entry.element
+            return pressable.contains(element.role) && element.isInteractive && element.isEnabled && !element.isBehind && !element.isSystemChrome
+                && element.source == .accessibility && !(element.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        entries.sort { ($0.element.windowZIndex, $0.elementID) < ($1.element.windowZIndex, $1.elementID) }
+        let pointerOn = entries.filter { $0.element.visibleFrameCG.contains(groundedTurn.cursorCG) }.min { $0.element.visibleFrameCG.width < $1.element.visibleFrameCG.width }?.element
+        func ask(_ among: [ElementRegistry.Entry]) async -> (elementID: Int, label: String)? {
+            let options = among.prefix(FastDecisionPolicy.pressOptionsAtMost).map {
+                FastPressOption(id: String($0.elementID), role: $0.element.role.rawValue, label: $0.element.label ?? "", app: $0.element.applicationName ?? "this app")
+            }
+            guard let question = FastDecisions.whichToPress(words: words, options: Array(options), pointerOn: pointerOn?.label) else { return nil }
+            let answers = await PrismClient.decideAll("press", question, timeout: 1.2)
+            guard let pick = FastDecisions.pressPick(from: answers, options: Array(options)), let elementID = Int(pick.id) else { return nil }
+            return (elementID, pick.label)
+        }
+        // What's in front or under the pointer first: it's what "press" usually means, and the other windows' words stay out of it.
+        let inFront = entries.filter { $0.element.isInFrontWindow || ($0.element.windowID != nil && $0.element.windowID == pointerOn?.windowID) }
+        if !inFront.isEmpty, let pick = await ask(inFront) { return pick }
+        // Then whatever else can be seen, for a page on another monitor. A button only counts if it's clear from everything showing.
+        return entries.count > inFront.count ? await ask(entries) : nil
+    }
+
     private func companionSystemPrompt(modeHint: ModeHint) -> String {
         var promptFeatures = SystemPromptFeatures.current
         if !ClickySettings.areBadgesEnabled {
@@ -1496,6 +1570,8 @@ final class CompanionManager: ObservableObject {
         var keepsLiveScreenMarks = false
         /// P8: the fast path already looked at this transcript (it had nothing by that name): straight to Claude.
         var skipsFastPath = false
+        /// What's left of "press this and that", for Claude: Prism wasn't sure of it.
+        var skipsFastPress = false
         /// False for words that aren't the owner's own (an agent's, Theo's): those stay out of Memory's log.
         var isOwnersWords = true
         /// Theo ordered this turn: what the team does for it reports back to him too.
@@ -1620,7 +1696,6 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         speechOutputClient.stopPlayback()
         // The owner spoke: this turn isn't a bot's screen job any more.
-        if turnOptions.isOwnersWords && !turnOptions.keepsLiveScreenMarks { ActionConfinement.clear() }
         // Marks from the previous answer would be confusing next to a new one
         // (an action task's observe turn keeps what its highlight steps drew).
         if !turnOptions.keepsLiveScreenMarks { clearLiveScreenMarks() }
@@ -1645,6 +1720,9 @@ final class CompanionManager: ObservableObject {
                 turnRecord?.markTiming("captureDone")
                 turnRecord?.recordScreens(groundedTurn.screenCaptures)
                 turnRecord?.recordElementLists(groundedTurn.elementListTexts)
+                if !turnOptions.skipsFastPress, try await pressWithPrism(transcript: transcript, groundedTurn: groundedTurn, turnOptions: turnOptions, turnRecord: turnRecord) {
+                    throw FastPressHandled()
+                }
                 turnRecord?.grounding = TurnRecord.GroundingEntry(
                     isWarm: groundedTurn.isWarm,
                     keyUpToReadyMs: groundedTurn.keyUpToReadyMilliseconds,
@@ -1729,6 +1807,8 @@ final class CompanionManager: ObservableObject {
                     turnRecord?.speech.interrupted = true
                     turnRecord?.speech.playedSegments = 0
                 }
+            } catch is FastPressHandled {
+                // Prism picked it and it's been pressed: no Claude turn.
             } catch {
                 print("⚠️ Companion response error: \(error)")
                 turnError = error

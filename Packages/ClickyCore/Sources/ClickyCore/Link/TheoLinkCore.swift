@@ -90,13 +90,28 @@ public enum LinkMerge {
     public static func union<T>(local: [T], remote: [T], id: (T) -> String, at: (T) -> Date, clearedAt: Date? = nil,
                                 better: (T, T) -> T = { first, _ in first }) -> [T] {
         var byID: [String: T] = [:]
-        for item in local + remote {
+        // Things at the very same time stay in the order they were written, this side's first: a reply must never land before what it answers.
+        var position: [String: Int] = [:]
+        for (index, item) in (local + remote).enumerated() {
             let key = id(item)
             byID[key] = byID[key].map { better($0, item) } ?? item
+            if position[key] == nil { position[key] = index }
         }
         return byID.values
             .filter { item in clearedAt.map { at(item) > $0 } ?? true }
-            .sorted { at($0) != at($1) ? at($0) < at($1) : id($0) < id($1) }
+            .sorted { first, other in
+                if at(first) != at(other) { return at(first) < at(other) }
+                return (position[id(first)] ?? 0) < (position[id(other)] ?? 0)
+            }
+    }
+
+    /// Runs: each Mac is the only one writing its own, so the other Mac's copy of its own always wins and this Mac's are left alone.
+    public static func ownedRuns<T>(local: [T], remote: [T], isTheirs: (T) -> Bool, id: (T) -> String, at: (T) -> Date) -> [T] {
+        var merged = local
+        for item in remote where isTheirs(item) {
+            if let index = merged.firstIndex(where: { id($0) == id(item) }) { merged[index] = item } else { merged.append(item) }
+        }
+        return merged.sorted { at($0) != at($1) ? at($0) < at($1) : id($0) < id($1) }
     }
 
     /// When each thing last changed, and when things were removed.
