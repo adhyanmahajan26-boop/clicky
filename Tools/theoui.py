@@ -115,9 +115,18 @@ def stop_pids(pids, hard=False, wait=20.0):
     return [p for p in pids if _alive(p)]
 
 
+def tracked_instance(found=None):
+    """The pid file's id, only while that process still carries this profile (a stale file's id can be reused)."""
+    found = profile_pids() if found is None else found
+    tracked = running_pid()
+    return tracked if tracked in found else None
+
+
 def start(binary, tab=None):
-    current = running_pid()
-    strays = [p for p in profile_pids() if p != current]
+    found = profile_pids()
+    # A stale pid file whose id now belongs to another program isn't a running Theo: launch one.
+    current = tracked_instance(found)
+    strays = [p for p in found if p != current]
     if strays:
         # Two copies of one profile share a home folder, control inbox and link port: never let a second one run.
         stop_pids(strays)
@@ -148,8 +157,8 @@ def stop(hard=False):
     found = profile_pids()
     # The pid file's id only counts while that process still carries this profile: a stale file's id can belong to
     # an unrelated program by now.
-    tracked = running_pid()
-    left = stop_pids(([tracked] if tracked in found else []) + found, hard=hard)
+    tracked = tracked_instance(found)
+    left = stop_pids(([tracked] if tracked else []) + found, hard=hard)
     PIDFILE.unlink(missing_ok=True)
     return left
 

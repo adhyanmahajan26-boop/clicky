@@ -76,6 +76,15 @@ class TheoUIInstances(unittest.TestCase):
         self.assertEqual(self.ui.stop(), [])
         self.assertIsNone(unrelated.poll(), "a process without this profile must be left alone")
 
+    def test_start_doesnt_take_a_reused_pid_for_a_running_theo(self):
+        unrelated = self.spawn("not-a-theo-profile")
+        self.ui.ROOT.mkdir(parents=True, exist_ok=True)
+        self.ui.PIDFILE.write_text(str(unrelated.pid))
+        self.assertIsNone(self.ui.tracked_instance(), "start would have returned this id instead of launching Theo")
+        mine = self.spawn(self.ui.PROFILE_ARG)
+        self.ui.PIDFILE.write_text(str(mine.pid))
+        self.assertEqual(self.ui.tracked_instance(), mine.pid)
+
     def test_a_copy_that_ignores_sigterm_is_killed(self):
         stubborn = self.spawn(self.ui.PROFILE_ARG, ignore_term=True)
         self.assertEqual(self.ui.stop_pids([stubborn.pid], wait=1), [])
