@@ -123,8 +123,69 @@ pub fn write_api_key(data_root: &Path, is_test: bool, provider: &str, key: Optio
     }
 }
 
+const UPDATE_TOKEN_SERVICE: &str = "com.theo.desktop.updates";
+const UPDATE_TOKEN_ACCOUNT: &str = "github-token";
+
+/// Where the updates token is kept as a file (Linux, and every test profile): beside the API keys, only this user's.
+fn update_token_file(data_root: &Path) -> std::path::PathBuf {
+    api_keys_folder(data_root).join("updates-github-token")
+}
+
+/// The GitHub token Settings › Updates saved, only needed when the releases repo is private.
+pub fn read_update_token(data_root: &Path, is_test: bool) -> Option<String> {
+    let _ = (UPDATE_TOKEN_SERVICE, UPDATE_TOKEN_ACCOUNT);
+    if !is_test {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            return keyring::Entry::new(UPDATE_TOKEN_SERVICE, UPDATE_TOKEN_ACCOUNT).ok().and_then(|entry| entry.get_password().ok()).map(|token| token.trim().to_string()).filter(|token| !token.is_empty());
+        }
+    }
+    read(&update_token_file(data_root), true)
+}
+
+/// Saves the updates token, or removes it with `None`.
+pub fn write_update_token(data_root: &Path, is_test: bool, token: Option<&str>) -> std::io::Result<()> {
+    if !is_test {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let entry = keyring::Entry::new(UPDATE_TOKEN_SERVICE, UPDATE_TOKEN_ACCOUNT).map_err(std::io::Error::other)?;
+            return match token {
+                Some(token) => entry.set_password(token.trim()).map_err(std::io::Error::other),
+                None => match entry.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                    Err(error) => Err(std::io::Error::other(error)),
+                },
+            };
+        }
+    }
+    let file = update_token_file(data_root);
+    match token {
+        Some(token) => {
+            let folder = api_keys_folder(data_root);
+            std::fs::create_dir_all(&folder)?;
+            crate::paths::make_private(&folder);
+            write(&file, true, token.trim())
+        }
+        None => match std::fs::remove_file(&file) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_updates_token_is_kept_and_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::read_update_token(dir.path(), true).is_none());
+        super::write_update_token(dir.path(), true, Some(" ghp_test \n")).unwrap();
+        assert_eq!(super::read_update_token(dir.path(), true).as_deref(), Some("ghp_test"));
+        super::write_update_token(dir.path(), true, None).unwrap();
+        super::write_update_token(dir.path(), true, None).unwrap();
+        assert!(super::read_update_token(dir.path(), true).is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_token_file_is_only_this_users() {

@@ -155,9 +155,42 @@ pub async fn state(h: &Harness) -> Value {
     let suggested = crate::brains::starting_brain(h, &brains).await.map(|(engine, model)| json!({"engine": engine, "model": model, "label": crate::brains::label(&engine)}));
     let any_ready = brains["anyReady"].clone();
     let coding = brains["coding"].clone();
-    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "coding": coding, "completed": h.settings.bool("setup.completed"), "os": std::env::consts::OS,
+    let completed = h.settings.bool("setup.completed");
+    let products = crate::products::choices(h);
+    // Dictation alone needs no brain, so a missing one only matters with Theo or Clicky on.
+    let needs_brain = products["theo"].as_bool() == Some(true) || products["clicky"].as_bool() == Some(true);
+    json!({"claude": claude, "git": git, "gh": gh, "bots": bots, "coding": coding, "completed": completed, "os": std::env::consts::OS,
            "brains": brains, "suggested": suggested, "anyReady": any_ready,
+           "products": products, "needsSetup": needs_setup(completed, needs_brain, any_ready.as_bool() == Some(true)),
+           "projectsFolder": h.paths.projects_dir(), "projectsFolderChosen": h.paths.chosen_projects_folder().is_some(),
            "ownerName": h.settings.string("owner.name").unwrap_or_default(), "suggestedOwnerName": crate::settings::suggested_owner_name()})
+}
+
+/// Whether Setup opens at launch (the Mac's `SetupGuideWindowController.isNeededAtLaunch`): it was never finished, or no
+/// brain at all can think here (no signed-in agent, no API key) while a product that needs one is on. Claude Code isn't
+/// required: a computer with only Codex, or only one key, never sees Setup again once it's finished.
+pub fn needs_setup(completed: bool, needs_brain: bool, any_brain_ready: bool) -> bool {
+    !completed || (needs_brain && !any_brain_ready)
+}
+
+/// Settings › Coding runs: the folder coding runs make new projects in, or empty for the default (`Projects` in Theo's data
+/// folder). Made only when the first project needs it.
+pub fn set_projects_folder(h: &Harness, folder: &str) -> Result<Value, String> {
+    let folder = folder.trim();
+    if folder.is_empty() {
+        h.settings.set(crate::paths::PROJECTS_FOLDER_SETTING, Value::Null);
+        h.paths.set_projects_folder(None);
+    } else {
+        let path = std::path::PathBuf::from(folder);
+        crate::paths::check_projects_folder(&path, &h.paths.root)?;
+        h.settings.set(crate::paths::PROJECTS_FOLDER_SETTING, Value::from(folder));
+        h.paths.set_projects_folder(Some(path));
+    }
+    Ok(projects_folder_report(h))
+}
+
+pub fn projects_folder_report(h: &Harness) -> Value {
+    json!({"projectsFolder": h.paths.projects_dir(), "chosen": h.paths.chosen_projects_folder().is_some(), "default": h.paths.default_projects_dir()})
 }
 
 /// At the end of setup: Theo was made on Claude Code before anything was checked. When Claude Code can't answer here and the
@@ -270,6 +303,15 @@ mod tests {
         assert_eq!(terminal_command("signin", None, None).unwrap(), "claude auth login");
         assert_eq!(terminal_command("gh", None, None).unwrap(), "gh auth login");
         assert!(terminal_command("rm -rf", None, None).is_err());
+    }
+
+    #[test]
+    fn setup_opens_until_finished_and_whenever_no_brain_can_think() {
+        assert!(needs_setup(false, true, true));
+        assert!(needs_setup(true, true, false));
+        assert!(!needs_setup(true, true, true));
+        // Only Dictation on: it needs no brain.
+        assert!(!needs_setup(true, false, false));
     }
 
     #[test]

@@ -129,9 +129,17 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         "setupState" => ok(crate::setup::state(h).await),
         "setupDone" => {
             h.settings.set("setup.completed", true.into());
+            crate::products::save_choices(h);
             let moved = crate::setup::move_untouched_theo(h).await.map(|(engine, model)| json!({"engine": engine, "model": model}));
             ok(json!({"completed": true, "theoMovedTo": moved}))
         }
+        // Theo, Clicky and Dictation, each on or off (products.rs); in-app updates (update.rs); the projects folder.
+        "products" => crate::products::control(h, cmd).map(ok).unwrap_or_else(|e| err(&e)),
+        "updates" => crate::update::control(h, cmd).await.map(ok).unwrap_or_else(|e| err(&e)),
+        "projectsFolder" => match s(cmd, "folder") {
+            Some(folder) => crate::setup::set_projects_folder(h, &folder).map(ok).unwrap_or_else(|e| err(&e)),
+            None => ok(crate::setup::projects_folder_report(h)),
+        },
         // Every brain and whether it works here. Never includes a key, only whether one is saved.
         "brains" => ok(crate::brains::inventory(h).await),
         "apiKeySet" => {
@@ -416,6 +424,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             ok(h.gateway.report(h))
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
+                                 "build": crate::update::this_build(), "versionLabel": crate::update::version_label(crate::update::this_build()),
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
         _ => crate::teams_control::handle(h, &name, cmd).await,
     }

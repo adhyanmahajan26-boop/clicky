@@ -141,3 +141,7 @@ dialog menu .grow { flex: 1; }
 .bs-foot { display: flex; justify-content: space-between; padding-top: 10px; border-top: 1px solid var(--line); }
 @media (max-width: 760px) { #bot-settings { width: 100vw; } .chain-pick { margin-left: 0; width: 100%; } }
 .bs-sec .btn, .bs-foot .btn { align-self: flex-start; }
+/* With Theo the product off, his pages are gone, so their header buttons and the settings column go too. */
+body.theo-off #head-actions, body.theo-off #bot-settings, body.theo-off #ctx-menu { display: none; }
+/* A long team list scrolls under the footer, so the Update row stays in view at the bottom (the Mac's always-visible row). */
+#sidebar > .footer { position: sticky; bottom: -12px; margin-bottom: -12px; padding-bottom: 12px; background: var(--bg); z-index: 1; }
