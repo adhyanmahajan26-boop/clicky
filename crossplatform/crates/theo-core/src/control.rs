@@ -410,7 +410,11 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
         // Clicky, the voice and screen companion (clicky/mod.rs).
         n if n.starts_with("clicky") => crate::clicky::control(h, n, cmd).await,
-        _ => err(&format!("Unknown command {name}")),
+        // Commands of the crates built on theo-core (dictation, Clicky), when theod or the app registered them.
+        _ => match crate::control_ext::handle(h, cmd).await {
+            Some(answer) => answer,
+            None => err(&format!("Unknown command {name}")),
+        },
     }
 }
 
