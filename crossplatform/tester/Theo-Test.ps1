@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
-$ScriptVersion = "1"
+$ScriptVersion = "2"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DataFolder = Join-Path $env:APPDATA "Theo-Desktop"
 $ExeName = "theo-desktop.exe"
@@ -398,6 +398,7 @@ if (-not $Unattended) {
   Say "   - Welcome: type any name."
   Say "   - 'Pick a brain': you don't need one for this test. If you have an OpenAI or Anthropic API key,"
   Say "     or Gemini CLI / Codex / OpenCode signed in, you can use it. Otherwise press 'Skip for now'."
+  Say "   - 'Pick products': turn on all three (Theo, Clicky and Dictation) so you can try them later."
   Say "   - 'Your first bot': pick any job and look, then press 'Make ...'."
   Say "   - Click around: the bot's chat, Bots, Connectors, Settings. Send the bot a message like 'hi'."
   Wait-Enter "Go through setup and make a bot in Theo now."
@@ -473,13 +474,48 @@ if ($null -ne $botsAfter -and $null -ne $botsReopened) {
 Start-Sleep -Seconds 3
 [void](Save-TheoShot "3-reopened")
 if (-not $Unattended) {
-  $noSetup = Ask-YesNo "Did it open straight to your bots, without the setup again?" $true
-  if ($noSetup) { Record "Setup isn't shown again" "pass" } else { Record "Setup isn't shown again" "fail" }
+  if ($hadBrain) {
+    $noSetup = Ask-YesNo "Did it open straight to your bots, without the setup again?" $true
+    if ($noSetup) { Record "Setup isn't shown again" "pass" } else { Record "Setup isn't shown again" "fail" }
+  } else {
+    # With no brain at all, Setup comes back on purpose (as on the Mac) and should say why.
+    $why = Ask-YesNo "With no brain, setup may come back. Did Theo open either to your bots or to setup's brain step saying it needs one?" $true
+    if ($why) { Record "Reopens sensibly with no brain" "pass" } else { Record "Reopens sensibly with no brain" "fail" (Ask-Text "What did it show?") }
+  }
 }
 
-# ------------------------------------------------------------------ 7. optional extras
+# ------------------------------------------------------------------ 7. new in this build
 
-Title "7. Extras (optional)"
+Title "7. New in this build"
+foreach ($probe in @(@{ name = "Products answer"; cmd = @{ cmd = "products" } }, @{ name = "Updates answer"; cmd = @{ cmd = "updates" } })) {
+  $r = Send-Theo $probe.cmd 15
+  if ($r -and $r.ok) { Record $probe.name "pass" } elseif ($r) { Record $probe.name "info" ($r.error) } else { Record $probe.name "fail" "no answer from Theo" }
+}
+if (-not $Unattended) {
+  Say "  A few quick looks at what's new. Answer n to anything you can't find, and say what you saw."
+  function Check-New([string]$step, [string]$howTo, [string]$question) {
+    Say ""
+    Say "  $howTo"
+    if (Ask-YesNo $question $true) { Record $step "pass" } else { Record $step "fail" (Ask-Text "What happened instead?") }
+  }
+  Check-New "Teams in the sidebar" "Look at the sidebar on the left: bots are grouped into teams, a manager first (with a crown), then 'Other bots', then 'New category'." "Is the sidebar grouped like that?"
+  Check-New "Bot settings: edit and delete" "Open a bot you made, open its settings, change its description and save. Then make a spare bot and delete it." "Did the change stick, and did the spare bot go away (after asking first)?"
+  Check-New "New group chat" "Make a group chat with two bots in it (look for New group in the sidebar)." "Could you make it, and does it show in the sidebar?"
+  Check-New "New routine" "Open Routines, press New routine, pick a bot, choose 'Every day' at any time, and add it." "Is the routine in the list with its next time?"
+  Check-New "Updates in Settings" "Open Settings, then Updates, and press 'Check for updates'." "Did it say something clear (up to date, a new build, or why it couldn't check)?"
+  if (Ask-YesNo "Try Dictation? (needs a microphone; no brain needed)" $true) {
+    Check-New "Dictation types into another app" "Open Notepad, click in it, hold Ctrl + Windows key, say 'hello from Theo', then let go." "Did your words appear in Notepad (a small pill showed while you talked)?"
+  } else { Record "Dictation" "skip" }
+  if ($hadBrain -and (Ask-YesNo "Try Clicky? (needs a microphone and the brain you gave Theo)" $true)) {
+    Check-New "Clicky answers about the screen" "Hold Ctrl + Alt, ask 'what's on my screen?', then let go." "Did Clicky answer out loud and on screen near the pointer (the orange spark)?"
+    Check-New "Clicky points at things" "Hold Ctrl + Alt and ask 'where is the Start button?'." "Did the spark fly to it?"
+  } else { Record "Clicky" "skip" "needs a brain and a microphone" }
+}
+[void](Save-TheoShot "4-new-features")
+
+# ------------------------------------------------------------------ 8. optional extras
+
+Title "8. Extras (optional)"
 if (-not $Unattended) {
   if (Ask-YesNo "Try a notification? (needs a brain; skip if you have none)" $false) {
     Wait-Enter "Ask a bot to do something that needs your answer (e.g. 'ask me which colour I like'), then close Theo's window and wait."
@@ -493,9 +529,9 @@ if (-not $Unattended) {
   } else { Record "Display scaling" "skip" }
 }
 
-# ------------------------------------------------------------------ 8. uninstall
+# ------------------------------------------------------------------ 9. uninstall
 
-Title "8. Uninstall (optional)"
+Title "9. Uninstall (optional)"
 $doUninstall = $Unattended
 if (-not $Unattended) {
   Say "  This checks that Theo removes itself cleanly. It keeps Theo's data folder, so reinstalling brings your bots back."
