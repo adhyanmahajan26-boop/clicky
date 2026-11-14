@@ -78,13 +78,14 @@ public enum ModelEffort {
         return nil
     }
 
-    /// What the composer's chip reads: the model without its maker's name, then the effort when one is set.
+    /// What the composer's chip reads: the model without its maker's name, then its effort ("Auto" until one is
+    /// picked, so the effort dial is always in sight) when the model has one.
     public static func chipLabel(modelLabel: String, effort: String?, levels: [String]) -> String {
         var name = modelLabel
         for maker in ["Claude ", "OpenAI ", "Google "] where name.hasPrefix(maker) { name = String(name.dropFirst(maker.count)) }
         if name.isEmpty { name = "Default model" }
-        guard !levels.isEmpty, let effort, !effort.isEmpty, levels.contains(effort) else { return name }
-        return "\(name) · \(shortTitle(for: effort))"
+        guard !levels.isEmpty else { return name }
+        return "\(name) · \(shortTitle(for: carriedOver(effort: effort, toLevels: levels) ?? ""))"
     }
 }
 

@@ -28,7 +28,8 @@ struct ModelEffortTests {
         #expect(ModelEffort.chipLabel(modelLabel: "Claude Sonnet 5.5", effort: "high", levels: ModelEffort.claudeLevels) == "Sonnet 5.5 · High")
         #expect(ModelEffort.chipLabel(modelLabel: "Claude Opus 5.5", effort: "xhigh", levels: ModelEffort.claudeLevels) == "Opus 5.5 · X-high")
         #expect(ModelEffort.chipLabel(modelLabel: "Claude Haiku 5.5", effort: "high", levels: []) == "Haiku 5.5")
-        #expect(ModelEffort.chipLabel(modelLabel: "Claude Sonnet 5.5", effort: nil, levels: ModelEffort.claudeLevels) == "Sonnet 5.5")
+        #expect(ModelEffort.chipLabel(modelLabel: "Claude Sonnet 5.5", effort: nil, levels: ModelEffort.claudeLevels) == "Sonnet 5.5 · Auto")
+        #expect(ModelEffort.chipLabel(modelLabel: "Claude Sonnet 5.5", effort: "minimal", levels: ModelEffort.claudeLevels) == "Sonnet 5.5 · Auto")
         #expect(ModelEffort.chipLabel(modelLabel: "", effort: nil, levels: []) == "Default model")
     }
 
