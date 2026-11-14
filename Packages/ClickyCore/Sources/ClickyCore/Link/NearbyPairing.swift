@@ -43,13 +43,16 @@ public enum NearbyPairing {
         public var publicKey: String?
         /// ChaChaPoly box of the link code, base64.
         public var sealed: String?
+        /// Test profiles only: the link port the sender listens on, since test profiles link by address rather than Bonjour.
+        public var testLinkPort: Int?
 
-        public init(kind: Kind, name: String? = nil, deviceID: String? = nil, publicKey: String? = nil, sealed: String? = nil) {
+        public init(kind: Kind, name: String? = nil, deviceID: String? = nil, publicKey: String? = nil, sealed: String? = nil, testLinkPort: Int? = nil) {
             self.kind = kind
             self.name = name
             self.deviceID = deviceID
             self.publicKey = publicKey
             self.sealed = sealed
+            self.testLinkPort = testLinkPort
         }
     }
 

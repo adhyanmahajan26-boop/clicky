@@ -12,6 +12,7 @@
 
 import AppKit
 import ClickyCore
+import Combine
 import CryptoKit
 import Foundation
 import Network
@@ -35,6 +36,8 @@ final class NearbyLinking: ObservableObject {
         let sealedCode: String
         let key: SymmetricKey
         let channel: PairingChannel
+        /// Test profiles only: the link port the asking profile listens on.
+        let testLinkPort: Int?
     }
 
     enum Outgoing: Equatable {
@@ -53,6 +56,8 @@ final class NearbyLinking: ObservableObject {
     private var listener: NWListener?
     private var browser: NWBrowser?
     private var outgoingChannel: PairingChannel?
+    /// A Mac that dialled in and hasn't sent its offer yet. Held here, since the channel's own callbacks only hold it weakly.
+    private var pendingIncomingChannel: PairingChannel?
     private var outgoingCode: String?
     /// Bumped on every new ask, so a timer from an earlier one leaves a newer one alone.
     private var outgoingGeneration = 0
@@ -127,8 +132,9 @@ final class NearbyLinking: ObservableObject {
         outgoingChannel = channel
         channel.onReady = { [weak channel] in
             channel?.send(NearbyPairing.Message(kind: .hello, name: TheoLink.localName, deviceID: DeviceRoles.thisMacID,
-                                                publicKey: privateKey.publicKey.rawRepresentation.base64EncodedString()))
+                                                publicKey: privateKey.publicKey.rawRepresentation.base64EncodedString(), testLinkPort: Self.testLinkPort))
         }
+        var answeringTestLinkPort: Int?
         channel.onMessage = { [weak self, weak channel] message in
             guard let self, let channel, self.outgoingChannel === channel else { return }
             switch message.kind {
@@ -137,10 +143,12 @@ final class NearbyLinking: ObservableObject {
                       let sealed = NearbyPairing.seal(code: code, with: agreement.key) else {
                     return self.finishOutgoing(.failed(name: mac.name, reason: "It didn't answer the way Theo does."))
                 }
+                answeringTestLinkPort = message.testLinkPort
                 self.outgoing = .asking(name: mac.name, checkNumber: agreement.checkNumber)
                 channel.send(NearbyPairing.Message(kind: .offer, sealed: sealed))
             case .accepted:
-                TheoLink.shared.pair(typed: code)
+                // The asking Mac dials; the asked one listens.
+                Self.savePairing(code: code, otherTestLinkPort: answeringTestLinkPort, dials: true)
                 self.finishOutgoing(.linked(name: mac.name))
             case .declined:
                 self.finishOutgoing(.declined(name: mac.name))
@@ -182,9 +190,12 @@ final class NearbyLinking: ObservableObject {
             connection.cancel()
             return
         }
+        pendingIncomingChannel?.close()
         let privateKey = Curve25519.KeyAgreement.PrivateKey()
         let channel = PairingChannel(connection: connection, queue: queue)
+        pendingIncomingChannel = channel
         var askingName: String?
+        var askingTestLinkPort: Int?
         var agreement: NearbyPairing.Agreement?
         channel.onMessage = { [weak self, weak channel] message in
             guard let self, let channel else { return }
@@ -193,12 +204,15 @@ final class NearbyLinking: ObservableObject {
                 guard agreement == nil, let theirKey = message.publicKey, let name = message.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
                       let agreed = NearbyPairing.agree(myPrivateKey: privateKey, theirPublicKeyBase64: theirKey) else { return channel.close() }
                 askingName = String(name.prefix(80))
+                askingTestLinkPort = message.testLinkPort
                 agreement = agreed
                 channel.send(NearbyPairing.Message(kind: .hello, name: TheoLink.localName, deviceID: DeviceRoles.thisMacID,
-                                                   publicKey: privateKey.publicKey.rawRepresentation.base64EncodedString()))
+                                                   publicKey: privateKey.publicKey.rawRepresentation.base64EncodedString(), testLinkPort: Self.testLinkPort))
             case .offer:
                 guard let askingName, let agreement, let sealed = message.sealed, self.incoming == nil else { return channel.close() }
-                let request = IncomingRequest(name: askingName, checkNumber: agreement.checkNumber, sealedCode: sealed, key: agreement.key, channel: channel)
+                let request = IncomingRequest(name: askingName, checkNumber: agreement.checkNumber, sealedCode: sealed, key: agreement.key, channel: channel,
+                                              testLinkPort: askingTestLinkPort)
+                self.pendingIncomingChannel = nil
                 self.incoming = request
                 self.showRequest()
                 Task { [weak self] in
@@ -211,8 +225,9 @@ final class NearbyLinking: ObservableObject {
             }
         }
         channel.onEnd = { [weak self, weak channel] in
-            guard let self, let channel, self.incoming?.channel === channel else { return }
-            self.incoming = nil
+            guard let self, let channel else { return }
+            if self.pendingIncomingChannel === channel { self.pendingIncomingChannel = nil }
+            if self.incoming?.channel === channel { self.incoming = nil }
         }
         channel.start()
     }
@@ -232,8 +247,28 @@ final class NearbyLinking: ObservableObject {
             request.channel.close()
             return
         }
-        TheoLink.shared.pair(typed: code)
+        Self.savePairing(code: code, otherTestLinkPort: request.testLinkPort, dials: false)
         request.channel.send(NearbyPairing.Message(kind: .accepted), thenClose: true)
+    }
+
+    /// The owner's Macs find each other on Bonjour once they share the code. Test profiles link by address only, on ports of their
+    /// own (never the real link's port), so there they're given each other's port at 127.0.0.1.
+    private static func savePairing(code: String, otherTestLinkPort: Int?, dials: Bool) {
+        if TheoProfile.isTest, let myPort = testLinkPort, let otherTestLinkPort {
+            _ = TheoLink.shared.startForTest(code: code, port: myPort, dialHost: dials ? "127.0.0.1" : "", dialPort: dials ? otherTestLinkPort : 0)
+        } else {
+            TheoLink.shared.pair(typed: code)
+        }
+    }
+
+    /// Test profiles only: the link port this profile listens on. One already set (`test.link.port`), else one from its link name
+    /// in 47400...47599, so two test profiles on one Mac don't clash with each other or the owner's real link.
+    static var testLinkPort: Int? {
+        guard TheoProfile.isTest else { return nil }
+        let chosen = UserDefaults.standard.integer(forKey: "test.link.port")
+        if chosen != 0 { return chosen }
+        let fromName = TheoLink.localName.unicodeScalars.reduce(0) { ($0 * 31 + Int($1.value)) % 200 }
+        return 47400 + fromName
     }
 
     func deny() {
