@@ -13,7 +13,7 @@
 //!
 //! Settings (`settings.json`): `products.clicky` (on/off; missing = off), `clicky.brain` (`claude`, `codex`, `api:openai`…;
 //! empty = the first that works here), `clicky.model`, `clicky.voice`, `clicky.rate` (-10 to 10), `clicky.shortcut`
-//! (`ctrl+alt`), `clicky.spark` (`always` | `talking`).
+//! (a theo-voice chord id, `ctrlAlt` by default), `clicky.spark` (`always` | `talking`).
 
 pub mod desktop;
 pub mod prompt;
@@ -585,7 +585,7 @@ pub async fn state(h: &Harness) -> Value {
         "model": h.settings.string(MODEL_SETTING).unwrap_or_default(),
         "voice": h.settings.string(VOICE_SETTING).unwrap_or_default(),
         "rate": h.settings.number(RATE_SETTING).unwrap_or(0.0),
-        "shortcut": h.settings.string(SHORTCUT_SETTING).unwrap_or_else(|| "ctrl+alt".into()),
+        "shortcut": h.settings.string(SHORTCUT_SETTING).unwrap_or_else(|| "ctrlAlt".into()),
         "spark": h.settings.string(SPARK_SETTING).unwrap_or_else(|| "always".into()),
         "using": pick.as_ref().map(|pick| json!({"engine": pick.engine, "model": pick.model, "label": pick.label(), "automatic": pick.automatic, "seesScreen": takes_pictures(h, pick)})),
         "canSeeScreen": screens::can_capture(),

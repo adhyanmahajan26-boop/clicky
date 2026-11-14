@@ -146,7 +146,7 @@ impl ClickyApp {
         self.inner.lock().unwrap().phase
     }
 
-    fn set_phase(&self, phase: Phase) {
+    pub fn set_phase(&self, phase: Phase) {
         self.inner.lock().unwrap().phase = phase;
         self.broadcast(json!({"kind": "state", "state": phase.word()}));
         self.keep_overlay();

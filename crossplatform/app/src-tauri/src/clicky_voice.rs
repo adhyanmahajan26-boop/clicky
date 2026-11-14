@@ -1,0 +1,116 @@
+//! Clicky's push-to-talk on theo-voice: hold the chord (Ctrl + Alt unless Settings › Clicky says otherwise), talk, let go.
+//! The microphone and the speech-to-text are Dictation's (the same microphone and recognizer settings), the chord is
+//! watched by the keyboard hook, and the words go to `ClickyApp::answer`.
+
+use crate::clicky::{ClickyApp, Phase};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use theo_voice::hotkey::{Chord, ChordEvent};
+use theo_voice::mic::Recorder;
+
+static RECORDER: Mutex<Option<Recorder>> = Mutex::new(None);
+/// Escape or another key while listening: what was recorded is thrown away.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Clicky's chord from the setting (`clicky.shortcut`, a theo-voice chord id), Ctrl + Alt by default.
+pub fn chord(clicky: &ClickyApp) -> Chord {
+    clicky.harness.settings.string(theo_core::clicky::SHORTCUT_SETTING).and_then(|id| Chord::from_id(&id)).unwrap_or(Chord::CtrlAlt)
+}
+
+/// Keeps the chord watched while Clicky is on, on the chord the settings name.
+pub fn start(clicky: Arc<ClickyApp>) {
+    std::thread::Builder::new()
+        .name("clicky-hotkey".into())
+        .spawn(move || {
+            let mut watching: Option<(Chord, theo_voice::hotkey::HotkeyHandle)> = None;
+            loop {
+                let wanted = if theo_core::clicky::is_on(&clicky.harness) { Some(chord(&clicky)) } else { None };
+                let current = watching.as_ref().map(|(chord, _)| *chord);
+                if wanted != current {
+                    if let Some((_, handle)) = watching.take() {
+                        handle.stop();
+                    }
+                    if let Some(chord) = wanted {
+                        let listener = clicky.clone();
+                        let handle = theo_voice::hotkey::watch(vec![chord], move |_, event| on_event(&listener, event));
+                        watching = Some((chord, handle));
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        })
+        .ok();
+}
+
+/// One chord event: pressed starts listening, released sends what was said, cancelled throws it away.
+pub fn on_event(clicky: &Arc<ClickyApp>, event: ChordEvent) {
+    match event {
+        ChordEvent::Pressed => {
+            if !theo_core::clicky::is_on(&clicky.harness) {
+                return;
+            }
+            clicky.begin_listening();
+            CANCELLED.store(false, Ordering::SeqCst);
+            let microphone = theo_voice::dictation::microphone(&clicky.harness);
+            match Recorder::start(microphone) {
+                Ok(recorder) => {
+                    *RECORDER.lock().unwrap() = Some(recorder);
+                    // The spark pulses with the voice while it listens.
+                    let watcher = clicky.clone();
+                    std::thread::spawn(move || loop {
+                        let level = match RECORDER.lock().unwrap().as_ref() {
+                            Some(recorder) => recorder.level(),
+                            None => break,
+                        };
+                        watcher.show_level(level);
+                        std::thread::sleep(Duration::from_millis(50));
+                    });
+                }
+                Err(problem) => clicky.show_note(&problem.to_string(), true),
+            }
+        }
+        ChordEvent::Released => {
+            let Some(recorder) = RECORDER.lock().unwrap().take() else { return };
+            let audio = recorder.stop();
+            if CANCELLED.load(Ordering::SeqCst) || clicky.phase() != Phase::Listening {
+                return;
+            }
+            let audio = match audio {
+                Ok(audio) => audio,
+                Err(problem) => return clicky.show_note(&problem.to_string(), true),
+            };
+            // A brush of the keys isn't a question.
+            if audio.duration_seconds() < theo_voice::hotkey::MINIMUM_HOLD_SECONDS {
+                clicky.stop_everything();
+                return;
+            }
+            let clicky = clicky.clone();
+            tauri::async_runtime::spawn(async move {
+                clicky.set_phase(Phase::Thinking);
+                if audio.peak_level() < 0.02 {
+                    return clicky.show_note("i didn't hear anything. check the microphone in settings, dictation.", false);
+                }
+                let config = theo_voice::dictation::stt_config(&clicky.harness);
+                match theo_voice::stt::transcribe(&audio, &config).await {
+                    Ok(words) if !words.trim().is_empty() => clicky.answer(words.trim().to_string()).await,
+                    Ok(_) => clicky.show_note("i didn't catch that. hold the keys and say it again.", false),
+                    Err(problem) => clicky.show_note(&problem.to_string(), true),
+                }
+            });
+        }
+        ChordEvent::Cancelled => {
+            if RECORDER.lock().unwrap().is_some() {
+                cancel_listening();
+                clicky.stop_everything();
+            }
+        }
+    }
+}
+
+/// Throws away what's being recorded (Escape, a new question).
+pub fn cancel_listening() {
+    CANCELLED.store(true, Ordering::SeqCst);
+    let recorder = RECORDER.lock().unwrap().take();
+    drop(recorder);
+}
