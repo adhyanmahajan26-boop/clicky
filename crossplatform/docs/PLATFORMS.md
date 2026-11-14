@@ -181,25 +181,35 @@ Control commands (theod's inbox and the window): `teams`, `teamAdd`, `teamUpdate
   permission card (macOS privacy permissions). The Connectors page shows which apps need a sign-in instead.
 - Theo's own MCP server (`claudia_*` tools) isn't ported.
 
-## Clicky (voice and screen helper): Mac only for now
+## Clicky (voice and screen helper): Mac and Windows
 
-Clicky leans on macOS for every one of its senses. What each would need elsewhere:
+Windows has Clicky's core in this build: hold a chord, ask about what's on the screen, let go, and Clicky answers in a
+bubble by the cursor, out loud, and points with its spark. The rules are in `crates/theo-core/src/clicky/` (tags, screens,
+prompt, speech, the turn on any brain, the `clicky*` control commands); the spark, the chord and the tray item are in
+`app/src-tauri/src/clicky.rs` and `clicky_voice.rs`; the overlay page is `app/ui/spark.html` and `spark.js`; Settings ›
+Clicky is `app/ui/clicky.js`. It's a product of its own (`products.clicky`, off until the owner turns it on in Setup's
+"Pick products" step, Settings › Products, Settings › Clicky or the tray's "Show Clicky").
 
-| What Clicky does | Mac API | Windows | Linux (X11) | Linux (Wayland, the default on Ubuntu and Fedora) |
+| What Clicky does | Mac | Windows (this build) | Linux (X11) | Linux (Wayland) |
 |---|---|---|---|---|
-| Push-to-talk on a held key | CGEvent tap | Low-level keyboard hook: feasible | XInput2: feasible | GlobalShortcuts portal (GNOME 48+, KDE): press works, release isn't reliable everywhere. Partial |
-| Microphone | AVAudioEngine | WASAPI (cpal): feasible | PulseAudio/PipeWire (cpal): feasible | Same: feasible |
-| Speech to text, on-device | Apple Speech | No good built-in offline recogniser for every language: bundle whisper.cpp (~150 MB model) or use Sarvam/Deepgram with a key | Same | Same |
-| See the screen | ScreenCaptureKit | Windows.Graphics.Capture: feasible | XGetImage: feasible | ScreenCast portal: asks permission each session (or a restore token). Partial |
-| The cursor companion that follows the pointer and flies to things | Transparent overlay windows | Layered, click-through topmost window: feasible | ARGB override-redirect window: feasible | Not possible: apps can't know the global pointer position or place windows. No |
-| Read and press UI elements | Accessibility (AX) | UI Automation: feasible, similar coverage | AT-SPI: works for GTK/Qt, little from Chromium/Electron apps unless started with accessibility on | Same as X11 for reading; pressing needs the RemoteDesktop portal with consent. Partial |
-| Speak answers | AVSpeechSynthesizer | SAPI / WinRT SpeechSynthesizer: feasible | speech-dispatcher, espeak-ng or Piper: feasible (robotic without Piper) | Same |
-| "Hey Clicky" wake word | Apple Speech, always on-device | Needs a local keyword model (openWakeWord, Porcupine): feasible | Same | Same |
-| Studio hidden screens | CGVirtualDisplay | Indirect Display driver: a signed kernel-mode driver. Not realistic | Xvfb/virtual outputs: feasible on X11 | No |
+| Push-to-talk on a held chord | Control + Option, CGEvent tap | Ctrl + Alt by default (Settings › Clicky › Shortcut), through the app's one keyboard hook shared with Dictation (`theo_voice::hub`). Chords are exact; if Dictation is set to the same chord, Clicky stands aside and Settings says so. A brush shorter than Dictation's minimum hold does nothing | Not yet (XInput2 is feasible); "Try it" in Settings › Clicky runs a whole turn from typed words | Not yet |
+| Microphone and speech to text | AVAudioEngine, Apple Speech | Dictation's: the same microphone and recognizer choice (a saved Sarvam, OpenAI, Groq, Deepgram or AssemblyAI key, else Windows' own offline recognizer) | Not yet | Not yet |
+| See the screen | ScreenCaptureKit, every display | GDI capture of every monitor at its real pixels (per-monitor DPI aware), scaled to at most 1568 px on the long edge as JPEG, the cursor's monitor first as SCREEN 1, the same headers as the Mac. The spark windows are left out of the capture (`WDA_EXCLUDEFROMCAPTURE`) | Not yet: it answers from the words and says once that it can't see | No |
+| Think | Claude Code (stream-json, pictures), or the helper brain | Any brain (`clicky.brain`, else Claude Code when installed, else the first saved key, else the first signed-in agent): API keys with pictures (Anthropic image blocks, OpenAI-style `image_url`), Claude Code with the Mac's stream-json message and no tools, Codex with the pictures as `-i` files; Gemini CLI, Cursor Agent, Grok and OpenCode answer from the words and say so once. A model that turns pictures down is asked again with words and remembered (`clicky.modelsWithoutImages`). The Mac's Clicky prompt, with `owner.name` | Same brains, words only | Same |
+| The spark that follows the pointer, spins while thinking, flies to things | Transparent overlay panels | One transparent, click-through, never-focused, always-on-top window per monitor (`theo_voice::overlay`), the orange spark redrawn at 60 Hz only while the pointer moves; flies along an arc to `[POINT:x,y:label:screenN]` on the right monitor at its own scale; `[MARK:…]` circles, boxes, arrows, underlines, spots, highlights and numbered steps (six at most), cleared on the next question, on Esc, or 20 s after it stops talking. "Always" or "only while talking" (`clicky.spark`) | The same windows (seen working under Xvfb) | No: apps can't know the pointer or place windows |
+| Speak answers | AVSpeechSynthesizer | Windows' own voices (SAPI through a hidden PowerShell), picked in Settings › Clicky › Voice | `spd-say` or `espeak-ng` when installed | Same |
+| Esc stops everything | Event tap | Yes, while it's listening, thinking, talking or showing marks | Not yet (the Stop button in Settings › Clicky) | Same |
 
-Verdict: a Windows Clicky is a real project (weeks, not days) and could match most of the Mac version except the Studio
-screens. Linux on X11 is similar. On Wayland the cursor companion can't exist and seeing or pressing things needs a
-permission prompt, so it would be a lesser, panel-only helper. None of it is half-built here.
+Checked where: the POINT, MARK and CLEAR rules, the coordinate mapping across monitors of different scales, the prompt and
+the speech script are unit tests (`cargo test -p theo-core clicky`); suite cases K01 to K05 drive `clickyTest` (pictures
+given, no screen needed) on Linux and Windows against stand-in APIs and agents, and K05 captures the real monitors, lists
+the voices and speaks to a file on the Windows runners. The chord, the microphone, the spark over other apps and the
+pointing on a real multi-monitor PC need a person ([WINDOWS-PC.md](WINDOWS-PC.md)).
+
+Not in this build yet (the Mac has them): hands-free sessions (double tap), the "Hey Clicky" wake word, doing things on the
+screen (`<actions>`, article highlights and notes), `[WORKER:]` helpers and Clicky's team, the notch pill, `[SNAP:]`
+screenshots and the local fast path for spoken commands. The Studio's hidden screens stay Mac-only: on Windows they would
+need a signed display driver.
 
 ## Dictation (hold a key, talk, the words are typed where you are): Mac and Windows
 

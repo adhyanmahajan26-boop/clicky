@@ -52,6 +52,9 @@ against a real Claude account. Without it, the summary says they were skipped.
 
 ## Simulated, not real
 
+- Clicky's turns in CI (`clickyTest`, suite cases K01 to K05) get the pictures from the test and stand-in brains
+  (`tests/fake_api.py`, `tests/fake_engine.py`); K05 captures the Windows runner's real monitors and speaks to a file with
+  its real voices. No microphone, keyboard hook or spark over another app is exercised.
 - Dictation's path from a WAV file to tidied text (`dictationTest`, suite cases D01 and D02) uses stand-in speech services
   (`tests/fake_voice.py`); D02 asks Windows' real built-in recognizer on the Windows runners. No microphone, keyboard hook
   or typing into another app is exercised in CI.
@@ -80,7 +83,14 @@ About 30 minutes on a Windows 10 or 11 PC:
 6. **Other brains.** In setup, paste a real API key (OpenAI or Anthropic) and check the first bot answers with it. Install
    and sign in one of Codex, Cursor Agent, Gemini CLI or Grok from Settings › Brains, put a bot on it and give it an app.
 7. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
-8. **Dictation** (about 10 minutes, a headset or the laptop's own mic). Settings › Dictation › Use Dictation (or pick it in
+8. **In-app update.** Install an older build with the per-user setup.exe. If the releases repo is private, open Settings ›
+   Updates and save a GitHub token that can read it (the row then says it's saved in the Credential Manager, and the
+   token is never shown again). Press Check for updates: the Update row at the bottom of the sidebar says "Build N". Press it (or Update to build N). Theo should close,
+   update with no installer window and no admin prompt, and open again by itself on the new build. Settings › Updates
+   should then say "Updated to build N", and your bots and chats should still be there.
+9. **Products.** In Settings › Products, turn Theo off. The bots, groups, Routines and Usage should leave the sidebar,
+   and Home should show the products page. Turn it back on and everything should come back.
+10. **Dictation** (about 10 minutes, a headset or the laptop's own mic). Settings › Dictation › Use Dictation (or pick it in
    Setup's products step). Then:
    - With no key saved: open Notepad, hold **Ctrl + Win**, say "this is a dictation test", let go. The pill near the bottom
      shows a moving level while you hold, "Transcribing", then "Typed" and the words, and the words land in Notepad. If
@@ -101,39 +111,49 @@ About 30 minutes on a Windows 10 or 11 PC:
      Clicky.
    - Turn off Windows' microphone access (Settings › Privacy & security › Microphone) and hold the chord: the pill says
      where to turn it back on.
-9. **In-app update.** Install an older build with the per-user setup.exe. If the releases repo is private, open Settings ›
-   Updates and save a GitHub token that can read it (the row then says it's saved in the Credential Manager, and the
-   token is never shown again). Press Check for updates: the Update row at the bottom of the sidebar says "Build N". Press it (or Update to build N). Theo should close,
-   update with no installer window and no admin prompt, and open again by itself on the new build. Settings › Updates
-   should then say "Updated to build N", and your bots and chats should still be there.
-10. **Products.** In Settings › Products, turn Theo off. The bots, groups, Routines and Usage should leave the sidebar,
-    and Home should show the products page. Turn it back on and everything should come back.
-11. **Routines.** On Routines press New routine, pick a bot, write what it does, pick Weekly, a day and a time, and Add
-    routine. Check the card says "Every <day> at <time> · next in …". Press Run now, then open "Last run …" to see the run.
-    Edit it to Every N hours, turn it off (Paused shows), then on again; Delete asks "Delete it?" first.
-12. **Chat cards.** Ask a bot for a long write-up with headings: it shows as a brief card; Open reads it in full, Share
+11. **Clicky** (about 10 minutes; best with two monitors, one of them scaled to 150% or more). Settings › Clicky › Turn on
+   (or pick it in Setup's products step, or the tray's "Show Clicky"). Then:
+   - The orange spark sits by the pointer on every monitor and follows it smoothly. Clicks go through it to whatever is
+     underneath, it never takes focus from the app you're typing in, and it stays over a maximized window.
+   - Open a web page, hold **Ctrl + Alt**, ask "where's the search box?", let go. The spark pulses while you talk, spins
+     while it thinks, an answer appears in a bubble by the pointer and is spoken, and the spark flies to the search box and
+     back. Ask about something on the other monitor: it flies there and lands on the right spot, also on the scaled one.
+   - Ask "walk me through the settings on this page": numbered steps or circles appear on the screen and clear after about
+     20 seconds, or at once on Esc. Esc while it's talking stops the voice.
+   - Settings › Clicky: pick another voice and press Hear it; set the spark to "Only while talking" and check it hides when
+     idle; pick another shortcut and check it works at once and Ctrl + Alt no longer does.
+   - Brains: with only an API key (Anthropic or OpenAI) it should still see the screen; put Clicky on Gemini CLI (Brain row)
+     and check it says once that it can't see the screen and answers from your words.
+   - Type a question in "Try it" and press Ask: the same turn runs without the microphone, and the answer shows there too.
+   - Turn on Dictation with its own chord too: Ctrl + Alt is only Clicky's, Ctrl + Win only Dictation's. Set Dictation to
+     Ctrl + Alt as well: Settings › Clicky says the two share keys and Clicky stands aside.
+   - Turn Clicky off: the spark goes away on every monitor and Ctrl + Alt does nothing.
+12. **Routines.** On Routines press New routine, pick a bot, write what it does, pick Weekly, a day and a time, and Add
+   routine. Check the card says "Every <day> at <time> · next in …". Press Run now, then open "Last run …" to see the run.
+   Edit it to Every N hours, turn it off (Paused shows), then on again; Delete asks "Delete it?" first.
+13. **Chat cards.** Ask a bot for a long write-up with headings: it shows as a brief card; Open reads it in full, Share
     copies it. Ask a bot to "make a PDF of your notes" (it writes a file in its folder and adds `[PDF: notes.md]`): the PDF
     card's Open opens it in your PDF reader. Ask a bot to choose with you: a `[CHOOSE: …]` shows as buttons or a list with
     Use this and Skip. Turn a bot off in its settings: its chat shows "This bot is off" with Turn on. Ask Theo to ask another
     bot something: the private exchange folds into one card that opens.
-13. **Sign-in words for each brain.** Put a bot on an agent that's signed out (Codex, say): the card says "Codex is signed
+14. **Sign-in words for each brain.** Put a bot on an agent that's signed out (Codex, say): the card says "Codex is signed
     out" with Sign in (opens a terminal) and Use an API key instead, never Claude Code. Put one on a bad API key: the card
     says the key didn't work and opens Settings.
-14. **Home.** With a bot that needs you, one that failed and one working, check Home's lanes: the sign-in or choice card can
+15. **Home.** With a bot that needs you, one that failed and one working, check Home's lanes: the sign-in or choice card can
     be answered right there, Try again on the failed one, and Asleep shows a bot's next routine with Run now.
-15. **The run card.** Ask a bot for a coding plan without asking it to build: the "Start this coding run?" card has the
+16. **The run card.** Ask a bot for a coding plan without asking it to build: the "Start this coding run?" card has the
     agent, folder and chat choices. Pick New folder…, type a name (made in the projects folder with git), Start run; or pick
     an existing folder where you've used Claude Code before and a chat from the list, and Continue chat (it carries on that
     session in the folder, no branch). Change the projects folder from the card's Change link.
-16. **Connectors page.** Click a row to open its details (Reached, Last worked, Used by, each bot's level). Remove… asks
+17. **Connectors page.** Click a row to open its details (Reached, Last worked, Used by, each bot's level). Remove… asks
     before removing. Add your own with Address (https only) or Command.
-17. **Teams and group chats.** With three or more bots: in the sidebar (Teams), press New category, add two bots on its page
+18. **Teams and group chats.** With three or more bots: in the sidebar (Teams), press New category, add two bots on its page
     and check the first gets the crown and "Manager". Press "Report to Theo now" and check the reports land in the manager's
     chat, then the roll-up in Theo's; ask Theo anything and check he mentions it. Right-click a bot: move it, open Settings,
     change its model and instructions, turn it off and on. Make a group chat (New group chat), ask Theo "Ask <group> to plan
     a tiny page in a new folder called test-page" and check the group plans, critiques and starts one run. Delete the group
     and a bot; check Theo can't be deleted.
-18. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+19. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
     AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits
@@ -143,3 +163,6 @@ About 30 minutes on a Windows 10 or 11 PC:
 - The .msi leaves the sign-in Run entry behind when it uninstalls. The per-user installer removes it.
 - Dictation can't type into an app running as administrator (Windows keeps a normal app's keys out of it) unless Theo
   runs as administrator too. On keyboards where AltGr sends Ctrl + Alt, a Ctrl + Alt chord also fires on AltGr.
+- Clicky's Ctrl + Alt has the same AltGr catch: typing an AltGr letter cancels the listen at once, but someone who holds
+  AltGr alone will wake Clicky; pick another shortcut in Settings › Clicky on those keyboards. Clicky can't see a window
+  that blocks capture (some video players, DRM content): those parts of the picture come back black.
