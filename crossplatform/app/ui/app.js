@@ -47,31 +47,16 @@ function once(key, sig, fn) { if (sigs[key] === sig) return; sigs[key] = sig; fn
 function renderSidebar() {
   const faces = state.faces.slice().sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state) || (a.id === "theo" ? -1 : b.id === "theo" ? 1 : 0));
   const minute = Math.floor(Date.now() / 60000);
-  const sig = JSON.stringify([faces.map((f) => [f.id, f.state, f.detail, f.unread, f.since]), state.bots.map((b) => b.name), state.groups, view, filter, minute]);
+  const sig = JSON.stringify([faces.map((f) => [f.id, f.state, f.detail, f.unread, f.since]), state.bots.map((b) => [b.name, b.primary]), state.groups, state.teams, sidebarSort(), view, filter, minute]);
   once("side", sig, () => {
     $("#brand-face").innerHTML = TP.bot(lookOf("theo"), "awake", 22, { badge: false });
     const c = state.counts || {};
     $("#counters").innerHTML = (c.needs ? `<span data-f="needs">${TP.pill("needs", `${c.needs} need${c.needs === 1 ? "s" : ""} you`)}</span>` : "")
       + (c.failed ? `<span data-f="failed">${TP.pill("failed", `${c.failed} failed`)}</span>` : "");
     $("#counters").querySelectorAll("[data-f]").forEach((el) => el.onclick = () => { filter = filter === el.dataset.f ? null : el.dataset.f; refresh(); });
-    let html = "";
-    for (const [g, label] of GROUPS) {
-      const rows = faces.filter((f) => groupOf(f.state) === g && (!filter || f.state === filter));
-      if (!rows.length) continue;
-      html += `<div class="section-label"><span>${label}</span><span>${rows.length}</span></div>`;
-      for (const f of rows) {
-        const sel = view.kind === "bot" && view.id === f.id ? " selected" : "";
-        const detail = f.detail ? ` · ${esc(f.detail)}` : "";
-        html += `<button class="row brow${sel}" data-bot="${esc(f.id)}">${botHTML(f.id, 36)}<span class="tx"><span class="nm">${esc(nameOf(f.id))}</span>`
-          + `<span class="st"><span class="s-word-${f.state}">${esc(f.word)}</span>${detail}</span></span>`
-          + (f.unread ? `<i class="unread" title="New"></i>` : "") + `<span class="tm">${["needs", "failed", "working", "thinking"].includes(f.state) ? ago(f.since) : ""}</span></button>`;
-      }
-    }
-    $("#bots").innerHTML = html;
-    $("#bots").querySelectorAll("[data-bot]").forEach((el) => el.onclick = () => open({ kind: "bot", id: el.dataset.bot }));
-    $("#groups").innerHTML = state.groups.map((g) => `<button class="row${view.kind === "group" && view.id === g.id ? " selected" : ""}" data-group="${esc(g.id)}">`
-      + `<span class="mosaic">${botHTML(g.head, 22, { badge: false })}</span>${esc(g.name)}</button>`).join("");
-    $("#groups").querySelectorAll("[data-group]").forEach((el) => el.onclick = () => open({ kind: "group", id: el.dataset.group }));
+    // By team (the default) or urgent first, and the group chats: teams.js.
+    renderBotList(faces);
+    renderGroupList();
     document.querySelectorAll(".row.nav[data-pane]").forEach((r) => r.classList.toggle("selected", view.kind === r.dataset.pane));
   });
 }
@@ -89,8 +74,10 @@ function renderHead() {
     const writing = Object.entries(state.replyingIn || {}).filter(([, r]) => r === room()).map(([b]) => nameOf(b));
     detail = writing.length ? `${writing.join(", ")} writing…` : `${(g.members || []).length + 1} bots`;
   } else {
-    name = { home: "Home", connectors: "Connectors", routines: "Routines", usage: "Usage", settings: "Settings" }[view.kind] || "";
+    name = { home: "Home", connectors: "Connectors", routines: "Routines", usage: "Usage", settings: "Settings", team: teamHeadName() }[view.kind] || "";
+    if (view.kind === "team") detail = teamHeadDetail();
   }
+  renderHeadActions();
   once("head", JSON.stringify([view, name, pill, detail, faceHTML.length, view.kind === "bot" ? face(view.id).state : ""]), () => {
     $("#head-face").innerHTML = faceHTML; $("#head-name").textContent = name; $("#head-pill").innerHTML = pill; $("#head-detail").textContent = detail;
   });
@@ -295,6 +282,7 @@ async function refresh() {
   if (window.productGate && window.productGate(view)) { $("#composer").style.display = "none"; return; }
   if (view.kind === "bot" || view.kind === "group") await renderChat();
   else if (view.kind === "home") renderHome();
+  else if (view.kind === "team") renderTeamPage();
   $("#composer").style.display = view.kind === "bot" || view.kind === "group" ? "" : "none";
 }
 function render() {
@@ -407,7 +395,7 @@ $("#bot-form").onsubmit = async (e) => {
   if (botDialogMode.kind === "look") { await invoke({ cmd: "botLook", id: botDialogMode.id, look }); Object.keys(sigs).forEach((k) => delete sigs[k]); return refresh(); }
   const f = new FormData(e.target);
   const r = await invoke({ cmd: "botCreate", name: f.get("name"), description: f.get("description"), instructions: f.get("instructions") || `You are ${f.get("name")}.`, provider: f.get("provider") || "claude", model: (f.get("model") || "").trim() || $("#bot-model").placeholder || "" });
-  if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); open({ kind: "bot", id: r.result.id }); }
+  if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look }); e.target.reset(); if (!(await teamTakesNewBot(r.result.id))) open({ kind: "bot", id: r.result.id }); }
   else { $("#bot-dialog-title").textContent = r.error; $("#bot-dialog").showModal(); }
 };
 

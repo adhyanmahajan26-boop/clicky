@@ -96,7 +96,7 @@ function productsHomeHTML() {
 }
 
 // Which pages belong to Theo the product (connectors and settings serve every product).
-function productGateKinds(v) { return !productIsOn("theo") && v && ["home", "bot", "group", "routines", "usage"].includes(v.kind); }
+function productGateKinds(v) { return !productIsOn("theo") && v && ["home", "bot", "group", "team", "routines", "usage"].includes(v.kind); }
 
 // app.js asks before drawing a page: true means this file drew it.
 window.productGate = function (v) {

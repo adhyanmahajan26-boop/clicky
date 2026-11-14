@@ -160,11 +160,10 @@ def t03():
     names = {v: k for k, v in IDS.items()}
     order = [names.get(m["author"], m["author"]) for m in msgs if m["author"] not in ("user", "note")]
     counts = {n: order.count(n) for n in ["Atlas", "Ledger", "Scout", "Forge", "Hijacker"]}
-    # What the harness guarantees whatever the model does: one writer at a time, every member answers, nobody more than twice,
-    # 8 turns at most, and the head's wrap-up is the last word (the Hijacker's own "Wrap-up:" doesn't end the round). The
-    # original also saw each member exactly once, because the real Hijacker on Haiku didn't actually hand turns back; this
-    # scripted one does, and the plan gives those members a second turn within its caps.
-    ok = (idle and peak["n"] <= 1 and all(1 <= counts[n] <= 2 for n in ["Ledger", "Scout", "Forge", "Hijacker"]) and counts["Hijacker"] == 1
+    # What the harness guarantees whatever the model does: one writer at a time, every member answers once, 8 turns at most,
+    # and the head's wrap-up is the last word (the Hijacker's own "Wrap-up:" doesn't end the round). A member's @Name only hands
+    # on to a bot that hasn't answered yet, as on the Mac, so the Hijacker handing everyone back gives nobody a second turn.
+    ok = (idle and peak["n"] <= 1 and all(counts[n] == 1 for n in ["Ledger", "Scout", "Forge", "Hijacker"])
           and len(order) <= 8 and counts["Atlas"] == 2 and order[:1] == ["Atlas"] and order[-1:] == ["Atlas"])
     T.fake("ok")
     return ok, {"settled": idle, "speaking_order": order, "turns_each": counts, "most_writing_at_once": peak["n"]}
@@ -2344,6 +2343,9 @@ def r02():
     return saved and n in ans, {"written_to_memory_file": saved, "answer_in_new_session": ans[:300]}
 
 
+# Teams, and Theo asking whole group chats (A03, A03b, A09, G01-G04, TM01-TM04).
+import suite_teams  # noqa: E402
+suite_teams.add_cases(sys.modules[__name__])
 # Dictation (theo-voice): its cases live in their own file.
 import suite_dictation
 suite_dictation.register(test)
@@ -2564,7 +2566,6 @@ NOT_PORTED = {
     "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. The PDF a [PDF:] tag makes is W02.",
     "T30, T31, F14, C08-C13": "Two linked Macs (Theo Link) aren't part of the cross-platform engine yet.",
     "C01-C07, C11": "The Swift app's T3 Code terminals and report states; the coding runs here are simpler (T24-T27 cover worktree, follow-up, parallel runs and stop).",
-    "A03, A03b, A09": "Theo messaging a whole group chat with [TELL: group] isn't in this build yet.",
     "A10": "A real model choosing to write a PDF; Theo's part (the [PDF:] tag to a real PDF, its card and opening it) is W02.",
     "E12, E13": "The Swift app's T3 Code page server isn't part of this build.",
 }

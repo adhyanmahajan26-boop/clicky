@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 
 pub type Fut<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
+#[path = "harness_teams.rs"]
+mod harness_teams;
+
 pub const TEAM_ID: &str = "team";
 pub const RESUME_PREFIX: &str = "Theo stopped before ";
 pub const RESUME_RETRY_SUFFIX: &str = "so it's asking again now.";
@@ -81,6 +84,8 @@ struct Round {
     opening_note: Option<String>,
     next_first: Option<Vec<String>>,
     next_note: Option<String>,
+    /// Members the owner's newer message names without tagging, for the round that's queued.
+    next_asked: Vec<String>,
 }
 
 #[derive(Default)]
@@ -122,6 +127,8 @@ pub struct State {
     /// A check of every app is running. It starts every app (and a `claude mcp list`), so only one runs at a time.
     pub connectors_refreshing: bool,
     pub gateway_recent: Vec<(DateTime<Utc>, String, String)>,
+    /// The categories, build discussions and Theo's asks to group chats (`harness_teams`).
+    pub teams: harness_teams::TeamState,
 }
 
 #[derive(Debug)]
@@ -251,6 +258,7 @@ impl Harness {
             s.conversations = conversations;
         }
         self.write_bots();
+        self.load_layout();
         // Runs that were going when Theo stopped can't be going now.
         let mut changed = false;
         self.with(|s| {
@@ -341,6 +349,8 @@ impl Harness {
     }
 
     pub fn delete_bot(&self, id: &str) {
+        // Theo (the CEO) can't be deleted.
+        if id == "theo" || self.bot(id).map(|b| b.primary).unwrap_or(true) { return; }
         self.stop(id);
         self.with(|s| {
             s.bots.retain(|b| b.id != id || b.primary);
@@ -351,6 +361,7 @@ impl Harness {
         });
         self.write_bots();
         self.write_groups();
+        self.forget_bot(id);
     }
 
     pub fn save_group(&self, group: Group) {
@@ -361,8 +372,11 @@ impl Harness {
     }
 
     pub fn delete_group(&self, id: &str) {
+        self.stop_group(id);
+        self.end_group_waits(&format!("group-{id}"), "That group chat was deleted before it answered.");
         self.with(|s| s.groups.retain(|g| g.id != id));
         self.write_groups();
+        self.forget_group(id);
     }
 
     pub fn chat_file_path(&self, id: &str) -> PathBuf { self.paths.chat_file(id) }
@@ -388,6 +402,8 @@ impl Harness {
             let others: Vec<Bot> = s.bots.iter().filter(|b| b.id != bot.id && b.is_on()).cloned().collect();
             let Some(allowed) = &bot.can_message else { return others };
             let mut allowed: HashSet<String> = allowed.iter().cloned().collect();
+            let ceo = s.bots.iter().find(|b| b.primary).map(|b| b.id.clone());
+            allowed.extend(s.teams.layout.reach(&bot.id, &s.bots, ceo.as_deref()));
             match bot.authority_level() {
                 "ceo" => return others,
                 "lead" => {
@@ -442,6 +458,7 @@ impl Harness {
         }
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
+        parts.extend(self.reporting_lines(bot));
         parts.push(crate::pdf::HOW_TO.to_string());
         parts.push(self.reach_note(bot));
         if !bot.apps.is_empty() {
@@ -638,7 +655,8 @@ impl Harness {
             let names: Vec<String> = tagged.iter().filter_map(|id| self.bot(id).map(|b| b.name)).collect();
             prompt.push_str(&format!("\n\n({} tagged {}: message them with a [TELL:] line.)", self.owner(), names.join(" and ")));
         }
-        prompt = self.catch_up(&record, &bot, owner_message_id) + &prompt;
+        let (reports, taken) = self.take_waiting_reports(&bot);
+        prompt = self.catch_up(&record, &bot, owner_message_id, &taken) + &reports + &self.ceo_turn_note(&bot) + &prompt;
         if !bot.primary {
             prompt = format!("({})\n\n{}", self.reach_note(&bot), prompt);
         }
@@ -648,7 +666,7 @@ impl Harness {
     }
 
     /// What this bot's engine session hasn't heard of its own chat (messages that came while it had no session, or a routine).
-    fn catch_up(&self, record: &Conversation, bot: &Bot, before: &str) -> String {
+    fn catch_up(&self, record: &Conversation, bot: &Bot, before: &str, skip: &[String]) -> String {
         let heard = record.heard.get(&bot.id);
         let has_session = record.sessions.contains_key(&bot.id);
         let upto = record.messages.iter().position(|m| m.id == before).unwrap_or(record.messages.len());
@@ -658,7 +676,7 @@ impl Harness {
             None if has_session => earlier.len(),
             None => 0,
         };
-        let unheard: Vec<&ChatMessage> = earlier[start..].iter().filter(|m| m.author != NOTE_AUTHOR && !m.text.is_empty()).collect();
+        let unheard: Vec<&ChatMessage> = earlier[start..].iter().filter(|m| m.author != NOTE_AUTHOR && !m.text.is_empty() && !skip.contains(&m.id)).collect();
         let unheard: Vec<&ChatMessage> = unheard.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect();
         if unheard.is_empty() {
             return String::new();
@@ -723,6 +741,7 @@ impl Harness {
             self.stop(&b);
         }
         self.stop_private_messages(&room);
+        self.end_group_waits(&room, &format!("{} was stopped before it answered.", group.name));
     }
 
     fn was_stopped_since(&self, bot: &str, since: Instant) -> bool {
@@ -894,7 +913,7 @@ impl Harness {
             if opts.from_owner {
                 if let Some(a) = answer.clone() {
                     let head_of_room = me.group_for_room(&conversation_id).and_then(|g| g.head_id) == Some(bot.id.clone());
-                    if head_of_room || conversation_id == bot.id {
+                    if (head_of_room || conversation_id == bot.id) && !me.is_discussing(&conversation_id) {
                         me.submit_if_final(&a, &conversation_id, &bot);
                     }
                     if let Some(request) = protocol::routine_request(&a) {
@@ -1403,6 +1422,16 @@ impl Harness {
             let mut jobs: Vec<Job> = vec![];
             for (index, (name, message)) in tells.into_iter().enumerate() {
                 if was_stopped() { break; }
+                // The CEO can ask a whole group chat: it talks it through and its last word comes back.
+                if sender.primary {
+                    if let Some(chat) = me.group_target(&name) {
+                        match me.tell_group(&chat, &sender, &message, &room, &ctx).await {
+                            Ok(answer) => { reply_at.insert(index, (chat.name.clone(), answer)); }
+                            Err(line) => { note_at.insert(index, line); }
+                        }
+                        continue;
+                    }
+                }
                 let Some(target) = me.direct_message_target(&name, &sender) else {
                     let names: Vec<String> = if sender.primary { me.bots().into_iter().filter(|b| b.id != sender.id && b.is_on()).map(|b| b.name).collect() } else { me.reachable(&sender).into_iter().map(|b| b.name).collect() };
                     note_at.insert(index, format!("There's nobody called {name} you can message. Who you can reach: {}.", names.join(", ")));
@@ -1511,7 +1540,7 @@ impl Harness {
         let earlier_msgs: Vec<&ChatMessage> = record.messages[..record.messages.len().saturating_sub(1)].iter().filter(|m| !m.text.is_empty() && m.author != NOTE_AUTHOR).collect();
         let unseen: Vec<&ChatMessage> = if session.is_some() { vec![] } else { earlier_msgs.into_iter().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect() };
         let earlier: Vec<String> = unseen.iter().map(|m| format!("{}: {}", self.bot(&m.author).map(|b| b.name).unwrap_or(m.author.clone()), m.text.chars().take(1500).collect::<String>())).collect();
-        let role = if sender.description.is_empty() { None } else { Some(sender.description.clone()) };
+        let role = self.role_line(&sender);
         let words = prompts::private_message_prompt(&sender.name, role.as_deref(), &message, ctx.owner_words.as_deref(), &earlier, &self.owner());
         let prompt = format!("{}({})\n\n{}", self.awareness(&target, &thread), prompts::private_thread_how_to(&sender.name), words);
         let prompt = if session.is_none() { self.first_message(&target, &prompt) } else { prompt };
@@ -1558,11 +1587,20 @@ impl Harness {
         self.owner_spoke(&room);
         let members: Vec<(String, String)> = group.all_ids().iter().filter_map(|id| self.bot(id)).map(|b| (b.id, b.name)).collect();
         let tagged = protocol::mentions_ordered(text, &members);
+        let (discussing, note) = self.owner_discussion_note(&group, text, !tagged.is_empty());
+        if discussing {
+            // A build discussion: the head plans first, whoever was named.
+            self.start_round(&group, vec![head], vec![], note);
+            return;
+        }
+        // Members addressed by name without an @ ("Ledger: the break-even") answer after whoever goes first.
+        let others: Vec<(String, String)> = members.iter().filter(|(id, _)| Some(id) != group.head_id.as_ref()).cloned().collect();
+        let asked = protocol::mentions_addressed(text, &others);
         let first = if tagged.is_empty() { vec![head] } else { tagged };
-        self.start_round(&group, first, None);
+        self.start_round(&group, first, asked, None);
     }
 
-    fn start_round(self: &Arc<Self>, group: &Group, first: Vec<String>, note: Option<String>) {
+    fn start_round(self: &Arc<Self>, group: &Group, first: Vec<String>, asked: Vec<String>, note: Option<String>) {
         let room = group.room_id();
         let Some(head) = group.head_id.clone() else { return };
         let started = self.with(|s| {
@@ -1571,14 +1609,15 @@ impl Harness {
                 r.plan.finish();
                 r.next_first = Some(first.clone());
                 r.next_note = note.clone();
+                r.next_asked = asked.clone();
                 return None;
             }
             s.stopped_exchange_rooms.remove(&room);
             s.next_round += 1;
             let id = s.next_round;
-            let mut plan = protocol::GroupTurnPlan::new(&head, &first);
+            let mut plan = protocol::GroupTurnPlan::new(&head, &first, &asked);
             let step = plan.start();
-            s.rounds.insert(room.clone(), Round { id, group_id: group.id.clone(), plan, opening_note: note, next_first: None, next_note: None });
+            s.rounds.insert(room.clone(), Round { id, group_id: group.id.clone(), plan, opening_note: note, next_first: None, next_note: None, next_asked: vec![] });
             Some((id, step))
         });
         if let Some((id, step)) = started {
@@ -1588,30 +1627,32 @@ impl Harness {
     }
 
     async fn run_round(self: Arc<Self>, room: String, round_id: u64, mut step: Step) {
+        let mut last_answer: Option<String> = None;
         loop {
             let current = self.with(|s| s.rounds.get(&room).filter(|r| r.id == round_id).map(|r| (r.group_id.clone(), r.plan.finished)));
             let Some((group_id, finished)) = current else { return };
             let Some(group) = self.group(&group_id) else {
                 self.with(|s| s.rounds.remove(&room));
+                self.end_group_waits(&room, "That group chat was deleted before it answered.");
                 return;
             };
             let (bot_id, wrap_up) = match (&step, finished) {
                 (Step::Speak { bot, wrap_up }, false) => (bot.clone(), *wrap_up),
                 _ => {
-                    let next = self.with(|s| s.rounds.remove(&room).and_then(|r| r.next_first.map(|f| (f, r.next_note))));
-                    if let Some((first, note)) = next {
-                        self.start_round(&group, first, note);
+                    let next = self.with(|s| s.rounds.remove(&room).and_then(|r| r.next_first.map(|f| (f, r.next_asked, r.next_note))));
+                    if let Some((first, asked, note)) = next {
+                        self.start_round(&group, first, asked, note);
                     } else {
                         self.finish_quiet_group_routine(&room, None);
+                        self.round_over(&group, last_answer);
                     }
                     return;
                 }
             };
-            let others: Vec<String> = group.member_ids.iter().filter(|m| Some(*m) != group.head_id.as_ref()).filter(|m| self.bot(m).map(|b| b.is_on()).unwrap_or(false)).cloned().collect();
             let Some(speaker) = self.bot(&bot_id).filter(|b| b.is_on()) else {
                 let name = self.bot(&bot_id).map(|b| b.name).unwrap_or_else(|| "That bot".into());
                 self.post(ChatMessage::note(format!("{name} is turned off, so it didn't answer.")), &room);
-                step = self.with(|s| s.rounds.get_mut(&room).map(|r| r.plan.turn_ended(&bot_id, &[], false, &others))).unwrap_or(Step::Finished);
+                step = self.next_group_step(&room, round_id, &group, &bot_id, None, false);
                 continue;
             };
             let is_head = group.head_id.as_deref() == Some(&bot_id);
@@ -1626,17 +1667,12 @@ impl Harness {
             }
             if !claimed {
                 self.post(ChatMessage::note(prompts::busy_member_line(&speaker.name)), &room);
-                step = self.with(|s| s.rounds.get_mut(&room).map(|r| r.plan.turn_ended(&bot_id, &[], false, &others))).unwrap_or(Step::Finished);
+                step = self.next_group_step(&room, round_id, &group, &bot_id, None, false);
                 continue;
             }
             let answer = self.group_turn(&speaker, &group, wrap_up, is_head).await;
-            let team: Vec<(String, String)> = group.all_ids().iter().filter_map(|id| self.bot(id)).map(|b| (b.id, b.name)).collect();
-            let mentions = match &answer {
-                Some(a) if is_head => protocol::mentions_named(a, &team),
-                Some(a) => protocol::mentions_ordered(a, &team),
-                None => vec![],
-            };
-            step = self.with(|s| s.rounds.get_mut(&room).filter(|r| r.id == round_id).map(|r| r.plan.turn_ended(&bot_id, &mentions, !wrap_up, &others))).unwrap_or(Step::Finished);
+            if let Some(a) = answer.as_ref().filter(|a| !a.trim().is_empty()) { last_answer = Some(a.clone()); }
+            step = self.next_group_step(&room, round_id, &group, &bot_id, answer.as_deref(), !wrap_up);
             if matches!(step, Step::Speak { .. }) {
                 tokio::time::sleep(Duration::from_millis(300)).await;
             }
@@ -1650,7 +1686,9 @@ impl Harness {
         let record = self.conversation(&room);
         let session = record.sessions.get(&speaker.id).cloned();
         let mut turn_note = if wrap_up { prompts::wrap_up_note(&owner) } else if is_head { prompts::head_opens_note(&owner) } else { prompts::member_turn_note(&speaker.name, &head_name) };
-        if let Some(extra) = self.with(|s| s.rounds.get_mut(&room).and_then(|r| r.opening_note.take())) {
+        if let Some(discussing) = self.discussion_turn_note(&room, is_head, speaker, &head_name) {
+            turn_note = discussing;
+        } else if let Some(extra) = self.with(|s| s.rounds.get_mut(&room).and_then(|r| r.opening_note.take())) {
             turn_note.push(' ');
             turn_note.push_str(&extra);
         }
@@ -1827,6 +1865,9 @@ impl Harness {
     pub fn start_routine(self: &Arc<Self>, routine: Routine, scheduled: bool) {
         if self.with(|s| s.running_routines.contains(&routine.id)) { return; }
         let text = format!("{} \"{}\": {}", protocol::ROUTINE_RUN_PREFIX, routine.name, routine.instruction);
+        if let Some(section_id) = routine.target.strip_prefix("report:") {
+            return self.run_report_routine(&routine.id, section_id);
+        }
         if let Some(group_id) = routine.target.strip_prefix("group:") {
             let Some(group) = self.group(group_id) else { return self.record_run(&routine.id, RoutineRun::finished("failed", "The group is gone.")) };
             let message_id = uuid::Uuid::new_v4().to_string().to_uppercase();
@@ -1838,7 +1879,7 @@ impl Harness {
             self.post(m, &group.room_id());
             self.owner_spoke(&group.room_id());
             let head = group.head_id.clone().unwrap_or_default();
-            self.start_round(&group, vec![head], None);
+            self.start_round(&group, vec![head], vec![], None);
             return;
         }
         let Some(bot) = self.bot(&routine.target) else { return self.record_run(&routine.id, RoutineRun::finished("failed", "The bot is gone.")) };
@@ -2210,6 +2251,8 @@ impl Harness {
             if r.paused { continue; }
             if let Some(gid) = r.target.strip_prefix("group:") {
                 if self.group(gid).is_none() { f.push(("warn".into(), "Routines".into(), format!("\"{}\" is for a group chat that's gone: delete it.", r.name))); }
+            } else if let Some(sid) = r.target.strip_prefix("report:") {
+                if self.with(|s| s.teams.layout.section(sid).is_none()) { f.push(("warn".into(), "Routines".into(), format!("\"{}\" is for a category that's gone: delete it.", r.name))); }
             } else {
                 match bots.iter().find(|b| b.id == r.target) {
                     None => f.push(("warn".into(), "Routines".into(), format!("\"{}\" is for a bot that's gone: delete it.", r.name))),
@@ -2325,6 +2368,7 @@ impl Harness {
         let mut report = report;
         report["counts"] = json!({"needs": count("needs"), "failed": count("failed"), "working": count("working") + count("thinking"), "done": count("done")});
         report["faces"] = Value::Array(faces);
+        report["teams"] = self.teams_report();
         report
     }
 

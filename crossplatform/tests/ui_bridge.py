@@ -86,6 +86,9 @@ def seed():
     ids["Ledger"] = r["result"]["id"]
     T.P({"cmd": "botLook", "id": ids["Ledger"], "look": {"fin": "bone", "trim": "#45C8E6", "eye": "round", "top": "none", "extra": "bezel"}})
     T.P({"cmd": "botUpdate", "id": ids["Release Mgr"], "enabled": False})
+    # The crew in its categories, as the sidebar's Teams view shows them (the first one filed manages each).
+    for team in ["Engineering", "Growth", "Planning"]:
+        T.P({"cmd": "teamAdd", "name": team, "members": [ids[n] for n, (desc, _) in CREW.items() if desc == team]})
     T.P({"cmd": "groupSave", "id": "launch", "name": "Launch room", "head": "theo", "members": [ids["Builder"], ids["Designer"], ids["Ledger"]]})
     T.P({"cmd": "routineAdd", "name": "Morning brief", "target": ids["Researcher"], "when": "weekdays 08:00", "do": "Send me the morning brief."})
     memory = T.BOTS / "memory" / ids["Copy Editor"]

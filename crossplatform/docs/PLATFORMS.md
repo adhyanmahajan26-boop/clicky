@@ -138,10 +138,41 @@ the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them
 - The engine finds the helper beside itself, else `THEO_CONNECTORS_BIN`, else on PATH. A test profile keeps the hub's key in
   a file (`--key-store file`) and records the sign-in address in `Logs/opened.log` instead of opening a browser.
 
+### Teams, group chats and bot settings
+
+Ported from the Swift app with the same words and rules (`teams.rs`, `harness_teams.rs`, `teams_control.rs`; the window's
+`teams.js` and `bot-settings.js`):
+
+- Teams: categories saved as the Mac saves them (`Bots/layout.json`: items `bot:<id>`, `leaderID`, `wantsManager`). Every
+  category gets a manager (its first member who isn't the CEO) unless the owner switches "Has a manager" off. "Report to
+  Theo now", or a schedule (every day at 6 pm, weekdays at 6 pm, Fridays at 5 pm, every 2 hours; a routine with target
+  `report:<category>`), has each member report to the manager's chat, then the manager rolls them up into the CEO's chat;
+  with no manager each member reports to the CEO directly. The CEO reads what came in at the start of its next turn, once.
+  Each bot's instructions say who it reports to, and the CEO's list its teams. The last 10 reports show on the team page.
+- The sidebar opens on Teams (each category with its manager first, crown and "Manager", then "Other bots", then New
+  category); "Urgent first" is the other choice, remembered by the window (`theo.sidebar.sort.v2`), and a counter pill shows
+  its lane without switching for good. Theo is always on top. Right-click a bot to move it, take it out, open its settings,
+  turn it off, make it primary or delete it; drag a bot onto a category; right-click a category to fold, rename, report or
+  delete it (its bots stay).
+- Bot settings (the Settings button in a bot's header): name, what it does, look, on or off, instructions, brain, model,
+  effort (Codex and Grok), authority and who it can message, its category, its apps at their levels, a fresh session, make
+  primary, delete. The CEO can't be deleted.
+- Group chats: New group chat, Edit (name, head, 1 to 5 other members) and Delete (its chat goes, its bots stay).
+- Theo asks a whole group chat with `[TELL: <group name>: …]`: the group talks it through and its head's last word comes back
+  to him (20 minutes at most). Each ask counts against the private-message budget. A message about building (plan, build,
+  make, app, website, …) starts a build discussion: the head plans, each member critiques in turn, the head merges and writes
+  the final prompt, and that starts the run when the owner's own words asked to build. The same happens when the owner
+  writes such a message in the group chat without tagging anyone.
+- In any group round, members the owner names without an @ ("Ledger: the break-even") answer after the head even if the head
+  forgets them, and a member's @Name only hands on to a bot that hasn't answered yet in the round.
+
+Control commands (theod's inbox and the window): `teams`, `teamAdd`, `teamUpdate`, `teamDelete`, `teamMember`, `teamMove`,
+`teamReport`, `teamReportSchedule`, `botGet`, `botMakePrimary`; `botUpdate` also takes `effort` and `canMessage: null`.
+
 ### Not in this build yet (the Swift app has them)
 
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
-- Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
+- Sub-categories, pinning and hiding bots in the sidebar, and a category's own colour and symbol.
 - `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
 - Harness cards for T3 Code, and the run card's Mac choice; coding runs in a terminal you can watch (they run headless here
   and report back in the chat). Codex chats kept only in its newer sqlite store, and Cursor Agent chats kept only in its

@@ -147,8 +147,14 @@ About 30 minutes on a Windows 10 or 11 PC:
     session in the folder, no branch). Change the projects folder from the card's Change link.
 17. **Connectors page.** Click a row to open its details (Reached, Last worked, Used by, each bot's level). Remove… asks
     before removing. Add your own with Address (https only) or Command.
-18. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
-   AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
+18. **Teams and group chats.** With three or more bots: in the sidebar (Teams), press New category, add two bots on its page
+    and check the first gets the crown and "Manager". Press "Report to Theo now" and check the reports land in the manager's
+    chat, then the roll-up in Theo's; ask Theo anything and check he mentions it. Right-click a bot: move it, open Settings,
+    change its model and instructions, turn it off and on. Make a group chat (New group chat), ask Theo "Ask <group> to plan
+    a tiny page in a new folder called test-page" and check the group plans, critiques and starts one run. Delete the group
+    and a bot; check Theo can't be deleted.
+19. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits
 

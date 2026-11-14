@@ -30,7 +30,7 @@ pub fn reach_how_to(reachable: &[(String, String)], owner: &str) -> String {
 }
 
 pub fn group_chat_how_to(others: &[(String, String)]) -> String {
-    format!("In this group chat, @Name hands that bot the next turn here, so use it only to hand something on. For a private message to any bot, use a line [TELL: their exact name: what you need] instead. The others here: {}.", reachable_list(others))
+    format!("In this group chat, @Name hands that bot the next turn here, so use it only to hand something on (a member can hand on only to a bot that hasn't answered yet in this round). For a private message to any bot, use a line [TELL: their exact name: what you need] instead. The others here: {}.", reachable_list(others))
 }
 
 pub fn private_thread_how_to(partner: &str) -> String {
@@ -69,7 +69,32 @@ pub fn head_opens_note(owner: &str) -> String {
 }
 
 pub fn member_turn_note(name: &str, head: &str) -> String {
-    format!("It's your turn, {name}, and nobody else is writing. Read everything above first. Don't repeat a point already made: agree in a few words or add what's new. Answer the part you were given. Use @Name only to hand something on; {head} wraps up after the last answer, so don't summarise for the group.")
+    format!("It's your turn, {name}, and nobody else is writing. Read everything above first. Don't repeat a point already made: agree in a few words or add what's new. Answer the part you were given. Use @Name only to hand something to a bot that hasn't answered yet in this round; {head} wraps up after the last answer, so don't write a wrap-up or summarise for the group.")
+}
+
+// A group chat's build discussion, step by step: the head plans, the others critique one at a time, the head merges and writes
+// the final prompt. ClickyCore's `BotProtocol.planNote`, `critiqueNote` and `mergeNote`.
+
+pub fn plan_note(has_others: bool, owner: &str) -> String {
+    if has_others {
+        "Lay out your plan for the group in a few lines, so they can pick it apart. No ```prompt block yet, and don't say anything has been sent or started.".into()
+    } else {
+        merge_note(owner)
+    }
+}
+
+pub const CRITIQUE_NOTE: &str = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt.";
+
+pub fn merge_note(owner: &str) -> String {
+    format!("Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model {owner} chose as soon as you've written it, and you'll see it in the list of runs. Theo makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder.")
+}
+
+/// Goes with every message to the CEO: who it can reach right now, group chats first, since a resumed engine session keeps
+/// following the lists from when it began. ClickyCore's `rosterForCEO` and `ceoTurnNote`. Empty with nobody to reach.
+pub fn ceo_turn_note(chats: &[String], people: &[String], owner: &str) -> String {
+    if chats.is_empty() && people.is_empty() { return String::new(); }
+    let roster = chats.iter().chain(people.iter()).cloned().collect::<Vec<_>>().join("\n");
+    format!("(As of now, and this replaces any older list in this chat. Everyone you can reach with [TELL: name: what to do], as of now:\n{roster}\nTo give one of them work, put a line [TELL: its exact name: what to do] in your reply; a group chat's name asks the whole group, and its head answers you when they've talked it through. Between bots it's private: {owner} sees a small card, their answer comes back to you here, and you tell {owner} what came of it. Just do it: don't explain to {owner} how you reach them, and don't ask how.)\n\n")
 }
 
 pub fn wrap_up_note(owner: &str) -> String {
