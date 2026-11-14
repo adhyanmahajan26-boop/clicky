@@ -18,6 +18,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 INSTALLER = HERE / "install.sh"
 STAMPER = HERE / "stamp-installer.py"
 BUNDLE_ID = "com.personal.clicky"
+# The stand-in osascript runs under Node; keep the folder Node is in (pnpm, nvm, Homebrew) on the stand-in PATH.
+NODE_FOLDER = (os.path.dirname(shutil.which("node")) + ":") if shutil.which("node") else ""
 TEAM_A, TEAM_B = "AAAAA11111", "BBBBB22222"
 RULE_A = 'identifier "com.personal.clicky" and anchor apple generic and certificate leaf[subject.OU] = "%s"' % TEAM_A
 RULE_B = 'identifier "com.personal.clicky" and anchor apple generic and certificate leaf[subject.OU] = "%s"' % TEAM_B
@@ -217,7 +219,7 @@ def main():
         log_folder.mkdir()
 
         def run(*arguments, script=INSTALLER, env=None, stdin_script=False):
-            environment = {"HOME": str(home), "PATH": "%s:/usr/local/bin:/usr/bin:/bin" % tools, "TMPDIR": str(scratch),
+            environment = {"HOME": str(home), "PATH": "%s:%s/usr/local/bin:/usr/bin:/bin" % (tools, NODE_FOLDER), "TMPDIR": str(scratch),
                            "THEO_GITHUB_API": "http://127.0.0.1:%d" % PORT, "THEO_RELEASES_REPO": "o/r"}
             environment.update(env or {})
             environment = {key: value for key, value in environment.items() if value is not None}

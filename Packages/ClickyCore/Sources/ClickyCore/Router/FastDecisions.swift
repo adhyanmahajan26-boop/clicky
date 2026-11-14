@@ -135,7 +135,7 @@ public enum FastDecisions {
     /// The steps in a request to press things, or nil when it isn't one. A question about pressing isn't a request to press.
     public static func pressRequest(_ transcript: String) -> [String]? {
         var text = transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        text = text.replacingOccurrences(of: #"^(hey |hi |ok |okay )?(clicky|theo|claudia)[,:]?\s+"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"^(hey |hi |ok |okay )?(clicky|theo|claudia|vello|pointer assistant|pointer)[,:]?\s+"#, with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: #"^(please |can you |could you |just |now |go ahead and )+"#, with: "", options: .regularExpression)
         guard text.split(whereSeparator: \.isWhitespace).count <= 24 else { return nil }
         let verb = #"(press|click|tap|hit|select)"#

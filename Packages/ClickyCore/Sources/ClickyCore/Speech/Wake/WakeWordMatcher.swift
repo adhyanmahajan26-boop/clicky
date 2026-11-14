@@ -347,7 +347,7 @@ public enum WakeListeningCommand: Equatable, Sendable {
         "silent mode off", "turn off silent mode", "talk again", "speak again", "you can talk again", "unmute yourself",
         "quiet mode off", "turn off quiet mode", "start talking again"
     ]
-    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "please", "now", "um", "uh", "so"]
+    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "vello", "pointer", "assistant", "claudia", "clicky", "please", "now", "um", "uh", "so"]
 
     public static func parse(_ transcript: String) -> WakeListeningCommand? {
         let words = WakeWordMatcher.normalizedWords(in: transcript).filter { !ignoredWords.contains($0) }
@@ -391,7 +391,7 @@ public enum WakeStopCommand {
     /// Clear commands only: soft words ("enough", "pause", "quiet") turned up in ordinary speech and
     /// in Clicky's own voice coming back through the speakers, and cut answers off after a few words.
     static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "shush", "hold", "cancel"]
-    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "it", "now", "please", "on", "talking",
+    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "vello", "pointer", "assistant", "claudia", "clicky", "it", "now", "please", "on", "talking",
                                           "be", "jao", "jaao", "karo", "that", "the"]
 
     public static func isStopUtterance(_ words: [String], recentClickySpokenWords: Set<String> = []) -> Bool {

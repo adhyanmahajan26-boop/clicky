@@ -87,7 +87,7 @@ public enum ClickyOrder {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Its name since the rename, "Pointer Assistant" (or "Pointer"), and the old one, "Clicky".
         let name = #"(?:clicky|pointer(?:\s+assistant)?)"#
-        let atName = #"(?:clicky|pointer(?:[_-]?assistant)?)"#
+        let atName = #"(?:clicky|pointer(?:[\s_-]?assistant)?)"#
         let patterns = [
             #"(?is)^(?:(?:hey|ok|okay|yo)[ ,]+)?"# + name + #"\s*[,:!\-–—]\s*(.+)$"#,
             #"(?is)^@"# + atName + #"\b[\s,:]*(.+)$"#,

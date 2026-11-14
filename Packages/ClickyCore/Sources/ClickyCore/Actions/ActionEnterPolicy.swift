@@ -48,7 +48,7 @@ public enum ActionEnterIntent {
     ]
     /// Words that may surround a look-alike ("Present for me too").
     static let shortFillerWords: Set<String> = [
-        "for", "me", "too", "to", "two", "it", "now", "please", "again", "once", "more", "the", "key", "button", "clicky", "hey", "ok", "okay",
+        "for", "me", "too", "to", "two", "it", "now", "please", "again", "once", "more", "the", "key", "button", "clicky", "vello", "pointer", "assistant", "hey", "ok", "okay",
         "just", "and", "then", "also", "yeah", "yes", "so", "um", "uh", "that", "karo", "kar", "do", "na", "bhai", "ji"
     ]
     public static let maximumShortUtteranceWords = 4

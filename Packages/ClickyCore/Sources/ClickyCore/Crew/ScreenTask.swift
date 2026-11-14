@@ -53,7 +53,7 @@ public enum ScreenTaskPolicy {
         (["system settings", "system preferences", "keychain access", "passwords", "wallet", "finder", "app store", "activity monitor", "disk utility"],
          "that app can change this Mac or holds private things"),
         (["music", "spotify", "tv", "podcasts", "quicktime player", "voice memos", "photo booth", "vlc", "netflix"], "that app plays sound or uses the camera"),
-        (["theo", "claude", "clicky"], "that's Vello's own side")
+        (["vello", "pointer assistant", "theo", "claude", "clicky"], "that's Vello's own side")
     ]
 
     public static func refusal(app name: String) -> String? {

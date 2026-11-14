@@ -194,7 +194,7 @@ public enum ActionConfirmReply: Equatable, Sendable {
     case no
     case notAReply
 
-    static let fillerWords: Set<String> = ["clicky", "hey", "please", "ok", "okay", "um", "uh", "so", "well", "just"]
+    static let fillerWords: Set<String> = ["clicky", "vello", "pointer", "assistant", "hey", "please", "ok", "okay", "um", "uh", "so", "well", "just"]
     static let yesPhrases: Set<String> = [
         "yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "do it", "go ahead", "go for it", "send it", "press it", "click it", "yes do it",
         "yes please", "yes send it", "yes go ahead", "yes confirm", "approved", "approve", "affirmative", "correct", "thats right", "yes thats right",
@@ -233,7 +233,7 @@ public enum ActionConfirmReply: Equatable, Sendable {
 /// "stop" / "cancel" said while a task runs (local, never sent to Claude).
 public enum ActionStopCommand {
     static let phrases: Set<String> = [
-        "stop", "stop it", "stop that", "stop stop", "cancel", "cancel that", "cancel it", "abort", "halt", "stop clicky", "clicky stop",
+        "stop", "stop it", "stop that", "stop stop", "cancel", "cancel that", "cancel it", "abort", "halt", "stop clicky", "clicky stop", "stop vello", "vello stop",
         "wait stop", "stop now", "never mind", "nevermind", "stop doing that", "cancel the task", "stop the task", "enough"
     ]
 

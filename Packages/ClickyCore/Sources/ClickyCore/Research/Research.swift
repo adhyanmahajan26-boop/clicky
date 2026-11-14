@@ -41,12 +41,12 @@ public enum ResearchTrigger {
     public static func isHandover(_ transcript: String) -> Bool {
         let text = CodingIntent.normalized(transcript).lowercased()
         return text.range(of: #"\b(hand ?over|hand|give|send|pass|share|forward)\b.{0,40}\b(research|brief|findings|notes)\b.{0,30}\b(to|ko)\b"#, options: .regularExpression) != nil
-            || text.range(of: #"\bresearch\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo|project manager|it guys)\b"#, options: .regularExpression) != nil
+            || text.range(of: #"\bresearch\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo|vello|project manager|it guys)\b"#, options: .regularExpression) != nil
     }
 
     /// "Research these links and hand it to Theo": research that goes to Theo when it's done.
     public static func wantsItHandedOver(_ transcript: String) -> Bool {
-        CodingIntent.normalized(transcript).lowercased().range(of: #"\b(hand|give|send|pass|share|forward)\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo)\b"#, options: .regularExpression) != nil
+        CodingIntent.normalized(transcript).lowercased().range(of: #"\b(hand|give|send|pass|share|forward)\b.{0,20}\b(to|ko)\s+(the\s+)?(main\s+)?(ceo|theo|vello)\b"#, options: .regularExpression) != nil
     }
 
     /// The owner's words only. Nil when it isn't a research request.

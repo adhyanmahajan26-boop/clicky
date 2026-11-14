@@ -185,7 +185,7 @@ struct ClickyTeamTests {
         #expect(section.contains("\"Memo\""))
         #expect(section.contains("a helper"))
         #expect(section.contains("[DELEGATE:runner:"))
-        #expect(section.contains("theo"))
+        #expect(section.contains("vello"))
     }
 }
 
