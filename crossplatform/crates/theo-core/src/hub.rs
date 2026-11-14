@@ -106,7 +106,7 @@ fn helper_environment(harness: &Harness) -> Vec<(String, String)> {
 }
 
 fn missing_helper_message() -> String {
-    format!("Theo's connector helper ({}) isn't next to Theo. Reinstall Theo to put it back.", helper_file_name())
+    format!("Vello's connector helper ({}) isn't next to Vello. Reinstall Vello to put it back.", helper_file_name())
 }
 
 /// Runs one hub command to its end and returns its JSON answer. `standard_input` carries a secret (a pasted token) so it
@@ -123,7 +123,7 @@ pub async fn run_hub_command(harness: &Harness, command_words: &[String], standa
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|error| format!("Theo's connector helper couldn't start: {error}"))?;
+    let mut child = command.spawn().map_err(|error| format!("Vello's connector helper couldn't start: {error}"))?;
     let process_tree = crate::procs::ProcessTree::attach(&child).ok();
     if let Some(text) = standard_input {
         use tokio::io::AsyncWriteExt;
@@ -140,14 +140,14 @@ pub async fn run_hub_command(harness: &Harness, command_words: &[String], standa
         }
     }
     let output = finished
-        .map_err(|_| "Theo's connector helper took too long to answer.".to_string())?
-        .map_err(|error| format!("Theo's connector helper failed: {error}"))?;
+        .map_err(|_| "Vello's connector helper took too long to answer.".to_string())?
+        .map_err(|error| format!("Vello's connector helper failed: {error}"))?;
     let printed = String::from_utf8_lossy(&output.stdout);
     let answer = last_json_line(&printed).ok_or_else(|| {
         // Its diagnostics never hold a secret (the hub's own rule), so the last of them can go in a log.
         let detail = String::from_utf8_lossy(&output.stderr).lines().last().unwrap_or("").to_string();
         log_helper_problem(harness, &detail);
-        "Theo's connector helper gave no answer.".to_string()
+        "Vello's connector helper gave no answer.".to_string()
     })?;
     if answer.get("ok").and_then(Value::as_bool) == Some(false) {
         return Err(answer.get("error").and_then(Value::as_str).unwrap_or("The connector helper couldn't do that.").to_string());
@@ -744,8 +744,8 @@ pub async fn start_sign_in(harness: &std::sync::Arc<Harness>, app_id: &str) -> R
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|error| format!("Theo's connector helper couldn't start: {error}"))?;
-    let stdout = child.stdout.take().ok_or("Theo's connector helper gave no answer.")?;
+    let mut child = command.spawn().map_err(|error| format!("Vello's connector helper couldn't start: {error}"))?;
+    let stdout = child.stdout.take().ok_or("Vello's connector helper gave no answer.")?;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
     let first = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
         .await

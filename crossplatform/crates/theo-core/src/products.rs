@@ -24,7 +24,7 @@ pub struct Product {
 pub const PRODUCTS: [Product; 3] = [
     Product {
         id: "theo",
-        title: "Theo",
+        title: "Vello",
         tagline: "Your own team of bots that chat, run routines and hand coding work to your agents.",
         points: ["Make bots with their own looks, teams and schedules", "Hand a fix to Claude Code, Codex, Cursor and more", "Runs come back with a branch and a draft PR"],
         requirement: None,
@@ -32,7 +32,7 @@ pub const PRODUCTS: [Product; 3] = [
     },
     Product {
         id: "clicky",
-        title: "Clicky",
+        title: "Pointer Assistant",
         tagline: "A companion on your screen that sees what you see, points at things and answers out loud.",
         points: ["Hold a shortcut (Ctrl + Alt on Windows) and ask", "Flies to the button you need and circles it", "Answers out loud in the computer's own voice"],
         requirement: Some("Uses any brain you set up: an API key or a signed-in agent"),

@@ -30,11 +30,11 @@ function updateShortStatus(u) {
 }
 
 function updateHelp(u) {
-  if (!u) return "Check for a newer build of Theo";
+  if (!u) return "Check for a newer build of Vello";
   switch (u.state) {
-    case "idle": return `Check for a newer build of Theo (${u.label})`;
+    case "idle": return `Check for a newer build of Vello (${u.label})`;
     case "upToDate": return `You have the newest build (${u.label}). Click to check again.`;
-    case "available": return "A newer build is ready. Theo quits, updates itself and reopens, keeping your bots, chats and settings.";
+    case "available": return "A newer build is ready. Vello quits, updates itself and reopens, keeping your bots, chats and settings.";
     default: return u.message || "";
   }
 }
@@ -48,7 +48,7 @@ function drawUpdateRow() {
   row.classList.toggle("has-update", has);
   row.disabled = !!updateBusy(u);
   row.title = updateHelp(u);
-  row.innerHTML = `${UPDATE_ICON}<span class="ur-name">${has ? "Update Theo" : "Updates"}</span><span class="ur-st">${esc(updateShortStatus(u))}</span>`;
+  row.innerHTML = `${UPDATE_ICON}<span class="ur-name">${has ? "Update Vello" : "Updates"}</span><span class="ur-st">${esc(updateShortStatus(u))}</span>`;
 }
 
 async function updateTapped() {
@@ -84,14 +84,14 @@ function updatesSettingsHTML() {
   const statusLine = Updates.error || u.message;
   const tone = u.state === "failed" || Updates.error ? " w-bad" : "";
   const where = {
-    windowsForEveryone: "This Theo was installed for everyone on this PC from the .msi, so updating it needs an administrator: Update opens the releases page.",
-    elsewhere: /linux/i.test(navigator.userAgent) ? "This Theo came from the .deb package (or was built by hand), so Update opens the releases page instead of replacing it." : "This copy of Theo wasn't put here by its installer, so Update opens the releases page.",
+    windowsForEveryone: "This Vello was installed for everyone on this PC from the .msi, so updating it needs an administrator: Update opens the releases page.",
+    elsewhere: /linux/i.test(navigator.userAgent) ? "This Vello came from the .deb package (or was built by hand), so Update opens the releases page instead of replacing it." : "This copy of Vello wasn't put here by its installer, so Update opens the releases page.",
   }[u.installKind] || "";
   const notes = has && u.available.notes ? `<div class="crow"><span class="tx"><b>What's new in build ${u.available.build}</b><small style="white-space:pre-wrap">${esc(u.available.notes)}</small></span></div>` : "";
-  return `<div class="list"><div class="crow"><span class="tx"><b>This is Theo ${esc(u.label)}</b><small class="${tone}" style="white-space:normal">${esc(statusLine)}</small></span><span class="act many">${action}</span></div>${notes}`
+  return `<div class="list"><div class="crow"><span class="tx"><b>This is Vello ${esc(u.label)}</b><small class="${tone}" style="white-space:normal">${esc(statusLine)}</small></span><span class="act many">${action}</span></div>${notes}`
     + `<div class="crow"><span class="tx"><b>GitHub token</b><small style="white-space:normal">${u.hasToken ? `Saved in ${tokenStoreWords()}. Paste a new one to replace it.` : "Only for private updates: a GitHub token that can read the updates repo. Public builds need nothing here."}</small></span>`
     + `<span class="act many"><input id="update-token" type="password" autocomplete="off" spellcheck="false" placeholder="${u.hasToken ? "Saved" : "Token"}" aria-label="GitHub token"><button class="btn sm" data-update-token disabled>Save</button>${u.hasToken ? `<button class="btn sm ghost" data-update-token-remove>Remove</button>` : ""}</span></div>`
-    + `<div class="crow"><span class="tx"><b>Where builds come from</b><small style="white-space:normal">${u.repo ? esc(u.repo) + "." : "This build doesn't say."} Theo checks when it starts and every 6 hours, and never installs by itself.</small></span><span class="act many">${u.repo ? `<button class="btn sm ghost" data-update-page>Releases page</button>` : ""}</span></div></div>`
+    + `<div class="crow"><span class="tx"><b>Where builds come from</b><small style="white-space:normal">${u.repo ? esc(u.repo) + "." : "This build doesn't say."} Vello checks when it starts and every 6 hours, and never installs by itself.</small></span><span class="act many">${u.repo ? `<button class="btn sm ghost" data-update-page>Releases page</button>` : ""}</span></div></div>`
     + (where ? `<p class="muted">${esc(where)}</p>` : "");
 }
 

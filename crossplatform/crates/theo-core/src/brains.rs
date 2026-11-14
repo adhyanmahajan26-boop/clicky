@@ -448,7 +448,7 @@ pub async fn model_for_new_bot(harness: &Harness, provider_id: &str) -> Option<S
 /// The provider's model ids (`GET <base>/models`), which also proves the key works. Err is a sentence for the owner,
 /// never containing the key.
 pub async fn list_models(harness: &Harness, provider_id: &str) -> Result<Vec<String>, String> {
-    let provider = api_provider(harness, provider_id).ok_or("Theo doesn't know that provider.")?;
+    let provider = api_provider(harness, provider_id).ok_or("Vello doesn't know that provider.")?;
     let key = api_key(harness, provider_id);
     if key.is_none() && !provider.keyless {
         return Err(format!("{} needs an API key.", provider.label));

@@ -44,20 +44,20 @@
       const chordName = (CHORDS.find(([id]) => id === s.shortcut) || CHORDS[0])[1];
       const ptt = s.desktop && s.desktop.pushToTalk;
       const hookLine = !s.on ? "" : ptt && ptt.sameChordAsDictation ? ` Dictation uses ${escape(chordName)} too: pick other keys for one of them.` : ptt && ptt.listening ? ` Listening for ${escape(chordName)}.` : ptt && ptt.hook && ptt.hook.problem ? ` The keyboard hook isn't running: ${escape(ptt.hook.problem)}` : "";
-      const brainSelect = `<select id="clicky-brain" aria-label="Clicky's brain">${await brainOptions(s.brain)}</select>`;
+      const brainSelect = `<select id="clicky-brain" aria-label="Pointer Assistant's brain">${await brainOptions(s.brain)}</select>`;
       const voiceOptions = (voices || []).map((v) => `<option value="${escape(v.name)}"${v.name === s.voice ? " selected" : ""}>${escape(v.name)}${v.language ? ` · ${escape(v.language)}` : ""}</option>`).join("");
       // Settings' own "Clicky is off · Turn on" line (settings.js) stands in for this switch while Clicky is off.
       const switchHere = s.on || typeof productIsOn !== "function";
       box.innerHTML = `<div class="list">`
-        + row("Clicky", `Hold ${escape(chordName)} anywhere, ask about what's on your screen, and let go. Clicky answers in a bubble by the cursor, out loud, and points at things with its spark. Esc stops it.${hookLine}`,
+        + row("Pointer Assistant", `Hold ${escape(chordName)} anywhere, ask about what's on your screen, and let go. Pointer Assistant answers in a bubble by the cursor, out loud, and points at things with its spark. Esc stops it.${hookLine}`,
           switchHere ? `${TP.pill(s.on ? "ok" : "none", s.on ? "On" : "Off")}<button class="btn sm" id="clicky-on">${s.on ? "Turn off" : "Turn on"}</button>` : "")
-        + row("Shortcut", "Hold these keys to talk to Clicky. Dictation uses its own.", `<select id="clicky-shortcut" aria-label="Clicky's shortcut">${CHORDS.map(([id, name]) => `<option value="${id}"${id === s.shortcut ? " selected" : ""}>${name}</option>`).join("")}</select>`)
+        + row("Shortcut", "Hold these keys to talk to Pointer Assistant. Dictation uses its own.", `<select id="clicky-shortcut" aria-label="Pointer Assistant's shortcut">${CHORDS.map(([id, name]) => `<option value="${id}"${id === s.shortcut ? " selected" : ""}>${name}</option>`).join("")}</select>`)
         + row("Spark", "The orange spark by your cursor.", `<select id="clicky-spark" aria-label="When the spark shows"><option value="always"${s.spark !== "talking" ? " selected" : ""}>Always show it</option><option value="talking"${s.spark === "talking" ? " selected" : ""}>Only while talking</option></select>`)
         + row("Brain", usingLine, brainSelect)
-        + row("Model", "Empty: the brain's own pick for Clicky (Sonnet on Claude Code, a model that sees pictures on a key).", `<input type="text" id="clicky-model" value="${escape(s.model)}" placeholder="Automatic" spellcheck="false" autocomplete="off"><datalist id="clicky-models"></datalist>`)
+        + row("Model", "Empty: the brain's own pick for Pointer Assistant (Sonnet on Claude Code, a model that sees pictures on a key).", `<input type="text" id="clicky-model" value="${escape(s.model)}" placeholder="Automatic" spellcheck="false" autocomplete="off"><datalist id="clicky-models"></datalist>`)
         + row("Voice", voices ? (voices.length ? "Windows' own voices. Add more in Windows Settings › Time & language › Speech." : "No voices were found on this computer.") : "Looking for voices…",
-          `<select id="clicky-voice" aria-label="Clicky's voice"><option value="">The computer's default</option>${voiceOptions}</select><button class="btn sm" id="clicky-hear">Hear it</button>`)
-        + `<div class="crow"><span class="tx" style="flex:1"><b>Try it</b><small style="white-space:normal">Type what you'd say. Clicky looks at your screens and answers the way it does when you talk.</small>`
+          `<select id="clicky-voice" aria-label="Pointer Assistant's voice"><option value="">The computer's default</option>${voiceOptions}</select><button class="btn sm" id="clicky-hear">Hear it</button>`)
+        + `<div class="crow"><span class="tx" style="flex:1"><b>Try it</b><small style="white-space:normal">Type what you'd say. Pointer Assistant looks at your screens and answers the way it does when you talk.</small>`
         + `<div class="try" style="margin-top:6px"><input type="text" id="clicky-try" placeholder="where's the search box?" autocomplete="off"><button class="btn pri sm" id="clicky-ask">Ask</button><button class="btn sm ghost" id="clicky-stop">Stop</button></div>`
         + `<small id="clicky-result" class="answer"></small></span></div>`
         + `</div>`;

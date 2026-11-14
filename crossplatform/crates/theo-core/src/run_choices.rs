@@ -78,7 +78,7 @@ pub async fn make_project(h: &Arc<Harness>, cmd: &Value) -> Value {
     if folder.exists() { return err(&format!("You already have {name}. Pick it from the list, or use another name.")); }
     if let Err(e) = std::fs::create_dir_all(&folder) { return err(&format!("Couldn't make that folder: {e}")); }
     if coding::git(&folder, &["init", "-q"]).await.is_ok() {
-        let _ = coding::git(&folder, &["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "First commit"]).await;
+        let _ = coding::git(&folder, &["-c", "user.name=Vello", "-c", "user.email=theo@localhost", "commit", "-q", "--allow-empty", "-m", "First commit"]).await;
     }
     ok(json!({"name": name, "path": folder.to_string_lossy()}))
 }
@@ -126,7 +126,7 @@ pub async fn start(h: &Arc<Harness>, cmd: &Value) -> Value {
     }
     let harness = text(cmd, "harness").filter(|h| h != "auto");
     if let Some(agent) = &harness {
-        if !CODING_AGENTS.contains(&agent.as_str()) { return err("Theo doesn't know that coding agent."); }
+        if !CODING_AGENTS.contains(&agent.as_str()) { return err("Vello doesn't know that coding agent."); }
         if h.executable(agent).is_none() { return err(&format!("{} isn't installed on this computer. Pick another agent, or install it in Settings › Brains.", crate::brains::label(agent))); }
     }
     let folder = text(cmd, "folder").map(PathBuf::from);

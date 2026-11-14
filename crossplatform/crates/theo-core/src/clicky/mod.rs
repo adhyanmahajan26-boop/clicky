@@ -192,7 +192,7 @@ pub async fn ask_brain(h: &Harness, pick: &BrainPick, transcript: &str, screens:
     let owner = h.settings.owner_name();
     let pictures = takes_pictures(h, pick) && !screens.is_empty();
     let mut answer = if let Some(provider_id) = crate::brains::api_provider_id(&pick.engine) {
-        let provider = crate::brains::api_provider(h, provider_id).ok_or("Theo doesn't know that provider.")?;
+        let provider = crate::brains::api_provider(h, provider_id).ok_or("Vello doesn't know that provider.")?;
         let key = crate::brains::api_key(h, provider_id);
         if key.is_none() && !provider.keyless {
             return Err(format!("{} needs an API key. Add one in Settings › Brains.", provider.label));
@@ -401,9 +401,9 @@ pub fn claude_arguments(model: &str, system_prompt_file: &std::path::Path, setti
 async fn ask_agent(h: &Harness, pick: &BrainPick, system: &str, conversation: &str, screens: &[Screen], cancel: Arc<Cancel>, on_text: Arc<dyn Fn(&str) + Send + Sync>) -> Result<String, String> {
     let engine = pick.engine.as_str();
     let label = crate::brains::label(engine);
-    let program = h.executable(engine).ok_or_else(|| format!("{label} isn't installed here. Pick another brain in Settings › Clicky."))?;
+    let program = h.executable(engine).ok_or_else(|| format!("{label} isn't installed here. Pick another brain in Settings › Pointer Assistant."))?;
     let folder = TurnFolder(h.paths.turns_dir().join(format!("clicky-{}", uuid::Uuid::new_v4())));
-    std::fs::create_dir_all(&folder.0).map_err(|e| format!("Couldn't make Clicky's turn folder: {e}"))?;
+    std::fs::create_dir_all(&folder.0).map_err(|e| format!("Couldn't make Pointer Assistant's turn folder: {e}"))?;
     let words = format!("{system}\n\n{conversation}");
     let model = pick.model.clone();
     let folder_text = folder.0.to_string_lossy().to_string();
@@ -413,12 +413,12 @@ async fn ask_agent(h: &Harness, pick: &BrainPick, system: &str, conversation: &s
     let (args, format) = match engine {
         "claude" => {
             let prompt_file = folder.0.join("system-prompt.md");
-            std::fs::write(&prompt_file, system).map_err(|e| format!("Couldn't write Clicky's prompt: {e}"))?;
+            std::fs::write(&prompt_file, system).map_err(|e| format!("Couldn't write Pointer Assistant's prompt: {e}"))?;
             crate::paths::make_private(&prompt_file);
             env.push(("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into()));
             stdin = Some(claude_user_message(conversation, screens));
             let settings_file = folder.0.join("settings.json");
-            std::fs::write(&settings_file, CLAUDE_SETTINGS).map_err(|e| format!("Couldn't write Clicky's settings for Claude Code: {e}"))?;
+            std::fs::write(&settings_file, CLAUDE_SETTINGS).map_err(|e| format!("Couldn't write Pointer Assistant's settings for Claude Code: {e}"))?;
             (claude_arguments(&model, &prompt_file, &settings_file), Format::Claude)
         }
         "codex" => {
@@ -555,7 +555,7 @@ pub fn overlay_plan(answer: &str, screens: &[Screen]) -> Value {
 
 /// One whole turn on the brain picked: the answer, its overlay plan, and the exchange remembered for the next question.
 pub async fn turn(h: &Harness, transcript: &str, screens: &[Screen], cancel: Arc<Cancel>, on_text: Arc<dyn Fn(&str) + Send + Sync>) -> Result<Value, String> {
-    let pick = pick_brain(h).await.ok_or("Clicky has no brain yet: add an API key or sign in to an agent in Settings › Brains.")?;
+    let pick = pick_brain(h).await.ok_or("Pointer Assistant has no brain yet: add an API key or sign in to an agent in Settings › Brains.")?;
     let started = std::time::Instant::now();
     let answer = ask_brain(h, &pick, transcript, screens, cancel, on_text).await?;
     let mut plan = overlay_plan(&answer.text, screens);

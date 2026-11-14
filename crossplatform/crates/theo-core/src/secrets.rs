@@ -93,7 +93,7 @@ pub fn read_api_key(data_root: &Path, is_test: bool, provider: &str) -> Option<S
 /// Saves a provider's key, or removes it with `None`.
 pub fn write_api_key(data_root: &Path, is_test: bool, provider: &str, key: Option<&str>) -> std::io::Result<()> {
     if !is_provider_id(provider) {
-        return Err(std::io::Error::other("That isn't a provider Theo knows."));
+        return Err(std::io::Error::other("That isn't a provider Vello knows."));
     }
     if !is_test {
         #[cfg(any(target_os = "macos", target_os = "windows"))]

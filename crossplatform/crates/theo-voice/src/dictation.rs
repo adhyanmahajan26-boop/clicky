@@ -65,7 +65,7 @@ pub fn stt_config(harness: &Harness) -> SttConfig {
     let mut config = SttConfig {
         engine: harness.settings.string(ENGINE_SETTING).and_then(|id| SttEngine::from_id(&id)),
         language: harness.settings.string(LANGUAGE_SETTING).unwrap_or_else(|| "auto".into()),
-        keyterms: ["Theo", "Clicky"].iter().map(|word| word.to_string()).chain(dictionary(harness).words()).collect(),
+        keyterms: ["Vello", "Pointer Assistant"].iter().map(|word| word.to_string()).chain(dictionary(harness).words()).collect(),
         ..Default::default()
     };
     for provider in VOICE_KEY_PROVIDERS {
@@ -203,11 +203,11 @@ pub async fn handle_command(harness: Arc<Harness>, cmd: Value) -> Option<Value> 
                 "on" => (PRODUCT_SETTING, Value::Bool(value.as_bool().unwrap_or(false))),
                 "chord" => match Chord::from_id(&text) {
                     Some(chord) => (CHORD_SETTING, chord.id().into()),
-                    None => return Some(err("Theo doesn't know that chord.")),
+                    None => return Some(err("Vello doesn't know that chord.")),
                 },
                 "engine" => match SttEngine::from_id(&text) {
                     Some(engine) => (ENGINE_SETTING, engine.id().into()),
-                    None => return Some(err("Theo doesn't know that recognizer.")),
+                    None => return Some(err("Vello doesn't know that recognizer.")),
                 },
                 "language" => (LANGUAGE_SETTING, stt::language(&text).id.into()),
                 "microphone" => (MICROPHONE_SETTING, if text.is_empty() { Value::Null } else { text.into() }),
@@ -215,7 +215,7 @@ pub async fn handle_command(harness: Arc<Harness>, cmd: Value) -> Option<Value> 
                 "dictionary" => (DICTIONARY_SETTING, value.as_str().unwrap_or("").chars().take(4000).collect::<String>().into()),
                 "cleanupBrain" => {
                     if !text.is_empty() && text != "auto" && !theo_core::brains::is_known_engine(&text) {
-                        return Some(err("Theo doesn't know that brain."));
+                        return Some(err("Vello doesn't know that brain."));
                     }
                     harness.settings.set(cleanup::MODEL_SETTING, Value::Null);
                     (cleanup::BRAIN_SETTING, if text.is_empty() || text == "auto" { Value::Null } else { text.into() })
@@ -657,8 +657,8 @@ mod tests {
         assert!(!uses_cleanup(&harness));
         set("on", true.into()).await;
         assert!(is_on(&harness));
-        set("dictionary", "Sarvam\ntheo klicky = Theo Clicky".into()).await;
-        assert_eq!(dictionary(&harness).words(), vec!["Sarvam", "Theo Clicky"]);
+        set("dictionary", "Sarvam\ntheo klicky = Vello Pointer Assistant".into()).await;
+        assert_eq!(dictionary(&harness).words(), vec!["Sarvam", "Vello Pointer Assistant"]);
         assert_eq!(set("cleanupBrain", "api:nowhere".into()).await.unwrap()["ok"], false);
         assert_eq!(set("nonsense", "x".into()).await.unwrap()["ok"], false);
         assert!(handle_command(harness.clone(), json!({"cmd": "botsState"})).await.is_none());

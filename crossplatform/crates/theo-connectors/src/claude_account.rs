@@ -219,7 +219,7 @@ pub fn call_claude_account_tool(entry: &AppEntry, tool_name: &str, arguments: &V
         (vec![qualified(tool_name)], request, system)
     };
 
-    let claude_code = locate_claude_code().ok_or("Claude Code isn't installed, so this app (connected through a Claude account) can't be reached. Add the app to Theo directly instead.")?;
+    let claude_code = locate_claude_code().ok_or("Claude Code isn't installed, so this app (connected through a Claude account) can't be reached. Add the app to Vello directly instead.")?;
     let mut command = claude_code_command(&claude_code);
     command.args(["-p", "--model", CLAUDE_MODEL_FOR_LOOKUPS, "--output-format", "json", "--permission-mode", "dontAsk", "--tools", ""]);
     if !denied_tools.is_empty() {

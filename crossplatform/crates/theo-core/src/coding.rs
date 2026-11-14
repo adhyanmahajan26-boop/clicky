@@ -305,8 +305,8 @@ pub fn start_with(h: &Arc<Harness>, prompt: String, title: String, repo: Option<
     h.with(|s| s.runs.push(run.clone()));
     h.write_runs();
     let started = match &choice.chat {
-        Some((_, chat_title)) => format!("Theo is carrying on the chat \"{chat_title}\" in {folder} for \"{title}\"."),
-        None => format!("Theo started the coding run \"{title}\" in {folder}."),
+        Some((_, chat_title)) => format!("Vello is carrying on the chat \"{chat_title}\" in {folder} for \"{title}\"."),
+        None => format!("Vello started the coding run \"{title}\" in {folder}."),
     };
     let mut card = ChatMessage::note(started);
     card.run_id = Some(id.clone());
@@ -519,7 +519,7 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
     let changed = git(&folder, &["status", "--porcelain"]).await.map(|s| !s.is_empty()).unwrap_or(false);
     if changed {
         let message = if follow_up { format!("{} (follow-up)", run.title) } else { run.title.clone() };
-        match git(&folder, &["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "-m", &message]).await {
+        match git(&folder, &["-c", "user.name=Vello", "-c", "user.email=theo@localhost", "commit", "-q", "-m", &message]).await {
             Ok(_) => lines.push("Committed the changes.".to_string()),
             Err(e) => lines.push(format!("Couldn't commit: {e}")),
         }
@@ -537,7 +537,7 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
                         let gh = h.settings.string("test.engine.gh").map(PathBuf::from).or_else(|| engine::locate("gh"));
                         if let Some(gh) = gh {
                             let mut cmd = engine::background_command(&gh);
-                            cmd.args(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Theo's coding run.", "--head", branch]).current_dir(&folder).env("GH_PROMPT_DISABLED", "1").stdin(std::process::Stdio::null()).kill_on_drop(true);
+                            cmd.args(["pr", "create", "--draft", "--title", &run.title, "--body", "Opened by Vello's coding run.", "--head", branch]).current_dir(&folder).env("GH_PROMPT_DISABLED", "1").stdin(std::process::Stdio::null()).kill_on_drop(true);
                             let out = cmd.output().await;
                             match out {
                                 Ok(o) if o.status.success() => {

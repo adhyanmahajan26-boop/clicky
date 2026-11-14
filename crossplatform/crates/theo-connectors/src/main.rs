@@ -17,7 +17,7 @@ use theo_connectors::serve::{effect_words, exposed_tool_name, level_words, serve
 use theo_connectors::ticket::{issue_ticket, load_ticket, remove_stale_tickets, revoke_ticket, Ticket};
 use theo_connectors::vault::KeyStore;
 
-const USAGE: &str = "usage: theo-connectors --data <Theo's data folder> [--key-store system|file] <command>
+const USAGE: &str = "usage: theo-connectors --data <Vello's data folder> [--key-store system|file] <command>
 commands:
   catalog                                   the starter catalog
   list [--check]                            every app with its status
@@ -117,7 +117,7 @@ fn run(raw_arguments: Vec<String>) -> Result<Option<Value>, String> {
         println!("{USAGE}");
         return Ok(None);
     }
-    let data_folder = command_line.data_folder.clone().ok_or("Say where Theo's data folder is with --data <folder>.")?;
+    let data_folder = command_line.data_folder.clone().ok_or("Say where Vello's data folder is with --data <folder>.")?;
     let hub = Hub::new(data_folder, command_line.key_store);
     let app_id_argument = || command_line.positional(0).ok_or_else(|| format!("{command} needs an app id."));
 

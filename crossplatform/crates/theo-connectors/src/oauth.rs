@@ -207,7 +207,7 @@ pub struct PendingSignIn {
 
 pub fn begin_sign_in(entry: &AppEntry, vault: &Vault, server: AuthorizationServer) -> Result<PendingSignIn, String> {
     if !server.supports_pkce_s256 {
-        return Err("This app's sign-in server doesn't support PKCE (S256), which Theo needs to sign in safely.".into());
+        return Err("This app's sign-in server doesn't support PKCE (S256), which Vello needs to sign in safely.".into());
     }
     let mut secrets = vault.read(&entry.id);
     let owner_client_id = entry.oauth.as_ref().and_then(|settings| settings.client_id.clone()).filter(|client_id| !client_id.trim().is_empty());
@@ -282,7 +282,7 @@ pub fn begin_sign_in(entry: &AppEntry, vault: &Vault, server: AuthorizationServe
 
 fn register_client(registration_endpoint: &str, redirect_uri: &str, issuer: &str, scopes: Option<&str>) -> Result<RegisteredOAuthClient, String> {
     let mut registration = serde_json::json!({
-        "client_name": "Theo",
+        "client_name": "Vello",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -302,12 +302,12 @@ fn register_client(registration_endpoint: &str, redirect_uri: &str, issuer: &str
         Ok(response) => response.into_string().map_err(|error| error.to_string())?,
         Err(ureq::Error::Status(status, response)) => {
             let detail = oauth_error_description(&response.into_string().unwrap_or_default());
-            return Err(format!("The app's sign-in server wouldn't register Theo ({status}){detail}."));
+            return Err(format!("The app's sign-in server wouldn't register Vello ({status}){detail}."));
         }
         Err(error) => return Err(format!("Couldn't reach the app's sign-in server: {error}")),
     };
     let answer: Value = serde_json::from_str(&body).map_err(|_| "The sign-in server's registration answer wasn't JSON.".to_string())?;
-    let client_id = answer.get("client_id").and_then(Value::as_str).ok_or("The sign-in server registered Theo without a client id.")?;
+    let client_id = answer.get("client_id").and_then(Value::as_str).ok_or("The sign-in server registered Vello without a client id.")?;
     let client_secret = answer.get("client_secret").and_then(Value::as_str).map(str::to_string);
     let token_endpoint_auth_method = answer
         .get("token_endpoint_auth_method")
@@ -335,8 +335,8 @@ fn oauth_error_description(body: &str) -> String {
     }
 }
 
-const PAGE_AFTER_SIGN_IN: &str = "<!doctype html><meta charset=utf-8><title>Theo</title><body style=\"font:16px -apple-system,Segoe UI,sans-serif;margin:4em auto;max-width:28em;text-align:center\"><h2>Signed in</h2><p>You can close this tab and go back to Theo.</p></body>";
-const PAGE_AFTER_FAILED_SIGN_IN: &str = "<!doctype html><meta charset=utf-8><title>Theo</title><body style=\"font:16px -apple-system,Segoe UI,sans-serif;margin:4em auto;max-width:28em;text-align:center\"><h2>Not signed in</h2><p>Go back to Theo and try again.</p></body>";
+const PAGE_AFTER_SIGN_IN: &str = "<!doctype html><meta charset=utf-8><title>Vello</title><body style=\"font:16px -apple-system,Segoe UI,sans-serif;margin:4em auto;max-width:28em;text-align:center\"><h2>Signed in</h2><p>You can close this tab and go back to Vello.</p></body>";
+const PAGE_AFTER_FAILED_SIGN_IN: &str = "<!doctype html><meta charset=utf-8><title>Vello</title><body style=\"font:16px -apple-system,Segoe UI,sans-serif;margin:4em auto;max-width:28em;text-align:center\"><h2>Not signed in</h2><p>Go back to Vello and try again.</p></body>";
 
 fn answer_browser(mut connection: TcpStream, status_line: &str, page: &str) {
     let _ = write!(connection, "HTTP/1.1 {status_line}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{page}", page.len());

@@ -47,7 +47,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         "botCreate" => {
             let Some(name) = s(cmd, "name").filter(|n| !n.is_empty()) else { return err("Needs a name.") };
             let provider = s(cmd, "provider").filter(|p| !p.is_empty()).unwrap_or_else(|| "claude".into());
-            if !crate::brains::is_known_engine(&provider) { return err("Theo doesn't know that brain."); }
+            if !crate::brains::is_known_engine(&provider) { return err("Vello doesn't know that brain."); }
             // No model given: the agent's own starting model, or the key's preferred chat model.
             let model = match s(cmd, "model").filter(|m| !m.is_empty()) {
                 Some(model) => model,
@@ -73,7 +73,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             // null: it may message anyone again.
             if cmd.get("canMessage").map(|c| c.is_null()).unwrap_or(false) { bot.can_message = None; }
             if let Some(p) = s(cmd, "provider").filter(|p| !p.is_empty()) {
-                if !crate::brains::is_known_engine(&p) { return err("Theo doesn't know that brain."); }
+                if !crate::brains::is_known_engine(&p) { return err("Vello doesn't know that brain."); }
                 bot.provider = p;
             }
             if let Some(m) = s(cmd, "model").filter(|m| !m.is_empty()) { bot.model = m; bot.effort = None; }
@@ -143,7 +143,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         // Every brain and whether it works here. Never includes a key, only whether one is saved.
         "brains" => ok(crate::brains::inventory(h).await),
         "apiKeySet" => {
-            let Some(provider) = s(cmd, "provider").filter(|p| crate::brains::api_provider(h, p).is_some()) else { return err("Theo doesn't know that provider.") };
+            let Some(provider) = s(cmd, "provider").filter(|p| crate::brains::api_provider(h, p).is_some()) else { return err("Vello doesn't know that provider.") };
             let Some(key) = s(cmd, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty() && k.len() <= 4096 && !k.chars().any(char::is_control)) else { return err("Paste the key.") };
             if let Err(e) = crate::secrets::write_api_key(&h.paths.root, h.settings.is_test, &provider, Some(&key)) { return err(&e.to_string()); }
             // The check is the provider's own model list: it proves the key works and gives the first bot a model.
@@ -156,7 +156,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             }
         }
         "apiKeyRemove" => {
-            let Some(provider) = s(cmd, "provider").filter(|p| crate::secrets::is_provider_id(p)) else { return err("Theo doesn't know that provider.") };
+            let Some(provider) = s(cmd, "provider").filter(|p| crate::secrets::is_provider_id(p)) else { return err("Vello doesn't know that provider.") };
             match crate::secrets::write_api_key(&h.paths.root, h.settings.is_test, &provider, None) {
                 Ok(()) => ok(json!({"provider": provider, "removed": true})),
                 Err(e) => err(&e.to_string()),
@@ -177,7 +177,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                 h.settings.set(crate::brains::STAND_IN_SETTING, Value::Null);
                 return ok(json!({"standIn": null}));
             }
-            if !crate::brains::is_known_engine(&engine) { return err("Theo doesn't know that brain."); }
+            if !crate::brains::is_known_engine(&engine) { return err("Vello doesn't know that brain."); }
             let model = s(cmd, "model").unwrap_or_default();
             if engine.starts_with("api:") && model.is_empty() { return err("Pick a model for that key."); }
             let value = format!("{engine}|{model}");
@@ -316,7 +316,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             let Some(mut bot) = s(cmd, "id").and_then(|id| h.bot(&id)) else { return err("No such bot.") };
             let Ok(look) = serde_json::from_value::<Look>(cmd.get("look").cloned().unwrap_or_default()) else { return err("Needs a look.") };
             // The app draws a look straight into its page, so only the parts it knows are kept.
-            if !look.is_known() { return err("That look has a part Theo doesn't know.") };
+            if !look.is_known() { return err("That look has a part Vello doesn't know.") };
             bot.look = Some(look);
             h.save_bot(bot);
             ok(json!({"saved": true}))
@@ -371,7 +371,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             // that agent's, so a new pick starts on its own default unless they come with it.
             if let Some(target) = s(cmd, "codingTarget") {
                 let target = target.trim().to_string();
-                if !target.is_empty() && target != "auto" && !crate::coding::CODING_AGENTS.contains(&target.as_str()) { return err("Theo doesn't know that coding agent."); }
+                if !target.is_empty() && target != "auto" && !crate::coding::CODING_AGENTS.contains(&target.as_str()) { return err("Vello doesn't know that coding agent."); }
                 let value = if target.is_empty() || target == "auto" { Value::Null } else { Value::from(target) };
                 if h.settings.get(crate::coding::TARGET_SETTING).unwrap_or(Value::Null) != value {
                     h.settings.set(crate::coding::TARGET_SETTING, value);

@@ -124,7 +124,7 @@ impl Audio {
         for frame in data.chunks_exact(frame_bytes) {
             let mut sum = 0.0;
             for channel in 0..channels as usize {
-                sum += read_one(&frame[channel * sample_bytes..(channel + 1) * sample_bytes]).ok_or_else(|| anyhow!("Theo can't read this kind of WAV file ({bits}-bit, format {tag})."))?;
+                sum += read_one(&frame[channel * sample_bytes..(channel + 1) * sample_bytes]).ok_or_else(|| anyhow!("Vello can't read this kind of WAV file ({bits}-bit, format {tag})."))?;
             }
             mono.push(sum / channels as f32);
         }
@@ -238,7 +238,7 @@ impl Recorder {
         #[cfg(not(windows))]
         {
             let _ = device;
-            bail!("Theo can only use the microphone on Windows in this build.")
+            bail!("Vello can only use the microphone on Windows in this build.")
         }
     }
 
@@ -274,7 +274,7 @@ impl Recorder {
         }
         #[cfg(not(windows))]
         {
-            bail!("Theo can only use the microphone on Windows in this build.")
+            bail!("Vello can only use the microphone on Windows in this build.")
         }
     }
 }
@@ -362,7 +362,7 @@ mod windows_mic {
                     cpal::SampleFormat::U16 => device.build_input_stream(&stream_config, move |data: &[u16], _: &cpal::InputCallbackInfo| take_frames(data, channels, |s| (s as f32 - 32768.0) / 32768.0, &callback_shared), on_error, None),
                     cpal::SampleFormat::I32 => device.build_input_stream(&stream_config, move |data: &[i32], _: &cpal::InputCallbackInfo| take_frames(data, channels, |s| s as f32 / 2_147_483_648.0, &callback_shared), on_error, None),
                     other => {
-                        let _ = ready_sender.send(Err(format!("the microphone's format ({other:?}) isn't one Theo reads")));
+                        let _ = ready_sender.send(Err(format!("the microphone's format ({other:?}) isn't one Vello reads")));
                         return;
                     }
                 };

@@ -181,15 +181,15 @@ impl ServerState {
                 json!({
                     "protocolVersion": answered_version,
                     "capabilities": {"tools": {"listChanged": false}},
-                    "serverInfo": {"name": "theo", "title": "Theo's apps", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": "These are the owner's apps that Theo gave this bot for this turn. Each tool is named <app>__<tool>."
+                    "serverInfo": {"name": "theo", "title": "Vello's apps", "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": "These are the owner's apps that Vello gave this bot for this turn. Each tool is named <app>__<tool>."
                 })
             }
             "ping" => json!({}),
             "tools/list" => self.list_tools(),
             "tools/call" => self.call_tool(&parameters),
             _ => {
-                self.send(&json!({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": format!("Theo's apps don't offer {method}")}}));
+                self.send(&json!({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": format!("Vello's apps don't offer {method}")}}));
                 return;
             }
         };

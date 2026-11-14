@@ -914,7 +914,7 @@ fn save_history(harness: &Harness, session: &str, mut messages: Vec<HistoryMessa
 /// One turn of a bot on an API key. Returns the answer and the session that holds this chat's earlier messages.
 pub async fn run_bot_turn(harness: &Harness, bot: &Bot, model: &str, system: String, prompt: &str, session: Option<String>, from_owner: bool, cancel: Arc<Cancel>, on_text: impl Fn(&str) + Send + Sync + 'static) -> Result<(String, Option<String>), RunError> {
     let provider_id = crate::brains::api_provider_id(&bot.provider).unwrap_or("");
-    let provider = crate::brains::api_provider(harness, provider_id).ok_or_else(|| RunError::Failed(format!("Theo doesn't know the provider \"{provider_id}\". Pick another brain for {}.", bot.name)))?;
+    let provider = crate::brains::api_provider(harness, provider_id).ok_or_else(|| RunError::Failed(format!("Vello doesn't know the provider \"{provider_id}\". Pick another brain for {}.", bot.name)))?;
     let key = crate::brains::api_key(harness, &provider.id);
     if key.is_none() && !provider.keyless {
         return Err(RunError::NotInstalled(format!("{} (no API key saved: add one in Settings › Brains)", provider.label)));
@@ -940,7 +940,7 @@ pub async fn run_bot_turn(harness: &Harness, bot: &Bot, model: &str, system: Str
     let outcome = match first {
         Err(_) => {
             cancel.cancel();
-            return Err(RunError::Failed(format!("{} didn't finish within the turn's time limit, so Theo stopped it.", provider.label)));
+            return Err(RunError::Failed(format!("{} didn't finish within the turn's time limit, so Vello stopped it.", provider.label)));
         }
         Ok(Err(RoundError::Refused { status, body })) => match tool_refusal(status, &body) {
             Some(refusal) if !tools.is_empty() => {
@@ -954,7 +954,7 @@ pub async fn run_bot_turn(harness: &Harness, bot: &Bot, model: &str, system: Str
                     Ok(result) => result,
                     Err(_) => {
                         cancel.cancel();
-                        return Err(RunError::Failed(format!("{} didn't finish within the turn's time limit, so Theo stopped it.", provider.label)));
+                        return Err(RunError::Failed(format!("{} didn't finish within the turn's time limit, so Vello stopped it.", provider.label)));
                     }
                 }
             }
@@ -979,7 +979,7 @@ pub async fn run_bot_turn(harness: &Harness, bot: &Bot, model: &str, system: Str
         answer.push_str("\n\n_(The connection ended early, so this may be cut off.)_");
     }
     if outcome.stopped_at_round_cap {
-        answer.push_str(&format!("\n\n_(Theo stopped the tools after {MAXIMUM_TOOL_ROUNDS} rounds, so this answer works from what they found so far.)_"));
+        answer.push_str(&format!("\n\n_(Vello stopped the tools after {MAXIMUM_TOOL_ROUNDS} rounds, so this answer works from what they found so far.)_"));
     }
     if let Some(note) = words_only_note {
         answer.push_str(&format!("\n\n{note}"));

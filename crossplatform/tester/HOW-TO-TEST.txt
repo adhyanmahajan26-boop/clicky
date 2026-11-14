@@ -1,12 +1,12 @@
-Testing Theo on your Windows PC
+Testing Vello on your Windows PC
 ===============================
 
 Thanks for helping! This takes about 25 minutes. You don't need any account, and you
 don't need to be an administrator.
 
-What Theo is: a desktop app where you make small AI "bots" that each have a job and a
+What Vello is: a desktop app where you make small AI "bots" that each have a job and a
 chat. Normally the bots think with an AI you already pay for. You don't need one for
-this test: we're checking that Theo installs, opens, looks right, and closes cleanly.
+this test: we're checking that Vello installs, opens, looks right, and closes cleanly.
 
 You need: Windows 10 or 11.
 
@@ -20,7 +20,7 @@ Open the folder it made. You'll see:
   - SHA256SUMS, Theo-Test.ps1, and this file
 
 
-2. Install Theo
+2. Install Vello
 ---------------
 Double-click the "Theo-...-setup.exe" file.
 
@@ -28,7 +28,7 @@ Windows will probably show a blue box saying "Windows protected your PC". That's
 expected: the app isn't signed with a paid certificate yet. Click "More info", then
 "Run anyway". Please remember whether you saw that box; the test will ask.
 
-The installer runs by itself and doesn't ask for an admin password. Theo may open
+The installer runs by itself and doesn't ask for an admin password. Vello may open
 when it finishes. That's fine, leave it open.
 
 
@@ -40,22 +40,22 @@ about this file too, click "More info", then "Run anyway".)
 It asks simple yes/no questions: type y or n and press Enter. Pressing Enter on
 its own picks the suggested answer (the capital letter).
 
-Sometimes it asks you to do something in Theo, like going through setup, closing
+Sometimes it asks you to do something in Vello, like going through setup, closing
 the window, or quitting from the tray icon. Do that, then come back to the blue
 window and press Enter.
 
-When Theo's setup reaches "Pick a brain": if you don't have an AI key or AI app,
+When Vello's setup reaches "Pick a brain": if you don't have an AI key or AI app,
 press "Skip for now". That's part of the test. At "Pick products", please turn on
-all three: Theo, Clicky and Dictation.
+all three: Vello, Pointer Assistant and Dictation.
 
 Then it shows you what's new in this build, one thing at a time: teams in the
 sidebar, editing and deleting a bot, a group chat, a routine, checking for
 updates, and (if you have a microphone) Dictation: hold Ctrl + the Windows key
-in Notepad, talk, and let go. If you gave Theo a brain, it also asks you to try
-Clicky: hold Ctrl + Alt, ask a question about your screen, and let go.
+in Notepad, talk, and let go. If you gave Vello a brain, it also asks you to try
+Pointer Assistant: hold Ctrl + Alt, ask a question about your screen, and let go.
 
-The last step offers to uninstall Theo. Saying yes is helpful, because it checks
-that Theo removes itself cleanly.
+The last step offers to uninstall Vello. Saying yes is helpful, because it checks
+that Vello removes itself cleanly.
 
 
 4. Send the results back
@@ -66,7 +66,7 @@ At the end, a folder opens with a file selected named something like
 test (email, WhatsApp, etc.).
 
 What's in it: yes/no answers, any comments you typed, your Windows version, screen
-scale and light or dark mode, pictures of Theo's window only, and Theo's own logs.
+scale and light or dark mode, pictures of Vello's window only, and Vello's own logs.
 It has no passwords, keys or chats, and your Windows user name is replaced with
 <user>. You can open the zip and look before sending it.
 
@@ -79,6 +79,6 @@ If something goes wrong
   it, then drag Theo-Test.ps1 into it after typing
      powershell -ExecutionPolicy Bypass -File
   (with a space at the end) and press Enter. If that fails too, send a photo.
-- To remove Theo later: Settings > Apps > Installed apps > Theo > Uninstall.
-  Theo's data stays in %APPDATA%\Theo-Desktop; delete that folder if you want
+- To remove Vello later: Settings > Apps > Installed apps > Vello > Uninstall.
+  Vello's data stays in %APPDATA%\Theo-Desktop; delete that folder if you want
   everything gone.

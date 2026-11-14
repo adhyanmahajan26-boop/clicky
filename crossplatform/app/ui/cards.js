@@ -200,7 +200,7 @@ const CARDS = (() => {
     return head(at ? `waiting ${esc(ago(at))}` : "can't start") + `<div class="tc-q">${esc(label)} is signed out</div><p>${name} runs on ${esc(label)}. Sign in once and try again: ${name} picks the job back up.</p>`
       + `<div class="tc-obj"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M4 6h16v12H4zM7 10l3 2-3 2M12 15h5"/></svg>${TP.badge("needs")}</span><span class="tx"><b>${esc(label)}</b><small>${esc(agent && agent.signInHint ? agent.signInHint : `Your ${label} account`)}</small></span>${TP.pill("needs", "Signed out")}</div>`
       + `<div class="btns"><button class="btn pri" data-term="signin:${esc(provider)}">Sign in</button><button class="btn" data-open-pane="settings">Use an API key instead</button><button class="btn ghost" data-retry="${esc(botId)}">Try again</button></div>`
-      + `<div class="tc-foot">Opens a terminal with ${esc(label)}'s own sign-in. Theo never sees your password. Your message is kept.</div></div>`;
+      + `<div class="tc-foot">Opens a terminal with ${esc(label)}'s own sign-in. Vello never sees your password. Your message is kept.</div></div>`;
   }
   function plainFailureCard(botId, reason, at, context) {
     const first = firstSentence(reason);

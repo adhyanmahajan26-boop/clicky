@@ -129,7 +129,7 @@ pub fn check_projects_folder(folder: &Path, data_root: &Path) -> Result<(), Stri
         return Err("Pick a folder inside your home folder, not the home folder itself.".into());
     }
     if folder.starts_with(data_root) || data_root.starts_with(folder) {
-        return Err("Pick a folder outside Theo's own data folder.".into());
+        return Err("Pick a folder outside Vello's own data folder.".into());
     }
     Ok(())
 }

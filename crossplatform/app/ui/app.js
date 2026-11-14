@@ -455,19 +455,19 @@ function drawSetup() {
   const checking = `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
   if (step === "welcome") {
     const list = (typeof Products !== "undefined" && Products.list) || [];
-    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Hi, I'm Theo</h1>`
+    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Hi, I'm Vello</h1>`
       + `<p class="lead">Three products, one app. First pick a brain to think with: the AI you already have, an API key or Claude Code, Codex, Cursor, Gemini, Grok or OpenCode on your own subscription. Then see each product and turn on only the ones you want. Setup takes about two minutes.</p>`
       + (list.length ? `<ul class="su-products">${list.map((p) => `<li><b>${esc(p.title)}</b>: ${esc(p.tagline)}</li>`).join("")}</ul>` : "")
       + `<div class="su-fields"><label>What should your bots call you? <input id="su-owner" value="${esc(setup.owner)}" maxlength="40" placeholder="Your first name"></label></div>`
       + `<div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
   } else if (step === "brain") {
     const ready = s && s.anyReady;
-    body = `<h1>Pick a brain</h1><p class="lead">Theo needs one thing to think with: an API key, or a coding agent you already pay for. Any one is enough, and none is required over another. You can add more later in Settings.</p>`
+    body = `<h1>Pick a brain</h1><p class="lead">Vello needs one thing to think with: an API key, or a coding agent you already pay for. Any one is enough, and none is required over another. You can add more later in Settings.</p>`
       + `<div id="su-brains">${brainsHTML(s && s.brains)}</div>`
       + `<div class="btns"><button class="btn pri" data-next${ready ? "" : " disabled"}>Continue</button><button class="btn" data-recheck>Check again</button>${s && !ready ? `<button class="btn ghost" data-next>Skip for now</button>${TP.pill("needs", "Add one to continue")}` : ""}</div>`;
   } else if (step === "products") {
     const any = anyProductOn();
-    body = `<h1>Pick what you want</h1><p class="lead">Theo, Clicky and Dictation are separate products. Watch each one and turn on only the ones you want; you can change this any time in Settings › Products.</p>`
+    body = `<h1>Pick what you want</h1><p class="lead">Vello, Pointer Assistant and Dictation are separate products. Watch each one and turn on only the ones you want; you can change this any time in Settings › Products.</p>`
       + `<div id="su-products">${typeof productCardsHTML === "function" ? productCardsHTML() : checking}</div>`
       + `<div class="btns"><button class="btn pri" data-next${any ? "" : " disabled"}>Continue</button>${any ? "" : TP.pill("needs", "Pick at least one")}</div>`;
   } else if (step === "coding") {
@@ -490,16 +490,16 @@ function drawSetup() {
     const who = setup.made ? setup.name : "a bot";
     const theo = typeof productIsOn !== "function" || productIsOn("theo");
     const tries = theo
-      ? [`Ask ${esc(who)} something in its chat.`, `Ask Theo to get ${esc(who)} to look into something and report back.`, `Say "every weekday at 8, send me a brief" to set up a routine.`]
-      : ["Your products are on. Their settings are in Settings.", "Turn on Theo any time in Settings › Products for bots, teams and coding runs."];
+      ? [`Ask ${esc(who)} something in its chat.`, `Ask Vello to get ${esc(who)} to look into something and report back.`, `Say "every weekday at 8, send me a brief" to set up a routine.`]
+      : ["Your products are on. Their settings are in Settings.", "Turn on Vello any time in Settings › Products for bots, teams and coding runs."];
     body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "done", 84, { badge: false })}</div><h1>You're all set</h1>`
       + (anyProductOn() ? "" : `<p class="w-ask">Nothing is on yet. Go back to Pick products and turn on at least one.</p>`)
       + `<p class="lead">Things to try:</p><ul class="su-try">${tries.map((t) => `<li>${t}</li>`).join("")}</ul>`
       + (missing ? `<div class="tc-line">${TP.badge("needs", "pg")}<span><b>No brain yet</b> · bots can't answer until you add an API key or sign in to an agent in Settings</span></div>` : "")
-      + `<div class="btns"><button class="btn pri" data-finish${anyProductOn() ? "" : " disabled"}>Open Theo</button>${anyProductOn() ? "" : `<button class="btn" data-goto="products">Pick products</button>`}</div>`;
+      + `<div class="btns"><button class="btn pri" data-finish${anyProductOn() ? "" : " disabled"}>Open Vello</button>${anyProductOn() ? "" : `<button class="btn" data-goto="products">Pick products</button>`}</div>`;
   }
   const close = setup.again ? `<button class="btn ghost su-close" data-close>Not now</button>` : "";
-  $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Theo</b></div>${side}${close}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
+  $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Vello</b></div>${side}${close}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
   const root = $("#setup");
   root.querySelectorAll("[data-next]").forEach((b) => b.onclick = setupNext);
   root.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { setup.step = b.dataset.goto; drawSetup(); });

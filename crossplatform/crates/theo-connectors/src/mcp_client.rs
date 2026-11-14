@@ -99,13 +99,13 @@ impl McpSession {
             json!({
                 "protocolVersion": LATEST_PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "theo-connectors", "title": "Theo", "version": env!("CARGO_PKG_VERSION")}
+                "clientInfo": {"name": "theo-connectors", "title": "Vello", "version": env!("CARGO_PKG_VERSION")}
             }),
             timeout,
         )?;
         let server_version = result.get("protocolVersion").and_then(Value::as_str).unwrap_or(LATEST_PROTOCOL_VERSION).to_string();
         if !SUPPORTED_PROTOCOL_VERSIONS.contains(&server_version.as_str()) {
-            return Err(McpError::Failed(format!("the app speaks MCP {server_version}, which Theo doesn't know yet")));
+            return Err(McpError::Failed(format!("the app speaks MCP {server_version}, which Vello doesn't know yet")));
         }
         session.server_name = result.pointer("/serverInfo/name").and_then(Value::as_str).map(str::to_string);
         session.negotiated_protocol_version = server_version.clone();
@@ -293,7 +293,7 @@ fn answer_server_request(incoming: &Value) -> Option<Value> {
     Some(match method {
         "ping" => json!({"jsonrpc": "2.0", "id": request_id, "result": {}}),
         "roots/list" => json!({"jsonrpc": "2.0", "id": request_id, "result": {"roots": []}}),
-        _ => json!({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Theo's connector hub doesn't offer this"}}),
+        _ => json!({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Vello's connector hub doesn't offer this"}}),
     })
 }
 

@@ -73,9 +73,9 @@ def seed():
         {"system": r"You are Manager", "reply": "We can ship Friday if we cut one thing. [CHOOSE: What should we cut for Friday? | Dark mode: two days saved, nobody asked for it yet | Export to CSV: one day saved, two customers want it]"},
         {"system": r"You are Ledger", "reply": "At $8 a month with $1,200 of costs, you break even at **150 subscribers**.", "sleep": 1.5},
         {"system": r"You are Copy Editor", "reply": BRIEF},
-        {"system": r"You are Theo", "prompt": "answered you privately", "reply": "Ledger says you break even at 150 subscribers; everything after that is $8 of margin each."},
-        {"system": r"You are Theo", "prompt": "Ledger", "reply": "Asking Ledger for the numbers.\n[TELL: Ledger: break-even subscribers at $8/month with $1,200/month costs?]"},
-        {"system": r"You are Theo", "prompt": "hello-demo", "reply": "One small script.\nProject: Hello demo\nNew folder: hello-demo\n```prompt\nIn the current folder create hello.txt containing hello from Theo. Nothing else.\n```"},
+        {"system": r"You are Vello", "prompt": "answered you privately", "reply": "Ledger says you break even at 150 subscribers; everything after that is $8 of margin each."},
+        {"system": r"You are Vello", "prompt": "Ledger", "reply": "Asking Ledger for the numbers.\n[TELL: Ledger: break-even subscribers at $8/month with $1,200/month costs?]"},
+        {"system": r"You are Vello", "prompt": "hello-demo", "reply": "One small script.\nProject: Hello demo\nNew folder: hello-demo\n```prompt\nIn the current folder create hello.txt containing hello from Theo. Nothing else.\n```"},
         {"reply": "Hi! I'm here. Ask me anything, or hand me something to schedule."}])
     ids = {}
     for name, (desc, look) in CREW.items():

@@ -29,7 +29,7 @@ pub type Fut<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 mod harness_teams;
 
 pub const TEAM_ID: &str = "team";
-pub const RESUME_PREFIX: &str = "Theo stopped before ";
+pub const RESUME_PREFIX: &str = "Vello stopped before ";
 pub const RESUME_RETRY_SUFFIX: &str = "so it's asking again now.";
 pub const RESUME_WINDOW_SECS: i64 = 6 * 3600;
 pub const RESUME_RETRIES: usize = 2;
@@ -232,6 +232,7 @@ impl Harness {
         if !bots.iter().any(|b| b.primary) {
             bots.insert(0, Bot::theo());
         }
+        rename_starter_theo_to_vello(&mut bots);
         let groups: Vec<Group> = self.problems.load(&p.groups_file(), "the group chats").unwrap_or_default();
         let routines: Vec<Routine> = self.problems.load(&p.routines_file(), "the routines").unwrap_or_default();
         let runs: Vec<CodingRun> = self.problems.load(&p.runs_file(), "the coding runs").unwrap_or_default();
@@ -264,7 +265,7 @@ impl Harness {
         self.with(|s| {
             for run in s.runs.iter_mut().filter(|r| r.phase == "running") {
                 run.phase = "stopped".into();
-                run.summary = Some("Theo stopped while this run was going.".into());
+                run.summary = Some("Vello stopped while this run was going.".into());
                 changed = true;
             }
         });
@@ -908,7 +909,7 @@ impl Harness {
             me.fire_hook("turn-finished", json!({"bot": bot.id, "botName": bot.name, "chat": conversation_id, "fromOwner": opts.from_owner, "privately": opts.privately.is_some(), "ok": answer.is_some(), "reply": answer.clone().unwrap_or_default()}));
             crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
             if clicky_orders > 0 && bot.primary {
-                me.post(ChatMessage::note("Clicky isn't part of this build of Theo yet, so that order to Clicky wasn't carried out."), &conversation_id);
+                me.post(ChatMessage::note("Pointer Assistant isn't part of this build of Vello yet, so that order to Pointer Assistant wasn't carried out."), &conversation_id);
             }
             if opts.from_owner {
                 if let Some(a) = answer.clone() {
@@ -1333,9 +1334,9 @@ impl Harness {
                 let minutes = (secs / 60.0).round() as i64;
                 let limit = if minutes >= 1 { format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" }) } else { format!("{} seconds", secs as i64) };
                 if text.trim().is_empty() {
-                    return Err(RunError::Failed(format!("{label} didn't finish within {limit}, so Theo stopped it.")));
+                    return Err(RunError::Failed(format!("{label} didn't finish within {limit}, so Vello stopped it.")));
                 }
-                return Ok((format!("{text}\n\n_(Cut off: this reply didn't finish within {limit}, so Theo stopped it.)_"), resolved));
+                return Ok((format!("{text}\n\n_(Cut off: this reply didn't finish within {limit}, so Vello stopped it.)_"), resolved));
             }
             EndReason::Cancelled => return Ok((text, resolved)),
             EndReason::Exited => {}
@@ -1822,7 +1823,7 @@ impl Harness {
                     if (now - run.started_at).num_seconds() as f64 > longest {
                         run.status = "failed".into();
                         run.finished_at = Some(now);
-                        run.summary = Some("Theo stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner.".into());
+                        run.summary = Some("Vello stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner.".into());
                         changed = true;
                     }
                 }
@@ -1855,7 +1856,7 @@ impl Harness {
             if protocol::catch_up(at, now, schedule::period_seconds(&routine.schedule)) == protocol::CatchUp::Missed {
                 let late = lateness((now - at).num_seconds());
                 let when = at.with_timezone(&chrono::Local).format("%-d %b %H:%M");
-                self.record_run(&routine.id, RoutineRun::finished("missed", format!("Missed the {when} run: Theo wasn't running then, and {late} late is too late to catch up.")));
+                self.record_run(&routine.id, RoutineRun::finished("missed", format!("Missed the {when} run: Vello wasn't running then, and {late} late is too late to catch up.")));
                 continue;
             }
             self.start_routine(routine, true);
@@ -2071,7 +2072,7 @@ impl Harness {
 
     fn ask_routine(&self, bot: &Bot, request: &protocol::RoutineRequest, target: &str, room: &str) {
         let label = schedule::label(&request.schedule);
-        self.post_ask(bot, room, &format!("{} wrote a routine (\"{}\", {}), but you didn't ask for one, so Theo didn't set it up. Set it up?", bot.name, request.name, label),
+        self.post_ask(bot, room, &format!("{} wrote a routine (\"{}\", {}), but you didn't ask for one, so Vello didn't set it up. Set it up?", bot.name, request.name, label),
             json!({"kind": "routine", "name": request.name, "when": request.when, "do": request.instruction, "target": target}));
     }
 
@@ -2306,7 +2307,7 @@ impl Harness {
     /// A message from a program on this computer: shown as from that program, answered on a turn that isn't the owner's.
     pub fn receive_from_gateway(self: &Arc<Self>, text: &str, source: &str, bot_id: &str) -> Option<String> {
         let bot = self.bot(bot_id).filter(|b| b.is_on())?;
-        let message = ChatMessage::new(ROUTINE_AUTHOR, format!("\u{1F4E8} From {source}, through Theo's local API: {text}"));
+        let message = ChatMessage::new(ROUTINE_AUTHOR, format!("\u{1F4E8} From {source}, through Vello's local API: {text}"));
         let id = message.id.clone();
         self.post(message, bot_id);
         self.fire_hook("gateway-message", json!({"bot": bot_id, "source": source, "text": text}));
@@ -2394,8 +2395,8 @@ pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
     sorted.sort_by_key(|f| rank(&f.0));
     let fails = findings.iter().filter(|f| f.0 == "fail").count();
     let warns = findings.iter().filter(|f| f.0 == "warn").count();
-    let head = if fails + warns == 0 { format!("Theo's health check: all {} checks pass.", findings.len()) } else {
-        format!("Theo's health check: {fails} problem{} and {warns} warning{} out of {} checks.", if fails == 1 { "" } else { "s" }, if warns == 1 { "" } else { "s" }, findings.len())
+    let head = if fails + warns == 0 { format!("Vello's health check: all {} checks pass.", findings.len()) } else {
+        format!("Vello's health check: {fails} problem{} and {warns} warning{} out of {} checks.", if fails == 1 { "" } else { "s" }, if warns == 1 { "" } else { "s" }, findings.len())
     };
     let lines: Vec<String> = sorted.iter().map(|f| format!("{} **{}**: {}", match f.0.as_str() { "fail" => "✗", "warn" => "!", _ => "✓" }, f.1, f.2)).collect();
     format!("{head}\n\n{}", lines.join("\n"))
@@ -2418,5 +2419,34 @@ struct TurnFolder(PathBuf);
 impl Drop for TurnFolder {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Theo is called Vello now (the Mac's `BotImport.upgrade` does the same). Only the starter's own name and opening words
+/// change: a name or instructions the owner wrote stay.
+pub(crate) fn rename_starter_theo_to_vello(bots: &mut [Bot]) {
+    for bot in bots.iter_mut().filter(|bot| bot.id == "theo") {
+        if bot.name == "Theo" { bot.name = "Vello".into(); }
+        if let Some(rest) = bot.instructions.strip_prefix("You are Theo,") { bot.instructions = format!("You are Vello,{rest}"); }
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    #[test]
+    fn the_starter_theo_becomes_vello_and_names_the_owner_chose_stay() {
+        let mut starter = Bot::theo();
+        starter.name = "Theo".into();
+        starter.instructions = "You are Theo, the owner's CEO bot. Keep it short.".into();
+        let mut renamed_by_owner = Bot::theo();
+        renamed_by_owner.id = "theo".into();
+        renamed_by_owner.name = "Boss".into();
+        let mut bots = vec![starter, renamed_by_owner];
+        rename_starter_theo_to_vello(&mut bots);
+        assert_eq!(bots[0].name, "Vello");
+        assert_eq!(bots[0].instructions, "You are Vello, the owner's CEO bot. Keep it short.");
+        assert_eq!(bots[1].name, "Boss");
     }
 }

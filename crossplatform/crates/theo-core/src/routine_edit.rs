@@ -15,7 +15,7 @@ pub const LONGEST_NAME: usize = 80;
 /// ("weekdays 08:30").
 pub fn schedule_from(value: &Value) -> Result<Schedule, String> {
     if let Some(words) = value.as_str() {
-        return crate::schedule::parse(words).ok_or_else(|| "Theo can't read that time.".to_string());
+        return crate::schedule::parse(words).ok_or_else(|| "Vello can't read that time.".to_string());
     }
     let kind = match value.get("kind").and_then(|k| k.as_str()).unwrap_or("") {
         "daily" => ScheduleKind::Daily,
