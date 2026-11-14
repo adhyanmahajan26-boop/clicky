@@ -9,6 +9,7 @@ use theo_core::Harness;
 mod clicky;
 mod clicky_voice;
 mod dictation_ui;
+mod updater;
 
 /// Started by the system at sign-in: Theo comes up in the tray without opening its window.
 const BACKGROUND_ARG: &str = "--background";
@@ -229,6 +230,7 @@ fn main() {
             let voice_runtime = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
             dictation_ui::start(app.handle(), harness.clone(), voice_runtime);
             watch_faces(app.handle().clone(), harness.clone());
+            updater::start(harness.clone());
             app.manage(harness.clone());
             // Clicky, the voice and screen companion: its spark, push-to-talk and voice (clicky.rs).
             clicky::start(app.handle(), harness.clone());
@@ -275,7 +277,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![control, set_tray, notify, open_at_login])
+        .invoke_handler(tauri::generate_handler![control, set_tray, notify, open_at_login, updater::install_update])
         .build(tauri::generate_context!())
         .expect("Theo couldn't start");
     app.run(|handle, event| {

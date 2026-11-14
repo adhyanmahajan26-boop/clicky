@@ -379,47 +379,8 @@ async function renderUsage() {
   const rows = r.bots.map((b) => `<tr><td>${esc(b.name)}</td><td>${b.turns}</td><td>${(b.totalTokens / 1000).toFixed(1)}k</td><td>${b.costUSD == null ? "–" : "$" + b.costUSD.toFixed(2)}</td></tr>`).join("");
   $("#pane").innerHTML = `<div class="column"><h1>Usage</h1><p class="muted">The last 7 days.</p><table class="grid"><tr><th>Bot</th><th>Turns</th><th>Tokens</th><th>Cost</th></tr>${rows}</table></div>`;
 }
-async function renderSettings() {
-  const [doc, gw, st] = await Promise.all([invoke({ cmd: "doctor" }), invoke({ cmd: "gateway" }), invoke({ cmd: "status" })]);
-  const rows = (doc.result.findings || []).map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}</div>`).join("");
-  const g = gw.result;
-  const ownerName = st.result.ownerName || "";
-  $("#pane").innerHTML = `<div class="column"><h1>Settings</h1><h2>You</h2><div class="list"><div class="crow"><span class="tx"><b>Your name</b><small style="white-space:normal">What your bots call you. Empty: they say "the owner".</small></span><span class="act"><input id="owner-name" value="${esc(ownerName)}" maxlength="40" placeholder="Your first name"></span></div></div><section id="brains-settings"></section><h2>Health check</h2><div class="list">${rows}</div>`
-    + `<h2>Local API</h2><div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`
-    + `<h2>This computer</h2><div class="list" id="login-row"></div><p class="muted">${esc(st.result.os)} ${esc(st.result.arch)} · data in ${esc(String(st.result.data))} · Theo ${esc(st.result.version)}</p></div>`;
-  $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettings(); };
-  $("#owner-name").oninput = (e) => saveOwnerName(e.target.value);
-  // Brains: keys, agents, and which one answers when a bot's own keeps failing.
-  const drawBrains = () => {
-    const box = $("#brains-settings");
-    if (!box) return;
-    const b = brainsCache;
-    const current = b && b.standIn ? b.standIn.split("|")[0] : "";
-    const choices = brainChoices(b).filter(([id]) => id !== "claude");
-    box.innerHTML = `${brainsHTML(b)}<h2>When a bot's brain fails</h2><div class="list"><div class="crow"><span class="tx"><b>Answer with</b><small style="white-space:normal">Another brain answers for the turn and the chat says so. The default is Claude Code when it's installed.</small></span>`
-      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`
-      + codingSettingsHTML(b && b.coding);
-    wireBrains(box, drawBrains);
-    if ($("#coding-target")) $("#coding-target").onchange = async (e) => { await invoke({ cmd: "harnessSet", codingTarget: e.target.value }); await loadBrains(); drawBrains(); };
-    $("#stand-in").onchange = async (e) => {
-      const engine = e.target.value;
-      let model = "";
-      if (engine.startsWith("api:")) { const m = await invoke({ cmd: "apiModels", provider: engine.slice(4) }); model = m.ok ? m.result.preferredModel || "" : ""; }
-      else if (b) { const agent = b.agents.find((a) => a.id === engine); model = agent ? agent.defaultModel : ""; }
-      await invoke({ cmd: "standIn", engine, model });
-      await loadBrains(); drawBrains();
-    };
-  };
-  drawBrains();
-  loadBrains().then(drawBrains);
-  // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
-  const drawLogin = (on) => {
-    if (typeof on !== "boolean" || !$("#login-row")) return;
-    $("#login-row").innerHTML = `<div class="crow"><span class="tx"><b>Open Theo when you sign in</b><small style="white-space:normal">Theo starts in the tray, so routines run without you opening it. Closing the window keeps Theo running; quit it from the tray icon.</small></span>${TP.pill(on ? "ok" : "none", on ? "On" : "Off")}<span class="act"><button class="btn sm" id="login-toggle">${on ? "Turn off" : "Turn on"}</button></span></div>`;
-    $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
-  };
-  window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
-}
+// Settings live in settings.js: the Mac's sections with a list on the left.
+async function renderSettings() { return renderSettingsPage(); }
 
 /* ---------------- coding runs ---------------- */
 // Which agent does coding runs: the owner's pick, else the first one ready (any of them: none is required).
@@ -497,12 +458,15 @@ async function refresh() {
   // The tray face and notifications come from the app itself (main.rs watch_faces), so they keep working while this window
   // is hidden and its timers are slowed down.
   renderSidebar(); renderHead();
+  // A product that's off shows its "turned off" page instead (products.js).
+  if (window.productGate && window.productGate(view)) { $("#composer").style.display = "none"; return; }
   if (view.kind === "bot" || view.kind === "group") await renderChat();
   else if (view.kind === "home") renderHome();
   $("#composer").style.display = view.kind === "bot" || view.kind === "group" ? "" : "none";
 }
 function render() {
   refresh();
+  if (window.productGate && window.productGate(view)) return;
   if (view.kind === "connectors") renderConnectors();
   if (view.kind === "routines") renderRoutines();
   if (view.kind === "usage") renderUsage();
@@ -615,17 +579,28 @@ $("#bot-form").onsubmit = async (e) => {
 };
 
 /* ---------------- first run ---------------- */
-const SETUP_STEPS = ["Welcome", "Brain", "Coding", "Your first bot", "Done"];
+// The Mac's Setup/SetupGuideWindow.swift: Welcome (and your name), a brain ("paste one API key" first), the products you want,
+// then for Theo its coding runs and a first bot, and done. It opens at launch when it was never finished, or when no brain
+// at all can think here while Theo or Clicky is on (setupState's needsSetup); opened again like that, or from Settings, it
+// can be closed.
+const SETUP_TITLES = { welcome: "Welcome", brain: "Brain", products: "Pick products", coding: "Coding runs", bot: "Your first bot", done: "Done" };
 let setup = null;
 const TEMPLATES = [
   ["Researcher", "Looks things up and sums them up", "You are Researcher. Read what you're asked about on the web and in files you're given, and answer in a few clear sentences with sources.", { fin: "sky", trim: "#F4F4F5", eye: "round", top: "twin", extra: "none" }],
   ["Builder", "Writes and fixes code", "You are Builder, an engineer. When asked for code, plan it briefly and hand it to a coding run.", { fin: "bone", trim: "#5B8DEF", eye: "wide", top: "handle", extra: "none" }],
   ["Writer", "Drafts emails, posts and docs", "You are Writer. Draft clear, short writing in the owner's voice and ask before anything is sent.", { fin: "slate", trim: "#F4F4F5", eye: "tall", top: "handle", extra: "pencil" }],
 ];
-async function startSetup() {
-  setup = { step: 0, st: null, owner: "", look: TEMPLATES[0][3], name: TEMPLATES[0][0], desc: TEMPLATES[0][1], instr: TEMPLATES[0][2], made: null };
+// The steps shown: coding runs and a first bot are Theo's, so they go when Theo is off.
+function setupSteps() {
+  const theo = typeof productIsOn === "function" ? productIsOn("theo") : true;
+  return ["welcome", "brain", "products"].concat(theo ? ["coding", "bot"] : [], ["done"]);
+}
+// `again`: opened from Settings, or at launch because no brain can think here. It starts at the brain step then and can be closed.
+async function startSetup(opts = {}) {
+  setup = { step: opts.step || "welcome", again: !!opts.again, st: null, owner: "", look: TEMPLATES[0][3], name: TEMPLATES[0][0], desc: TEMPLATES[0][1], instr: TEMPLATES[0][2], made: null };
   $("#setup").hidden = false;
   drawSetup();
+  if (typeof loadProducts === "function") await loadProducts();
   setup.st = (await invoke({ cmd: "setupState" })).result;
   // The name the bots will use: what's saved, else the computer account's name, saved straight away so what's shown is what they're told.
   setup.owner = (setup.st && (setup.st.ownerName || setup.st.suggestedOwnerName)) || "";
@@ -636,36 +611,55 @@ async function startSetup() {
 function saveOwnerName(name) { return invoke({ cmd: "setSetting", key: "owner.name", value: name.trim().slice(0, 40) || null }); }
 function setupFace() {
   const s = setup.st;
-  if (setup.step === 4) return "done";
-  if (setup.step === 1 && s && !s.anyReady) return "needs";
-  if (setup.step === 3 && !setup.name.trim()) return "needs";
+  if (setup.step === "done") return "done";
+  if (setup.step === "brain" && s && !s.anyReady) return "needs";
+  if (setup.step === "products" && !anyProductOn()) return "needs";
+  if (setup.step === "bot" && !setup.name.trim()) return "needs";
   return "awake";
 }
+function anyProductOn() { return typeof productIsOn !== "function" || ["theo", "clicky", "dictation"].some(productIsOn); }
+function setupNext() {
+  const steps = setupSteps();
+  setup.step = steps[Math.min(steps.indexOf(setup.step) + 1, steps.length - 1)];
+  drawSetup();
+}
+function closeSetup() { $("#setup").hidden = true; setup = null; render(); }
 function drawSetup() {
+  if (!setup) return;
   const s = setup.st, step = setup.step;
-  const steps = SETUP_STEPS.map((n, i) => `<div class="su-step${i === step ? " on" : ""}${i < step ? " done" : ""}">${i < step ? TP.badge("done", "pg") : `<i class="num">${i + 1}</i>`}${n}</div>`).join("");
+  const steps = setupSteps();
+  const at = steps.indexOf(step);
+  const side = steps.map((id, i) => `<div class="su-step${i === at ? " on" : ""}${i < at ? " done" : ""}">${i < at ? TP.badge("done", "pg") : `<i class="num">${i + 1}</i>`}${SETUP_TITLES[id]}</div>`).join("");
   let body = "";
   const checking = `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
-  if (step === 0) {
-    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Meet Theo</h1>`
-      + `<p class="lead">Theo runs a team of AI bots on the AI you already have: an API key, or Claude Code, Codex, Cursor, Gemini, Grok or OpenCode on your own subscription. Chats, group chats, routines and coding runs. Bots can't loop, schedule things or start coding without you saying so.</p>`
+  if (step === "welcome") {
+    const list = (typeof Products !== "undefined" && Products.list) || [];
+    body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "awake", 112, { badge: false })}</div><h1>Hi, I'm Theo</h1>`
+      + `<p class="lead">Three products, one app. First pick a brain to think with: the AI you already have, an API key or Claude Code, Codex, Cursor, Gemini, Grok or OpenCode on your own subscription. Then see each product and turn on only the ones you want. Setup takes about two minutes.</p>`
+      + (list.length ? `<ul class="su-products">${list.map((p) => `<li><b>${esc(p.title)}</b>: ${esc(p.tagline)}</li>`).join("")}</ul>` : "")
       + `<div class="su-fields"><label>What should your bots call you? <input id="su-owner" value="${esc(setup.owner)}" maxlength="40" placeholder="Your first name"></label></div>`
-      + `<p class="muted">This takes a minute: pick a brain, then make your first bot.</p><div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
-  } else if (step === 1) {
+      + `<div class="btns"><button class="btn pri" data-next>Get started</button></div>`;
+  } else if (step === "brain") {
     const ready = s && s.anyReady;
-    body = `<h1>Pick a brain</h1><p class="lead">Bots think with the AI you already have. Paste an API key, or use an agent you're signed in to. You need one, any one; you can add more later in Settings.</p>`
+    body = `<h1>Pick a brain</h1><p class="lead">Theo needs one thing to think with: an API key, or a coding agent you already pay for. Any one is enough, and none is required over another. You can add more later in Settings.</p>`
       + `<div id="su-brains">${brainsHTML(s && s.brains)}</div>`
       + `<div class="btns"><button class="btn pri" data-next${ready ? "" : " disabled"}>Continue</button><button class="btn" data-recheck>Check again</button>${s && !ready ? `<button class="btn ghost" data-next>Skip for now</button>${TP.pill("needs", "Add one to continue")}` : ""}</div>`;
-  } else if (step === 2) {
+  } else if (step === "products") {
+    const any = anyProductOn();
+    body = `<h1>Pick what you want</h1><p class="lead">Theo, Clicky and Dictation are separate products. Watch each one and turn on only the ones you want; you can change this any time in Settings › Products.</p>`
+      + `<div id="su-products">${typeof productCardsHTML === "function" ? productCardsHTML() : checking}</div>`
+      + `<div class="btns"><button class="btn pri" data-next${any ? "" : " disabled"}>Continue</button>${any ? "" : TP.pill("needs", "Pick at least one")}</div>`;
+  } else if (step === "coding") {
     const g = s && s.git, h = s && s.gh;
     const r = (name, icon, line, pill, act) => `<div class="crow"><span class="app">${icon}</span><span class="tx"><b>${name}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
     body = `<h1>Coding runs</h1><p class="lead">Optional. When you ask a bot to build or fix something, a coding agent works on its own branch, commits, and with GitHub pushes and opens a draft pull request.</p>`
       + (!s ? checking : `<div class="list">${codingRowHTML(s.coding, r)}`
       + `${r("git", "g", g.installed ? esc(g.version) : "Not installed. Get it from git-scm.com or your package manager.", g.installed ? TP.pill("ok", "Installed") : TP.pill("none", "Not installed"), "")}`
       + r("GitHub CLI", "gh", !h.installed ? "Not installed: runs still commit, they just don't push. cli.github.com" : h.signedIn ? "Signed in: runs can push and open draft PRs." : "Signed out: sign in to push and open draft PRs.",
-          !h.installed ? TP.pill("none", "Not installed") : h.signedIn ? TP.pill("ok", "Signed in") : TP.pill("needs", "Signed out"), h.installed && !h.signedIn ? `<button class="btn sm" data-term="gh">Sign in</button>` : "") + `</div>`)
+          !h.installed ? TP.pill("none", "Not installed") : h.signedIn ? TP.pill("ok", "Signed in") : TP.pill("needs", "Signed out"), h.installed && !h.signedIn ? `<button class="btn sm" data-term="gh">Sign in</button>` : "") + `</div>`
+      + (s.projectsFolder ? `<p class="muted">New projects go in ${esc(String(s.projectsFolder))}. You can pick another folder in Settings › Coding runs.</p>` : ""))
       + `<div class="btns"><button class="btn pri" data-next>Continue</button><button class="btn" data-recheck>Check again</button></div>`;
-  } else if (step === 3) {
+  } else if (step === "bot") {
     body = `<h1>Your first bot</h1><p class="lead">Pick what it does and how it looks. You can change both later.</p>`
       + `<div class="pills su-tpl">${TEMPLATES.map(([n]) => `<button type="button" class="btn sm${setup.name === n ? " pri" : ""}" data-tpl="${n}">${n}</button>`).join("")}</div>`
       + `<div class="su-fields"><label>Name <input id="su-name" value="${esc(setup.name)}" maxlength="40"></label><label>What it does <input id="su-desc" value="${esc(setup.desc)}" maxlength="120"></label></div><div id="su-maker"></div>`
@@ -673,21 +667,30 @@ function drawSetup() {
   } else {
     const missing = s && !s.anyReady;
     const who = setup.made ? setup.name : "a bot";
+    const theo = typeof productIsOn !== "function" || productIsOn("theo");
+    const tries = theo
+      ? [`Ask ${esc(who)} something in its chat.`, `Ask Theo to get ${esc(who)} to look into something and report back.`, `Say "every weekday at 8, send me a brief" to set up a routine.`]
+      : ["Your products are on. Their settings are in Settings.", "Turn on Theo any time in Settings › Products for bots, teams and coding runs."];
     body = `<div class="su-hero">${TP.bot(TP.CREW.theo, "done", 84, { badge: false })}</div><h1>You're all set</h1>`
-      + `<p class="lead">Things to try:</p><ul class="su-try"><li>Ask ${esc(who)} something in its chat.</li><li>Ask Theo to get ${esc(who)} to look into something and report back.</li><li>Say "every weekday at 8, send me a brief" to set up a routine.</li></ul>`
+      + (anyProductOn() ? "" : `<p class="w-ask">Nothing is on yet. Go back to Pick products and turn on at least one.</p>`)
+      + `<p class="lead">Things to try:</p><ul class="su-try">${tries.map((t) => `<li>${t}</li>`).join("")}</ul>`
       + (missing ? `<div class="tc-line">${TP.badge("needs", "pg")}<span><b>No brain yet</b> · bots can't answer until you add an API key or sign in to an agent in Settings</span></div>` : "")
-      + `<div class="btns"><button class="btn pri" data-finish>Open Theo</button></div>`;
+      + `<div class="btns"><button class="btn pri" data-finish${anyProductOn() ? "" : " disabled"}>Open Theo</button>${anyProductOn() ? "" : `<button class="btn" data-goto="products">Pick products</button>`}</div>`;
   }
-  $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Theo</b></div>${steps}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
+  const close = setup.again ? `<button class="btn ghost su-close" data-close>Not now</button>` : "";
+  $("#setup").innerHTML = `<div class="su"><aside class="su-side"><div class="su-theo">${TP.bot(TP.CREW.theo, setupFace(), 56)}<b>Setting up Theo</b></div>${side}${close}</aside><section class="su-main"><div class="su-body">${body}</div></section></div>`;
   const root = $("#setup");
-  root.querySelectorAll("[data-next]").forEach((b) => b.onclick = () => { setup.step++; drawSetup(); });
+  root.querySelectorAll("[data-next]").forEach((b) => b.onclick = setupNext);
+  root.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { setup.step = b.dataset.goto; drawSetup(); });
+  root.querySelectorAll("[data-close]").forEach((b) => b.onclick = closeSetup);
   root.querySelectorAll("[data-recheck]").forEach((b) => b.onclick = async () => { setup.st = null; drawSetup(); setup.st = (await invoke({ cmd: "setupState" })).result; drawSetup(); });
   root.querySelectorAll("[data-term]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openTerminal", which: b.dataset.term }); b.textContent = r.ok ? "Opened" : "Copy the command"; });
   root.querySelectorAll("[data-tpl]").forEach((b) => b.onclick = () => { const t = TEMPLATES.find((x) => x[0] === b.dataset.tpl); Object.assign(setup, { name: t[0], desc: t[1], instr: t[2], look: t[3] }); drawSetup(); });
   wire(root);
-  if (step === 0 && $("#su-owner")) $("#su-owner").oninput = (e) => { setup.owner = e.target.value; saveOwnerName(setup.owner); };
-  if (step === 1 && s) wireBrains(root.querySelector("#su-brains"), async () => { setup.st = (await invoke({ cmd: "setupState" })).result; drawSetup(); });
-  if (step === 3) {
+  if (step === "welcome" && $("#su-owner")) $("#su-owner").oninput = (e) => { setup.owner = e.target.value; saveOwnerName(setup.owner); };
+  if (step === "brain" && s) wireBrains(root.querySelector("#su-brains"), async () => { setup.st = (await invoke({ cmd: "setupState" })).result; drawSetup(); });
+  if (step === "products" && typeof wireProductCards === "function") wireProductCards(root.querySelector("#su-products"), drawSetup);
+  if (step === "bot") {
     const get = mountMaker($("#su-maker"), setup.look, (l) => (setup.look = l));
     $("#su-name").oninput = (e) => { setup.name = e.target.value; root.querySelector("[data-create]").disabled = !setup.name.trim(); root.querySelector("[data-create]").textContent = `Make ${setup.name || "it"}`; };
     $("#su-desc").oninput = (e) => (setup.desc = e.target.value);
@@ -695,16 +698,20 @@ function drawSetup() {
       // The first bot thinks with the brain setup found: a signed-in agent, else a key on its preferred model.
       const brain = (setup.st && setup.st.suggested) || { engine: "claude", model: "claude-sonnet-5-5" };
       const r = await invoke({ cmd: "botCreate", name: setup.name.trim(), description: setup.desc, instructions: setup.instr || `You are ${setup.name.trim()}.`, provider: brain.engine, model: brain.model });
-      if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look: get() }); setup.made = r.result.id; setup.step = 4; drawSetup(); }
+      if (r.ok) { await invoke({ cmd: "botLook", id: r.result.id, look: get() }); setup.made = r.result.id; setup.step = "done"; drawSetup(); }
     };
   }
   root.querySelectorAll("[data-finish]").forEach((b) => b.onclick = async () => {
-    await invoke({ cmd: "setupDone" }); $("#setup").hidden = true;
-    open(setup.made ? { kind: "bot", id: setup.made } : { kind: "home" });
+    await invoke({ cmd: "setupDone" });
+    const made = setup.made;
+    $("#setup").hidden = true; setup = null;
+    if (typeof loadProducts === "function") await loadProducts();
+    open(made ? { kind: "bot", id: made } : { kind: "home" });
   });
 }
 
 document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "n") { e.preventDefault(); $("#new-bot").click(); } });
 setInterval(refresh, 500);
 render();
-invoke({ cmd: "setupState" }).then((r) => { if (r.ok && !r.result.completed) startSetup(); });
+// Setup opens when it was never finished, or when no brain can think here (then at its brain step, and it can be closed).
+invoke({ cmd: "setupState" }).then((r) => { if (r.ok && r.result.needsSetup) startSetup(r.result.completed ? { again: true, step: "brain" } : {}); });

@@ -15,6 +15,7 @@ anyhow.workspace = true
 once_cell.workspace = true
 rand = "0.8"
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+sha2 = "0.10"
 # Clicky: screenshots scaled and encoded for the brain, and pictures in requests.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64 = "0.22"

@@ -1958,6 +1958,173 @@ def b08():
     return all(checks.values()), dict(checks, suggested=suggested, theo_moved=done.get("theoMovedTo"), shown=shown[:120])
 
 
+# ---------------------------------------------------------------- Updates, products and setup
+
+class FakeReleases:
+    """A stand-in for GitHub's release list (`/repos/<repo>/releases`) and its asset downloads, on 127.0.0.1."""
+
+    def __init__(self):
+        import hashlib, http.server, threading
+        self.auth, self.paths, self.tamper = [], [], False
+        self.installer = b"theo installer for tests " * 64
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def send(self, body, ctype="application/json", code=200):
+                self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def do_GET(self):
+                fake.auth.append(self.headers.get("Authorization"))
+                fake.paths.append(self.path)
+                port = self.server.server_address[1]
+                p = self.path
+                if p.startswith("/repos/private/"):  # GitHub's answer for a private repo the request can't see
+                    return self.send(b'{"message":"Not Found"}', code=404)
+                if p.startswith("/repos/o/r/releases/latest"):
+                    return self.send(b'{"message":"the updater must not ask for the latest release"}', code=500)
+                if p.startswith("/repos/o/r/releases"):
+                    def asset(name):
+                        return {"name": name, "url": "http://127.0.0.1:%d/api/%s" % (port, name), "browser_download_url": "http://127.0.0.1:%d/dl/%s" % (port, name)}
+                    both = ["Theo-200.zip", "Theo-200-windows-x64-setup.exe", "Theo-200-linux-x86_64.AppImage", "Theo-200-linux-aarch64.AppImage", "SHA256SUMS"]
+                    releases = [
+                        # The Mac's "latest": a Mac-only build. Windows and Linux skip it.
+                        {"tag_name": "build-300", "draft": False, "prerelease": False, "body": "Mac only", "assets": [asset("Theo-300.zip"), asset("SHA256SUMS")]},
+                        {"tag_name": "build-900", "draft": True, "prerelease": False, "body": "", "assets": [asset(n) for n in both]},
+                        {"tag_name": "build-100", "draft": False, "prerelease": False, "body": "Older", "assets": [asset(n) for n in both]},
+                        {"tag_name": "build-200", "draft": False, "prerelease": False, "body": "Faster setup.\r\nsha256: abc", "html_url": "http://example.invalid/build-200", "assets": [asset(n) for n in both]},
+                    ]
+                    return self.send(json.dumps(releases).encode())
+                if p.startswith("/api/") or p.startswith("/dl/"):
+                    name = p.split("/", 2)[2]
+                    if name == "SHA256SUMS":
+                        digest = "0" * 64 if fake.tamper else hashlib.sha256(fake.installer).hexdigest()
+                        lines = ["%s  Theo-200-%s" % (digest, n) for n in ("windows-x64-setup.exe", "linux-x86_64.AppImage", "linux-aarch64.AppImage")]
+                        return self.send(("\n".join(lines) + "\n").encode(), "text/plain")
+                    return self.send(fake.installer, "application/octet-stream")
+                self.send(b"{}", code=404)
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+
+
+def opened_log():
+    f = T.DATA / "Logs" / "opened.log"
+    return f.read_text(encoding="utf-8") if f.exists() else ""
+
+
+@test("U01", "Updates: the newest build-* release with this platform's installer (never the Mac's latest), checked against SHA256SUMS; a private repo said plainly; the token kept secret", "updates")
+def u01():
+    fake = FakeReleases()
+    T.setd("test.updates.api", "http://127.0.0.1:%d" % fake.port)
+    T.setd("test.updates.repo", "o/r")
+    try:
+        before = P({"cmd": "updates"})["result"]
+        checked = P({"cmd": "updates", "action": "check"}, timeout=60)["result"]
+        log_before = opened_log()
+        installed = P({"cmd": "updates", "action": "install"}, timeout=60)
+        recorded = opened_log()[len(log_before):]
+        downloaded = list((T.DATA / "Updates").glob("Theo-200-*")) if (T.DATA / "Updates").exists() else []
+        fake.tamper = True
+        P({"cmd": "updates", "action": "check"}, timeout=60)
+        tampered = P({"cmd": "updates", "action": "install"}, timeout=60)
+        left_after_tamper = [f.name for f in (T.DATA / "Updates").glob("Theo-200-*")] if (T.DATA / "Updates").exists() else []
+        fake.tamper = False
+        T.setd("test.updates.repo", "private/r")
+        private = P({"cmd": "updates", "action": "check"}, timeout=60)["result"]
+        bad = P({"cmd": "updates", "action": "token", "token": "has a space"})
+        with_token = P({"cmd": "updates", "action": "token", "token": "ghp_TESTTOKEN123"}, timeout=60)["result"]
+        sent = fake.auth[-1]
+        removed = P({"cmd": "updates", "action": "removeToken"})["result"]
+        status = P({"cmd": "status"})["result"]
+    finally:
+        T.setd("test.updates.api", None)
+        T.setd("test.updates.repo", None)
+        P({"cmd": "updates", "action": "removeToken"})
+        fake.stop()
+    text = json.dumps([checked, private, with_token, removed])
+    checks = {
+        "build_and_label": before.get("build") == status.get("build") and "label" in before and before.get("state") in ("idle", "upToDate", "available", "failed"),
+        "lists_releases_not_latest": any("/releases?per_page=" in p for p in fake.paths) and not any(p.startswith("/repos/o/r/releases/latest") for p in fake.paths),
+        "picks_build_200": checked.get("state") == "available" and (checked.get("available") or {}).get("build") == 200 and checked.get("newest") == 200,
+        "notes_without_checksum_line": (checked.get("available") or {}).get("notes") == "Faster setup.",
+        "install_downloads_checks_and_records": installed.get("ok") is True and installed["result"].get("verified") is True and "update install build 200" in recorded and len(downloaded) == 1,
+        "checksum_mismatch_refused_and_deleted": tampered.get("ok") is False and "checksum" in tampered.get("error", "") and not left_after_tamper,
+        "private_repo_said_plainly": private.get("state") == "failed" and "updates are private" in private.get("message", "") and "private/r" in private.get("message", "") and "auth login" not in private.get("message", ""),
+        "bad_token_refused": bad.get("ok") is False,
+        "token_sent_as_header": sent == "Bearer ghp_TESTTOKEN123" and with_token.get("hasToken") is True and "can't read it" in with_token.get("message", ""),
+        "token_never_shown": "ghp_TESTTOKEN123" not in text,
+        "token_removed": removed.get("hasToken") is False,
+    }
+    return all(checks.values()), dict(checks, checked=checked, private=private.get("message"), tampered=tampered.get("error"), paths=fake.paths[:6])
+
+
+@test("U02", "Products: Theo on and Clicky and Dictation off by default, switched by the products command, in setupState; setup opens until finished or when no brain can think", "setup")
+def u02():
+    saved = {k: P({"cmd": "products"})["result"]["on"][k] for k in ("theo", "clicky", "dictation")}
+    was_completed = P({"cmd": "setupState"}, timeout=120)["result"]["completed"]
+    try:
+        for k in ("theo", "clicky", "dictation"):
+            T.setd("products.%s" % k, None)
+        default = P({"cmd": "products"})["result"]
+        P({"cmd": "products", "action": "set", "product": "clicky", "on": True})
+        unknown = P({"cmd": "products", "action": "set", "product": "studio", "on": True})
+        st = P({"cmd": "setupState"}, timeout=120)["result"]
+        P({"cmd": "products", "action": "set", "product": "theo", "on": False})
+        P({"cmd": "products", "action": "set", "product": "clicky", "on": False})
+        only_dictation_unset = P({"cmd": "setupState"}, timeout=120)["result"]
+        T.setd("products.dictation", None)
+        P({"cmd": "setupDone"}, timeout=120)
+        after_done = P({"cmd": "products"})["result"]
+    finally:
+        for k, v in saved.items():
+            P({"cmd": "products", "action": "set", "product": k, "on": v})
+        # Other tests see setup as it was (S09 checks a first run).
+        T.setd("setup.completed", True if was_completed else None)
+    titles = [p["title"] for p in default["products"]]
+    expected_needs = (not st["completed"]) or (not st["anyReady"])
+    checks = {
+        "defaults": default["on"] == {"theo": True, "clicky": False, "dictation": False} and titles == ["Theo", "Clicky", "Dictation"],
+        "each_has_words": all(p["tagline"] and len(p["points"]) == 3 for p in default["products"]),
+        "unknown_refused": unknown.get("ok") is False,
+        "setup_state_has_products": st.get("products") == {"theo": True, "clicky": True, "dictation": False},
+        "needs_setup_rule": st.get("needsSetup") is expected_needs,
+        "no_brain_needed_with_theo_and_clicky_off": only_dictation_unset.get("needsSetup") is (not only_dictation_unset["completed"]),
+        "finishing_saves_every_choice": after_done["on"] == {"theo": False, "clicky": False, "dictation": False} and all(p["saved"] for p in after_done["products"]),
+    }
+    return all(checks.values()), dict(checks, default=default["on"], setup_products=st.get("products"), needs=st.get("needsSetup"), any_ready=st.get("anyReady"))
+
+
+@test("U03", "Settings › Coding runs: the projects folder is a setting; a relative path, a drive or Theo's own data folder is refused", "setup")
+def u03():
+    mine = T.ROOT / "my-projects"
+    try:
+        start = P({"cmd": "projectsFolder"})["result"]
+        chosen = P({"cmd": "projectsFolder", "folder": str(mine)})
+        relative = P({"cmd": "projectsFolder", "folder": "Projects"})
+        inside = P({"cmd": "projectsFolder", "folder": str(T.DATA / "Projects2")})
+        drive = P({"cmd": "projectsFolder", "folder": "C:\\" if T.WIN else "/"})
+        kept = P({"cmd": "projectsFolder"})["result"]
+        in_setup = P({"cmd": "setupState"}, timeout=120)["result"].get("projectsFolder")
+    finally:
+        reset = P({"cmd": "projectsFolder", "folder": ""})["result"]
+    checks = {
+        "default_in_data_folder": start.get("chosen") is False and pathlib.Path(start["projectsFolder"]) == T.DATA / "Projects",
+        "chosen": chosen.get("ok") is True and pathlib.Path(chosen["result"]["projectsFolder"]) == mine,
+        "refused": not relative.get("ok") and not inside.get("ok") and not drive.get("ok"),
+        "kept_after_refusals": pathlib.Path(kept["projectsFolder"]) == mine and pathlib.Path(in_setup) == mine,
+        "not_made_until_needed": not mine.exists(),
+        "reset_to_default": reset.get("chosen") is False and pathlib.Path(reset["projectsFolder"]) == T.DATA / "Projects",
+    }
+    return all(checks.values()), dict(checks, start=start, chosen=chosen, relative=relative.get("error"), inside=inside.get("error"), drive=drive.get("error"))
+
+
 # ---------------------------------------------------------------- Real model (opt-in: THEO_REAL=1, needs Claude Code signed in)
 
 def real_engine():

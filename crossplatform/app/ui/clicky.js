@@ -1,6 +1,6 @@
 // Settings › Clicky: on or off, the push-to-talk chord, when the spark shows, Clicky's brain and model, its voice, and a
-// "Try it" box that runs a whole turn (screenshots, spark, bubble, voice) from typed words. It fills #settings-clicky when the
-// Settings page has one, else adds its own section to the page. Everything goes through `control` (theo-core clicky/mod.rs).
+// "Try it" box that runs a whole turn (screenshots, spark, bubble, voice) from typed words. It fills #settings-clicky, the place
+// Settings (settings.js) keeps for it, each time the page is drawn ("theo-settings"). Everything goes through `control` (theo-core clicky/mod.rs).
 (function () {
   "use strict";
   const call = (cmd) => window.__TAURI__.core.invoke("control", { cmd });
@@ -36,7 +36,7 @@
     drawing = true;
     try {
       const r = await call({ cmd: "clickyState" });
-      if (!r.ok) { box.innerHTML = `<h2>Clicky</h2><p class="muted">${escape(r.error)}</p>`; return; }
+      if (!r.ok) { box.innerHTML = `<p class="muted">${escape(r.error)}</p>`; return; }
       const s = r.result;
       const using = s.using;
       const sees = using ? (using.seesScreen ? "sees your screen" : "can't see your screen on this brain, so it answers from your words") : "";
@@ -46,9 +46,11 @@
       const hookLine = !s.on ? "" : ptt && ptt.sameChordAsDictation ? ` Dictation uses ${escape(chordName)} too: pick other keys for one of them.` : ptt && ptt.listening ? ` Listening for ${escape(chordName)}.` : ptt && ptt.hook && ptt.hook.problem ? ` The keyboard hook isn't running: ${escape(ptt.hook.problem)}` : "";
       const brainSelect = `<select id="clicky-brain" aria-label="Clicky's brain">${await brainOptions(s.brain)}</select>`;
       const voiceOptions = (voices || []).map((v) => `<option value="${escape(v.name)}"${v.name === s.voice ? " selected" : ""}>${escape(v.name)}${v.language ? ` · ${escape(v.language)}` : ""}</option>`).join("");
-      box.innerHTML = `<h2>Clicky</h2><div class="list">`
+      // Settings' own "Clicky is off · Turn on" line (settings.js) stands in for this switch while Clicky is off.
+      const switchHere = s.on || typeof productIsOn !== "function";
+      box.innerHTML = `<div class="list">`
         + row("Clicky", `Hold ${escape(chordName)} anywhere, ask about what's on your screen, and let go. Clicky answers in a bubble by the cursor, out loud, and points at things with its spark. Esc stops it.${hookLine}`,
-          `${TP.pill(s.on ? "ok" : "none", s.on ? "On" : "Off")}<button class="btn sm" id="clicky-on">${s.on ? "Turn off" : "Turn on"}</button>`)
+          switchHere ? `${TP.pill(s.on ? "ok" : "none", s.on ? "On" : "Off")}<button class="btn sm" id="clicky-on">${s.on ? "Turn off" : "Turn on"}</button>` : "")
         + row("Shortcut", "Hold these keys to talk to Clicky. Dictation uses its own.", `<select id="clicky-shortcut" aria-label="Clicky's shortcut">${CHORDS.map(([id, name]) => `<option value="${id}"${id === s.shortcut ? " selected" : ""}>${name}</option>`).join("")}</select>`)
         + row("Spark", "The orange spark by your cursor.", `<select id="clicky-spark" aria-label="When the spark shows"><option value="always"${s.spark !== "talking" ? " selected" : ""}>Always show it</option><option value="talking"${s.spark === "talking" ? " selected" : ""}>Only while talking</option></select>`)
         + row("Brain", usingLine, brainSelect)
@@ -60,7 +62,11 @@
         + `<small id="clicky-result" class="answer"></small></span></div>`
         + `</div>`;
       box.querySelector("#clicky-model").setAttribute("list", "clicky-models");
-      box.querySelector("#clicky-on").onclick = async () => { await set("products.clicky", !s.on); draw(box); };
+      // Through the products module (products.js) when it's there, so the sidebar and Settings › Products follow.
+      if (switchHere) box.querySelector("#clicky-on").onclick = async () => {
+        if (typeof setProduct === "function") await setProduct("clicky", !s.on); else await set("products.clicky", !s.on);
+        if (typeof renderSettingsPage === "function" && document.getElementById("set-clicky")) renderSettingsPage(); else draw(box);
+      };
       box.querySelector("#clicky-shortcut").onchange = async (e) => { await set("clicky.shortcut", e.target.value); setTimeout(() => draw(box), 1500); };
       box.querySelector("#clicky-spark").onchange = (e) => set("clicky.spark", e.target.value);
       box.querySelector("#clicky-brain").onchange = async (e) => { await set("clicky.brain", e.target.value || null); await set("clicky.model", null); draw(box); };
@@ -104,24 +110,19 @@
     }
   }
 
-  // The Settings page is redrawn whole each time it opens: fill Clicky's place when it appears.
-  function look() {
-    const pane = document.getElementById("pane");
-    if (!pane) return;
-    const heading = pane.querySelector("h1");
-    if (!heading || heading.textContent.trim() !== "Settings") return;
-    let box = document.getElementById("settings-clicky");
-    if (!box) {
-      box = document.createElement("section");
-      box.id = "settings-clicky";
-      const column = pane.querySelector(".column") || pane;
-      const brains = column.querySelector("#brains-settings");
-      if (brains && brains.nextSibling) column.insertBefore(box, brains.nextSibling); else column.appendChild(box);
-    }
-    if (box.dataset.clickyDrawn) return;
+  // Settings (settings.js) draws the page whole each time and then fires "theo-settings" with where Clicky's part goes.
+  function fill(selector) {
+    const box = document.querySelector(selector || "#settings-clicky");
+    if (!box || box.dataset.clickyDrawn) return;
     box.dataset.clickyDrawn = "1";
+    drawing = false;
     draw(box);
   }
-  new MutationObserver(look).observe(document.body, { childList: true, subtree: true });
-  look();
+  document.addEventListener("theo-settings", (e) => fill(e.detail && e.detail.clicky));
+  // Turned on or off from Settings › Products or Setup: redraw Clicky's part if it's showing.
+  document.addEventListener("theo-products", () => {
+    const box = document.getElementById("settings-clicky");
+    if (box && box.dataset.clickyDrawn) draw(box);
+  });
+  fill();
 })();

@@ -58,7 +58,8 @@ const AGENT_ORDER: [&str; 5] = ["codex", "gemini", "cursor", "grok", "opencode"]
 static HISTORY: Lazy<Mutex<Vec<(String, String)>>> = Lazy::new(|| Mutex::new(vec![]));
 
 pub fn is_on(h: &Harness) -> bool {
-    h.settings.bool(PRODUCT_SETTING)
+    // The products module (products.rs) reads the choice: a saved one wins, else Clicky starts off.
+    crate::products::is_on(h, "clicky")
 }
 
 /// Forgets the conversation (a new session).
