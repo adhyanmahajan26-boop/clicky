@@ -18,7 +18,7 @@
 //! `dictationTest`'s and the composer's own answer.
 
 use crate::cleanup::{self, Dictionary};
-use crate::hotkey::{self, Chord, ChordEvent, HotkeyHandle};
+use crate::hotkey::{self, Chord, ChordEvent};
 use crate::mic::{self, Audio, Recorder};
 use crate::stt::{self, SttConfig, SttEngine};
 use serde_json::{json, Value};
@@ -167,10 +167,13 @@ pub async fn status(harness: &Arc<Harness>, slow: bool) -> Value {
     report
 }
 
-static HOTKEY_REPORT: once_cell::sync::Lazy<Mutex<Value>> = once_cell::sync::Lazy::new(|| Mutex::new(json!({"running": false})));
+/// The name dictation registers its chord under in the app's one keyboard hook.
+pub const HUB_NAME: &str = "dictation";
 
 fn hotkey_report() -> Value {
-    HOTKEY_REPORT.lock().unwrap().clone()
+    let mut report = crate::hub::status();
+    report["dictationListening"] = crate::hub::is_listening_for(HUB_NAME).into();
+    report
 }
 
 fn s(cmd: &Value, key: &str) -> Option<String> {
@@ -332,7 +335,6 @@ pub struct Controller {
     harness: Arc<Harness>,
     runtime: tokio::runtime::Handle,
     live: Mutex<Live>,
-    hook: Mutex<Option<(Chord, HotkeyHandle)>>,
     on_pill: Box<dyn Fn(Value) + Send + Sync>,
 }
 
@@ -344,7 +346,6 @@ impl Controller {
             harness,
             runtime,
             live: Mutex::new(Live { phase: Phase::Idle, recorder: None, pressed_at: Instant::now(), session: 0, levels: vec![0.0; LEVEL_COUNT], words: String::new(), composer: None }),
-            hook: Mutex::new(None),
             on_pill: Box::new(on_pill),
         });
         let weak = Arc::downgrade(&controller);
@@ -365,29 +366,18 @@ impl Controller {
         controller
     }
 
-    /// Starts, restarts or stops the chord hook to match the settings.
+    /// Registers dictation's chord with the app's one keyboard hook (`hub`), or takes it away, to match the settings.
     pub fn apply_settings(self: &Arc<Self>) {
-        let wanted = is_on(&self.harness).then(|| chord(&self.harness));
-        let mut hook = self.hook.lock().unwrap();
-        if hook.as_ref().map(|(chord, _)| Some(*chord)) == Some(wanted) && hook.as_ref().map(|(_, handle)| handle.is_running()).unwrap_or(false) {
+        if !is_on(&self.harness) {
+            crate::hub::unregister(HUB_NAME);
             return;
         }
-        *hook = None;
-        *HOTKEY_REPORT.lock().unwrap() = json!({"running": false});
-        let Some(chord) = wanted else { return };
         let weak = Arc::downgrade(self);
-        let handle = hotkey::watch(vec![chord], move |chord, event| {
+        crate::hub::register(HUB_NAME, vec![chord(&self.harness)], move |chord, event| {
             if let Some(controller) = weak.upgrade() {
                 controller.chord_event(chord, event);
             }
         });
-        // The hook reports itself once its thread is up.
-        let started = Instant::now();
-        while !handle.is_running() && handle.problem().is_none() && started.elapsed() < Duration::from_millis(500) {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        *HOTKEY_REPORT.lock().unwrap() = json!({"running": handle.is_running(), "chord": chord.id(), "problem": handle.problem()});
-        *hook = Some((chord, handle));
     }
 
     fn show(&self, live: &Live) {
