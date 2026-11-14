@@ -74,6 +74,25 @@ About 30 minutes on a Windows 10 or 11 PC:
 7. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
 8. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
+9. **Routines.** On Routines press New routine, pick a bot, write what it does, pick Weekly, a day and a time, and Add
+   routine. Check the card says "Every <day> at <time> · next in …". Press Run now, then open "Last run …" to see the run.
+   Edit it to Every N hours, turn it off (Paused shows), then on again; Delete asks "Delete it?" first.
+10. **Chat cards.** Ask a bot for a long write-up with headings: it shows as a brief card; Open reads it in full, Share
+    copies it. Ask a bot to "make a PDF of your notes" (it writes a file in its folder and adds `[PDF: notes.md]`): the PDF
+    card's Open opens it in your PDF reader. Ask a bot to choose with you: a `[CHOOSE: …]` shows as buttons or a list with
+    Use this and Skip. Turn a bot off in its settings: its chat shows "This bot is off" with Turn on. Ask Theo to ask another
+    bot something: the private exchange folds into one card that opens.
+11. **Sign-in words for each brain.** Put a bot on an agent that's signed out (Codex, say): the card says "Codex is signed
+    out" with Sign in (opens a terminal) and Use an API key instead, never Claude Code. Put one on a bad API key: the card
+    says the key didn't work and opens Settings.
+12. **Home.** With a bot that needs you, one that failed and one working, check Home's lanes: the sign-in or choice card can
+    be answered right there, Try again on the failed one, and Asleep shows a bot's next routine with Run now.
+13. **The run card.** Ask a bot for a coding plan without asking it to build: the "Start this coding run?" card has the
+    agent, folder and chat choices. Pick New folder…, type a name (made in the projects folder with git), Start run; or pick
+    an existing folder where you've used Claude Code before and a chat from the list, and Continue chat (it carries on that
+    session in the folder, no branch). Change the projects folder from the card's Change link.
+14. **Connectors page.** Click a row to open its details (Reached, Last worked, Used by, each bot's level). Remove… asks
+    before removing. Add your own with Address (https only) or Command.
 
 ## Known limits
 

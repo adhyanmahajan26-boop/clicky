@@ -1532,6 +1532,183 @@ def s07():
 
 
 
+# ---------------------------------------------------------------- Routines editor, PDFs and the coding-run card (win/chat)
+
+@test("W01", "Routines editor: add with each schedule kind, edit keeps the runs, off and on, and a bad schedule or target is refused", "routines")
+def w01():
+    b = fresh_bot("Planner")
+    n = T.nonce()
+    kinds = {"weekly": ({"kind": "weekly", "hour": 8, "minute": 30, "weekday": 6}, "Every Friday at 8:30"),
+             "weekdays": ({"kind": "weekdays", "hour": 9, "minute": 0}, "Weekdays at 9:00"),
+             "hourly": ({"kind": "hourly", "minute": 15}, "Every hour at :15"),
+             "every": ({"kind": "every", "intervalMinutes": 45}, "Every 45 min"),
+             "hours": ({"kind": "every", "intervalMinutes": 120}, "Every 2 h"),
+             "daily": ({"kind": "daily", "hour": 7, "minute": 5}, "Every day at 7:05")}
+    labels, ids = {}, {}
+    for k, (schedule, _) in kinds.items():
+        r = P({"cmd": "routineSave", "name": "%s %s" % (k, n), "target": b, "do": "Sum up what needs a reply (%s)." % k, "schedule": schedule})
+        labels[k] = r.get("result", {}).get("label")
+        ids[k] = r.get("result", {}).get("id")
+    every_label_right = all(labels[k] == want for k, (_, want) in kinds.items())
+    # Edit: the runs stay, the schedule and words change, and it can be turned off and on again.
+    P({"cmd": "routines", "action": "run", "id": ids["daily"]})
+    T.wait_until(lambda: next((r for r in P({"cmd": "routinesList"})["result"] if r["id"] == ids["daily"] and r["runs"] and r["runs"][-1]["status"] != "running"), None), 60)
+    runs_before = len(next(r for r in P({"cmd": "routinesList"})["result"] if r["id"] == ids["daily"])["runs"])
+    edited = P({"cmd": "routineSave", "id": ids["daily"], "name": "Morning %s" % n, "target": b, "do": "Check the inbox.", "schedule": {"kind": "weekdays", "hour": 8, "minute": 0}, "paused": True})
+    after = next(r for r in P({"cmd": "routinesList"})["result"] if r["id"] == ids["daily"])
+    on_again = P({"cmd": "routineSave", "id": ids["daily"], "name": "Morning %s" % n, "target": b, "do": "Check the inbox.", "schedule": {"kind": "weekdays", "hour": 8, "minute": 0}, "paused": False})
+    after_on = next(r for r in P({"cmd": "routinesList"})["result"] if r["id"] == ids["daily"])
+    unnamed = P({"cmd": "routineSave", "target": b, "do": "Read the release notes %s and say what changed for us" % n, "schedule": {"kind": "daily", "hour": 18}})
+    refused = {
+        "too_often": P({"cmd": "routineSave", "target": b, "do": "x", "schedule": {"kind": "every", "intervalMinutes": 2}}),
+        "no_such_bot": P({"cmd": "routineSave", "target": "nobody-%s" % n, "do": "x", "schedule": {"kind": "daily"}}),
+        "no_words": P({"cmd": "routineSave", "target": b, "do": "  ", "schedule": {"kind": "daily"}}),
+        "bad_hour": P({"cmd": "routineSave", "target": b, "do": "x", "schedule": {"kind": "daily", "hour": 25}}),
+    }
+    all_refused = all(not r.get("ok") for r in refused.values())
+    in_list = sum(1 for r in P({"cmd": "routinesList"})["result"] if n in r["name"] or n in r["instruction"])
+    ok = (every_label_right and edited.get("ok") and after["paused"] and after["name"] == "Morning " + n and after["schedule"]["kind"] == "weekdays" and len(after["runs"]) == runs_before >= 1
+          and on_again.get("ok") and not after_on["paused"] and after_on.get("nextRunAt") and unnamed.get("result", {}).get("name", "").startswith("Read the release notes")
+          and all_refused and in_list == len(kinds) + 1)
+    return ok, {"labels": labels, "edit_kept_runs": [runs_before, len(after["runs"])], "paused_after_edit": after["paused"], "on_again_next": after_on.get("nextRunAt"),
+                "unnamed_named": unnamed.get("result", {}).get("name"), "refused": {k: r.get("error") for k, r in refused.items()}, "routines_made": in_list}
+
+
+def pdf_words(path):
+    """The words in a PDF Theo wrote: by pypdf when it's there, else from the page's own text strings."""
+    data = pathlib.Path(path).read_bytes()
+    try:
+        import pypdf
+        return " ".join(page.extract_text() for page in pypdf.PdfReader(str(path)).pages), data
+    except ImportError:
+        return " ".join(s.decode("latin-1") for s in re.findall(rb"\(((?:\\.|[^\\)])*)\)\s*Tj", data)), data
+
+
+@test("W02", "[PDF: notes.md] in a bot's answer: Theo writes a real PDF from the bot's file, posts a card, and opens it on request", "cards")
+def w02():
+    b = fresh_bot("Writer")
+    n = T.nonce()
+    memory = T.BOTS / "memory" / b
+    memory.mkdir(parents=True, exist_ok=True)
+    (memory / "notes.md").write_text("# Quarterly notes %s\n\nRevenue grew **12%%** over the quarter.\n\n- First point\n- Second point\n\n" % n + ("A long paragraph that wraps across lines. " * 80), encoding="utf-8")
+    mark = T.calls_mark()
+    T.fake_reply("Here are your notes. [PDF: notes.md]"); T.fake("reply")
+    T.say(b, "Make me a PDF of the notes."); T.wait_idle()
+    T.fake("ok")
+    msgs = T.chat(b, 20)
+    card = next((m for m in msgs if (m.get("card") or "").startswith("pdf:")), None)
+    told = any("[PDF:" in (c.get("system", "") + c.get("prompt", "")) for c in T.calls(mark))
+    shown = next((m["text"] for m in msgs if m["author"] == b), "")
+    p = json.loads(card["card"][4:]) if card else {}
+    path = p.get("path", "")
+    words, data = pdf_words(path) if path and pathlib.Path(path).exists() else ("", b"")
+    opened = P({"cmd": "openFile", "path": path}) if path else {}
+    log = T.DATA / "Logs" / "opened.log"
+    logged = log.exists() and pathlib.Path(path).name in log.read_text(encoding="utf-8")
+    outside = P({"cmd": "openFile", "path": str(T.HERE / "suite.py")})
+    by_hand = P({"cmd": "pdfMake", "bot": b, "file": "../../../settings.json"})
+    ok = (card is not None and told and "[PDF:" not in shown and data.startswith(b"%PDF-") and data.rstrip().endswith(b"%%EOF") and ("Quarterly notes " + n) in words
+          and "Revenue grew" in words and opened.get("ok") and logged and not outside.get("ok") and not by_hand.get("ok"))
+    return ok, {"card": card and card.get("card"), "prompt_told_how": told, "answer_shown": shown[:120], "pdf_bytes": len(data), "words": words[:200],
+                "opened": opened, "logged": logged, "outside_refused": outside.get("error"), "escape_refused": by_hand.get("error")}
+
+
+def w_prompt(n, extra=""):
+    return "Here's the plan.\nProject: Card %s\n%s```prompt\nIn the current folder create card/%s.md containing card %s. Nothing else.\n```" % (n, extra, n, n)
+
+
+@test("W03", "The run card: agents and folders listed, a new project folder made with git, the projects folder moved, Start on a chosen agent and folder, never twice", "coding")
+def w03():
+    T.fake("ok")
+    n = T.nonce(); b = fresh_bot("Builder")
+    choices = P({"cmd": "runChoices"}, timeout=90).get("result", {})
+    agent_ids = [a["id"] for a in choices.get("agents", [])]
+    projects = T.ROOT / ("projects-" + n)
+    moved = P({"cmd": "projectsFolderSet", "path": str(projects)})
+    relative = P({"cmd": "projectsFolderSet", "path": "not/whole"})
+    made = P({"cmd": "projectMake", "name": "moon-%s" % n}, timeout=60)
+    folder = pathlib.Path(made.get("result", {}).get("path", ""))
+    first_commit = subprocess.run(["git", "-C", str(folder), "log", "--format=%s"], capture_output=True, text=True).stdout.strip()
+    again = P({"cmd": "projectMake", "name": "moon-%s" % n})
+    bad_name = P({"cmd": "projectMake", "name": "../escape"})
+    listed = P({"cmd": "runChoices"}, timeout=90).get("result", {})
+    in_list = any(p["path"] == str(folder) for p in listed.get("others", []) + listed.get("recent", []))
+    # The bot's answer has a final prompt the owner didn't ask for: nothing starts until Start.
+    T.fake_reply(w_prompt(n)); T.fake("reply")
+    T.say(b, "What would make onboarding better?"); T.wait_idle()
+    T.fake("ok")
+    answer = next((m for m in reversed(T.chat(b, 20)) if m["author"] == b and "```prompt" in m["text"]), None)
+    target = next((m for m in reversed(T.chat(b, 20)) if (m.get("card") or "").startswith("ask:")), None) or answer
+    missing = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "harness": "codex", "folder": str(T.ROOT / "nowhere" / n)})
+    start = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "harness": "codex", "folder": str(folder)}, timeout=60)
+    twice = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "harness": "codex", "folder": str(folder)})
+    runs = wait_runs(lambda r: n in r["title"], 90)
+    run = runs[-1] if runs else {}
+    made_file = (pathlib.Path(run.get("folder", "")) / "card" / ("%s.md" % n))
+    # The chosen folder is a git repo, so the run worked on its own branch of it.
+    on_branch = bool(run.get("branch")) and subprocess.run(["git", "-C", str(folder), "rev-parse", "--verify", "--quiet", run.get("branch") or "none"], capture_output=True).returncode == 0
+    reset = P({"cmd": "projectsFolderSet", "path": ""})
+    ok = (set(agent_ids) == {"claude", "codex", "cursor", "opencode", "grok", "gemini"} and moved.get("ok") and not relative.get("ok") and made.get("ok") and folder.parent == projects
+          and first_commit == "First commit" and not again.get("ok") and not bad_name.get("ok") and in_list and target is not None and not missing.get("ok") and start.get("ok")
+          and not twice.get("ok") and len(runs) == 1 and run.get("harness") == "codex" and run.get("phase") == "done" and on_branch
+          and reset.get("ok") and not reset["result"]["projectsFolder"].startswith(str(projects)))
+    return ok, {"agents": agent_ids, "projects_folder": moved.get("result"), "relative_refused": relative.get("error"), "made": made.get("result"), "first_commit": first_commit,
+                "again": again.get("error"), "bad_name": bad_name.get("error"), "listed": in_list, "card_on": target and (target.get("card") or "answer")[:40],
+                "missing_folder": missing.get("error"), "start": start, "twice": twice.get("error"), "run": {k: run.get(k) for k in ("title", "harness", "phase", "folder", "branch")},
+                "file_made": made_file.exists()}
+
+
+@test("W04", "Carry on an agent's own chat: its chats in a folder are listed, Continue runs that session in the folder itself with no branch, and an agent that can't is refused", "coding")
+def w04():
+    T.fake("ok")
+    n = T.nonce(); b = fresh_bot("Continuer")
+    work = T.ROOT / ("continue-" + n)
+    work.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    home = T.ROOT / "home"
+    T.setd("test.home", str(home))
+    # Claude Code's own store: ~/.claude/projects/<the folder with every other character as ->/<session>.jsonl
+    store = home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(work))
+    store.mkdir(parents=True, exist_ok=True)
+    session = "sess-%s" % n
+    (store / (session + ".jsonl")).write_text(json.dumps({"type": "user", "cwd": str(work), "message": {"content": "Build the landing page %s" % n}}) + "\n", encoding="utf-8")
+    listed = P({"cmd": "runChats", "harness": "claude", "folder": str(work)}).get("result", {})
+    gemini = P({"cmd": "runChats", "harness": "gemini", "folder": str(work)}).get("result", {})
+    T.fake_reply(w_prompt(n, "Continue: Build the landing page %s\n" % n)); T.fake("reply")
+    T.say(b, "Where were we on the landing page?"); T.wait_idle()
+    T.fake("ok")
+    answer = next((m for m in reversed(T.chat(b, 20)) if m["author"] == b and "```prompt" in m["text"]), None)
+    target = next((m for m in reversed(T.chat(b, 20)) if (m.get("card") or "").startswith("ask:")), None) or answer
+    refused = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "harness": "gemini", "folder": str(work), "chat": "x"})
+    no_agent = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "folder": str(work), "chat": session})
+    mark = T.calls_mark()
+    start = P({"cmd": "runChoiceStart", "room": b, "message": target["id"] if target else "", "harness": "claude", "folder": str(work), "chat": session, "chatTitle": "Build the landing page %s" % n}, timeout=60)
+    runs = wait_runs(lambda r: n in r["title"], 90)
+    run = runs[-1] if runs else {}
+    coding = [c for c in T.calls(mark) if c.get("coding")]
+    resumed_there = any(c.get("resume") and session in c.get("args", []) and os.path.realpath(c.get("cwd", "")) == os.path.realpath(str(work)) for c in coding)
+    branches = subprocess.run(["git", "-C", str(work), "branch", "--list", "theo/*"], capture_output=True, text=True).stdout.strip()
+    said = json.dumps(T.chat(b, 40))
+    chats = listed.get("chats", [])
+    ok = (listed.get("continues") and len(chats) == 1 and chats[0]["id"] == session and chats[0]["title"] == "Build the landing page %s" % n and gemini.get("continues") is False
+          and not refused.get("ok") and not no_agent.get("ok") and start.get("ok") and run.get("continued") == "Build the landing page %s" % n
+          and run.get("folder") == str(work) and not run.get("branch") and resumed_there and not branches and "carrying on the chat" in said)
+    return ok, {"listed": listed, "gemini": gemini, "gemini_refused": refused.get("error"), "no_agent_refused": no_agent.get("error"), "start": start,
+                "run": {k: run.get(k) for k in ("title", "harness", "phase", "folder", "branch", "session", "continued")}, "resumed_in_folder": resumed_there,
+                "coding_calls": [(c.get("agent"), c.get("resume"), c.get("cwd")) for c in coding], "theo_branches": branches}
+
+
+@test("W05", "Faces say which brain to sign in to: a Codex bot that's signed out asks for Codex, not Claude Code, and carries the failure for its card", "cards")
+def w05():
+    b = P({"cmd": "botCreate", "name": "Codey %s" % T.nonce()[:4], "instructions": "You are Codey.", "provider": "codex", "model": ""})["result"]["id"]
+    T.fake("signedout-agent")
+    T.say(b, "Hello?"); T.wait_idle()
+    T.fake("ok")
+    f = face_of(b)
+    ok = f.get("state") == "needs" and f.get("detail") == "Sign in to Codex" and f.get("provider") == "codex" and (f.get("failure") or {}).get("kind") == "signin"
+    return ok, {"face": {k: f.get(k) for k in ("state", "detail", "provider", "failure")}}
+
+
 # ---------------------------------------------------------------- The connector hub (theo-fix-plan package 2)
 
 ECHO_APP = {"id": "echo", "name": "Echo", "kind": "local", "command": str(T.HERE / "echo_mcp.py")}
@@ -2001,11 +2178,11 @@ def r02():
 
 
 NOT_PORTED = {
-    "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. PDF making isn't in this build yet.",
+    "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. The PDF a [PDF:] tag makes is W02.",
     "T30, T31, F14, C08-C13": "Two linked Macs (Theo Link) aren't part of the cross-platform engine yet.",
     "C01-C07, C11": "The Swift app's T3 Code terminals and report states; the coding runs here are simpler (T24-T27 cover worktree, follow-up, parallel runs and stop).",
     "A03, A03b, A09": "Theo messaging a whole group chat with [TELL: group] isn't in this build yet.",
-    "A10": "PDF making isn't in this build yet.",
+    "A10": "A real model choosing to write a PDF; Theo's part (the [PDF:] tag to a real PDF, its card and opening it) is W02.",
     "E12, E13": "The Swift app's T3 Code page server isn't part of this build.",
 }
 

@@ -29,5 +29,10 @@ pub mod hub;
 pub mod brains;
 pub mod apichat;
 pub mod setup;
+pub mod routine_edit;
+pub mod pdf;
+pub mod harness_chats;
+pub mod run_choices;
+pub mod chat_controls;
 
 pub use harness::Harness;
