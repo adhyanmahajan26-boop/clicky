@@ -233,7 +233,7 @@ pub fn install_kind(os: &str, exe: &Path, has_uninstaller: bool, program_files: 
             }
         }
         "linux" => match appimage {
-            Some(file) if file.is_absolute() => InstallKind::AppImage { file: file.to_path_buf() },
+            Some(file) if file.has_root() => InstallKind::AppImage { file: file.to_path_buf() },
             _ => InstallKind::Elsewhere,
         },
         _ => InstallKind::Elsewhere,
