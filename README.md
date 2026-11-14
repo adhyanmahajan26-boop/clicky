@@ -48,3 +48,7 @@ checked: [docs/INSTALL.md](docs/INSTALL.md) (Mac) and [crossplatform/docs/DISTRI
 
 [AGENTS.md](AGENTS.md) has the architecture, conventions and where to look first. [docs/TESTING.md](docs/TESTING.md) explains
 the isolated test profile; never test in your real profile.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Theo is built on the original Clicky by Farza, also MIT.
