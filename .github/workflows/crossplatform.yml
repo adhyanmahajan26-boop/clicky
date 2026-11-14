@@ -4,7 +4,7 @@ name: Theo cross-platform
 
 on:
   push:
-    paths: ["crossplatform/**", ".github/workflows/crossplatform.yml"]
+    paths: ["crossplatform/**", "!crossplatform/tester/**", ".github/workflows/crossplatform.yml"]
   workflow_dispatch:
 
 # Builds and tests only: the job token can read the code and nothing else.
