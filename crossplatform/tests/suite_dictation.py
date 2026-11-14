@@ -92,7 +92,13 @@ def register(test):
             dset("engine", "openai")
             refused = P({"cmd": "dictationTest", "wav": str(wav)}, timeout=90)
             evidence["refused"] = refused
-            checks["refused_plain"] = refused.get("ok") is False and "Settings › Dictation" in refused.get("error", "") and "sk-wrong" not in refused.get("error", "")
+            # On Windows a refused service falls back to Windows' own recognizer, which may hear something in the WAV:
+            # then the refusal is in the result's problems rather than the error.
+            if refused.get("ok"):
+                said = " ".join(refused.get("result", {}).get("problems", []))
+            else:
+                said = refused.get("error", "")
+            checks["refused_plain"] = "Settings › Dictation" in said and "sk-wrong" not in json.dumps(refused)
 
             status = P({"cmd": "dictationStatus"}, timeout=60)
             evidence["status"] = {k: status.get("result", {}).get(k) for k in ("engine", "wouldListen", "cleanup", "chord", "last", "hotkey", "cleanupBrain", "cleanupNote")}
