@@ -97,52 +97,11 @@ function renderHead() {
 }
 
 /* ---------------- cards ---------------- */
-const INSTALL = /win/i.test(navigator.platform || navigator.userAgent) ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash";
-// Kept in step with failover.rs classify's Auth, so a card and the Home lane agree on "signed out".
-const SIGNIN = /\/login|invalid api key|invalid x-api-key|authentication_error|isn't installed|not logged in|sign in|unauthori[sz]ed|\b401\b|oauth token (has )?expired/i;
-function failureCard(m, latest) {
-  const reason = m.text.replace(/^Couldn't reply:\s*/, "");
-  const signin = SIGNIN.test(reason);
-  if (!latest) return `<div class="tc-line">${TP.badge(signin ? "needs" : "failed", "pg")}<span><b>${signin ? "Signed out" : "Failed"}</b> · ${esc(reason)}</span><time>${ago(m.at)}</time></div>`;
-  if (signin) {
-    const missing = /isn't installed/i.test(reason);
-    return `<div class="tc ask"><div class="tc-h">${botHTML(m.author, 28, { state: "needs" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · ${missing ? "Claude Code" : "Sign-in"}</span>${TP.pill("needs", "Needs you")}</div>`
-      + `<div class="tc-q">${missing ? "Install Claude Code on this computer" : "Sign in to Claude Code"}</div>`
-      + `<p>${missing ? "Theo runs bots on Claude Code, which isn't installed here yet." : "Theo runs bots on your Claude subscription, and Claude Code on this computer is signed out."}</p>`
-      + `<div class="tc-obj"><span class="app"><b>C</b>${TP.badge("needs")}</span><span class="tx"><b>Claude Code</b><small>${missing ? "https://claude.com/claude-code" : "Run this in a terminal, then try again"}</small></span>${TP.pill("needs", missing ? "Not installed" : "Signed out")}</div>`
-      + `<div class="tc-field"><span>${missing ? INSTALL : "claude auth login"}</span><button class="btn sm" data-copy="${missing ? INSTALL : "claude auth login"}">Copy</button></div>`
-      + `<div class="btns">${missing ? "" : `<button class="btn" data-term="signin">Sign in</button>`}<button class="btn pri" data-retry="${esc(m.author)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
-  }
-  return `<div class="tc bad"><div class="tc-h">${botHTML(m.author, 28, { state: "failed" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · Reply</span>${TP.pill("failed", "Failed")}</div>`
-    + `<div class="tc-q">${esc(nameOf(m.author))} couldn't answer</div><p>${esc(reason.split(/(?<=\.)\s/)[0])} Your message is kept, and nothing else was changed.</p>`
-    + `<div class="term tall tc-details">${esc(reason)}</div>`
-    + `<div class="btns"><button class="btn pri" data-retry="${esc(m.author)}">Try again</button><button class="btn" data-details>See details</button></div></div>`;
-}
-function askCard(m) {
-  let p = {}; try { p = JSON.parse(m.card.slice(4)); } catch (e) {}
-  const isRun = p.kind === "run";
-  const obj = isRun
-    ? `<div class="tc-obj"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13.5 6l-3 12"/></svg></span><span class="tx"><b>${esc(p.title || "Coding run")}</b><small>${esc((p.prompt || "").split("\n")[0].slice(0, 110))}</small></span></div>`
-    : `<div class="tc-obj"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M19.5 12A7.5 7.5 0 1 1 17.3 6.7M13.9 6.8h3.6V3.2M12 8.6V12l2.3 1.5"/></svg></span><span class="tx"><b>${esc(p.name || "Routine")}</b><small>${esc(p.when || "")} · ${esc(p.do || "")}</small></span></div>`;
-  return `<div class="tc ask"><div class="tc-h">${botHTML(p.bot, 28, { state: "needs" })}<span class="who"><b>${esc(nameOf(p.bot))}</b> · ${isRun ? "Coding run" : "New routine"}</span>${TP.pill("needs", "Needs you")}</div>`
-    + `<div class="tc-q">${isRun ? "Start this coding run?" : "Set up this routine?"}</div><p>${esc(m.text)}</p>${obj}`
-    + `<div class="btns"><button class="btn pri" data-card="${esc(m.id)}" data-choice="yes">${isRun ? "Start it" : "Set it up"}</button><button class="btn" data-card="${esc(m.id)}" data-choice="no">Don't</button></div>`
-    + `<div class="tc-foot">${isRun ? "A coding agent works with full access in its own folder." : "A routine runs the bot again and again with nobody watching."} Nothing happens unless you say yes.</div></div>`;
-}
+// The failure, sign-in, choice, brief, private-message, PDF and yes-or-no cards are in cards.js; the run choices in runchoices.js.
 function answeredLine(m) {
   let p = {}; try { p = JSON.parse(m.card.slice(9)); } catch (e) {}
   const yes = p.choice === "yes";
   return `<div class="tc-line">${yes ? TP.badge("done", "pg") : `<i class="pg nil"></i>`}<span><b>${esc(p.what || (yes ? "Done" : "Declined"))}</b> · ${esc(m.text.replace(/\?$/, "").slice(0, 120))}</span><time>${ago(p.at)}</time></div>`;
-}
-function chooseCard(m, answered) {
-  const match = m.text.match(/\[CHOOSE:\s*([^\]]+)\]/);
-  const parts = match[1].split("|").map((s) => s.trim());
-  const q = parts.shift();
-  const before = m.text.replace(match[0], "").trim();
-  const opts = parts.map((o) => { const [t, ...d] = o.split(":"); return [t.trim(), d.join(":").trim()]; });
-  if (answered) return (before ? `<div class="body">${md(before)}</div>` : "") + `<div class="tc-line">${TP.badge("done", "pg")}<span><b>Answered</b> · ${esc(q)}</span></div>`;
-  return (before ? `<div class="body">${md(before)}</div>` : "") + `<div class="tc ask"><div class="tc-h">${botHTML(m.author, 28, { state: "needs" })}<span class="who"><b>${esc(nameOf(m.author))}</b> · A choice</span>${TP.pill("needs", "Needs you")}</div>`
-    + `<div class="tc-q">${esc(q)}</div><div class="tc-opts">${opts.map(([t, d], i) => `<button class="tc-opt${i === 0 ? " on" : ""}" data-say="${esc(t)}"><i></i><span class="tx"><b>${esc(t)}</b><small>${esc(d)}</small></span></button>`).join("")}</div></div>`;
 }
 function runCard(run, m) {
   const phase = run ? run.phase : "running";
@@ -156,7 +115,7 @@ function runCard(run, m) {
     return `<div class="${cls}"><i></i>${s}</div>`;
   }).join("");
   const pr = run && run.pullRequest ? `<div class="tc-obj"><span class="app"><svg class="ic" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4"/></svg></span><span class="tx"><b>Draft pull request</b><small>${esc(run.pullRequest)}</small></span>${TP.pill("ok", "Open")}</div>` : "";
-  return `<div class="tc${phase === "failed" ? " bad" : ""}"><div class="tc-h"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13.5 6l-3 12"/></svg></span><span class="who"><b>${esc(run ? run.title : "Coding run")}</b> · ${esc(run ? run.folder.split(/[\\/]/).pop() : "")}</span>${TP.pill(tone, word)}</div>`
+  return `<div class="tc${phase === "failed" ? " bad" : ""}"><div class="tc-h"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13.5 6l-3 12"/></svg></span><span class="who"><b>${esc(run ? run.title : "Coding run")}</b> · ${esc(run ? run.folder.split(/[\\/]/).pop() : "")}${run && run.continued ? ` · carrying on "${esc(run.continued)}"` : ""}</span>${TP.pill(tone, word)}</div>`
     + `<div class="steps">${steps}</div><p>${md(m.text)}</p>${pr}</div>`;
 }
 
@@ -170,7 +129,7 @@ async function renderChat() {
   const live = writing.map((b) => [b, (state.live || {})[b] || ""]);
   const faceSig = view.kind === "bot" ? face(view.id).state : "";
   const runSig = state.runs.map((x) => x.id + x.phase + (x.pullRequest || "")).join();
-  const sig = JSON.stringify([view, msgs.length, msgs.length && msgs[msgs.length - 1].id, msgs.map((m) => m.card || "").join(), faceSig, runSig, live.map(([b]) => b)]);
+  const sig = JSON.stringify([view, msgs.length, msgs.length && msgs[msgs.length - 1].id, msgs.map((m) => m.card || "").join(), faceSig, runSig, live.map(([b]) => b), CARDS.sig(), RUNCHOICES.sig()]);
   const pane = $("#pane");
   if (view.kind === "bot" && msgs.length && lastSeen !== msgs[msgs.length - 1].id + view.id) { lastSeen = msgs[msgs.length - 1].id + view.id; invoke({ cmd: "chatSeen", id: view.id }); }
   if (sigs.chat === sig) {
@@ -182,15 +141,15 @@ async function renderChat() {
   const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
   const lastFailure = [...msgs].reverse().find((m) => m.author !== "user" && m.author !== "note" && /^Couldn't reply:/.test(m.text));
   const ownerAfter = (i) => msgs.slice(i + 1).some((x) => x.author === "user");
+  // A prompt the owner didn't ask for has its "Start this coding run?" card right after it, which carries the run choices.
+  const runCardAfter = (i) => msgs.slice(i + 1, i + 4).some((x) => /^(ask|answered):/.test(x.card || "") && x.card.includes('"kind":"run"'));
   let html = "", last = null;
   if (!msgs.length) html = `<div class="empty">${view.kind === "bot" ? botHTML(view.id, 112, { badge: false }) : ""}<div>Say hello to ${esc(view.kind === "bot" ? nameOf(view.id) : (state.groups.find((g) => g.id === view.id) || {}).name)}.</div></div>`;
   msgs.forEach((m, i) => {
-    if (m.card && m.card.startsWith("ask:")) { html += askCard(m); last = null; return; }
+    if (m.card && m.card.startsWith("ask:")) { html += CARDS.ask(m, room()); last = null; return; }
     if (m.card && m.card.startsWith("answered:")) { html += answeredLine(m); last = null; return; }
-    if (m.card && m.card.startsWith("dm:")) {
-      const target = m.card.split(":")[2];
-      html += `<div class="tc-line">${botHTML(target, 18, { badge: false })}<span><b>${esc(nameOf(m.author))}</b> messaged <b>${esc(nameOf(target))}</b> privately</span><time>${ago(m.at)}</time></div>`; last = null; return;
-    }
+    if (m.card && m.card.startsWith("dm:")) { html += CARDS.dm(m); last = null; return; }
+    if (m.card && m.card.startsWith("pdf:")) { html += CARDS.pdf(m); last = null; return; }
     if (m.run) {
       // One card per run, where its latest line is.
       if (msgs.slice(i + 1).some((x) => x.run === m.run)) return;
@@ -199,15 +158,22 @@ async function renderChat() {
     if (m.author === "user") { html += `<div class="msg user">${md(m.text)}</div>`; last = null; return; }
     if (m.author === "note") { html += `<div class="msg note">${md(m.text)}</div>`; last = null; return; }
     if (m.author === "routine") { html += `<div class="msg routine">${md(m.text)}</div>`; last = null; return; }
-    if (/^Couldn't reply:/.test(m.text)) { html += failureCard(m, m === lastFailure && !ownerAfter(i)); last = null; return; }
+    if (/^Couldn't reply:/.test(m.text)) { html += CARDS.failure(m, m === lastFailure && !ownerAfter(i)); last = null; return; }
     const who = last !== m.author ? `<div class="who">${botHTML(m.author, 28, { badge: false })}${esc(nameOf(m.author))}</div>` : "";
-    const body = /\[CHOOSE:[^\]]+\]/.test(m.text) ? chooseCard(m, ownerAfter(i)) : `<div class="body">${md(m.text)}</div>`;
+    // A [CHOOSE:] is a card until the owner's next message answers it; a long answer is a brief card; a final prompt gets the run choices.
+    const answer = msgs.slice(i + 1).find((x) => x.author === "user");
+    const pitch = msgs.slice(0, i).reverse().find((x) => x.author === "user");
+    const body = CARDS.parseCall(m.text) ? CARDS.choose(m, answer ? answer.text : null, i === msgs.length - 1)
+      : CARDS.parseBrief(m.text) ? CARDS.brief(m)
+      : `<div class="body">${md(m.text)}</div>` + (/```prompt\b/.test(m.text) && !runCardAfter(i) ? RUNCHOICES.draw(m.id, m.text, pitch ? pitch.id : null, room()) : "");
     html += `<div class="msg">${who}${body}</div>`;
     last = m.author;
   });
+  if (view.kind === "bot" && face(view.id).state === "off") html += CARDS.off(view.id);
   for (const [b, t] of live) html += `<div class="msg live" data-live="${esc(b)}"><div class="who">${botHTML(b, 28, { badge: false, state: t ? "working" : "thinking" })}${esc(nameOf(b))}</div><div class="body">${md(t || "…")}</div></div>`;
   pane.innerHTML = `<div class="column">${html}</div>`;
   wire(pane);
+  CARDS.wire(pane);
   if (atBottom || !sigs.scrolled) { pane.scrollTop = pane.scrollHeight; sigs.scrolled = true; }
 }
 
@@ -225,154 +191,21 @@ function wire(root) {
 }
 
 /* ---------------- home ---------------- */
+// The needs-you, failed and working lanes are home.js (the Mac's HomeLanes).
 function renderHome() {
-  const faces = state.faces;
-  const by = (st) => faces.filter((f) => (Array.isArray(st) ? st : [st]).includes(f.state));
-  const c = state.counts || {};
-  const hour = new Date().getHours();
-  const hello = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const urgent = by(["needs", "failed"]).map((f) => {
-    const failed = f.state === "failed";
-    const btn = failed ? `<button class="btn pri sm" data-retry="${esc(f.id)}">Try again</button><button class="btn sm" data-open="${esc(f.id)}">Open</button>` : `<button class="btn pri sm" data-open="${esc(f.id)}">Open</button>`;
-    return `<div class="tc ${failed ? "bad" : "ask"}"><div class="tc-h">${botHTML(f.id, 28)}<span class="who"><b>${esc(nameOf(f.id))}</b> · ${esc(f.word)}</span><span class="timer">${ago(f.since)}</span></div>`
-      + `<div class="tc-q">${esc(f.detail || f.word)}</div><div class="btns">${btn}</div></div>`;
-  }).join("") || `<div class="mini">${TP.bot(lookOf("theo"), "done", 28, { badge: false })}<span class="tx"><b>Nothing needs you</b><small>Bots that need an answer or failed show up here first.</small></span></div>`;
-  const working = by(["working", "thinking"]).map((f) => `<div class="mini">${botHTML(f.id, 28)}<span class="tx"><b>${esc(nameOf(f.id))}</b><small>${esc(f.detail || f.word)}</small><div class="bar"><i></i></div></span><span class="timer">${clock(f.since)}</span></div>`).join("");
-  const done = by("done").map((f) => `<div class="mini">${botHTML(f.id, 28)}<span class="tx"><b>${esc(nameOf(f.id))}</b><small>${esc(f.detail)}</small></span><button class="btn sm" data-open="${esc(f.id)}">Open</button></div>`).join("");
-  const asleep = by(["idle", "awake"]).filter((f) => f.id !== "theo").map((f) => `<div class="mini">${botHTML(f.id, 28)}<span class="tx"><b>${esc(nameOf(f.id))}</b><small>${esc(f.word)}</small></span><button class="btn sm" data-open="${esc(f.id)}">Give it a job</button></div>`).join("");
-  const sig = JSON.stringify([faces.map((f) => [f.id, f.state, f.detail]), Math.floor(Date.now() / 1000)]);
-  once("home", sig, () => {
-    $("#pane").innerHTML = `<div class="column"><div><h1>${hello}.</h1><div class="pills">${TP.pill("needs", `${c.needs || 0} need you`)}${TP.pill("failed", `${c.failed || 0} failed`)}${TP.pill("working", `${c.working || 0} working`)}${TP.pill("done", `${c.done || 0} done`)}</div></div>`
-      + `<div class="lanes"><div class="lane"><div class="lane-h"><span>Needs you and failed</span><span>${(c.needs || 0) + (c.failed || 0)}</span></div>${urgent}</div>`
-      + `<div class="lane"><div class="lane-h"><span>Working now</span><span>${c.working || 0}</span></div>${working || `<div class="muted">Nobody's working right now.</div>`}`
-      + (done ? `<div class="lane-h"><span>Finished</span><span>${c.done || 0}</span></div>${done}` : "")
-      + (asleep ? `<div class="lane-h"><span>Asleep</span></div>${asleep}` : "") + `</div></div></div>`;
-    wire($("#pane"));
-  });
+  HOME.render();
 }
 
 /* ---------------- connectors ---------------- */
-// Theo's own connectors, from the connector hub (crates/theo-connectors, docs/CONNECTORS.md): apps added here (a remote
-// address or a command on this computer) and apps on the owner's Claude account, which Claude Code reaches. Claude Code
-// isn't needed for the first two. Each bot gets each app at a level: read only, read and draft, or everything.
-const LEVEL_WORDS = { off: "Off", read: "Read only", readAndDraft: "Read and draft", full: "Everything" };
-const STATUS_ORDER = ["needsSignIn", "failed", "connected", "unknown", "off"];
-let connectorsPoll = null;
-function appIdFrom(name) { return (name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "app"; }
-function commandWords(line) { return (line.match(/"[^"]*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, "")); }
-function viaWords(c) {
-  if (c.kind === "claude-account") return "Through your Claude account";
-  if (c.kind === "local") return "A program on this computer";
-  return c.auth === "oauth" ? "Signs in in your browser" : c.auth === "token" ? "Uses a pasted token" : "No sign-in";
-}
+// Theo's own connectors, from the connector hub: the page is connectors.js.
 async function renderConnectors(refresh = false) {
-  if (!sigs.connectors) $("#pane").innerHTML = `<div class="column"><div class="pills">${TP.pill("checking", "Checking")}</div><p class="muted">Checking your apps…</p></div>`;
-  const [r, cat] = await Promise.all([invoke({ cmd: "connectors", refresh }), sigs.catalog ? Promise.resolve(sigs.catalog) : invoke({ cmd: "connectorCatalog" })]);
-  if (view.kind !== "connectors") return;
-  if (!r.ok) { $("#pane").innerHTML = `<div class="column"><div class="tc bad"><div class="tc-q">Couldn't list connectors</div><p>${esc(r.error)}</p></div></div>`; return; }
-  if (cat.ok) sigs.catalog = cat;
-  const list = r.result.connectors.slice().sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
-  const n = (s) => list.filter((c) => c.status === s).length;
-  const rows = list.map((c) => {
-    const kind = { connected: "ok", needsSignIn: "needs", failed: "failed", unknown: "checking", off: "idle" }[c.status] || "none";
-    const word = { connected: "Connected", needsSignIn: "Needs sign-in", failed: "Can't connect", unknown: "Not checked", off: "Off" }[c.status] || "Not connected";
-    const worked = c.lastConnected ? ` · worked ${ago(c.lastConnected) === "now" ? "just now" : `${ago(c.lastConnected)} ago`}` : "";
-    const small = c.status === "failed" ? `<small class="w-bad">${esc(c.reason || "Not answering")}${worked}</small>`
-      : c.status === "needsSignIn" ? `<small class="w-ask">${c.kind === "claude-account" ? "Sign in on claude.ai so bots can use it" : "Sign in so bots can use it"}</small>`
-      : `<small>${esc(viaWords(c))}${c.target ? ` · ${esc(c.target)}` : ""}${worked}</small>`;
-    const acts = [];
-    if (c.kind === "remote" && c.auth === "oauth") acts.push(c.signedIn ? `<button class="btn sm" data-signout="${esc(c.id)}">Sign out</button>` : `<button class="btn pri sm" data-signin="${esc(c.id)}">Sign in</button>`);
-    if (c.kind === "remote" && c.auth === "token") acts.push(`<button class="btn ${c.signedIn ? "" : "pri "}sm" data-token="${esc(c.id)}">${c.signedIn ? "Change token" : "Paste token"}</button>`);
-    if (c.kind === "claude-account" && c.status === "needsSignIn") acts.push(`<button class="btn pri sm" data-claude-signin="${esc(c.name)}">Sign in</button>`);
-    if (c.status === "failed") acts.push(`<button class="btn sm" data-check="${esc(c.id)}">Try again</button>`);
-    acts.push(`<button class="btn sm ghost" data-enable="${esc(c.id)}" data-on="${c.enabled === false ? "1" : "0"}">${c.enabled === false ? "Turn on" : "Turn off"}</button>`);
-    acts.push(`<button class="btn sm ghost" data-remove="${esc(c.id)}">Remove</button>`);
-    const signIn = c.signIn && c.signIn.state === "waiting"
-      ? `<div class="tc ask"><div class="tc-q">Finish signing in to ${esc(c.name)} in your browser</div><p>Theo opened the sign-in page. If it didn't open, copy the address into your browser.</p><div class="tc-field"><span>${esc(c.signIn.url)}</span><button class="btn sm" data-copy="${esc(c.signIn.url)}">Copy</button></div></div>`
-      : c.signIn && c.signIn.state === "failed" ? `<div class="tc bad"><div class="tc-q">Signing in to ${esc(c.name)} didn't work</div><p>${esc(c.signIn.error)}</p></div>` : "";
-    // Who may use it, and how much: a bot only gets an app's tools when it's given the app here.
-    const who = state.bots.filter((b) => b.enabled !== false).map((b) => {
-      const level = (b.apps || []).includes(c.id) ? ((b.appLevels || {})[c.id] || "readAndDraft") : "off";
-      const options = Object.entries(LEVEL_WORDS).map(([k, w]) => `<option value="${k}"${k === level ? " selected" : ""}>${w}</option>`).join("");
-      return `<label class="lvl${level === "off" ? "" : " on"}">${esc(b.name)} <select data-botapp="${esc(b.id)}" data-app="${esc(c.id)}">${options}</select></label>`;
-    }).join("");
-    return `<div class="crow"><span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(kind === "ok" ? "ok" : kind === "needs" ? "needs" : kind === "failed" ? "failed" : "none")}</span><span class="tx"><b>${esc(c.name)}</b>${small}</span>${TP.pill(kind, word)}<span class="act many">${acts.join("")}</span></div>`
-      + `<div class="apps-for"><span class="muted">Bots that can use it</span>${who}</div>${signIn}<div class="token-slot" data-token-for="${esc(c.id)}"></div>`;
-  }).join("");
-  const have = new Set(list.map((c) => c.catalogId || c.id));
-  const starters = ((cat.ok && cat.result.apps) || []).filter((a) => !have.has(a.id)).filter((a) => a.kind !== "claude-account" || r.result.claudeCode);
-  const starterRows = starters.map((a) => `<div class="crow"><span class="app">${esc(a.name.slice(0, 1))}</span><span class="tx"><b>${esc(a.name)}</b><small>${esc(a.description || "")}${a.via ? ` · ${esc(a.via)}` : ""}</small></span><span class="act"><button class="btn sm" data-add-catalog="${esc(a.id)}">Add</button></span></div>`).join("");
-  $("#pane").innerHTML = `<div class="column"><div><h1>Connectors</h1><p class="muted">Apps your bots can use. Theo keeps the sign-ins and decides what each bot may do.${r.result.checked ? ` Checked ${ago(r.result.checked) === "now" ? "just now" : `${ago(r.result.checked)} ago`}.` : ""}</p>`
-    + `<div class="pills">${TP.pill("ok", `${n("connected")} connected`)}${n("needsSignIn") ? TP.pill("needs", `${n("needsSignIn")} need sign-in`) : ""}${n("failed") ? TP.pill("failed", `${n("failed")} can't connect`) : ""}<button class="btn sm" data-refresh>Check again</button></div></div>`
-    + (r.result.note ? `<p class="muted">${esc(r.result.note)}</p>` : "")
-    + `<div id="signin-help"></div>`
-    + (list.length ? `<div class="list">${rows}</div>` : `<p class="muted">No apps yet. Add one below: an app's MCP address, or a program on this computer.</p>`)
-    + (starterRows ? `<h2>Add an app</h2><div class="list">${starterRows}</div>` : "")
-    + `<h2>Add your own</h2><form class="hub-form su-fields" id="hub-add"><label>Name <input name="name" required maxlength="60" placeholder="My notes"></label>`
-    + `<label>Address or command <input name="where" required placeholder="https://example.com/mcp  or  npx -y some-mcp-server"></label>`
-    + `<label>Sign-in <select name="auth"><option value="none">None</option><option value="oauth">Sign in in the browser</option><option value="token">Paste a token</option></select></label>`
-    + `<button class="btn pri sm" type="submit">Add</button><p class="muted" id="hub-add-said"></p></form></div>`;
-  sigs.connectors = true;
-  const pane = $("#pane");
-  wire(pane);
-  const after = async (promise, button) => { if (button) button.disabled = true; const a = await promise; if (!a.ok) $("#signin-help").innerHTML = `<div class="tc bad"><div class="tc-q">That didn't work</div><p>${esc(a.error)}</p></div>`; else renderConnectors(); return a; };
-  pane.querySelectorAll("[data-refresh]").forEach((b) => b.onclick = () => { b.disabled = true; renderConnectors(true); });
-  pane.querySelectorAll("[data-check]").forEach((b) => b.onclick = () => after(invoke({ cmd: "connectorCheck", id: b.dataset.check }), b));
-  pane.querySelectorAll("[data-enable]").forEach((b) => b.onclick = () => after(invoke({ cmd: "connectorEnable", id: b.dataset.enable, enabled: b.dataset.on === "1" }), b));
-  pane.querySelectorAll("[data-remove]").forEach((b) => b.onclick = () => after(invoke({ cmd: "connectorRemove", id: b.dataset.remove }), b));
-  pane.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => after(invoke({ cmd: "connectorSignOut", id: b.dataset.signout }), b));
-  pane.querySelectorAll("[data-add-catalog]").forEach((b) => b.onclick = () => after(invoke({ cmd: "connectorAdd", catalog: b.dataset.addCatalog }), b));
-  pane.querySelectorAll("[data-signin]").forEach((b) => b.onclick = async () => {
-    b.disabled = true;
-    const a = await invoke({ cmd: "connectorSignIn", id: b.dataset.signin });
-    if (!a.ok) { b.disabled = false; $("#signin-help").innerHTML = `<div class="tc bad"><div class="tc-q">Couldn't start the sign-in</div><p>${esc(a.error)}</p></div>`; return; }
-    renderConnectors();
-  });
-  pane.querySelectorAll("[data-claude-signin]").forEach((b) => b.onclick = () => {
-    $("#signin-help").innerHTML = `<div class="tc ask"><div class="tc-h"><span class="app">${esc(b.dataset.claudeSignin.slice(0, 1))}${TP.badge("needs")}</span><span class="who"><b>${esc(b.dataset.claudeSignin)}</b> · Claude account</span>${TP.pill("needs", "Needs sign-in")}</div>`
-      + `<div class="tc-q">Sign in to ${esc(b.dataset.claudeSignin)}</div><p>This app is on your Claude account: sign in on claude.ai, then check again here.</p>`
-      + `<div class="tc-field"><span>https://claude.ai/settings/connectors</span><button class="btn sm" data-copy="https://claude.ai/settings/connectors">Copy</button></div></div>`;
-    wire($("#signin-help"));
-  });
-  pane.querySelectorAll("[data-token]").forEach((b) => b.onclick = () => {
-    const slot = pane.querySelector(`[data-token-for="${CSS.escape(b.dataset.token)}"]`);
-    slot.innerHTML = `<form class="hub-form su-fields"><label>Token <input type="password" name="token" autocomplete="off" required></label><button class="btn pri sm" type="submit">Save</button></form>`;
-    slot.querySelector("form").onsubmit = (e) => { e.preventDefault(); after(invoke({ cmd: "connectorSecret", id: b.dataset.token, value: new FormData(e.target).get("token") }), e.target.querySelector("button")); };
-  });
-  pane.querySelectorAll("select[data-botapp]").forEach((s) => s.onchange = async () => {
-    await invoke({ cmd: "botApp", bot: s.dataset.botapp, app: s.dataset.app, level: s.value });
-    state = (await invoke({ cmd: "botsState" })).result || state;
-    renderConnectors();
-  });
-  $("#hub-add").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const name = String(f.get("name")).trim(), where = String(f.get("where")).trim();
-    const id = appIdFrom(name);
-    const app = /^https?:\/\//i.test(where) ? { id, name, kind: "remote", url: where, auth: f.get("auth") } : (() => { const w = commandWords(where); return { id, name, kind: "local", command: w[0], args: w.slice(1) }; })();
-    $("#hub-add-said").textContent = "Adding and checking…";
-    const a = await invoke({ cmd: "connectorAdd", app });
-    $("#hub-add-said").textContent = a.ok ? "" : a.error;
-    if (a.ok) { if (app.auth === "oauth") await invoke({ cmd: "connectorSignIn", id }); renderConnectors(); }
-  };
-  // While a sign-in is waiting for the browser, look again every two seconds.
-  clearTimeout(connectorsPoll);
-  if (list.some((c) => c.signIn && c.signIn.state === "waiting")) connectorsPoll = setTimeout(() => { if (view.kind === "connectors") renderConnectors(); }, 2000);
+  return CONNECTORS.render(refresh);
 }
 
 /* ---------------- routines, usage, settings ---------------- */
+// The list and the editor are routines.js.
 async function renderRoutines() {
-  const r = (await invoke({ cmd: "routines" })).result || [];
-  const rows = r.map((x) => {
-    const last = x.runs.slice(-1)[0];
-    const kind = !last ? "none" : { done: "done", quiet: "ok", failed: "failed", missed: "needs", running: "working", skipped: "none" }[last.status] || "none";
-    const word = !last ? "Not run yet" : { done: "Done", quiet: "Nothing to report", failed: "Failed", missed: "Missed", running: "Working", skipped: "Skipped" }[last.status];
-    const target = x.target.startsWith("group:") ? (state.groups.find((g) => `group:${g.id}` === x.target) || {}).head : x.target;
-    return `<div class="crow">${botHTML(target, 30, { badge: false, state: x.paused ? "idle" : "awake" })}<span class="tx"><b>${esc(x.name)}</b><small>${esc(nameOf(target))} · ${esc(x.instruction)}</small></span>${TP.pill(x.paused ? "idle" : kind, x.paused ? "Paused" : word)}`
-      + `<span class="btns"><button class="btn sm" data-a="run" data-id="${x.id}">Run now</button><button class="btn sm" data-a="${x.paused ? "resume" : "pause"}" data-id="${x.id}">${x.paused ? "Resume" : "Pause"}</button><button class="btn sm ghost" data-a="delete" data-id="${x.id}">Delete</button></span></div>`;
-  }).join("");
-  $("#pane").innerHTML = `<div class="column"><h1>Routines</h1>${r.length ? `<div class="list">${rows}</div>` : `<p class="muted">Ask a bot for something on a schedule ("every weekday at 8, send me a brief") and it shows up here.</p>`}</div>`;
-  $("#pane").querySelectorAll("button[data-a]").forEach((b) => b.onclick = async () => { await invoke({ cmd: "routines", action: b.dataset.a, id: b.dataset.id }); setTimeout(renderRoutines, 300); });
+  return ROUTINES.render();
 }
 async function renderUsage() {
   const r = (await invoke({ cmd: "botsUsage", days: 7 })).result || { bots: [] };

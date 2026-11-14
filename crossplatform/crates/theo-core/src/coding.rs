@@ -24,7 +24,7 @@ fn slug(text: &str) -> String {
 }
 
 /// "a new folder called liar-1", "New folder: x".
-fn new_folder_name(owner_words: &str, answer: &str) -> Option<String> {
+pub(crate) fn new_folder_name(owner_words: &str, answer: &str) -> Option<String> {
     let re = regex::Regex::new(r#"(?i)\bnew folder (?:called|named)\s+[`"']?([A-Za-z0-9._-]+)"#).unwrap();
     if let Some(c) = re.captures(owner_words) {
         let name = c[1].trim_end_matches('.').to_string();
@@ -37,11 +37,11 @@ fn new_folder_name(owner_words: &str, answer: &str) -> Option<String> {
 }
 
 /// An existing folder the owner's own words named.
-fn named_repo(owner_words: &str) -> Option<PathBuf> {
+pub(crate) fn named_repo(owner_words: &str) -> Option<PathBuf> {
     crate::policy::paths_in_words(owner_words).into_iter().find(|p| p.is_dir())
 }
 
-async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let git = engine::locate("git").unwrap_or_else(|| PathBuf::from("git"));
     let mut cmd = engine::background_command(&git);
     // Never wait on a password prompt nobody can see: a push without credentials fails instead of hanging the run.
@@ -58,6 +58,22 @@ pub const CODING_AGENTS: [&str; 6] = ["claude", "codex", "cursor", "opencode", "
 
 /// Settings key: the agent the owner picked for coding runs. Unset: automatic.
 pub const TARGET_SETTING: &str = "coding.target";
+
+/// Settings key: where new projects go (the Mac's `v2.code.projectsFolder`), chosen on the run card. Unset: the Projects
+/// folder in Theo's data folder.
+pub const PROJECTS_SETTING: &str = "coding.projectsFolder";
+
+/// The folder new projects go in: the owner's choice when it's an absolute path, else Theo's own Projects folder.
+pub fn projects_folder(h: &Harness) -> PathBuf {
+    h.settings.string(PROJECTS_SETTING).map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| h.paths.projects_dir())
+}
+
+/// What the run card chose: the agent, and an existing chat of that agent's to carry on (its id and title).
+#[derive(Clone, Debug, Default)]
+pub struct Choice {
+    pub harness: Option<String>,
+    pub chat: Option<(String, String)>,
+}
 
 /// One agent as the choice sees it.
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +262,13 @@ pub fn start_from_answer(h: &Arc<Harness>, prompt: &str, answer: &str, owner_wor
 }
 
 pub fn start(h: &Arc<Harness>, prompt: String, title: String, repo: Option<PathBuf>, new_folder: Option<String>, room: String, digest: Option<String>) -> String {
+    start_with(h, prompt, title, repo, new_folder, room, digest, Choice::default())
+}
+
+/// A run with the card's choices. Carrying on a chat works in the folder itself, on that chat's session, with no branch,
+/// commit or push of Theo's (the Mac's `BotsT3.continueChat`).
+#[allow(clippy::too_many_arguments)]
+pub fn start_with(h: &Arc<Harness>, prompt: String, title: String, repo: Option<PathBuf>, new_folder: Option<String>, room: String, digest: Option<String>, choice: Choice) -> String {
     // The same pitch never starts twice, even after a restart.
     if let Some(d) = &digest {
         if let Some(existing) = h.with(|s| s.runs.iter().find(|r| r.prompt_digest.as_deref() == Some(d)).map(|r| r.id.clone())) {
@@ -254,12 +277,15 @@ pub fn start(h: &Arc<Harness>, prompt: String, title: String, repo: Option<PathB
     }
     let id = uuid::Uuid::new_v4().to_string().to_uppercase();
     let short = id[..6].to_lowercase();
+    let continuing = choice.chat.is_some();
     let folder = match (&repo, &new_folder) {
+        (Some(place), _) if continuing => place.to_string_lossy().to_string(),
         (Some(_), _) => h.paths.projects_dir().join(".worktrees").join(format!("{}-{}", slug(&title), short)).to_string_lossy().to_string(),
         (None, Some(name)) if Path::new(name).is_absolute() => name.clone(),
-        (None, Some(name)) => h.paths.projects_dir().join(name).to_string_lossy().to_string(),
-        _ => h.paths.projects_dir().join(slug(&title)).to_string_lossy().to_string(),
+        (None, Some(name)) => projects_folder(h).join(name).to_string_lossy().to_string(),
+        _ => projects_folder(h).join(slug(&title)).to_string_lossy().to_string(),
     };
+    let repo = if continuing { None } else { repo };
     let run = CodingRun {
         id: id.clone(),
         title: title.clone(),
@@ -268,16 +294,21 @@ pub fn start(h: &Arc<Harness>, prompt: String, title: String, repo: Option<PathB
         room: room.clone(),
         branch: repo.as_ref().map(|_| format!("theo/{}-{}", slug(&title), short)),
         pull_request: None,
-        session_id: None,
-        // Chosen when the run starts (asking the agents takes a moment): see `choose_agent`.
-        harness: None,
+        session_id: choice.chat.as_ref().map(|(id, _)| id.clone()),
+        // The card's pick, else chosen when the run starts (asking the agents takes a moment): see `choose_agent`.
+        harness: choice.harness.clone().filter(|id| CODING_AGENTS.contains(&id.as_str())),
+        continued: choice.chat.as_ref().map(|(_, chat_title)| chat_title.clone()),
         prompt_digest: digest,
         started_at: chrono::Utc::now(),
         summary: None,
     };
     h.with(|s| s.runs.push(run.clone()));
     h.write_runs();
-    let mut card = ChatMessage::note(format!("Theo started the coding run \"{title}\" in {folder}."));
+    let started = match &choice.chat {
+        Some((_, chat_title)) => format!("Theo is carrying on the chat \"{chat_title}\" in {folder} for \"{title}\"."),
+        None => format!("Theo started the coding run \"{title}\" in {folder}."),
+    };
+    let mut card = ChatMessage::note(started);
     card.run_id = Some(id.clone());
     h.post(card, &room);
     let me = h.clone();
@@ -335,7 +366,7 @@ fn set_phase(h: &Harness, id: &str, phase: &str, summary: Option<String>) {
 async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt: String, follow_up: bool) {
     let folder = PathBuf::from(&run.folder);
     // The place: a new worktree on its own branch for an existing repo, a new folder (made a repo) otherwise.
-    if !follow_up {
+    if !follow_up && run.continued.is_none() {
         let prepared: Result<(), String> = async {
             if let (Some(repo), Some(branch)) = (&repo, &run.branch) {
                 std::fs::create_dir_all(folder.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -354,8 +385,14 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
             return;
         }
     }
-    // The agent: the one this run was on for a follow-up (its session lives there), else the choice.
-    let earlier = run.harness.clone().filter(|id| follow_up && CODING_AGENTS.contains(&id.as_str()));
+    if run.continued.is_some() && !folder.is_dir() {
+        let words = format!("There's no folder at {} any more.", folder.to_string_lossy());
+        set_phase(&h, &run.id, "failed", Some(words.clone()));
+        h.post(ChatMessage::note(format!("\"{}\" couldn't start: {words}", run.title)), &run.room);
+        return;
+    }
+    // The agent: the one this run was on for a follow-up (its session lives there), or the one the run card picked, else the choice.
+    let earlier = run.harness.clone().filter(|id| CODING_AGENTS.contains(&id.as_str()));
     let (agent, fell_back) = match earlier {
         Some(id) => (id, false),
         None => match choose_agent(&h).await {
@@ -370,7 +407,8 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
     };
     let label = crate::brains::label(&agent);
     let Some(program) = h.executable(&agent) else {
-        let words = format!("{label} isn't installed on this computer any more, so the follow-up can't run there. Install it again in Settings › Brains.");
+        let words = if follow_up { format!("{label} isn't installed on this computer any more, so the follow-up can't run there. Install it again in Settings › Brains.") }
+            else { format!("{label} isn't installed on this computer. Pick another agent on the card, or install it in Settings › Brains.") };
         set_phase(&h, &run.id, "failed", Some(words.clone()));
         h.post(ChatMessage::note(format!("\"{}\" couldn't go on: {words}", run.title)), &run.room);
         return;
@@ -464,6 +502,15 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
     if let Some(err) = failure {
         set_phase(&h, &run.id, "failed", Some(err.clone()));
         h.post(ChatMessage::note(format!("\"{}\" failed: {err}", run.title)), &run.room);
+        return;
+    }
+    // Carrying on the owner's own chat: the folder is theirs, so Theo commits and pushes nothing.
+    if let Some(chat_title) = run.continued.clone() {
+        let said: String = outcome.text.chars().take(1200).collect();
+        set_phase(&h, &run.id, "done", Some(said.chars().take(300).collect()));
+        let mut note = ChatMessage::note(format!("\"{}\" is done{} ({label}, in the chat \"{chat_title}\").\n\n{}\n\nTheo didn't commit or push anything: the changes are in {}.", run.title, if follow_up { " with the follow-up" } else { "" }, said.trim(), run.folder));
+        note.run_id = Some(run.id.clone());
+        h.post(note, &run.room);
         return;
     }
     // Commit what it did, push and open a draft PR when there's somewhere to push.
