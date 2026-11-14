@@ -254,6 +254,8 @@ impl ClickyApp {
                     theo_voice::overlay::show_without_focus(handle);
                 } else if let Some(window) = self.app.get_webview_window(&label) {
                     let _ = window.show();
+                    // GTK only has a window to make click-through once it's shown (tao unwraps it).
+                    let _ = window.set_ignore_cursor_events(true);
                 }
             } else if let Some(window) = self.app.get_webview_window(&label) {
                 let _ = window.hide();
@@ -292,14 +294,19 @@ impl ClickyApp {
                     if let Some(clicky) = instance() {
                         let phase = clicky.phase();
                         clicky.send_to(&page_label, json!({"kind": "state", "state": phase.word()}));
-                        let _ = window.set_ignore_cursor_events(true);
+                        if cfg!(windows) || window.is_visible().unwrap_or(false) {
+                            let _ = window.set_ignore_cursor_events(true);
+                        }
                     }
                 }
             });
         let window = builder.build().map_err(|e| e.to_string())?;
         let _ = window.set_position(tauri::PhysicalPosition::new(monitor.x, monitor.y));
         let _ = window.set_size(tauri::PhysicalSize::new(monitor.width, monitor.height));
-        let _ = window.set_ignore_cursor_events(true);
+        // On Linux a hidden window has no GTK window yet: it's made click-through when it's shown.
+        if cfg!(windows) {
+            let _ = window.set_ignore_cursor_events(true);
+        }
         #[cfg(windows)]
         let handle = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
         #[cfg(not(windows))]
