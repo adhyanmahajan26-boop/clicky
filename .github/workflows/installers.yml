@@ -1,0 +1,59 @@
+# The one-line installers and the release settings, on a cheap Linux runner: where releases come from, what a
+# private repo says, how install.sh picks and enforces the signer (on a stand-in Mac), and that the releases repo
+# and signing team each live in one place. Nothing is built, signed or published.
+name: Installers
+
+on:
+  pull_request:
+    paths:
+      - "Config/**"
+      - "Tools/install/**"
+      - "Tools/release.sh"
+      - "Tools/set-releases-repo.sh"
+      - "Tools/setup-signing.sh"
+      - "crossplatform/install/**"
+      - "crossplatform/tests/install_test.py"
+      - "crossplatform/tools/collect_installers.py"
+      - "leanring-buddy.xcodeproj/project.pbxproj"
+      - ".github/workflows/installers.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Config/**"
+      - "Tools/install/**"
+      - "Tools/release.sh"
+      - "crossplatform/install/**"
+      - "leanring-buddy.xcodeproj/project.pbxproj"
+      - ".github/workflows/installers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installers:
+    name: Install scripts and release settings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Releases repo and signing team each in one place
+        run: python3 Tools/install/check-release-config.py
+      - name: Scripts parse
+        run: |
+          bash -n Tools/install/install.sh Tools/install/test-install.sh Tools/install/make-cask.sh \
+            Tools/install/signer-requirement.sh Tools/setup-signing.sh Tools/set-releases-repo.sh crossplatform/install/install-linux.sh
+          pwsh -NoProfile -Command '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("crossplatform/install/install.ps1", [ref]$null, [ref]$e); if ($e) { $e; exit 1 }'
+      - name: Mac install.sh on a stand-in Mac against a stand-in GitHub
+        run: python3 Tools/install/test-install-stand-in.py
+      - name: Linux install-linux.sh against a stand-in GitHub
+        run: python3 crossplatform/tests/install_test.py
+      - name: Homebrew cask reads the releases repo from Config/Theo.xcconfig
+        run: Tools/install/make-cask.sh 202611140000 "$(printf '0%.0s' $(seq 64))" | grep -q "github.com/$(cat crossplatform/install/releases-repo)/releases"

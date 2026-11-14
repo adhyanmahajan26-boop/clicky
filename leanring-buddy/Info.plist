@@ -4,6 +4,8 @@
 <dict>
 	<key>LSUIElement</key>
 	<true/>
+	<key>TheoReleasesRepository</key>
+	<string>$(THEO_RELEASES_REPO)</string>
 	<key>VoiceTranscriptionProvider</key>
 	<string>apple</string>
 	<key>NSBonjourServices</key>

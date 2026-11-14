@@ -201,10 +201,13 @@ struct ChildProcessTests {
 
     @Test func idleTimeoutFires() async throws {
         let startTime = Date()
-        let result = try await ChildProcess.run(executable: "/bin/sleep", arguments: ["5"], environment: testEnvironment,
+        // The child would sleep for 30 seconds; the 1 second idle timeout has to be what ends it. The bound is far below 30
+        // and far above 1 because a build machine running every suite at once can hold the timeout back by several seconds
+        // (it fired after 5.9 seconds there, which the old 5 second sleep and 3 second bound called a failure).
+        let result = try await ChildProcess.run(executable: "/bin/sleep", arguments: ["30"], environment: testEnvironment,
                                                 timeouts: ChildProcessTimeouts(idleSeconds: 1))
         #expect(result.endReason == .idleTimeout)
-        #expect(Date().timeIntervalSince(startTime) < 3)
+        #expect(Date().timeIntervalSince(startTime) < 15)
     }
 
     @Test func toolInFlightSuppressesIdleTimeout() async throws {

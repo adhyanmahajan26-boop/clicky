@@ -39,8 +39,11 @@ harness's rule is unchanged (only your own words start runs and routines by them
 
 ## Connectors
 
-From `claude mcp list`, which on Claude Code 2.1 prints `name: target - ✔ Connected`, `- ! Needs authentication`, or a
-failure mark. Rows sort needs sign-in, can't connect, connected; each failed row says when it last worked.
+From the connector hub's list ([CONNECTORS.md](CONNECTORS.md)); apps on the Claude account get their status from `claude mcp
+list`, which on Claude Code 2.1 prints `name: target - ✔ Connected`, `- ! Needs authentication`, or a failure mark. Rows sort
+needs sign-in, can't connect, connected, not checked, off; each failed row says when it last worked. Under each row, every
+bot has a level for the app (Off, Read only, Read and draft, Everything). A sign-in waiting for the browser shows a small card
+with the address to copy.
 
 ## The tray
 

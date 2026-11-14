@@ -392,10 +392,17 @@ struct ClickyTeamTests {
 
 @Suite struct ClickyMachineWordsTests {
     @Test func theSwitchOutLoud() {
-        #expect(ClickyMachineWords.choice(in: "Clicky, work on the Air") == "air")
-        #expect(ClickyMachineWords.choice(in: "switch to the Mac Studio for now") == "studio")
-        #expect(ClickyMachineWords.choice(in: "use the MacBook") == nil)
-        #expect(ClickyMachineWords.choice(in: "work on the studio project") == nil)
-        #expect(ClickyMachineWords.choice(in: "what is the air quality") == nil)
+        let addysMacs = ["Adhyan’s Mac Studio", "Adhyan’s MacBook Air"]
+        #expect(ClickyMachineWords.choice(in: "Clicky, work on the Air", macNames: addysMacs) == "Adhyan’s MacBook Air")
+        #expect(ClickyMachineWords.choice(in: "switch to the Mac Studio for now", macNames: addysMacs) == "Adhyan’s Mac Studio")
+        #expect(ClickyMachineWords.choice(in: "use the MacBook", macNames: addysMacs) == nil)
+        #expect(ClickyMachineWords.choice(in: "work on the studio project", macNames: addysMacs) == nil)
+        #expect(ClickyMachineWords.choice(in: "what is the air quality", macNames: addysMacs) == nil)
+        // Any pair of Macs, by their own names.
+        let samsMacs = ["Sam’s MacBook Pro", "Kitchen iMac"]
+        #expect(ClickyMachineWords.choice(in: "Clicky, work on the iMac", macNames: samsMacs) == "Kitchen iMac")
+        #expect(ClickyMachineWords.choice(in: "switch to the kitchen iMac now", macNames: samsMacs) == "Kitchen iMac")
+        #expect(ClickyMachineWords.choice(in: "move to my MacBook Pro please", macNames: samsMacs) == "Sam’s MacBook Pro")
+        #expect(ClickyMachineWords.choice(in: "work on the Air", macNames: samsMacs) == nil)
     }
 }

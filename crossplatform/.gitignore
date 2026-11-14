@@ -7,3 +7,5 @@
 /app/src-tauri/target/
 /app/src-tauri/gen/
 /tests/work-ui/
+/tests/work-stranger/
+/tests/results-stranger/

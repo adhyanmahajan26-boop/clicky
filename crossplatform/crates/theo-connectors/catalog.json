@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "note": "Only apps whose address and sign-in have been tested go here. Anything else is added with \"Add your own\" (a URL or a command). Google's own MCP servers (gmailmcp.googleapis.com and the Drive, Docs and Sheets ones) need a Google OAuth client registered by the app's owner, so until there is one they come through a Claude account. See docs/CONNECTORS.md.",
+  "apps": [
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "kind": "claude-account",
+      "server": "claude.ai Gmail",
+      "readTools": [
+        "search_threads",
+        "get_thread",
+        "get_message",
+        "list_labels",
+        "list_drafts",
+        "get_draft"
+      ],
+      "writeTools": [
+        "create_draft",
+        "send_message",
+        "reply",
+        "forward",
+        "trash_message",
+        "trash_thread",
+        "delete_draft",
+        "delete_label",
+        "create_label",
+        "update_label",
+        "label_message",
+        "label_thread",
+        "unlabel_message",
+        "unlabel_thread",
+        "update_message_labels",
+        "mark_message_spam",
+        "mark_thread_spam",
+        "update_draft",
+        "apply_sensitive_message_label",
+        "apply_sensitive_thread_label"
+      ],
+      "description": "Search and read mail, write drafts.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "kind": "claude-account",
+      "server": "claude.ai Notion",
+      "readTools": [
+        "notion-search",
+        "notion-fetch",
+        "notion-query-data-sources",
+        "notion-query-multiple-data-sources",
+        "notion-get-comments",
+        "notion-get-users",
+        "notion-get-self",
+        "notion-list-recent-pages",
+        "notion-list-favorite-pages",
+        "notion-list-private-pages",
+        "notion-list-shared-pages",
+        "notion-query-meeting-notes"
+      ],
+      "writeTools": [
+        "notion-create-pages",
+        "notion-update-page",
+        "notion-delete-pages",
+        "notion-move-pages",
+        "notion-create-database",
+        "notion-delete-databases",
+        "notion-update-data-source",
+        "notion-create-comment",
+        "notion-delete-comment",
+        "notion-duplicate-page"
+      ],
+      "description": "Search, read and write pages and databases.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    },
+    {
+      "id": "calendar",
+      "name": "Notion Calendar",
+      "kind": "claude-account",
+      "server": "claude.ai Notion",
+      "readTools": [
+        "notion-calendar-list-calendars",
+        "notion-calendar-list-events",
+        "notion-calendar-list-contacts",
+        "notion-calendar-list-calendar-resources"
+      ],
+      "writeTools": [
+        "notion-calendar-create-events",
+        "notion-calendar-update-events",
+        "notion-calendar-cancel-events"
+      ],
+      "description": "See calendars and events, add and change events.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    },
+    {
+      "id": "drive",
+      "name": "Google Drive",
+      "kind": "claude-account",
+      "server": "claude.ai Google Drive",
+      "readTools": [
+        "search_files",
+        "list_recent_files",
+        "read_file_content",
+        "get_file_metadata"
+      ],
+      "writeTools": [
+        "create_file",
+        "update_file",
+        "trash_file",
+        "share_file",
+        "copy_file"
+      ],
+      "description": "Find and read files.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    },
+    {
+      "id": "docs",
+      "name": "Google Docs",
+      "kind": "claude-account",
+      "server": "claude.ai Google Docs",
+      "readTools": [
+        "read_doc"
+      ],
+      "writeTools": [
+        "update_doc"
+      ],
+      "description": "Read and edit documents.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    },
+    {
+      "id": "sheets",
+      "name": "Google Sheets",
+      "kind": "claude-account",
+      "server": "claude.ai Google Sheets",
+      "readTools": [
+        "get_spreadsheet",
+        "get_values"
+      ],
+      "writeTools": [
+        "append_values",
+        "batch_clear_values",
+        "update_values",
+        "update_formulas",
+        "update_spreadsheet",
+        "insert_dimension",
+        "copy_sheet_to_another_spreadsheet"
+      ],
+      "description": "Read and edit spreadsheets.",
+      "via": "Your Claude account (needs Claude Code)",
+      "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
+    }
+  ]
+}

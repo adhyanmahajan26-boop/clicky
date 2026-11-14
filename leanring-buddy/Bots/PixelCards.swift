@@ -51,7 +51,11 @@ struct AppSignInCard: View {
     }
 
     static func scope(_ connector: BotConnector) -> String {
-        BotConnectors.bridged(connector) ? "Read and draft only. Never sends or deletes." : "Used by your bots on this Mac."
+        if let hub = connector.hub {
+            // A hub app: every brain reaches it the same way, and each bot's settings say how far it may go.
+            return hub.isClaudeAccount ? "Through your Claude account. Each bot's settings say what it may do." : "Signed in inside Theo. Each bot's settings say what it may do."
+        }
+        return BotConnectors.bridged(connector) ? "Read and draft only. Never sends or deletes." : "Used by your bots on this Mac."
     }
 
     private func signIn() {
@@ -224,27 +228,6 @@ struct ConnectorFailedCard: View {
                 PixelObjectRow(symbol: connector.symbol, name: connector.name, line: worked.map { "Last connected " + $0.replacingOccurrences(of: "worked ", with: "") } ?? "Not seen connected yet",
                                pill: (.failed, "Can't connect"), badge: .failed)
                 if showsDetails { FailureDetails(text: reason) }
-            }
-        }
-    }
-}
-
-// MARK: - API key
-
-/// Dictation needs a Sarvam key. Saving it here unblocks Dictation everywhere, and the card folds.
-struct SarvamKeyCard: View {
-    @ObservedObject private var products = TheoProducts.shared
-    @ObservedObject private var folds = PixelCardFolds.shared
-    private let cardID = "key:sarvam"
-
-    var body: some View {
-        if products.dictationAccess == .ready {
-            folds.line(cardID) ?? PixelFoldedLine(tone: .ok, did: "Sarvam key saved", about: "Dictation is ready")
-        } else {
-            PixelCard(tone: .needs, lead: .app(symbol: "mic.fill", state: .needs), name: "Dictation", context: "blocked",
-                      question: "Dictation needs a Sarvam API key",
-                      foot: "Keys stay in your Keychain.") {
-                SarvamKeyField()
             }
         }
     }

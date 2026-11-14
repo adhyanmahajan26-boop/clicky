@@ -54,12 +54,13 @@ extension BotsStore {
 
     /// Clicky as a member of a team: its name, its brain, its place in the chart.
     var clickyBot: NativeBot {
-        let brain = BrainModel(setting: ClickyModels.main)
+        // Clicky's engine is its own brain, whatever it is (Claude, an agent, an API key), so its face and status follow it.
+        let engine = BotEngineChoice(brainSetting: ClickyModels.main)
         var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
-                         instructions: "You are Clicky, Addy's screen companion. You manage a small team and report to the CEO.",
-                         hue: 20, accentHue: 40, primary: false, provider: "claude",
-                         model: brain.isClaude ? brain.modelIdentifier : ClickyModels.sonnet, effort: nil, apps: [], category: "personal")
+                         instructions: "You are Clicky, \(BotPrompts.ownerName)'s screen companion. You manage a small team and report to the CEO.",
+                         hue: 20, accentHue: 40, primary: false, provider: engine.provider,
+                         model: engine.model, effort: nil, apps: [], category: "personal")
         clicky.look = Self.savedClickyLook
         return clicky
     }
@@ -80,9 +81,14 @@ extension BotsStore {
 
     var memoryStore: ClickyMemoryStore { ClickyMemoryStore(directory: folder.appendingPathComponent("clicky-memory", isDirectory: true)) }
 
-    /// The model hidden helpers and Researcher's page readers use: Researcher's, when it's on Claude.
+    /// The model hidden helpers and Researcher's page readers use: Researcher's own brain when it runs here (Claude,
+    /// an agent or an API key), else the helper model. The name is older than the other brains.
     var researcherClaudeModel: String {
-        if let researcher = teamBot(.researcher), researcher.provider == "claude" { return researcher.model }
+        if let researcher = teamBot(.researcher),
+           let setting = BotEngineChoice(provider: researcher.provider, model: researcher.model).brainSetting,
+           BrainAvailability.inventory.isUsable(setting) {
+            return setting
+        }
         return ClickyModels.helper
     }
 
@@ -94,7 +100,7 @@ extension BotsStore {
 
     // MARK: Setting up
 
-    /// Once: the team joins this setup, new or old. Bots Addy later removes stay removed.
+    /// Once: the team joins this setup, new or old. Bots the owner later removes stay removed.
     func provisionClickyTeam() {
         let file = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
@@ -221,7 +227,7 @@ extension BotsStore {
             } else {
                 do {
                     let turn = try await ClaudeCodeBridge(model: ClickyModels.helper).runTurn(
-                        systemPromptFileName: "clicky-\(duty.rawValue)-helper-prompt.md", systemPrompt: duty.instructions, contentBlocks: [.text(plan.prompt)])
+                        systemPromptFileName: "clicky-\(duty.rawValue)-helper-prompt.md", systemPrompt: duty.instructions(owner: BotPrompts.ownerName), contentBlocks: [.text(plan.prompt)])
                     self.jobAnswered(job.id, duty: duty, answer: turn.text.trimmingCharacters(in: .whitespacesAndNewlines), ownerWords: ownerWords,
                                      memoryKind: plan.memoryKind, room: Self.clickyID)
                 } catch {
@@ -239,11 +245,11 @@ extension BotsStore {
             switch kind {
             case .remember(let text):
                 memoryStore.append(text, kind: .remembered)
-                return (ClickyTeamPrompts.rememberPrompt(text), kind)
+                return (ClickyTeamPrompts.rememberPrompt(text, owner: BotPrompts.ownerName), kind)
             case .find(let query):
                 return (ClickyTeamPrompts.findPrompt(query: query, hits: memoryStore.search(query)), kind)
             case .summarise:
-                return (ClickyTeamPrompts.summarisePrompt(entries: memoryStore.unsummarised()), kind)
+                return (ClickyTeamPrompts.summarisePrompt(entries: memoryStore.unsummarised(), owner: BotPrompts.ownerName), kind)
             }
         case .runner:
             let targets = bots.filter { $0.owner == nil && $0.isOn }.map { (name: $0.name, description: $0.description) }
@@ -449,7 +455,7 @@ extension BotsStore {
             onReport?(CompanionManager.clickyOffLine)
             return
         }
-        if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order), TheoLink.shared.setClickyMac(word: word) {
+        if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order, macNames: TheoLink.shared.macNames), TheoLink.shared.setClickyMac(word: word) {
             let line = "Clicky's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
             post(BotChatMessage(author: Self.clickyID, text: line), to: ceo.id)
             onReport?(line)
@@ -595,11 +601,11 @@ extension BotsStore {
             return
         }
         guard let ownerWords, BotsStore.ownerAskedToBuild(ownerWords) else {
-            onReport?("That needs Addy's own go-ahead: they have to say to send it to code.")
+            onReport?("That needs \(BotPrompts.ownerName)'s own go-ahead: they have to say to send it to code.")
             return
         }
         let choices = codingChoices(from: ownerWords + "\n" + prompt)
-        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords), room: ceo.id)
+        let mac = runMac(named: CodingDeviceWords.named(in: ownerWords, macNames: TheoLink.shared.macNames), room: ceo.id)
         let folder = projectChoice(ownerWords: ownerWords, answer: prompt, macName: mac)
         submitToT3(prompt: prompt, title: BotsT3.shortTitle(from: prompt), repo: folder.repo, room: ceo.id, harness: harness,
                    modelChoice: choices.model, effortChoice: choices.effort, newFolder: folder.newFolder, macName: mac) { started, problem in
@@ -612,7 +618,11 @@ extension BotsStore {
     func workOnScreen(_ task: String, bot: NativeBot, room: String, onReport: ((String) -> Void)? = nil) {
         guard StudioController.isAvailable else {
             if !TheoLink.shared.request("screen", ["task": task, "bot": bot.id, "room": room]) {
-                post(BotChatMessage(author: bot.id, text: "I can't reach the Mac Studio's hidden screens right now: your other Mac isn't connected."), to: room)
+                let link = TheoLink.shared
+                let line = link.isPaired
+                    ? "I can't reach the hidden screens on your \(TheoLink.shortName(link.knownPeerName ?? "other Mac")) right now: it isn't connected."
+                    : "There are no hidden screens on this Mac."
+                post(BotChatMessage(author: bot.id, text: line), to: room)
             }
             return
         }
@@ -627,7 +637,7 @@ extension BotsStore {
             guard await studio.wakeForWork() else {
                 let said = studio.isEnabled
                     ? "The hidden screens are asleep while something's playing, because waking them can interrupt it. Nothing was done, so ask again when it's stopped."
-                    : "I can't do that: the hidden screens are off, so nothing was done. Addy can turn them on in Settings › Studio."
+                    : "I can't do that: the hidden screens are off, so nothing was done. \(OwnerName.startingSentence(BotPrompts.ownerName)) can turn them on in Settings › Studio."
                 if let onReport { onReport(said) } else { self.post(BotChatMessage(author: bot.id, text: said), to: room) }
                 return
             }
@@ -788,7 +798,7 @@ extension BotsStore {
         guard bot.primary, !rosterForCEO.isEmpty else { return "" }
         let work = memoryStore.teamWorkContext()
         return "(As of now, and this replaces any older list in this chat. \(rosterForCEO)\n\(runsStatus)\n\(projectsNote)\n" +
-            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply. Between bots it's private: Addy sees a small card, their answer comes back to you here, and you tell Addy what came of it. Just do it: don't explain to Addy how you reach them, and don't ask how." +
+            "To give one of them work, put a line [TELL: its exact name: what to do] in your reply. Between bots it's private: \(BotPrompts.ownerName) sees a small card, their answer comes back to you here, and you tell \(BotPrompts.ownerName) what came of it. Just do it: don't explain to \(BotPrompts.ownerName) how you reach them, and don't ask how." +
             (work.isEmpty ? "" : "\n\n" + work) + ")\n\n"
     }
 
@@ -816,9 +826,11 @@ extension BotImport {
     /// The team and its category: Clicky manages Memory, Researcher and Runner, and Theo stays on top, pinned, above it.
     /// Safe to run on any setup: other bots and categories stay as they are.
     static func addClickyTeam(to bots: inout [NativeBot], layout: inout BotsLayout) {
+        // The team starts on the helper brain: Haiku on Claude, a cheap model of whatever else this Mac thinks with.
+        let teamEngine = BotsStore.clickyTeamEngine
         for duty in ClickyDuty.allCases where !bots.contains(where: { $0.id == duty.botID }) {
-            var bot = NativeBot(id: duty.botID, name: duty.defaultName, description: duty.blurb, instructions: duty.instructions,
-                                hue: 30, accentHue: 60, primary: false, provider: "claude", model: ClickyDuty.model, effort: nil,
+            var bot = NativeBot(id: duty.botID, name: duty.defaultName, description: duty.blurb, instructions: duty.instructions(owner: BotPrompts.ownerName),
+                                hue: 30, accentHue: 60, primary: false, provider: teamEngine.provider, model: teamEngine.model, effort: nil,
                                 apps: [], category: "personal")
             bot.owner = BotsStore.clickyID
             bot.duty = duty.rawValue

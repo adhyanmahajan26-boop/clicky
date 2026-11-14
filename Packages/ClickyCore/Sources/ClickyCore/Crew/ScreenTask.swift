@@ -46,10 +46,10 @@ public enum ScreenTaskPolicy {
     /// Signed-in, spending, sending, sounding or code apps. A hidden screen is for simple jobs in ordinary apps.
     private static let refusedApps: [(words: [String], why: String)] = [
         (["terminal", "iterm", "warp", "ghostty", "kitty", "alacritty", "xcode", "visual studio code", "cursor", "zed", "t3 code"],
-         "terminals and code stay on Addy's own machine"),
+         "terminals and code stay on the owner's own machine"),
         (["chrome", "safari", "firefox", "arc", "edge", "brave", "opera", "vivaldi"], "the browser is only for Clicky's research"),
         (["mail", "messages", "slack", "whatsapp", "telegram", "discord", "teams", "facetime", "zoom", "signal", "outlook"],
-         "that app can send things as Addy"),
+         "that app can send things as the owner"),
         (["system settings", "system preferences", "keychain access", "passwords", "wallet", "finder", "app store", "activity monitor", "disk utility"],
          "that app can change this Mac or holds private things"),
         (["music", "spotify", "tv", "podcasts", "quicktime player", "voice memos", "photo booth", "vlc", "netflix"], "that app plays sound or uses the camera"),
@@ -69,7 +69,7 @@ public enum ScreenTaskPolicy {
     public static func refusal(pressing title: String) -> String? {
         let lowered = title.lowercased()
         guard let word = refusedPresses.first(where: { contains(word: $0, in: lowered) }) else { return nil }
-        return "\"\(word)\" could do something that can't be taken back, so that's for Addy to do"
+        return "\"\(word)\" could do something that can't be taken back, so that's for the owner to do"
     }
 
     private static func contains(word: String, in text: String) -> Bool {
@@ -90,7 +90,7 @@ public enum ScreenTaskPolicy {
     {"do":"open","app":"Stickies"}
     {"do":"press","id":12}
     {"do":"menu","path":["File","New Note"]}
-    {"do":"type","id":7,"text":"Hello Addy"}
+    {"do":"type","id":7,"text":"Hello there"}
     {"do":"done","say":"one plain sentence on what is now on the screen"}
     {"do":"cant","say":"one plain sentence on what stopped you"}
     "type" replaces the text in that field. Say done only when the controls below show the job finished. \

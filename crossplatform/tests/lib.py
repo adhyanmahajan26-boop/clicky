@@ -10,6 +10,10 @@ BOTS = DATA / "Bots"
 FAKE_DIR = ROOT / "fake"
 EXE = ".exe" if WIN else ""
 BIN = pathlib.Path(os.environ.get("THEOD_BIN") or (HERE.parent / "target" / "debug" / ("theod" + EXE)))
+# The connector hub's helper: the one beside theod (or the app under test) when it's there, else the workspace's own build.
+HELPER = BIN.parent / ("theo-connectors" + EXE)
+if not HELPER.exists():
+    HELPER = HERE.parent / "target" / "debug" / ("theo-connectors" + EXE)
 FAKE = HERE / "fake_engine.py"
 FAKE_GH = HERE / "fake_gh.py"
 PY = sys.executable
@@ -81,6 +85,8 @@ def start(wait=None):
     wait = wait or float(os.environ.get("THEO_START_WAIT", "20"))
     global _proc
     env = dict(os.environ, THEO_FAKE_DIR=str(FAKE_DIR))
+    if not (BIN.parent / ("theo-connectors" + EXE)).exists() and HELPER.exists():
+        env.setdefault("THEO_CONNECTORS_BIN", str(HELPER))
     log = open(ROOT / "theod.log", "a")
     kw = {}
     if not WIN:

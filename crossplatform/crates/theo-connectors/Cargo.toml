@@ -1,0 +1,36 @@
+[package]
+name = "theo-connectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Theo's connector hub: the apps bots may use, their sign-ins, and the rule for what a bot may do with them."
+
+[lib]
+name = "theo_connectors"
+path = "src/lib.rs"
+
+[[bin]]
+name = "theo-connectors"
+path = "src/main.rs"
+
+# Deliberately no async runtime: every command is one short exchange, and `serve` answers each request on its own thread.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rand = "0.8"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+url = "2"
+sha2 = "0.10"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+[dev-dependencies]
+tempfile = "3"

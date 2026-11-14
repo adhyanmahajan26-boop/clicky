@@ -70,22 +70,10 @@ enum HarnessCatalog {
     // MARK: Finding binaries
 
     /// The login shell's PATH, asked once (nvm, pnpm, bun and friends are only on it in a login shell).
-    /// Blocks on first use for up to 5 s: call off the main thread.
-    static let loginShellPath: String = {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-ilc", "printf %s \"$PATH\""]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return "" }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { if process.isRunning { process.terminate() } }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        // Interactive shells may print banners; the PATH is the last line.
-        return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
-    }()
+    /// The owner's own shell (LoginShell: $SHELL, else the account's, else zsh), so a bash or fish user's PATH is found too.
+    /// Blocks on first use for up to 5 s: call off the main thread. It never runs the run loop while it waits (see
+    /// LoginShell.commandOutput), so a first use on the main thread can't start a second one inside it and crash.
+    nonisolated static let loginShellPath: String = LoginShell.askPath(timeout: 5)
 
     /// Where to look for a harness: the usual folders and the login shell's PATH, then npm's own global folder, which
     /// isn't on PATH with pnpm's or nvm's Node (that's where `npm install -g` puts Gemini CLI).
@@ -99,8 +87,8 @@ enum HarnessCatalog {
     /// Asks npm where its global commands go. Runs a command: call off the main thread.
     static func findNpmGlobalFolder() {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "npm config get prefix"]
+        process.executableURL = URL(fileURLWithPath: LoginShell.shellPath())
+        process.arguments = LoginShell.arguments(forCommand: "npm config get prefix", interactive: false)
         process.environment = childEnvironment()
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -115,19 +103,34 @@ enum HarnessCatalog {
         extraDirectoriesLock.withLock { if !extraDirectories.contains("\(prefix)/bin") { extraDirectories.append("\(prefix)/bin") } }
     }
 
-    private static let _searchDirectories: [String] = {
+    /// The folders the usual installers put their commands in. Looking here needs no shell, so a tool in one of them is
+    /// found at once, even on the main thread before the login shell has answered.
+    static let usualInstallDirectories: [String] = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let fixed = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.grok/bin", "\(home)/.cursor/bin",
+        // ~/.claude/local is where Claude Code's older "local" install put its command.
+        let fixed = ["\(home)/.local/bin", "\(home)/.claude/local", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.grok/bin", "\(home)/.cursor/bin",
                      "\(home)/.npm-global/bin", "\(home)/.bun/bin", "\(home)/.opencode/bin"]
-        var seen = Set<String>()
         // The test profile can stand in a fake CLI, to test signing in without touching a real account.
         let testing = TheoProfile.isTest ? ["\(home)/fake-bin"] : []
-        return (testing + fixed + loginShellPath.split(separator: ":").map(String.init)).filter { !$0.isEmpty && seen.insert($0).inserted }
+        return testing + fixed
     }()
 
+    private static let _searchDirectories: [String] = {
+        var seen = Set<String>()
+        return (usualInstallDirectories + loginShellPath.split(separator: ":").map(String.init)).filter { !$0.isEmpty && seen.insert($0).inserted }
+    }()
+
+    /// The one way Theo finds a command-line tool (Claude Code, Codex, OpenCode, gh, node, …): the usual install folders
+    /// first, then the owner's login-shell PATH and npm's global folder. The first lookup that has to go past the usual
+    /// folders waits for the login shell (up to 5 s, once per launch).
     static func locate(binary name: String) -> URL? {
-        for dir in searchDirectories {
-            let path = "\(dir)/\(name)"
+        if let found = firstExecutable(named: name, in: usualInstallDirectories) { return found }
+        return firstExecutable(named: name, in: searchDirectories)
+    }
+
+    private static func firstExecutable(named name: String, in directories: [String]) -> URL? {
+        for directory in directories {
+            let path = "\(directory)/\(name)"
             if FileManager.default.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
         }
         return nil
@@ -138,6 +141,14 @@ enum HarnessCatalog {
         if id == "t3" { return BotsT3.cli }
         guard let info = info(id) else { return nil }
         for name in info.binaries { if let found = locate(binary: name) { return found } }
+        return nil
+    }
+
+    /// The same, looking only in the usual install folders: never starts a shell, so it's safe on the main thread at launch.
+    static func quickExecutable(for id: String) -> URL? {
+        if id == "t3" { return BotsT3.cli }
+        guard let info = info(id) else { return nil }
+        for name in info.binaries { if let found = firstExecutable(named: name, in: usualInstallDirectories) { return found } }
         return nil
     }
 
@@ -474,25 +485,72 @@ enum HarnessPrefs {
     static func usesAPIKey(_ harness: String) -> Bool { defaults.bool(forKey: "theo.harness.apiKey.\(harness)") }
     static func setUsesAPIKey(_ on: Bool, for harness: String) { defaults.set(on, forKey: "theo.harness.apiKey.\(harness)") }
 
-    /// Where the coding hand-off goes: t3 (default), claude, codex, cursor, opencode, grok or gemini.
+    private static let codingTargetKey = "theo.coding.target"
+    /// The harness the last full check picked for someone who never chose (CodingTargetDefault), kept so the next launch starts with it.
+    private static let detectedCodingTargetKey = "theo.coding.target.detected"
+    private static let earlierDefaultsCheckedKey = "theo.coding.earlierDefaultsChecked"
+
+    /// Where the coding hand-off goes: t3, claude, codex, cursor, opencode, grok or gemini. The owner's choice when they
+    /// made one; otherwise the first harness they have installed and signed in (`automaticCodingTarget`), never one they don't have.
     static var codingTarget: String {
-        get { defaults.string(forKey: "theo.coding.target") ?? "t3" }
+        get { defaults.string(forKey: codingTargetKey) ?? automaticCodingTarget }
         set {
             // A model belongs to one harness: passing it to another makes that harness refuse to start.
             if newValue != codingTarget {
                 defaults.removeObject(forKey: "theo.coding.model")
                 defaults.removeObject(forKey: "theo.coding.effort")
             }
-            defaults.set(newValue, forKey: "theo.coding.target")
+            defaults.set(newValue, forKey: codingTargetKey)
         }
     }
+    /// Choosing a model or effort is choosing it for the harness builds go to now, so that harness is kept as the owner's
+    /// choice too: otherwise a later check could move builds to another harness that refuses this model.
     static var codingModel: String? {
         get { defaults.string(forKey: "theo.coding.model").flatMap { $0.isEmpty ? nil : $0 } }
-        set { defaults.set(newValue, forKey: "theo.coding.model") }
+        set {
+            keepCurrentCodingTargetAsChosen()
+            defaults.set(newValue, forKey: "theo.coding.model")
+        }
     }
     static var codingEffort: String? {
         get { defaults.string(forKey: "theo.coding.effort").flatMap { $0.isEmpty ? nil : $0 } }
-        set { defaults.set(newValue, forKey: "theo.coding.effort") }
+        set {
+            keepCurrentCodingTargetAsChosen()
+            defaults.set(newValue, forKey: "theo.coding.effort")
+        }
+    }
+
+    private static func keepCurrentCodingTargetAsChosen() {
+        if defaults.string(forKey: codingTargetKey) == nil { defaults.set(codingTarget, forKey: codingTargetKey) }
+    }
+
+    /// Where builds go for someone who never chose: what the last full check found, else a quick look at the usual
+    /// install folders (no shell, no sign-in check) for the very first launch, else the harness new bots run on.
+    static var automaticCodingTarget: String {
+        if let detected = defaults.string(forKey: detectedCodingTargetKey), HarnessCatalog.info(detected) != nil { return detected }
+        let installedWithoutAsking = Set(HarnessCatalog.codingTargets.map(\.id).filter { HarnessCatalog.quickExecutable(for: $0) != nil })
+        return CodingTargetDefault.choose(orderedHarnessIDs: HarnessCatalog.codingTargets.map(\.id), readyHarnessIDs: [],
+                                          installedHarnessIDs: installedWithoutAsking, fallback: defaultHarness)
+    }
+
+    /// After every full check: the harness someone who never chose gets from now on.
+    static func rememberDetectedCodingTarget(statuses: [String: HarnessStatus]) {
+        let orderedIDs = HarnessCatalog.codingTargets.map(\.id)
+        let readyIDs = Set(orderedIDs.filter { statuses[$0]?.ready == true })
+        let installedIDs = Set(orderedIDs.filter { statuses[$0]?.installed == true })
+        let detected = CodingTargetDefault.choose(orderedHarnessIDs: orderedIDs, readyHarnessIDs: readyIDs, installedHarnessIDs: installedIDs, fallback: defaultHarness)
+        defaults.set(detected, forKey: detectedCodingTargetKey)
+    }
+
+    /// Once per Mac, at launch. Builds used to go to T3 Code unless the owner chose otherwise. A Mac that has T3 Code and
+    /// never chose keeps sending builds there (the same model and effort as before, from BotsT3), so updating changes
+    /// nothing for it. A Mac without T3 Code was never able to build that way, and gets the automatic choice instead.
+    static func keepEarlierCodingDefaultsOnce() {
+        guard !defaults.bool(forKey: earlierDefaultsCheckedKey) else { return }
+        defaults.set(true, forKey: earlierDefaultsCheckedKey)
+        if defaults.string(forKey: codingTargetKey) == nil, BotsT3.cli != nil {
+            defaults.set("t3", forKey: codingTargetKey)
+        }
     }
 }
 
@@ -625,6 +683,7 @@ final class HarnessCenter: ObservableObject {
             if let opencode = HarnessCatalog.executable(for: "opencode") { opencodeModels = HarnessModels.opencode(executable: opencode) }
             await MainActor.run {
                 self.statuses = found
+                HarnessPrefs.rememberDetectedCodingTarget(statuses: found)
                 if !codex.models.isEmpty { self.models["codex"] = codex.models; self.codexEfforts = codex.efforts }
                 if let cursorModels { self.models["cursor"] = cursorModels }
                 // BrainCatalog's OpenCode list (loaded by Setup) wins when it has one.

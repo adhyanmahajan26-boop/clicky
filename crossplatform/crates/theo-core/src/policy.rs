@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const IRREVERSIBLE: [&str; 8] = ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Skill", "Agent", "Task"];
 
-pub fn allowed_tools(paths: &Paths, bot_id: &str, apps: &[String], readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
+pub fn allowed_tools(paths: &Paths, bot_id: &str, readable: &[PathBuf], recall: &[PathBuf]) -> Vec<String> {
     let memory = format!("{}/**", rule_path(&paths.memory_dir(bot_id)));
     let projects = format!("{}/**", rule_path(&paths.projects_dir()));
     let mut tools = vec!["WebSearch".to_string(), "WebFetch".to_string(), format!("Edit({memory})"), format!("Write({memory})")];
@@ -28,14 +28,6 @@ pub fn allowed_tools(paths: &Paths, bot_id: &str, apps: &[String], readable: &[P
         let rule = rule_path(file);
         tools.push(format!("Read({rule})"));
         tools.push(format!("Grep({rule})"));
-    }
-    // The connectors the owner gave this bot (Connectors page), each by its server's name in `claude mcp list`.
-    for app in apps {
-        if let Some(rule) = crate::connectors::tool_rule(app) {
-            if !tools.contains(&rule) {
-                tools.push(rule);
-            }
-        }
     }
     tools
 }
@@ -72,7 +64,11 @@ pub fn secret_read_rules(paths: &Paths, recall: &[PathBuf]) -> Vec<String> {
             }
         }
     }
-    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), format!("{root}/Turns/**"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
+    denied.extend([format!("{bots}/*.json"), format!("{bots}/*.json.*"), format!("{bots}/*.lastgood"), format!("{root}/*.json"), format!("{root}/gateway-token"), format!("{root}/control-*/**"), format!("{root}/Turns/**"),
+        // The connector hub's sign-ins, its vault key (in a file on Linux) and the turns' tickets.
+        format!("{root}/Connectors/**"),
+        // API keys kept in a file (Linux and test profiles), API bots' chat history, and a test profile's Grok config.
+        format!("{root}/Keys/**"), format!("{root}/APISessions/**"), format!("{root}/test-grok-config.toml"), "//**/.env".to_string(), "//**/.env.*".to_string()]);
     denied.into_iter().map(|p| format!("Read({p})")).collect()
 }
 
@@ -95,20 +91,35 @@ pub fn other_bots_folders(paths: &Paths, bot_id: &str) -> Vec<String> {
 /// written by the caller from what this returns): each can be long (one rule per saved chat), and Windows caps a whole command
 /// line at 32,767 characters. Rules from `--settings` are the same allow and deny rules as `--allowedTools` and
 /// `--disallowedTools`; a deny still wins over any allow.
-pub fn claude_turn(paths: &Paths, bot: &crate::model::Bot, model: &str, persona_file: &Path, settings_file: &Path, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf]) -> (Vec<String>, serde_json::Value) {
+///
+/// `apps` is what the connector hub wired for this turn (`hub::wire_turn`): the rules for the bot's apps, and the hub's MCP
+/// server for this turn only (`--mcp-config`). The owner's own Claude Code servers stay loaded, which is how a claude.ai app
+/// is reached directly, but only the tools allowed here run.
+#[allow(clippy::too_many_arguments)]
+pub fn claude_turn(paths: &Paths, bot: &crate::model::Bot, model: &str, persona_file: &Path, settings_file: &Path, session: Option<&str>, new_session: Option<&str>, readable: &[PathBuf], recall: &[PathBuf], apps: &crate::hub::TurnApps) -> (Vec<String>, serde_json::Value) {
     let persona_file = persona_file.to_string_lossy().to_string();
     let settings_path = settings_file.to_string_lossy().to_string();
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", model, "--permission-mode", "dontAsk", "--append-system-prompt-file", &persona_file, "--settings", &settings_path]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let allow = allowed_tools(paths, &bot.id, &bot.apps, readable, recall);
+    let mut allow = allowed_tools(paths, &bot.id, readable, recall);
+    for rule in &apps.allow {
+        if !allow.contains(rule) {
+            allow.push(rule.clone());
+        }
+    }
+    if let Some(config) = &apps.claude_mcp_config {
+        args.push("--mcp-config".into());
+        args.push(config.to_string_lossy().to_string());
+    }
     let mut deny: Vec<String> = IRREVERSIBLE.iter().map(|s| s.to_string()).collect();
     deny.extend(secret_read_rules(paths, recall));
     // Bash outright: Claude Code lets read-only commands run in the working folder without a rule.
     deny.push("Bash".into());
     deny.push("PowerShell".into());
     deny.extend(other_bots_folders(paths, &bot.id));
+    deny.extend(apps.deny.iter().cloned());
     let settings = serde_json::json!({"permissions": {"allow": allow, "deny": deny}});
     if let Some(effort) = bot.effort.as_deref().filter(|e| !e.is_empty()) {
         args.push("--effort".into());
