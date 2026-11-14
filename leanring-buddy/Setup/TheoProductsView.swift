@@ -273,6 +273,6 @@ struct ProductsHomeView: View {
     private var subtitle: String {
         let on = TheoProduct.allCases.filter(products.isOn).map(\.title)
         guard !on.isEmpty else { return "Nothing is on yet. Each product works without the others." }
-        return "On: " + on.joined(separator: ", ") + ". Turn on Theo for bots, teams and coding runs."
+        return "On: " + on.joined(separator: ", ") + ". Turn on Vello for bots, teams and coding runs."
     }
 }

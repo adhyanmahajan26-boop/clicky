@@ -23,8 +23,8 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
     public var title: String {
         switch self {
         case .dictation: return "Dictation"
-        case .clicky: return "Clicky"
-        case .theo: return "Theo"
+        case .clicky: return "Pointer Assistant"
+        case .theo: return "Vello"
         }
     }
 
@@ -45,7 +45,7 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
                     "Fillers and \u{201C}um\u{201D}s are tidied away",
                     "Hindi, Hinglish and 10 Indian languages"]
         case .clicky:
-            return ["Say \u{201C}hey Theo\u{201D} or hold Control + Option",
+            return ["Say \u{201C}hey Vello\u{201D} or hold Control + Option",
                     "Flies to the button you need and circles it",
                     "Draws boards and researches links for you"]
         case .theo:

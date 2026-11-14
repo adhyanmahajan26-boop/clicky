@@ -63,15 +63,15 @@ struct BotProtocolTests {
     }
 
     @Test func aCapIsSaidPlainly() {
-        #expect(BotDMBudget.capLine(.send, sender: "Theo", target: "Coder") == nil)
-        #expect(BotDMBudget.capLine(.roundTripCap, sender: "Theo", target: "Coder")?.contains("3 times") == true)
-        #expect(BotDMBudget.capLine(.totalCap, sender: "Theo", target: "Coder")?.contains("12") == true)
+        #expect(BotDMBudget.capLine(.send, sender: "Vello", target: "Coder") == nil)
+        #expect(BotDMBudget.capLine(.roundTripCap, sender: "Vello", target: "Coder")?.contains("3 times") == true)
+        #expect(BotDMBudget.capLine(.totalCap, sender: "Vello", target: "Coder")?.contains("12") == true)
     }
 
     // MARK: The card
 
     @Test func aCardReadsLikePartOfTheProduct() {
-        #expect(BotDMCardText.headline(sender: "Theo", target: "Coder") == "Theo messaged Coder privately")
+        #expect(BotDMCardText.headline(sender: "Vello", target: "Coder") == "Vello messaged Coder privately")
         #expect(BotDMCardText.count(1) == "1 message")
         #expect(BotDMCardText.count(2) == "2 messages")
         #expect(BotDMCardText.preview("**Use SQLite.**\nIt's simple") == "Use SQLite.")
@@ -294,12 +294,12 @@ struct BotProtocolTests {
 
     private var roles: [Role] {
         [
-            Role(name: "CEO", identity: BotIdentityFacts(name: "Theo", owner: "Sam", job: "Your primary bot", isCEO: true, ceoName: "Theo"), reporting: []),
-            Role(name: "manager", identity: BotIdentityFacts(name: "Mira", owner: "Sam", job: "Runs the IT guys", teams: ["IT guys"], managesTeams: ["IT guys"], ceoName: "Theo"),
+            Role(name: "CEO", identity: BotIdentityFacts(name: "Vello", owner: "Sam", job: "Your primary bot", isCEO: true, ceoName: "Vello"), reporting: []),
+            Role(name: "manager", identity: BotIdentityFacts(name: "Mira", owner: "Sam", job: "Runs the IT guys", teams: ["IT guys"], managesTeams: ["IT guys"], ceoName: "Vello"),
                  reporting: [.init(name: "IT guys", purpose: "Keep it running", mates: ["Coder", "Ops"], isManager: true)]),
-            Role(name: "member", identity: BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]),
+            Role(name: "member", identity: BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code", teams: ["IT guys"], managerName: "Mira", ceoName: "Vello", apps: ["Gmail"]),
                  reporting: [.init(name: "IT guys", mates: ["Mira", "Ops"], managerName: "Mira")]),
-            Role(name: "no-manager member", identity: BotIdentityFacts(name: "Ops", owner: "Sam", job: "Runs servers", teams: ["Ops"], ceoName: "Theo"),
+            Role(name: "no-manager member", identity: BotIdentityFacts(name: "Ops", owner: "Sam", job: "Runs servers", teams: ["Ops"], ceoName: "Vello"),
                  reporting: [.init(name: "Ops")]),
         ]
     }
@@ -312,7 +312,7 @@ struct BotProtocolTests {
         let identity = BotAwareness.whoYouAre(role.identity)
         let whereNow = BotAwareness.whereYouAre(place)
         let reach = BotProtocol.reachHowTo(reachable: reachable, owner: "Sam")
-        let reporting = role.reporting.map { BotProtocol.reportingLine($0, ceoName: "Theo") }.joined(separator: "\n")
+        let reporting = role.reporting.map { BotProtocol.reportingLine($0, ceoName: "Vello") }.joined(separator: "\n")
         let shared = [identity, whereNow, reach, reporting, BotProtocol.houseStyle(owner: "Sam"), BotProtocol.routineHowTo(owner: "Sam"), BotProtocol.codingHowTo(harnessLabel: "Claude Code"), BotProtocol.screenHowTo(owner: "Sam"), BotProtocol.askingStyle].joined(separator: "\n\n")
         let group = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [], transcript: [("Sam", "hi"), ("Coder", "hello")],
                                                 includesScreenHowTo: true, turnNote: BotProtocol.memberTurnNote(name: role.identity.name, headName: "Mira"))
@@ -320,8 +320,8 @@ struct BotProtocolTests {
                                                includesScreenHowTo: true, turnNote: BotProtocol.headOpensNote(owner: "Sam"))
         let wrap = BotProtocol.groupTurnPrompt(botName: role.identity.name, groupName: "IT guys", owner: "Sam", others: reachable, firstTimeIntro: [], transcript: [("Coder", "done")],
                                                includesScreenHowTo: false, turnNote: BotProtocol.wrapUpNote(owner: "Sam"))
-        let privately = [BotProtocol.privateThreadHowTo(partner: "Theo"),
-                         BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: "Which database?", ownerAsked: "ask Coder", earlier: [], owner: "Sam")].joined(separator: "\n\n")
+        let privately = [BotProtocol.privateThreadHowTo(partner: "Vello"),
+                         BotProtocol.privateMessagePrompt(from: "Vello", senderRole: "the CEO", message: "Which database?", ownerAsked: "ask Coder", earlier: [], owner: "Sam")].joined(separator: "\n\n")
         let carryOn = BotProtocol.repliesPrompt([("Coder", "SQLite")], notes: [], lastRoundWith: [], reader: "Sam")
         return [shared, shared + "\n\n" + group, shared + "\n\n" + head, shared + "\n\n" + wrap, shared + "\n\n" + privately, shared + "\n\n" + carryOn]
     }
@@ -365,12 +365,12 @@ struct BotProtocolTests {
 
     @Test func aPrivateMessageHoldsAllOfItWhoSentItAndWhy() {
         let long = String(repeating: "word ", count: 2000)
-        let prompt = BotProtocol.privateMessagePrompt(from: "Theo", senderRole: "the CEO", message: long, ownerAsked: "ask Coder which database", earlier: ["Coder: Earlier we said SQLite"], owner: "Sam")
+        let prompt = BotProtocol.privateMessagePrompt(from: "Vello", senderRole: "the CEO", message: long, ownerAsked: "ask Coder which database", earlier: ["Coder: Earlier we said SQLite"], owner: "Sam")
         #expect(prompt.contains(long))
-        #expect(prompt.contains("Private message from Theo (the CEO)"))
+        #expect(prompt.contains("Private message from Vello (the CEO)"))
         #expect(prompt.contains("ask Coder which database"))
         #expect(prompt.contains("Earlier we said SQLite"))
-        #expect(prompt.contains("Answer Theo directly"))
+        #expect(prompt.contains("Answer Vello directly"))
     }
 
     @Test func aRepliesPromptHoldsAllOfTheAnswer() {
@@ -432,7 +432,7 @@ struct BotProtocolTests {
     }
 
     @Test func whoYouAreIsBuiltFromTheBot() {
-        let text = BotAwareness.whoYouAre(BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code.", teams: ["IT guys"], managerName: "Mira", ceoName: "Theo", apps: ["Gmail"]))
+        let text = BotAwareness.whoYouAre(BotIdentityFacts(name: "Coder", owner: "Sam", job: "Writes code.", teams: ["IT guys"], managerName: "Mira", ceoName: "Vello", apps: ["Gmail"]))
         #expect(text.contains("you're Coder, Sam's bot"))
         #expect(text.contains("Your job: Writes code."))
         #expect(text.contains("on the IT guys team; your manager is Mira"))
@@ -729,7 +729,7 @@ struct BotProtocolTests {
     }
 
     @Test func aTagInCodeIsNotAnOrder() {
-        let text = "Here's the prompt.\n\n```prompt\nMake Theo read [TELL: Coder: hello there] lines.\n```\n\n[TELL: Coder: a real one]"
+        let text = "Here's the prompt.\n\n```prompt\nMake Vello read [TELL: Coder: hello there] lines.\n```\n\n[TELL: Coder: a real one]"
         let taken = ClickyOrder.extract(from: text)
         #expect(taken.orders.count == 1)
         #expect(ClickyOrder.tellTarget(in: taken.orders.first ?? "")?.message == "a real one")

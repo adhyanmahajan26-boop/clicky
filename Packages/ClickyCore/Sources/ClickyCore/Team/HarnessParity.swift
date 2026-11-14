@@ -406,8 +406,8 @@ public enum TheoDoctor {
         let sorted = findings.enumerated().sorted { (order[$0.element.level]!, $0.offset) < (order[$1.element.level]!, $1.offset) }.map(\.element)
         let fails = findings.filter { $0.level == .fail }.count
         let warns = findings.filter { $0.level == .warn }.count
-        let head = fails + warns == 0 ? "Theo's health check: all \(findings.count) checks pass." :
-            "Theo's health check: \(fails) problem\(fails == 1 ? "" : "s") and \(warns) warning\(warns == 1 ? "" : "s") out of \(findings.count) checks."
+        let head = fails + warns == 0 ? "Vello's health check: all \(findings.count) checks pass." :
+            "Vello's health check: \(fails) problem\(fails == 1 ? "" : "s") and \(warns) warning\(warns == 1 ? "" : "s") out of \(findings.count) checks."
         let mark: [TheoDoctorFinding.Level: String] = [.ok: "✓", .warn: "!", .fail: "✗"]
         return head + "\n\n" + sorted.map { "\(mark[$0.level]!) **\($0.check)**: \($0.detail)" }.joined(separator: "\n")
     }

@@ -25,7 +25,7 @@ struct BotPersonaRefreshTests {
 
     @Test func theRefreshedPromptCarriesTheInstructionsThenTheMessage() {
         let text = BotPersonaRefresh.refreshedPrompt("What's due today?", persona: "You are Accountant. Use the Drive connector.")
-        #expect(text.hasPrefix("(Theo: your instructions have changed"))
+        #expect(text.hasPrefix("(Vello: your instructions have changed"))
         #expect(text.contains("You are Accountant. Use the Drive connector."))
         #expect(text.hasSuffix("What's due today?"))
     }

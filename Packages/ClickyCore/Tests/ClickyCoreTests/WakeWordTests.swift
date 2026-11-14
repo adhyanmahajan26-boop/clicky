@@ -35,6 +35,16 @@ struct WakeWordMatcherTests {
         #expect(match(text)?.phrase == "hey theo", "\(text)")
     }
 
+    @Test(arguments: ["hey vello", "Hey Vello!", "hey velo", "hi vello", "okay vello", "hey bello", "hey vella"])
+    func velloVariantsWake(_ text: String) {
+        #expect(match(text)?.phrase == "hey vello", "\(text)")
+    }
+
+    @Test(arguments: ["hi hello", "hey hello", "hello there", "hey yellow", "hey fellow", "hey cello"])
+    func greetingsNearVelloDoNotWake(_ text: String) {
+        #expect(match(text) == nil, "\(text)")
+    }
+
     @Test func theOldNameNoLongerWakes() {
         #expect(match("hey clicky") == nil)
     }

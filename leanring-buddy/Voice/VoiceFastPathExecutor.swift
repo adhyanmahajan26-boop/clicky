@@ -342,7 +342,7 @@ final class VoiceFastPathExecutor {
             return .notHandled(reason: "no app called \u{201C}\(name)\u{201D}")
         }
         if candidate.path.map({ URL(fileURLWithPath: $0).standardizedFileURL }) == Bundle.main.bundleURL.standardizedFileURL {
-            return .failed(reason: "that's Clicky", spokenLine: "That's me.")
+            return .failed(reason: "that's Pointer Assistant", spokenLine: "That's me.")
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true

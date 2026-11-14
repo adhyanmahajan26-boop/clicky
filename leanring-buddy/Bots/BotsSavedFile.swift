@@ -35,15 +35,15 @@ enum BotsSavedFile {
         let old = (try? Data(contentsOf: lastGood(file))).flatMap { data in (try? decoder.decode(T.self, from: data)).map { (data, $0) } }
         if let rescued, rescued.data.count >= (old?.0.count ?? 0) {
             try? rescued.data.write(to: file, options: .atomic)
-            note("Theo couldn't read all of \(what), so it kept everything that could still be read. The damaged file is kept as \(aside.lastPathComponent).")
+            note("Vello couldn't read all of \(what), so it kept everything that could still be read. The damaged file is kept as \(aside.lastPathComponent).")
             return rescued.value
         }
         if let (good, value) = old {
             try? good.write(to: file, options: .atomic)
-            note("Theo couldn't read \(what), so it used the last copy that read fine. The unreadable file is kept as \(aside.lastPathComponent).")
+            note("Vello couldn't read \(what), so it used the last copy that read fine. The unreadable file is kept as \(aside.lastPathComponent).")
             return value
         }
-        note("Theo couldn't read \(what) and had no earlier copy to use. Nothing was deleted: the file is kept as \(aside.lastPathComponent).")
+        note("Vello couldn't read \(what) and had no earlier copy to use. Nothing was deleted: the file is kept as \(aside.lastPathComponent).")
         return nil
     }
 
@@ -89,7 +89,7 @@ enum BotsSavedFile {
 
     private static func note(_ line: String) {
         lock.withLock { problems.append(line) }
-        NSLog("Theo saved file: %@", line)
+        NSLog("Vello saved file: %@", line)
     }
 
     /// The problems so far, cleared: each is told once.

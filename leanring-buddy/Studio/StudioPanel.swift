@@ -234,7 +234,7 @@ struct StudioPanel: View {
         ForEach(store.bots) { candidate in
             Button(candidate.name) { studio.assign(botID: candidate.id, to: tile) }
         }
-        Button("Clicky") { studio.assign(botID: BotsStore.clickyID, to: tile) }
+        Button("Pointer Assistant") { studio.assign(botID: BotsStore.clickyID, to: tile) }
         Divider()
         Menu("\(studio.config.screens.indices.contains(tile.screen) ? studio.config.screens[tile.screen].name : "This screen") belongs to") {
             ForEach(store.bots) { candidate in
@@ -326,7 +326,7 @@ struct StudioPanelHint: View {
         if isPaused {
             Text("Live view paused while video plays").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary)
         } else if isIdle {
-            Text("Ask Clicky to research something and its agents work here.").font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
+            Text("Ask Pointer Assistant to research something and its agents work here.").font(.system(size: 11.5)).foregroundColor(DS.Colors.textTertiary)
         }
     }
 }
@@ -418,7 +418,7 @@ struct LinkStatusLine: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(link.isConnected ? Color(hex: 0x4ADE80) : DS.Colors.textDisabled).frame(width: 6, height: 6)
                 if !link.isConnected {
-                    Text("\(other) isn't connected. Open Theo there.")
+                    Text("\(other) isn't connected. Open Vello there.")
                 } else if let theirs = link.peerBuild, theirs < build {
                     Text("\(other) is linked, on an older build: click Update now there.")
                 } else {
@@ -471,7 +471,7 @@ struct StudioSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Theo puts your pointer and windows straight back if they land on one. Experimental. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
+            TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Vello puts your pointer and windows straight back if they land on one. Experimental. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
                 SettingRow(title: "Hidden bot screens", detail: "They come up when a bot needs one and sleep after 15 quiet minutes") {
                     Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
@@ -483,7 +483,7 @@ struct StudioSettingsContent: View {
             }
             ResearchAgentSettingsSection()
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
-                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Clicky's research agents, one tile each. Tiles are freed when they're done") {
+                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Pointer Assistant's research agents, one tile each. Tiles are freed when they're done") {
                     Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
                 if studio.researchUsesBrowser {
@@ -509,7 +509,7 @@ struct StudioSettingsContent: View {
     }
 
     private var captureNote: String {
-        let permission = studio.hasCapturePermission ? "" : " It also needs Screen Recording, which Theo never asks for by itself."
+        let permission = studio.hasCapturePermission ? "" : " It also needs Screen Recording, which Vello never asks for by itself."
         return "Capturing can black out Netflix on your monitors, the way screen recording does, so nothing is captured while anything's playing: tiles show the page's words instead, and pictures come back when it stops. A tile with another app shows its bot and status instead." + permission
     }
 }

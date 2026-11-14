@@ -73,7 +73,7 @@ private struct VoiceProcessingUnavailableError: Error {}
     let heardAt = speakingStart.addingTimeInterval(1)
     #expect(echoGuard.acceptsWhilePlaying("Stop", at: heardAt))
     #expect(echoGuard.acceptsWhilePlaying("wait.", at: heardAt))
-    #expect(echoGuard.acceptsWhilePlaying("Clicky, stop!", at: heardAt))
+    #expect(echoGuard.acceptsWhilePlaying("Pointer Assistant, stop!", at: heardAt))
     // A sentence that merely contains a command word doesn't count while playing.
     #expect(!echoGuard.acceptsWhilePlaying("please wait for me", at: heardAt))
     #expect(!echoGuard.acceptsWhilePlaying("stop the build", at: heardAt))

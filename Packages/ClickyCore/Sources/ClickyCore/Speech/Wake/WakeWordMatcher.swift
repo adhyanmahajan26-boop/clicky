@@ -52,7 +52,8 @@ public struct WakeWordMatch: Equatable, Sendable {
 }
 
 public struct WakeWordMatcher: Sendable {
-    public static let defaultPhrases = ["hey theo", "hey claudia"]
+    // "hey theo" keeps waking it for a while after the rename to Vello, so an old habit still works.
+    public static let defaultPhrases = ["hey vello", "hey theo", "hey claudia"]
     /// A gap this long between two words starts a new utterance segment.
     public static let segmentPauseSeconds: TimeInterval = 0.6
 
@@ -73,6 +74,8 @@ public struct WakeWordMatcher: Sendable {
     /// (checked before the fuzzy rule, which also catches most of them).
     static let knownNameSpellings: [String: Set<String>] = [
         // The on-device recognizer often writes "hey Theo" as one of its better-known neighbours, "hey Siri" above all.
+        // "Vello" is new to the recognizer, which writes it as a better-known neighbour. Never "hello": see rejectedNearNames.
+        "vello": ["vello", "velo", "vellow", "bello", "vallo", "velloh", "wello", "vellos", "velos", "vela", "vella"],
         "theo": ["theo", "teo", "thio", "tio", "theyo", "theodore", "dio", "deo", "thiyo", "tayo", "leo", "jio", "siri", "thea"],
         "claudia": ["claudia", "cloudia", "clodia", "claudio", "klaudia", "claudya", "claudiya", "clawdia", "klodia", "glaudia", "claudias"],
         "clicky": ["clicky", "clickey", "kliki", "clicki", "klicky", "kliky", "clickie", "clikki", "cliky", "cliquey", "klickie"]
@@ -81,7 +84,9 @@ public struct WakeWordMatcher: Sendable {
     /// Real words one edit away from a name that must not wake Clicky
     /// ("hey claude", "hey click on that").
     static let rejectedNearNames: Set<String> = [
-        "claude", "claudes", "click", "clicks", "clicked", "clique", "cliche", "clickers", "clicker"
+        "claude", "claudes", "click", "clicks", "clicked", "clique", "cliche", "clickers", "clicker",
+        // One edit from "vello": "hi hello" and "hey hello" are everyday greetings, not a wake.
+        "hello", "cello", "jello", "mello", "yellow", "fellow", "hullo", "helo"
     ]
 
     struct ParsedPhrase: Sendable {
@@ -342,7 +347,7 @@ public enum WakeListeningCommand: Equatable, Sendable {
         "silent mode off", "turn off silent mode", "talk again", "speak again", "you can talk again", "unmute yourself",
         "quiet mode off", "turn off quiet mode", "start talking again"
     ]
-    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "please", "now", "um", "uh", "so"]
+    static let ignoredWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "vello", "pointer", "assistant", "claudia", "clicky", "please", "now", "um", "uh", "so"]
 
     public static func parse(_ transcript: String) -> WakeListeningCommand? {
         let words = WakeWordMatcher.normalizedWords(in: transcript).filter { !ignoredWords.contains($0) }
@@ -386,7 +391,7 @@ public enum WakeStopCommand {
     /// Clear commands only: soft words ("enough", "pause", "quiet") turned up in ordinary speech and
     /// in Clicky's own voice coming back through the speakers, and cut answers off after a few words.
     static let stopWords: Set<String> = ["stop", "wait", "ruko", "ruk", "bas", "shush", "hold", "cancel"]
-    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "claudia", "clicky", "it", "now", "please", "on", "talking",
+    static let fillerWords: Set<String> = ["hey", "hi", "okay", "ok", "theo", "vello", "pointer", "assistant", "claudia", "clicky", "it", "now", "please", "on", "talking",
                                           "be", "jao", "jaao", "karo", "that", "the"]
 
     public static func isStopUtterance(_ words: [String], recentClickySpokenWords: Set<String> = []) -> Bool {

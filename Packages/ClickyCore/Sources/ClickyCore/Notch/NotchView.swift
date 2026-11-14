@@ -224,7 +224,7 @@ public struct NotchView: View {
         .contentShape(Rectangle())
         .onTapGesture { actions.expand() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(content.statusText.isEmpty ? "Theo" : "Theo, \(content.statusText)")
+        .accessibilityLabel(content.statusText.isEmpty ? "Vello" : "Vello, \(content.statusText)")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -293,7 +293,7 @@ public struct NotchView: View {
             HStack(spacing: 0) {
                 HStack(spacing: 6) {
                     logo
-                    headerTitle(content.statusText.isEmpty ? "Clicky" : content.statusText, isPrimary: content.statusText.isEmpty)
+                    headerTitle(content.statusText.isEmpty ? "Pointer Assistant" : content.statusText, isPrimary: content.statusText.isEmpty)
                 }
                 .frame(width: sideWidth, alignment: .leading)
                 Spacer(minLength: 0)
@@ -302,7 +302,7 @@ public struct NotchView: View {
         } else {
             HStack(spacing: 7) {
                 logo
-                headerTitle("Clicky", isPrimary: true)
+                headerTitle("Pointer Assistant", isPrimary: true)
                 if !content.statusText.isEmpty { headerTitle(content.statusText, isPrimary: false) }
                 Spacer(minLength: 8)
                 runningSummaryLabel

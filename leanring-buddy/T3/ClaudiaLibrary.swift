@@ -75,7 +75,7 @@ enum ClaudiaLibrary {
     static func writeSelectedNotesBundle() -> URL? {
         let notes = selectedItems.filter { !$0.isImage }
         guard !notes.isEmpty else { return nil }
-        var text = "# Notes from Theo\n\nThe owner picked these notes for this task.\n"
+        var text = "# Notes from Vello\n\nThe owner picked these notes for this task.\n"
         for note in notes {
             let body = (try? String(contentsOf: note.url, encoding: .utf8)) ?? ""
             text += "\n\n---\n\n## \(note.title)\n\n\(body)"

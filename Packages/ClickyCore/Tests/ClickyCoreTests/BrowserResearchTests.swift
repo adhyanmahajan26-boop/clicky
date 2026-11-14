@@ -181,7 +181,7 @@ final class BrowserResearchTests: XCTestCase {
         XCTAssertEqual(CrewLook.standard(id: "x", name: "CEO"), .manager)
         XCTAssertEqual(CrewLook.standard(id: "x", name: "project manager"), .manager)
         XCTAssertEqual(CrewLook.standard(id: "x", name: "Planner"), .manager)
-        XCTAssertEqual(CrewLook.standard(id: "theo", name: "Theo", isPrimary: true), .theo)
+        XCTAssertEqual(CrewLook.standard(id: "theo", name: "Vello", isPrimary: true), .theo)
     }
 
     func testTheRoleIsUsedWhenTheNameSaysNothing() {

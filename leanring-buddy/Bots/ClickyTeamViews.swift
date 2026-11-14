@@ -23,7 +23,7 @@ struct DelegationCard: View {
                 avatar
                 VStack(alignment: .leading, spacing: 1) {
                     Text(job.workerName).font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                    Text(job.isOrder ? "Order from \(store.primary?.name ?? "the CEO")" : "Job from Clicky" + (job.reportsToCEO == true ? ", for \(store.primary?.name ?? "the CEO")" : ""))
+                    Text(job.isOrder ? "Order from \(store.primary?.name ?? "the CEO")" : "Job from Pointer Assistant" + (job.reportsToCEO == true ? ", for \(store.primary?.name ?? "the CEO")" : ""))
                         .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
                 }
                 Spacer(minLength: 8)

@@ -371,14 +371,14 @@ public enum BotProtocol {
     /// Bots' screen jobs run on the hidden screens of whichever Mac has them, through Clicky.
     /// How a bot gets a PDF made: it writes the document, Theo renders it.
     public static let pdfHowTo = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: " +
-        "Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so."
+        "Vello makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Vello's line says so."
 
     public static func screenHowTo(owner: String) -> String {
         "\(OwnerName.startingSentence(owner))'s Mac has hidden screens set aside for you, and \(owner) watches them in the Studio panel. For a simple job in an " +
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
-        "Clicky does it on a free tile without touching \(owner)'s own monitors, then tells you what happened. Say a job happened only if " +
+        "Pointer Assistant does it on a free tile without touching \(owner)'s own monitors, then tells you what happened. Say a job happened only if " +
         "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +
-        "To have Clicky's research agents look something up in \(owner)'s browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
+        "To have Pointer Assistant's research agents look something up in \(owner)'s browser, put a line [RESEARCH: the question]; you'll hear the brief. " +
         "If \(owner) asks for a bot to get a screen, put a line [GIVE SCREEN: bot name: screen name, own, shared or none]; \(owner) confirms it on a card. " +
         "Writing or changing code doesn't go through this: use a ```prompt block."
     }
@@ -386,9 +386,9 @@ public enum BotProtocol {
     /// How a bot sets up a routine. Theo does the scheduling, so no scheduling tool or skill is needed.
     public static func routineHowTo(owner: String) -> String {
         "Routines: when \(owner) asks for something on a schedule (\"every weekday at 8, …\"), don't use any scheduling, " +
-        "cron or schedule tool or skill: Theo runs routines for you. Say what you'll do and when, then add a ```routine " +
+        "cron or schedule tool or skill: Vello runs routines for you. Say what you'll do and when, then add a ```routine " +
         "block with JSON {\"name\": short name, \"when\": \"daily 08:00\" | \"weekdays 08:30\" | \"weekly mon 09:00\" | " +
-        "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Theo then runs it on " +
+        "\"hourly\" | \"every 30 minutes\", \"do\": the instruction you'll be given at each run}. Vello then runs it on " +
         "time, and \(owner) can pause, run or delete it."
     }
 
@@ -396,10 +396,10 @@ public enum BotProtocol {
     public static func codingHowTo(harnessLabel: String) -> String {
         "Coding: when the owner asks to build, fix or change code, don't edit files yourself. Plan it in a sentence or two, then write: a line " +
             "\"Project: <short name>\", a line \"Repo: <path>\" when they named an existing folder (\"New folder: <name>\" for a new one), and the full instructions for the coding agent " +
-            "in a ```prompt fenced block. Theo makes the folder and starts the agent inside it, so never tell the agent to create or go to a folder. Theo then runs it on \(harnessLabel): an existing git repo gets its own branch and " +
+            "in a ```prompt fenced block. Vello makes the folder and starts the agent inside it, so never tell the agent to create or go to a folder. Vello then runs it on \(harnessLabel): an existing git repo gets its own branch and " +
             "worktree, and the result comes back with the changes, tests and a draft pull request. A folder that isn't a git repo is worked on in place, with no branch. The run goes on the Mac your \"where you are\" note says; if the owner names their other Mac, add a line \"Mac: <that Mac>\". " +
             "To carry on an earlier harness chat instead of starting a new one, add a line \"Continue: <chat id or title>\". For a change to the run you already started, " +
-            "put it in a ```followup fenced block instead. Writing a block doesn't start anything by itself: never say a run has started or been passed on until the list of runs shows it, or Theo's own line in the chat says so."
+            "put it in a ```followup fenced block instead. Writing a block doesn't start anything by itself: never say a run has started or been passed on until the list of runs shows it, or Vello's own line in the chat says so."
     }
 
     /// One team a bot is on, for its reporting lines.
@@ -441,7 +441,7 @@ public enum BotProtocol {
 
     public static let critiqueNote = "Give a real critique of the plan above from your own role: what's missing, what's likely to go wrong, what you'd change. Be specific and disagree where you do. Don't write the final prompt."
 
-    public static func mergeNote(owner: String) -> String { "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Theo starts the run on the harness and model \(owner) chose as soon as you've written it, and you'll see it in the list of runs. Theo makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder." }
+    public static func mergeNote(owner: String) -> String { "Now write the outcome. Say briefly what each person raised and what changed because of it, then a line \"Project: <short name>\" and the complete final instructions in a ```prompt block. You don't start or send anything yourself: Vello starts the run on the harness and model \(owner) chose as soon as you've written it, and you'll see it in the list of runs. Vello makes the folder and starts the agent inside it, so the instructions must never tell the agent to create or go to a folder." }
 
     // MARK: What a group member reads
 

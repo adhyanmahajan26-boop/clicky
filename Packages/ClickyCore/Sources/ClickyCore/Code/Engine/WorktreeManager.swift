@@ -52,7 +52,7 @@ public enum WorktreeError: Error, Equatable, Sendable, CustomStringConvertible {
         case .integrityChanged(let paths): return "git config or hooks changed during the run: \(paths.joined(separator: ", "))"
         case .nothingToCommit: return "the agent made no changes"
         case .mergeParentsWrong: return "the conflict commit doesn't have parents [HEAD, BASE]"
-        case .notUnderWorktreeRoot(let path): return "\(path) isn't one of Clicky's worktrees"
+        case .notUnderWorktreeRoot(let path): return "\(path) isn't one of Pointer Assistant's worktrees"
         case .agentCommittedDuringMerge: return "the agent committed while a conflict merge was in progress"
         case .agentMovedHead: return "the agent moved HEAD to a commit that isn't on top of where it started"
         }

@@ -120,8 +120,8 @@ public enum ActionsDebugAXCommand {
     /// nil = allowed; else why not.
     public static func bundleRefusal(_ bundleIdentifier: String?, ownBundleIdentifier: String?) -> String? {
         guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return "needs \"bundle\"" }
-        if let ownBundleIdentifier, bundleIdentifier == ownBundleIdentifier { return "never Clicky itself" }
-        if bundleIdentifier.lowercased().contains("clicky") || bundleIdentifier == "com.personal.clicky" { return "never Clicky itself" }
+        if let ownBundleIdentifier, bundleIdentifier == ownBundleIdentifier { return "never Pointer Assistant itself" }
+        if bundleIdentifier.lowercased().contains("clicky") || bundleIdentifier == "com.personal.clicky" { return "never Pointer Assistant itself" }
         if explicitlyRefusedBundleIdentifiers.contains(bundleIdentifier) { return "never Safari" }
         guard allowedBundleIdentifiers.contains(bundleIdentifier) else {
             return "only \(allowedBundleIdentifiers.sorted().joined(separator: ", ")) are allowed"
@@ -205,7 +205,7 @@ public enum ClickForMeCommand {
     public static func matches(_ transcript: String) -> Bool {
         let text = transcript.lowercased().replacingOccurrences(of: "[^a-z ]", with: "", options: .regularExpression)
         let patterns = [
-            "^(?:(?:hey )?(?:theo|clicky) )?(?:please )?(?:can you |could you )?do (?:it|that|them|this|those steps) for me",
+            "^(?:(?:hey )?(?:theo|clicky|vello|pointer assistant|pointer) )?(?:please )?(?:can you |could you )?do (?:it|that|them|this|those steps) for me",
             "(?:make|do) the clicks? for me", "click (?:it|them|those|these|that) for me", "click (?:through )?(?:the |those |these )?steps? for me",
             "^(?:please )?(?:go ahead and )?click (?:them|those|it)$", "you (?:do|click) it", "^do (?:the )?steps(?: for me)?$"
         ]

@@ -20,7 +20,7 @@ HOME = ROOT / "home"
 INBOX = HOME / ".clicky/control-inbox"
 OUTBOX = HOME / ".clicky/control-outbox"
 PIDFILE = ROOT / "test-instance.pid"
-DEFAULT_BINARY = os.environ.get("THEOUI_BINARY", "/Applications/Theo.app/Contents/MacOS/Clicky")
+DEFAULT_BINARY = os.environ.get("THEOUI_BINARY", next((path for path in ("/Applications/Vello.app/Contents/MacOS/Clicky", "/Applications/Theo.app/Contents/MacOS/Clicky") if os.path.exists(path)), "/Applications/Vello.app/Contents/MacOS/Clicky"))
 OUT = pathlib.Path(os.environ.get("THEOUI_OUT", str(ROOT / "shots")))
 
 

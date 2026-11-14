@@ -46,7 +46,7 @@ final class StudioScreenTask {
     func run(_ task: String, bot: NativeBot, onDone: @escaping (StudioScreenTaskResult) -> Void) {
         Task { @MainActor in
             guard AXIsProcessTrusted() else {
-                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that on the hidden screen: Theo doesn't have Accessibility here. Nothing was done."))
+                onDone(StudioScreenTaskResult(finished: false, report: "I couldn't do that on the hidden screen: Vello doesn't have Accessibility here. Nothing was done."))
                 return
             }
             guard StudioController.shared.config.choice(for: bot.id) != .none else {
@@ -60,7 +60,7 @@ final class StudioScreenTask {
             let job = Job(task: task, tile: tile)
             jobs[tile] = job
             let studio = StudioController.shared
-            studio.holdForResearch(tile, botID: bot.id, note: "Clicky: \(task)", app: nil)
+            studio.holdForResearch(tile, botID: bot.id, note: "Pointer Assistant: \(task)", app: nil)
             let result = await work(job)
             studio.noteResearch(tile, note: (result.finished ? "Done: " : "Couldn't: ") + result.report, app: job.app)
             studio.clearCursor(on: tile)
@@ -92,7 +92,7 @@ final class StudioScreenTask {
             let window = readWindows(job)
             let menus = job.app.map { menuLines(of: $0.processIdentifier) } ?? []
             let prompt = ScreenTaskPolicy.prompt(job: job.task, history: job.history, window: window, menus: menus)
-            guard let step = await nextStep(prompt: prompt) else { return stopped(job, "Clicky's helper didn't give a step it could use") }
+            guard let step = await nextStep(prompt: prompt) else { return stopped(job, "Pointer Assistant's helper didn't give a step it could use") }
             switch step {
             case .done(let say):
                 if job.history.isEmpty || job.lastStepFailed { return stopped(job, "the last step didn't work") }
@@ -159,7 +159,7 @@ final class StudioScreenTask {
     }
 
     private func note(_ job: Job, _ what: String) {
-        StudioController.shared.noteResearch(job.tile, note: "Clicky: \(what)", app: job.app)
+        StudioController.shared.noteResearch(job.tile, note: "Pointer Assistant: \(what)", app: job.app)
     }
 
     /// Does one action and hands the front back if the app took it. Nil means it took the front.
@@ -232,7 +232,7 @@ final class StudioScreenTask {
             AXUIElementPerformAction(window, kAXRaiseAction as CFString)
             job.moved.append((window, original))
         }
-        StudioController.shared.noteResearch(job.tile, note: StudioController.shared.tileNotes[job.tile] ?? "Clicky: \(job.task)", app: app)
+        StudioController.shared.noteResearch(job.tile, note: StudioController.shared.tileNotes[job.tile] ?? "Pointer Assistant: \(job.task)", app: app)
     }
 
     private func readWindows(_ job: Job) -> String {

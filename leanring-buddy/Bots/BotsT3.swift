@@ -23,7 +23,7 @@ enum BotsT3Error: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noCLI: return "T3 Code's t3 command isn't installed on this Mac (open T3 Code once to install it)."
-        case .alreadyARun: return "That thread is already one of Theo's runs."
+        case .alreadyARun: return "That thread is already one of Vello's runs."
         case .failed(let message): return message
         }
     }
@@ -142,7 +142,7 @@ enum BotsT3 {
         When you're done: commit your work to git with a clear message, run the tests or checks you wrote and \
         say how they went, and end with a short report: what you did, how to run it, the tests and their results, and \
         anything left undone. If your sandbox can't commit, just leave the changes in the folder. Don't push or open a \
-        pull request, and don't mention them in your report: Theo commits anything left over, pushes the branch and \
+        pull request, and don't mention them in your report: Vello commits anything left over, pushes the branch and \
         opens the draft pull request after you finish.
         """
 
@@ -154,7 +154,7 @@ enum BotsT3 {
         When you're done: commit your work to git with a clear message, run the tests or checks you wrote and \
         say how they went, and end with a short report: what you did, how to run it, the tests and their results, and \
         anything left undone. If your sandbox can't commit, just leave the changes in the folder. Don't push or open a \
-        pull request: this repo has no remote, so the work stays on this branch, and Theo commits anything left over.
+        pull request: this repo has no remote, so the work stays on this branch, and Vello commits anything left over.
         """
 
     static func deliveryNote(for run: T3Run) -> String { run.noRemote == true ? localDeliveryNote : deliveryNote }
@@ -518,7 +518,7 @@ enum BotsT3 {
 
     /// A first, empty commit, so the run's diff has something to start from.
     static func startEmpty(in folder: URL) async throws {
-        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
+        try await shell(git, ["-c", "user.name=Vello", "-c", "user.email=theo@localhost", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], in: folder)
     }
 
     /// Whether a repo pushes anywhere.
@@ -641,7 +641,7 @@ enum BotsT3 {
             do {
                 leftOut = try await commitAll(in: folder, message: "\(run.title): remaining changes from \(engine)")
             } catch {
-                commitProblem = "Theo couldn't commit the agent's changes: \(error.localizedDescription.suffix(200))"
+                commitProblem = "Vello couldn't commit the agent's changes: \(error.localizedDescription.suffix(200))"
             }
         }
         let head = run.branch ?? "HEAD"
@@ -678,11 +678,11 @@ enum BotsT3 {
                 } else if changed.isEmpty {
                     if run.pullRequest == nil { problems.append("The agent didn't change anything, so there's nothing to push.") }
                 } else if let secret = changed.first(where: { looksLikeSecret($0.path) }) {
-                    problems.append("Theo didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
+                    problems.append("Vello didn't push because \(secret.path) looks like a secret. Take it out of the branch, then write @code push.")
                 } else {
                     onStage?("push")
                     let outcome = await publish(in: folder, branch: branch, title: run.title, existing: run.pullRequest, base: run.forkCommit ?? run.baseCommit, baseBranch: run.baseBranch,
-                                                body: state.lastMessage ?? "Built by \(engine) from Theo.", engine: engine, model: usedModel, onStage: onStage)
+                                                body: state.lastMessage ?? "Built by \(engine) from Vello.", engine: engine, model: usedModel, onStage: onStage)
                     run.pullRequest = outcome.url ?? run.pullRequest
                     if let problem = outcome.problem { problems.append(problem) }
                 }
@@ -832,7 +832,7 @@ enum BotsT3 {
         onStage?("pr")
         guard let gh else { return (nil, "The branch is pushed, but GitHub's gh command isn't installed, so there's no pull request.") }
         var arguments = ["pr", "create", "--draft", "--head", branch, "--title", title,
-                         "--body", "From Theo, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"]
+                         "--body", "From Vello, built in \(engine) on \(model).\n\n\(trimmedSummary(body))"]
         if let baseBranch, (try? await shell(git, ["ls-remote", "--exit-code", "--heads", "origin", baseBranch], in: folder, limit: 30)) != nil {
             arguments += ["--base", baseBranch]
         }
@@ -891,7 +891,7 @@ enum BotsT3 {
         let secrets = staged.filter(looksLikeSecret)
         if !secrets.isEmpty { try await shell(git, ["reset", "-q", "--"] + secrets, in: folder) }
         guard staged.count > secrets.count else { return secrets }
-        try await shell(git, ["-c", "user.name=Theo", "-c", "user.email=theo@localhost", "commit", "-q", "-m", message], in: folder)
+        try await shell(git, ["-c", "user.name=Vello", "-c", "user.email=theo@localhost", "commit", "-q", "-m", message], in: folder)
         return secrets
     }
 

@@ -118,7 +118,7 @@ final class VoicePreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     static func sample(for languageSetting: String) -> String {
         switch languageSetting {
-        case "hinglish": return "Hey, main Theo hoon. Main aapko aise answer dunga, simple aur clear."
+        case "hinglish": return "Hey, main Vello hoon. Main aapko aise answer dunga, simple aur clear."
         case "hi-IN": return "नमस्ते, मैं थियो हूँ। मैं आपको ऐसे जवाब दूँगा।"
         case "bn-IN": return "নমস্কার, আমি থিও। আমি এভাবেই আপনাকে উত্তর দেব।"
         case "gu-IN": return "નમસ્તે, હું થિયો છું. હું તમને આ રીતે જવાબ આપીશ."
@@ -138,7 +138,7 @@ struct ClickyVoicePicker: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .theo: return "Theo's voice"
+            case .theo: return "Vello's voice"
             case .sarvam: return "Sarvam Bulbul"
             case .mac: return "Mac voices"
             case .elevenlabs: return "ElevenLabs"
@@ -173,7 +173,7 @@ struct ClickyVoicePicker: View {
     private var shown: Source { showing ?? active }
 
     var body: some View {
-        TheoSection(title: "Clicky's voice", hint: "It speaks sentence by sentence, so the first words come fast, and “stop” cuts it off at once.") {
+        TheoSection(title: "Pointer Assistant's voice", hint: "It speaks sentence by sentence, so the first words come fast, and “stop” cuts it off at once.") {
             VStack(alignment: .leading, spacing: 12) {
                 sourceChips
                 switch shown {
@@ -229,7 +229,7 @@ struct ClickyVoicePicker: View {
     private var theoPane: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Theo's own voice, made on this Mac").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                Text("Vello's own voice, made on this Mac").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 Text(QwenLocalTTSClient.isAvailable ? "Private and free. Other voices are in the voice gallery." : "Needs MLX Core, which isn't on this Mac.")
                     .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
             }
@@ -264,7 +264,7 @@ struct ClickyVoicePicker: View {
             if !keys.hasKey(for: "sarvam") {
                 HStack(spacing: 8) {
                     Image(systemName: "key.fill").font(.system(size: 11)).foregroundColor(DS.Colors.warning)
-                    Text("Add your Sarvam key to hear these. Until then Clicky keeps its current voice.").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    Text("Add your Sarvam key to hear these. Until then Pointer Assistant keeps its current voice.").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                     Spacer()
                     Button("Add a key") { TheoSettingsWindowController.show(section: .keys) }.buttonStyle(.theoSecondary)
                 }

@@ -26,8 +26,8 @@ enum T3ConnectSelfTest {
     /// checks each reply, then kills the process. Blocking: call it off the main thread.
     static func run(executablePath: String, timeout: TimeInterval = 25) -> Result {
         guard FileManager.default.isExecutableFile(atPath: executablePath) else {
-            return Result(passed: false, summary: "Theo's program wasn't found",
-                          detail: "Expected an executable at:\n\(executablePath)\nMove Theo to /Applications and press Fix.")
+            return Result(passed: false, summary: "Vello's program wasn't found",
+                          detail: "Expected an executable at:\n\(executablePath)\nMove Vello to /Applications and press Fix.")
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
@@ -37,7 +37,7 @@ enum T3ConnectSelfTest {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         do { try process.run() } catch {
-            return Result(passed: false, summary: "Couldn't start Theo's MCP server",
+            return Result(passed: false, summary: "Couldn't start Vello's MCP server",
                           detail: "Starting \(executablePath) --mcp failed:\n\(error.localizedDescription)")
         }
         defer { if process.isRunning { process.terminate() } }
@@ -92,7 +92,7 @@ enum T3ConnectSelfTest {
 
         if waitResult == .timedOut {
             let missing = [1: "initialize", 2: "tools/list", 3: "claudia_status call"].filter { snapshot[$0.key] == nil }.map(\.value).sorted()
-            return Result(passed: false, summary: "Theo's MCP server didn't answer in time",
+            return Result(passed: false, summary: "Vello's MCP server didn't answer in time",
                           detail: "No reply to: \(missing.joined(separator: ", ")) within \(Int(timeout))s." + tail)
         }
         guard let initResult = snapshot[1]?["result"] as? [String: Any], let serverInfo = initResult["serverInfo"] as? [String: Any],
@@ -101,16 +101,16 @@ enum T3ConnectSelfTest {
         }
         let toolNames = ((snapshot[2]?["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
         guard toolNames.contains("claudia_status"), toolNames.contains("claudia_ask") else {
-            return Result(passed: false, summary: "tools/list is missing Theo's tools", detail: "Tools seen: \(toolNames)" + tail)
+            return Result(passed: false, summary: "tools/list is missing Vello's tools", detail: "Tools seen: \(toolNames)" + tail)
         }
         guard let callResult = snapshot[3]?["result"] as? [String: Any] else {
             return Result(passed: false, summary: "claudia_status returned an error", detail: "Reply: \(String(describing: snapshot[3]))" + tail)
         }
         let text = ((callResult["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
         if (callResult["isError"] as? Bool) == true {
-            return Result(passed: false, summary: "claudia_status failed: \(text.prefix(120))", detail: "Theo answered with an error:\n\(text)" + tail)
+            return Result(passed: false, summary: "claudia_status failed: \(text.prefix(120))", detail: "Vello answered with an error:\n\(text)" + tail)
         }
-        return Result(passed: true, summary: "Theo answered (\(toolNames.count) tools)",
+        return Result(passed: true, summary: "Vello answered (\(toolNames.count) tools)",
                       detail: "initialize OK (server \"theo\"), tools/list returned \(toolNames.count) tools, claudia_status replied:\n\(text.prefix(600))")
     }
 }
@@ -148,7 +148,7 @@ final class T3ConnectModel: ObservableObject {
 
     static func freshSteps() -> [Step] {
         [Step(id: "detect", title: "Detecting agents and T3 Code"),
-         Step(id: "install", title: "Installing the Theo extension"),
+         Step(id: "install", title: "Installing the Vello extension"),
          Step(id: "test", title: "Testing the connection"),
          Step(id: "done", title: "Connected")]
     }
@@ -226,7 +226,7 @@ final class T3ConnectModel: ObservableObject {
             setStep("test", result.passed ? .done : .failed, result.passed ? result.detail : "\(result.summary)\n\(result.detail)")
             rows = buildRows()
             let allGood = installResult.0.succeeded && result.passed && rows.filter { $0.onThisMac }.allSatisfy { $0.configPresent }
-            if allGood { setStep("done", .done, "Restart your T3 thread, then type $ to use Theo."); connected = true }
+            if allGood { setStep("done", .done, "Restart your T3 thread, then type $ to use Vello."); connected = true }
             else { setStep("done", .failed, "Not connected yet. Open the failing step above for the full error, or press Fix on an agent below.") }
             isRunning = false
         }
@@ -284,9 +284,9 @@ struct T3ConnectView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.connected ? "Theo is connected to T3 Code" : "One click adds Theo's tools to your agents")
+                    Text(model.connected ? "Vello is connected to T3 Code" : "One click adds Vello's tools to your agents")
                         .font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
-                    Text(model.connected ? "Restart your T3 thread, then type $ to use Theo." : "Installs them into Claude Code, Codex and OpenCode, then checks they really answer.")
+                    Text(model.connected ? "Restart your T3 thread, then type $ to use Vello." : "Installs them into Claude Code, Codex and OpenCode, then checks they really answer.")
                         .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -359,9 +359,9 @@ struct T3ConnectView: View {
                 .padding(.top, 4)
             } else {
                 HStack(spacing: 6) {
-                    Text("No T3 Code app in Applications. Theo's tools still work once it's installed.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                    Text("No T3 Code app in Applications. Vello's tools still work once it's installed.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
                     if let builtInReleaseURL = Self.builtInReleaseURL {
-                        Button("Get the build with Theo inside") { NSWorkspace.shared.open(builtInReleaseURL) }.buttonStyle(.theo(.ghost, .small))
+                        Button("Get the build with Vello inside") { NSWorkspace.shared.open(builtInReleaseURL) }.buttonStyle(.theo(.ghost, .small))
                     }
                 }
                 .padding(.top, 4)

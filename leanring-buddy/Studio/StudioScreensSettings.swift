@@ -141,7 +141,7 @@ struct StudioScreensSection: View {
                 }
             } else if studio.hasStagedChanges {
                 if studio.stagedNeedsRebuild {
-                    Text("Apply makes the hidden screens again. That drops your monitors out of HDR and nudges the left one, then Theo puts it back and checks. It closes anything on a tile.")
+                    Text("Apply makes the hidden screens again. That drops your monitors out of HDR and nudges the left one, then Vello puts it back and checks. It closes anything on a tile.")
                         .font(.system(size: 11.5)).foregroundColor(DS.Colors.warningText).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {

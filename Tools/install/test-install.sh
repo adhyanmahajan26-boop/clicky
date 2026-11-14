@@ -19,11 +19,11 @@ ROOT="${1:?scratch folder}"; NEWZIP="${2:?newer Theo zip}"; GITHUB=1
 mkdir -p "$ROOT"; ROOT="$(cd "$ROOT" && pwd)"
 rm -rf "$ROOT/apps" "$ROOT/home" "$ROOT/fake" "$ROOT/zips" "$ROOT/logs"
 mkdir -p "$ROOT/apps" "$ROOT/home/.Trash" "$ROOT/fake" "$ROOT/zips" "$ROOT/logs"
-APP="$ROOT/apps/Theo.app"
+APP="$ROOT/apps/Vello.app"
 NEWSHA="$(shasum -a 256 "$NEWZIP" | awk '{print $1}')"
-NEWBUILD="$(unzip -p "$NEWZIP" 'Theo.app/Contents/Info.plist' | plutil -extract CFBundleVersion raw -)"
+NEWBUILD="$(unzip -p "$NEWZIP" 'Vello.app/Contents/Info.plist' | plutil -extract CFBundleVersion raw -)"
 mkdir -p "$ROOT/zips/signer"; ditto -x -k "$NEWZIP" "$ROOT/zips/signer"
-SIGNER_RULE="$("$HERE/signer-requirement.sh" "$ROOT/zips/signer/Theo.app")" || { echo "the newer zip has no usable signature"; exit 1; }
+SIGNER_RULE="$("$HERE/signer-requirement.sh" "$ROOT/zips/signer/Vello.app")" || { echo "the newer zip has no usable signature"; exit 1; }
 export THEO_SIGNER_REQUIREMENT="$SIGNER_RULE"
 PASS=0; FAIL=0; N=0
 
@@ -32,7 +32,7 @@ bad()  { FAIL=$((FAIL+1)); printf 'FAIL  %s\n' "$1"; [ -n "${2:-}" ] && sed 's/^
 run()  { N=$((N+1)); LOG="$ROOT/logs/$N.log"; bash "$INSTALLER" "$@" > "$LOG" 2>&1; RC=$?; }
 build() { /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$1/Contents/Info.plist" 2>/dev/null || echo none; }
 has()  { grep -q "$1" "$LOG"; }
-leftovers() { ls -a "$ROOT/apps" | grep -c '^\.Theo\.app\.' ; }
+leftovers() { ls -a "$ROOT/apps" | grep -c '^\.Vello\.app\.' ; }
 
 # ---- 1. the real releases repo (latest build, checksum from the release notes, private repo via gh)
 if [ "$GITHUB" = 1 ]; then
@@ -72,10 +72,10 @@ AFTER="$(find "$APP" -type f -exec stat -f '%m' {} + | shasum | cut -c1-12)"
 
 # ---- 6. same checksum but re-signed by someone else (ad hoc): refused
 W="$ROOT/zips/adhoc"; mkdir -p "$W"; ditto -x -k "$NEWZIP" "$W"
-codesign --force --deep --sign - "$W/Theo.app" 2>/dev/null
-ditto -c -k --keepParent "$W/Theo.app" "$ROOT/zips/adhoc.zip"
+codesign --force --deep --sign - "$W/Vello.app" 2>/dev/null
+ditto -c -k --keepParent "$W/Vello.app" "$ROOT/zips/adhoc.zip"
 run --dir "$ROOT/apps" --from "$ROOT/zips/adhoc.zip" --sha256 "$(shasum -a 256 "$ROOT/zips/adhoc.zip" | awk '{print $1}')" --no-launch --force
-[ $RC != 0 ] && has "not Theo's" && ok "an app signed by another identity is refused" || bad "ad-hoc signed" "$LOG"
+[ $RC != 0 ] && has "not Vello's" && ok "an app signed by another identity is refused" || bad "ad-hoc signed" "$LOG"
 # ---- 6b. no named signer: the installed Theo's own rule still refuses the ad hoc copy
 N=$((N+1)); LOG="$ROOT/logs/$N.log"
 env -u THEO_SIGNER_REQUIREMENT bash "$INSTALLER" --dir "$ROOT/apps" --from "$ROOT/zips/adhoc.zip" \
@@ -84,12 +84,12 @@ env -u THEO_SIGNER_REQUIREMENT bash "$INSTALLER" --dir "$ROOT/apps" --from "$ROO
 
 # ---- 7. a different app signed by Theo's own team: refused (bundle id)
 W="$ROOT/zips/other"; mkdir -p "$W"; ditto -x -k "$NEWZIP" "$W"
-plutil -replace CFBundleIdentifier -string com.example.notheo "$W/Theo.app/Contents/Info.plist"
+plutil -replace CFBundleIdentifier -string com.example.notheo "$W/Vello.app/Contents/Info.plist"
 IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)"
-if [ -n "$IDENTITY" ] && codesign --force --deep --sign "$IDENTITY" "$W/Theo.app" 2>/dev/null; then
-  ditto -c -k --keepParent "$W/Theo.app" "$ROOT/zips/other.zip"
+if [ -n "$IDENTITY" ] && codesign --force --deep --sign "$IDENTITY" "$W/Vello.app" 2>/dev/null; then
+  ditto -c -k --keepParent "$W/Vello.app" "$ROOT/zips/other.zip"
   run --dir "$ROOT/apps" --from "$ROOT/zips/other.zip" --sha256 "$(shasum -a 256 "$ROOT/zips/other.zip" | awk '{print $1}')" --no-launch --force
-  [ $RC != 0 ] && has "doesn't contain Theo" && ok "another app from the same team is refused" || bad "other bundle id" "$LOG"
+  [ $RC != 0 ] && has "doesn't contain Vello" && ok "another app from the same team is refused" || bad "other bundle id" "$LOG"
 else
   printf 'SKIP  another app from the same team (no signing identity here)\n'
 fi
@@ -103,7 +103,7 @@ run --dir "$ROOT/apps" --from "$ROOT/zips/browser.zip" --sha256 "$NEWSHA" --no-l
 
 # ---- 9-11. a fake GitHub (latest release with a SHA256SUMS asset), with and without a token, and via curl | bash
 PORT=$((47900 + RANDOM % 80))
-FAKE="$ROOT/fake"; NAME="Theo-$NEWBUILD.zip"; BASE="http://127.0.0.1:$PORT"
+FAKE="$ROOT/fake"; NAME="Vello-$NEWBUILD.zip"; BASE="http://127.0.0.1:$PORT"
 mkdir -p "$FAKE/repos/test/theo/releases" "$FAKE/dl" "$FAKE/api-assets"
 cp "$NEWZIP" "$FAKE/dl/$NAME"; cp "$NEWZIP" "$FAKE/api-assets/1"
 printf '%s\n' "$SIGNER_RULE" > "$FAKE/dl/SIGNER"; cp "$FAKE/dl/SIGNER" "$FAKE/api-assets/4"
@@ -169,7 +169,7 @@ PIDS="$(ps -axo pid=,comm= | awk -v e="$APP/Contents/MacOS/Clicky" '{p=$1;$1="";
 [ -n "$PIDS" ] && ok "the installed app launches and stays up (pid $PIDS, profile $PROFILE)" || bad "launch" "$ROOT/logs/launch.log"
 run --dir "$ROOT/apps" --from "$NEWZIP" --sha256 "$NEWSHA" --no-launch --force
 STILL="$(ps -axo pid=,comm= | awk -v e="$APP/Contents/MacOS/Clicky" '{p=$1;$1="";sub(/^ /,"");if($0==e)print p}')"
-[ $RC = 0 ] && has "Quitting the running Theo" && [ -z "$STILL" ] && [ "$(build "$APP")" = "$NEWBUILD" ] \
+[ $RC = 0 ] && has "Quitting the running Vello" && [ -z "$STILL" ] && [ "$(build "$APP")" = "$NEWBUILD" ] \
   && ok "upgrading quits the running copy first" || { bad "upgrade while running" "$LOG"; [ -n "$STILL" ] && kill $STILL; }
 
 # ---- 12b. an upgrade quits the app but leaves a `Clicky --mcp` helper (another session's MCP server) running.
@@ -177,14 +177,14 @@ STILL="$(ps -axo pid=,comm= | awk -v e="$APP/Contents/MacOS/Clicky" '{p=$1;$1=""
 # signal, placed at the app's executable path in a scratch copy, run once as the app and once with --mcp.
 HELPERS="$ROOT/apps-helper"; rm -rf "$HELPERS"; mkdir -p "$HELPERS"
 run --dir "$HELPERS" --from "$NEWZIP" --sha256 "$NEWSHA" --no-launch
-STANDIN="$HELPERS/Theo.app/Contents/MacOS/Clicky"
+STANDIN="$HELPERS/Vello.app/Contents/MacOS/Clicky"
 printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' | cc -x c -o "$STANDIN" - 2>"$ROOT/logs/standin.log"
 # Started from a subshell, so they aren't this script's children (a dead child would linger as a zombie and still answer kill -0).
 APP_PID="$( ("$STANDIN" --background < /dev/null > /dev/null 2>&1 & echo $!) )"
 HELPER_PID="$( ("$STANDIN" --mcp < /dev/null > /dev/null 2>&1 & echo $!) )"
 sleep 1
 run --dir "$HELPERS" --from "$NEWZIP" --sha256 "$NEWSHA" --no-launch --force
-if [ $RC = 0 ] && has "Quitting the running Theo" && ! kill -0 $APP_PID 2>/dev/null && kill -0 $HELPER_PID 2>/dev/null; then
+if [ $RC = 0 ] && has "Quitting the running Vello" && ! kill -0 $APP_PID 2>/dev/null && kill -0 $HELPER_PID 2>/dev/null; then
   ok "upgrading quits the app but leaves its --mcp helper running"
 else
   bad "upgrade with an --mcp helper (app alive: $(kill -0 $APP_PID 2>/dev/null && echo yes || echo no), helper alive: $(kill -0 $HELPER_PID 2>/dev/null && echo yes || echo no))" "$LOG"
@@ -196,7 +196,7 @@ mkdir -p "$ROOT/home/Library/Application Support/Theo/Bots" "$ROOT/home/.clicky"
 echo '{}' > "$ROOT/home/Library/Application Support/Theo/Bots/bots.json"
 N=$((N+1)); LOG="$ROOT/logs/$N.log"
 HOME="$ROOT/home" bash "$INSTALLER" --uninstall --dir "$ROOT/apps" > "$LOG" 2>&1; RC=$?
-[ $RC = 0 ] && [ ! -e "$APP" ] && ls "$ROOT/home/.Trash" | grep -q '^Theo-.*\.app$' \
+[ $RC = 0 ] && [ ! -e "$APP" ] && ls "$ROOT/home/.Trash" | grep -q '^Vello-.*\.app$' \
   && [ -f "$ROOT/home/Library/Application Support/Theo/Bots/bots.json" ] \
   && ok "uninstall moves the app to the Trash and keeps the data" || bad "uninstall" "$LOG"
 
@@ -205,7 +205,7 @@ bash "$INSTALLER" --dir "$ROOT/apps" --from "$NEWZIP" --sha256 "$NEWSHA" --no-la
 N=$((N+1)); LOG="$ROOT/logs/$N.log"
 HOME="$ROOT/home" THEO_UNINSTALL_SKIP_SYSTEM=1 bash "$INSTALLER" --uninstall --purge --yes --dir "$ROOT/apps" > "$LOG" 2>&1; RC=$?
 [ $RC = 0 ] && [ ! -e "$APP" ] && [ ! -e "$ROOT/home/Library/Application Support/Theo" ] && [ ! -e "$ROOT/home/.clicky" ] \
-  && ls "$ROOT/home/.Trash"/Theo-data-*/Theo/Bots/bots.json >/dev/null 2>&1 \
+  && ls "$ROOT/home/.Trash"/Vello-data-*/Theo/Bots/bots.json >/dev/null 2>&1 \
   && ok "uninstall --purge moves the data to the Trash" || bad "purge" "$LOG"
 
 # ---- 15. uninstall when nothing is installed
@@ -225,11 +225,11 @@ if [ -n "${THEO_TEST_SELFSIGNED_ZIP:-}" ]; then
   N=$((N+1)); LOG="$ROOT/logs/$N.log"
   THEO_SIGNER_REQUIREMENT="$THEO_TEST_SELFSIGNED_REQ" bash "$INSTALLER" --dir "$ROOT/apps" --no-launch --force \
     --from "$THEO_TEST_SELFSIGNED_OTHER_ZIP" --sha256 "$(sha "$THEO_TEST_SELFSIGNED_OTHER_ZIP")" > "$LOG" 2>&1; RC=$?
-  [ $RC != 0 ] && has "not Theo's" && ok "same certificate name with another key is refused" || bad "self-signed other key" "$LOG"
+  [ $RC != 0 ] && has "not Vello's" && ok "same certificate name with another key is refused" || bad "self-signed other key" "$LOG"
   N=$((N+1)); LOG="$ROOT/logs/$N.log"
   THEO_SIGNER_REQUIREMENT="$THEO_TEST_SELFSIGNED_REQ" bash "$INSTALLER" --dir "$ROOT/apps" --no-launch --force \
     --from "$NEWZIP" --sha256 "$NEWSHA" > "$LOG" 2>&1; RC=$?
-  [ $RC != 0 ] && has "not Theo's" && ok "with a self-signed pin, an Apple Development build is refused" || bad "self-signed pin vs Apple build" "$LOG"
+  [ $RC != 0 ] && has "not Vello's" && ok "with a self-signed pin, an Apple Development build is refused" || bad "self-signed pin vs Apple build" "$LOG"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

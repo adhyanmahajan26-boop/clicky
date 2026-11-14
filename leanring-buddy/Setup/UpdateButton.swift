@@ -33,7 +33,7 @@ struct UpdateButton: View {
     private var sidebarLabel: some View {
         HStack(spacing: 10) {
             HairlineIcon(name: "updates", size: 20, color: hasUpdate ? DS.Colors.accent : DS.Colors.textSecondary, live: isBusy)
-            Text(hasUpdate ? "Update Theo" : "Updates").font(.system(size: 13, weight: hasUpdate ? .semibold : .regular))
+            Text(hasUpdate ? "Update Vello" : "Updates").font(.system(size: 13, weight: hasUpdate ? .semibold : .regular))
                 .foregroundColor(DS.Colors.textPrimary).lineLimit(1).fixedSize()
             Spacer(minLength: 0)
             Text(shortStatus).font(.system(size: 11.5, weight: hasUpdate ? .semibold : .regular))
@@ -74,10 +74,10 @@ struct UpdateButton: View {
 
     private var helpText: String {
         switch updateController.state {
-        case .idle: return "Check for a newer build of Theo (\(updateController.currentVersionLabel))"
+        case .idle: return "Check for a newer build of Vello (\(updateController.currentVersionLabel))"
         case .checking: return "Checking for updates…"
         case .upToDate: return "You have the newest build (\(updateController.currentVersionLabel)). Click to check again."
-        case .available: return "A newer build is ready. Theo quits, updates itself and reopens, keeping your settings and permissions."
+        case .available: return "A newer build is ready. Vello quits, updates itself and reopens, keeping your settings and permissions."
         case .installing(let message): return message
         case .failed(let message): return message
         }
@@ -102,7 +102,7 @@ struct UpdateAvailableBanner: View {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill").font(.system(size: 18)).foregroundColor(DS.Colors.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Theo build \(release.build) is ready").font(.system(size: 12.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text("Vello build \(release.build) is ready").font(.system(size: 12.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                     Text("Keeps your settings and permissions.").font(.system(size: 11)).foregroundColor(DS.Colors.textSecondary)
                 }
                 Spacer(minLength: 4)

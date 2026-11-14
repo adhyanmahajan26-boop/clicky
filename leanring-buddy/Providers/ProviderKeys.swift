@@ -125,11 +125,11 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
         ProviderInfo(id: "cursor", label: "Cursor", blurb: "Runs Cursor Agent on a key, and Cursor's cloud agents", group: .models, kind: .other,
                      baseURL: "https://api.cursor.com", consoleURL: "https://cursor.com/dashboard?tab=integrations", keyHint: "key_…", modelsPath: nil, testPath: "/v0/me"),
 
-        ProviderInfo(id: "elevenlabs", label: "ElevenLabs", blurb: "Natural voices for Clicky and Theo", group: .voice, kind: .other,
+        ProviderInfo(id: "elevenlabs", label: "ElevenLabs", blurb: "Natural voices for Pointer Assistant and Vello", group: .voice, kind: .other,
                      baseURL: "https://api.elevenlabs.io", consoleURL: "https://elevenlabs.io/app/settings/api-keys", keyHint: "sk_…", modelsPath: nil, testPath: "/v2/voices?page_size=1"),
-        ProviderInfo(id: "deepgram", label: "Deepgram", blurb: "Hears what you say to Clicky", group: .voice, kind: .other,
+        ProviderInfo(id: "deepgram", label: "Deepgram", blurb: "Hears what you say to Pointer Assistant", group: .voice, kind: .other,
                      baseURL: "https://api.deepgram.com", consoleURL: "https://console.deepgram.com", keyHint: "40-character key", modelsPath: nil, testPath: "/v1/projects"),
-        ProviderInfo(id: "assemblyai", label: "AssemblyAI", blurb: "Hears what you say to Clicky", group: .voice, kind: .other,
+        ProviderInfo(id: "assemblyai", label: "AssemblyAI", blurb: "Hears what you say to Pointer Assistant", group: .voice, kind: .other,
                      baseURL: "https://api.assemblyai.com", consoleURL: "https://www.assemblyai.com/dashboard/api-keys", keyHint: "32-character key", modelsPath: nil, testPath: "/v2/transcript?limit=1"),
 
         ProviderInfo(id: "ollama", label: "Ollama", blurb: "Models running on this Mac, no key needed", group: .local, kind: .openAICompatible,

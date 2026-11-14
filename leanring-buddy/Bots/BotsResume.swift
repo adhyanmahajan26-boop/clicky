@@ -17,7 +17,7 @@ extension BotsStore {
     static let resumeRetries = 2
 
     /// Theo's own lines about a cut-off turn start with this; "…so it's asking again now." marks a retry.
-    nonisolated static let resumePrefix = "Theo stopped before "
+    nonisolated static let resumePrefix = "Vello stopped before "
     nonisolated static let resumeRetrySuffix = "so it's asking again now."
 
     /// The owner's messages at the end of a chat with nothing after them: what was cut off.

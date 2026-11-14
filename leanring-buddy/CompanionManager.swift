@@ -497,7 +497,7 @@ final class CompanionManager: ObservableObject {
             MainActor.assumeIsolated { self?.noteScreenContentSeen() }
         }
         refreshAllPermissions()
-        print("🔑 Theo start: accessibility \(hasAccessibilityPermission), screen \(hasScreenRecordingPermission), mic \(hasMicrophonePermission), screen content \(hasScreenContentPermission)")
+        print("🔑 Vello start: accessibility \(hasAccessibilityPermission), screen \(hasScreenRecordingPermission), mic \(hasMicrophonePermission), screen content \(hasScreenContentPermission)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
@@ -508,7 +508,7 @@ final class CompanionManager: ObservableObject {
         showSparkIfReady()
     }
 
-    static let clickyOffLine = "Clicky is turned off. Turn it on in Settings \u{203A} Products."
+    static let clickyOffLine = "Pointer Assistant is turned off. Turn it on in Settings \u{203A} Products."
 
     /// A product was switched (Settings › Products): Clicky's spark and wake word, and dictation's keys, follow at once.
     func applyProducts() {
@@ -916,7 +916,7 @@ final class CompanionManager: ObservableObject {
         wakeWordController.setEnabled(enables)
         guard speaks else { return }
         let confirmation = enables
-            ? "Okay, I'm listening for hey Theo again."
+            ? "Okay, I'm listening for hey Vello again."
             : "Okay, I've stopped listening for my name. Say start listening with the shortcut to turn it back on."
         Task { try? await speechOutputClient.speakText(confirmation) }
     }
@@ -1065,7 +1065,7 @@ final class CompanionManager: ObservableObject {
             // ≥ 60 % its own) are dropped, so they don't start an utterance.
             if activeEchoMode == .aec, let activeCoordinator = speechOutputClient.activeCoordinator,
                activeCoordinator.isLikelyEcho(partialTranscript) {
-                print("🔇 Hands-free: echo of Clicky's own words dropped: \(partialTranscript)")
+                print("🔇 Hands-free: echo of Pointer Assistant's own words dropped: \(partialTranscript)")
                 handsFreeListeningSession?.discardCurrentUtterance()
                 currentUtteranceOverlappedBuddySpeech = false
                 return
@@ -1130,7 +1130,7 @@ final class CompanionManager: ObservableObject {
             // While Clicky talks, only if it didn't just say those words itself.
             if utteranceOverlappedBuddySpeech, let activeCoordinator = speechOutputClient.activeCoordinator,
                !activeCoordinator.echoGuard.accepts(finishedUtterance, commandWords: BoardVoiceCommand.echoWords(in: finishedUtterance), at: Date()) {
-                print("🔇 Hands-free: board command heard in Clicky's own words, ignored: \(finishedUtterance)")
+                print("🔇 Hands-free: board command heard in Pointer Assistant's own words, ignored: \(finishedUtterance)")
                 return
             }
             performBoardVoiceCommand(boardCommand)
@@ -1540,8 +1540,8 @@ final class CompanionManager: ObservableObject {
         var mainPrompt = SystemPromptBuilder.mainSystemPrompt(features: promptFeatures)
         // The name the owner gave the assistant (v2.assistant.name).
         let assistantName = ClickySettings.assistantName
-        if assistantName.lowercased() != "theo" {
-            mainPrompt = mainPrompt.replacingOccurrences(of: "you're theo (built on clicky)", with: "you're \(assistantName.lowercased())")
+        if assistantName.lowercased() != "vello" {
+            mainPrompt = mainPrompt.replacingOccurrences(of: "you're vello,", with: "you're \(assistantName.lowercased()),")
         }
         // Clicky's team, and Theo above it. Added here so the warm standby brain gets the same prompt.
         mainPrompt += "\n\n" + BotsStore.shared.clickyTeamPromptSection
@@ -1633,7 +1633,7 @@ final class CompanionManager: ObservableObject {
         guard TheoProducts.isOn(.clicky) else {
             showHandsFreeStatusMessage(Self.clickyOffLine)
             voiceState = .idle
-            turnOptions.onTurnFinished?(nil, NSError(domain: "Theo.Products", code: 1, userInfo: [NSLocalizedDescriptionKey: Self.clickyOffLine]))
+            turnOptions.onTurnFinished?(nil, NSError(domain: "Vello.Products", code: 1, userInfo: [NSLocalizedDescriptionKey: Self.clickyOffLine]))
             return
         }
         // "Clicky, work on the Air": the switch, wherever it's said.
@@ -2197,7 +2197,7 @@ final class CompanionManager: ObservableObject {
     }
 
     static let companionWorkerSystemPrompt = """
-    you're a fast helper working for theo, a voice assistant. theo's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
+    you're a fast helper working for vello, a voice assistant. vello's main brain gave you one small sub-task. you can see the user's screen in the attached images. do only that sub-task and reply in plain, concise text (under 150 words) with the facts the main brain needs. no greetings, no tags, no markdown headings.
     """
 
     // MARK: - First-run hint

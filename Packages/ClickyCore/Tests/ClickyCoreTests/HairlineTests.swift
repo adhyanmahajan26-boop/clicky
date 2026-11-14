@@ -54,11 +54,11 @@ final class HairlineTests: XCTestCase {
     }
 
     func testDefaultsFollowTheSpec() {
-        XCTAssertEqual(CrewLook.standard(id: "theo", name: "Theo"), .theo)
+        XCTAssertEqual(CrewLook.standard(id: "theo", name: "Vello"), .theo)
         XCTAssertEqual(CrewLook.theo.shell, "black")
         XCTAssertEqual(CrewLook.theo.antenna, .ball)
         XCTAssertEqual(CrewLook.theo.extra, .tie)
-        XCTAssertEqual(CrewLook.standard(id: "clicky", name: "Clicky").antenna, .cursor)
+        XCTAssertEqual(CrewLook.standard(id: "clicky", name: "Pointer Assistant").antenna, .cursor)
         XCTAssertEqual(CrewLook.clicky.eyes, .round)
         XCTAssertEqual(CrewLook.standard(id: "x", name: "Code Reviewer"), .reviewer)
         XCTAssertEqual(CrewLook.standard(id: "x", name: "Builder"), .builder)

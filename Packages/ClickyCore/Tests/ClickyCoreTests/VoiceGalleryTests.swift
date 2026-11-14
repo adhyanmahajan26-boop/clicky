@@ -30,7 +30,7 @@ enum VoiceGalleryFixtures {
         {"id": "voice5", "name": "Voice 5 · steady", "pitchHz": 123, "reference": "voice5-ref.wav", "sample": "voice5-sample.wav"},
         {"id": "voice6", "name": "Voice 6 · deep", "pitchHz": 113, "reference": "voice6-ref.wav", "sample": "voice6-sample.wav"}
       ],
-      "current": {"id": "clicky-voice", "name": "Current Clicky voice", "pitchHz": 286, "reference": "../clicky-voice.wav", "extra": true}
+      "current": {"id": "clicky-voice", "name": "Current Pointer Assistant voice", "pitchHz": 286, "reference": "../clicky-voice.wav", "extra": true}
     }
     """
 

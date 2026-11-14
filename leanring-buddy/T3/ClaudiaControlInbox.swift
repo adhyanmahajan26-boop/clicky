@@ -188,7 +188,7 @@ final class ClaudiaControlInbox {
             let section = (command["section"] as? String).flatMap(SettingsTab.Section.init(rawValue:)) ?? .look
             if let provider = command["provider"] as? String { ProviderKeys.shared.rowToOpen = provider }
             TheoSettingsWindowController.show(section: section)
-            let window = NSApp.windows.first { $0.isVisible && $0.title == "Theo" }
+            let window = NSApp.windows.first { $0.isVisible && $0.title == "Vello" }
             reply(identifier, ok: true, result: ["section": section.rawValue, "screen": window?.screen?.localizedName ?? NSNull(), "window": window?.windowNumber ?? 0], error: nil)
         case "clickyTeam":
             // {action: state|delegate|order|memorySearch, duty, task, ownerWords, text, query}

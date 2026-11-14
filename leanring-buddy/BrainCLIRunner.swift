@@ -226,7 +226,7 @@ extension BrainCLIRunner {
                                        onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)?) async throws -> ClaudeTurnResult {
         let parts = model.modelIdentifier.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2, let provider = await MainActor.run(body: { ProviderInfo.info(for: parts[0]) }) else {
-            throw APIChatError.rejected("The model \(model.modelIdentifier) isn't set up. Pick another in Settings › Clicky.")
+            throw APIChatError.rejected("The model \(model.modelIdentifier) isn't set up. Pick another in Settings › Pointer Assistant.")
         }
         var words: [String] = []
         var images: [String] = []

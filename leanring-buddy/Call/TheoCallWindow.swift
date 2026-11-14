@@ -40,7 +40,7 @@ enum TheoCallController {
         self.session = session
         let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 660),
                                styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-        created.title = "Call with Theo"
+        created.title = "Call with Vello"
         created.titleVisibility = .hidden
         created.titlebarAppearsTransparent = true
         created.isReleasedWhenClosed = false
@@ -120,7 +120,7 @@ struct TheoCallView: View {
         case .listening: return session.isMuted ? "You're muted" : "Listening"
         case .userSpeaking: return "Go on"
         case .thinking: return "Thinking"
-        case .speaking: return "Theo is talking. Just talk to cut in."
+        case .speaking: return "Vello is talking. Just talk to cut in."
         case .ended: return "Call ended"
         }
     }
@@ -183,7 +183,7 @@ private struct CallLineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(line.who == .addy ? "You" : "Theo").font(.system(size: 10.5, weight: .semibold))
+            Text(line.who == .addy ? "You" : "Vello").font(.system(size: 10.5, weight: .semibold))
                 .foregroundColor(line.who == .addy ? DS.Colors.textTertiary : DS.Colors.accentText)
             if line.text.isEmpty && line.isLive {
                 TypingDots()

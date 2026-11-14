@@ -84,7 +84,7 @@ enum SetupGuideWindowController {
         if window == nil {
             let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
                                    styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-            created.title = "Set up Theo"
+            created.title = "Set up Vello"
             created.titlebarAppearsTransparent = true
             created.isReleasedWhenClosed = false
             created.contentView = FirstMouseHostingView(rootView: SetupGuideView(model: model, companionManager: companionManager))
@@ -114,7 +114,7 @@ private struct TheoMark: View {
     var state: PixelState = .awake
 
     var body: some View {
-        CrewAvatar(look: BotsStore.shared.primary?.crewLook ?? .theo, size: size, pose: state, name: "Theo")
+        CrewAvatar(look: BotsStore.shared.primary?.crewLook ?? .theo, size: size, pose: state, name: "Vello")
     }
 }
 
@@ -158,7 +158,7 @@ struct SetupGuideView: View {
             HStack(spacing: 10) {
                 TheoMark(size: 32, state: setupState)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Theo").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
+                    Text("Vello").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
                     Text("Setup").font(TheoType.micro).foregroundColor(DS.Colors.textTertiary)
                 }
             }
@@ -226,7 +226,7 @@ struct SetupGuideView: View {
                 Button("Skip") { model.next() }.buttonStyle(.theoGhost)
             }
             if model.step == .done {
-                Button("Open Theo") { model.finish() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
+                Button("Open Vello") { model.finish() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
             } else {
                 Button(model.step == .welcome ? "Get started" : "Continue") { model.next() }.buttonStyle(.theoPrimary).keyboardShortcut(.defaultAction)
                     .disabled(!model.canContinue)
@@ -240,25 +240,25 @@ struct SetupGuideView: View {
         case .welcome: WelcomeStep()
         case .products:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "Pick what you want", subtitle: "Theo, Clicky and Dictation are separate products. Watch each demo and turn on only the ones you want; you can change this any time in Settings \u{203A} Products.")
+                StepHeader(title: "Pick what you want", subtitle: "Vello, Pointer Assistant and Dictation are separate products. Watch each demo and turn on only the ones you want; you can change this any time in Settings \u{203A} Products.")
                 TheoProductsList(demoWidth: 250)
             }
         case .permissions:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "Let Theo hear and see", subtitle: "Allow what you want. Theo still runs without any of these and tells you what it can't do yet, so you can come back to this any time in Settings.")
+                StepHeader(title: "Let Vello hear and see", subtitle: "Allow what you want. Vello still runs without any of these and tells you what it can't do yet, so you can come back to this any time in Settings.")
                 PermissionsSettingsContent()
             }
         case .harnesses:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "Pick a brain", subtitle: "Theo needs one thing to think with: an API key, or a coding agent you already pay for (Claude Code, Codex, Cursor, OpenCode). Any one is enough, and none is required over another.")
+                StepHeader(title: "Pick a brain", subtitle: "Vello needs one thing to think with: an API key, or a coding agent you already pay for (Claude Code, Codex, Cursor, OpenCode). Any one is enough, and none is required over another.")
                 QuickBrainKeyCard(companionManager: companionManager)
                 if products.isOn(.clicky) {
-                    TheoSection(title: "Clicky thinks with", hint: "Clicky is your screen companion. Any agent below or any API key works.") {
+                    TheoSection(title: "Pointer Assistant thinks with", hint: "Pointer Assistant is your screen companion. Any agent below or any API key works.") {
                         SetupBrainRow(companionManager: companionManager)
                     }
                 }
                 if products.isOn(.theo) {
-                    StepHeader(title: "Your coding agents", subtitle: "Optional. Install and sign in right here. Builds go to the agent you pick, else the first one that's signed in; each runs in a live terminal inside Theo.")
+                    StepHeader(title: "Your coding agents", subtitle: "Optional. Install and sign in right here. Builds go to the agent you pick, else the first one that's signed in; each runs in a live terminal inside Vello.")
                     CodingSettingsView()
                 }
             }
@@ -274,13 +274,13 @@ struct SetupGuideView: View {
                         }
                     }
                 } else {
-                    StepHeader(title: "API keys (optional)", subtitle: "Bring a key for any provider and use it for bots, Theo, Clicky and voices. You can skip this and add them later.")
+                    StepHeader(title: "API keys (optional)", subtitle: "Bring a key for any provider and use it for bots, Vello, Pointer Assistant and voices. You can skip this and add them later.")
                 }
                 ProviderKeysView()
             }
         case .voice:
             VStack(alignment: .leading, spacing: 18) {
-                StepHeader(title: "How should Theo sound?", subtitle: "Theo always listens for \u{201C}hey Theo\u{201D}. Answers can be spoken or shown as captions.")
+                StepHeader(title: "How should Vello sound?", subtitle: "Vello always listens for \u{201C}hey Vello\u{201D}. Answers can be spoken or shown as captions.")
                 VoiceSettingsContent()
             }
         case .done: DoneStep(model: model, setup: model.setup, products: products)
@@ -316,7 +316,7 @@ private struct QuickBrainKeyCard: View {
 
     var body: some View {
         TheoSection(title: "Quickest start: paste one API key",
-                    hint: "One key from any of these runs Theo, Clicky and your bots. It's checked with a real call and stays in your Keychain. Already signed in to an agent below? You can skip this.") {
+                    hint: "One key from any of these runs Vello, Pointer Assistant and your bots. It's checked with a real call and stays in your Keychain. Already signed in to an agent below? You can skip this.") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Picker("Provider", selection: $providerID) {
@@ -369,11 +369,11 @@ private struct QuickBrainKeyCard: View {
             guard let provider = ProviderInfo.info(for: testedProviderID) else { return }
             let currentBrain = companionManager.selectedModel
             if BrainAvailability.inventory.isUsable(currentBrain) {
-                status = "Saved. Theo still thinks with \(BrainCatalog.shared.label(for: currentBrain)); pick this key any time in the menu below."
+                status = "Saved. Vello still thinks with \(BrainCatalog.shared.label(for: currentBrain)); pick this key any time in the menu below."
             } else if let model = APIModelDefaults.preferredChatModel(providerID: testedProviderID, models: keys.models(for: provider)) {
                 let setting = BrainModel(provider: .api, modelIdentifier: "\(testedProviderID)/\(model)").setting
                 companionManager.setSelectedModel(setting)
-                status = "Works. Theo and Clicky now think with \(model) on your \(provider.label) key."
+                status = "Works. Vello and Pointer Assistant now think with \(model) on your \(provider.label) key."
             } else {
                 status = "Saved, but \(provider.label) didn't list a chat model. Pick one in the menu below."
             }
@@ -398,7 +398,7 @@ private struct WelcomeStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             TheoMark(size: 72, state: .awake)
-            Text("Hi, I'm Theo").font(.system(size: 30, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
+            Text("Hi, I'm Vello").font(.system(size: 30, weight: .bold)).foregroundColor(DS.Colors.textPrimary)
             Text("Three products, one app. Next you'll see a short demo of each and turn on only the ones you want. Setup takes about two minutes.")
                 .font(.system(size: 15)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 12) {
@@ -475,7 +475,7 @@ private struct DoneStep: View {
                     tip(line)
                 }
             }
-            TheoSection(title: "Theo's screen", hint: "Theo opens its windows here and leaves your main screen alone.") {
+            TheoSection(title: "Vello's screen", hint: "Vello opens its windows here and leaves your main screen alone.") {
                 SettingRow(title: "Monitor") {
                     Picker("Monitor", selection: $look.screenName) {
                         Text("Follow my pointer").tag("")
@@ -494,8 +494,8 @@ private struct DoneStep: View {
     private var tips: [String] {
         var lines: [String] = []
         if products.isOn(.clicky) {
-            lines.append("\u{201C}Hey Theo, what's on my screen?\u{201D} (Clicky answers)")
-            lines.append("\u{201C}Hey Theo, draw me a flowchart of my signup flow.\u{201D}")
+            lines.append("\u{201C}Hey Vello, what's on my screen?\u{201D} (Pointer Assistant answers)")
+            lines.append("\u{201C}Hey Vello, draw me a flowchart of my signup flow.\u{201D}")
         }
         if products.isOn(.theo) { lines.append("Make a bot, then tell it \u{201C}fix the failing test in \(BotsT3.projectsWords)/foo\u{201D}.") }
         if products.isOn(.dictation) { lines.append("Hold Control + Fn in any app, say a sentence, and let go.") }

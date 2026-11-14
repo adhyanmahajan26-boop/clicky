@@ -641,7 +641,7 @@ public enum VoiceFastPathPolicy {
         let frontmost = facts.frontmost
         // Theo's main window goes through the usual tiers below (keys there wait for a yes); its panels never.
         if let frontmost, frontmost.isOwnApplication, !frontmost.isOwnMainWindow, commandActsOnFrontWindow(command) {
-            return ActionTierDecision(.refused, "that's Clicky's own window")
+            return ActionTierDecision(.refused, "that's Pointer Assistant's own window")
         }
         switch command {
         case .volumeUp, .volumeDown, .volumeSet, .mute, .unmute, .brightnessUp, .brightnessDown:

@@ -47,13 +47,13 @@ public enum ScreenTaskPolicy {
     private static let refusedApps: [(words: [String], why: String)] = [
         (["terminal", "iterm", "warp", "ghostty", "kitty", "alacritty", "xcode", "visual studio code", "cursor", "zed", "t3 code"],
          "terminals and code stay on the owner's own machine"),
-        (["chrome", "safari", "firefox", "arc", "edge", "brave", "opera", "vivaldi"], "the browser is only for Clicky's research"),
+        (["chrome", "safari", "firefox", "arc", "edge", "brave", "opera", "vivaldi"], "the browser is only for Pointer Assistant's research"),
         (["mail", "messages", "slack", "whatsapp", "telegram", "discord", "teams", "facetime", "zoom", "signal", "outlook"],
          "that app can send things as the owner"),
         (["system settings", "system preferences", "keychain access", "passwords", "wallet", "finder", "app store", "activity monitor", "disk utility"],
          "that app can change this Mac or holds private things"),
         (["music", "spotify", "tv", "podcasts", "quicktime player", "voice memos", "photo booth", "vlc", "netflix"], "that app plays sound or uses the camera"),
-        (["theo", "claude", "clicky"], "that's Theo's own side")
+        (["vello", "pointer assistant", "theo", "claude", "clicky"], "that's Vello's own side")
     ]
 
     public static func refusal(app name: String) -> String? {
