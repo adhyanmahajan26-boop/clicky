@@ -279,7 +279,7 @@ impl StreamParser {
             Format::Grok => {
                 if kind == "result" {
                     if event["is_error"].as_bool().unwrap_or(false) {
-                        self.error = Some(event["result"].as_str().filter(|r| !r.trim().is_empty()).unwrap_or("Grok reported an error.").to_string());
+                        self.error = Some(grok_error(&event).unwrap_or_else(|| "Grok reported an error.".to_string()));
                     } else if let Some(result) = event["result"].as_str() {
                         self.text.clear();
                         self.push(result);
@@ -329,6 +329,32 @@ impl StreamParser {
     pub fn unread_output(&self) -> &str {
         &self.raw
     }
+}
+
+/// Grok's own words for a failed turn. It puts them in the result event's `errors` list, often as `Internal error: {"message":
+/// "API error (status 402 …): …", …}`, so the innermost message is read out (the Mac's `EngineFailureText.grok`).
+fn grok_error(event: &serde_json::Value) -> Option<String> {
+    let mut candidates: Vec<&str> = event["errors"].as_array().into_iter().flatten().filter_map(|e| e.as_str()).collect();
+    if let Some(result) = event["result"].as_str() {
+        candidates.push(result);
+    }
+    candidates.into_iter().map(innermost_message).find(|text| !text.is_empty())
+}
+
+fn innermost_message(text: &str) -> String {
+    let cut = |t: &str| t.trim().chars().take(300).collect::<String>();
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+        if start < end {
+            if let Ok(object) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                for found in [&object["message"], &object["error"]["message"], &object["error"]] {
+                    if let Some(message) = found.as_str().filter(|m| !m.trim().is_empty()) {
+                        return cut(message);
+                    }
+                }
+            }
+        }
+    }
+    cut(text)
 }
 
 /// How a program is started: a Python stand-in through Python; anything else as itself.
@@ -694,6 +720,17 @@ pub fn locate(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn grok_says_its_own_error_not_a_generic_one() {
+        let mut parser = StreamParser::default();
+        let line = r#"{"type":"result","is_error":true,"result":"","errors":["Internal error: {\"message\": \"API error (status 402 Payment Required): Grok Build usage balance exhausted\", \"http_status\": 402}"]}"#;
+        parser.consume(line, Format::Grok);
+        assert_eq!(parser.error.as_deref(), Some("API error (status 402 Payment Required): Grok Build usage balance exhausted"));
+        let mut bare = StreamParser::default();
+        bare.consume(r#"{"type":"result","is_error":true}"#, Format::Grok);
+        assert_eq!(bare.error.as_deref(), Some("Grok reported an error."));
+    }
     use super::*;
 
     // What npm (cmd-shim) writes to %APPDATA%\npm\claude.cmd for a package whose bin is an .exe, and for one whose bin is a

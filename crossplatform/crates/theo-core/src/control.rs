@@ -350,9 +350,23 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             ok(json!({"key": key}))
         }
         "harnessSet" => {
+            // The coding agent: an agent's id, or "auto" (or empty) for the first one ready. The coding model and effort are
+            // that agent's, so a new pick starts on its own default unless they come with it.
+            if let Some(target) = s(cmd, "codingTarget") {
+                let target = target.trim().to_string();
+                if !target.is_empty() && target != "auto" && !crate::coding::CODING_AGENTS.contains(&target.as_str()) { return err("Theo doesn't know that coding agent."); }
+                let value = if target.is_empty() || target == "auto" { Value::Null } else { Value::from(target) };
+                if h.settings.get(crate::coding::TARGET_SETTING).unwrap_or(Value::Null) != value {
+                    h.settings.set(crate::coding::TARGET_SETTING, value);
+                    h.settings.set("coding.model", Value::Null);
+                    h.settings.set("coding.effort", Value::Null);
+                }
+            }
             if let Some(m) = s(cmd, "codingModel") { h.settings.set("coding.model", m.into()); }
             if let Some(e) = s(cmd, "codingEffort") { h.settings.set("coding.effort", e.into()); }
-            ok(json!({"codingTarget": "claude", "defaultHarness": "claude"}))
+            let brains = crate::brains::inventory(h).await;
+            let coding = brains["coding"].clone();
+            ok(json!({"codingTarget": coding["target"].clone(), "defaultHarness": coding["target"].clone(), "coding": coding}))
         }
         "uiRunStart" | "runStart" => {
             let (Some(prompt), Some(title)) = (s(cmd, "prompt"), s(cmd, "title")) else { return err("Needs prompt and title.") };

@@ -397,8 +397,10 @@ async function renderSettings() {
     const current = b && b.standIn ? b.standIn.split("|")[0] : "";
     const choices = brainChoices(b).filter(([id]) => id !== "claude");
     box.innerHTML = `${brainsHTML(b)}<h2>When a bot's brain fails</h2><div class="list"><div class="crow"><span class="tx"><b>Answer with</b><small style="white-space:normal">Another brain answers for the turn and the chat says so. The default is Claude Code when it's installed.</small></span>`
-      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`;
+      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`
+      + codingSettingsHTML(b && b.coding);
     wireBrains(box, drawBrains);
+    if ($("#coding-target")) $("#coding-target").onchange = async (e) => { await invoke({ cmd: "harnessSet", codingTarget: e.target.value }); await loadBrains(); drawBrains(); };
     $("#stand-in").onchange = async (e) => {
       const engine = e.target.value;
       let model = "";
@@ -419,6 +421,22 @@ async function renderSettings() {
   window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
 }
 
+/* ---------------- coding runs ---------------- */
+// Which agent does coding runs: the owner's pick, else the first one ready (any of them: none is required).
+function codingRowHTML(c, row) {
+  if (!c) return "";
+  if (!c.target) return row("Coding agent", "&lt;/&gt;", "None yet: install any coding agent in the Brain step (OpenCode's free models need no account). Chats and routines don't need one.", TP.pill("none", "Not installed"), "");
+  const line = (c.pickedMissing ? "Your pick isn't installed here, so " : "") + `${esc(c.label)} ${c.runsOnKey ? "runs the coding on your saved API key (it's signed out), which your provider bills you for" : c.ready ? "runs the coding" : "will run the coding once it's signed in"}${c.picked ? "" : " (the first one ready; pick another in Settings)"}.`;
+  return row("Coding agent", "&lt;/&gt;", line, c.runsOnKey ? TP.pill("needs", "On your API key") : c.ready ? TP.pill("ok", "Ready") : TP.pill("needs", "Signed out"), "");
+}
+function codingSettingsHTML(c) {
+  if (!c) return "";
+  const options = [`<option value="auto"${c.picked ? "" : " selected"}>Automatic${!c.picked && c.label ? ` (${esc(c.label)})` : ""}</option>`]
+    .concat(c.choices.map((a) => `<option value="${esc(a.id)}"${c.picked === a.id ? " selected" : ""}>${esc(a.label)}</option>`)).join("");
+  const line = c.target ? `${esc(c.label)} ${c.runsOnKey ? "does the work on your saved API key, since it's signed out (your provider bills you for it)" : c.ready ? "does the work" : "will do the work once it's signed in"}${c.pickedMissing ? ", because your pick isn't installed here" : ""}.` : "No coding agent is installed yet. Any one of the agents above will do.";
+  return `<h2>Coding runs</h2><div class="list"><div class="crow"><span class="tx"><b>Coding agent</b><small style="white-space:normal">${line}</small></span><span class="act many"><select id="coding-target" aria-label="Coding agent">${options}</select></span></div></div>`;
+}
+
 /* ---------------- brains ---------------- */
 // Every brain a bot can think with: an API key you paste (quickest), or an agent signed in with your own subscription. None
 // is required; any one is enough. Keys go to the Credential Manager, the Keychain or a file only you can read, and never come
@@ -437,8 +455,8 @@ function brainsHTML(b) {
   const saved = keyed.filter((a) => a.hasKey);
   const keyRows = saved.map((a) => `<div class="crow"><span class="tx"><b>${esc(a.label)}</b><small>API key saved</small></span>${TP.pill("ok", "Ready")}<span class="act"><button class="btn sm ghost" data-key-remove="${esc(a.id)}">Remove</button></span></div>`).join("");
   const agentRows = b.agents.map((a) => {
-    const pill = a.ready && a.signedIn === true ? TP.pill("ok", "Signed in") : a.ready ? TP.pill("ok", "Installed") : a.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
-    const line = a.ready ? "Thinks with your own subscription." : a.installed ? esc(a.signInHint) : `Install: <code>${esc(a.install)}</code>`;
+    const pill = a.ready && a.signedIn === true ? TP.pill("ok", "Signed in") : a.ready ? TP.pill("ok", "Installed") : a.runsOnKey ? TP.pill("needs", "On your API key") : a.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed");
+    const line = a.ready ? "Thinks with your own subscription." : a.runsOnKey ? `Signed out: coding runs on it use your saved API key, which your provider bills you for. ${esc(a.signInHint)}` : a.installed ? esc(a.signInHint) : `Install: <code>${esc(a.install)}</code>`;
     const act = a.ready ? "" : a.installed ? `<button class="btn sm" data-term="signin:${esc(a.id)}">Sign in</button>` : `<button class="btn sm" data-term="install:${esc(a.id)}">Install</button>`;
     return `<div class="crow" data-brain="${esc(a.id)}"><span class="tx"><b>${esc(a.label)}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
   }).join("");
@@ -624,7 +642,7 @@ function setupFace() {
   return "awake";
 }
 function drawSetup() {
-  const s = setup.st, step = setup.step, c = s && s.claude;
+  const s = setup.st, step = setup.step;
   const steps = SETUP_STEPS.map((n, i) => `<div class="su-step${i === step ? " on" : ""}${i < step ? " done" : ""}">${i < step ? TP.badge("done", "pg") : `<i class="num">${i + 1}</i>`}${n}</div>`).join("");
   let body = "";
   const checking = `<div class="pills">${TP.pill("checking", "Checking")}</div>`;
@@ -642,7 +660,7 @@ function drawSetup() {
     const g = s && s.git, h = s && s.gh;
     const r = (name, icon, line, pill, act) => `<div class="crow"><span class="app">${icon}</span><span class="tx"><b>${name}</b><small style="white-space:normal">${line}</small></span>${pill}<span class="act">${act}</span></div>`;
     body = `<h1>Coding runs</h1><p class="lead">Optional. When you ask a bot to build or fix something, a coding agent works on its own branch, commits, and with GitHub pushes and opens a draft pull request.</p>`
-      + (!s ? checking : `<div class="list">${r("Claude Code", "C", c.installed && c.signedIn ? `${esc(c.version)} · runs the coding` : c.installed ? "Signed out: sign in to start coding runs." : "Not installed: coding runs need it. Chats and routines don't.", c.installed && c.signedIn ? TP.pill("ok", "Signed in") : c.installed ? TP.pill("needs", "Signed out") : TP.pill("none", "Not installed"), c.installed && c.signedIn ? "" : `<button class="btn sm" data-term="${c.installed ? "signin" : "install"}">${c.installed ? "Sign in" : "Install"}</button>`)}`
+      + (!s ? checking : `<div class="list">${codingRowHTML(s.coding, r)}`
       + `${r("git", "g", g.installed ? esc(g.version) : "Not installed. Get it from git-scm.com or your package manager.", g.installed ? TP.pill("ok", "Installed") : TP.pill("none", "Not installed"), "")}`
       + r("GitHub CLI", "gh", !h.installed ? "Not installed: runs still commit, they just don't push. cli.github.com" : h.signedIn ? "Signed in: runs can push and open draft PRs." : "Signed out: sign in to push and open draft PRs.",
           !h.installed ? TP.pill("none", "Not installed") : h.signedIn ? TP.pill("ok", "Signed in") : TP.pill("needs", "Signed out"), h.installed && !h.signedIn ? `<button class="btn sm" data-term="gh">Sign in</button>` : "") + `</div>`)

@@ -25,7 +25,7 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 | Local API (127.0.0.1, token, no browsers, 30 a minute) | Token in Keychain | Token in Credential Manager | Token in a 0600 file (Secret Service needs a desktop keyring that servers and CI don't have) | `gateway.rs`, `secrets.rs` |
 | Hooks | Executable, owned by you, not group/world-writable | `.exe`, `.cmd`, `.bat`, `.ps1`, `.py` in the hooks folder | As Mac | `hooks.rs` |
 | Usage per bot and day, `/doctor`, `/new` | Yes | Yes | Yes | |
-| Coding runs: own branch and worktree, commit, push, draft PR | Yes | Yes | Yes | Needs `git`, and `gh` signed in for the PR |
+| Coding runs: own branch and worktree, commit, push, draft PR | Yes | Yes | Yes | On any coding agent: Claude Code, Codex, Cursor Agent, OpenCode, Grok or Gemini CLI (`coding.rs`). Needs `git`, and `gh` signed in for the PR |
 | Data folder | `~/Library/Application Support/Theo-Desktop` | `%APPDATA%\Theo-Desktop` | `~/.local/share/theo-desktop` | never the Swift app's `Theo` folder |
 
 ### Brains
@@ -49,6 +49,25 @@ How each brain runs a bot's turn, and what it may do (nobody is there to approve
   hub apps its level allows; at most 8 rounds of tool calls a turn. Theo keeps its chat history in `APISessions/`.
 
 A signed-out agent or a used-up plan is said plainly in the chat, once, with where to sign in.
+
+### Coding runs
+
+Coding runs use any coding agent, none required (`coding.rs`, the Mac's `HarnessCoding.headlessArguments`). Which one: the
+owner's pick in Settings › Coding runs (`coding.target`) when it's installed here, else the first one ready in the Mac's order
+(Claude Code, Codex, Cursor Agent, OpenCode, Grok, Gemini CLI), else the first one installed. "Ready" is signed in, or signed
+out with a saved API key the agent reads (Claude Code `ANTHROPIC_API_KEY`, Codex `OPENAI_API_KEY`/`CODEX_API_KEY`, Grok
+`XAI_API_KEY`, Gemini CLI `GEMINI_API_KEY`, OpenCode only the key of its model's provider), which is then handed to it for
+the run and the chat says so ("Codex is signed out here, so … uses your saved OpenAI key"), as do Setup and Settings; a
+signed-in agent never gets a key, so its work stays on the subscription. With no agent at all the run fails with what to install.
+The coding model and effort (`coding.model`, `coding.effort`) are for the picked agent (Claude Code when none is picked);
+any other agent runs on its own default. Each runs headless with write access in the run's folder:
+
+- Claude Code: `claude -p --permission-mode bypassPermissions`, the prompt on standard input, then `--resume`.
+- Codex: `codex exec --json -C <folder> -s workspace-write`, the prompt on standard input, then `codex exec resume`.
+- Cursor Agent: `cursor-agent -p --force --trust --workspace <folder>`, then `--resume`.
+- OpenCode: `opencode run --format json --dir <folder>`, then `-s <session>`.
+- Grok: `grok -p --permission-mode auto` in the folder, then `--resume`.
+- Gemini CLI: `gemini -p "" --approval-mode auto_edit` in the folder, trusted for the run. A follow-up starts afresh there.
 
 ### Connectors
 
@@ -80,8 +99,8 @@ the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
 - Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
 - `[PDF:]` documents, `[CHOOSE:]` cards, `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
-- Harness cards for T3 Code; coding runs on Codex, Cursor, Grok and Gemini (bots think with them, coding runs use Claude
-  Code); continuing a harness's own chat.
+- Harness cards for T3 Code; continuing a harness's own chat; coding runs in a terminal you can watch (they run headless
+  here and report back in the chat).
 - Theo's own MCP server (`claudia_*` tools) isn't ported.
 
 ## Clicky (voice and screen helper): Mac only for now

@@ -96,6 +96,78 @@ pub fn command_line_brain(id: &str) -> Option<&'static CommandLineBrain> {
     COMMAND_LINE_BRAINS.iter().find(|brain| brain.id == id)
 }
 
+/// The environment variables each agent reads a saved API key from, as (provider id, variable): the Mac's
+/// `HarnessCatalog.setups` key variables and `openCodeKeys`. Cursor's key is its own (not a model API key), so it has none here.
+pub fn agent_key_variables(agent_id: &str) -> &'static [(&'static str, &'static str)] {
+    match agent_id {
+        "claude" => &[("anthropic", "ANTHROPIC_API_KEY")],
+        "codex" => &[("openai", "OPENAI_API_KEY"), ("openai", "CODEX_API_KEY")],
+        "grok" => &[("xai", "XAI_API_KEY")],
+        "gemini" => &[("gemini", "GEMINI_API_KEY")],
+        "opencode" => &[
+            ("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY"), ("gemini", "GOOGLE_GENERATIVE_AI_API_KEY"), ("xai", "XAI_API_KEY"),
+            ("groq", "GROQ_API_KEY"), ("openrouter", "OPENROUTER_API_KEY"), ("mistral", "MISTRAL_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY"),
+            ("together", "TOGETHER_AI_API_KEY"), ("fireworks", "FIREWORKS_API_KEY"), ("cerebras", "CEREBRAS_API_KEY"),
+        ],
+        _ => &[],
+    }
+}
+
+/// The owner's saved keys an agent can use, as environment variables. Only for an agent that isn't signed in: a key handed
+/// to a signed-in agent would move its work from the owner's subscription to paid API use.
+pub fn agent_key_environment(harness: &Harness, agent_id: &str) -> Vec<(String, String)> {
+    agent_key_environment_for_model(harness, agent_id, None)
+}
+
+/// The provider an OpenCode model id names (`anthropic/claude-…`), in Theo's provider ids. `opencode/…` is OpenCode's own
+/// (its free models need no key).
+fn opencode_model_provider(model: &str) -> Option<&'static str> {
+    let prefix = model.split_once('/')?.0;
+    Some(match prefix {
+        "anthropic" => "anthropic",
+        "openai" => "openai",
+        "google" | "gemini" => "gemini",
+        "xai" => "xai",
+        "groq" => "groq",
+        "openrouter" => "openrouter",
+        "mistral" => "mistral",
+        "deepseek" => "deepseek",
+        "togetherai" | "together" => "together",
+        "fireworks" | "fireworks-ai" => "fireworks",
+        "cerebras" => "cerebras",
+        _ => return None,
+    })
+}
+
+/// The same, for a run on `model`: OpenCode only gets the key of the provider that model is on (none for its own models),
+/// so a run never carries more keys than it needs. With no model named, every key it reads.
+pub fn agent_key_environment_for_model(harness: &Harness, agent_id: &str, model: Option<&str>) -> Vec<(String, String)> {
+    let only_provider: Option<Option<&str>> = match (agent_id, model) {
+        ("opencode", Some(model)) => Some(opencode_model_provider(model)),
+        _ => None,
+    };
+    agent_key_variables(agent_id)
+        .iter()
+        .filter(|(provider, _)| only_provider.map(|only| only == Some(*provider)).unwrap_or(true))
+        .filter_map(|(provider, variable)| api_key(harness, provider).map(|key| (variable.to_string(), key)))
+        .collect()
+}
+
+/// The names of the providers whose saved keys `environment` carries ("OpenAI"), for saying which key a run is on. Never
+/// the key itself.
+pub fn key_provider_labels(agent_id: &str, environment: &[(String, String)]) -> Vec<String> {
+    let mut labels: Vec<String> = vec![];
+    for (provider, variable) in agent_key_variables(agent_id) {
+        if environment.iter().any(|(name, _)| name == variable) {
+            let label = KNOWN_PROVIDERS.iter().find(|known| known.id == *provider).map(|known| known.label).unwrap_or(provider).to_string();
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    labels
+}
+
 /// How a model API takes requests: Anthropic's Messages API, or the OpenAI-style chat endpoint everyone else offers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WireStyle {
@@ -299,7 +371,8 @@ pub async fn inventory(harness: &Harness) -> Value {
         })
         .collect();
     let any_ready = agents.iter().chain(keys.iter()).any(|brain| brain["ready"].as_bool() == Some(true));
-    json!({"agents": agents, "apis": keys, "anyReady": any_ready, "standIn": harness.settings.string(STAND_IN_SETTING)})
+    let coding = crate::coding::describe(harness, &agents);
+    json!({"agents": agents, "apis": keys, "anyReady": any_ready, "standIn": harness.settings.string(STAND_IN_SETTING), "coding": coding})
 }
 
 async fn agent_state(harness: &Harness, brain: &CommandLineBrain) -> Value {
@@ -310,8 +383,11 @@ async fn agent_state(harness: &Harness, brain: &CommandLineBrain) -> Value {
     };
     let install = if cfg!(windows) { brain.install_on_windows } else { brain.install_elsewhere };
     let ready = found.is_some() && signed_in != Some(false);
+    // Signed out but with a saved key it reads: it can still do coding runs, on that key.
+    let runs_on_key = found.is_some() && !ready && !agent_key_environment(harness, brain.id).is_empty();
     json!({
         "id": brain.id, "label": brain.label, "kind": "agent", "installed": found.is_some(), "signedIn": signed_in, "ready": ready,
+        "codingReady": ready || runs_on_key, "runsOnKey": runs_on_key,
         "install": install, "signIn": sign_in_line(brain), "signInHint": brain.sign_in_hint, "defaultModel": brain.default_model,
     })
 }
@@ -423,7 +499,12 @@ pub fn usage_limit_message(engine: &str, output: &str) -> Option<String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
     static CODEX_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(hit|reached) your usage limit|usage limit (reached|exceeded)|quota exceeded").unwrap());
-    static CURSOR_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)out of usage|increase your limit").unwrap());
+    static CURSOR_LIMIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)out of usage|increase your limit|usage limit reached").unwrap());
+    static GROK_BALANCE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)usage balance exhausted|402 payment required").unwrap());
+    // Grok bills a prepaid balance: there's no reset to wait for, only a top-up.
+    if engine == "grok" && GROK_BALANCE.is_match(output) {
+        return Some("Grok's usage balance is used up. Top it up in your xAI account, then try again.".to_string());
+    }
     static RESET_PHRASE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)(try again|resets?|available again)[^.\n"]*"#).unwrap());
     let (limit_pattern, plan_name) = match engine {
         "codex" => (&*CODEX_LIMIT, "Codex's ChatGPT"),
@@ -486,6 +567,14 @@ mod tests {
     }
 
     #[test]
+    fn a_run_on_a_key_names_the_provider_never_the_key() {
+        let environment = vec![("OPENAI_API_KEY".to_string(), "sk-secret".to_string()), ("CODEX_API_KEY".to_string(), "sk-secret".to_string())];
+        assert_eq!(key_provider_labels("codex", &environment), vec!["OpenAI".to_string()]);
+        assert_eq!(opencode_model_provider("anthropic/claude-haiku-5-5"), Some("anthropic"));
+        assert_eq!(opencode_model_provider("opencode/deepseek-v4.1-flash-free"), None);
+    }
+
+    #[test]
     fn a_new_bot_on_a_key_starts_on_a_chat_model() {
         let listed = vec!["text-embedding-3".to_string(), "whisper-1".to_string(), "gpt-6-mini".to_string()];
         assert_eq!(preferred_model("openai", &listed).as_deref(), Some("gpt-6-mini"));
@@ -502,6 +591,11 @@ mod tests {
         );
         assert_eq!(usage_limit_message("cursor", "You're out of usage"), Some("Cursor's usage limit is reached; it resets later.".to_string()));
         assert_eq!(usage_limit_message("claude", "usage limit reached"), None);
+        assert_eq!(
+            usage_limit_message("cursor", "ActionRequiredError: Weekly usage limit reached. It resets in 4 days. Buy credits to keep going now."),
+            Some("Cursor's usage limit is reached; resets in 4 days.".to_string())
+        );
+        assert!(usage_limit_message("grok", "API error (status 402 Payment Required): Grok Build usage balance exhausted").unwrap().contains("balance is used up"));
         assert!(sign_in_problem("gemini", "Please set an Auth method in your settings.json").unwrap().contains("Gemini"));
         assert!(sign_in_problem("grok", "Run `grok login` first").is_some());
         assert_eq!(sign_in_problem("codex", "all good"), None);
