@@ -137,6 +137,8 @@ struct BotsRootView: View {
 
     @State private var editingGroup: BotGroup?
     @State private var addingBot = false
+    /// Set when the New bot sheet was opened from a category's right-click menu: the bot it makes joins that category.
+    @State private var addingBotToSectionID: String?
     @State private var detailsBot: NativeBot?
     @State private var namingSectionFor: String?
     @State private var sectionName = ""
@@ -191,6 +193,7 @@ struct BotsRootView: View {
                                 // Clicky's own team leaves with Clicky (Settings › Products).
                                 ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
                                 unfiledBots
+                                newBotButton
                                 newCategoryButton
                             }
                         }
@@ -221,10 +224,14 @@ struct BotsRootView: View {
                 editingGroup = nil
             }
         }
-        .sheet(isPresented: $addingBot) {
-            NewBotSheet(store: store) { bot in
-                if let bot { selection.pane = .bot(bot.id) }
+        .sheet(isPresented: $addingBot, onDismiss: { addingBotToSectionID = nil }) {
+            NewBotSheet(store: store, joiningTeamName: addingBotToSectionID.flatMap { id in store.layout.sections.first { $0.id == id }?.name }) { bot in
+                if let bot {
+                    if let addingBotToSectionID { store.addMember(bot.id, to: addingBotToSectionID) }
+                    selection.pane = .bot(bot.id)
+                }
                 addingBot = false
+                addingBotToSectionID = nil
             }
         }
         .sheet(item: $detailsBot) { bot in
@@ -317,6 +324,22 @@ struct BotsRootView: View {
             sectionTitle("Other bots", count: unfiled.count)
             ForEach(unfiled, id: \.id) { bot in itemRow("bot:\(bot.id)") }
         }
+    }
+
+    /// A labelled way to make a bot, under the teams. The small icon beside the CEO row and ⌘N do the same, but they're
+    /// easy to miss, so the sidebar says it in words too.
+    private var newBotButton: some View {
+        Button { addingBotToSectionID = nil; addingBot = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                Text("New bot").font(.system(size: 11.5))
+            }
+            .foregroundColor(DS.Colors.textTertiary)
+            .padding(.horizontal, 20).frame(height: 30)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).pointerCursor().padding(.top, 6)
     }
 
     /// Makes a category and opens its page, where it's named, filled and given a manager.
@@ -675,6 +698,7 @@ struct BotsRootView: View {
             .buttonStyle(.plain)
             .contextMenu {
                 Button("Open team page") { selection.pane = .category(section.id) }
+                Button("New bot in \(section.name)…") { addingBotToSectionID = section.id; addingBot = true }
                 Button(collapsed ? "Show the team" : "Fold the team") { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } }
                 Menu("Manager") {
                     Button("No manager (everyone reports to \(store.primary?.name ?? "the CEO"))") { store.setLeader(nil, of: section.id) }
