@@ -221,7 +221,7 @@ pub async fn ask_brain(h: &Harness, pick: &BrainPick, transcript: &str, screens:
         if !told.contains(&pick.remembered_as()) {
             told.push(pick.remembered_as());
             h.settings.set(TOLD_CANT_SEE_SETTING, json!(told));
-            answer.note = Some(format!("heads up: {} can't see your screen, so i'm going from your words. pick a brain that takes pictures in settings, clicky, to let me look.", crate::brains::label(&pick.engine).to_lowercase()));
+            answer.note = Some(format!("heads up: {} can't see your screen, so i'm going from your words. pick a brain that takes pictures in settings, clicky, to let me look.", crate::brains::label(&pick.engine).replace(" (API key)", "").to_lowercase()));
         }
     }
     Ok(answer)
@@ -371,9 +371,12 @@ impl Drop for TurnFolder {
     }
 }
 
+/// Claude Code's settings for a Clicky turn: no hooks (written to a file, which the stand-in in the tests reads too).
+pub const CLAUDE_SETTINGS: &str = r#"{"disableAllHooks":true}"#;
+
 /// Claude Code's command line for Clicky (the Mac's ClickyCore `ClaudeArgs`): no tools, no MCP, no skills, no hooks, no
 /// saved session, the system prompt from a file.
-pub fn claude_arguments(model: &str, system_prompt_file: &std::path::Path) -> Vec<String> {
+pub fn claude_arguments(model: &str, system_prompt_file: &std::path::Path, settings_file: &std::path::Path) -> Vec<String> {
     let mut arguments: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"].iter().map(|a| a.to_string()).collect();
     if !model.is_empty() {
         arguments.extend(["--model".into(), model.to_string()]);
@@ -389,7 +392,7 @@ pub fn claude_arguments(model: &str, system_prompt_file: &std::path::Path) -> Ve
         "--setting-sources".into(),
         "user".into(),
         "--settings".into(),
-        r#"{"disableAllHooks":true}"#.into(),
+        settings_file.to_string_lossy().to_string(),
     ]);
     arguments
 }
@@ -413,7 +416,9 @@ async fn ask_agent(h: &Harness, pick: &BrainPick, system: &str, conversation: &s
             crate::paths::make_private(&prompt_file);
             env.push(("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into()));
             stdin = Some(claude_user_message(conversation, screens));
-            (claude_arguments(&model, &prompt_file), Format::Claude)
+            let settings_file = folder.0.join("settings.json");
+            std::fs::write(&settings_file, CLAUDE_SETTINGS).map_err(|e| format!("Couldn't write Clicky's settings for Claude Code: {e}"))?;
+            (claude_arguments(&model, &prompt_file, &settings_file), Format::Claude)
         }
         "codex" => {
             let reply = folder.0.join("codex-reply.txt");
@@ -765,7 +770,7 @@ mod tests {
 
     #[test]
     fn claude_runs_isolated_like_the_mac() {
-        let arguments = claude_arguments("claude-sonnet-5-5", std::path::Path::new("p.md"));
+        let arguments = claude_arguments("claude-sonnet-5-5", std::path::Path::new("p.md"), std::path::Path::new("s.json"));
         for expected in ["--input-format", "stream-json", "--include-partial-messages", "--strict-mcp-config", "--no-session-persistence", "--system-prompt-file"] {
             assert!(arguments.iter().any(|a| a == expected), "{expected}");
         }

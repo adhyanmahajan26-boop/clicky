@@ -425,6 +425,7 @@ impl ClickyApp {
             }
             inner.last_transcript = transcript.clone();
             inner.last_error = None;
+            inner.last_plan = Value::Null;
             inner.hold_until = None;
         }
         self.broadcast(json!({"kind": "clear"}));

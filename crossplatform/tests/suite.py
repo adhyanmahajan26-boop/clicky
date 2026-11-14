@@ -2005,6 +2005,217 @@ import suite_dictation
 suite_dictation.register(test)
 
 
+# ---------------- Clicky (the voice and screen companion) ----------------
+
+def png(path, width, height, rgb=(240, 240, 240)):
+    """A plain PNG of one colour, written without any imaging library (a stand-in for a monitor's picture)."""
+    import struct, zlib
+    row = b"\x00" + bytes(rgb) * width
+    raw = row * height
+    chunk = lambda kind, data: struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+    return str(path)
+
+
+# Two monitors: a wide one at 150 % with the cursor, and a smaller one to its right.
+CLICKY_MONITORS = [{"x": 0, "y": 0, "width": 3000, "height": 1000, "scale": 1.5, "primary": True, "name": "Display 1"},
+                   {"x": 3000, "y": 0, "width": 1600, "height": 900, "scale": 1.0, "primary": False, "name": "Display 2"}]
+
+
+def clicky_pictures():
+    folder = T.ROOT / "clicky"
+    folder.mkdir(exist_ok=True)
+    return [png(folder / "one.png", 3000, 1000), png(folder / "two.png", 1600, 900, (30, 30, 30))]
+
+
+def clicky_on(engine, model):
+    T.setd("products.clicky", True)
+    T.setd("clicky.brain", engine)
+    T.setd("clicky.model", model)
+
+
+CLICKY_REPLY = "click save up top. [MARK:1:100,50:save] [MARK:box:10,10,200,100:toolbar|start here] [POINT:784,441:open:screen2]"
+
+
+def clicky_mapping_checks(result, prefix):
+    point, marks = result.get("point") or {}, result.get("marks") or []
+    return {
+        prefix + "speech_has_no_tags": result.get("speech") == "click save up top.",
+        # 784,441 of screen 2's 1568x882 picture is the middle of the 1600x900 monitor at x 3000.
+        prefix + "point_on_screen_2": point.get("screen") == 2 and point.get("x") == 3800 and point.get("y") == 450,
+        prefix + "two_marks_on_screen_1": len(marks) == 2 and all(m.get("screen") == 1 for m in marks),
+        # 100,50 of screen 1's 1568x523 picture is 191,96 on the 3000x1000 monitor.
+        prefix + "step_mapped": bool(marks) and marks[0].get("style") == "1" and marks[0].get("x") == 191 and marks[0].get("y") == 96,
+        prefix + "box_note": len(marks) > 1 and marks[1].get("text") == "start here" and (marks[1].get("box") or {}).get("width") == 383,
+    }
+
+
+@test("K01", "Clicky on an API key (Anthropic and OpenAI-style): every monitor's picture goes with the Mac's prompt, and the answer's POINT and MARK land on the right monitor", "clicky")
+def k01():
+    api = FakeAPI([])
+    checks, evidence = {}, {}
+    try:
+        pictures = clicky_pictures()
+        for provider in ("anthropic", "openai"):
+            P({"cmd": "apiKeySet", "provider": provider, "key": API_KEY_FOR_TESTS}, timeout=60)
+            clicky_on("api:" + provider, "fake-chat-1")
+            before = len(api.requests(provider))
+            r = P({"cmd": "clickyTest", "text": "where do i save this? REPLY>>%s<<" % CLICKY_REPLY, "images": pictures, "monitors": CLICKY_MONITORS, "fresh": True}, timeout=90)
+            result = r.get("result") or {}
+            sent = api.requests(provider)[before:]
+            body = sent[0]["body"] if sent else {}
+            content = body.get("messages", [{}])[-1].get("content", []) if body else []
+            texts = [block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"]
+            system = body.get("system") if provider == "anthropic" else (body.get("messages", [{}])[0].get("content", "") if body else "")
+            if provider == "anthropic":
+                pictures_sent = [block for block in content if isinstance(block, dict) and block.get("type") == "image" and block.get("source", {}).get("media_type") == "image/jpeg"]
+            else:
+                pictures_sent = [block for block in content if isinstance(block, dict) and block.get("type") == "image_url" and block["image_url"]["url"].startswith("data:image/jpeg;base64,")]
+            checks.update({
+                provider + "_answered": r.get("ok") is True and result.get("sawScreen") is True,
+                provider + "_one_request": len(sent) == 1 and sent[0]["key_right"],
+                provider + "_two_pictures": len(pictures_sent) == 2,
+                provider + "_headers_like_the_mac": any(t.startswith('SCREEN 1 "Display 1" (main, cursor here) image 1568x523 px') for t in texts) and any(t.startswith('SCREEN 2 "Display 2" (right of main) image 1568x882 px') for t in texts),
+                provider + "_said_first": bool(texts) and texts[0].startswith('USER SAID: "where do i save this?'),
+                provider + "_mac_prompt": "[POINT:x,y:label]" in str(system) and "[MARK:kind:x,y:label]" in str(system) and "push-to-talk" in str(system),
+            })
+            checks.update(clicky_mapping_checks(result, provider + "_"))
+            evidence[provider] = {"result": {k: result.get(k) for k in ("speech", "point", "marks", "brain", "sawScreen")}, "texts": texts[:3]}
+        # A second question carries the first exchange in words (no pictures from before).
+        r = P({"cmd": "clickyTest", "text": "and then? REPLY>>then press enter.<<", "images": pictures[:1]}, timeout=90)
+        later = api.requests("openai")[-1]["body"]["messages"][-1]["content"][0]["text"]
+        checks["history_in_words"] = later.startswith("earlier in this conversation (text only):") and 'YOU SAID: click save up top.' in later
+        checks["key_never_written_elsewhere"] = API_KEY_FOR_TESTS not in everything_theo_wrote()
+    finally:
+        api.stop()
+        T.setd("products.clicky", None); T.setd("clicky.brain", None); T.setd("clicky.model", None)
+    return all(checks.values()), dict(checks, **evidence)
+
+
+@test("K02", "Clicky on a model that takes no pictures: asked again with words only, remembered, and it says once that it can't see the screen", "clicky")
+def k02():
+    api = FakeAPI([])
+    checks = {}
+    try:
+        P({"cmd": "apiKeySet", "provider": "openai", "key": API_KEY_FOR_TESTS}, timeout=60)
+        clicky_on("api:openai", "fake-blind")
+        pictures = clicky_pictures()
+        before = len(api.requests("openai"))
+        first = P({"cmd": "clickyTest", "text": "what's this? REPLY>>a settings page.<<", "images": pictures, "fresh": True}, timeout=90).get("result") or {}
+        sent = api.requests("openai")[before:]
+        second = P({"cmd": "clickyTest", "text": "and this? REPLY>>a menu.<<", "images": pictures, "fresh": True}, timeout=90).get("result") or {}
+        after = api.requests("openai")[before + len(sent):]
+        state = P({"cmd": "clickyState"}, timeout=60).get("result") or {}
+        checks = {
+            "refused_then_words": len(sent) == 2 and "image_url" in json.dumps(sent[0]["body"]) and "image_url" not in json.dumps(sent[1]["body"]),
+            "words_prompt_says_it_cant_see": "can't see their screen" in json.dumps(sent[1]["body"]) if len(sent) > 1 else False,
+            "said_once": "can't see your screen" in (first.get("speech") or "") and "a settings page." in (first.get("speech") or "") and first.get("sawScreen") is False,
+            "not_again": second.get("speech") == "a menu." and second.get("note") is None,
+            "remembered_no_pictures_asked": len(after) == 1 and "image_url" not in json.dumps(after[0]["body"]),
+            "state_says_so": (state.get("using") or {}).get("seesScreen") is False,
+        }
+        evidence = {"first": first.get("speech"), "second": second.get("speech")}
+    finally:
+        api.stop()
+        T.setd("products.clicky", None); T.setd("clicky.brain", None); T.setd("clicky.model", None)
+    return all(checks.values()), dict(checks, **evidence)
+
+
+@test("K03", "Clicky on Claude Code: one stream-json message with the pictures, no tools, no MCP, no saved session; a signed-out Claude Code is said plainly", "clicky")
+def k03():
+    clicky_on("claude", "claude-sonnet-5-5")
+    checks, evidence = {}, {}
+    try:
+        T.fake_reply(CLICKY_REPLY)
+        T.fake("reply")
+        mark = T.calls_mark()
+        r = P({"cmd": "clickyTest", "text": "where do i save this?", "images": clicky_pictures(), "monitors": CLICKY_MONITORS, "fresh": True}, timeout=90)
+        result = r.get("result") or {}
+        call = (T.calls(mark) or [{}])[-1]
+        args = call.get("args", [])
+        try:
+            message = json.loads(call.get("prompt", "").strip().splitlines()[0])
+        except (ValueError, IndexError):
+            message = {}
+        content = message.get("message", {}).get("content", [])
+        checks.update({
+            "answered": r.get("ok") is True and result.get("sawScreen") is True and result.get("engine") == "claude",
+            "stream_json_in": flag_list(args, "--input-format")[:1] == ["stream-json"] and "--include-partial-messages" in args,
+            "isolated": "--strict-mcp-config" in args and "--no-session-persistence" in args and "--disable-slash-commands" in args and "--bare" not in args,
+            "no_tools": "--tools" in args and args[args.index("--tools") + 1] == "",
+            "system_prompt_file": "--system-prompt-file" in args,
+            "model": call.get("model") == "claude-sonnet-5-5",
+            "two_pictures_in_message": message.get("type") == "user" and sum(1 for b in content if b.get("type") == "image") == 2,
+        })
+        checks.update(clicky_mapping_checks(result, ""))
+        T.fake("signedout-cli")
+        r = P({"cmd": "clickyTest", "text": "hello", "images": clicky_pictures()[:1], "fresh": True}, timeout=90)
+        checks["signed_out_said"] = r.get("ok") is False and "isn't signed in" in r.get("error", "") and "Settings › Brains" in r.get("error", "")
+        evidence = {"args": args, "result": {k: result.get(k) for k in ("speech", "point", "marks")}, "signed_out": r.get("error")}
+    finally:
+        T.fake("ok")
+        T.setd("products.clicky", None); T.setd("clicky.brain", None); T.setd("clicky.model", None)
+    return all(checks.values()), dict(checks, **evidence)
+
+
+@test("K04", "Clicky on an agent that takes no pictures (Gemini CLI) answers from the words and says once that it can't see; Codex gets the pictures as files", "clicky")
+def k04():
+    checks, evidence = {}, {}
+    try:
+        T.fake_reply("it's in the file menu. [POINT:none]")
+        T.fake("reply")
+        clicky_on("gemini", "")
+        mark = T.calls_mark()
+        first = P({"cmd": "clickyTest", "text": "where's save?", "images": clicky_pictures(), "fresh": True}, timeout=90)
+        call = (T.calls(mark) or [{}])[-1]
+        result = first.get("result") or {}
+        checks.update({
+            "gemini_answered": first.get("ok") is True and result.get("sawScreen") is False and "it's in the file menu." in (result.get("speech") or ""),
+            "gemini_told_once": "can't see your screen" in (result.get("speech") or ""),
+            "gemini_prompt_words_only": "can't see their screen" in call.get("prompt", "") and "[POINT:x,y:label]" not in call.get("prompt", ""),
+        })
+        clicky_on("codex", "")
+        mark = T.calls_mark()
+        second = P({"cmd": "clickyTest", "text": "where's save?", "images": clicky_pictures(), "fresh": True}, timeout=90)
+        call = (T.calls(mark) or [{}])[-1]
+        args = call.get("args", [])
+        images = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "-i"]
+        checks.update({
+            "codex_answered": second.get("ok") is True and (second.get("result") or {}).get("sawScreen") is True,
+            "codex_two_picture_files": len(images) == 2 and all(i.endswith(".jpg") for i in images),
+            "codex_prompt_on_stdin": args[-2:] == ["--", "-"] and "[POINT:x,y:label]" in call.get("prompt", ""),
+            "codex_read_only": "read-only" in args,
+            "turn_folder_removed": not any(pathlib.Path(i).exists() for i in images),
+        })
+        evidence = {"gemini": result.get("speech"), "codex_args": args}
+    finally:
+        T.fake("ok")
+        T.setd("products.clicky", None); T.setd("clicky.brain", None); T.setd("clicky.model", None)
+    return all(checks.values()), dict(checks, **evidence)
+
+
+@test("K05", "Clicky's senses on this computer: every monitor captured (Windows), the computer's voices listed and speech written to a file (Windows)", "clicky")
+def k05():
+    state = P({"cmd": "clickyState"}, timeout=60).get("result") or {}
+    capture = P({"cmd": "clickyCapture", "save": str(T.ROOT / "clicky-capture")}, timeout=60)
+    voices = P({"cmd": "clickyVoices"}, timeout=60)
+    if not T.WIN:
+        checks = {"says_windows_only": capture.get("ok") is False and "Windows" in capture.get("error", ""), "state_says_so": state.get("canSeeScreen") is False}
+        return all(checks.values()), dict(checks, capture=capture)
+    screens = (capture.get("result") or {}).get("screens", [])
+    wav = T.ROOT / "clicky-voice.wav"
+    spoke = P({"cmd": "clickySpeak", "text": "hello from clicky", "toFile": str(wav)}, timeout=90)
+    saved = sorted((T.ROOT / "clicky-capture").glob("*.jpg")) if (T.ROOT / "clicky-capture").exists() else []
+    checks = {
+        "captured": capture.get("ok") is True and len(screens) >= 1 and screens[0]["number"] == 1 and screens[0]["jpegBytes"] > 1000,
+        "scaled": all(max(s["imageWidth"], s["imageHeight"]) <= 1568 for s in screens),
+        "saved_jpegs": len(saved) == len(screens) and all(p.read_bytes()[:2] == b"\xff\xd8" for p in saved),
+        "voices_listed": voices.get("ok") is True and len((voices.get("result") or {}).get("voices", [])) >= 1,
+        "spoke_to_file": spoke.get("ok") is True and wav.exists() and wav.stat().st_size > 1000,
+    }
+    return all(checks.values()), dict(checks, screens=screens, voices=voices, spoke=spoke)
+
+
 NOT_PORTED = {
     "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. PDF making isn't in this build yet.",
     "T30, T31, F14, C08-C13": "Two linked Macs (Theo Link) aren't part of the cross-platform engine yet.",
