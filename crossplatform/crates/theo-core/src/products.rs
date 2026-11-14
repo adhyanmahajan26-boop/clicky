@@ -34,7 +34,7 @@ pub const PRODUCTS: [Product; 3] = [
         id: "clicky",
         title: "Clicky",
         tagline: "A companion on your screen that sees what you see, points at things and answers out loud.",
-        points: ["Say \u{201C}hey Theo\u{201D} or hold a shortcut", "Flies to the button you need and circles it", "Hands jobs to its own small team"],
+        points: ["Hold a shortcut (Ctrl + Alt on Windows) and ask", "Flies to the button you need and circles it", "Answers out loud in the computer's own voice"],
         requirement: Some("Uses any brain you set up: an API key or a signed-in agent"),
         on_by_default: false,
     },
