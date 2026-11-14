@@ -15,12 +15,15 @@ anyhow.workspace = true
 once_cell.workspace = true
 rand = "0.8"
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# Clicky: screenshots scaled and encoded for the brain, and pictures in requests.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_System_Environment"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_System_Environment", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }

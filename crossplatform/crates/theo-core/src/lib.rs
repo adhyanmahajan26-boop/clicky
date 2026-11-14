@@ -29,5 +29,6 @@ pub mod hub;
 pub mod brains;
 pub mod apichat;
 pub mod setup;
+pub mod clicky;
 
 pub use harness::Harness;

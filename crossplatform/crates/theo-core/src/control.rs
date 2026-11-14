@@ -408,6 +408,8 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
+        // Clicky, the voice and screen companion (clicky/mod.rs).
+        n if n.starts_with("clicky") => crate::clicky::control(h, n, cmd).await,
         _ => err(&format!("Unknown command {name}")),
     }
 }
