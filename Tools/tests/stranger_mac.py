@@ -11,7 +11,7 @@ OpenAI-compatible server plays the one API key the stranger has. Then:
   4. The projects folder is set to a non-default place, and a coding run starts there with a stand-in harness.
   5. Two profiles that are both laptops are linked, and exactly one of them is the Mac that fires routines.
 
-  python3 Tools/tests/stranger_mac.py --app /path/to/Theo.app [--helper /path/to/theo-connectors] [--out folder]
+  python3 Tools/tests/stranger_mac.py --app /path/to/Theo.app [--helper /path/to/theo-connectors] [--out folder] [--only 5]
 
 Never run it against the owner's own profile: it deletes and recreates only the two test-stranger profiles. It moves no
 pointer, takes no focus and opens no browser (see docs/TESTING.md).
@@ -377,7 +377,9 @@ def main():
     parser.add_argument("--app", required=True, help="Theo.app (or its Contents/MacOS/Clicky)")
     parser.add_argument("--helper", default="", help="theo-connectors; default: the one inside the app")
     parser.add_argument("--out", default=str(REPO / "build/stranger-mac"))
+    parser.add_argument("--only", default="", help="Comma-separated step numbers to run, e.g. 5 or 1,3 (default: all five)")
     options = parser.parse_args()
+    wanted = {int(n) for n in options.only.split(",") if n.strip()} or {1, 2, 3, 4, 5}
     app = pathlib.Path(options.app)
     if app.suffix == ".app":
         executables = [p for p in (app / "Contents/MacOS").iterdir() if p.is_file() and os.access(p, os.X_OK)]
@@ -385,7 +387,8 @@ def main():
     else:
         binary = str(app)
     bundled = (app if app.suffix == ".app" else app.parent.parent.parent) / "Contents/Helpers/theo-connectors"
-    helper = options.helper or (str(bundled) if bundled.exists() else "")
+    # Absolute: the instance starts in the home folder, where a relative path finds nothing (and the hub looks missing).
+    helper = os.path.abspath(options.helper) if options.helper else (str(bundled) if bundled.exists() else "")
     out = pathlib.Path(options.out)
     out.mkdir(parents=True, exist_ok=True)
     record = out / "stand-in-requests"
@@ -400,13 +403,17 @@ def main():
         theo.write_default("test.connectors.helper", "-string", helper)
     results = {}
     try:
-        theo.start(binary)
+        # Steps 1–4 share one stranger instance; step 5 starts two of its own, so it can run alone.
+        if wanted & {1, 2, 3, 4}:
+            theo.start(binary)
         steps = [(1, "First run finishes with only an API key", lambda: step_first_run(theo, record)),
                  (2, "The owner's name is in prompts, and \"Addy\" is nowhere", lambda: step_owner_name(theo, record)),
                  (3, "The echo app, given to a bot on the API key, is used", lambda: step_echo_app(theo, record, helper)),
                  (4, "A coding run in a non-default projects folder with a stand-in harness", lambda: step_coding_run(theo))]
         theo_steps_done = False
         for number, title, run in steps + [(5, "Two laptops linked: exactly one fires routines", lambda: step_two_laptops(binary))]:
+            if number not in wanted:
+                continue
             if number == 5 and not theo_steps_done:
                 theo.stop()
                 theo_steps_done = True

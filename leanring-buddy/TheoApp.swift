@@ -105,8 +105,9 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         TheoFirstClick.install()
         Self.keepConsoleLog()
         CompanionManager.current = companionManager
-        // The harnesses' PATH comes from a login shell; read it once now, off the main thread.
-        Task.detached(priority: .utility) { _ = HarnessCatalog.loginShellPath }
+        // The harnesses' PATH comes from a login shell; read it once now, off the main thread. Not Task.detached: with the
+        // app's default MainActor isolation that closure ran on the main thread, inside a first use already waiting there.
+        DispatchQueue.global(qos: .utility).async { _ = HarnessCatalog.loginShellPath }
         Task { @MainActor in HarnessCenter.shared.refresh() }
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
