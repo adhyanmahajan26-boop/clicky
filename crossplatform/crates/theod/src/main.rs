@@ -29,6 +29,8 @@ async fn main() -> anyhow::Result<()> {
     let root = data.unwrap_or_else(theo_core::paths::default_root);
     std::fs::create_dir_all(&root)?;
     let harness = theo_core::Harness::new(root.clone(), test);
+    // Dictation's commands (dictationTest and friends), so the suite can drive its path with no microphone.
+    theo_voice::register_control_commands();
     std::fs::write(harness.paths.pid_file(), std::process::id().to_string())?;
     harness.start();
     eprintln!("[theod] running on {} with data in {}", std::env::consts::OS, root.display());

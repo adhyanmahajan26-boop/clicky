@@ -408,7 +408,11 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
-        _ => err(&format!("Unknown command {name}")),
+        // Commands of the crates built on theo-core (dictation, Clicky), when theod or the app registered them.
+        _ => match crate::control_ext::handle(h, cmd).await {
+            Some(answer) => answer,
+            None => err(&format!("Unknown command {name}")),
+        },
     }
 }
 
