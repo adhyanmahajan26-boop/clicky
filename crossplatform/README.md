@@ -1,13 +1,14 @@
 # Theo for Windows and Linux (and optionally Mac)
 
 The Mac app stays the Swift app. This folder is a separate project that brings **Theo, the bots harness**, to Windows and
-Linux: the harness engine rewritten in Rust, and a Tauri desktop window around it. Clicky and dictation stay Mac-only for
-now; [docs/PLATFORMS.md](docs/PLATFORMS.md) says what each would take elsewhere.
+Linux: the harness engine rewritten in Rust, and a Tauri desktop window around it. Dictation works on Windows too
+(`crates/theo-voice`); [docs/PLATFORMS.md](docs/PLATFORMS.md) says what runs where.
 
 ```
 crossplatform/
   crates/theo-core/   the engine: bots, chats, turns, limits, routines, recovery, local API, hooks, usage, doctor, coding runs
   crates/theod/       the engine as a background program, driven through a control inbox (for servers and tests)
+  crates/theo-voice/  voice on Windows: the chord hook, the microphone, speech to text, typing where the cursor is, dictation
   crates/theo-connectors/  the connector hub: Theo's own apps, sign-ins and safety rule, for every brain, Mac and Windows (docs/CONNECTORS.md)
   app/                the desktop app: Tauri 2, a plain HTML/JS window on the Theo Pixel kit (app/ui/kit), the same engine inside
   tests/              the Swift app's harness suites, ported to drive theod or the desktop app, plus installer tests

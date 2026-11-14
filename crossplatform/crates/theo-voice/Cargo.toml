@@ -1,0 +1,38 @@
+[package]
+name = "theo-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Theo's voice foundation for Windows: the chord hook, the microphone, speech to text, typing where the cursor is, and dictation's clean-up"
+
+[dependencies]
+theo-core = { path = "../theo-core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+uuid.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+base64 = "0.22"
+
+# The microphone (WASAPI), the keyboard hook, SendInput, the clipboard and UI Automation exist only on Windows. Everywhere
+# else the same API answers with a plain "not on this computer", so the workspace builds and the pure parts are tested.
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Accessibility",
+] }
+
+[dev-dependencies]
+tempfile = "3"

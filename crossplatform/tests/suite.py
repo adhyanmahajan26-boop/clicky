@@ -2346,6 +2346,10 @@ def r02():
 # Teams, and Theo asking whole group chats (A03, A03b, A09, G01-G04, TM01-TM04).
 import suite_teams  # noqa: E402
 suite_teams.add_cases(sys.modules[__name__])
+# Dictation (theo-voice): its cases live in their own file.
+import suite_dictation
+suite_dictation.register(test)
+
 
 NOT_PORTED = {
     "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. The PDF a [PDF:] tag makes is W02.",

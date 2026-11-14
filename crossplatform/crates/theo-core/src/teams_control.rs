@@ -22,6 +22,11 @@ fn is_ceo(h: &Harness, bot_id: &str) -> bool { h.bot(bot_id).map(|b| b.primary).
 
 const CEO_STAYS_ON_TOP: &str = "The CEO stays on top of the sidebar and isn't filed in a category.";
 
+/// The commands this file answers; control.rs asks before handing one over.
+pub fn handles(name: &str) -> bool {
+    matches!(name, "teams" | "teamAdd" | "teamUpdate" | "teamDelete" | "teamMember" | "teamMove" | "teamReport" | "teamReportSchedule" | "botGet" | "botMakePrimary")
+}
+
 pub async fn handle(h: &Arc<Harness>, name: &str, cmd: &Value) -> Value {
     match name {
         "teams" => ok(h.teams_report()),

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use theo_core::Harness;
 
+mod dictation_ui;
 mod updater;
 
 /// Started by the system at sign-in: Theo comes up in the tray without opening its window.
@@ -223,6 +224,9 @@ fn main() {
                     _ => {}
                 }
             }
+            // Dictation (theo-voice): its commands, its chord when products.dictation is on, and its pill.
+            let voice_runtime = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
+            dictation_ui::start(app.handle(), harness.clone(), voice_runtime);
             watch_faces(app.handle().clone(), harness.clone());
             updater::start(harness.clone());
             app.manage(harness);

@@ -24,6 +24,7 @@ pub mod harness;
 pub mod teams;
 pub mod teams_control;
 pub mod control;
+pub mod control_ext;
 pub mod coding;
 pub mod faces;
 pub mod connectors;
