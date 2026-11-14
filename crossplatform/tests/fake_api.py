@@ -48,6 +48,32 @@ def tool_results_in(style, body):
     return found
 
 
+def user_texts(body):
+    texts = []
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            texts.extend(str(block.get("text", "")) for block in content if isinstance(block, dict))
+    return texts
+
+
+def pictures_in(body):
+    return sum(1 for message in body.get("messages", []) if isinstance(message.get("content"), list)
+               for block in message["content"] if isinstance(block, dict) and block.get("type") in ("image", "image_url"))
+
+
+def scripted_reply(body):
+    # The last one: earlier exchanges come first in the text.
+    text = "\n".join(user_texts(body))
+    start = text.rfind("REPLY>>")
+    if start < 0:
+        return None
+    end = text.find("<<", start)
+    return text[start + len("REPLY>>"):end if end > 0 else len(text)]
+
+
 def offered_tools(style, body):
     if style == "anthropic":
         return [tool["name"] for tool in body.get("tools", [])]
@@ -97,8 +123,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(404, {"error": {"message": "not here"}})
         if not self.key_is_right(style):
             return self.send_json(401, {"error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+        # Clicky's tests: a model that takes no pictures turns a request with one down, and REPLY>>…<< in what the user said
+        # is the answer (so a test can script POINT and MARK tags).
+        if body.get("model") == "fake-blind" and pictures_in(body):
+            return self.send_json(400, {"error": {"type": "invalid_request_error", "message": "This model does not support image input."}})
+        scripted = scripted_reply(body)
         calls = [] if results else [call for call in WANTED_CALLS if call["tool"] in tools]
-        text = ("Done: " + " | ".join(results)) if results else ("" if calls else "fake api ok on %s" % body.get("model"))
+        text = scripted if scripted is not None else ("Done: " + " | ".join(results)) if results else ("" if calls else "fake api ok on %s" % body.get("model"))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
