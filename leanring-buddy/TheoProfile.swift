@@ -34,7 +34,7 @@ enum TheoProfile {
     static let isTest: Bool = name == "test" || name?.hasPrefix("test-") == true
 
     /// "Theo-Test", "Theo-Test-clicks", …
-    private static var folderName: String { "Vello-Test" + (name.map { $0.dropFirst("test".count) } ?? "") }
+    private static var folderName: String { "Theo-Test" + (name.map { $0.dropFirst("test".count) } ?? "") }
 
     /// Keychain service suffix, so a test key never overwrites a real one.
     static var keychainSuffix: String { isTest ? "." + (name ?? "test") : "" }
