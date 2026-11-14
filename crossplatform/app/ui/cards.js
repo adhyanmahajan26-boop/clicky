@@ -152,8 +152,15 @@ const CARDS = (() => {
   function providerOf(id) { return (state.bots.find((b) => b.id === id) || {}).provider || "claude"; }
   function agentInfo(provider) { return brainsCache && brainsCache.agents ? brainsCache.agents.find((a) => a.id === provider) : null; }
   function apiInfo(provider) { return brainsCache && brainsCache.apis ? brainsCache.apis.find((a) => a.engine === provider) : null; }
-  let brainsAsked = false;
-  function wantBrains() { if (!brainsCache && !brainsAsked) { brainsAsked = true; loadBrains().then(() => { sigs.chat = null; sigs.home = null; }); } }
+  // The list of brains is read once, then again for each new failure, since an agent may have been installed or
+  // signed in since (setup loads it before the owner installs anything).
+  const brainsAskedFor = new Set();
+  function wantBrains(failureAt) {
+    const key = failureAt || "first";
+    if (brainsAskedFor.has(key) || (brainsCache && !failureAt)) return;
+    brainsAskedFor.add(key);
+    loadBrains().then(() => { sigs.chat = null; sigs.home = null; });
+  }
   const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", cursor: "Cursor Agent", opencode: "OpenCode", grok: "Grok", gemini: "Gemini CLI" };
   function brainLabel(provider) {
     const agent = agentInfo(provider); if (agent) return agent.label;
@@ -168,7 +175,7 @@ const CARDS = (() => {
   }
   // The card for a bot whose brain is signed out, missing, or whose key didn't work. `botId`, the raw reason, and whether it's live.
   function signInCard(botId, reason, at) {
-    wantBrains();
+    wantBrains(at);
     const provider = providerOf(botId);
     const label = brainLabel(provider);
     const name = esc(nameOf(botId));
@@ -180,7 +187,9 @@ const CARDS = (() => {
         + `<div class="btns"><button class="btn pri" data-open-pane="settings">Open Settings</button><button class="btn" data-retry="${esc(botId)}">Try again</button></div><div class="tc-foot">Your message is kept; it's asked again when you try.</div></div>`;
     }
     const agent = agentInfo(provider);
-    const missing = /isn't installed|not installed/i.test(reason) || (agent && !agent.installed);
+    // The agent's own words win: if it answered "not logged in", it ran, so it's installed whatever the cached list says.
+    const agentRan = /\/login|not logged in|not signed in|signed out|unauthori[sz]ed|\b401\b|expired|not authenticated/i.test(reason);
+    const missing = /isn't installed|not installed/i.test(reason) || (agent && !agent.installed && !agentRan);
     if (missing) {
       const install = agent ? agent.install : "";
       return head("can't start") + `<div class="tc-q">Install ${esc(label)} on this computer</div><p>${name} runs on ${esc(label)}, which isn't installed here yet. Install it, sign in, and ${name} picks the job back up.</p>`

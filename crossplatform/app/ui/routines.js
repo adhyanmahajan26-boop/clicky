@@ -57,7 +57,8 @@ const ROUTINES = (() => {
     list = r.ok ? r.result || [] : [];
     const sig = JSON.stringify([list, [...expanded], state.bots.map((b) => b.name), state.groups.map((g) => g.name), Math.floor(Date.now() / 60000)]);
     clearTimeout(poll);
-    poll = setTimeout(() => { if (view.kind === "routines") render(); }, 3000);
+    // Not over the "turned off" page when Theo the product was switched off meanwhile (products.js).
+    poll = setTimeout(() => { if (view.kind === "routines" && !(window.productGate && window.productGate(view))) render(); }, 3000);
     if (sigs.routines === sig) return;
     sigs.routines = sig;
     const pane = $("#pane");
