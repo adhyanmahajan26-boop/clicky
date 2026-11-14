@@ -123,15 +123,27 @@ Verdict: a Windows Clicky is a real project (weeks, not days) and could match mo
 screens. Linux on X11 is similar. On Wayland the cursor companion can't exist and seeing or pressing things needs a
 permission prompt, so it would be a lesser, panel-only helper. None of it is half-built here.
 
-## Dictation (hold a key, talk, the words are typed where you are): Mac only for now
+## Dictation (hold a key, talk, the words are typed where you are): Mac and Windows
+
+Windows has it in this build (`crates/theo-voice`, wired into the app by `app/src-tauri/src/dictation_ui.rs`, Settings ›
+Dictation in `app/ui/dictation.js`). It's a product of its own (`products.dictation`, off until the owner turns it on in
+Setup's "Pick products" step, Settings › Products or Settings › Dictation).
 
 | Step | Mac | Windows | Linux (X11) | Linux (Wayland) |
 |---|---|---|---|---|
-| Hold Control + Fn | Fn is visible to macOS | Fn is handled by the keyboard's firmware and never reaches Windows: needs another chord (for example Ctrl + Win) | Same: another chord | Same, through the portal |
-| Record and transcribe | Apple Speech + Sarvam + Haiku clean-up | whisper.cpp or Sarvam, then the same Haiku clean-up through Claude Code: feasible | Same | Same |
-| Put the words in the app you're in | Accessibility insert, then paste | SendInput (Unicode) or UI Automation, then paste: feasible | XTest typing or paste: feasible | Needs `wtype` (wlroots compositors only) or the RemoteDesktop portal, or paste with the clipboard portal. Partial |
+| Hold a chord | Control + Fn (Fn is visible to macOS) | Ctrl + Win by default (Fn is handled by the keyboard's firmware and never reaches Windows); also Ctrl + Shift, Alt + Shift, Win + Alt, Ctrl + Shift + Space, Ctrl + Alt + Space. One `WH_KEYBOARD_LL` hook for the whole app (`theo_voice::hub`), shared with Clicky's Ctrl + Alt; chords are exact, so the two never overlap. Esc or any other key while holding cancels; letting go of Win after the chord doesn't open Start | Not yet: XInput2 is feasible | Not yet: the GlobalShortcuts portal, partial |
+| Record | AVAudioEngine | WASAPI through cpal, 16 kHz mono PCM16; never asks for a permission, and says where Windows' microphone privacy switch is when it's off | Not yet (cpal over PulseAudio/PipeWire is feasible) | Same |
+| Transcribe | Apple Speech always, Sarvam when its key is saved | Sarvam, OpenAI (gpt-4o-transcribe), Groq (Whisper), Deepgram (Nova-3) or AssemblyAI on a saved key; with no key, Windows' own `System.Speech` dictation through a hidden PowerShell (offline, in the languages the PC has speech for; plain words when it has none). "Automatic" tries the saved keys in that order, then Windows' own, so a failed call never loses the words | The services work; no offline recogniser | Same |
+| Clean-up | Haiku through one warm Claude Code, else the helper brain, else skipped with a note | The Mac's rules (`theo_voice::cleanup`: local pass, prompt, the guard against answers), through a cheap model of Theo's own brain, else any saved API key, else a signed-in agent (Claude Code on Haiku, Codex, Gemini CLI, OpenCode), else skipped with the Mac's note. Waits 4 s for an API and 20 s for an agent, then the words go in as heard | Same code | Same code |
+| Put the words in the app you're in | Accessibility insert, then paste | Paste (clipboard saved, words marked to stay out of clipboard history, Ctrl+V, the clipboard put back unless something else changed it), else typed with `SendInput` Unicode. Never into a password field (UI Automation's IsPassword, and the classic password edit style). The pill never takes focus | XTest typing or paste: feasible | Needs `wtype` or the RemoteDesktop portal. Partial |
+| The chat box's mic | Yes (mic, ⌥Space, ⌘⇧D; Esc cancels, Enter keeps) | Yes (mic button, Ctrl+Shift+D; Esc cancels, Enter keeps; never sends) | The same button, where a microphone works | Same |
 
-Verdict: Windows dictation is very doable (about a week's work), X11 too; Wayland depends on the desktop.
+What's checked where: the chord rules, WAV handling, requests and answers of every service, the Windows recognizer's
+script and its answers, and the clean-up rules are unit tests on Linux; every Windows-only file compiles in CI's Windows
+jobs and here with `cargo check --target x86_64-pc-windows-gnu`; suite cases D01 and D02 drive `dictationTest {wav}` (a
+WAV through transcribe and clean-up, no microphone) on Linux and Windows, D02 asking Windows' real recognizer on the
+Windows runners. The hook, the microphone, typing into other apps and the pill need a person at a real PC
+([WINDOWS-PC.md](WINDOWS-PC.md)).
 
 ## Not yet verified
 

@@ -43,7 +43,7 @@
       const usingLine = using ? `Thinking with ${escape(using.label)}${using.automatic ? " (automatic)" : ""}; ${sees}.` : "No brain yet: add an API key or sign in to an agent above.";
       const chordName = (CHORDS.find(([id]) => id === s.shortcut) || CHORDS[0])[1];
       const ptt = s.desktop && s.desktop.pushToTalk;
-      const hookLine = !s.on ? "" : ptt && ptt.listening ? ` Listening for ${escape(chordName)}.` : ptt && ptt.hook && ptt.hook.problem ? ` The keyboard hook isn't running: ${escape(ptt.hook.problem)}` : "";
+      const hookLine = !s.on ? "" : ptt && ptt.sameChordAsDictation ? ` Dictation uses ${escape(chordName)} too: pick other keys for one of them.` : ptt && ptt.listening ? ` Listening for ${escape(chordName)}.` : ptt && ptt.hook && ptt.hook.problem ? ` The keyboard hook isn't running: ${escape(ptt.hook.problem)}` : "";
       const brainSelect = `<select id="clicky-brain" aria-label="Clicky's brain">${await brainOptions(s.brain)}</select>`;
       const voiceOptions = (voices || []).map((v) => `<option value="${escape(v.name)}"${v.name === s.voice ? " selected" : ""}>${escape(v.name)}${v.language ? ` · ${escape(v.language)}` : ""}</option>`).join("");
       box.innerHTML = `<h2>Clicky</h2><div class="list">`

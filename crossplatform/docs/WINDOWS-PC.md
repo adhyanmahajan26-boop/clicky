@@ -47,6 +47,9 @@ against a real Claude account. Without it, the summary says they were skipped.
 
 ## Simulated, not real
 
+- Dictation's path from a WAV file to tidied text (`dictationTest`, suite cases D01 and D02) uses stand-in speech services
+  (`tests/fake_voice.py`); D02 asks Windows' real built-in recognizer on the Windows runners. No microphone, keyboard hook
+  or typing into another app is exercised in CI.
 - The engine suite (`tests/suite.py`, 80+ checks on Linux and Windows) uses a stand-in for Claude Code
   (`tests/fake_engine.py`) that records what Theo asked for. It proves Theo's side (arguments, limits, budgets, files),
   not Claude Code's answers.
@@ -72,7 +75,28 @@ About 30 minutes on a Windows 10 or 11 PC:
 6. **Other brains.** In setup, paste a real API key (OpenAI or Anthropic) and check the first bot answers with it. Install
    and sign in one of Codex, Cursor Agent, Gemini CLI or Grok from Settings › Brains, put a bot on it and give it an app.
 7. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
-8. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+8. **Dictation** (about 10 minutes, a headset or the laptop's own mic). Settings › Dictation › Use Dictation (or pick it in
+   Setup's products step). Then:
+   - With no key saved: open Notepad, hold **Ctrl + Win**, say "this is a dictation test", let go. The pill near the bottom
+     shows a moving level while you hold, "Transcribing", then "Typed" and the words, and the words land in Notepad. If
+     this PC has no Windows speech recognizer for its language, the pill (and Settings › Dictation's test) says so in plain
+     words and how to add one.
+   - Check letting go of Win doesn't open the Start menu, Ctrl + Win + D still makes a new desktop (and doesn't dictate),
+     and Esc while holding cancels.
+   - Save a key (Settings › Dictation: Sarvam, OpenAI, Groq, Deepgram or AssemblyAI). Dictate a longer sentence with an
+     "um" and a repeated word into Word or a browser text box; check it comes back tidied ("Tidies with …" in Settings
+     says which brain), in under about 4 seconds after letting go.
+   - Copy something first, dictate, then paste with Ctrl+V: your copied thing should come back, and Win+V's clipboard
+     history shouldn't list the dictated words.
+   - Dictate into a password box (a browser's sign-in page): nothing is typed, and the pill says it's a password field.
+   - Pick another microphone and another shortcut in Settings › Dictation and check they take effect at once.
+   - In a bot's chat, press the mic button in the message box (or Ctrl+Shift+D), talk, press it again: the words land in
+     the box and aren't sent. Esc cancels.
+   - Turn on Clicky too (if it's in this build): Ctrl + Alt is Clicky's and never starts dictation, Ctrl + Win never starts
+     Clicky.
+   - Turn off Windows' microphone access (Settings › Privacy & security › Microphone) and hold the chord: the pill says
+     where to turn it back on.
+9. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits
@@ -80,3 +104,5 @@ About 30 minutes on a Windows 10 or 11 PC:
 - Coding runs on very deep folders can hit Windows' 260-character path limit unless long paths are turned on.
 - Hooks written in Python need a real Python. The Microsoft Store stub that opens the Store won't run them.
 - The .msi leaves the sign-in Run entry behind when it uninstalls. The per-user installer removes it.
+- Dictation can't type into an app running as administrator (Windows keeps a normal app's keys out of it) unless Theo
+  runs as administrator too. On keyboards where AltGr sends Ctrl + Alt, a Ctrl + Alt chord also fires on AltGr.

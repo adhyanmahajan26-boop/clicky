@@ -12,6 +12,8 @@ use theo_voice::mic::Recorder;
 static RECORDER: Mutex<Option<Recorder>> = Mutex::new(None);
 /// Escape or another key while listening: what was recorded is thrown away.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+/// Dictation is on with the same chord: both would start on one press, so Clicky stands aside and Settings says so.
+static SAME_CHORD_AS_DICTATION: AtomicBool = AtomicBool::new(false);
 
 /// Clicky's chord from the setting (`clicky.shortcut`, a theo-voice chord id), Ctrl + Alt by default.
 pub fn chord(clicky: &ClickyApp) -> Chord {
@@ -28,7 +30,12 @@ pub fn start(clicky: Arc<ClickyApp>) {
         .spawn(move || {
             let mut registered: Option<Chord> = None;
             loop {
-                let wanted = if theo_core::clicky::is_on(&clicky.harness) { Some(chord(&clicky)) } else { None };
+                let dictation_chord = theo_voice::dictation::is_on(&clicky.harness)
+                    .then(|| theo_voice::dictation::chord(&clicky.harness));
+                let mine = chord(&clicky);
+                let clash = theo_core::clicky::is_on(&clicky.harness) && dictation_chord == Some(mine);
+                SAME_CHORD_AS_DICTATION.store(clash, Ordering::SeqCst);
+                let wanted = if theo_core::clicky::is_on(&clicky.harness) && !clash { Some(mine) } else { None };
                 if wanted != registered {
                     match wanted {
                         Some(chord) => {
@@ -47,7 +54,11 @@ pub fn start(clicky: Arc<ClickyApp>) {
 
 /// Whether the keyboard hook is listening for Clicky's chord, and why not.
 pub fn hook_status() -> serde_json::Value {
-    serde_json::json!({"listening": theo_voice::hub::is_listening_for(HUB_NAME), "hook": theo_voice::hub::status()})
+    let mut status = serde_json::json!({"listening": theo_voice::hub::is_listening_for(HUB_NAME), "hook": theo_voice::hub::status()});
+    if SAME_CHORD_AS_DICTATION.load(Ordering::SeqCst) {
+        status["sameChordAsDictation"] = serde_json::json!(true);
+    }
+    status
 }
 
 /// One chord event: pressed starts listening, released sends what was said, cancelled throws it away.
