@@ -417,6 +417,8 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
                                  "build": crate::update::this_build(), "versionLabel": crate::update::version_label(crate::update::this_build()),
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
+        // Routines editor, chat cards and the coding-run card (chat_controls.rs).
+        other if crate::chat_controls::handles(other) => crate::chat_controls::handle(h, other, cmd).await,
         // Commands of the crates built on theo-core (dictation, Clicky), when theod or the app registered them.
         _ => match crate::control_ext::handle(h, cmd).await {
             Some(answer) => answer,

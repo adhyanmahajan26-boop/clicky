@@ -26,6 +26,12 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 | Hooks | Executable, owned by you, not group/world-writable | `.exe`, `.cmd`, `.bat`, `.ps1`, `.py` in the hooks folder | As Mac | `hooks.rs` |
 | Usage per bot and day, `/doctor`, `/new` | Yes | Yes | Yes | |
 | Coding runs: own branch and worktree, commit, push, draft PR | Yes | Yes | Yes | On any coding agent: Claude Code, Codex, Cursor Agent, OpenCode, Grok or Gemini CLI (`coding.rs`). Needs `git`, and `gh` signed in for the PR |
+| The run card under a final prompt: which coding agent, which folder (the projects folder's, a new one made with git and a first commit, or any other), which chat, Start | Yes | Yes | Yes | `run_choices.rs`, `app/ui/runchoices.js`; the projects folder is `coding.projectsFolder` (default: Theo's own `Projects` folder), changed from the card |
+| Carrying on a coding agent's own chat, in the folder itself, with no branch, commit or push of Theo's | Yes | Yes | Yes | `harness_chats.rs` reads each agent's own store: Claude Code, Codex (rollout files), Cursor Agent (`~/.cursor/chats`), OpenCode (`opencode session list`), Grok. Gemini CLI can't resume by id, so it lists none. A bot names one with a `Continue:` line |
+| Routines page: add and edit (who, what, every N minutes or hours, every hour, daily, weekdays, weekly), on and off, last runs with quiet, missed and skipped | Yes | Yes | Yes | `routine_edit.rs` (`routineSave`, `routinesList`), `app/ui/routines.js` |
+| Chat cards: a long answer as a brief with a reader, `[CHOOSE:]` as a yes/no or a choice (left 10 minutes with the chat open, it picks the highlighted one), sign-in in the words of the bot's own brain (install, sign in, API key), failure, off, private messages between bots, `[PDF:]` | Yes | Yes | Yes | `app/ui/cards.js` |
+| `[PDF: file]`: a real PDF of a Markdown, text or HTML file in the bot's folder, with a card that opens it | Yes | Yes | Yes | `pdf.rs`, written by Theo itself (no PDF library, standard fonts, A4) |
+| Home: needs you, failed, working now, finished today, asleep with the next routine | Yes | Yes | Yes | `app/ui/home.js` (the Mac's `HomeLanes`) |
 | Data folder | `~/Library/Application Support/Theo-Desktop` | `%APPDATA%\Theo-Desktop` | `~/.local/share/theo-desktop` | never the Swift app's `Theo` folder |
 | Projects folder for coding runs | Setting | Setting | Setting | `code.projectsFolder` (Settings › Coding runs), default `<data folder>/Projects`, made only when a run needs it; a relative path, a drive, the home folder or Theo's own data folder is refused (`paths.rs`) |
 | In-app updates (Update row, Settings › Updates) | The Swift app's own | Per-user install: downloads, checks, installs silently and reopens | AppImage: replaces itself and reopens | `update.rs`, the app's `updater.rs`; see Updates below |
@@ -136,9 +142,12 @@ the .deb, inside the AppImage and the `.app`). Claude Code isn't needed for them
 
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
 - Theo messaging a whole group chat with `[TELL: group]`, and group "build discussions" (plan, critiques, merge).
-- `[PDF:]` documents, `[CHOOSE:]` cards, `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
-- Harness cards for T3 Code; continuing a harness's own chat; coding runs in a terminal you can watch (they run headless
-  here and report back in the chat).
+- `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
+- Harness cards for T3 Code, and the run card's Mac choice; coding runs in a terminal you can watch (they run headless here
+  and report back in the chat). Codex chats kept only in its newer sqlite store, and Cursor Agent chats kept only in its
+  `store.db`, aren't listed for carrying on yet.
+- The app sign-in card for a bot blocked on one connector app (the Mac's `ConnectorHealth.blockingConnector`) and the
+  permission card (macOS privacy permissions). The Connectors page shows which apps need a sign-in instead.
 - Theo's own MCP server (`claudia_*` tools) isn't ported.
 
 ## Clicky (voice and screen helper): Mac only for now
