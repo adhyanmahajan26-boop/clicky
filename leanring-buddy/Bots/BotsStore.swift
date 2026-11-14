@@ -1678,7 +1678,7 @@ final class BotsStore: ObservableObject {
                 if let chatTitle = run.continuedChat {
                     self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is continuing \"\(chatTitle)\" in \(engine), in your folder \(URL(fileURLWithPath: run.folder).lastPathComponent) on this \(here). You can follow along here, and I'll post the result when it's done."), to: room)
                 } else {
-                    let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" }
+                    let place = run.branch.map { "branch `\($0)` of \(repo?.lastPathComponent ?? "the repo")" + (run.noRemote == true ? " (\(CodingPlacement.noRemoteStartWords))" : "") }
                         ?? (repo.map { "your folder \($0.lastPathComponent)" } ?? "a new project in \(BotsT3.projectsWords)/\(URL(fileURLWithPath: run.folder).lastPathComponent)")
                     self.post(BotChatMessage(author: theo.id, text: "On it. **\(title)** is with \(engine), \(place), on this \(here). " +
                         "It's coding on \(run.model.map(NativeBot.label(for:)) ?? BotsT3.modelName)" +

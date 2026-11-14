@@ -16,6 +16,8 @@ struct TheoApp: App {
     @NSApplicationDelegateAdaptor(TheoAppDelegate.self) private var delegate
 
     init() {
+        // First of all: a test profile (and unit tests, which are always on `test-unittests`) gets its own home, defaults
+        // and Keychain service before anything below reads or migrates the owner's.
         TheoProfile.prepareAtLaunch()
         // Before anything builds a prompt: a Mac set up when the owner's name and the call language were built in keeps them.
         ClickySettings.migrateOwnerNameIfNeeded()
@@ -63,9 +65,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     private var productsObserver: NSObjectProtocol?
 
     /// Unit tests host the app; then nothing starts (no overlay, mic, event tap or servers).
-    static var isHostingUnitTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
+    static var isHostingUnitTests: Bool { TheoProfile.isHostingTests }
 
     /// Started with `--background` (an update, a reinstall): the window opens behind whatever the owner is doing.
     static var launchedInBackground: Bool { CommandLine.arguments.contains("--background") }

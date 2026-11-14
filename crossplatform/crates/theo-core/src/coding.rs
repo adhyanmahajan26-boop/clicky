@@ -507,6 +507,9 @@ async fn execute(h: Arc<Harness>, run: CodingRun, repo: Option<PathBuf>, prompt:
                 Err(e) => lines.push(format!("Couldn't push: {e}")),
             }
         }
+    } else if let Some(branch) = &run.branch {
+        // A repo with no remote still gets its own branch and worktree; only the push and the draft PR are left out.
+        lines.push(format!("The work is on branch {branch}. Nothing was pushed because the repo has no remote."));
     }
     let said: String = outcome.text.chars().take(1200).collect();
     set_phase(&h, &run.id, "done", Some(said.chars().take(300).collect()));
