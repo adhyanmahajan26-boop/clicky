@@ -71,22 +71,9 @@ enum HarnessCatalog {
 
     /// The login shell's PATH, asked once (nvm, pnpm, bun and friends are only on it in a login shell).
     /// The owner's own shell (LoginShell: $SHELL, else the account's, else zsh), so a bash or fish user's PATH is found too.
-    /// Blocks on first use for up to 5 s: call off the main thread.
-    static let loginShellPath: String = {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: LoginShell.shellPath())
-        process.arguments = LoginShell.arguments(forCommand: "printf %s \"$PATH\"", interactive: true)
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return "" }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { if process.isRunning { process.terminate() } }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        // Interactive shells may print banners; the PATH is the last line.
-        return String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
-    }()
+    /// Blocks on first use for up to 5 s: call off the main thread. It never runs the run loop while it waits (see
+    /// LoginShell.commandOutput), so a first use on the main thread can't start a second one inside it and crash.
+    nonisolated static let loginShellPath: String = LoginShell.askPath(timeout: 5)
 
     /// Where to look for a harness: the usual folders and the login shell's PATH, then npm's own global folder, which
     /// isn't on PATH with pnpm's or nvm's Node (that's where `npm install -g` puts Gemini CLI).
