@@ -51,7 +51,17 @@ struct T3HandoffButton: View {
     private var namedFolder: URL? { BotsT3.targetRepo(answer: text, pitch: "", mustExist: isHere) }
     private var target: URL? { folder ?? namedFolder }
 
-    private var projects: [DeviceProject] { isHere ? BotsT3.projects() : (BotsStore.shared.peerDevice?.projects ?? []) }
+    /// Bumped when the projects folder is changed from this card, so the list below reads the new folder.
+    @State private var projectsFolderRevision = 0
+    private var projects: [DeviceProject] {
+        _ = projectsFolderRevision
+        return isHere ? BotsT3.projects() : (BotsStore.shared.peerDevice?.projects ?? [])
+    }
+    /// The chosen Mac's projects folder, as the owner reads it ("~/Projects" unless it was changed in Settings).
+    private var projectsFolderWords: String {
+        if isHere { return BotsT3.projectsWords }
+        return BotsStore.shared.peerDevice.map { ProjectsFolder.words(forOtherMacPath: $0.projectsFolder) } ?? "the projects folder"
+    }
     private var menu: (recent: [DeviceProject], others: [DeviceProject]) {
         ProjectFolderMenu.sections(projects: projects, used: BotsStore.shared.t3Runs.reversed().filter { !$0.isRemote == isHere }.map(\.folder))
     }
@@ -135,7 +145,7 @@ struct T3HandoffButton: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 1) {
                             if sections.recent.isEmpty {
-                                RunChoiceNote(text: "No projects in ~/Projects on \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac)) yet.")
+                                RunChoiceNote(text: "No projects in \(projectsFolderWords) on \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac)) yet.")
                             } else {
                                 RunChoiceHeader(text: "On \(isHere ? "this \(TheoLink.shortName(mac))" : TheoLink.shortName(mac))")
                                 ForEach(sections.recent) { project in
@@ -162,6 +172,10 @@ struct T3HandoffButton: View {
                         RunChoiceRow(title: "Choose a folder\u{2026}", symbol: "ellipsis.circle") {
                             openChoice = nil
                             DispatchQueue.main.async { chooseWithPanel() }
+                        }
+                        RunChoiceRow(title: "Projects folder: \(projectsFolderWords)\u{2026}", symbol: "folder.badge.gearshape") {
+                            openChoice = nil
+                            DispatchQueue.main.async { if ProjectsFolderChooser.chooseWithPanel() { projectsFolderRevision += 1 } }
                         }
                     }
                 }
@@ -191,7 +205,7 @@ struct T3HandoffButton: View {
     private var newFolderSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(isHere ? "New folder" : "New folder on \(TheoLink.shortName(mac))").font(.system(size: 16, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-            Text("It goes in ~/Projects on \(isHere ? "this \(TheoLink.shortName(mac))" : "your \(TheoLink.shortName(mac))"), with git and an empty first commit.")
+            Text("It goes in \(projectsFolderWords) on \(isHere ? "this \(TheoLink.shortName(mac))" : "your \(TheoLink.shortName(mac))"), with git and an empty first commit.")
                 .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
             TextField("moon-site", text: $newFolderName).textFieldStyle(.roundedBorder).frame(width: 320).onSubmit(makeFolder)
             HStack {

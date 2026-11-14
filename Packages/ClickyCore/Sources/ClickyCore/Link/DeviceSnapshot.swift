@@ -2,8 +2,8 @@
 //  DeviceSnapshot.swift
 //  ClickyCore
 //
-//  What one Mac tells the other about itself over Theo Link: its project folders, which harnesses are ready and whether it has the
-//  hidden screens. A run's folder, new folder and chat always come from the Mac it will run on, so the other Mac needs this to offer them.
+//  What one Mac tells the other about itself over Theo Link: its project folders, which harnesses are ready, whether it has the
+//  hidden screens, and what the routing rules need to agree on which Mac does what. A run's folder, new folder and chat always come from the Mac it will run on, so the other Mac needs this to offer them.
 //
 
 import Foundation
@@ -29,12 +29,20 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
     public var projects: [DeviceProject]
     /// Harness or "api:<provider>" id: it can run on this Mac right now.
     public var harnesses: [String: Bool]
+    /// The hidden screens are on this Mac. (Before any Mac could have them, this meant "this Mac is a Mac Studio".)
     public var hasScreens: Bool
     public var t3Version: String?
-    /// This Mac fires routines, by its own setting.
+    /// This Mac fires routines, by its own reckoning. Kept for builds that decide from this alone.
     public var firesRoutines: Bool?
+    /// The Mac's own id (`LinkedMac.id`). Nil from builds before it was shared.
+    public var deviceID: String?
+    /// No battery, so it's the kind of Mac that stays on. Nil from builds before it was shared.
+    public var isDesktop: Bool?
+    /// Its own Routines choice (`DeviceChoice` raw value), said from its side.
+    public var routinesChoice: String?
 
-    public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil, firesRoutines: Bool? = nil) {
+    public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil, firesRoutines: Bool? = nil,
+                deviceID: String? = nil, isDesktop: Bool? = nil, routinesChoice: String? = nil) {
         self.name = name
         self.projectsFolder = projectsFolder
         self.projects = projects
@@ -42,6 +50,16 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
         self.hasScreens = hasScreens
         self.t3Version = t3Version
         self.firesRoutines = firesRoutines
+        self.deviceID = deviceID
+        self.isDesktop = isDesktop
+        self.routinesChoice = routinesChoice
+    }
+
+    /// The other Mac, as the routing rules see it. A build from before ids were shared is known by its name, and only a Mac Studio
+    /// had screens then, so `hasScreens` says whether it's a desktop.
+    public var linkedMac: LinkedMac {
+        LinkedMac(id: deviceID ?? "name:\(name)", name: name, isDesktop: isDesktop ?? hasScreens,
+                  routinesChoice: routinesChoice.flatMap { DeviceChoice.fromSaved($0, thisMacWasMacStudio: hasScreens) })
     }
 }
 
@@ -64,13 +82,53 @@ public enum ProjectFolderMenu {
     }
 }
 
-/// "Run it on the Studio", "build this on my MacBook Air": the Mac the owner named for a run. "studio" or "air", nil for anything else.
+/// "Run it on the Studio", "build this on my MacBook Pro": the Mac the owner named for a run. The full name of the Mac named, from `macNames`
+/// (this Mac and the linked one), nil for anything else.
 public enum CodingDeviceWords {
-    public static func named(in text: String) -> String? {
+    public static func named(in text: String, macNames: [String]) -> String? {
         let words = CodingIntent.normalized(text).lowercased()
-        let pattern = #"\b(?:on|to|from)\s+(?:the\s+|my\s+)?(mac\s?studio|studio|mac\s?book\s?air|mac\s?book|air)\b"#
-        guard let range = words.range(of: pattern, options: .regularExpression) else { return nil }
-        return words[range].contains("studio") ? "studio" : "air"
+        for (phrase, macName) in MacNameWords.phrases(for: macNames) {
+            let pattern = #"\b(?:on|to|from)\s+(?:the\s+|my\s+)?"# + phrase + #"\b"#
+            if words.range(of: pattern, options: .regularExpression) != nil { return macName }
+        }
+        return nil
+    }
+}
+
+/// The words a Mac goes by out loud. "Adhyan's MacBook Air" is "MacBook Air", "the Air" or "the MacBook"; "Sam's iMac" is "iMac". A word
+/// both Macs' names share (two MacBooks) names neither, and "Mac" alone names nothing.
+public enum MacNameWords {
+    /// Regex pieces that match a Mac by name, longest first, each with the full name it stands for.
+    public static func phrases(for macNames: [String]) -> [(phrase: String, macName: String)] {
+        let wordsByMac = macNames.map { spokenWords(of: $0) }
+        var phrases: [(phrase: String, macName: String, length: Int)] = []
+        for (index, macName) in macNames.enumerated() {
+            let otherMacsWords = wordsByMac.enumerated().filter { $0.offset != index }.flatMap(\.element)
+            for spoken in wordsByMac[index] where !otherMacsWords.contains(spoken) {
+                phrases.append((pattern(for: spoken), macName, spoken.count))
+            }
+        }
+        return phrases.sorted { $0.length > $1.length }.map { ($0.phrase, $0.macName) }
+    }
+
+    /// "Adhyan’s MacBook Air (2)" → ["macbook air 2", "macbook", "air", "2"]: the short name, then each word of it but "mac".
+    static func spokenWords(of macName: String) -> [String] {
+        let shortName = macName.range(of: #"^.*['’]s\s+"#, options: .regularExpression).map { String(macName[$0.upperBound...]) } ?? macName
+        let words = shortName.lowercased()
+            .replacingOccurrences(of: "mac book", with: "macbook")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        guard !words.isEmpty else { return [] }
+        var spoken = [words.joined(separator: " ")]
+        for word in words where word != "mac" && !spoken.contains(word) { spoken.append(word) }
+        return spoken
+    }
+
+    /// Spoken words as a regex piece: "Mac Book" and "MacBook" are the same, and so are "Mac Studio" and "MacStudio".
+    private static func pattern(for spoken: String) -> String {
+        spoken.components(separatedBy: " ")
+            .map { NSRegularExpression.escapedPattern(for: $0).replacingOccurrences(of: "macbook", with: #"mac\s?book"#) }
+            .joined(separator: #"\s?"#)
     }
 }
 

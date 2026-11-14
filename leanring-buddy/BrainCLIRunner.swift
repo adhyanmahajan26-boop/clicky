@@ -38,24 +38,11 @@ enum BrainCLIRunner {
     /// One-shot CLIs think before printing anything, so they get longer than Claude's stream.
     static let stallSeconds: TimeInterval = 120
 
+    /// The brain's command, through HarnessCatalog.locate (Theo's one finder; it asks the owner's own shell for its PATH).
     static func locateExecutable(for provider: BrainProvider) -> URL? {
         if provider == .claude { return ClaudeCodeBridge.locateClaudeCodeExecutable() }
         if provider == .api { return nil }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.opencode/bin", "\(home)/.cursor/bin"]
-            .map { "\($0)/\(provider.executableName)" }
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
-        let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        shell.arguments = ["-lc", "command -v \(provider.executableName)"]
-        let pipe = Pipe()
-        shell.standardOutput = pipe
-        shell.standardError = FileHandle.nullDevice
-        guard (try? shell.run()) != nil else { return nil }
-        shell.waitUntilExit()
-        let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !path.isEmpty && FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+        return HarnessCatalog.locate(binary: provider.executableName)
     }
 
     /// `onStreamEvent` gets the same events Claude Code's stream-json gives (init, message start, text deltas,

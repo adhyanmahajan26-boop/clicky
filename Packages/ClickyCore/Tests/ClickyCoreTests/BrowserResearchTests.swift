@@ -354,69 +354,172 @@ final class ResearchAgentTests: XCTestCase {
 }
 
 final class DeviceRoutingTests: XCTestCase {
-    private func route(_ feature: DeviceFeature, _ choice: DeviceChoice? = nil, on mac: DeviceKind, paired: Bool = true, online: Bool = true) -> DeviceRoute {
-        DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, thisMac: mac, paired: paired, otherMacOnline: online)
+    // Addy's two Macs: a desktop and a laptop.
+    private let studio = LinkedMac(id: "B-STUDIO", name: "Adhyan’s Mac Studio", isDesktop: true)
+    private let air = LinkedMac(id: "A-AIR", name: "Adhyan’s MacBook Air", isDesktop: false)
+
+    /// The pair as `thisMac` sees it, with the other Mac's own Routines choice.
+    private func pair(_ thisMac: LinkedMac, _ otherMac: LinkedMac?, otherRoutines: DeviceChoice? = nil, paired: Bool = true, online: Bool = true) -> MacPair {
+        var other = otherMac
+        if let otherRoutines { other?.routinesChoice = otherRoutines }
+        return MacPair(thisMac: thisMac, otherMac: other, paired: paired, otherMacOnline: online)
+    }
+
+    private func route(_ feature: DeviceFeature, _ choice: DeviceChoice? = nil, on thisMac: LinkedMac, with otherMac: LinkedMac?, otherRoutines: DeviceChoice? = nil,
+                       paired: Bool = true, online: Bool = true) -> DeviceRoute {
+        DeviceRouting.route(feature, choice: choice ?? feature.defaultChoice, pair: pair(thisMac, otherMac, otherRoutines: otherRoutines, paired: paired, online: online))
     }
 
     func testBotsAndCodingRunOnTheMacYoureUsing() {
-        XCTAssertEqual(route(.bots, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.bots, on: .macBookAir), .runHere)
+        XCTAssertEqual(route(.bots, on: studio, with: air), .runHere)
+        XCTAssertEqual(route(.bots, on: air, with: studio), .runHere)
     }
 
     func testRoutinesFireOnTheStudioAndTheAirSendsThem() {
-        XCTAssertEqual(route(.routines, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.routines, on: .macBookAir), .sendAcross)
+        XCTAssertEqual(route(.routines, on: studio, with: air), .runHere)
+        XCTAssertEqual(route(.routines, on: air, with: studio), .sendAcross)
     }
 
     func testTheAirKeepsWorkingWhileTheStudioIsAway() {
-        XCTAssertEqual(route(.bots, on: .macBookAir, online: false), .runHere)
+        XCTAssertEqual(route(.bots, on: air, with: studio, online: false), .runHere)
         // Routines still wait for the Mac that fires them.
-        XCTAssertEqual(route(.routines, on: .macBookAir, online: false), .waitForOtherMac)
+        XCTAssertEqual(route(.routines, on: air, with: studio, online: false), .waitForOtherMac)
     }
 
-    func testBotsSetToTheStudioByHandStillGoThere() {
-        XCTAssertEqual(route(.bots, .macStudio, on: .macBookAir), .sendAcross)
-        XCTAssertEqual(route(.bots, .macStudio, on: .macBookAir, online: false), .waitForOtherMac)
+    func testBotsSetToTheOtherMacByHandStillGoThere() {
+        XCTAssertEqual(route(.bots, .otherMac, on: air, with: studio), .sendAcross)
+        XCTAssertEqual(route(.bots, .otherMac, on: air, with: studio, online: false), .waitForOtherMac)
     }
 
-    func testAMacOnItsOwnRunsItsBots() {
-        XCTAssertEqual(route(.bots, on: .macBookAir, paired: false, online: false), .runHere)
+    func testAMacOnItsOwnRunsEverything() {
+        for feature in DeviceFeature.allCases {
+            for choice in DeviceChoice.allCases {
+                XCTAssertEqual(route(feature, choice, on: air, with: nil, paired: false, online: false), .runHere, "\(feature) \(choice)")
+            }
+        }
     }
 
     func testClickyDictationAndVoiceRunOnBoth() {
         for feature in [DeviceFeature.clicky, .dictation, .voice] {
-            XCTAssertEqual(route(feature, on: .macStudio), .runHere, feature.title)
-            XCTAssertEqual(route(feature, on: .macBookAir), .runHere, feature.title)
+            XCTAssertEqual(route(feature, on: studio, with: air), .runHere, feature.title)
+            XCTAssertEqual(route(feature, on: air, with: studio), .runHere, feature.title)
         }
     }
 
-    func testStudioScreensAreNeverOnAnotherMac() {
-        XCTAssertEqual(route(.studioScreens, on: .macStudio), .runHere)
-        for choice in DeviceChoice.allCases {
-            XCTAssertEqual(route(.studioScreens, choice, on: .macBookAir), .notHere, choice.title)
-            XCTAssertEqual(route(.studioScreens, choice, on: .macBookAir, paired: false), .notHere, choice.title)
-        }
-    }
-
-    func testRoutinesFireOnOneMacWhateverAnySays() {
-        // The list is the same on both Macs, so "Any" can't mean both.
-        XCTAssertEqual(route(.routines, .any, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.routines, .any, on: .macBookAir), .sendAcross)
-        XCTAssertEqual(route(.routines, .any, on: .macBookAir, online: false), .waitForOtherMac)
-        XCTAssertEqual(route(.routines, .any, on: .macBookAir, paired: false), .runHere)
+    func testHiddenScreensAreOnOneMacAndNeverSentAcross() {
+        XCTAssertEqual(route(.studioScreens, on: studio, with: air), .runHere)
+        XCTAssertEqual(route(.studioScreens, on: air, with: studio), .notHere)
+        XCTAssertEqual(route(.studioScreens, .otherMac, on: studio, with: air), .notHere)
+        // Any Mac can have them now: a laptop on its own, or one set to have them.
+        XCTAssertEqual(route(.studioScreens, on: air, with: nil, paired: false), .runHere)
+        XCTAssertEqual(route(.studioScreens, .thisMac, on: air, with: studio), .runHere)
     }
 
     func testResearchFromTheAirGoesToTheStudio() {
-        XCTAssertEqual(route(.researchBrowser, on: .macStudio), .runHere)
-        XCTAssertEqual(route(.researchBrowser, on: .macBookAir), .sendAcross)
-        XCTAssertEqual(route(.researchBrowser, on: .macBookAir, online: false), .waitForOtherMac)
+        XCTAssertEqual(route(.researchBrowser, on: studio, with: air), .runHere)
+        XCTAssertEqual(route(.researchBrowser, on: air, with: studio), .sendAcross)
+        XCTAssertEqual(route(.researchBrowser, on: air, with: studio, online: false), .waitForOtherMac)
     }
 
     func testThePickerIsObeyed() {
-        XCTAssertEqual(route(.clicky, .macBookAir, on: .macStudio), .notHere)
-        XCTAssertEqual(route(.clicky, .macBookAir, on: .macBookAir), .runHere)
-        XCTAssertEqual(route(.bots, .thisMac, on: .macBookAir), .runHere)
-        XCTAssertEqual(route(.bots, .any, on: .macBookAir), .runHere)
-        XCTAssertEqual(route(.bots, .macBookAir, on: .macStudio), .sendAcross)
+        XCTAssertEqual(route(.clicky, .otherMac, on: studio, with: air), .notHere)
+        XCTAssertEqual(route(.clicky, .thisMac, on: air, with: studio), .runHere)
+        XCTAssertEqual(route(.bots, .thisMac, on: air, with: studio), .runHere)
+        XCTAssertEqual(route(.bots, .any, on: air, with: studio), .runHere)
+        XCTAssertEqual(route(.bots, .otherMac, on: studio, with: air), .sendAcross)
+    }
+
+    // MARK: Routines fire on exactly one Mac, whatever the pair
+
+    /// Both sides of every pair of Routines choices: exactly one Mac fires. `firstMac` holds `firstChoice`, `secondMac` `secondChoice`.
+    private func firingMacs(_ firstMac: LinkedMac, _ firstChoice: DeviceChoice, _ secondMac: LinkedMac, _ secondChoice: DeviceChoice) -> [String] {
+        var firing: [String] = []
+        if route(.routines, firstChoice, on: firstMac, with: secondMac, otherRoutines: secondChoice) == .runHere { firing.append(firstMac.name) }
+        if route(.routines, secondChoice, on: secondMac, with: firstMac, otherRoutines: firstChoice) == .runHere { firing.append(secondMac.name) }
+        return firing
+    }
+
+    private func assertExactlyOneFires(_ firstMac: LinkedMac, _ secondMac: LinkedMac, file: StaticString = #filePath, line: UInt = #line) {
+        for firstChoice in DeviceChoice.allCases {
+            for secondChoice in DeviceChoice.allCases {
+                XCTAssertEqual(firingMacs(firstMac, firstChoice, secondMac, secondChoice).count, 1, "\(firstMac.name): \(firstChoice), \(secondMac.name): \(secondChoice)", file: file, line: line)
+            }
+        }
+    }
+
+    func testTwoLaptopsFireRoutinesOnExactlyOne() {
+        // Until now both laptops counted as "MacBook Air", each waited for a "Mac Studio", and routines never fired.
+        let pro = LinkedMac(id: "1111", name: "Sam’s MacBook Pro", isDesktop: false)
+        let otherAir = LinkedMac(id: "2222", name: "Sam’s MacBook Air", isDesktop: false)
+        assertExactlyOneFires(pro, otherAir)
+        // Nobody picked: the smaller id, the same answer on both.
+        XCTAssertEqual(firingMacs(pro, .any, otherAir, .any), ["Sam’s MacBook Pro"])
+    }
+
+    func testTwoDesktopsFireRoutinesOnExactlyOne() {
+        let mini = LinkedMac(id: "9999", name: "Office Mac mini", isDesktop: true)
+        let iMac = LinkedMac(id: "3333", name: "Kitchen iMac", isDesktop: true)
+        assertExactlyOneFires(mini, iMac)
+        XCTAssertEqual(firingMacs(mini, .any, iMac, .any), ["Kitchen iMac"])
+    }
+
+    func testADesktopAndALaptopFireRoutinesOnExactlyOne() {
+        assertExactlyOneFires(studio, air)
+        // Nobody picked: the desktop, even though the laptop's id is smaller.
+        XCTAssertEqual(firingMacs(studio, .any, air, .any), ["Adhyan’s Mac Studio"])
+    }
+
+    func testTheOwnersPickWins() {
+        XCTAssertEqual(firingMacs(studio, .any, air, .thisMac), ["Adhyan’s MacBook Air"])
+        XCTAssertEqual(firingMacs(studio, .otherMac, air, .any), ["Adhyan’s MacBook Air"])
+        XCTAssertEqual(firingMacs(studio, .otherMac, air, .thisMac), ["Adhyan’s MacBook Air"])
+        XCTAssertEqual(firingMacs(studio, .thisMac, air, .otherMac), ["Adhyan’s Mac Studio"])
+        // Both want them, or both want the other to have them: the always-on Mac.
+        XCTAssertEqual(firingMacs(studio, .thisMac, air, .thisMac), ["Adhyan’s Mac Studio"])
+        XCTAssertEqual(firingMacs(studio, .otherMac, air, .otherMac), ["Adhyan’s Mac Studio"])
+    }
+
+    func testBeforeTheOtherMacHasBeenHeardFromOnlyADesktopFires() {
+        XCTAssertEqual(route(.routines, on: studio, with: nil), .runHere)
+        XCTAssertEqual(route(.routines, on: air, with: nil), .sendAcross)
+        XCTAssertEqual(route(.routines, on: air, with: nil, online: false), .waitForOtherMac)
+    }
+
+    func testAnOlderBuildOnTheOtherMacIsKnownByItsNameAndScreens() {
+        // A build from before ids were shared says only its name and whether it has screens (then: whether it's a Mac Studio).
+        let oldStudio = DeviceSnapshot(name: "Adhyan’s Mac Studio", projectsFolder: "~/Projects", projects: [], harnesses: [:], hasScreens: true, firesRoutines: true)
+        XCTAssertEqual(oldStudio.linkedMac, LinkedMac(id: "name:Adhyan’s Mac Studio", name: "Adhyan’s Mac Studio", isDesktop: true, routinesChoice: nil))
+        XCTAssertEqual(route(.routines, on: air, with: oldStudio.linkedMac), .sendAcross)
+        let newAir = DeviceSnapshot(name: "Adhyan’s MacBook Air", projectsFolder: "~/Projects", projects: [], harnesses: [:], hasScreens: false,
+                                    deviceID: "A-AIR", isDesktop: false, routinesChoice: "thisMac")
+        XCTAssertEqual(newAir.linkedMac.routinesChoice, .thisMac)
+        XCTAssertEqual(route(.routines, on: studio, with: newAir.linkedMac), .sendAcross)
+    }
+
+    // MARK: Settings saved by builds that knew only a Mac Studio and a MacBook Air
+
+    func testOldSavedChoicesBecomeThisMacOrTheOtherMac() {
+        XCTAssertEqual(DeviceChoice.fromSaved("macStudio", thisMacWasMacStudio: true), .thisMac)
+        XCTAssertEqual(DeviceChoice.fromSaved("macStudio", thisMacWasMacStudio: false), .otherMac)
+        XCTAssertEqual(DeviceChoice.fromSaved("macBookAir", thisMacWasMacStudio: true), .otherMac)
+        // Every Mac that wasn't a Mac Studio counted as the MacBook Air.
+        XCTAssertEqual(DeviceChoice.fromSaved("macBookAir", thisMacWasMacStudio: false), .thisMac)
+        XCTAssertEqual(DeviceChoice.fromSaved("any", thisMacWasMacStudio: false), .any)
+        XCTAssertEqual(DeviceChoice.fromSaved("thisMac", thisMacWasMacStudio: true), .thisMac)
+        XCTAssertNil(DeviceChoice.fromSaved("somethingElse", thisMacWasMacStudio: true))
+    }
+
+    func testAddysSavedSettingsBehaveAsBefore() {
+        // Before, routines, research and screens defaulted to "Mac Studio" (nothing saved). Now they default to Any, which for
+        // these means the always-on Mac: the Studio.
+        for feature in [DeviceFeature.routines, .researchBrowser, .studioScreens] {
+            XCTAssertEqual(route(feature, on: studio, with: air), .runHere, feature.title)
+            XCTAssertNotEqual(route(feature, on: air, with: studio), .runHere, feature.title)
+        }
+        // Routines set by hand to the Studio on the Air: kept, and still the Studio.
+        let airsRoutines = DeviceChoice.fromSaved("macStudio", thisMacWasMacStudio: false)!
+        XCTAssertEqual(firingMacs(air, airsRoutines, studio, .any), ["Adhyan’s Mac Studio"])
+        // Bots set by hand to the Studio on the Air still go there.
+        XCTAssertEqual(route(.bots, DeviceChoice.fromSaved("macStudio", thisMacWasMacStudio: false)!, on: air, with: studio), .sendAcross)
     }
 }

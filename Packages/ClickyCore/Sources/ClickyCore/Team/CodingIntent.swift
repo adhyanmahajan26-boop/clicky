@@ -148,14 +148,15 @@ public enum ProjectWords {
     }
 }
 
-/// "Clicky, work on the Air", "switch to the Studio": which Mac Clicky should work on. "air" or "studio", nil for anything else.
+/// "Clicky, work on the Air", "switch to the Studio": which Mac Clicky should work on. The full name of the Mac named, from `macNames`
+/// (this Mac and the linked one), nil for anything else.
 public enum ClickyMachineWords {
-    public static func choice(in text: String) -> String? {
+    public static func choice(in text: String, macNames: [String]) -> String? {
         let words = CodingIntent.normalized(text).lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let pattern = #"\b(work|use|switch|move|go|run|stay)\b.{0,25}\b(?:on|to)\s+(?:the\s+|my\s+)?(mac\s?book\s?air|mac\s?book|air|mac\s?studio|studio)\b\s*(?:for now|please|now)?[.!?]*$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: words, range: NSRange(words.startIndex..., in: words)),
-              let range = Range(match.range(at: 2), in: words) else { return nil }
-        return words[range].contains("studio") ? "studio" : "air"
+        for (phrase, macName) in MacNameWords.phrases(for: macNames) {
+            let pattern = #"\b(work|use|switch|move|go|run|stay)\b.{0,25}\b(?:on|to)\s+(?:the\s+|my\s+)?"# + phrase + #"\b\s*(?:for now|please|now)?[.!?]*$"#
+            if words.range(of: pattern, options: .regularExpression) != nil { return macName }
+        }
+        return nil
     }
 }

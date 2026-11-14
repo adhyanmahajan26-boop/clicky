@@ -54,21 +54,27 @@ public enum CLIStreamFailure: Equatable, Sendable {
 
     public static let stallSeconds: TimeInterval = 25
 
-    /// The sentence Clicky says out loud.
+    /// The sentence Clicky says out loud, for a Claude brain.
     public var spokenMessage: String {
+        spokenMessage(brainName: "Claude", signInFix: "Run claude auth login in Terminal, then try again.")
+    }
+
+    /// The sentence Clicky says out loud, naming the brain that failed ("Codex", "the OpenAI key") and its own fix, so a
+    /// person who doesn't use Claude is never told to sign in to it.
+    public func spokenMessage(brainName: String, signInFix: String) -> String {
         switch self {
-        case .reportedError(let message) where ["auth", "login", "401", "api key"].contains(where: { message.lowercased().contains($0) }):
-            return "I'm signed out of Claude. Run claude auth login in Terminal, then try again."
+        case .reportedError(let message) where BrainTrouble.isSignInProblem(message):
+            return "I'm signed out of \(brainName). \(signInFix)"
         case .reportedError(let message):
             let shortMessage = message.split(separator: "\n").first.map(String.init) ?? ""
-            return shortMessage.isEmpty ? "Claude ran into an error." : "Claude ran into an error: \(shortMessage.prefix(120))"
+            return shortMessage.isEmpty ? "\(brainName) ran into an error." : "\(brainName) ran into an error: \(shortMessage.prefix(120))"
         case .usageLimit(let resetDescription):
-            if let resetDescription { return "You've hit your Claude usage limit. It resets \(resetDescription)." }
-            return "You've hit your Claude usage limit, so I can't answer right now."
+            if let resetDescription { return "You've hit your \(brainName) usage limit. It resets \(resetDescription)." }
+            return "You've hit your \(brainName) usage limit, so I can't answer right now."
         case .endedWithoutResult:
-            return "Claude stopped unexpectedly."
+            return "\(brainName) stopped unexpectedly."
         case .stalled:
-            return "Claude went quiet for too long, so I stopped it."
+            return "\(brainName) went quiet for too long, so I stopped it."
         }
     }
 

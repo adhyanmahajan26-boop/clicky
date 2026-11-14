@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/theo-core", "crates/theod"]
+members = ["crates/theo-core", "crates/theod", "crates/theo-connectors"]
 
 [workspace.package]
 version = "0.1.0"

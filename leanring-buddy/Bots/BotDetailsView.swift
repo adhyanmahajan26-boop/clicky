@@ -96,6 +96,9 @@ struct BotDetailsSheet: View {
                             }
                             .toggleStyle(.checkbox)
                         }
+                        AppLevelRows(bot: binding.wrappedValue) { appID, level in
+                            draft?.appLevels = AppLevelRows.levels(draft?.appLevels, setting: appID, to: level)
+                        }
                     }
                 }
                 field("Memory") {

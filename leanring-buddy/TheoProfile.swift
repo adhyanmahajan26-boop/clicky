@@ -10,15 +10,24 @@
 //
 
 import AppKit
+import ClickyCore
 import Foundation
 import ObjectiveC
 
 enum TheoProfile {
-    /// The name after `--profile`: "test", or "test-<anything>" for another separate test instance beside it.
+    /// The name after `--profile`: "test", or "test-<anything>" for another separate test instance beside it. Unit tests
+    /// that host the app are always on `test-unittests`, so they can never write the owner's settings, files or keys.
     static let name: String? = {
         let arguments = CommandLine.arguments
-        guard let flag = arguments.firstIndex(of: "--profile"), arguments.indices.contains(flag + 1) else { return nil }
-        return arguments[flag + 1]
+        if let flag = arguments.firstIndex(of: "--profile"), arguments.indices.contains(flag + 1) { return arguments[flag + 1] }
+        return isHostingTests ? unitTestsName : nil
+    }()
+
+    static let unitTestsName = "test-unittests"
+
+    /// The app is the host of an XCTest bundle (`xcodebuild test`, Xcode's ⌘U).
+    static let isHostingTests: Bool = {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil
     }()
 
     /// Launched with `--profile test` (or test-…).
@@ -30,6 +39,9 @@ enum TheoProfile {
     /// Keychain service suffix, so a test key never overwrites a real one.
     static var keychainSuffix: String { isTest ? "." + (name ?? "test") : "" }
 
+    /// Where UserDefaults.standard points in a test profile.
+    static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
+
     /// The owner's real home, whatever CFFIXED_USER_HOME says.
     static var realHome: String {
         guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return NSHomeDirectory() }
@@ -40,8 +52,11 @@ enum TheoProfile {
         URL(fileURLWithPath: realHome).appendingPathComponent("Library/Application Support/\(folderName)/home", isDirectory: true)
     }
 
+    /// `--profile test-stranger…`: someone who has never used this Mac. Nothing is borrowed from the real home (no CLI
+    /// sign-ins, no ~/.ssh or ~/.gitconfig), and the processes it starts get the test home as HOME too.
+    static var borrowsNothing: Bool { name?.hasPrefix("test-stranger") == true }
+
     private static let homeVariable = "CFFIXED_USER_HOME"
-    private static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
 
     /// What the test home borrows from the real one: where the CLIs live and what they're signed in with.
     private static let sharedHomeItems = [".claude", ".claude.json", ".codex", ".config", ".cursor", ".gemini", ".grok", ".local",
@@ -53,6 +68,8 @@ enum TheoProfile {
     static func prepareAtLaunch() {
         clearInheritedClaudeEnvironment()
         guard isTest else { return }
+        // ClickyCore's own Keychain items (the API key, the voice-server key) get the same suffix as the app's.
+        ClickySecrets.serviceSuffix = keychainSuffix
         if getenv(homeVariable) == nil {
             makeTestHome()
             setenv(homeVariable, testHome.path, 1)
@@ -87,7 +104,7 @@ enum TheoProfile {
     private static func makeTestHome() {
         let manager = FileManager.default
         try? manager.createDirectory(at: testHome.appendingPathComponent("Library/Application Support"), withIntermediateDirectories: true)
-        for item in sharedHomeItems {
+        for item in sharedHomeItems where !borrowsNothing {
             let real = URL(fileURLWithPath: realHome).appendingPathComponent(item)
             guard manager.fileExists(atPath: real.path) else { continue }
             let link = testHome.appendingPathComponent(item)
@@ -138,6 +155,8 @@ enum TheoProfile {
             if let process = task as? Process {
                 var environment = process.environment ?? ProcessInfo.processInfo.environment
                 environment[homeVariable] = nil
+                // A stranger's agents and helpers find nothing of the owner's under ~ either.
+                if borrowsNothing { environment["HOME"] = testHome.path }
                 // A test bot's Theo tools still talk to this test instance, not the owner's Theo.
                 environment["THEO_CONTROL_HOME"] = testHome.path
                 process.environment = environment

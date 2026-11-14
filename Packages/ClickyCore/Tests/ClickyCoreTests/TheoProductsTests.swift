@@ -22,17 +22,17 @@ struct TheoProductsTests {
         #expect(TheoProductChoice.canFinish([.dictation]))
     }
 
-    @Test func dictationIsBlockedWithoutAKey() {
+    @Test func dictationUsesAppleWithoutAKey() {
         #expect(DictationAccess.of(productOn: false, hasSarvamKey: true) == .off)
         #expect(DictationAccess.of(productOn: false, hasSarvamKey: false) == .off)
-        #expect(DictationAccess.of(productOn: true, hasSarvamKey: false) == .needsKey)
+        #expect(DictationAccess.of(productOn: true, hasSarvamKey: false) == .appleOnly)
         #expect(DictationAccess.of(productOn: true, hasSarvamKey: true) == .ready)
-        // With no key the shortcut is still heard, so a press can say what's missing; off means nothing at all.
-        #expect(DictationAccess.needsKey.listensForShortcut)
+        // With no key dictation still listens, on Apple's recognizer; off means nothing at all.
+        #expect(DictationAccess.appleOnly.listensForShortcut)
         #expect(!DictationAccess.off.listensForShortcut)
-        #expect(DictationAccess.needsKey.message?.contains("Sarvam API key") == true)
+        #expect(DictationAccess.appleOnly.message == nil)
         #expect(DictationAccess.ready.message == nil)
-        #expect(TheoProduct.dictation.requirement?.contains("Sarvam API key") == true)
+        #expect(TheoProduct.dictation.requirement?.contains("Apple's dictation") == true)
     }
 
     @Test func eachProductOwnsItsDeviceFeatures() {

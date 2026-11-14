@@ -1,0 +1,4 @@
+// Copy to Config/Signing.local.xcconfig (ignored by git), or let Tools/setup-signing.sh write it.
+// Your Apple team id: the 10 characters in parentheses under Xcode › Settings › Accounts, or the
+// "OU" of your Apple Development certificate in Keychain Access. A free Personal Team works.
+DEVELOPMENT_TEAM = ABCDE12345

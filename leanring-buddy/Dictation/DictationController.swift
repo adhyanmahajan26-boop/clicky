@@ -323,7 +323,9 @@ final class DictationController: ObservableObject {
     private let hub: AudioEngineHub
     private let speech: CompanionSpeechOutput
     /// One Haiku process kept open between dictations, so all but the first skip its start-up (about 1 s to its first words).
-    private var cleaner: ClaudeConversation?
+    /// Without Claude Code it's the helper brain, one request per clean-up (`ConversationBrains`).
+    private var cleaner: ConversationBrain?
+    private var cleanerModel = ""
     private var cleanerPrompt = ""
     private var cleanerTurns = 0
     private var cleanerIdle: Task<Void, Never>?
@@ -361,11 +363,7 @@ final class DictationController: ObservableObject {
 
     private func keysPressed() {
         guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
-        // Dictation needs a Sarvam key (Settings › Products): the press says so instead of listening.
-        if TheoProducts.dictationAccessNow == .needsKey {
-            showFailure("Add a Sarvam API key to dictate")
-            return
-        }
+        // No Sarvam key is fine: Apple's recognizer on this Mac does the listening (DictationSettings.usesSarvam).
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             showFailure("Theo needs the microphone")
             return
@@ -431,19 +429,38 @@ final class DictationController: ObservableObject {
             return
         }
         cleanerIdle?.cancel()
+        guard let model = Self.cleanupModel else {
+            // Nothing here can think yet: the words go in as heard (with the local tidy-up), and Settings says why.
+            stopCleaner()
+            return
+        }
         let prompt = DictationCleanup.systemPrompt(dictionary: DictationSettings.dictionary)
-        if cleaner?.isRunning == true, prompt == cleanerPrompt, cleanerTurns < Self.cleanerMaxTurns { return }
+        if cleaner?.isRunning == true, prompt == cleanerPrompt, model == cleanerModel, cleanerTurns < Self.cleanerMaxTurns { return }
         stopCleaner()
-        let conversation = ClaudeConversation(model: ClickyModels.haiku, systemPrompt: prompt, promptFileName: DictationCleanup.systemPromptFileName)
+        let conversation = ConversationBrains.make(model: model, systemPrompt: prompt, promptFileName: DictationCleanup.systemPromptFileName, keepsHistory: false)
         conversation.onEnded = { [weak self] _ in self?.cleaner = nil }
         do {
             try conversation.start()
             cleaner = conversation
+            cleanerModel = model
             cleanerPrompt = prompt
             cleanerTurns = 0
         } catch {
-            print("⚠️ Dictation: Haiku didn't start: \(error.localizedDescription)")
+            print("⚠️ Dictation: the clean-up brain didn't start: \(error.localizedDescription)")
         }
+    }
+
+    /// What tidies dictation up: Haiku through Claude Code when it's ready (the fastest), else the helper brain when it
+    /// works here. Nil when nothing on this Mac can think, so the clean-up is skipped.
+    static var cleanupModel: String? {
+        if BrainAvailability.isClaudeReady { return ClickyModels.haiku }
+        let helper = ClickyModels.helper
+        return BrainAvailability.inventory.isUsable(helper) ? helper : nil
+    }
+
+    /// The plain words for Settings when clean-up is on but can't run: nil when it can.
+    static var cleanupUnavailableMessage: String? {
+        cleanupModel == nil ? "No brain is set up yet, so your words go in as heard. Add an API key or sign in to an agent in Settings to turn tidying on." : nil
     }
 
     private func stopCleaner() {
@@ -525,7 +542,7 @@ final class DictationController: ObservableObject {
             let cleanupStart = Date()
             let cleaning = cleanupTask(for: raw)
             if let cleaned = await Self.value(of: cleaning, within: Self.cleanupBudgetSeconds) {
-                if let cleaned { text = cleaned; cleanupNote = "haiku" } else { cleanupNote = "kept raw" }
+                if let cleaned { text = cleaned; cleanupNote = cleanerModel == ClickyModels.haiku ? "haiku" : "cleaned" } else { cleanupNote = cleaner == nil ? "skipped: no brain" : "kept raw" }
             } else {
                 // Slow: the raw words go in now and Haiku's version follows if the field is still as we left it.
                 cleanupNote = "late"

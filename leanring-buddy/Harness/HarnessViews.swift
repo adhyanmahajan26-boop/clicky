@@ -17,6 +17,8 @@ import SwiftUI
 struct CodingSettingsView: View {
     @ObservedObject private var center = HarnessCenter.shared
     @State private var terminalTask: HarnessTerminalTask?
+    /// The projects folder as shown, refreshed when it's changed here.
+    @State private var projectsFolderWords = BotsT3.projectsWords
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -45,12 +47,36 @@ struct CodingSettingsView: View {
                 defaultRow(title: "New bots run on", harnesses: HarnessCatalog.botEngines, selection: Binding(get: { center.defaultHarness }, set: { center.defaultHarness = $0 }),
                            model: Binding(get: { center.defaultModel(for: center.defaultHarness) ?? "" }, set: { center.setDefaultModel($0.isEmpty ? nil : $0, for: center.defaultHarness) }),
                            effort: Binding(get: { center.defaultEffort(for: center.defaultHarness) ?? "" }, set: { center.setDefaultEffort($0.isEmpty ? nil : $0, for: center.defaultHarness) }))
+                RowDivider()
+                projectsFolderRow
             }
         }
         .onAppear { center.refresh() }
         .sheet(item: $terminalTask) { task in
             HarnessTerminalSheet(task: task) { terminalTask = nil }
         }
+    }
+
+    /// Where new project folders go (`v2.code.projectsFolder`). The folder is made when the first project needs it.
+    private var projectsFolderRow: some View {
+        HStack(spacing: 10) {
+            Text("Projects folder").font(TheoType.body).foregroundColor(DS.Colors.textPrimary).frame(width: 110, alignment: .leading).fixedSize()
+            Text(projectsFolderWords).font(TheoType.body).foregroundColor(DS.Colors.textSecondary).lineLimit(1).truncationMode(.middle)
+                .help("New project folders go here, and bots and coding runs list your projects from it.")
+            Button("Change\u{2026}") {
+                if ProjectsFolderChooser.chooseWithPanel() { projectsFolderWords = BotsT3.projectsWords }
+            }
+            .buttonStyle(.theo(.ghost, .small)).pointerCursor()
+            if ClickySettings.projectsFolderSetting != ProjectsFolder.defaultSetting {
+                Button("Use \(ProjectsFolder.defaultSetting)") {
+                    ClickySettings.projectsFolderSetting = ProjectsFolder.defaultSetting
+                    projectsFolderWords = BotsT3.projectsWords
+                }
+                .buttonStyle(.theo(.ghost, .small)).pointerCursor()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
     private func defaultRow(title: String, harnesses: [HarnessInfo], selection: Binding<String>, model: Binding<String>, effort: Binding<String>) -> some View {
@@ -81,6 +107,27 @@ struct CodingSettingsView: View {
             }
         }
         .labelsHidden().frame(width: 230)
+    }
+}
+
+/// Picks the projects folder with the system's panel, from Settings › Harnesses or a run's card.
+@MainActor
+enum ProjectsFolderChooser {
+    /// True when the owner chose a folder (the setting changed).
+    @discardableResult
+    static func chooseWithPanel() -> Bool {
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use for projects"
+        panel.message = "New project folders go here, and bots and coding runs list your projects from it."
+        let currentFolder = BotsT3.projectsFolder
+        panel.directoryURL = FileManager.default.fileExists(atPath: currentFolder.path) ? currentFolder : homeDirectory
+        guard panel.runModal() == .OK, let chosenFolder = panel.url else { return false }
+        ClickySettings.projectsFolderSetting = ProjectsFolder.setting(forChosenPath: chosenFolder.path, homeDirectory: homeDirectory.path)
+        return true
     }
 }
 

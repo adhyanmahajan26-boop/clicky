@@ -12,10 +12,10 @@
 //  the indexed clones, exact folder name first, then RepoMatcher.
 //
 //  CodeRepoDenylist is checked on every local root, whichever way it was
-//  found: Clicky never works on its own source — ~/Projects/clicky, any
-//  checkout whose root holds leanring-buddy.xcodeproj, or any worktree of
-//  such a checkout (the clicky-* worktrees) — on top of RepoMatcher's
-//  farzaa/clicky denylist.
+//  found: Clicky never works on its own source — any checkout whose root
+//  holds Theo's Xcode project or its ClickyCore package, wherever it lives,
+//  or any worktree of such a checkout (the clicky-* worktrees) — on top of
+//  RepoMatcher's farzaa/clicky denylist.
 //
 
 import Foundation
@@ -48,21 +48,27 @@ public struct RepoFileSystem: Sendable {
 public enum CodeRepoDenylist {
     /// A checkout of Clicky itself has this at its root.
     public static let clickyProjectMarker = "leanring-buddy.xcodeproj"
+    /// Every marker that says "this is Theo's own source": the Xcode project, or the ClickyCore package
+    /// (a checkout that only holds the package, or one whose Xcode project was renamed).
+    public static let ownSourceMarkers = [clickyProjectMarker, "Packages/ClickyCore/Package.swift"]
 
-    /// ~/Projects/clicky, a root holding leanring-buddy.xcodeproj, or a
-    /// worktree whose main checkout is one of those.
+    /// A root holding one of `ownSourceMarkers`, or a worktree whose main checkout holds one. Decided by what the
+    /// folder contains, never by its path: anyone's own project called "clicky" is fine, and Theo's source is
+    /// recognised wherever it was cloned. `homeDirectory` is unused and only kept so callers don't change.
     public static func isDeniedLocalRoot(_ rootPath: String, homeDirectory: String = NSHomeDirectory(), fileSystem: RepoFileSystem = .live) -> Bool {
         let root = standardized(rootPath)
-        if root == standardized((homeDirectory as NSString).appendingPathComponent("Projects/clicky")) { return true }
-        if fileSystem.exists((root as NSString).appendingPathComponent(clickyProjectMarker)) { return true }
+        if holdsOwnSourceMarker(root, fileSystem: fileSystem) { return true }
         // A linked worktree: `.git` is a file "gitdir: <main>/.git/worktrees/<name>".
         let dotGitPath = (root as NSString).appendingPathComponent(".git")
         if !fileSystem.isDirectory(dotGitPath), let pointer = fileSystem.readText(dotGitPath),
            let mainCheckout = mainCheckoutPath(fromGitFile: pointer, worktreeRoot: root) {
-            if mainCheckout == standardized((homeDirectory as NSString).appendingPathComponent("Projects/clicky")) { return true }
-            if fileSystem.exists((mainCheckout as NSString).appendingPathComponent(clickyProjectMarker)) { return true }
+            if holdsOwnSourceMarker(mainCheckout, fileSystem: fileSystem) { return true }
         }
         return false
+    }
+
+    static func holdsOwnSourceMarker(_ folderPath: String, fileSystem: RepoFileSystem) -> Bool {
+        ownSourceMarkers.contains { fileSystem.exists((folderPath as NSString).appendingPathComponent($0)) }
     }
 
     /// "gitdir: /x/clicky/.git/worktrees/fix" → "/x/clicky".

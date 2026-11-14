@@ -83,6 +83,10 @@ final class ConnectorHealth: ObservableObject {
 
     @Published private(set) var claude: [String: ConnectorState] = [:]
     @Published private(set) var openCode: [String: ConnectorState] = [:]
+    /// Theo's own apps, from the connector hub's last check (ConnectorHub.swift). Empty without the helper.
+    @Published private(set) var hubApps: [HubAppRecord] = []
+    /// Why the hub's list couldn't be read, when it couldn't.
+    @Published private(set) var hubProblem: String?
     @Published private(set) var isChecking = false
     @Published private(set) var lastChecked: Date?
     /// When each connector was last seen connected, by connector id.
@@ -146,15 +150,33 @@ final class ConnectorHealth: ObservableObject {
     func refresh() async {
         guard !isChecking else { return }
         isChecking = true
-        async let claudeListing = BotConnectors.listing(.claude)
-        async let openCodeListing = BotConnectors.listing(.opencode)
-        let (claudeText, openCodeText) = await (claudeListing, openCodeListing)
-        claude = ConnectorListing.parseClaude(claudeText)
-        openCode = ConnectorListing.parseOpenCode(openCodeText)
+        if ConnectorHub.isAvailable {
+            // The hub's apps first, so the screen shows them at once; then each is reached (`list --check`) beside the engines' listings.
+            if let listed = try? await ConnectorHub.list() { hubApps = listed }
+            async let checkedHub: [HubAppRecord]? = try? ConnectorHub.list(check: true)
+            async let claudeListing = BotConnectors.listing(.claude)
+            async let openCodeListing = BotConnectors.listing(.opencode)
+            let (checked, claudeText, openCodeText) = await (checkedHub, claudeListing, openCodeListing)
+            if let checked {
+                hubApps = checked
+                hubProblem = nil
+            } else {
+                hubProblem = "Theo's connector helper didn't answer. Details are in ~/Library/Logs/Clicky/connectors.log."
+            }
+            // The engines' own listings still tell Clicky's tools' and Chrome's states, and the servers that aren't in Theo yet.
+            claude = ConnectorListing.parseClaude(claudeText)
+            openCode = ConnectorListing.parseOpenCode(openCodeText)
+        } else {
+            async let claudeListing = BotConnectors.listing(.claude)
+            async let openCodeListing = BotConnectors.listing(.opencode)
+            let (claudeText, openCodeText) = await (claudeListing, openCodeListing)
+            claude = ConnectorListing.parseClaude(claudeText)
+            openCode = ConnectorListing.parseOpenCode(openCodeText)
+        }
         isChecking = false
         lastChecked = Date()
         for connector in BotConnectors.known where state(of: connector) == .connected || state(of: connector) == .claudeOnly || state(of: connector) == .othersOnly {
-            lastConnected[connector.id] = Date()
+            lastConnected[connector.id] = hubRecord(of: connector)?.lastWorked ?? Date()
         }
         save()
         // An app that works again lets go of the bots that were waiting on it: the card folds and the bot picks the job back up.
@@ -188,6 +210,20 @@ final class ConnectorHealth: ObservableObject {
         return ["connected": .connected, "needsSignIn": .needsSignIn, "missing": .missing][value] ?? .unknown
     }
 
+    /// The hub's latest record of this app (the screen's copy of the list is newer than the one the connector was made from).
+    func hubRecord(of connector: BotConnector) -> HubAppRecord? {
+        guard connector.hub != nil else { return nil }
+        return hubApps.first(where: { $0.id == connector.id }) ?? connector.hub
+    }
+
+    /// One status for a hub app, the same for every brain.
+    func onHub(_ connector: BotConnector) -> ConnectorState? {
+        guard let record = hubRecord(of: connector) else { return nil }
+        if let test = testStatus(connector) { return test }
+        if record.enabled, record.status == "unknown", isChecking { return .unknown }
+        return record.connectorState
+    }
+
     func onClaude(_ connector: BotConnector) -> ConnectorState {
         if let test = testStatus(connector) { return test }
         guard let name = connector.claudeServer else { return .missing }
@@ -204,6 +240,15 @@ final class ConnectorHealth: ObservableObject {
 
     func state(of connector: BotConnector) -> RowState {
         if connector.isSkill { return .skills }
+        if let hubState = onHub(connector) {
+            switch hubState {
+            case .connected: return .connected
+            case .needsSignIn: return .needsSignIn
+            case .failed(let reason): return .failed(reason)
+            case .missing: return .missing
+            case .unknown: return isChecking ? .checking : .missing
+            }
+        }
         let claudeSide = onClaude(connector)
         let openCodeSide = onOpenCode(connector)
         if claudeSide == .unknown { return .checking }
@@ -219,6 +264,7 @@ final class ConnectorHealth: ObservableObject {
     /// apps through Claude, and the rest through OpenCode's own servers.
     func state(for connector: BotConnector, provider: String) -> ConnectorState {
         if connector.isSkill { return .connected }
+        if let hubState = onHub(connector) { return hubState }
         let claudeSide = onClaude(connector)
         if provider == "claude" || BotConnectors.bridged(connector) { return claudeSide }
         return onOpenCode(connector)
@@ -342,6 +388,19 @@ final class ConnectorHealth: ObservableObject {
     /// Sign in to an app for the bots that use it: claude.ai connectors are signed in on the web; an OpenCode server signs
     /// in through OpenCode itself. In the test profile the action is recorded instead (no browser tab on the owner's screen).
     func signIn(_ connector: BotConnector, forBot bot: NativeBot?) async -> String {
+        // A hub app signs in inside Theo: the hub opens the provider's page in the browser and waits for it to come back.
+        if let record = hubRecord(of: connector) {
+            if record.signsInWithBrowser {
+                do {
+                    let status = try await ConnectorHub.signIn(record.id) { url in TheoOpen.url(url) }
+                    return status == "connected" ? "Signed in to \(record.name)." : "\(record.name) still isn't connected (\(status)). Try again from Connectors."
+                } catch {
+                    return error.localizedDescription
+                }
+            }
+            if record.takesPastedToken { return "\(record.name) takes a token: paste it in Theo's Connectors page." }
+            if !record.isClaudeAccount { return "\(record.name) needs no sign-in. Try again from Connectors." }
+        }
         let onOpenCode = bot.map { $0.provider == "opencode" } ?? false
         if onOpenCode, connector.openCodeURL != nil {
             if TheoProfile.isTest {

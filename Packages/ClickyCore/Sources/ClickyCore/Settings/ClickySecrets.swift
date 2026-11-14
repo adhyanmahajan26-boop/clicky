@@ -19,7 +19,9 @@ public enum ClickySecrets {
         case updateToken = "update-token"
     }
 
-    static let service = "com.personal.clicky.secrets"
+    /// Set once at launch by a test profile (".test", ".test-unittests"), so its keys never overwrite or read the owner's.
+    nonisolated(unsafe) public static var serviceSuffix = ""
+    static var service: String { "com.personal.clicky.secrets" + serviceSuffix }
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cache: [Item: String?] = [:]
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Copies the installers Tauri built into one folder under release names, and writes SHA256SUMS ("<hex>  <name>").
+"""Copies the installers Tauri built into one folder under release names, adds the one-line install scripts with the releases
+repo written in (install/releases-repo, through Tools/install/stamp-installer.py), and writes SHA256SUMS ("<hex>  <name>").
 
   python3 tools/collect_installers.py <bundle dir> <out dir> <build>
 
 Names follow the release conventions of the Mac app's releases: nothing ends in .zip (the Mac app's updater takes the first
 .zip in a release), and Windows and Linux assets say so in their names (the Mac install.sh skips those).
 """
-import hashlib, pathlib, shutil, sys
+import hashlib, pathlib, shutil, subprocess, sys
 
 bundle, out, build = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 out.mkdir(parents=True, exist_ok=True)
@@ -27,6 +28,16 @@ for pattern, name in rules:
         shutil.copy2(f, target)
         made.append(target)
         break
+# The install scripts as the release carries them: the same files with the releases repo filled in, so
+# `irm .../install.ps1 | iex` and `curl .../install-linux.sh | bash` need no settings.
+crossplatform = pathlib.Path(__file__).resolve().parents[1]
+releases_repo = (crossplatform / "install" / "releases-repo").read_text().strip()
+stamper = crossplatform.parent / "Tools" / "install" / "stamp-installer.py"
+for script_name in ("install.ps1", "install-linux.sh"):
+    stamped_script = out / script_name
+    subprocess.run([sys.executable, str(stamper), str(crossplatform / "install" / script_name), str(stamped_script),
+                    "--repo", releases_repo], check=True)
+    made.append(stamped_script)
 sums = out / "SHA256SUMS"
 lines = [l for l in (sums.read_text().splitlines() if sums.exists() else []) if l.strip()]
 names = {l.split("  ", 1)[1] for l in lines}
@@ -36,5 +47,5 @@ for f in made:
 sums.write_text("\n".join(lines) + "\n")
 for f in made:
     print(f.name, f.stat().st_size)
-if not made:
+if not any(f.name not in ("install.ps1", "install-linux.sh") for f in made):
     sys.exit("no installers found under %s" % bundle)

@@ -23,13 +23,16 @@ param(
   [switch]$Help
 )
 
+# The release's copy of this script has its repo written in here (Tools/install/stamp-installer.py, run by
+# tools/collect_installers.py). It stays empty in the repo, where the script reads .\releases-repo instead.
+$PublishedReleasesRepo = ""
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 # Windows PowerShell 5.1 on older Windows 10 may still offer only TLS 1.0/1.1, which GitHub refuses.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 function Main {
-  $Repo = if ($env:THEO_RELEASES_REPO) { $env:THEO_RELEASES_REPO } else { "adhyanmahajan26-boop/claudia-releases" }
   $Api = if ($env:THEO_GITHUB_API) { $env:THEO_GITHUB_API.TrimEnd("/") } else { "https://api.github.com" }
   $DataDir = Join-Path $env:APPDATA "Theo-Desktop"
 
@@ -46,7 +49,8 @@ Theo for Windows installer
   -Uninstall         remove Theo, keep its data
   -Purge             remove Theo and its data (asks first; -Yes skips the question)
 
-Environment: THEO_RELEASES_REPO, THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (falls back to GH_TOKEN, GITHUB_TOKEN, then gh auth token), THEO_GITHUB_API.
+Environment: THEO_RELEASES_REPO (default: the repo this copy was published to), THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (only for a
+private releases repo, a public one needs nothing; falls back to GH_TOKEN, GITHUB_TOKEN, then gh auth token), THEO_GITHUB_API.
 "@
     return
   }
@@ -83,11 +87,18 @@ Environment: THEO_RELEASES_REPO, THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (falls back
       if ($From -match "^https?://") { Invoke-WebRequest -UseBasicParsing -Uri $From -OutFile $setup } else { Copy-Item $From $setup }
       if ((Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower() -ne $Sha256.ToLower()) { throw "Checksum mismatch: refusing to install $From" }
     } else {
+      $Repo = Get-ReleasesRepo
       $headers = @{ "Accept" = "application/vnd.github+json"; "User-Agent" = "theo-installer" }
       $token = Get-Token
       if ($token) { $headers["Authorization"] = "Bearer $token" }
       $url = if ($Version) { "$Api/repos/$Repo/releases/tags/build-$($Version -replace '^build-','')" } else { "$Api/repos/$Repo/releases/latest" }
-      $release = Invoke-RestMethod -Uri $url -Headers $headers
+      try {
+        $release = Invoke-RestMethod -Uri $url -Headers $headers
+      } catch {
+        $status = 0
+        if ($_.Exception.Response) { try { $status = [int]$_.Exception.Response.StatusCode } catch { } }
+        throw (Get-ReleaseFailureMessage -Status $status -SentToken ([bool]$token) -Repo $Repo)
+      }
       $build = $release.tag_name -replace '^build-', ''
       $installed = Get-InstalledBuild
       if (-not $Force -and $installed -eq $build) { Write-Output "Theo $build is already installed (-Force reinstalls)."; return }
@@ -119,6 +130,35 @@ Environment: THEO_RELEASES_REPO, THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (falls back
     }
   } finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+  }
+}
+
+# The releases repo: THEO_RELEASES_REPO, else the one this copy was published with, else releases-repo next to the script
+# when it runs from a checkout of Theo's source.
+function Get-ReleasesRepo {
+  $repo = $env:THEO_RELEASES_REPO
+  if (-not $repo) { $repo = $PublishedReleasesRepo }
+  if (-not $repo -and $PSScriptRoot) {
+    $file = Join-Path $PSScriptRoot "releases-repo"
+    if (Test-Path $file) { $repo = (Get-Content $file -First 1).Trim() }
+  }
+  if (-not $repo) { throw "This copy of the installer doesn't say where Theo's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install.ps1 attached to a release." }
+  if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "THEO_RELEASES_REPO must look like owner/name (got '$repo')." }
+  return $repo
+}
+
+# Says plainly why the release couldn't be read. GitHub answers 404 for a private repo it won't show.
+function Get-ReleaseFailureMessage([int]$Status, [bool]$SentToken, [string]$Repo) {
+  switch ($Status) {
+    404 {
+      if (-not $SentToken) { return "This build's updates are private: $Repo can't be read without access. Ask whoever gave you Theo for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)" }
+      return "No such release in $Repo, or the GitHub token can't read that repo."
+    }
+    401 { return "GitHub refused the token (THEO_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN or gh's). A public releases repo needs no token: remove it and try again." }
+    403 { return "GitHub is limiting requests from this network right now. Try again in a while." }
+    429 { return "GitHub is limiting requests from this network right now. Try again in a while." }
+    0 { return "Couldn't reach GitHub. Check the internet connection and try again." }
+    default { return "GitHub answered $Status for the release list of $Repo." }
   }
 }
 

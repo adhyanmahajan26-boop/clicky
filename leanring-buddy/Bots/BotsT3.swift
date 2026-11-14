@@ -3,7 +3,7 @@
 //  leanring-buddy
 //
 //  Hands the Project room's final prompt to T3 Code and follows it through:
-//  a project (a new git repo under ~/Projects, or a new branch in a worktree
+//  a project (a new git repo in the projects folder, ~/Projects unless changed in Settings, or a new branch in a worktree
 //  of a repo Addy named), a thread on Opus 5.5 at high effort, then the run
 //  tracked until it ends. The result comes back to the room as a report:
 //  the agent's summary, what changed, Theo's own test run, and a draft PR
@@ -93,6 +93,8 @@ struct T3Run: Codable, Identifiable, Equatable {
     var sessionID: String?
     /// Its harness doesn't say which chat a new run made, and Theo couldn't tell. It never guesses.
     var chatUnknown: Bool?
+    /// Its repo has no remote: the run still has its own branch and worktree, but nothing is pushed and there's no pull request.
+    var noRemote: Bool?
 }
 
 /// One file a run changed.
@@ -104,16 +106,29 @@ struct RunFileChange: Codable, Equatable, Identifiable {
 }
 
 enum BotsT3 {
-    /// The coding model T3 Code builds with: Opus 5.5 through T3 Code's Claude provider.
+    /// The coding model T3 Code builds with when the owner hasn't picked one in Settings › Harnesses: Opus 5.5 through
+    /// T3 Code's Claude provider (`t3 thread start` needs a provider and a model). Only reached by someone who has T3 Code
+    /// and sends builds to it; every other harness starts on its own default model.
     static let provider = "claudeAgent"
     static let model = "claude-opus-5-5"
     static let effort = "high"
     static let modelName = "Claude Opus 5.5"
 
-    /// The t3 launcher T3 Code writes into its data folder (Cursor Assistant build first).
+    /// A private build of T3 Code ("T3 Code Cursor Assistant") that one Mac may have. It's used only where it's
+    /// installed; a Mac without it never looks for it and gets stock T3 Code.
+    enum PrivateT3Build {
+        static let launcherPath = ".t3-claudia/bin/t3"
+        static let appName = "T3 Code Cursor Assistant.app"
+        static let bundleIdentifier = "com.addy.claudia.t3code"
+    }
+
+    /// Stock T3 Code's launcher in its data folder.
+    static let stockLauncherPath = ".t3/bin/t3"
+
+    /// The t3 launcher T3 Code writes into its data folder: the private build's when it's installed, else stock T3 Code's.
     static var cli: URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return [".t3-claudia/bin/t3", ".t3/bin/t3"].map { home.appendingPathComponent($0) }
+        return [PrivateT3Build.launcherPath, stockLauncherPath].map { home.appendingPathComponent($0) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
@@ -130,6 +145,19 @@ enum BotsT3 {
         pull request, and don't mention them in your report: Theo commits anything left over, pushes the branch and \
         opens the draft pull request after you finish.
         """
+
+    /// The same for a branch of a repo with no remote: it's committed here, and nothing is pushed.
+    static let localDeliveryNote = """
+
+
+        ---
+        When you're done: commit your work to git with a clear message, run the tests or checks you wrote and \
+        say how they went, and end with a short report: what you did, how to run it, the tests and their results, and \
+        anything left undone. If your sandbox can't commit, just leave the changes in the folder. Don't push or open a \
+        pull request: this repo has no remote, so the work stays on this branch, and Theo commits anything left over.
+        """
+
+    static func deliveryNote(for run: T3Run) -> String { run.noRemote == true ? localDeliveryNote : deliveryNote }
 
     /// The ```prompt block Theo writes as the team's final prompt, if there is one.
     static func promptBlock(in text: String) -> String? { fenced("prompt", in: text) }
@@ -194,7 +222,7 @@ enum BotsT3 {
     /// What a follow-up ends with: a plain folder stays out of git, everything else commits.
     static func followupNote(for run: T3Run) -> String {
         if run.continuedChat != nil { return continuedNote }
-        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote
+        return run.repo == nil && run.baseCommit == nil ? plainFolderNote : deliveryNote(for: run)
     }
 
     /// A new project's folder is made first and the agent starts inside it, whatever a bot's prompt says about making one.
@@ -205,9 +233,12 @@ enum BotsT3 {
     /// The same again after the instructions: a quick model follows whatever it read last.
     static let newFolderReminder = "\n\nRemember: this project's folder already exists and you're in it. Keep everything in the current folder."
 
-    /// Where the project folders are, in words an agent's shell understands. A test profile's folders are its own, while its agents keep the
-    /// owner's real home, so "~/Projects" would send them into the owner's real folders.
-    static var projectsWords: String { TheoProfile.isTest ? projectsFolder.path : "~/Projects" }
+    /// Where the project folders are, in words an agent's shell understands ("~/Projects" unless the owner moved it). A test profile's
+    /// folders are its own, while its agents keep the owner's real home, so "~/…" would send them into the owner's real folders.
+    static var projectsWords: String {
+        TheoProfile.isTest ? projectsFolder.path
+            : ProjectsFolder.words(forPath: projectsFolder.path, homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
+    }
 
     /// What goes to an agent. In a test profile "~/Projects" means that profile's folder, whoever wrote it.
     static func forAgent(_ text: String) -> String {
@@ -272,24 +303,23 @@ enum BotsT3 {
         var subfolder = ""
         var topLevel: URL?
         if let repo { topLevel = await gitTopLevel(of: repo) }
-        if let repo, topLevel == nil {
+        var repoHasRemote = false
+        if let topLevel { repoHasRemote = await hasRemote(topLevel) }
+        let placement = CodingPlacement.decide(folderNamed: repo != nil, isGitRepo: topLevel != nil, hasRemote: repoHasRemote)
+        if let repo, placement == .inPlace {
             plainFolder = true
             _ = try? await shell(cli, ["project", "add", repo.path])
             arguments += [repo.path, "-"]
             run = T3Run(id: "", title: title, folder: repo.path)
-        } else if let topLevel, !(await hasRemote(topLevel)) {
-            // A project of the owner's that lives only here: changes go right in it, on its own history.
-            let base = try await headCommit(in: topLevel)
-            _ = try? await shell(cli, ["project", "add", topLevel.path])
-            arguments += [topLevel.path, "-"]
-            run = T3Run(id: "", title: title, folder: topLevel.path, baseCommit: base)
-        } else if let repo, let topLevel {
+        } else if let repo, let topLevel, placement.hasOwnBranch {
+            // Its own branch and worktree, with or without a remote; one with no remote is never pushed.
             let branch = "theo/\(slug(title))-\(Int(Date().timeIntervalSince1970) % 100000)"
             let base = try await headCommit(in: topLevel)
             _ = try? await shell(cli, ["project", "add", topLevel.path])
             arguments += [topLevel.path, "-", "--worktree", base, "--branch", branch]
             run = T3Run(id: "", title: title, folder: topLevel.path, repo: topLevel.path, branch: branch, baseCommit: base)
             run.baseBranch = await currentBranch(in: topLevel)
+            if !placement.publishes { run.noRemote = true }
             subfolder = subfolderNote(repo, in: topLevel)
         } else {
             let folder = try await newGitProject(title: newFolder ?? title)
@@ -304,7 +334,7 @@ enum BotsT3 {
         let chosenModel = modelChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingModel : nil) ?? model
         let chosenEffort = effortChoice ?? (target == HarnessPrefs.codingTarget ? HarnessPrefs.codingEffort : nil) ?? effort
         arguments += ["--title", title, "--provider", t3Provider(forModel: chosenModel), "--model", chosenModel, "--json"]
-        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote))
+        let message = forAgent(subfolder + prompt + (repo == nil ? newFolderReminder : "") + (plainFolder ? plainFolderNote : deliveryNote(for: run)))
         run.model = chosenModel
         run.effort = chosenEffort
         run.prompt = prompt
@@ -399,7 +429,8 @@ enum BotsT3 {
 
     /// The T3 Code app whose data folder a `t3` launcher uses.
     private static func app(forCLI cli: URL) -> URL? {
-        let names = cli.path.contains(".t3-claudia") ? ["T3 Code Cursor Assistant.app"] : ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code (Alpha).app"]
+        let stockNames = ["T3 Code (Nightly).app", "T3 Code.app", "T3 Code (Alpha).app"]
+        let names = cli.path.hasSuffix(PrivateT3Build.launcherPath) ? [PrivateT3Build.appName] + stockNames : stockNames
         return names.map { URL(fileURLWithPath: "/Applications/\($0)") }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
@@ -460,7 +491,7 @@ enum BotsT3 {
 
     /// T3 Code opens where it last was; with a display picked for Theo, its window goes there instead.
     @MainActor private static func moveT3ToTheosScreen() {
-        let app = ["com.addy.claudia.t3code", "com.t3tools.t3code"].lazy
+        let app = [PrivateT3Build.bundleIdentifier, "com.t3tools.t3code"].lazy
             .compactMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }.first
         ClaudiaScreen.moveFrontWindow(of: app)
     }
@@ -496,8 +527,9 @@ enum BotsT3 {
         return !remotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The projects folder (Settings › Harnesses, `v2.code.projectsFolder`, default ~/Projects). Not made until the first project needs it.
     static var projectsFolder: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
+        URL(fileURLWithPath: ClickySettings.projectsFolderPath(homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path), isDirectory: true)
     }
 
     /// The owner's project folders.
@@ -519,7 +551,7 @@ enum BotsT3 {
         case failed(String)
     }
 
-    /// A new folder in ~/Projects on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
+    /// A new folder in the projects folder on this Mac, with git and an empty first commit. Used wherever a folder is made, in chat or from a run's card.
     static func makeProject(named name: String) async -> MadeProject {
         let exact = projectsFolder.appendingPathComponent(slug(name), isDirectory: true)
         if FileManager.default.fileExists(atPath: exact.path) { return .alreadyThere(exact) }
@@ -544,7 +576,7 @@ enum BotsT3 {
     }
 
     static func newProjectFolder(title: String) throws -> URL {
-        let projects = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Projects", isDirectory: true)
+        let projects = projectsFolder
         var folder = projects.appendingPathComponent(slug(title), isDirectory: true)
         var suffix = 2
         while FileManager.default.fileExists(atPath: folder.path) {
@@ -635,6 +667,10 @@ enum BotsT3 {
         if !stopped {
             if let pr = state.pullRequest {
                 run.pullRequest = pr
+            } else if !failed, let branch = run.branch, run.noRemote == true {
+                // Nowhere to push: the work stays on its branch here, and the room is told so.
+                if let commitProblem { problems.append(commitProblem) }
+                lines.append(CodingPlacement.localBranchWords(branch: branch))
             } else if !failed, let branch = run.branch {
                 let changed = run.changedFiles ?? []
                 if let commitProblem {
@@ -824,21 +860,12 @@ enum BotsT3 {
     /// A command-line tool by name: the usual install folders, then the login shell's PATH (node from
     /// pnpm or nvm lives in the home folder, which a Mac app's PATH doesn't include).
     static func tool(_ name: String) -> URL? {
+        // The real home's folders first: in a test profile the home folder is the profile's own.
         let home = TheoProfile.realHome
         if let found = executable(["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)",
                                    "\(home)/Library/pnpm/\(name)", "/usr/bin/\(name)"]) { return found }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "command -v \(name)"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return nil }
-        let path = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        process.waitUntilExit()
-        return path.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
+        // Then Theo's one finder, which asks the owner's own login shell for its PATH.
+        return HarnessCatalog.locate(binary: name)
     }
 
     private static func executable(_ paths: [String]) -> URL? {

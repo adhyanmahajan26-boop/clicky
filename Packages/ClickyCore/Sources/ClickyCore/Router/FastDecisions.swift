@@ -160,14 +160,14 @@ public enum FastDecisions {
         guard options.count >= 2 else { return nil }
         let shown = Array(options.prefix(FastDecisionPolicy.pressOptionsAtMost))
         var criteria: [String: String] = [:]
-        for option in shown { criteria[option.id] = "Addy means the \(option.role) \"\(String(option.label.prefix(120)))\" in \(option.app)." }
+        for option in shown { criteria[option.id] = "The user means the \(option.role) \"\(String(option.label.prefix(120)))\" in \(option.app)." }
         let list = shown.map { "- \($0.role) \"\(String($0.label.prefix(120)))\" in \($0.app)" }.joined(separator: "\n")
         return FastDecisionQuestion(
-            state: "Addy told their assistant: \(String(words.prefix(300)))\nThe pointer is on: \(pointerOn ?? "nothing in particular")\nWhat can be pressed on screen:\n\(list)",
-            question: PrismQuestion(kind: .choice, instructions: "Which item does Addy mean?", criteria: criteria),
+            state: "The user told their assistant: \(String(words.prefix(300)))\nThe pointer is on: \(pointerOn ?? "nothing in particular")\nWhat can be pressed on screen:\n\(list)",
+            question: PrismQuestion(kind: .choice, instructions: "Which item does the user mean?", criteria: criteria),
             alsoAsk: [namesOneID: PrismQuestion(
                 kind: .noul,
-                instructions: "Did Addy clearly name one thing to press that's in this list?",
+                instructions: "Did the user clearly name one thing to press that's in this list?",
                 criteria: ["true": "What they said matches one listed item by its name or meaning, or they said 'this' and the pointer is on it.",
                            "false": "Nothing listed matches, several match equally, they named more than one thing, or they aren't asking for something to be pressed."])])
     }

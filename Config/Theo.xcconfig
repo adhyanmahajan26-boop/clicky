@@ -1,0 +1,21 @@
+// Theo for Mac: the build settings that differ from one person's Mac to another's.
+// The Xcode project uses this file as the base of its Debug and Release configurations.
+
+// Where Theo's builds are published: a GitHub repo (owner/name) whose releases Tools/release.sh
+// makes. This is the one place the Mac side reads it from: the app's updater (through the
+// TheoReleasesRepository key in Info.plist), Tools/release.sh, Tools/install/make-cask.sh, and
+// Tools/install/install.sh when it runs from a checkout (release.sh writes it into the copy it
+// publishes). The Windows and Linux installers read crossplatform/install/releases-repo, which must
+// hold the same value: Tools/set-releases-repo.sh changes both, and
+// Tools/install/check-release-config.sh fails when they differ.
+THEO_RELEASES_REPO = adhyanmahajan26-boop/claudia-releases
+
+// Signing. Nobody's Apple team is committed: without one, Xcode signs to run locally on this Mac
+// (macOS asks for permissions again after each rebuild) and CI builds with signing off.
+// To sign with your own team, so permissions survive rebuilds and updates, run
+//   Tools/setup-signing.sh            (finds the team of your Apple Development certificate)
+//   Tools/setup-signing.sh ABCDE12345 (or names it)
+// which writes Config/Signing.local.xcconfig. That file is in .gitignore; see
+// Config/Signing.local.xcconfig.example and docs/INSTALL.md, "Signing".
+DEVELOPMENT_TEAM =
+#include? "Signing.local.xcconfig"

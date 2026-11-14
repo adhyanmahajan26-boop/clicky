@@ -16,7 +16,14 @@ struct TheoApp: App {
     @NSApplicationDelegateAdaptor(TheoAppDelegate.self) private var delegate
 
     init() {
+        // First of all: a test profile (and unit tests, which are always on `test-unittests`) gets its own home, defaults
+        // and Keychain service before anything below reads or migrates the owner's.
         TheoProfile.prepareAtLaunch()
+        // Before anything builds a prompt: a Mac set up when the owner's name and the call language were built in keeps them.
+        ClickySettings.migrateOwnerNameIfNeeded()
+        CallSettings.migrateLanguageIfNeeded()
+        // Helpers now follow the main brain; a Mac set up when they were always Haiku keeps Haiku.
+        ClickyModels.keepEarlierHelperDefaultOnce(setupWasCompleted: ClickySettings.isSetupCompleted)
         // AppKit and SwiftUI each add these to the Edit menu; the text fields still have them on right click.
         UserDefaults.standard.set(true, forKey: "NSDisabledDictationMenuItem")
         UserDefaults.standard.set(true, forKey: "NSDisabledCharacterPaletteMenuItem")
@@ -58,9 +65,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     private var productsObserver: NSObjectProtocol?
 
     /// Unit tests host the app; then nothing starts (no overlay, mic, event tap or servers).
-    static var isHostingUnitTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
+    static var isHostingUnitTests: Bool { TheoProfile.isHostingTests }
 
     /// Started with `--background` (an update, a reinstall): the window opens behind whatever the owner is doing.
     static var launchedInBackground: Bool { CommandLine.arguments.contains("--background") }
@@ -94,11 +99,15 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         PrismClient.warm()
         if Self.isHostingUnitTests { return }
+        // Defaults that no longer assume one particular Mac: a Mac that relied on the old ones keeps them (once per Mac).
+        HarnessPrefs.keepEarlierCodingDefaultsOnce()
+        ClickySettings.keepRetiredRepoRootOnce()
         TheoFirstClick.install()
         Self.keepConsoleLog()
         CompanionManager.current = companionManager
-        // The harnesses' PATH comes from a login shell; read it once now, off the main thread.
-        Task.detached(priority: .utility) { _ = HarnessCatalog.loginShellPath }
+        // The harnesses' PATH comes from a login shell; read it once now, off the main thread. Not Task.detached: with the
+        // app's default MainActor isolation that closure ran on the main thread, inside a first use already waiting there.
+        DispatchQueue.global(qos: .utility).async { _ = HarnessCatalog.loginShellPath }
         Task { @MainActor in HarnessCenter.shared.refresh() }
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means

@@ -46,7 +46,8 @@ enum DeviceSnapshotBuilder {
         }
         for provider in ProviderKeys.shared.usableChatProviders { ready["api:\(provider.id)"] = true }
         return DeviceSnapshot(name: TheoLink.localName, projectsFolder: BotsT3.projectsFolder.path, projects: BotsT3.projects(), harnesses: ready,
-                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines))
+                              hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines),
+                              deviceID: DeviceRoles.thisMacID, isDesktop: DeviceRoles.thisMacIsDesktop, routinesChoice: DeviceRoles.choice(.routines).rawValue)
     }
 }
 
@@ -77,13 +78,15 @@ extension BotsStore {
         }
         let forwarded = forwardedTurns[room]
         let projects = forwarded != nil ? (peerDevice?.projects.map(\.name) ?? []) : hereProjects
-        // Run on this Mac for the other one, its folders are the other Mac's. Only a test profile's folder isn't "~/Projects" there.
-        let projectsFolder = forwarded != nil && TheoProfile.isTest ? (peerDevice?.projectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
+        // Run on this Mac for the other one, its folders are the other Mac's, in the projects folder that Mac has set.
+        // A test profile's folder is written out in full: its agents keep the owner's real home.
+        let peerProjectsFolder = peerDevice.map { TheoProfile.isTest ? $0.projectsFolder : ProjectsFolder.words(forOtherMacPath: $0.projectsFolder) }
+        let projectsFolder = forwarded != nil ? (peerProjectsFolder ?? BotsT3.projectsWords) : BotsT3.projectsWords
         // Bots & coding is set to this Mac, and the owner typed on the other: its folders and runs are this Mac's.
         let typedOn = ownerMacs[room].map(TheoLink.shortName)
         let why = forwarded?.why ?? typedOn.map { _ in "Bots & coding is set to this Mac" }
         return BotPlaceFacts(owner: BotPrompts.ownerName, thisMac: here, ownerMac: forwarded?.fromMac ?? typedOn, whyHere: why, codingMac: forwarded?.fromMac, projects: projects, projectsFolder: projectsFolder, ready: hereReady,
-                             otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? (DeviceRoles.thisMac != .macStudio)),
+                             otherMac: otherName, otherMacConnected: link.isConnected, otherMacHasScreens: otherName != nil && (peerDevice?.hasScreens ?? !StudioController.isAvailable),
                              thisMacHasScreens: StudioController.isAvailable, canReadFiles: Self.engineReadsFiles(bot))
     }
 
@@ -97,7 +100,7 @@ extension BotsStore {
     /// When this bot's engine can't run on this Mac but can on the other, connected one: that Mac's name, and why. Nil means it runs here.
     func turnGoesAcross(_ bot: NativeBot) -> (mac: String, why: String)? {
         guard let problem = EngineReadiness.problem(with: bot.provider), let peer = TheoLink.shared.peerName,
-              DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), thisMac: DeviceRoles.thisMac, paired: TheoLink.shared.isPaired, otherMacOnline: TheoLink.shared.isConnected,
+              DeviceRouting.botTurn(choice: DeviceRoles.choice(.bots), pair: DeviceRoles.pair,
                                     engineHere: false, engineThere: peerDevice?.harnesses[bot.provider] == true) == .engineOnOtherMac else { return nil }
         return (peer, "\(problem) on the \(TheoLink.shortName(TheoLink.localName))")
     }
@@ -179,14 +182,14 @@ extension BotsStore {
         let harness = continuingHarness(words: words, room: room)
         let named = projectChoice(ownerWords: words, answer: nil).repo?.path
         guard let folder = named ?? latestRun(in: room).flatMap({ $0.isRemote ? nil : $0.folder }) else {
-            return "Addy wants to carry on earlier work but no folder is clear yet: ask which folder, in one short question."
+            return "\(OwnerName.startingSentence(BotPrompts.ownerName)) wants to carry on earlier work but no folder is clear yet: ask which folder, in one short question."
         }
         let chats = await HarnessChats.list(harness: harness, folder: folder)
         let label = HarnessCatalog.label(harness)
         if chats.isEmpty, harness == "t3", !HarnessChats.isT3ServerUp {
-            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If Addy names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
+            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If \(BotPrompts.ownerName) names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
         }
-        guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if Addy asked to continue one." }
+        guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if \(BotPrompts.ownerName) asked to continue one." }
         let lines = chats.prefix(8).map { "- \($0.title) (\(HarnessChatText.age(of: $0.updatedAt)) ago): \($0.id)" }.joined(separator: "\n")
         return "Earlier \(label) chats in \(folder), newest first:\n\(lines)\nTo continue one, write a line \"Continue: <its id>\" next to the ```prompt block, with \"Repo: \(folder)\"."
     }
@@ -216,7 +219,7 @@ enum BotMemory {
 
     /// Written at launch, so it always matches this build's rules. Only rewritten when it changed.
     static func writeGuide(owner: String) {
-        let text = HarnessGuide.markdown(owner: owner)
+        let text = HarnessGuide.markdown(owner: owner, projectsFolder: BotsT3.projectsWords)
         if (try? String(contentsOf: guideFile, encoding: .utf8)) != text { try? text.write(to: guideFile, atomically: true, encoding: .utf8) }
     }
 

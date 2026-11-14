@@ -30,8 +30,63 @@ public struct UpdateRelease: Equatable, Sendable {
 }
 
 public enum UpdateFeed {
-    /// The updates repo's newest release (GitHub API, no sign-in for a public repo).
-    public static let defaultFeedURL = URL(string: "https://api.github.com/repos/adhyanmahajan26-boop/claudia-releases/releases/latest")!
+    /// The Info.plist key holding the releases repo (owner/name). The build fills it from THEO_RELEASES_REPO in
+    /// Config/Theo.xcconfig, the one place the Mac side keeps it, so a fork changes it there and nowhere in Swift.
+    public static let releasesRepositoryInfoKey = "TheoReleasesRepository"
+
+    /// The releases repo this build of the app was made for, from its Info.plist. Nil when the build didn't set one.
+    public static var bundledReleasesRepository: String? {
+        releasesRepository(fromInfoValue: Bundle.main.object(forInfoDictionaryKey: releasesRepositoryInfoKey) as? String)
+    }
+
+    /// The updates feed of this build: its releases repo's newest release (GitHub API, no sign-in for a public repo).
+    public static var bundledFeedURL: URL? {
+        bundledReleasesRepository.flatMap(latestReleaseFeedURL(repository:))
+    }
+
+    /// "owner/name" when the Info.plist value looks like a GitHub repo. Nil for an empty value or one the build left
+    /// unexpanded ("$(THEO_RELEASES_REPO)"), so a build without the setting says so instead of asking a wrong URL.
+    public static func releasesRepository(fromInfoValue infoValue: String?) -> String? {
+        let repository = (infoValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = repository.split(separator: "/", omittingEmptySubsequences: false)
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        guard parts.count == 2, parts.allSatisfy({ part in
+            !part.isEmpty && part.unicodeScalars.allSatisfy { allowedCharacters.contains($0) }
+        }) else { return nil }
+        return repository
+    }
+
+    /// GitHub's "latest release" API URL for a repo (owner/name).
+    public static func latestReleaseFeedURL(repository: String) -> URL? {
+        guard let checkedRepository = releasesRepository(fromInfoValue: repository) else { return nil }
+        return URL(string: "https://api.github.com/repos/\(checkedRepository)/releases/latest")
+    }
+
+    /// The repo's releases page, for a person to open in a browser.
+    public static func releasesPageURL(repository: String) -> URL? {
+        guard let checkedRepository = releasesRepository(fromInfoValue: repository) else { return nil }
+        return URL(string: "https://github.com/\(checkedRepository)/releases/latest")
+    }
+
+    /// What a failed update check tells the person, from GitHub's answer. GitHub answers 404 both for a repo
+    /// that doesn't exist and for a private repo the request can't see, so without a token the honest answer is
+    /// that this build's updates are private (not a sign-in instruction most people can't follow).
+    public static func checkFailureMessage(statusCode: Int, sentToken: Bool, repository: String?) -> String {
+        let repositoryName = repository ?? "the updates repo"
+        switch statusCode {
+        case 404 where !sentToken:
+            return "This build's updates are private, so this Mac can't see them. If you were given access to \(repositoryName), "
+                + "paste a GitHub token that can read it below. Otherwise, new builds come from whoever gave you Theo."
+        case 404:
+            return "No updates found: \(repositoryName) has no published build yet, or the saved GitHub token can't read it."
+        case 401:
+            return "GitHub refused the saved token. Paste a new one below, or remove it if the updates are public."
+        case 403, 429:
+            return "GitHub is limiting how often this Mac can check for updates. Theo tries again later by itself."
+        default:
+            return "The update check answered \(statusCode)."
+        }
+    }
 
     /// Parses a GitHub "release" object. Nil when it isn't a usable Clicky release.
     public static func parseRelease(_ data: Data) -> UpdateRelease? {

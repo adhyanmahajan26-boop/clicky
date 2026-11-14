@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import ClickyCore
 import Combine
 import SwiftUI
 
@@ -274,8 +275,10 @@ final class T3ConnectModel: ObservableObject {
 
 struct T3ConnectView: View {
     @StateObject private var model = T3ConnectModel()
-    /// The release that carries the T3 Code Cursor Assistant build (T3-Code-Cursor-Assistant-arm64.zip).
-    static let builtInReleaseURL = URL(string: "https://github.com/adhyanmahajan26-boop/clicky/releases/latest")!
+    /// The release that carries the T3 Code Cursor Assistant build (T3-Code-Cursor-Assistant-arm64.zip): this build's
+    /// releases repo (Config/Theo.xcconfig), the one place people who aren't the owner can download from.
+    /// Nil only for a build made without a releases repo, which then has no download button.
+    static let builtInReleaseURL: URL? = UpdateFeed.bundledReleasesRepository.flatMap(UpdateFeed.releasesPageURL(repository:))
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -357,7 +360,9 @@ struct T3ConnectView: View {
             } else {
                 HStack(spacing: 6) {
                     Text("No T3 Code app in Applications. Theo's tools still work once it's installed.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-                    Button("Get the build with Theo inside") { NSWorkspace.shared.open(Self.builtInReleaseURL) }.buttonStyle(.theo(.ghost, .small))
+                    if let builtInReleaseURL = Self.builtInReleaseURL {
+                        Button("Get the build with Theo inside") { NSWorkspace.shared.open(builtInReleaseURL) }.buttonStyle(.theo(.ghost, .small))
+                    }
                 }
                 .padding(.top, 4)
             }

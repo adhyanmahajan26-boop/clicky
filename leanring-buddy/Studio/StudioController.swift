@@ -2,8 +2,8 @@
 //  StudioController.swift
 //  leanring-buddy
 //
-//  Studio screens: two hidden 1440×900 displays, two tiles each, on a Mac Studio only and off until the owner turns them
-//  on. Nothing moves onto them except windows Theo puts there. Bots don't use them by themselves yet; this is the
+//  Studio screens: two hidden 1440×900 displays, two tiles each. Experimental: any Mac that can make a virtual display can
+//  have them, on one Mac of a linked pair (Settings › Devices), and they're off until the owner turns them on. Nothing moves onto them except windows Theo puts there. Bots don't use them by themselves yet; this is the
 //  plumbing (`open(window:…)`, `open(app:…)`) and a manual Assign menu on each tile.
 //
 //  Thumbnails: a tile holding a window of Theo's own draws its thumbnail from that window, which needs no permission and
@@ -38,21 +38,16 @@ final class StudioController: ObservableObject {
     let live = StudioLive()
     static let shared = StudioController()
 
-    /// Mac Studio only. On any other Mac the feature isn't there at all.
-    static let isAvailable: Bool = {
-        // uiStudio's model override is for tests of the gate.
-        let model = UserDefaults.standard.string(forKey: "test.studio.model").flatMap { TheoProfile.isTest ? $0 : nil } ?? StudioGate.currentModel
-        return StudioGate.isMacStudio(model: model, productName: productName(whenModelIs: model))
+    /// This Mac can make virtual displays (CGVirtualDisplay, reached through the runtime). A test profile can say it can't
+    /// (`test.studio.unsupported`), to test a Mac without them.
+    nonisolated static let canMakeHiddenScreens: Bool = {
+        if TheoProfile.isTest, UserDefaults.standard.bool(forKey: "test.studio.unsupported") { return false }
+        return NSClassFromString("CGVirtualDisplay") != nil && NSClassFromString("CGVirtualDisplayDescriptor") != nil
     }()
 
-    /// Only asked of the real machine, so a test's override isn't overruled by it.
-    private static func productName(whenModelIs model: String) -> String? {
-        guard model == StudioGate.currentModel else { return nil }
-        let entry = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
-        defer { IOObjectRelease(entry) }
-        guard let data = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? Data else { return nil }
-        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
-    }
+    /// The hidden screens live on this Mac, on or off: it can make them, and of two linked Macs it's the one they're set to
+    /// (Settings › Devices, by default the always-on Mac). The other Mac shows them in its Studio panel instead.
+    static var isAvailable: Bool { canMakeHiddenScreens && DeviceRoles.runsHere(.studioScreens) }
 
     enum Keys {
         static let enabled = "theo.studio.enabled"
@@ -849,8 +844,9 @@ final class StudioController: ObservableObject {
         if !view.tiles.isEmpty, !panelVisible { panelVisible = true }
     }
 
-    /// Whether this Mac has a Studio panel at all: its own screens, or the other Mac's.
-    static var hasPanel: Bool { isAvailable || TheoLink.shared.isPaired }
+    /// Whether this Mac has a Studio panel at all: its own screens once they've been turned on (they're experimental, so a Mac
+    /// that never did isn't shown them), or the other Mac's.
+    static var hasPanel: Bool { (isAvailable && (shared.isEnabled || shared.isOn)) || TheoLink.shared.isPaired }
 
     /// One running stream a hidden screen, cut into its tiles, while the panel can be seen and nothing's playing. A stream only
     /// delivers when the picture changes, and macOS checks its permission once. Taking separate pictures made it check on every

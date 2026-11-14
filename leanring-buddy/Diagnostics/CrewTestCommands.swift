@@ -44,7 +44,9 @@ enum CrewTestCommands {
         var state = link.statusReport
         state["localName"] = TheoLink.localName
         state["peerDevice"] = BotsStore.shared.peerDevice.map { ["name": $0.name, "projects": $0.projects.map(\.name), "harnesses": $0.harnesses, "hasScreens": $0.hasScreens] as [String: Any] } ?? NSNull()
-        state["thisMac"] = DeviceRoles.thisMac == .macStudio ? "macStudio" : "macBookAir"
+        let thisMac = DeviceRoles.thisMac
+        state["thisMac"] = ["id": thisMac.id, "name": thisMac.name, "isDesktop": thisMac.isDesktop] as [String: Any]
+        state["otherMac"] = DeviceRoles.otherMac.map { ["id": $0.id, "name": $0.name, "isDesktop": $0.isDesktop, "routinesChoice": $0.routinesChoice?.rawValue ?? "unknown"] as [String: Any] } ?? NSNull()
         state["botsRoute"] = "\(DeviceRoles.route(.bots))"
         state["routinesRoute"] = "\(DeviceRoles.route(.routines))"
         return state
@@ -86,7 +88,7 @@ enum CrewTestCommands {
         }
         var roster: [String: String] = [:]
         for (key, value) in controller.roster.bots { roster["\(key.screen).\(key.tile)"] = value }
-        return ["available": StudioController.isAvailable, "model": StudioGate.currentModel, "on": controller.isOn, "enabled": controller.isEnabled,
+        return ["available": StudioController.isAvailable, "canMakeScreens": StudioController.canMakeHiddenScreens, "model": StudioGate.currentModel, "on": controller.isOn, "enabled": controller.isEnabled,
                 "displays": controller.displayBounds(), "roster": roster, "thumbnails": controller.thumbnails.count,
                 "captureAllowed": controller.hasCapturePermission, "liveCapture": controller.liveCapture, "problem": controller.problem ?? "", "monitorCheck": controller.lastMonitorCheck,
                 "allScreens": NSScreen.screens.map { ["name": $0.localizedName, "x": $0.frame.minX, "y": $0.frame.minY, "w": $0.frame.width, "h": $0.frame.height] as [String: Any] },
@@ -135,7 +137,7 @@ enum CrewTestCommands {
         About three percent of the CPU and 180 MB with four tiles live. Thumbnails stop the moment the panel closes.
 
         ## Rollout
-        Mac Studio only for now, and off until you turn it on. Bots don't move onto the tiles by themselves yet; that comes after you've tried it.
+        Experimental, on any Mac, and off until you turn it on. Bots don't move onto the tiles by themselves yet; that comes after you've tried it.
         """
         store.seedForTest(theo.id, messages: [
             message("user", "Plan the Studio screens launch and get Builder started on the tiles.", 200),

@@ -2,11 +2,11 @@
 //  BotConnectors.swift
 //  leanring-buddy
 //
-//  The apps bots can use and whether each engine can reach them. Claude
-//  Code gets claude.ai connectors (Gmail, Notion, Drive…) from the signed-in
-//  account plus local MCP servers; OpenCode only has the MCP servers in its
-//  own config, so a cloud connector has to be added and signed in there
-//  separately. Statuses come from `claude mcp list` and `opencode mcp list`.
+//  The apps bots can use. With the connector hub (ConnectorHub.swift) they are Theo's own list: whatever the
+//  owner added (from the starter catalog, an address, a command, or their Claude account), the same for
+//  every brain, plus Theo's own screen tools and Chrome. Without the helper, it is the fixed list from before
+//  the hub, reached through Claude Code (claude.ai connectors) and OpenCode's own config, with statuses from
+//  `claude mcp list` and `opencode mcp list`.
 //
 
 import AppKit
@@ -27,10 +27,49 @@ struct BotConnector: Identifiable, Equatable {
     let openCodeURL: String?
     /// A skill set rather than a connector (always there when the plugin is).
     var isSkill = false
+    /// The hub's record of this app. Nil for Theo's own tools, Chrome and skills, and for every app while the helper is missing.
+    var hub: HubAppRecord? = nil
 }
 
 enum BotConnectors {
-    static let known: [BotConnector] = [
+    /// Every app a bot can be given right now: the hub's apps, then Theo's own tools. Without the helper, the list from before.
+    /// Until the old list has been moved into the hub once (`ConnectorHub.moveOldConnectorsOnce`), its apps the hub doesn't have
+    /// yet stay too, so nothing a bot was given disappears on the way.
+    static var known: [BotConnector] {
+        guard ConnectorHub.isAvailable else { return beforeTheHub }
+        let fromHub = ConnectorHub.cachedApps.map(connector(for:))
+        let hubIDs = Set(fromHub.map(\.id))
+        let builtInIDs = Set(builtIn.map(\.id))
+        let notMovedYet = UserDefaults.standard.bool(forKey: ConnectorHub.movedOldConnectorsKey)
+            ? [] : beforeTheHub.filter { !hubIDs.contains($0.id) && !builtInIDs.contains($0.id) }
+        // HyperFrames (a skill set of the owner's, not an app) stays in the list only until the move: it was never a connector, and a
+        // bot that has it keeps it in its saved apps either way.
+        return fromHub + notMovedYet + builtIn.filter { !hubIDs.contains($0.id) }
+    }
+
+    /// Theo's own tools and Chrome: part of Theo, never in the hub.
+    static var builtIn: [BotConnector] { beforeTheHub.filter { $0.id == "theo" || $0.id == "chrome" } }
+
+    /// A hub app as the rest of the app sees it. A claude-account app keeps Claude Code's names for its server and tools, which is
+    /// how a Claude bot still reaches it directly.
+    static func connector(for app: HubAppRecord) -> BotConnector {
+        let iconName = beforeTheHub.first(where: { $0.id == app.id })?.symbol ?? Self.symbol(for: app.kind)
+        return BotConnector(id: app.id, name: app.name, symbol: iconName, claudeServer: app.server,
+                            claudeToolPrefix: app.server.map(ClaudeDirectRoute.toolPrefix(forServer:)),
+                            openCodeServer: nil, openCodeURL: nil, hub: app)
+    }
+
+    /// The icon of an app the old list didn't have, by how it is reached.
+    static func symbol(for kind: HubAppRecord.Kind) -> String {
+        switch kind {
+        case .remote: return "network"
+        case .local: return "terminal"
+        case .claudeAccount: return "person.crop.circle"
+        }
+    }
+
+    /// The fixed list from before the hub: what Theo uses while the helper is missing, and where Theo's own tools are described.
+    static let beforeTheHub: [BotConnector] = [
         BotConnector(id: "gmail", name: "Gmail", symbol: "envelope.fill", claudeServer: "claude.ai Gmail",
                      claudeToolPrefix: "mcp__claude_ai_Gmail", openCodeServer: "gmail",
                      openCodeURL: "https://gmailmcp.googleapis.com/mcp/v1"),
@@ -62,10 +101,10 @@ enum BotConnectors {
                      claudeToolPrefix: "mcp__claude-in-chrome", openCodeServer: "claude-in-chrome", openCodeURL: nil),
     ]
 
-    /// Apps bots on OpenCode and Grok reach through Theo's claudia_app tool (ConnectorBridge).
+    /// Apps bots on OpenCode and Grok reach through Theo's claudia_app tool (ConnectorBridge), while the helper is missing.
     static let bridgedApps: Set<String> = ["gmail", "notion", "calendar", "drive", "docs", "sheets"]
 
-    static func bridged(_ connector: BotConnector) -> Bool { bridgedApps.contains(connector.id) }
+    static func bridged(_ connector: BotConnector) -> Bool { connector.hub == nil && bridgedApps.contains(connector.id) }
 
     /// connected, needsSignIn, failed(reason), missing, unknown. The wording of both listings is ClickyCore's ConnectorListing,
     /// checked against real `claude mcp list` and `opencode mcp list` output.

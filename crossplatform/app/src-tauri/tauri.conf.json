@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.theo.desktop",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBuildCommand": "node scripts/build-connectors-helper.mjs",
+    "beforeDevCommand": "node scripts/build-connectors-helper.mjs --debug"
   },
   "app": {
     "withGlobalTauri": true,
@@ -25,17 +27,42 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "msi", "nsis", "appimage", "deb"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "targets": [
+      "dmg",
+      "app",
+      "msi",
+      "nsis",
+      "appimage",
+      "deb"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "category": "Productivity",
     "shortDescription": "Your team of bots",
     "longDescription": "Theo runs a team of AI bots on your own Claude subscription: chats, group chats, routines and coding runs, with limits that keep bots from looping, scheduling or coding without you.",
     "linux": {
-      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"] }
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
+      }
     },
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper" },
-      "nsis": { "installerHooks": "./windows/hooks.nsh" }
-    }
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    },
+    "externalBin": [
+      "binaries/theo-connectors"
+    ]
   }
 }

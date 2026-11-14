@@ -363,7 +363,7 @@ final class VoiceFastPathExecutor {
 
     // MARK: Files and folders (Spotlight, outside protected folders)
 
-    /// Home's top level (listed directly), plus ~/Projects and /Applications through Spotlight. Desktop,
+    /// Home's top level (listed directly), plus the projects folder (~/Projects unless changed) and /Applications through Spotlight. Desktop,
     /// Documents and Downloads only with v2.code.searchProtectedFolders (macOS asks the owner for those).
     private func openItem(named name: String, kind: VoiceOpenItemKind, command: VoiceFastPathCommand) async -> VoiceFastPathOutcome {
         let homeURL = FileManager.default.homeDirectoryForCurrentUser
@@ -373,7 +373,8 @@ final class VoiceFastPathExecutor {
         if let homeEntries = try? FileManager.default.contentsOfDirectory(at: homeURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             candidateURLs += homeEntries.filter { searchesProtectedFolders || !protectedFolderURLs.contains($0.standardizedFileURL.path) }
         }
-        var searchScopes = [homeURL.appendingPathComponent("Projects", isDirectory: true), URL(fileURLWithPath: "/Applications", isDirectory: true)]
+        let projectsFolderURL = URL(fileURLWithPath: ClickySettings.projectsFolderPath(homeDirectory: homeURL.path), isDirectory: true)
+        var searchScopes = [projectsFolderURL, URL(fileURLWithPath: "/Applications", isDirectory: true)]
         if searchesProtectedFolders { searchScopes += protectedFolderURLs.map { URL(fileURLWithPath: $0, isDirectory: true) } }
         candidateURLs += await VoiceSpotlightSearch.find(nameContaining: name, scopes: searchScopes.filter { FileManager.default.fileExists(atPath: $0.path) },
                                                           timeoutSeconds: 1.0)

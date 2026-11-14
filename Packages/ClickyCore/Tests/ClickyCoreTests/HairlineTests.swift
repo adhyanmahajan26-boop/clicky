@@ -108,7 +108,8 @@ final class HairlineTests: XCTestCase {
 
     // MARK: Studio
 
-    func testOnlyMacStudiosGetStudio() {
+    /// Only for reading settings saved when a Mac Studio and a MacBook Air were the only kinds of Mac.
+    func testOldSettingsKnowAMacStudioByItsModel() {
         XCTAssertTrue(StudioGate.isMacStudio(model: "Mac15,14"))
         XCTAssertTrue(StudioGate.isMacStudio(model: "Mac13,1"))
         XCTAssertTrue(StudioGate.isMacStudio(model: "Mac99,1", productName: "Mac Studio"))

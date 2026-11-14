@@ -11,7 +11,8 @@ notification system. `tests/windows_pc.py` is the test; the `windows-pc` and `wi
 Each line is a step in `tests/windows_pc.py`, run on both Windows versions.
 
 - The per-user installer runs silently with no admin prompt, and adds Theo to the Start menu.
-- Opened from the Start menu, Theo shows first-run setup. With Claude Code missing it gives the Windows install command.
+- Opened from the Start menu, Theo shows first-run setup's brain step: paste an API key first, then every agent. With
+  Claude Code missing, its row gives the Windows install command.
 - Claude Code installed with npm (`%APPDATA%\npm\claude.cmd`, which isn't on Theo's PATH) is found, and is shown as signed out.
 - Setup's Sign in button opens PowerShell running that Claude Code's `auth login`, by its full path.
 - Claude Code from its own Windows installer (`irm https://claude.ai/install.ps1 | iex`) is found in `.local\bin`.
@@ -20,8 +21,9 @@ Each line is a step in `tests/windows_pc.py`, run on both Windows versions.
   (Claude Code answers "Not logged in · Please run /login" as if it were a reply; Theo now treats that as signed out).
 - A bot with 37,000+ characters of instructions over hundreds of lines still starts. Windows command lines stop at 32K
   characters (8K through cmd), so instructions and tool rules go in files and the message goes on stdin.
-- Connectors come from the real `claude mcp list` on Windows. A working server shows Connected, and a broken one shows
-  Can't connect with its reason. Giving a bot an app from the Connectors page adds that app's tools to the bot's allowed list.
+- Connectors on the Claude account come from the real `claude mcp list` on Windows (through the connector hub). A working
+  server shows Connected, and a broken one shows Can't connect with its reason. Giving a bot an app from the Connectors page
+  adds that app's tools to the bot's allowed list. The hub's helper is installed beside the app (`install_ps_test.py`).
 - Open at sign-in writes the Windows Run key, and that start opens Theo in the tray with no window.
 - Closing the window keeps Theo running in the tray. A bot that needs you raises a Windows notification (logged as sent by
   Windows' notification API).
@@ -48,6 +50,9 @@ against a real Claude account. Without it, the summary says they were skipped.
 - The engine suite (`tests/suite.py`, 80+ checks on Linux and Windows) uses a stand-in for Claude Code
   (`tests/fake_engine.py`) that records what Theo asked for. It proves Theo's side (arguments, limits, budgets, files),
   not Claude Code's answers.
+- Codex, Cursor Agent, Gemini CLI and Grok are played by the same stand-in in each one's own output format, and API keys
+  by a stand-in model API (`tests/fake_api.py`, Anthropic and OpenAI-style). The suite proves the arguments, the hub each
+  is given and the tool loop, not those programs' or providers' real answers.
 - The connectors in the Windows test are two local test servers (`tests/echo_mcp.py` and a missing program), not claude.ai
   connectors such as Gmail or Notion.
 - The sign-in test checks that PowerShell starts with the right command. No one types in the browser sign-in.
@@ -64,8 +69,10 @@ About 30 minutes on a Windows 10 or 11 PC:
 4. **Notifications and tray.** With the window closed, give a bot a job that needs you. Check the toast appears with Theo's
    name and icon, note what clicking it does, and check the tray icon's right-click menu has Open Theo and Quit Theo.
 5. **Restart the PC.** Theo should start in the tray at sign-in, with no window.
-6. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
-7. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+6. **Other brains.** In setup, paste a real API key (OpenAI or Anthropic) and check the first bot answers with it. Install
+   and sign in one of Codex, Cursor Agent, Gemini CLI or Grok from Settings › Brains, put a bot on it and give it an app.
+7. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
+8. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits

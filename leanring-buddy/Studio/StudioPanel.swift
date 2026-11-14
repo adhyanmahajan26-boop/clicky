@@ -43,7 +43,7 @@ struct StudioPanel: View {
             .frame(height: 30)
             if studio.isOn {
                 HStack {
-                    Text("\(studio.screenCount) hidden screen\(studio.screenCount == 1 ? "" : "s") · \(studio.allTiles.count) tiles · Mac Studio only")
+                    Text("\(studio.screenCount) hidden screen\(studio.screenCount == 1 ? "" : "s") · \(studio.allTiles.count) tiles · experimental")
                         .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary)
                     Spacer(minLength: 8)
                     Button {
@@ -354,7 +354,8 @@ struct RemoteStudioPanel: View {
                 Spacer()
             }
             .frame(height: 30)
-            Text(link.isConnected ? "Your Mac Studio's screens" : "Your Mac Studio isn't connected").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).padding(.top, -6)
+            let otherMac = TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "other Mac")
+            Text(link.isConnected ? "Screens on your \(otherMac)" : "Your \(otherMac) isn't connected").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).padding(.top, -6)
             ForEach(0..<(view?.screens ?? 2), id: \.self) { screen in
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Screen \(screen + 1)").font(.system(size: 11.5, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
@@ -470,7 +471,7 @@ struct StudioSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Theo puts your pointer and windows straight back if they land on one. Mac Studio only. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
+            TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Theo puts your pointer and windows straight back if they land on one. Experimental. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
                 SettingRow(title: "Hidden bot screens", detail: "They come up when a bot needs one and sleep after 15 quiet minutes") {
                     Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
@@ -478,7 +479,7 @@ struct StudioSettingsContent: View {
             if StudioController.isAvailable {
                 StudioScreensSection()
             } else {
-                TheoSection(title: "Screens", hint: "Screens live on the Mac Studio. Set them up there, and this Mac shows them in the Studio panel.") { EmptyView() }
+                TheoSection(title: "Screens", hint: "Screens live on your other Mac (Settings › Devices). Set them up there, and this Mac shows them in the Studio panel.") { EmptyView() }
             }
             ResearchAgentSettingsSection()
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {

@@ -49,6 +49,11 @@ final class SetupGuideModel: ObservableObject {
             return
         }
         TheoProducts.shared.saveChoices()
+        // Clicky and the first bot think with a brain that works here: whatever was set up, not always Claude.
+        if !BrainAvailability.inventory.isUsable(ClickyModels.main), let working = BrainAvailability.startingModel(current: ClickyModels.main) {
+            companionManager.setSelectedModel(working)
+        }
+        BotsStore.shared.moveUntouchedStartersToWorkingBrain()
         ClickySettings.isSetupCompleted = true
         ClickySettings.setupGuideStep = 0
         SetupGuideWindowController.close()
@@ -61,13 +66,12 @@ enum SetupGuideWindowController {
     private static var window: NSWindow?
     private static var model: SetupGuideModel?
 
-    /// At launch: never finished, or the chosen brain's command-line tool is missing.
+    /// At launch: never finished, or no brain at all can think here (no signed-in agent and no API key). Claude Code
+    /// isn't required: a Mac with only Codex, or only one key, never sees Setup again once it's finished.
     static var isNeededAtLaunch: Bool {
-        let provider = BrainModel(setting: ClickyModels.main).provider
-        // An API model has no command-line tool to look for.
         // Dictation alone needs no brain, so a missing one only matters with Theo or Clicky on.
         let needsBrain = TheoProducts.isOn(.clicky) || TheoProducts.isOn(.theo)
-        return !ClickySettings.isSetupCompleted || (needsBrain && provider != .api && BrainCLIRunner.locateExecutable(for: provider) == nil)
+        return !ClickySettings.isSetupCompleted || (needsBrain && !BrainAvailability.inventory.hasUsableBrain)
     }
 
     /// `activates` false opens it without taking focus (a launch in the background).
@@ -125,7 +129,6 @@ struct SetupGuideView: View {
         if model.step == .done { return .done }
         if voicePreview.playing != nil { return .talking }
         if model.step == .products && !model.canContinue { return .needs }
-        if model.step == .keys && products.isOn(.dictation) && products.dictationAccess == .needsKey { return .needs }
         return .awake
     }
 
@@ -203,18 +206,9 @@ struct SetupGuideView: View {
         case .products:
             if !model.canContinue {
                 StatusPill(text: "Pick at least one", tone: .warn)
-            } else if products.isOn(.dictation) && products.dictationAccess == .needsKey {
-                HStack(spacing: 8) {
-                    StatusPill(text: "Dictation still needs its key", tone: .warn)
-                    Text("You can add it later.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-                }
             }
         case .keys:
-            if products.isOn(.dictation) && products.dictationAccess == .needsKey {
-                StatusPill(text: "Dictation needs a key", tone: .warn)
-            } else {
-                Text("You can skip this").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
-            }
+            Text("You can skip this").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
         default:
             EmptyView()
         }
@@ -256,23 +250,23 @@ struct SetupGuideView: View {
             }
         case .harnesses:
             VStack(alignment: .leading, spacing: 18) {
-                if products.isOn(.theo) {
-                    StepHeader(title: "Your coding agents", subtitle: "Install and sign in right here. T3 Code is the default for builds; any other harness runs in a live terminal inside Theo.")
-                    CodingSettingsView()
-                } else {
-                    StepHeader(title: "Clicky's brain", subtitle: "The model Clicky answers with. Your Claude subscription works, and so does any API key.")
-                }
+                StepHeader(title: "Pick a brain", subtitle: "Theo needs one thing to think with: an API key, or a coding agent you already pay for (Claude Code, Codex, Cursor, OpenCode). Any one is enough, and none is required over another.")
+                QuickBrainKeyCard(companionManager: companionManager)
                 if products.isOn(.clicky) {
-                    TheoSection(title: "Clicky thinks with", hint: "Clicky is your screen companion. Claude Sonnet 5.5 is a good start, and any agent or API key works.") {
+                    TheoSection(title: "Clicky thinks with", hint: "Clicky is your screen companion. Any agent below or any API key works.") {
                         SetupBrainRow(companionManager: companionManager)
                     }
+                }
+                if products.isOn(.theo) {
+                    StepHeader(title: "Your coding agents", subtitle: "Optional. Install and sign in right here. Builds go to the agent you pick, else the first one that's signed in; each runs in a live terminal inside Theo.")
+                    CodingSettingsView()
                 }
             }
         case .keys:
             VStack(alignment: .leading, spacing: 18) {
                 if products.isOn(.dictation) {
-                    StepHeader(title: "API keys", subtitle: "Dictation needs a Sarvam key; everything else here is optional. Keys stay in your Keychain.")
-                    TheoSection(title: "Dictation's Sarvam key", hint: products.dictationAccess == .ready ? "Saved. Dictation is ready." : "Dictation stays blocked until this is saved. You can skip it now and add it later in Settings \u{203A} Dictation.") {
+                    StepHeader(title: "API keys (optional)", subtitle: "Dictation works with Apple's dictation on this Mac; a Sarvam key makes it better. Every key here is optional and stays in your Keychain.")
+                    TheoSection(title: "Dictation's Sarvam key", hint: products.dictationAccess == .ready ? "Saved. Dictation uses Sarvam." : "Optional: Sarvam adds Indian languages and Hinglish. Without it Apple's dictation does the listening. You can add it later in Settings \u{203A} Dictation.") {
                         if products.dictationAccess == .ready {
                             SettingRow(title: "Sarvam AI", detail: "Key saved") { StatusPill(text: "Ready", tone: .good) }
                         } else {
@@ -296,11 +290,93 @@ struct SetupGuideView: View {
 
 private struct SetupBrainRow: View {
     @ObservedObject var companionManager: CompanionManager
-    @State private var main = ClickyModels.main
 
     var body: some View {
+        // Read from the manager, so a key pasted in the card above shows here at once.
         SettingRow(title: "Answers") {
-            BrainModelPicker(title: "Answers", setting: Binding(get: { main }, set: { main = $0; companionManager.setSelectedModel($0) })).frame(width: 280)
+            BrainModelPicker(title: "Answers", setting: Binding(get: { companionManager.selectedModel }, set: { companionManager.setSelectedModel($0) })).frame(width: 280)
+        }
+    }
+}
+
+/// The fastest way in for someone with no coding agent: paste one API key, it's checked with a real call, and when the
+/// brain Theo would use doesn't work on this Mac, Theo and Clicky think with this key from then on.
+private struct QuickBrainKeyCard: View {
+    @ObservedObject var companionManager: CompanionManager
+    @ObservedObject private var keys = ProviderKeys.shared
+    @State private var providerID = "anthropic"
+    @State private var draft = ""
+    @State private var status: String?
+    @State private var isWorking = false
+    @FocusState private var focused: Bool
+
+    /// Chat providers that take a pasted key. Servers on this Mac need no key and are on the API keys step.
+    private var choices: [ProviderInfo] { keys.providers.filter { $0.canChat && !$0.keyless && $0.group == .models } }
+    private var chosenProvider: ProviderInfo? { ProviderInfo.info(for: providerID) }
+
+    var body: some View {
+        TheoSection(title: "Quickest start: paste one API key",
+                    hint: "One key from any of these runs Theo, Clicky and your bots. It's checked with a real call and stays in your Keychain. Already signed in to an agent below? You can skip this.") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Picker("Provider", selection: $providerID) {
+                        ForEach(choices) { provider in Text(provider.label).tag(provider.id) }
+                    }
+                    .labelsHidden().frame(width: 160)
+                    SecureField(chosenProvider?.keyHint.isEmpty == false ? chosenProvider!.keyHint : "API key", text: $draft)
+                        .focused($focused).theoField(focused: focused).font(TheoType.mono)
+                        .onSubmit(saveAndTest)
+                        .frame(maxWidth: 240)
+                    Button(isWorking ? "Checking…" : "Use this key", action: saveAndTest).buttonStyle(.theoPrimary)
+                        .disabled(isWorking || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let consoleAddress = chosenProvider?.consoleURL, let consoleURL = URL(string: consoleAddress) {
+                    Link(destination: consoleURL) {
+                        HStack(spacing: 2) {
+                            Text("Get a key from \(chosenProvider?.label ?? providerID)")
+                            Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .semibold))
+                        }
+                        .font(TheoType.caption).foregroundColor(DS.Colors.accentText)
+                    }
+                    .pointerCursor()
+                }
+                if let status {
+                    Text(status).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func saveAndTest() {
+        let trimmedKey = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty, !isWorking else { return }
+        isWorking = true
+        status = "Checking the key with \(chosenProvider?.label ?? providerID)…"
+        let testedProviderID = providerID
+        Task {
+            let result = await keys.test(testedProviderID, draft: trimmedKey)
+            defer { isWorking = false }
+            guard result.isOK else {
+                status = "That key didn't work: \(result.message)"
+                return
+            }
+            guard keys.save(trimmedKey, for: testedProviderID) else {
+                status = "The Keychain didn't save that. Try again."
+                return
+            }
+            draft = ""
+            guard let provider = ProviderInfo.info(for: testedProviderID) else { return }
+            let currentBrain = companionManager.selectedModel
+            if BrainAvailability.inventory.isUsable(currentBrain) {
+                status = "Saved. Theo still thinks with \(BrainCatalog.shared.label(for: currentBrain)); pick this key any time in the menu below."
+            } else if let model = APIModelDefaults.preferredChatModel(providerID: testedProviderID, models: keys.models(for: provider)) {
+                let setting = BrainModel(provider: .api, modelIdentifier: "\(testedProviderID)/\(model)").setting
+                companionManager.setSelectedModel(setting)
+                status = "Works. Theo and Clicky now think with \(model) on your \(provider.label) key."
+            } else {
+                status = "Saved, but \(provider.label) didn't list a chat model. Pick one in the menu below."
+            }
         }
     }
 }
@@ -332,6 +408,11 @@ private struct WelcomeStep: View {
             }
             .padding(.top, 6)
             VStack(alignment: .leading, spacing: 8) {
+                Text("What should your bots call you?").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                OwnerNameField(suggestsComputerName: true).frame(width: 260)
+            }
+            .padding(.top, 8)
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Pick your look").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                 HairlineSegments(options: TheoAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance).frame(width: 260)
             }
@@ -344,6 +425,33 @@ private struct WelcomeStep: View {
             IconTile(symbol: symbol, colors: colors, size: 26)
             Text(text).font(.system(size: 14)).foregroundColor(DS.Colors.textPrimary)
         }
+    }
+}
+
+/// The owner's name, as the bots will call them (ClickySettings.ownerName). Saved as it's typed, and Theo's bot guide is
+/// rewritten so a bot reading it sees the new name. In setup an empty field starts with the computer's first name, saved
+/// straight away so what's shown is what the bots are told.
+struct OwnerNameField: View {
+    var suggestsComputerName = false
+    @State private var draft = ClickySettings.savedOwnerName
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Your first name", text: $draft)
+            .focused($focused).theoField(focused: focused)
+            .onAppear {
+                guard suggestsComputerName, draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                let suggestion = OwnerName.suggestion(fullUserName: NSFullUserName(), accountName: NSUserName())
+                guard !suggestion.isEmpty else { return }
+                draft = suggestion
+                save(suggestion)
+            }
+            .onChange(of: draft) { _, newName in save(newName) }
+    }
+
+    private func save(_ newName: String) {
+        ClickySettings.ownerName = String(newName.prefix(OwnerName.maximumLength))
+        BotMemory.writeGuide(owner: BotPrompts.ownerName)
     }
 }
 
@@ -367,11 +475,6 @@ private struct DoneStep: View {
                     tip(line)
                 }
             }
-            // Anything still missing, as a folded line with its button: it never blocks starting.
-            if products.dictationAccess == .needsKey {
-                PixelFoldedLine(tone: .needs, did: "Dictation is waiting for its key", about: "add it any time",
-                                undo: ("Add it", { BotsSelection.shared.openSettings(.keys); model.finish() }))
-            }
             TheoSection(title: "Theo's screen", hint: "Theo opens its windows here and leaves your main screen alone.") {
                 SettingRow(title: "Monitor") {
                     Picker("Monitor", selection: $look.screenName) {
@@ -394,7 +497,7 @@ private struct DoneStep: View {
             lines.append("\u{201C}Hey Theo, what's on my screen?\u{201D} (Clicky answers)")
             lines.append("\u{201C}Hey Theo, draw me a flowchart of my signup flow.\u{201D}")
         }
-        if products.isOn(.theo) { lines.append("Make a bot, then tell it \u{201C}fix the failing test in ~/Projects/foo\u{201D}.") }
+        if products.isOn(.theo) { lines.append("Make a bot, then tell it \u{201C}fix the failing test in \(BotsT3.projectsWords)/foo\u{201D}.") }
         if products.isOn(.dictation) { lines.append("Hold Control + Fn in any app, say a sentence, and let go.") }
         return lines
     }

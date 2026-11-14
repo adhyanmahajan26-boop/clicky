@@ -8,7 +8,10 @@
 
 set -euo pipefail
 
-REPO="${THEO_RELEASES_REPO:-adhyanmahajan26-boop/claudia-releases}"
+# The release's copy of this script has its repo written in here (Tools/install/stamp-installer.py, run by
+# tools/collect_installers.py). It stays empty in the repo, where the script reads ./releases-repo instead.
+PUBLISHED_RELEASES_REPO=""
+REPO="${THEO_RELEASES_REPO:-}"
 API="${THEO_GITHUB_API:-https://api.github.com}"
 INSTALL_DIR="${THEO_INSTALL_DIR:-$HOME/.local/opt/theo}"
 BIN_DIR="$HOME/.local/bin"
@@ -32,8 +35,9 @@ Theo for Linux installer
   --yes                answer yes to --purge's question
   --help               this text
 
-Environment: THEO_RELEASES_REPO (owner/repo), THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (for a private releases repo; falls back to
-GH_TOKEN, GITHUB_TOKEN, then `gh auth token`; sent in a header file, never on the command line), THEO_GITHUB_API.
+Environment: THEO_RELEASES_REPO (owner/repo; default: the repo this copy was published to), THEO_INSTALL_DIR,
+THEO_GITHUB_TOKEN (only for a private releases repo, a public one needs nothing; falls back to GH_TOKEN, GITHUB_TOKEN, then
+`gh auth token`; sent in a header file, never on the command line), THEO_GITHUB_API.
 USAGE
 }
 
@@ -56,6 +60,44 @@ gh_curl() {
   local t; t="$(token)"
   [ -n "$t" ] && printf 'Authorization: Bearer %s\n' "$t" >> "$headers"
   curl -fsSL --retry 3 -H @"$headers" "$@"
+}
+
+# The releases repo: THEO_RELEASES_REPO, else the one this copy was published with, else releases-repo next to the script
+# when it runs from a checkout of Theo's source.
+choose_repo() {
+  [ -n "$REPO" ] || REPO="$PUBLISHED_RELEASES_REPO"
+  if [ -z "$REPO" ]; then
+    local script_path="${BASH_SOURCE[0]:-}"
+    if [ -n "$script_path" ] && [ -f "$(dirname "$script_path")/releases-repo" ]; then
+      REPO="$(head -n 1 "$(dirname "$script_path")/releases-repo" | tr -d '[:space:]')"
+    fi
+  fi
+  [ -n "$REPO" ] || die "this copy of the installer doesn't say where Theo's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install-linux.sh attached to a release."
+  case "$REPO" in */*/*|/*|*/|*" "*) die "THEO_RELEASES_REPO must look like owner/name (got '$REPO')" ;; */*) ;; *) die "THEO_RELEASES_REPO must look like owner/name (got '$REPO')" ;; esac
+}
+
+# Says plainly why the release couldn't be read. GitHub answers 404 for a private repo it won't show.
+explain_release_failure() { # http status, whether a token was sent (1/0)
+  case "$1" in
+    404)
+      if [ "$2" = 0 ]; then
+        die "this build's updates are private: $REPO can't be read without access. Ask whoever gave you Theo for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
+      fi
+      die "no such release in $REPO, or the GitHub token can't read that repo" ;;
+    401) die "GitHub refused the token (THEO_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN or gh's). A public releases repo needs no token: unset it and try again." ;;
+    403|429) die "GitHub is limiting requests from this network right now. Try again in a while." ;;
+    000|"") die "couldn't reach GitHub ($API). Check the internet connection and try again." ;;
+    *) die "GitHub answered $1 for the release list of $REPO" ;;
+  esac
+}
+
+# Like gh_curl for the release list, but prints the HTTP status instead of failing (000 when GitHub couldn't be reached).
+gh_status() { # url out-file
+  local headers="$TMP/headers"
+  : > "$headers"; chmod 600 "$headers"
+  local t; t="$(token)"
+  [ -n "$t" ] && printf 'Authorization: Bearer %s\n' "$t" >> "$headers"
+  curl -sSL --retry 3 -H @"$headers" -H "Accept: application/vnd.github+json" -o "$2" -w '%{http_code}' "$1" 2>/dev/null || true
 }
 
 sha256_of() {
@@ -160,9 +202,13 @@ main() {
   else
     command -v python3 >/dev/null || die "needs python3 to read the release list"
     local arch; arch="$(arch_name)"
+    choose_repo
     local url="$API/repos/$REPO/releases/latest"
     if [ -n "$version" ]; then url="$API/repos/$REPO/releases/tags/build-${version#build-}"; fi
-    gh_curl -H "Accept: application/vnd.github+json" -o "$TMP/release.json" "$url" || die "couldn't read the release (is $REPO reachable, and is THEO_GITHUB_TOKEN set for a private repo?)"
+    local status sent_token=0
+    [ -n "$(token)" ] && sent_token=1
+    status="$(gh_status "$url" "$TMP/release.json")"
+    [ "$status" = 200 ] || explain_release_failure "$status" "$sent_token"
     local build; build="$(json_get "import json;print(json.load(open('$TMP/release.json'))['tag_name'].replace('build-',''))")"
     [ -n "$build" ] || die "the release has no build number"
     if [ "$force" != 1 ] && [ "$(installed_build)" = "$build" ]; then say "Theo $build is already installed (--force reinstalls)."; exit 0; fi

@@ -195,10 +195,12 @@ struct StandbyCLITests {
         slot.onReap = { _, reason in reapLog.append(reason) }
         let standby = try StandbyCLIProcess.spawn(fakeSpec(mode: "stream-json-stdin"))
         slot.install(standby)
-        #expect(await waitUntil(timeoutSeconds: 5) { !reapLog.all.isEmpty })
+        // The waits are long because a build machine running every suite at once has held this 0.3 second timer back by
+        // more than 5 seconds. A wait ends as soon as its condition is true, so a quick machine loses no time.
+        #expect(await waitUntil(timeoutSeconds: 30) { !reapLog.all.isEmpty })
         #expect(slot.currentProcess == nil)
         #expect(reapLog.all == [.idle])
-        #expect(await waitUntil(timeoutSeconds: 5) { !standby.isRunning })
+        #expect(await waitUntil(timeoutSeconds: 30) { !standby.isRunning })
     }
 
     @Test func takenStandbyIsNotIdleReaped() async throws {

@@ -7,10 +7,13 @@ import Foundation
 public enum HarnessGuide {
     public static let fileName = "HARNESS-GUIDE.md"
 
-    public static func markdown(owner: String = "Addy", codingHarness: String = "the coding harness Theo picks") -> String {
+    /// `projectsFolder`: where the owner's project folders are, as the bots' prompts say it (the projects folder setting, default
+    /// "~/Projects"), so the guide never names a folder bots aren't allowed to read.
+    public static func markdown(owner: String = OwnerName.unset, codingHarness: String = "the coding harness Theo picks",
+                                projectsFolder: String = ProjectsFolder.defaultSetting) -> String {
         let sections: [(String, String)] = [
             ("What Theo is",
-             "Theo is \(owner)'s bot harness on their Macs. Each bot is a persona with an engine (Claude Code, OpenCode or an API key), " +
+             "Theo is \(owner)'s bot harness on their Macs. Each bot is a persona with a brain (Claude Code, Codex, Cursor, OpenCode, Grok, Gemini or an API key), " +
              "its own chat with \(owner), a memory file, the apps (connectors) \(owner) gave it, and a place on a team. Bots message each other " +
              "privately, talk in group chats, run routines on a schedule, and hand coding to a harness that commits, pushes and opens a draft PR. " +
              "Theo is the CEO bot; Clicky is the voice and screen companion, with Memory, Researcher and Runner under it."),
@@ -31,7 +34,7 @@ public enum HarnessGuide {
              "not to Theo; the manager rolls its team's reports up to Theo, who reads them at the start of its next turn. With no manager, report straight to Theo " +
              "with a [TELL:] line when something is worth knowing."),
             ("Coding", BotProtocol.codingHowTo(harnessLabel: codingHarness)),
-            ("Routines", BotProtocol.routineHowTo + " " +
+            ("Routines", BotProtocol.routineHowTo(owner: owner) + " " +
              "Each run lands in your own chat and session, so you keep the context. A run that only checks on something can stay quiet: " +
              RoutineQuiet.howTo(owner: owner) + " A slot missed while Theo was closed runs late only within half the routine's period (2 minutes to 2 hours); " +
              "older ones are recorded as missed."),
@@ -41,18 +44,18 @@ public enum HarnessGuide {
              "Skills are step-by-step procedures in skills/<name>/SKILL.md folders, yours and other bots', all listed in your prompt. " +
              BotSkillsPrompt.writeHowTo(ownFolder: "your memory folder's skills", owner: owner)),
             ("Asking \(owner) to choose", BotProtocol.askingStyle),
-            ("Screens and research", BotProtocol.screenHowTo),
+            ("Screens and research", BotProtocol.screenHowTo(owner: owner)),
             ("Apps (connectors)",
              "Use only the apps \(owner) gave you. If one looks unavailable at the start of a turn, it may still be loading: load its tools with ToolSearch and try once " +
              "before saying it needs connecting, and quote the real error if it fails. Never send, reply, forward, delete or share without \(owner)'s go-ahead: drafts are fine."),
             ("What you can't do",
              "You can't run shell commands or edit files outside your memory folder (your skills live inside it). Anything that needs a command (a script, a build) goes to a coding run with a ```prompt block. " +
-             "You can read only your memory folder, ~/Projects and files or folders \(owner) names in the message: anything else is refused, and no setting opens it, " +
+             "You can read only your memory folder, \(projectsFolder) and files or folders \(owner) names in the message: anything else is refused, and no setting opens it, " +
              "so use your app's connector or ask \(owner) to name its path. " +
              BotProtocol.pdfHowTo + " " +
              "Never say something happened until Theo's own line in the chat, a run card or a reply shows it."),
             ("Two Macs",
-             "Theo runs on the Mac Studio and the MacBook Air and keeps them in step. A message is answered on the Mac \(owner) typed it on, with that Mac's folders and coding runs, " +
+             "Theo can run on two linked Macs and keeps them in step. A message is answered on the Mac \(owner) typed it on, with that Mac's folders and coding runs, " +
              "unless \(owner) set it to the other Mac. When the other Mac is away, say so plainly; a run that waited long for it asks \(owner) before it starts.")
         ]
         var text = "# Theo's bot harness: the guide\n\n" +

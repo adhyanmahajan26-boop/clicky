@@ -29,8 +29,8 @@ enum SettingsTab {
         case products, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
-        /// The pages this Mac has: Studio is on a Mac Studio only.
-        static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
+        /// The pages this Mac has: Studio is on the Mac the hidden screens live on.
+        @MainActor static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
 
         /// Its Hairline icon.
         var icon: String {
@@ -86,7 +86,7 @@ enum SettingsTab {
             case .link: return "Both Macs run as one Theo: the same bots, group chats, chats and memory."
             case .permissions: return "What Theo needs to hear, see and point."
             case .updates: return "Keep Theo current."
-            case .about: return "The Dock icon and the setup guide."
+            case .about: return "Your name, the Dock icon and the setup guide."
             }
         }
 
@@ -473,6 +473,7 @@ struct ClickySettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
     @State private var main = ClickyModels.main
     @State private var helper = ClickyModels.helper
+    @AppStorage(EngineStandIn.settingKey) private var standIn = ""
     @State private var code = ClickyModels.code
     @State private var silent = ClickySettings.isSilentModeEnabled
     @State private var listens = ClickySettings.isWakeWordEnabled
@@ -505,6 +506,11 @@ struct ClickySettingsContent: View {
                 RowDivider()
                 SettingRow(title: "Helpers", detail: "Research pages, helper workers, mark checks.") {
                     BrainModelPicker(title: "Helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 })).frame(width: 260)
+                }
+                RowDivider()
+                SettingRow(title: "Stand-in for bots", detail: "Answers when a bot's own engine keeps failing. Until you pick one, Claude Code does it when it's here.") {
+                    BrainModelPicker(title: "Stand-in for bots", setting: Binding(get: { standIn.isEmpty ? (BrainAvailability.isClaudeReady ? BotRunner.standInModel : main) : standIn },
+                                                                                  set: { standIn = $0 })).frame(width: 260)
                 }
                 RowDivider()
                 SettingRow(title: "Code tasks", detail: "When you ask Clicky to change code by voice.") {
@@ -579,7 +585,8 @@ struct VoiceSettingsContent: View {
     @AppStorage(CloudListening.settingKey) private var listening = ""
     @AppStorage(PrismClient.settingKey) private var fastDecisions = true
     @AppStorage(CallSettings.languageKey) private var callLanguage = CallSettings.Language.auto.rawValue
-    @AppStorage(CallSettings.modelKey) private var callModel = "claude-sonnet-5-5"
+    /// Empty until picked: calls then use `CallSettings.automaticModel`.
+    @AppStorage(CallSettings.modelKey) private var callModel = ""
     @ObservedObject private var keys = ProviderKeys.shared
 
     var body: some View {
@@ -608,11 +615,10 @@ struct VoiceSettingsContent: View {
                 }
                 RowDivider()
                 SettingRow(title: "Thinks with") {
-                    Picker("Thinks with", selection: $callModel) {
-                        Text("Claude Sonnet 5.5").tag("claude-sonnet-5-5")
-                        Text("Claude Haiku 5.5 (fastest)").tag("claude-haiku-5-5")
-                    }
-                    .labelsHidden().frame(width: 220)
+                    // Any brain: Claude, a signed-in agent or an API key.
+                    BrainModelPicker(title: "Thinks with", setting: Binding(get: { callModel.isEmpty ? CallSettings.automaticModel : callModel },
+                                                                           set: { callModel = $0 }))
+                        .frame(width: 220)
                 }
                 RowDivider()
                 SettingRow(title: "Talk to Theo now") {
@@ -771,10 +777,10 @@ private struct UpdatesRows: View {
                 }
             }
             RowDivider()
-            // The updates repo is private. A Mac signed in with `gh auth login` needs nothing here; another Mac can
-            // paste a GitHub token that can read it, kept in the Keychain.
+            // Public updates need nothing here. A private updates repo needs a GitHub token that can read it (kept in
+            // the Keychain), or a Mac signed in with `gh auth login`.
             SettingRow(title: "GitHub token", detail: hasSavedToken ? "Saved in the Keychain. Paste a new one to replace it."
-                       : "Only if this Mac isn't signed in to GitHub (gh auth login): a token that can read the updates repo.") {
+                       : "Only for private updates: a GitHub token that can read the updates repo. Public builds need nothing here.") {
                 HStack(spacing: 6) {
                     SecureField(hasSavedToken ? "Saved" : "Token", text: $tokenField).textFieldStyle(.roundedBorder).frame(width: 160)
                     Button("Save") {
@@ -808,6 +814,10 @@ struct AboutSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             TheoSection(title: "", hint: nil) {
+                SettingRow(title: "Your name", detail: "What your bots call you. Empty: they say \u{201C}the owner\u{201D}.") {
+                    OwnerNameField().frame(width: 220)
+                }
+                RowDivider()
                 SettingRow(title: "Show Theo in the Dock", detail: "Off: Theo lives only in the menu bar.") {
                     Toggle("Dock", isOn: $showsInDock).toggleStyle(.switch).labelsHidden()
                         .onChange(of: showsInDock) { _, value in

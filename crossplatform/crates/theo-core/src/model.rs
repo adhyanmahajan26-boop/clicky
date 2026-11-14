@@ -39,8 +39,13 @@ pub struct Bot {
     /// Who this bot may message; nil means anyone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub can_message: Option<Vec<String>>,
+    /// The connector hub's apps this bot may use, by app id (`docs/CONNECTORS.md`). Before the hub these were Claude Code
+    /// server names ("claude.ai Gmail"); `hub::move_old_app_names` moves them over.
     #[serde(default)]
     pub apps: Vec<String>,
+    /// How much it may do with each of them: `read`, `readAndDraft` (when missing) or `full`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub app_levels: std::collections::BTreeMap<String, String>,
     /// How its Pixel face looks; None draws one picked from its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look: Option<Look>,
@@ -127,6 +132,7 @@ impl Bot {
             authority: None,
             can_message: None,
             apps: vec![],
+            app_levels: Default::default(),
             look: None,
             last_failure: None,
         }

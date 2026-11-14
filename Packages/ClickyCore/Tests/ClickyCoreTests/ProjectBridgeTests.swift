@@ -134,7 +134,8 @@ struct ProjectBridgeTests {
     @Test func repoRootIsOnlyAFoundNonClickyRoot() {
         let noClickyMarker = RepoFileSystem(exists: { _ in false }, isDirectory: { _ in true }, readText: { _ in nil })
         #expect(ProjectOutboxMessage.repoRoot(from: .found(rootPath: "/Users/me/Projects/app", source: "Xcode path"), homeDirectory: "/Users/me", fileSystem: noClickyMarker) == "/Users/me/Projects/app")
-        #expect(ProjectOutboxMessage.repoRoot(from: .found(rootPath: "/Users/me/Projects/clicky", source: "Xcode path"), homeDirectory: "/Users/me", fileSystem: noClickyMarker) == nil)
+        // Theo's own source is known by what's in the folder, not where it is: a project of the owner's that happens to be called clicky is fine.
+        #expect(ProjectOutboxMessage.repoRoot(from: .found(rootPath: "/Users/me/Projects/clicky", source: "Xcode path"), homeDirectory: "/Users/me", fileSystem: noClickyMarker) == "/Users/me/Projects/clicky")
         let clickyCheckout = RepoFileSystem(exists: { $0.hasSuffix(CodeRepoDenylist.clickyProjectMarker) }, isDirectory: { _ in true }, readText: { _ in nil })
         #expect(ProjectOutboxMessage.repoRoot(from: .found(rootPath: "/Users/me/Projects/clicky-fix", source: "Terminal path"), homeDirectory: "/Users/me", fileSystem: clickyCheckout) == nil)
         #expect(ProjectOutboxMessage.repoRoot(from: .denied(rootPath: "/x")) == nil)

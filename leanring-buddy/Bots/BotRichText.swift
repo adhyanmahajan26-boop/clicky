@@ -387,6 +387,13 @@ struct T3ResultCard: View {
                     Text("Tests (Theo's own run): \(tests)").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if !isStopped, run.phase != "failed", run.noRemote == true, let branch = run.branch {
+                // A repo with no remote: where the work is, and why there's no pull request. Not a problem, so no warning sign.
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "arrow.triangle.branch").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
+                    Text(CodingPlacement.localBranchWords(branch: branch)).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if let problem = run.pullRequestProblem {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundColor(DS.Colors.warning)
@@ -498,6 +505,7 @@ struct T3ResultCard: View {
         HStack(spacing: 6) {
             if let tests = run.tests, tests.hasPrefix("passed") { doneChip("Tests passed") }
             if run.pullRequest != nil { doneChip("Saved and pushed") }
+            if run.noRemote == true, run.pullRequest == nil, !(run.changedFiles ?? []).isEmpty { doneChip("Committed on its branch") }
             if let number = pullRequestNumber { doneChip("Draft pull request \(number)") }
             Spacer(minLength: 0)
         }
