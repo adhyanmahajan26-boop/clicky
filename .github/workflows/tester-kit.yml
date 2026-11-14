@@ -1,0 +1,52 @@
+# The Windows tester kit (crossplatform/tester): runs its guided check unattended, in Windows PowerShell 5.1, against the
+# last Windows installer built on main, on Windows Server 2022 and 2025. Builds nothing and publishes nothing.
+name: Windows tester kit
+
+on:
+  push:
+    paths: ["crossplatform/tester/**", ".github/workflows/tester-kit.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: tester-kit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit:
+    name: Tester check, unattended (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: The last Windows installer built on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow crossplatform.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name theo-installers-windows-2022 --dir installers
+          cp installers/*-windows-x64-setup.exe installers/SHA256SUMS crossplatform/tester/
+          ls -la crossplatform/tester
+      - name: Install it the way the guide says, then run the check (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem crossplatform/tester -Filter "*-windows-x64-setup.exe" | Select-Object -First 1
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File crossplatform/tester/Theo-Test.ps1 -Unattended -OutDir "$env:RUNNER_TEMP\tester-results"
+          $code = $LASTEXITCODE
+          Get-Content "$env:RUNNER_TEMP\tester-results\RESULTS.txt"
+          if (-not (Test-Path "$env:RUNNER_TEMP\tester-results.zip")) { Write-Host "no results zip"; exit 1 }
+          exit $code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tester-results-${{ matrix.os }}
+          path: ${{ runner.temp }}/tester-results*

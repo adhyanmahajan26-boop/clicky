@@ -1,0 +1,77 @@
+Testing Theo on your Windows PC
+===============================
+
+Thanks for helping! This takes about 15 minutes. You don't need any account, and you
+don't need to be an administrator.
+
+What Theo is: a desktop app where you make small AI "bots" that each have a job and a
+chat. Normally the bots think with an AI you already pay for. You don't need one for
+this test: we're checking that Theo installs, opens, looks right, and closes cleanly.
+
+You need: Windows 10 or 11.
+
+
+1. Unzip
+--------
+Right-click the zip you were sent, choose "Extract All...", then Extract.
+Open the folder it made. You'll see:
+  - Theo-...-windows-x64-setup.exe   (the installer)
+  - RUN-TEST.cmd                     (the test)
+  - SHA256SUMS, Theo-Test.ps1, and this file
+
+
+2. Install Theo
+---------------
+Double-click the "Theo-...-setup.exe" file.
+
+Windows will probably show a blue box saying "Windows protected your PC". That's
+expected: the app isn't signed with a paid certificate yet. Click "More info", then
+"Run anyway". Please remember whether you saw that box; the test will ask.
+
+The installer runs by itself and doesn't ask for an admin password. Theo may open
+when it finishes. That's fine, leave it open.
+
+
+3. Run the test
+---------------
+Double-click "RUN-TEST.cmd". A blue PowerShell window opens. (If Windows warns
+about this file too, click "More info", then "Run anyway".)
+
+It asks simple yes/no questions: type y or n and press Enter. Pressing Enter on
+its own picks the suggested answer (the capital letter).
+
+Sometimes it asks you to do something in Theo, like going through setup, closing
+the window, or quitting from the tray icon. Do that, then come back to the blue
+window and press Enter.
+
+When Theo's setup reaches "Pick a brain": if you don't have an AI key or AI app,
+press "Skip for now". That's part of the test.
+
+The last step offers to uninstall Theo. Saying yes is helpful, because it checks
+that Theo removes itself cleanly.
+
+
+4. Send the results back
+------------------------
+At the end, a folder opens with a file selected named something like
+   Theo-test-results-20261114-1530.zip
+(it's on your Desktop). Please send that file back the same way you got the
+test (email, WhatsApp, etc.).
+
+What's in it: yes/no answers, any comments you typed, your Windows version, screen
+scale and light or dark mode, pictures of Theo's window only, and Theo's own logs.
+It has no passwords, keys or chats, and your Windows user name is replaced with
+<user>. You can open the zip and look before sending it.
+
+
+If something goes wrong
+-----------------------
+- The installer won't run, or the antivirus removes something: that's a useful
+  result! Write down what it said (a photo of the screen works) and send that.
+- The blue window closes right away: open the Start menu, type PowerShell, open
+  it, then drag Theo-Test.ps1 into it after typing
+     powershell -ExecutionPolicy Bypass -File
+  (with a space at the end) and press Enter. If that fails too, send a photo.
+- To remove Theo later: Settings > Apps > Installed apps > Theo > Uninstall.
+  Theo's data stays in %APPDATA%\Theo-Desktop; delete that folder if you want
+  everything gone.
