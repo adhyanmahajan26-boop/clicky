@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tauri::Manager;
 use theo_core::Harness;
 
+mod updater;
+
 /// Started by the system at sign-in: Theo comes up in the tray without opening its window.
 const BACKGROUND_ARG: &str = "--background";
 
@@ -222,6 +224,7 @@ fn main() {
                 }
             }
             watch_faces(app.handle().clone(), harness.clone());
+            updater::start(harness.clone());
             app.manage(harness);
 
             let open_item = tauri::menu::MenuItem::with_id(app, "open", "Open Theo", true, None::<&str>)?;
@@ -264,7 +267,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![control, set_tray, notify, open_at_login])
+        .invoke_handler(tauri::generate_handler![control, set_tray, notify, open_at_login, updater::install_update])
         .build(tauri::generate_context!())
         .expect("Theo couldn't start");
     app.run(|handle, event| {
