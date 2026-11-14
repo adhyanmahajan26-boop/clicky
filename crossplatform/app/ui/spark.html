@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Clicky</title>
+  <style>
+    :root { --orange: #D97757; --ink: #f6f2ee; --bubble: rgba(20, 18, 17, 0.92); --bubble-edge: rgba(217, 119, 87, 0.55); }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; cursor: default; user-select: none; }
+    body { font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+    #spark { position: absolute; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; opacity: 0; transition: opacity 180ms ease; will-change: transform; pointer-events: none; }
+    #spark.shown { opacity: 1; }
+    #spark svg { width: 100%; height: 100%; display: block; overflow: visible; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+    #spark .body { transform-origin: 50% 50%; transform-box: fill-box; }
+    #spark.idle .body { animation: breathe 2.6s ease-in-out infinite; }
+    #spark.speaking .body { animation: breathe 1.2s ease-in-out infinite; }
+    #spark.thinking .body { animation: spin 0.9s linear infinite; }
+    #spark .ring { fill: none; stroke: var(--orange); stroke-width: 2.5; opacity: 0; transform-origin: 50% 50%; transform-box: fill-box; }
+    #spark.listening .ring { opacity: 0.55; }
+    @keyframes breathe { 0%, 100% { transform: scale(0.9); } 50% { transform: scale(1.04); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #bubble { position: absolute; left: 0; top: 0; max-width: 360px; padding: 9px 12px; border-radius: 12px; background: var(--bubble); color: var(--ink);
+      border: 1px solid var(--bubble-edge); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); opacity: 0; transition: opacity 200ms ease; white-space: pre-wrap; word-wrap: break-word; pointer-events: none; }
+    #bubble.shown { opacity: 1; }
+    #bubble.error { border-color: #e5484d; }
+    #marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+    #marks .stroke { fill: none; stroke: var(--orange); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    #marks .draw { stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: draw 520ms ease-out forwards; }
+    #marks .fade { opacity: 0; animation: appear 260ms ease-out forwards; }
+    #marks .badge { fill: var(--orange); }
+    #marks .badge-number { fill: #fff; font: 700 14px "Segoe UI", system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+    #marks .note { fill: #fff; font: 600 13px "Segoe UI", system-ui, sans-serif; paint-order: stroke; stroke: rgba(20, 18, 17, 0.85); stroke-width: 4px; }
+    #marks .soft { fill: rgba(217, 119, 87, 0.22); stroke: none; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    @keyframes appear { to { opacity: 1; } }
+    #label { position: absolute; left: 0; top: 0; padding: 2px 8px; border-radius: 999px; background: var(--orange); color: #fff; font-weight: 600; font-size: 12px; opacity: 0; transition: opacity 160ms ease; pointer-events: none; white-space: nowrap; }
+    #label.shown { opacity: 1; }
+  </style>
+</head>
+<body>
+  <svg id="marks" aria-hidden="true"></svg>
+  <div id="spark" class="idle" aria-hidden="true"><svg viewBox="0 0 100 100"><circle class="ring" cx="50" cy="50" r="46"></circle><path class="body" fill="#D97757"></path></svg></div>
+  <div id="label"></div>
+  <div id="bubble" role="status" aria-live="polite"></div>
+  <script src="spark.js"></script>
+</body>
+</html>

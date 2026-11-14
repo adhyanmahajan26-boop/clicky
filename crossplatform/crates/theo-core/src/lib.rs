@@ -37,5 +37,6 @@ pub mod run_choices;
 pub mod chat_controls;
 pub mod products;
 pub mod update;
+pub mod clicky;
 
 pub use harness::Harness;

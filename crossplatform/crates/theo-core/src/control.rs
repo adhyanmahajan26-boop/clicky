@@ -419,6 +419,8 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
         // Routines editor, chat cards and the coding-run card (chat_controls.rs).
         other if crate::chat_controls::handles(other) => crate::chat_controls::handle(h, other, cmd).await,
+        // Clicky, the voice and screen companion (clicky/mod.rs).
+        n if n.starts_with("clicky") => crate::clicky::control(h, n, cmd).await,
         // Commands of the crates built on theo-core (dictation, Clicky), when theod or the app registered them.
         _ => match crate::control_ext::handle(h, cmd).await {
             Some(answer) => answer,

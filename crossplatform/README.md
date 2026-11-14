@@ -2,7 +2,8 @@
 
 The Mac app stays the Swift app. This folder is a separate project that brings **Theo, the bots harness**, to Windows and
 Linux: the harness engine rewritten in Rust, and a Tauri desktop window around it. Dictation works on Windows too
-(`crates/theo-voice`); [docs/PLATFORMS.md](docs/PLATFORMS.md) says what runs where.
+(`crates/theo-voice`), and so does Clicky's core (push-to-talk, the screens, the spark, the voice:
+`crates/theo-core/src/clicky`); [docs/PLATFORMS.md](docs/PLATFORMS.md) says what runs where.
 
 ```
 crossplatform/
