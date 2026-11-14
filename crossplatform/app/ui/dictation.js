@@ -1,10 +1,9 @@
 // Dictation in the window: Settings › Dictation (the Mac's DictationSettingsView) and the chat composer's mic (the Mac's
 // ComposerDictation). Everything goes through `control` like the rest of the UI: dictationStatus, dictationSet,
-// dictationKeySet / dictationKeyRemove, composerDictation {action}. Loaded after app.js; it fills #settings-dictation when the
-// Settings page has one, or adds its own section to Settings when it doesn't.
+// dictationKeySet / dictationKeyRemove, composerDictation {action}. Loaded after settings.js; it fills the Settings page's
+// #settings-dictation each time the page is drawn (the "theo-settings" event).
 (() => {
   const call = (cmd) => window.__TAURI__.core.invoke("control", { cmd });
-  const pane = () => document.getElementById("pane");
   const escape = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const pill = (state, text) => (window.TP && TP.pill ? TP.pill(state, text) : `<span class="pill">${escape(text)}</span>`);
   const keyCaps = (keys) => (keys || []).map((key) => `<kbd class="dict-key">${escape(key)}</kbd>`).join(" + ");
@@ -43,7 +42,8 @@
     const chord = (s.chords || []).find((c) => c.id === s.chord) || { title: s.chordTitle, keys: [] };
     const onWindows = s.platform === "windows";
     const hook = s.hotkey || {};
-    let html = `<h2>Dictation</h2><div class="list">`;
+    // The section's own title and subtitle are the Settings page's; this starts with the switch.
+    let html = `<div class="list">`;
     html += row("Dictate anywhere", s.on ? `Hold ${keyCaps(chord.keys)} in any app, talk, then let go. Your words are tidied up and typed wherever the cursor is.` : "Dictation is off. It's a product of its own. Turn it on to use the shortcut and the chat box's mic.",
       `${pill(s.on ? "ok" : "none", s.on ? "On" : "Off")}<span class="act"><button class="btn sm" id="dict-on">${s.on ? "Turn off" : "Use Dictation"}</button></span>`);
     if (s.on && onWindows && !hook.dictationListening) {
@@ -132,28 +132,22 @@
     wire(box);
   }
 
-  /** The Settings page is drawn by app.js; this finds (or adds) dictation's place in it each time it's drawn. */
+  /** settings.js draws the page with an empty #settings-dictation and fires "theo-settings"; this fills it each time. */
   function watchSettings() {
-    const observer = new MutationObserver(() => {
-      const root = pane();
-      if (!root) return;
-      const title = root.querySelector("h1");
-      if (!title || title.textContent.trim() !== "Settings") return;
-      let box = root.querySelector("#settings-dictation");
-      if (!box) {
-        box = document.createElement("section");
-        box.id = "settings-dictation";
-        const brains = root.querySelector("#brains-settings");
-        const health = Array.from(root.querySelectorAll("h2")).find((h) => h.textContent.trim() === "Health check");
-        if (brains && brains.parentNode) brains.parentNode.insertBefore(box, brains.nextSibling);
-        else if (health) health.parentNode.insertBefore(box, health);
-        else (root.querySelector(".column") || root).appendChild(box);
-      }
-      if (box.dataset.filled === "1" || box.dataset.loading === "1") return;
+    document.addEventListener("theo-settings", (event) => {
+      const box = document.querySelector((event.detail && event.detail.dictation) || "#settings-dictation");
+      if (!box || box.dataset.loading === "1") return;
       box.dataset.loading = "1";
-      loadStatus(true).then(() => { box.dataset.loading = ""; fill(box, false); });
+      loadStatus(true).then(() => {
+        box.dataset.loading = "";
+        if (!box.isConnected || !status) return;
+        // The first row here is Dictation's own on/off switch, so the page's "Dictation is off · Turn on" line goes.
+        const productOff = box.parentNode && box.parentNode.querySelector('[data-turn-on="dictation"]');
+        const productLine = productOff && productOff.closest(".list");
+        if (productLine) productLine.remove();
+        fill(box, true);
+      });
     });
-    if (pane()) observer.observe(pane(), { childList: true, subtree: true });
   }
 
   /* ---------------- dictating into a text box (the composer, the test box) ---------------- */
