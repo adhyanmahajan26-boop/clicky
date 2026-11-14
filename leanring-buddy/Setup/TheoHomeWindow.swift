@@ -28,7 +28,7 @@ enum TheoHomeWindowController {
             let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                    backing: .buffered, defer: false)
-            created.title = "Theo"
+            created.title = "Vello"
             created.titleVisibility = .hidden
             created.titlebarAppearsTransparent = true
             created.isReleasedWhenClosed = false
@@ -76,7 +76,7 @@ struct TheoHomeView: View {
             switch self {
             case .home: return "Home"
             case .notes: return "Notes"
-            case .ask: return "Ask Clicky"
+            case .ask: return "Ask Pointer Assistant"
             case .bots: return "Bots"
             case .connectors: return "Connectors"
             case .t3: return "T3 Code"
@@ -178,7 +178,7 @@ struct NotesTab: View {
                                 .padding(.horizontal, 8).padding(.vertical, 2)
                                 .background(Capsule().fill(DS.Colors.hover))
                         }
-                        Text("Everything Theo saved. Pick notes to attach them to code tasks.")
+                        Text("Everything Vello saved. Pick notes to attach them to code tasks.")
                             .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
                     }
                     Spacer()

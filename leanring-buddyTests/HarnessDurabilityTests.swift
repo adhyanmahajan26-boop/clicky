@@ -76,7 +76,7 @@ struct HarnessDurabilityTests {
     // MARK: Faults and durability, round two
 
     private func note(_ text: String) -> BotChatMessage { BotChatMessage(author: BotsStore.noteAuthor, text: text) }
-    private var retryNote: BotChatMessage { note("Theo stopped before Ledger answered your last message, so it's asking again now.") }
+    private var retryNote: BotChatMessage { note("Vello stopped before Ledger answered your last message, so it's asking again now.") }
 
     @Test func aRetryCutOffByASecondCrashIsStillUnanswered() {
         // The first restart asked again, then Theo stopped again before any answer: still waiting, one retry used.
@@ -88,7 +88,7 @@ struct HarnessDurabilityTests {
         // Answered after the retry: nothing waits.
         #expect(BotsStore.unanswered([owner("c"), retryNote, bot("d")]).isEmpty)
         // Told to send it again: nothing more happens by itself.
-        #expect(BotsStore.unanswered([owner("c"), retryNote, note("Theo stopped before Ledger answered this. Send it again if you still need it.")]).isEmpty)
+        #expect(BotsStore.unanswered([owner("c"), retryNote, note("Vello stopped before Ledger answered this. Send it again if you still need it.")]).isEmpty)
         // Any other note after the owner's message (a folder made, a routine set up) is an answer, as before.
         #expect(BotsStore.unanswered([owner("c"), note("Made the folder.")]).isEmpty)
     }
@@ -183,10 +183,10 @@ struct HarnessDurabilityTests {
         // The owner edits the instructions: the next turn carries them, once.
         bot.instructions += " Use the Google Drive connector only."
         let refreshed = BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "s1", newSession: nil)
-        #expect(refreshed.hasPrefix("(Theo: your instructions have changed") && refreshed.contains("Use the Google Drive connector only.") && refreshed.hasSuffix("hi"))
+        #expect(refreshed.hasPrefix("(Vello: your instructions have changed") && refreshed.contains("Use the Google Drive connector only.") && refreshed.hasSuffix("hi"))
         #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "s1", newSession: nil) == "hi")
         // A session Theo has no record of (it began before this update) hears them once too.
-        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "older", newSession: nil).hasPrefix("(Theo:"))
+        #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "older", newSession: nil).hasPrefix("(Vello:"))
         #expect(BotRunner.promptForClaude(bot: bot, team: [], prompt: "hi", session: "older", newSession: nil) == "hi")
     }
 

@@ -135,7 +135,7 @@ final class SetupModel: ObservableObject {
     /// Opens Terminal running `claude auth login`.
     func signInToClaudeCode() {
         let claudeCommand = claudeCodePath.map { "'\($0)'" } ?? "~/.local/bin/claude"
-        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Theo and press Test.'")
+        Self.runInTerminal("\(claudeCommand) auth login && echo && echo 'Signed in. Go back to Vello and press Test.'")
     }
 
     /// One real call through Claude Code with the chosen sign-in.
@@ -315,8 +315,8 @@ final class SetupModel: ObservableObject {
         var lines: [String] = []
         lines.append(companionManager.hasMicrophonePermission ? "✓ Microphone" : "✗ Microphone: grant it in the permissions panel")
         lines.append(companionManager.hasAccessibilityPermission ? "✓ Accessibility"
-                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Theo can't click or type")
-        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Theo")
+                     : "✗ Accessibility: grant it, or marks are guesses from the screenshot and Vello can't click or type")
+        lines.append(companionManager.hasScreenRecordingPermission ? "✓ Screen Recording" : "✗ Screen Recording: grant it, then quit and reopen Vello")
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         if speechStatus != .authorized {
@@ -434,7 +434,7 @@ enum SetupWindowController {
             let createdWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: min(windowHeight, 640)),
                                          styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                                          backing: .buffered, defer: false)
-            createdWindow.title = "Theo Settings"
+            createdWindow.title = "Vello Settings"
             createdWindow.titlebarAppearsTransparent = true
             createdWindow.isReleasedWhenClosed = false
             createdWindow.contentView = FirstMouseHostingView(rootView: SetupView(model: model))
@@ -580,7 +580,7 @@ struct SetupView: View {
         case .permissions:
             card {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Theo needs Microphone, Speech Recognition, Accessibility and Screen Recording.")
+                    Text("Vello needs Microphone, Speech Recognition, Accessibility and Screen Recording.")
                         .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Button("Open the Setup guide's permissions") { SetupGuideWindowController.show(companionManager: model.companionManagerForGuide, step: .permissions) }
@@ -643,7 +643,7 @@ struct SetupView: View {
                 }
                 Button("Check") { model.refreshClaudeCodePath() }
             }
-            Text("Theo thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor, OpenCode, or any API key from Settings \u{203A} Models & API keys. None is required.")
+            Text("Vello thinks with the brain you pick below: Claude Code, ChatGPT (Codex), Cursor, OpenCode, or any API key from Settings \u{203A} Models & API keys. None is required.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
@@ -711,7 +711,7 @@ struct SetupView: View {
                         .foregroundColor(.secondary)
                 }
             } else if model.voiceSource == .thisMac, !model.isMLXCoreInstalled {
-                Text("MLX Core isn't installed on this Mac, so Theo will use the Mac voice.")
+                Text("MLX Core isn't installed on this Mac, so Vello will use the Mac voice.")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
             }
@@ -740,7 +740,7 @@ private struct UpdateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("This is Theo \(updateController.currentVersionLabel)")
+                Text("This is Vello \(updateController.currentVersionLabel)")
                     .font(.system(size: 12))
                 Spacer()
                 if let release = updateController.availableRelease {
@@ -774,10 +774,10 @@ private struct UpdateSection: View {
 
     private var statusLine: String {
         switch updateController.state {
-        case .idle: return "Theo checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
+        case .idle: return "Vello checks for updates when it starts and every 6 hours. Updating keeps your settings and permissions."
         case .checking: return "Checking…"
         case .upToDate: return "✓ You have the newest build."
-        case .available: return "A newer build is ready. Theo quits, updates itself and reopens."
+        case .available: return "A newer build is ready. Vello quits, updates itself and reopens."
         case .installing(let message): return message
         case .failed(let message): return "✗ \(message)"
         }
@@ -885,7 +885,7 @@ struct ClaudiaScreenSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Theo's screen", selection: $look.screenName) {
+            Picker("Vello's screen", selection: $look.screenName) {
                 Text("None: wherever my pointer is").tag("")
                 ForEach(look.screenNames, id: \.self) { name in
                     Text(name).tag(name)
@@ -894,15 +894,15 @@ struct ClaudiaScreenSection: View {
                     Text("\(look.screenName) (not connected)").tag(look.screenName)
                 }
             }
-            Text("With a screen picked, Theo opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
+            Text("With a screen picked, Vello opens its browser windows, apps, boards and notes there and leaves your main screen alone.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Picker("Theo's pill", selection: $look.placement) {
+            Picker("Vello's pill", selection: $look.placement) {
                 ForEach(ClickySettings.IslandPlacement.allCases, id: \.self) { item in Text(item.displayName).tag(item) }
             }
             Picker("Spark", selection: $look.sparkMode) {
                 Text("Follows my pointer").tag(ClickySettings.SparkMode.cursor)
-                Text("Lives on its own (corner of Theo's screen)").tag(ClickySettings.SparkMode.docked)
+                Text("Lives on its own (corner of Vello's screen)").tag(ClickySettings.SparkMode.docked)
             }
             .pickerStyle(.radioGroup)
             Picker("Notes and T3 theme", selection: $look.theme) {

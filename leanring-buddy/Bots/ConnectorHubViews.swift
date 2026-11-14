@@ -41,7 +41,7 @@ struct HubAppDetails: View {
                         .buttonStyle(.theo(.primary, .small)).disabled(working || pastedToken.isEmpty)
                 }
                 .padding(.top, 2)
-                Text("It stays encrypted on this Mac, with its key in your Keychain. Theo never shows it again.")
+                Text("It stays encrypted on this Mac, with its key in your Keychain. Vello never shows it again.")
                     .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
             }
             HStack(spacing: 8) {
@@ -78,7 +78,7 @@ struct HubAppDetails: View {
             .padding(.top, 4)
         }
         .padding(.leading, 66).padding(.trailing, 14).padding(.bottom, 12)
-        .confirmationDialog("Remove \(record.name) from Theo?", isPresented: $confirmsRemove) {
+        .confirmationDialog("Remove \(record.name) from Vello?", isPresented: $confirmsRemove) {
             Button("Remove", role: .destructive) {
                 act("Removed \(record.name). Bots that had it keep it in their settings, unused, until you add it again.") {
                     try await ConnectorHub.remove(record.id)

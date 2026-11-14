@@ -245,7 +245,7 @@ private struct ClickyDemoStage: View {
                 .position(x: Self.target.x, y: Self.target.y)
                 .opacity(shown(time, from: 3.6, until: 7.4, fade: 0.05))
 
-            DemoBubble(text: Clock.typed("Hey Theo, how do I save this as a PDF?", progress: Clock.progress(time, from: 0.4, to: 1.6)), mine: true)
+            DemoBubble(text: Clock.typed("Hey Vello, how do I save this as a PDF?", progress: Clock.progress(time, from: 0.4, to: 1.6)), mine: true)
                 .frame(width: 150, alignment: .leading)
                 .position(x: 165, y: 178)
                 .opacity(shown(time, from: 0.35, until: 6.8))
@@ -299,13 +299,13 @@ private struct TheoDemoStage: View {
     let time: Double
 
     var body: some View {
-        DemoWindow(title: "Theo") {
+        DemoWindow(title: "Vello") {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 6) {
-                    member("Theo", .theo, state: time > 1.2 && time < 2.0 ? .thinking : .awake, selected: true)
+                    member("Vello", .theo, state: time > 1.2 && time < 2.0 ? .thinking : .awake, selected: true)
                     member("Builder", .builder, state: time >= 6.4 ? .done : time > 2.8 ? .working : .idle)
                     member("Researcher", .researcher, state: .idle)
-                    member("Clicky", .clicky, state: .awake)
+                    member("Pointer Assistant", .clicky, state: .awake)
                     Spacer()
                 }
                 .padding(6).frame(width: 74).background(DS.Colors.sidebar)

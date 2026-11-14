@@ -29,7 +29,7 @@ struct ActionEnterIntentTests {
     @Test func explicitEnglishPhrases() {
         for phrase in ["press enter", "Hit enter.", "press return", "hit return please", "the enter key", "type hello and enter", "type it then enter",
                        "send it", "reply ok and send", "submit", "submit the form", "press the enter key", "hit the return key", "press inter",
-                       "Clicky, press enter now", "and send it to him"] {
+                       "Pointer Assistant, press enter now", "and send it to him"] {
             #expect(asked(phrase, returnStep: false), "\(phrase)")
             #expect(asked(phrase, returnStep: true), "\(phrase)")
         }

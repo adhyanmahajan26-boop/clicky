@@ -50,22 +50,22 @@ struct ClickyTeamTests {
     // MARK: Orders
 
     @Test func ordersToClickyAreRecognised() {
-        #expect(ClickyOrder.parse("Clicky, research vector databases") == "research vector databases")
+        #expect(ClickyOrder.parse("Pointer Assistant, research vector databases") == "research vector databases")
         #expect(ClickyOrder.parse("hey clicky: point at the Save button") == "point at the Save button")
-        #expect(ClickyOrder.parse("@Clicky remember this") == "remember this")
+        #expect(ClickyOrder.parse("@Pointer Assistant remember this") == "remember this")
         #expect(ClickyOrder.parse("tell clicky to open chrome") == "open chrome")
         #expect(ClickyOrder.parse("clicky remember that I like tea") == "remember that I like tea")
     }
 
     @Test func aMessageThatOnlyMentionsClickyStaysAMessage() {
-        #expect(ClickyOrder.parse("what does Clicky do?") == nil)
+        #expect(ClickyOrder.parse("what does Pointer Assistant do?") == nil)
         #expect(ClickyOrder.parse("clicky is great") == nil)
-        #expect(ClickyOrder.parse("Clicky,") == nil)
+        #expect(ClickyOrder.parse("Pointer Assistant,") == nil)
         #expect(ClickyOrder.parse("I asked clicky to do it") == nil)
     }
 
     @Test func tagsComeOutOfTheosReply() {
-        let reply = "I'll have Clicky check.\n\n[CLICKY: point at the Save button]\n\nMeanwhile, here's the plan."
+        let reply = "I'll have Pointer Assistant check.\n\n[CLICKY: point at the Save button]\n\nMeanwhile, here's the plan."
         let (text, orders) = ClickyOrder.extract(from: reply)
         #expect(orders == ["point at the Save button"])
         #expect(!text.contains("CLICKY"))
@@ -79,7 +79,7 @@ struct ClickyTeamTests {
     }
 
     @Test func theVoiceNeverReadsAnOrderHoweverItIsSplit() {
-        let reply = "I'll get Clicky on that. [CLICKY: point at the Save button] Anything else?"
+        let reply = "I'll get Pointer Assistant on that. [CLICKY: point at the Save button] Anything else?"
         for size in [1, 2, 3, 5, 9, 200] {
             var stream = ClickyOrderStream()
             var speech = ""
@@ -96,7 +96,7 @@ struct ClickyTeamTests {
             speech += last.speech
             orders += last.orders
             #expect(orders == ["point at the Save button"], "chunk size \(size)")
-            #expect(speech == "I'll get Clicky on that.  Anything else?", "chunk size \(size)")
+            #expect(speech == "I'll get Pointer Assistant on that.  Anything else?", "chunk size \(size)")
         }
     }
 
@@ -181,7 +181,7 @@ struct ClickyTeamTests {
     }
 
     @Test func thePromptNamesEveryDutyAndWhoIsAbove() {
-        let section = ClickyTeamPrompts.teamSection(names: [.memory: "Memo", .researcher: "Researcher"], ceoName: "Theo")
+        let section = ClickyTeamPrompts.teamSection(names: [.memory: "Memo", .researcher: "Researcher"], ceoName: "Vello")
         #expect(section.contains("\"Memo\""))
         #expect(section.contains("a helper"))
         #expect(section.contains("[DELEGATE:runner:"))
@@ -191,12 +191,12 @@ struct ClickyTeamTests {
 
 @Suite struct TheoTellTests {
     @Test func tellOrdersComeOutWithNameAndMessage() {
-        let taken = ClickyOrder.extract(from: "Sending it over. [TELL: IT guys: write the prompt from Clicky's data] [CLICKY: point at Save]")
+        let taken = ClickyOrder.extract(from: "Sending it over. [TELL: IT guys: write the prompt from Pointer Assistant's data] [CLICKY: point at Save]")
         #expect(taken.text == "Sending it over.")
         #expect(taken.orders.count == 2)
         let target = ClickyOrder.tellTarget(in: taken.orders[0])
         #expect(target?.name == "IT guys")
-        #expect(target?.message == "write the prompt from Clicky's data")
+        #expect(target?.message == "write the prompt from Pointer Assistant's data")
         #expect(ClickyOrder.tellTarget(in: taken.orders[1]) == nil)
     }
 
@@ -227,7 +227,7 @@ struct ClickyTeamTests {
 
     @Test func gatheringWorkIsASearchNotSomethingToSave() {
         if case .find = ClickyMemoryTask.classify("gather everything the team collected") {} else { Issue.record("should be a find") }
-        if case .find = ClickyMemoryTask.classify("collect all the data from Clicky's bots") {} else { Issue.record("should be a find") }
+        if case .find = ClickyMemoryTask.classify("collect all the data from Pointer Assistant's bots") {} else { Issue.record("should be a find") }
     }
 }
 
@@ -383,7 +383,7 @@ struct ClickyTeamTests {
 
 @Suite struct HandedOverWhenDoneTests {
     @Test func researchThatGoesToTheoWhenDone() {
-        let words = "research these three links and make notes and hand it to Theo"
+        let words = "research these three links and make notes and hand it to Vello"
         #expect(ResearchTrigger.wantsItHandedOver(words))
         #expect(ResearchTrigger.parse(words) != nil)
         #expect(!ResearchTrigger.wantsItHandedOver("research these three links"))
@@ -393,14 +393,14 @@ struct ClickyTeamTests {
 @Suite struct ClickyMachineWordsTests {
     @Test func theSwitchOutLoud() {
         let addysMacs = ["Adhyan’s Mac Studio", "Adhyan’s MacBook Air"]
-        #expect(ClickyMachineWords.choice(in: "Clicky, work on the Air", macNames: addysMacs) == "Adhyan’s MacBook Air")
+        #expect(ClickyMachineWords.choice(in: "Pointer Assistant, work on the Air", macNames: addysMacs) == "Adhyan’s MacBook Air")
         #expect(ClickyMachineWords.choice(in: "switch to the Mac Studio for now", macNames: addysMacs) == "Adhyan’s Mac Studio")
         #expect(ClickyMachineWords.choice(in: "use the MacBook", macNames: addysMacs) == nil)
         #expect(ClickyMachineWords.choice(in: "work on the studio project", macNames: addysMacs) == nil)
         #expect(ClickyMachineWords.choice(in: "what is the air quality", macNames: addysMacs) == nil)
         // Any pair of Macs, by their own names.
         let samsMacs = ["Sam’s MacBook Pro", "Kitchen iMac"]
-        #expect(ClickyMachineWords.choice(in: "Clicky, work on the iMac", macNames: samsMacs) == "Kitchen iMac")
+        #expect(ClickyMachineWords.choice(in: "Pointer Assistant, work on the iMac", macNames: samsMacs) == "Kitchen iMac")
         #expect(ClickyMachineWords.choice(in: "switch to the kitchen iMac now", macNames: samsMacs) == "Kitchen iMac")
         #expect(ClickyMachineWords.choice(in: "move to my MacBook Pro please", macNames: samsMacs) == "Sam’s MacBook Pro")
         #expect(ClickyMachineWords.choice(in: "work on the Air", macNames: samsMacs) == nil)

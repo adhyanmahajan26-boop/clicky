@@ -468,7 +468,7 @@ struct ClickyChatScreen: View {
             HStack(spacing: 10) {
                 ClickyAvatar(size: 34, isActive: store.isClickyBusy)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Clicky").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text("Pointer Assistant").font(.system(size: 15, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                     Text(statusLine).font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
                 Spacer()
@@ -494,7 +494,7 @@ struct ClickyChatScreen: View {
                             VStack(spacing: 12) {
                                 ClickyAvatar(size: 84)
                                     .padding(.top, 120)
-                                Text("Clicky").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                                Text("Pointer Assistant").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                                 Text("Ask about what's on your screen, have it point things out, draw a whiteboard, or say \u{201C}remember this\u{201D} or \u{201C}research this\u{201D} and its team takes it from there.")
                                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
                             }
@@ -537,7 +537,7 @@ struct ClickyChatScreen: View {
                 .onAppear { proxy.scrollTo("end", anchor: .bottom) }
             }
             VStack(alignment: .leading, spacing: 10) {
-                TextField("Message Clicky", text: $draft, axis: .vertical)
+                TextField("Message Pointer Assistant", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain).font(.system(size: 15)).lineLimit(1...6)
                     .onSubmit(send)
                 HStack(spacing: 6) {
@@ -549,7 +549,7 @@ struct ClickyChatScreen: View {
                         .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8).frame(height: 26)
                         .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Colors.hover))
                     }
-                    .buttonStyle(.plain).help("Change Clicky's model")
+                    .buttonStyle(.plain).help("Change Pointer Assistant's model")
                     Spacer()
                     if pending != nil {
                         Button {

@@ -137,7 +137,7 @@ struct AgentStoreTests {
         #expect(decoded["code"] == codeTask)
         #expect(decoded["live"]?.status == .cancelled)
         #expect(decoded["live"]?.endedAt == reloadDate)
-        #expect(decoded["live"]?.logLines.last?.text == "Clicky quit while this was running.")
+        #expect(decoded["live"]?.logLines.last?.text == "Pointer Assistant quit while this was running.")
         #expect(decoded.runningRecords.isEmpty)
         #expect(throws: (any Error).self) { try AgentStore.decoded(from: Data("not json".utf8)) }
     }

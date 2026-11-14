@@ -247,7 +247,7 @@ public struct NamedProjectOffer: Equatable, Sendable {
 
 public enum NamedProjectSpeech {
     public static func offerLine(projectName: String) -> String {
-        "I can only send to the Clicky project right now. Want me to open Claude at \(projectName) and put your message in the box for you to send?"
+        "I can only send to the Pointer Assistant project right now. Want me to open Claude at \(projectName) and put your message in the box for you to send?"
     }
 
     public static let declineLine = "Okay, I won't."

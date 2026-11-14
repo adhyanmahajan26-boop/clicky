@@ -40,7 +40,7 @@ public enum BoardExportLocation {
     }
 
     /// Spoken after a save (the folder, in words; never the file name).
-    public static let savedLine = "saved the board as a PDF and a picture in the Clicky folder in your Pictures."
+    public static let savedLine = "saved the board as a PDF and a picture in the Pointer Assistant folder in your Pictures."
     public static let failedLine = "I couldn't save the board."
     public static let noBoardLine = "there's no board open to save."
 }

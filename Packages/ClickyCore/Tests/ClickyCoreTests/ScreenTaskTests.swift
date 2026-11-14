@@ -31,7 +31,7 @@ final class ScreenTaskTests: XCTestCase {
     }
 
     func testAppsThatAreNeverDrivenThere() {
-        for app in ["Terminal", "iTerm", "Xcode", "Google Chrome", "Safari", "Mail", "Messages", "Slack", "System Settings", "Finder", "Music", "Theo"] {
+        for app in ["Terminal", "iTerm", "Xcode", "Google Chrome", "Safari", "Mail", "Messages", "Slack", "System Settings", "Finder", "Music", "Vello"] {
             XCTAssertNotNil(ScreenTaskPolicy.refusal(app: app), app)
         }
     }

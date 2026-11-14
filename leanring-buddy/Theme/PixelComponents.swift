@@ -546,7 +546,7 @@ struct FacesKeyView: View {
             Text("WHAT THE FACES MEAN").font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(1.4).foregroundColor(DS.Colors.textTertiary)
             ForEach(rows, id: \.0) { state, line in
                 HStack(spacing: 14) {
-                    CrewAvatar(look: BotsStore.shared.primary?.crewLook ?? .theo, size: 44, pose: state, interactive: false, name: "Theo", ring: DS.Colors.surface1)
+                    CrewAvatar(look: BotsStore.shared.primary?.crewLook ?? .theo, size: 44, pose: state, interactive: false, name: "Vello", ring: DS.Colors.surface1)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(state.label).font(.system(size: 15, weight: .semibold))
                             .foregroundColor(state == .idle || state == .done ? DS.Colors.textPrimary : PixelTone(state: state).text)

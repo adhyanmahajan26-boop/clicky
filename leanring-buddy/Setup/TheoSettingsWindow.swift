@@ -58,7 +58,7 @@ enum SettingsTab {
             case .look: return "Look"
             case .devices: return "Devices"
             case .studio: return "Studio"
-            case .clicky: return "Clicky"
+            case .clicky: return "Pointer Assistant"
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
             case .voice: return "Voice"
@@ -73,19 +73,19 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
-            case .products: return "Theo, Clicky and Dictation are separate. Turn on the ones you want."
-            case .look: return "How Theo looks and moves. Click one and it changes right away."
+            case .products: return "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."
+            case .look: return "How Vello looks and moves. Click one and it changes right away."
             case .devices: return "Choose which Mac does what."
-            case .studio: return "Hidden screens your bots work on, with small live views inside Theo."
+            case .studio: return "Hidden screens your bots work on, with small live views inside Vello."
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
-            case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."
-            case .voice: return "How Clicky and Theo speak, how they hear you, and calls."
+            case .keys: return "Bring your own key for any provider, and use it anywhere in Vello."
+            case .voice: return "How Pointer Assistant and Vello speak, how they hear you, and calls."
             case .dictation: return "Talk into the chat box, or hold a shortcut in any app."
-            case .screen: return "The monitor Theo works on, leaving your main screen alone."
-            case .link: return "Both Macs run as one Theo: the same bots, group chats, chats and memory."
-            case .permissions: return "What Theo needs to hear, see and point."
-            case .updates: return "Keep Theo current."
+            case .screen: return "The monitor Vello works on, leaving your main screen alone."
+            case .link: return "Both Macs run as one Vello: the same bots, group chats, chats and memory."
+            case .permissions: return "What Vello needs to hear, see and point."
+            case .updates: return "Keep Vello current."
             case .about: return "Your name, the Dock icon and the setup guide."
             }
         }
@@ -140,7 +140,7 @@ struct SettingsSidebar: View {
             Button { selection.closeSettings() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)).foregroundColor(DS.Colors.textSecondary).frame(width: 22)
-                    Text("Back to Theo").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
+                    Text("Back to Vello").font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary)
                     Spacer()
                 }
                 .padding(.horizontal, 8).frame(height: 34).contentShape(Rectangle())
@@ -255,7 +255,7 @@ struct LookSettingsContent: View {
                 .padding(12)
                 RowDivider()
                 ChoiceChips(options: [(ClickySettings.SparkMode.cursor, "Follows my pointer", "cursorarrow.motionlines"),
-                                      (.docked, "Lives in a corner of Theo's screen", "rectangle.bottomthird.inset.filled")], selection: $look.sparkMode)
+                                      (.docked, "Lives in a corner of Vello's screen", "rectangle.bottomthird.inset.filled")], selection: $look.sparkMode)
                     .padding(12)
             }
             TheoSection(title: "Whiteboard and notch colours", hint: "Also used on the T3 Code page. The window itself follows Appearance above.") {
@@ -266,7 +266,7 @@ struct LookSettingsContent: View {
                 }
                 .padding(12)
             }
-            TheoSection(title: "Pill", hint: "Where Theo's status pill lives.") {
+            TheoSection(title: "Pill", hint: "Where Vello's status pill lives.") {
                 ChoiceChips(options: [(ClickySettings.IslandPlacement.notch, "Notch", "rectangle.topthird.inset.filled"),
                                       (.floating, "Floating", "rectangle.dashed"),
                                       (.corner, "Top-right corner", "rectangle.inset.topright.filled")], selection: $look.placement)
@@ -487,17 +487,17 @@ struct ClickySettingsContent: View {
                 HStack(spacing: 12) {
                     ClickyAvatar(size: 44)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Clicky").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
-                        Text("Sees your screens, points at things, draws boards, researches links with helpers, and acts on Theo's own screen.")
+                        Text("Pointer Assistant").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
+                        Text("Sees your screens, points at things, draws boards, researches links with helpers, and acts on Vello's own screen.")
                             .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 12)
-                    Toggle("Clicky on", isOn: Binding(get: { listens }, set: setClicky)).toggleStyle(.switch).labelsHidden()
+                    Toggle("Pointer Assistant on", isOn: Binding(get: { listens }, set: setClicky)).toggleStyle(.switch).labelsHidden()
                 }
                 .padding(14)
             }
             TheoSection(title: "Brain", hint: BrainModel(setting: main).sendsScreenshotsToThirdParty ? "This model runs in someone else's cloud, so your screenshots go to that provider." : nil) {
-                SettingRow(title: "Thinks with", detail: "Answers everything you ask Clicky.") {
+                SettingRow(title: "Thinks with", detail: "Answers everything you ask Pointer Assistant.") {
                     BrainModelPicker(title: "Thinks with", setting: Binding(get: { main }, set: { value in
                         main = value
                         if let manager { manager.setSelectedModel(value) } else { ClickyModels.main = value }
@@ -513,14 +513,14 @@ struct ClickySettingsContent: View {
                                                                                   set: { standIn = $0 })).frame(width: 260)
                 }
                 RowDivider()
-                SettingRow(title: "Code tasks", detail: "When you ask Clicky to change code by voice.") {
+                SettingRow(title: "Code tasks", detail: "When you ask Pointer Assistant to change code by voice.") {
                     // Voice code tasks run through Claude Code, so only its models work here.
                     BrainModelPicker(title: "Code tasks", setting: Binding(get: { code }, set: { code = $0; ClickyModels.code = $0 }), claudeOnly: true).frame(width: 260)
                 }
             }
             TheoSection(title: "Behaviour", hint: nil) {
                 SettingRow(title: "Name", detail: "What you call it: \u{201C}hey \(name)\u{201D}.") {
-                    TextField("Theo", text: Binding(get: { name }, set: { name = $0; if !$0.trimmingCharacters(in: .whitespaces).isEmpty { ClickySettings.assistantName = $0 } })).theoField().frame(width: 160)
+                    TextField("Vello", text: Binding(get: { name }, set: { name = $0; if !$0.trimmingCharacters(in: .whitespaces).isEmpty { ClickySettings.assistantName = $0 } })).theoField().frame(width: 160)
                 }
                 RowDivider()
                 SettingRow(title: "Listens for its name", detail: "On-device. Pauses when another app uses the mic.") {
@@ -537,7 +537,7 @@ struct ClickySettingsContent: View {
                     })).toggleStyle(.switch).labelsHidden()
                 }
                 RowDivider()
-                SettingRow(title: "Acts on screen", detail: "Opens, clicks and types on Theo's own monitor, with its own cursor.") {
+                SettingRow(title: "Acts on screen", detail: "Opens, clicks and types on Vello's own monitor, with its own cursor.") {
                     Toggle("Acts", isOn: Binding(get: { actions }, set: { value in
                         actions = value
                         UserDefaults.standard.set(value, forKey: ClickySettings.Keys.actionsEnabled)
@@ -550,7 +550,7 @@ struct ClickySettingsContent: View {
                 RowDivider()
                 linkRow("Listening", detail: "How it hears you", section: .voice)
                 RowDivider()
-                linkRow("Theo's screen", detail: look.screenName.isEmpty ? "Follows your pointer" : look.screenName, section: .screen)
+                linkRow("Vello's screen", detail: look.screenName.isEmpty ? "Follows your pointer" : look.screenName, section: .screen)
             }
         }
     }
@@ -601,12 +601,12 @@ struct VoiceSettingsContent: View {
                 RowDivider(inset: 54)
                 listenRow(id: "sarvam", logo: "sarvam", title: "Sarvam Saaras", detail: "Best for Indian languages and code-mixing", available: keys.hasKey(for: "sarvam"))
             }
-            TheoSection(title: "Fast decisions", hint: keys.hasKey(for: "sarvam") ? "Sarvam Prism picks the button when you tell Clicky to press something, and checks if dictation needs tidying. It sees those words and the button names on screen." : "Add a Sarvam key to use this.") {
+            TheoSection(title: "Fast decisions", hint: keys.hasKey(for: "sarvam") ? "Sarvam Prism picks the button when you tell Pointer Assistant to press something, and checks if dictation needs tidying. It sees those words and the button names on screen." : "Add a Sarvam key to use this.") {
                 SettingRow(title: "Decide with Sarvam Prism", detail: "If it isn't sure, things go the usual way.") {
                     Toggle("Decide with Sarvam Prism", isOn: $fastDecisions).toggleStyle(.switch).labelsHidden().disabled(!keys.hasKey(for: "sarvam"))
                 }
             }
-            TheoSection(title: "Calls with Theo", hint: keys.hasKey(for: "sarvam") ? "Calls listen and speak with Sarvam, in Hindi, English or Hinglish." : "Calls use Apple's listening and the Mac voice until a Sarvam key is saved. Hindi and Hinglish sound far better with Sarvam.") {
+            TheoSection(title: "Calls with Vello", hint: keys.hasKey(for: "sarvam") ? "Calls listen and speak with Sarvam, in Hindi, English or Hinglish." : "Calls use Apple's listening and the Mac voice until a Sarvam key is saved. Hindi and Hinglish sound far better with Sarvam.") {
                 SettingRow(title: "Language", detail: "Auto answers in whatever you just spoke.") {
                     Picker("Language", selection: $callLanguage) {
                         ForEach(CallSettings.Language.allCases) { Text($0.title).tag($0.rawValue) }
@@ -621,8 +621,8 @@ struct VoiceSettingsContent: View {
                         .frame(width: 220)
                 }
                 RowDivider()
-                SettingRow(title: "Talk to Theo now") {
-                    Button { TheoCallController.start() } label: { Label("Call Theo", systemImage: "phone.fill") }.buttonStyle(.theoPrimary)
+                SettingRow(title: "Talk to Vello now") {
+                    Button { TheoCallController.start() } label: { Label("Call Vello", systemImage: "phone.fill") }.buttonStyle(.theoPrimary)
                 }
             }
         }
@@ -666,7 +666,7 @@ struct ScreenSettingsContent: View {
     @ObservedObject private var look = LookSettings.shared
 
     var body: some View {
-        TheoSection(title: "Theo's screen", hint: "With a screen picked, Theo opens its windows, browser, boards and notes there, with its own cursor, and leaves your main screen alone.") {
+        TheoSection(title: "Vello's screen", hint: "With a screen picked, Vello opens its windows, browser, boards and notes there, with its own cursor, and leaves your main screen alone.") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 10)], spacing: 10) {
                 tile(name: "", title: "Follow my pointer", symbol: "cursorarrow.rays")
                 ForEach(look.screenNames, id: \.self) { name in tile(name: name, title: name, symbol: "display") }
@@ -701,8 +701,8 @@ struct PermissionsSettingsContent: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        TheoSection(title: "", hint: "Theo checks every second, so this page updates by itself. Without a permission Theo still runs: it just can't do that one thing, and tells you so.") {
-            row("Microphone", "Hears \u{201C}hey Theo\u{201D} and push-to-talk", "mic.fill", microphone == .authorized, asked: microphone != .notDetermined,
+        TheoSection(title: "", hint: "Vello checks every second, so this page updates by itself. Without a permission Vello still runs: it just can't do that one thing, and tells you so.") {
+            row("Microphone", "Hears \u{201C}hey Vello\u{201D} and push-to-talk", "mic.fill", microphone == .authorized, asked: microphone != .notDetermined,
                 ask: { AVCaptureDevice.requestAccess(for: .audio) { _ in } }, open: { TheoPermissions.openSettingsPane("Privacy_Microphone") })
             RowDivider(inset: 50)
             row("Speech recognition", "Turns what you say into words, on this Mac", "waveform", speech == .authorized, asked: speech != .notDetermined,
@@ -768,7 +768,7 @@ private struct UpdatesRows: View {
 
     var body: some View {
         TheoSection(title: "", hint: statusLine) {
-            SettingRow(title: "This is Theo \(updateController.currentVersionLabel)") {
+            SettingRow(title: "This is Vello \(updateController.currentVersionLabel)") {
                 if let release = updateController.availableRelease {
                     Button("Update to build \(release.build)") { updateController.installAvailableUpdate() }.buttonStyle(.theoPrimary)
                 } else {
@@ -797,10 +797,10 @@ private struct UpdatesRows: View {
 
     private var statusLine: String {
         switch updateController.state {
-        case .idle: return "Theo checks when it starts and every 6 hours. Updating keeps your settings and permissions."
+        case .idle: return "Vello checks when it starts and every 6 hours. Updating keeps your settings and permissions."
         case .checking: return "Checking…"
         case .upToDate: return "You have the newest build."
-        case .available: return "A newer build is ready. Theo quits, updates itself and reopens."
+        case .available: return "A newer build is ready. Vello quits, updates itself and reopens."
         case .installing(let message): return message
         case .failed(let message): return message
         }
@@ -818,7 +818,7 @@ struct AboutSettingsContent: View {
                     OwnerNameField().frame(width: 220)
                 }
                 RowDivider()
-                SettingRow(title: "Show Theo in the Dock", detail: "Off: Theo lives only in the menu bar.") {
+                SettingRow(title: "Show Vello in the Dock", detail: "Off: Vello lives only in the menu bar.") {
                     Toggle("Dock", isOn: $showsInDock).toggleStyle(.switch).labelsHidden()
                         .onChange(of: showsInDock) { _, value in
                             ClickySettings.showsInDock = value
@@ -844,7 +844,7 @@ struct AboutSettingsContent: View {
                 RowDivider()
                 shortcut("Settings", "⌘,")
                 RowDivider()
-                shortcut("Talk to Clicky", "⌃⌥ hold")
+                shortcut("Talk to Pointer Assistant", "⌃⌥ hold")
             }
         }
         .sheet(isPresented: $showsFacesKey) { FacesKeyView { showsFacesKey = false } }

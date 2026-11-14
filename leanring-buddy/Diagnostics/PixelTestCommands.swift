@@ -132,7 +132,7 @@ enum PixelTestCommands {
             let names: [String: SetupStep] = Dictionary(uniqueKeysWithValues: SetupStep.allCases.map { ("\($0)", $0) })
             let step = (command["step"] as? String).flatMap { names[$0] } ?? .welcome
             SetupGuideWindowController.show(companionManager: manager, step: step, activates: false)
-            let window = NSApp.windows.first { $0.title == "Set up Theo" }
+            let window = NSApp.windows.first { $0.title == "Set up Vello" }
             return ["window": window?.windowNumber ?? 0, "step": "\(step)"]
         case "products":
             for (name, on) in command["on"] as? [String: Bool] ?? [:] {
@@ -179,7 +179,7 @@ enum PixelTestCommands {
         window.appearance = NSAppearance(named: theme == "light" ? .aqua : .darkAqua)
         window.contentView = NSHostingView(rootView: view)
         // Beside Theo's own window, on Theo's monitor.
-        if let main = NSApp.windows.first(where: { $0.isVisible && $0.title.contains("Theo") }) ?? NSApp.mainWindow {
+        if let main = NSApp.windows.first(where: { $0.isVisible && $0.title.contains("Vello") }) ?? NSApp.mainWindow {
             window.setFrameOrigin(NSPoint(x: main.frame.minX + 40, y: main.frame.maxY - size.height - 60))
         }
         window.orderFrontRegardless()
@@ -297,7 +297,7 @@ struct NotchPreview: View {
         let builder = BotsStore.shared.bots.first { $0.name == "Builder" }
         let examples: [NotchContent] = [
             NotchContent(statusText: live?.title ?? "", botLine: live),
-            NotchContent(phase: .listening, statusText: "Listening…", captionText: "\u{201C}Hey Theo, what's Builder doing?\u{201D}"),
+            NotchContent(phase: .listening, statusText: "Listening…", captionText: "\u{201C}Hey Vello, what's Builder doing?\u{201D}"),
             NotchContent(botLine: builder.map { NotchBotLine(botID: $0.id, state: "done", title: "Builder is done", line: "Draft pull request is ready", button: "Open") }),
         ]
         return VStack(spacing: 14) {
@@ -352,7 +352,7 @@ struct PixelGalleryView: View {
     let look: CrewLook
     let name: String
     private let sizes: [CGFloat] = [16, 28, 36, 112]
-    private let crew: [(String, CrewLook)] = [("Theo", .theo), ("Clicky", .clicky), ("Builder", .builder), ("Researcher", .researcher), ("Designer", .designer),
+    private let crew: [(String, CrewLook)] = [("Vello", .theo), ("Pointer Assistant", .clicky), ("Builder", .builder), ("Researcher", .researcher), ("Designer", .designer),
                                               ("Code Reviewer", .reviewer), ("Inbox Triage", .inbox), ("Copy Editor", .copyEditor), ("Release Mgr", .release),
                                               ("Manager", .manager), ("Accountant", .accountant)]
 

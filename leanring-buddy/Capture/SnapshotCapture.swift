@@ -194,7 +194,7 @@ enum SnapshotCapture {
         let timestampFormatter = DateFormatter()
         timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
         timestampFormatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let baseFileName = "Clicky \(timestampFormatter.string(from: capturedDate))"
+        let baseFileName = "Pointer Assistant \(timestampFormatter.string(from: capturedDate))"
 
         var candidateURL = folderURL.appendingPathComponent("\(baseFileName).png")
         var duplicateNumber = 2

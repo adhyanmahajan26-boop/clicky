@@ -120,8 +120,8 @@ public enum ActionsDebugAXCommand {
     /// nil = allowed; else why not.
     public static func bundleRefusal(_ bundleIdentifier: String?, ownBundleIdentifier: String?) -> String? {
         guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return "needs \"bundle\"" }
-        if let ownBundleIdentifier, bundleIdentifier == ownBundleIdentifier { return "never Clicky itself" }
-        if bundleIdentifier.lowercased().contains("clicky") || bundleIdentifier == "com.personal.clicky" { return "never Clicky itself" }
+        if let ownBundleIdentifier, bundleIdentifier == ownBundleIdentifier { return "never Pointer Assistant itself" }
+        if bundleIdentifier.lowercased().contains("clicky") || bundleIdentifier == "com.personal.clicky" { return "never Pointer Assistant itself" }
         if explicitlyRefusedBundleIdentifiers.contains(bundleIdentifier) { return "never Safari" }
         guard allowedBundleIdentifiers.contains(bundleIdentifier) else {
             return "only \(allowedBundleIdentifiers.sorted().joined(separator: ", ")) are allowed"

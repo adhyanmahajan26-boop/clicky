@@ -44,9 +44,9 @@ final class HarnessParityTests: XCTestCase {
     // MARK: Skills
 
     func testParsesSkillFrontMatter() {
-        let text = "---\nname: theo-release\ndescription: \"How to cut a Theo release safely\"\n---\n# Steps\n1. Test\n"
+        let text = "---\nname: theo-release\ndescription: \"How to cut a Vello release safely\"\n---\n# Steps\n1. Test\n"
         let skill = BotSkill.parse(text, path: "/x/SKILL.md", author: "Pip", folderName: "theo-release")
-        XCTAssertEqual(skill, BotSkill(name: "theo-release", description: "How to cut a Theo release safely", path: "/x/SKILL.md", author: "Pip"))
+        XCTAssertEqual(skill, BotSkill(name: "theo-release", description: "How to cut a Vello release safely", path: "/x/SKILL.md", author: "Pip"))
         XCTAssertEqual(BotSkill.parse("---\ndescription: d\n---\n", path: "p", author: nil, folderName: "folder")?.name, "folder")
         XCTAssertNil(BotSkill.parse("# no front matter\n", path: "p", author: nil, folderName: "f"))
         XCTAssertNil(BotSkill.parse("---\nname: x\n---\n", path: "p", author: nil, folderName: "f"))
@@ -164,10 +164,10 @@ final class HarnessParityRoundTwoTests: XCTestCase {
 
     func testDoctorMarkdownPutsProblemsFirst() {
         let text = TheoDoctor.markdown([.init(.ok, "Disk", "500 GB free."), .init(.fail, "Claude Code", "Not signed in."), .init(.warn, "Skills", "One has no description.")])
-        XCTAssertTrue(text.hasPrefix("Theo's health check: 1 problem and 1 warning out of 3 checks."))
+        XCTAssertTrue(text.hasPrefix("Vello's health check: 1 problem and 1 warning out of 3 checks."))
         XCTAssertLessThan(text.range(of: "Claude Code")!.lowerBound, text.range(of: "Skills")!.lowerBound)
         XCTAssertLessThan(text.range(of: "Skills")!.lowerBound, text.range(of: "Disk")!.lowerBound)
-        XCTAssertEqual(TheoDoctor.markdown([.init(.ok, "Disk", "fine")]).components(separatedBy: "\n").first, "Theo's health check: all 1 checks pass.")
+        XCTAssertEqual(TheoDoctor.markdown([.init(.ok, "Disk", "fine")]).components(separatedBy: "\n").first, "Vello's health check: all 1 checks pass.")
         XCTAssertTrue(TheoDoctor.asksForDoctor(" /doctor "))
         XCTAssertFalse(TheoDoctor.asksForDoctor("doctor who?"))
     }

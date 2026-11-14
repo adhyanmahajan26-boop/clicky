@@ -205,8 +205,8 @@ struct TheoPanelView: View {
                 }
             }
             Spacer()
-            roundButton("macwindow", "Open Theo") { close(); TheoHomeWindowController.show(companionManager: companionManager) }
-            roundButton("phone.fill", "Call Theo") { close(); TheoCallController.start() }
+            roundButton("macwindow", "Open Vello") { close(); TheoHomeWindowController.show(companionManager: companionManager) }
+            roundButton("phone.fill", "Call Vello") { close(); TheoCallController.start() }
         }
     }
 
@@ -390,7 +390,7 @@ struct TheoPanelView: View {
             Spacer()
             Menu {
                 Button(action: { speech.selectQwenLocalVoice() }) {
-                    if speech.usesQwenLocalVoice { Label("Theo's voice", systemImage: "checkmark") } else { Text("Theo's voice") }
+                    if speech.usesQwenLocalVoice { Label("Vello's voice", systemImage: "checkmark") } else { Text("Vello's voice") }
                 }
                 Button(action: { speech.selectSystemVoice(identifier: nil) }) {
                     if !speech.usesQwenLocalVoice { Label("Mac voice", systemImage: "checkmark") } else { Text("Mac voice") }
@@ -398,7 +398,7 @@ struct TheoPanelView: View {
                 Divider()
                 Button("More voices…") { close(); companionManager.voiceGalleryController.showWindow(activatesClicky: true) }
             } label: {
-                Text(speech.usesQwenLocalVoice ? "Theo's voice" : "Mac voice").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                Text(speech.usesQwenLocalVoice ? "Vello's voice" : "Mac voice").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
             }
             .menuStyle(.borderlessButton).fixedSize()
         }
@@ -544,7 +544,7 @@ enum MenuBarFace {
         let look = PixelLook(finish: darkMenuBar ? "bone" : "onyx", trim: 0xFF7A45, eye: "block", top: "none", extra: "none")
         let image = PixelDrawing.faceImage(look: look, state: state, size: 18, isDark: darkMenuBar, scale: 3)
         image.isTemplate = false
-        image.accessibilityDescription = "Theo: \(state.label)"
+        image.accessibilityDescription = "Vello: \(state.label)"
         return image
     }
 }
@@ -576,7 +576,7 @@ final class MenuBarFaceUpdater {
         button.image = MenuBarFace.image(for: summary.state, darkMenuBar: dark)
         button.imagePosition = .imageLeading
         button.title = summary.count > 0 ? " \(summary.count)" : ""
-        button.toolTip = summary.count > 0 ? "\(summary.count) \(summary.state == .working ? "working" : summary.state.label.lowercased())" : "Theo"
+        button.toolTip = summary.count > 0 ? "\(summary.count) \(summary.state == .working ? "working" : summary.state.label.lowercased())" : "Vello"
     }
 }
 

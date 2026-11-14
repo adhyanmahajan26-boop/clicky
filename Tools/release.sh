@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Builds a Release Theo with a new build number, zips it, and publishes it as a GitHub release of
-# the releases repo, which every installed Theo picks up from Settings › Updates or "Update now".
+# Builds a Release Vello with a new build number, zips it, and publishes it as a GitHub release of
+# the releases repo, which every installed Vello picks up from Settings › Updates or "Update now".
 #
 # The release also carries SHA256SUMS, SIGNER (who signed this build, as a code requirement) and
 # install.sh with this repo and signer written in, so a new Mac can install from Terminal with
@@ -32,30 +32,32 @@ if [[ "$(Tools/setup-signing.sh --show)" == "no team set"* ]]; then
   Tools/setup-signing.sh
 fi
 
-echo "Building Theo build $BUILD for $REPO…"
+echo "Building Vello build $BUILD for $REPO…"
 xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configuration Release \
   -derivedDataPath "$DERIVED" CURRENT_PROJECT_VERSION="$BUILD" build > "$OUT/build-$BUILD.log" 2>&1 \
   || { tail -20 "$OUT/build-$BUILD.log"; exit 1; }
 BUILT="$DERIVED/Build/Products/Release/Clicky.app"
-# Shipped as Theo.app (the display name is Theo; the folder name is what Finder shows).
+# Shipped as Vello.app (the display name is Vello; the folder name is what Finder shows). An installed Theo.app
+# becomes Vello.app on its next update: the updater keeps the new app's own file name (UpdateFeed.installScript).
 STAGE="$OUT/stage-$BUILD"; rm -rf "$STAGE"; mkdir -p "$STAGE"
-APP="$STAGE/Theo.app"
+APP="$STAGE/Vello.app"
 ditto "$BUILT" "$APP"
 codesign --verify --deep --strict "$APP"
 # The connector hub helper is built into Contents/Helpers by the Xcode build phase; this says plainly if it is missing.
 bash Tools/build-connectors-helper.sh --check "$APP"
-# Signed with the Apple Development identity (never ad hoc), so macOS keeps Theo's permissions across updates.
+# Signed with the Apple Development identity (never ad hoc), so macOS keeps Vello's permissions across updates.
 SIGNING="$(codesign -dv --verbose=2 "$APP" 2>&1)"   # Not piped: with pipefail, grep -q closing early fails the check.
 [[ "$SIGNING" == *"Authority=Apple Development"* ]] || {
-  echo "Theo.app isn't signed with an Apple Development identity, so it can't be released (macOS would reset every"
+  echo "Vello.app isn't signed with an Apple Development identity, so it can't be released (macOS would reset every"
   echo "user's permissions with each update). Set your team with Tools/setup-signing.sh and run this again."
   exit 1
 }
 # macOS keeps a permission (Accessibility, Screen Recording, Microphone) against the app's designated
-# requirement. If this build doesn't satisfy the installed Theo's (a new certificate, a changed name or
+# requirement. If this build doesn't satisfy the installed Vello's (a new certificate, a changed name or
 # Apple ID), every user would be asked for every permission again, so stop here. (Compared with the
 # installed copy rather than a file in the repo, so the certificate's name and email aren't committed.)
-PREVIOUS_APP="${CLICKY_RELEASE_PREVIOUS_APP:-/Applications/Theo.app}"
+PREVIOUS_APP="${CLICKY_RELEASE_PREVIOUS_APP:-/Applications/Vello.app}"
+[[ -d "$PREVIOUS_APP" || -n "${CLICKY_RELEASE_PREVIOUS_APP:-}" ]] || PREVIOUS_APP="/Applications/Theo.app"
 if [[ -d "$PREVIOUS_APP" && "${CLICKY_ALLOW_NEW_SIGNER:-0}" != "1" ]]; then
   PREVIOUS_DR="$(codesign -d -r- "$PREVIOUS_APP" 2>&1 | sed -n 's/^designated => //p')"
   if ! codesign --verify -R "=$PREVIOUS_DR" "$APP" 2>/dev/null; then
@@ -70,7 +72,7 @@ fi
 # install.sh, so the installer checks downloads against this build's own signer without any team in the repo.
 SIGNER_RULE="$(Tools/install/signer-requirement.sh "$APP")"
 codesign --verify -R "=$SIGNER_RULE" "$APP" || { echo "the build doesn't satisfy its own signer rule: $SIGNER_RULE"; exit 1; }
-ZIP="$OUT/Theo-$BUILD.zip"
+ZIP="$OUT/Vello-$BUILD.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
@@ -84,7 +86,7 @@ SUMS="$STAGE/SHA256SUMS"
 (cd "$STAGE" && shasum -a 256 SIGNER install.sh) > "$SUMS.parts"
 { printf '%s  %s\n' "$SHA" "$(basename "$ZIP")"; cat "$SUMS.parts"; } > "$SUMS"
 rm -f "$SUMS.parts"
-CASK="$OUT/theo-$BUILD.rb"
+CASK="$OUT/vello-$BUILD.rb"
 Tools/install/make-cask.sh "$BUILD" "$SHA" "$REPO" > "$CASK"
 echo "Zip: $ZIP"
 echo "sha256: $SHA"
@@ -95,6 +97,6 @@ if [[ "${CLICKY_RELEASE_DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run: not published. Release files are in $STAGE."
   exit 0
 fi
-gh release create "build-$BUILD" "$ZIP" "$SUMS" "$SIGNER" "$INSTALLER" --repo "$REPO" --title "Theo build $BUILD" \
+gh release create "build-$BUILD" "$ZIP" "$SUMS" "$SIGNER" "$INSTALLER" --repo "$REPO" --title "Vello build $BUILD" \
   --notes "$(printf '%s\n\nsha256: %s\n' "$NOTES" "$SHA")"
 echo "Published build-$BUILD to $REPO"

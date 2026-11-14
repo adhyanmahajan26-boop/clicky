@@ -25,7 +25,7 @@ struct TheoProductionTests {
         for bot in bots where bot.owner == BotsStore.clickyID { #expect(bot.model == "claude-haiku-5-5") }
         #expect(Set(bots.compactMap(\.avatar)).count == 3)
         #expect(layout.pinned == ["bot:theo"])
-        #expect(layout.sections.first?.name == "Clicky")
+        #expect(layout.sections.first?.name == "Pointer Assistant")
         #expect(layout.sections.first?.leaderID == BotsStore.clickyID)
         #expect(layout.sections.first?.items.first == "clicky")
         #expect(layout.sections.first?.items.count == 4)

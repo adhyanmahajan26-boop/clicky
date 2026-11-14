@@ -47,7 +47,7 @@ public enum AgentInitFailure: Equatable, Sendable, CustomStringConvertible {
         case .permissionMode(let found): return "permissionMode is \(found ?? "missing")"
         case .tools(let unexpected, let missing): return "tools differ (unexpected: \(unexpected.joined(separator: ", ")); missing: \(missing.joined(separator: ", ")))"
         case .mcpServers(let names): return "MCP servers loaded: \(names.joined(separator: ", "))"
-        case .plugins(let names): return "plugins loaded: \(names.joined(separator: ", ")) (Clicky's coding agent only runs with no plugins; if this repo's .claude/settings.json turns plugins on, remove them there)"
+        case .plugins(let names): return "plugins loaded: \(names.joined(separator: ", ")) (Pointer Assistant's coding agent only runs with no plugins; if this repo's .claude/settings.json turns plugins on, remove them there)"
         case .apiKeySource(let found): return "apiKeySource is \(found ?? "missing")"
         case .workingDirectory(let found): return "cwd is \(found ?? "missing")"
         }

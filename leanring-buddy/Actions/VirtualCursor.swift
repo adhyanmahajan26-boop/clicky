@@ -181,7 +181,7 @@ private struct VirtualCursorView: View {
                 .frame(width: 16, height: 23)
                 .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1.5)
             HStack(spacing: 4) {
-                Text("Theo").font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundColor(.white)
+                Text("Vello").font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundColor(.white)
                 if model.isTyping { VirtualCursorTypingDots() }
             }
             .padding(.horizontal, 7)

@@ -438,7 +438,7 @@ final class CodeModeController: ObservableObject {
             case .integrityChanged:
                 speak("Something changed git's settings or hooks during the run, so I stopped and won't use that change.")
             case .existingWorktreeHasUnpushedWork:
-                speak("There's already a Clicky worktree for that with unpushed work. Clean it up from the menu first.")
+                speak("There's already a Pointer Assistant worktree for that with unpushed work. Clean it up from the menu first.")
             default:
                 speak("I couldn't set up the worktree: \(worktreeError.description).")
             }
@@ -688,7 +688,7 @@ final class CodeModeController: ObservableObject {
         }
         guard !matchResult.rankedCandidates.isEmpty else {
             if deniedLocalRepos.contains(where: { RepoMatcher.normalize(($0.folderPath as NSString).lastPathComponent) == RepoMatcher.normalize(task.repo) }) {
-                speak("That's Clicky's own code, and I don't work on that one.")
+                speak("That's Pointer Assistant's own code, and I don't work on that one.")
             } else {
                 speak("I couldn't find a repo called \(task.repo).")
             }
@@ -754,7 +754,7 @@ final class CodeModeController: ObservableObject {
         case .found(let foundRootPath, _):
             rootPath = foundRootPath
         case .denied:
-            speak("That's Clicky's own code, and I don't work on that one.")
+            speak("That's Pointer Assistant's own code, and I don't work on that one.")
             return nil
         case .notFound:
             speak("I couldn't tell which repo is in front. Say its name, or bring it up in Xcode, VS Code or Terminal.")
@@ -768,7 +768,7 @@ final class CodeModeController: ObservableObject {
     private func resolvePinnedRepository(rootPath: String, task: CodeTask, tools: CodeToolPaths) async -> ResolvedRepository? {
         let git = HardenedGit(gitPath: tools.git, ghPath: tools.gh, runner: ChildProcessCommandRunner())
         guard !CodeRepoDenylist.isDeniedLocalRoot(rootPath) else {
-            speak("That's Clicky's own code, and I don't work on that one.")
+            speak("That's Pointer Assistant's own code, and I don't work on that one.")
             return nil
         }
         guard FileManager.default.fileExists(atPath: (rootPath as NSString).appendingPathComponent(".git")) else {
@@ -789,7 +789,7 @@ final class CodeModeController: ObservableObject {
         var repository: ResolvedRepository
         if let identity = originURL.flatMap(GitHubRemote.parse) ?? upstreamURL.flatMap(GitHubRemote.parse) {
             guard !RepoMatcher.isDenied(identity.fullName), !deniedFullNames.contains(identity.fullName.lowercased()) else {
-                speak("That's Clicky's own code, and I don't work on that one.")
+                speak("That's Pointer Assistant's own code, and I don't work on that one.")
                 return nil
             }
             repository = ResolvedRepository(remote: identity, clonePath: rootPath)
@@ -1128,11 +1128,11 @@ final class CodeModeController: ObservableObject {
                 }
             }
             guard !entriesByClone.isEmpty else {
-                self.speak("There are no Clicky worktrees to clean up.")
+                self.speak("There are no Pointer Assistant worktrees to clean up.")
                 return
             }
             if unpushedCount > 0 {
-                let removeAnyway = await self.ask(title: "Remove Clicky's worktrees?", detail: "\(unpushedCount) of them have commits that were never pushed. Removing deletes that work.",
+                let removeAnyway = await self.ask(title: "Remove Pointer Assistant's worktrees?", detail: "\(unpushedCount) of them have commits that were never pushed. Removing deletes that work.",
                                                   confirmTitle: "Remove all", gatedAction: .apply)
                 guard removeAnyway else { return }
             }
@@ -1142,7 +1142,7 @@ final class CodeModeController: ObservableObject {
                 if (try? await manager.clickyWorktrees(clonePath: clonePath))?.isEmpty == true { await manager.removeAllClickyRefs(clonePath: clonePath) }
             }
             self.record("cleanup removed \(removedCount)")
-            self.speak("Removed \(removedCount) Clicky worktree\(removedCount == 1 ? "" : "s").")
+            self.speak("Removed \(removedCount) Pointer Assistant worktree\(removedCount == 1 ? "" : "s").")
         }
     }
 

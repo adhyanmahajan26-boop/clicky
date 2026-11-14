@@ -107,7 +107,7 @@ enum CallPrompt {
     static func system(store: BotsStore, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
         let theo = store.primary
         let owner = BotPrompts.ownerName
-        var parts = [theo?.instructions ?? "You are Theo."]
+        var parts = [theo?.instructions ?? "You are Vello."]
         var rules = """
         You are on a live voice call with \(owner) right now. Everything you write is read aloud at once by a voice.
         Talk the way you would on the phone: usually one to three short sentences, in plain words. Start with the answer; your first sentence should be short, because it's spoken while you're still writing the rest.
@@ -136,7 +136,7 @@ enum CallPrompt {
             parts.append(store.projectsNote + " On this call, put those words inside the [TELL: …] line. To just make a new empty folder, say it's for your chat afterward.")
             let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
                 guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
-                let who = message.author == "user" ? "\(OwnerName.startingSentence(owner)): " : message.author == theo.id ? "Theo: " : "Clicky: "
+                let who = message.author == "user" ? "\(OwnerName.startingSentence(owner)): " : message.author == theo.id ? "Vello: " : "Pointer Assistant: "
                 return who + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
             }
             if !recent.isEmpty { parts.append("The end of your text chat with \(owner), before this call:\n" + recent.joined(separator: "\n")) }
@@ -222,7 +222,7 @@ final class TheoCallSession: ObservableObject {
 
     func start() {
         // No App Nap or timer coalescing while someone is on the line, even with Theo in the background.
-        liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with Theo")
+        liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with Vello")
         audio.onBlock = { [weak self] block in self?.handle(block) }
         audio.onDrained = { [weak self] in self?.voiceDrained() }
         do {
@@ -310,7 +310,7 @@ final class TheoCallSession: ObservableObject {
     private func appleEars() -> AppleCallEars {
         let owner = BotPrompts.ownerName
         let ownerNameWords = OwnerName.isUnset(owner) ? [] : [owner]
-        return AppleCallEars(locale: language.appleLocale, phrases: ["Theo", "Clicky", "Sarvam"] + ownerNameWords + store.bots.map(\.name))
+        return AppleCallEars(locale: language.appleLocale, phrases: ["Vello", "Pointer Assistant", "Sarvam"] + ownerNameWords + store.bots.map(\.name))
     }
 
     private func use(ears newEars: CallEars) {

@@ -56,9 +56,9 @@ extension BotsStore {
     var clickyBot: NativeBot {
         // Clicky's engine is its own brain, whatever it is (Claude, an agent, an API key), so its face and status follow it.
         let engine = BotEngineChoice(brainSetting: ClickyModels.main)
-        var clicky = NativeBot(id: Self.clickyID, name: "Clicky",
+        var clicky = NativeBot(id: Self.clickyID, name: "Pointer Assistant",
                          description: "Your screen companion. Sees your screens, points, acts on screen and runs its own team.",
-                         instructions: "You are Clicky, \(BotPrompts.ownerName)'s screen companion. You manage a small team and report to the CEO.",
+                         instructions: "You are Pointer Assistant, \(BotPrompts.ownerName)'s screen companion. You manage a small team and report to the CEO.",
                          hue: 20, accentHue: 40, primary: false, provider: engine.provider,
                          model: engine.model, effort: nil, apps: [], category: "personal")
         clicky.look = Self.savedClickyLook
@@ -95,7 +95,7 @@ extension BotsStore {
     var clickyTeamPromptSection: String {
         var names: [ClickyDuty: String] = [:]
         for duty in ClickyDuty.allCases { names[duty] = teamBot(duty)?.name }
-        return ClickyTeamPrompts.teamSection(names: names, ceoName: primary?.name ?? "Theo")
+        return ClickyTeamPrompts.teamSection(names: names, ceoName: primary?.name ?? "Vello")
     }
 
     // MARK: Setting up
@@ -104,12 +104,28 @@ extension BotsStore {
     func provisionClickyTeam() {
         let file = folder.appendingPathComponent("offered.json")
         var offered = Set((try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
+        renameTeamCategoryOnce(offered: &offered, file: file)
         guard !offered.contains(ClickyDuty.provisionKey) else { return }
         var newBots = bots
         var newLayout = layout
         BotImport.addClickyTeam(to: &newBots, layout: &newLayout)
         setTeamSetup(bots: newBots, layout: newLayout)
         offered.insert(ClickyDuty.provisionKey)
+        try? JSONEncoder().encode(Array(offered).sorted()).write(to: file, options: .atomic)
+    }
+
+    /// Once: the team's category, still called "Clicky" from before the rename, becomes "Pointer Assistant".
+    /// Only the team's own category (the one Pointer Assistant manages), and only while it still has the old name.
+    private func renameTeamCategoryOnce(offered: inout Set<String>, file: URL) {
+        let renameKey = "pointer-assistant-category-name"
+        guard !offered.contains(renameKey) else { return }
+        var renamedLayout = layout
+        for index in renamedLayout.sections.indices
+        where renamedLayout.sections[index].name == ClickyDuty.categoryNameBeforeRename && renamedLayout.sections[index].leaderID == Self.clickyID {
+            renamedLayout.sections[index].name = ClickyDuty.categoryName
+        }
+        if renamedLayout != layout { setTeamSetup(bots: bots, layout: renamedLayout) }
+        offered.insert(renameKey)
         try? JSONEncoder().encode(Array(offered).sorted()).write(to: file, options: .atomic)
     }
 
@@ -124,7 +140,7 @@ extension BotsStore {
         // Theo quit while these ran: their processes went with it.
         for index in saved.indices where saved[index].isLive && saved[index].waitsForRun != true {
             saved[index].phase = .failed
-            saved[index].result = "Theo closed before this finished."
+            saved[index].result = "Vello closed before this finished."
             saved[index].finishedAt = Date()
         }
         delegations = saved
@@ -456,7 +472,7 @@ extension BotsStore {
             return
         }
         if !cameFromOtherMac, let word = ClickyMachineWords.choice(in: order, macNames: TheoLink.shared.macNames), TheoLink.shared.setClickyMac(word: word) {
-            let line = "Clicky's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
+            let line = "Pointer Assistant's working on \(TheoLink.shortName(TheoLink.shared.clickyMacNow)) now."
             post(BotChatMessage(author: Self.clickyID, text: line), to: ceo.id)
             onReport?(line)
             return
@@ -468,11 +484,11 @@ extension BotsStore {
         }
         // "...and send it to Theo": the card lands in that bot's chat, and the bot answers it.
         let handedTo = room == nil ? ClickyHandoff.target(in: order, among: bots.filter(\.isOn).map(\.name)).flatMap { name in bots.first { $0.name == name } } : nil
-        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Clicky", task: order, room: room ?? handedTo?.id ?? ceo.id)
+        let job = ClickyDelegation(duty: "order", workerID: Self.clickyID, workerName: "Pointer Assistant", task: order, room: room ?? handedTo?.id ?? ceo.id)
         add(job)
         guard let manager = CompanionManager.current else {
-            finish(job.id, result: "Clicky isn't running.", succeeded: false)
-            onReport?("Clicky isn't running.")
+            finish(job.id, result: "Pointer Assistant isn't running.", succeeded: false)
+            onReport?("Pointer Assistant isn't running.")
             return
         }
         Task { [weak self] in
@@ -483,7 +499,7 @@ extension BotsStore {
             var options = CompanionManager.TurnOptions(speaksResponse: false, keyUpDate: Date(), onTurnFinished: { [weak self] directory, error in
                 Task { @MainActor in
                     let said = directory.flatMap { ClaudiaControlInbox.spokenAnswer(inTurn: $0) } ?? ""
-                    let report = error == nil ? (said.isEmpty ? "Done." : said) : "Clicky couldn't do that: \(error?.localizedDescription ?? "it stopped")."
+                    let report = error == nil ? (said.isEmpty ? "Done." : said) : "Pointer Assistant couldn't do that: \(error?.localizedDescription ?? "it stopped")."
                     self?.finish(job.id, result: report, succeeded: error == nil)
                     onReport?(report)
                     if error == nil, let handedTo { self?.acknowledgeHandoff(to: handedTo, task: order, result: report) }
@@ -657,7 +673,7 @@ extension BotsStore {
     /// A bot's research job: Clicky's agents do it in the owner's browser on hidden tiles, and the bot hears the brief.
     func researchForBot(_ question: String, bot: NativeBot, room: String) {
         guard let research = CompanionManager.current?.researchController else {
-            post(BotChatMessage(author: bot.id, text: "I couldn't start the research: Clicky isn't ready on this Mac. Nothing was done."), to: room)
+            post(BotChatMessage(author: bot.id, text: "I couldn't start the research: Pointer Assistant isn't ready on this Mac. Nothing was done."), to: room)
             return
         }
         let route = DeviceRoles.route(.researchBrowser)
@@ -679,7 +695,7 @@ extension BotsStore {
             return
         }
         guard !research.isRunning else {
-            post(BotChatMessage(author: bot.id, text: "Clicky's agents are already researching something, so I didn't start this: \(question)"), to: room)
+            post(BotChatMessage(author: bot.id, text: "Pointer Assistant's agents are already researching something, so I didn't start this: \(question)"), to: room)
             return
         }
         if route == .waitForOtherMac { post(BotChatMessage(author: Self.noteAuthor, text: ResearchController.researchingHereLine(otherMac: otherMac)), to: room) }
@@ -725,7 +741,7 @@ extension BotsStore {
         let session = conversation(room).sessions[bot.id]
         // A bot doing this for another bot's private message tells that bot; the owner isn't in that thread.
         let reader = BotDMThread.partner(of: bot.id, in: room).flatMap { self.bot($0)?.name } ?? BotPrompts.ownerName
-        let words = "Clicky did that on a hidden screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell \(reader) how it went."
+        let words = "Pointer Assistant did that on a hidden screen and reports: \(report)\n\nCarry on. If there's more to do on it, use another line in the same form. If you're done, tell \(reader) how it went."
         reply(bot: bot, in: room, prompt: session == nil ? BotPrompts.firstMessage(bot: bot, team: bots, text: words) : words, session: session, fromOwner: !BotDMThread.isThread(room), mayUseScreen: true) { [weak self] answer in
             // The bot that asked hears how it went, and tells the owner.
             guard let self, BotDMThread.isThread(room), let answer, !answer.isEmpty, let asked = self.exchangeRooms[room], let asker = self.bot(asked.senderID) else { return }
@@ -746,7 +762,7 @@ extension BotsStore {
         guard asked.range(of: #"(?i)\b(clicky|research|researcher|data|collected|brief|bundle|notes?|findings?|photos?)\b|रिसर्च"#, options: .regularExpression) != nil else { return message }
         let fresh = CodingIntent.relevantWork(for: asked, in: memoryStore.teamWork().map(\.text)).filter { !passedOnWork.contains($0) }
         passedOnWork.formUnion(fresh)
-        return fresh.isEmpty ? message : "\(message)\n\nWhat Clicky's team found on this:\n\n\(fresh.joined(separator: "\n\n"))"
+        return fresh.isEmpty ? message : "\(message)\n\nWhat Pointer Assistant's team found on this:\n\n\(fresh.joined(separator: "\n\n"))"
     }
 
     /// Hands Researcher's latest finished brief to Theo. False when there isn't one.
@@ -842,8 +858,11 @@ extension BotImport {
         layout.pinned.removeAll { items.contains($0) }
         layout.hidden.removeAll { items.contains($0) }
         for index in layout.sections.indices { layout.sections[index].items.removeAll { items.contains($0) } }
-        var section = layout.sections.first { $0.name.lowercased() == ClickyDuty.categoryName.lowercased() }
+        // A category still called "Clicky" from before the rename becomes "Pointer Assistant"; any other name the owner gave it stays.
+        let teamCategoryNames = [ClickyDuty.categoryName.lowercased(), ClickyDuty.categoryNameBeforeRename.lowercased()]
+        var section = layout.sections.first { teamCategoryNames.contains($0.name.lowercased()) }
             ?? BotsLayout.Section(name: ClickyDuty.categoryName)
+        if section.name.lowercased() == ClickyDuty.categoryNameBeforeRename.lowercased() { section.name = ClickyDuty.categoryName }
         layout.sections.removeAll { $0.id == section.id }
         section.items = items + section.items
         section.leaderID = BotsStore.clickyID

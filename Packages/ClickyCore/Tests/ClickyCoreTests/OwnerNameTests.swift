@@ -71,7 +71,7 @@ struct OwnerNameTests {
             #expect(!prompt.contains(OwnerName.nameBeforeItWasASetting), "Still names the old owner: \(prompt.prefix(120))")
         }
         #expect(ClickyDuty.memory.instructions(owner: "Priya").contains("Call the owner Priya, or they"))
-        #expect(HarnessGuide.markdown(owner: "Priya").contains("Theo is Priya's bot harness"))
+        #expect(HarnessGuide.markdown(owner: "Priya").contains("Vello is Priya's bot harness"))
     }
 
     @Test func withNoNameSetPromptsSayTheOwnerAndReadAsSentences() {
@@ -82,7 +82,7 @@ struct OwnerNameTests {
                 #expect(!prompt.contains(sentenceStart), "Starts a sentence with \"the owner\": \(prompt.prefix(120))")
             }
         }
-        #expect(HarnessGuide.markdown().contains("Theo is the owner's bot harness"))
+        #expect(HarnessGuide.markdown().contains("Vello is the owner's bot harness"))
         #expect(BotProtocol.screenHowTo(owner: OwnerName.unset).hasPrefix("The owner's Mac has hidden screens"))
     }
 }

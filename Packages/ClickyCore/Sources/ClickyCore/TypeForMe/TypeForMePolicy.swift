@@ -24,10 +24,10 @@ public enum TypeForMeRefusal: Equatable, Sendable {
     public var cardExplanation: String {
         switch self {
         case .featureDisabled: return "Typing is off (Settings › Type this for me). You can copy it."
-        case .secureEventInput: return "A password prompt has secure input on — Clicky won't type."
-        case .secureTextField: return "That's a password field — Clicky never types there."
-        case .ownApplication: return "The focused field belongs to Clicky."
-        case .blockedApplication: return "Clicky doesn't type into this app."
+        case .secureEventInput: return "A password prompt has secure input on — Pointer Assistant won't type."
+        case .secureTextField: return "That's a password field — Pointer Assistant never types there."
+        case .ownApplication: return "The focused field belongs to Pointer Assistant."
+        case .blockedApplication: return "Pointer Assistant doesn't type into this app."
         case .noFocusedField: return "No text field has focus."
         }
     }

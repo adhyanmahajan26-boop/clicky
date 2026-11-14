@@ -22,7 +22,7 @@ struct ProviderKeysView: View {
         ScrollViewReader { proxy in
             VStack(alignment: .leading, spacing: 22) {
                 summary
-                group("AI models", hint: "A saved key adds that provider's models to the engine pickers. Open it to choose which: bots, Theo, Clicky.", providers.filter { $0.group == .models })
+                group("AI models", hint: "A saved key adds that provider's models to the engine pickers. Open it to choose which: bots, Vello, Pointer Assistant.", providers.filter { $0.group == .models })
                 group("Voice and listening", hint: "Pick which one speaks and listens in Settings › Voice.", providers.filter { $0.group == .voice })
                 group("On this Mac", hint: "Local servers need no key. Test finds out whether they're running.", providers.filter { $0.group == .local })
                 VStack(alignment: .leading, spacing: 8) {

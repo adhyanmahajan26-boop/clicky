@@ -237,7 +237,7 @@ final class StudioController: ObservableObject {
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard let self else { return }
             let live = self.live
-            self.measuredAfterApply = "Measured after Apply: Theo \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
+            self.measuredAfterApply = "Measured after Apply: Vello \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
         }
     }
 
@@ -324,7 +324,7 @@ final class StudioController: ObservableObject {
         rememberMonitors()
         var made: [VirtualDisplay] = []
         for (index, spec) in config.screens.enumerated() {
-            guard let display = VirtualDisplay(name: "Theo Studio \(index + 1)", serial: UInt32(0x7400 + index), size: spec.size, hiDPI: spec.hiDPI, refresh: Double(spec.refresh)) else {
+            guard let display = VirtualDisplay(name: "Vello Studio \(index + 1)", serial: UInt32(0x7400 + index), size: spec.size, hiDPI: spec.hiDPI, refresh: Double(spec.refresh)) else {
                 problem = "This version of macOS wouldn't make the hidden screens."
                 made.forEach { $0.remove() }
                 isStarting = false

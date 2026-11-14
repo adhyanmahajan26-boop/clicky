@@ -320,7 +320,7 @@ enum BotRunner {
             default: throw error
             }
             guard let standInChoice = standInEngine(for: bot) else {
-                throw BotRunnerError.failed("\(why). No other brain is set up to stand in: pick one in Settings \u{203A} Clicky (Stand-in for bots), or try again later.")
+                throw BotRunnerError.failed("\(why). No other brain is set up to stand in: pick one in Settings \u{203A} Pointer Assistant (Stand-in for bots), or try again later.")
             }
             var standIn = bot
             standIn.provider = standInChoice.provider
@@ -560,9 +560,9 @@ enum BotRunner {
             let minutes = Int((turnLimitSeconds / 60).rounded())
             let limit = minutes >= 1 ? "\(minutes) minute\(minutes == 1 ? "" : "s")" : "\(Int(turnLimitSeconds)) seconds"
             guard !parser.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw BotRunnerError.failed("\(provider.displayName) didn't finish within \(limit), so Theo stopped it.")
+                throw BotRunnerError.failed("\(provider.displayName) didn't finish within \(limit), so Vello stopped it.")
             }
-            return (parser.text + "\n\n_(Cut off: this reply didn't finish within \(limit), so Theo stopped it.)_", parser.sessionID ?? newSessionID ?? session)
+            return (parser.text + "\n\n_(Cut off: this reply didn't finish within \(limit), so Vello stopped it.)_", parser.sessionID ?? newSessionID ?? session)
         }
         if let error = parser.error, parser.text.isEmpty {
             // The engine's own words are often only on stderr ("--resume requires a valid session ID"), with a bare error result on stdout.

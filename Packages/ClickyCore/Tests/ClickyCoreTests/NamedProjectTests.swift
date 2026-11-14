@@ -92,7 +92,7 @@ struct NamedProjectTests {
 
     @Test func spokenLines() {
         #expect(NamedProjectSpeech.offerLine(projectName: "Mahajan Motor India Works")
-            == "I can only send to the Clicky project right now. Want me to open Claude at Mahajan Motor India Works and put your message in the box for you to send?")
+            == "I can only send to the Pointer Assistant project right now. Want me to open Claude at Mahajan Motor India Works and put your message in the box for you to send?")
         #expect(NamedProjectSpeech.declineLine == "Okay, I won't.")
         #expect(NamedProjectSpeech.pasteFallbackLine(projectName: "Mahajan Motor India Works")
             == "I've copied it and brought Claude up — open Mahajan Motor India Works and paste it.")
@@ -299,7 +299,7 @@ struct NamedProjectTests {
     // MARK: - Screenshot attachments
 
     @Test func attachmentHelpers() {
-        #expect(CodeTaskAttachments.excludeFileText(adding: "") == "# Clicky: screenshots for the code agent (never committed)\n/.clicky-attachments/\n")
+        #expect(CodeTaskAttachments.excludeFileText(adding: "") == "# Pointer Assistant: screenshots for the code agent (never committed)\n/.clicky-attachments/\n")
         let once = CodeTaskAttachments.excludeFileText(adding: "*.log")
         #expect(once.hasPrefix("*.log\n"))
         #expect(CodeTaskAttachments.excludeFileText(adding: once) == once)

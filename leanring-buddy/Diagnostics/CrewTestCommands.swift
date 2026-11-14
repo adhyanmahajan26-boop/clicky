@@ -125,13 +125,13 @@ enum CrewTestCommands {
         let brief = """
         # Studio Screens: four bots, two hidden displays
 
-        Two invisible 1440×900 screens, each split into two tiles. Your bots work side by side while you watch small live views inside Theo, and nothing lands on your own monitors.
+        Two invisible 1440×900 screens, each split into two tiles. Your bots work side by side while you watch small live views inside Vello, and nothing lands on your own monitors.
 
         ## Why
         Bots that open browsers and terminals on your screens get in the way. A screen nobody sees is the simplest place for that work to happen, and Builder and Designer can keep at it while you do something else entirely.
 
         ## How it works
-        Theo makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the Studio panel, only while it's open.
+        Vello makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the Studio panel, only while it's open.
 
         ## Cost on Studio
         About three percent of the CPU and 180 MB with four tiles live. Thumbnails stop the moment the panel closes.

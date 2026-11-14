@@ -590,7 +590,7 @@ enum HarnessCoding {
             // That run's own session, by id. Only a run from before sessions were recorded falls back on the newest in the folder.
             var session = run.sessionID
             if session == nil, run.chatUnknown == true {
-                throw BotsT3Error.failed("Theo couldn't tell which \(label) chat this run made, and its terminal has closed, so this can't carry on by itself. Start a new run in that folder and pick the chat from its Chat menu.")
+                throw BotsT3Error.failed("Vello couldn't tell which \(label) chat this run made, and its terminal has closed, so this can't carry on by itself. Start a new run in that folder and pick the chat from its Chat menu.")
             }
             if session == nil { session = await HarnessChats.session(startedFor: run) }
             guard let terminal = await restartTerminal(id: run.id, harness: harness, executable: executable, model: model, effort: effort, folder: folder, title: run.title, gitFolder: gitFolder, resume: session) else {
@@ -763,7 +763,7 @@ enum HarnessCoding {
             // Theo restarted and the terminal went with it. Nothing says the agent finished, so it isn't reported as done
             // and nothing half-made gets pushed.
             return BotsT3.ThreadState(status: "interrupted", busy: false, waitingForAnswer: false,
-                                      lastMessage: "Theo restarted while the run was going. The work so far is in its folder; write @code to carry on.",
+                                      lastMessage: "Vello restarted while the run was going. The work so far is in its folder; write @code to carry on.",
                                       worktree: run.worktree, pullRequest: nil)
         }
         guard terminal.isRunning else {
@@ -1075,7 +1075,7 @@ enum HarnessCoding {
         }
         // Theo restarted mid-run: the process went with it.
         return BotsT3.ThreadState(status: "interrupted", busy: false, waitingForAnswer: false,
-                                  lastMessage: "Theo restarted while the run was going; the work so far is in the project folder.",
+                                  lastMessage: "Vello restarted while the run was going; the work so far is in the project folder.",
                                   worktree: run.worktree, pullRequest: nil)
     }
 }

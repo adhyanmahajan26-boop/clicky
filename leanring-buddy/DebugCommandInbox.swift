@@ -986,7 +986,7 @@ final class DebugCommandInbox {
             return (false, ["error": "no ready fixture groundtruth at \(groundTruthURL.path)"])
         }
         guard AXIsProcessTrusted() else {
-            return (false, ["error": "Clicky isn't trusted for Accessibility"])
+            return (false, ["error": "Pointer Assistant isn't trusted for Accessibility"])
         }
 
         let accessibilityElements = FixtureAccessibilityWalker.collectElements(processIdentifier: pid_t(fixtureProcessIdentifier))
@@ -1221,7 +1221,7 @@ nonisolated enum AXFindWalker {
         guard let bundleIdentifier = object["bundle"] as? String, !bundleIdentifier.isEmpty else {
             return .failure(FindError(message: "axfind needs \"bundle\""))
         }
-        guard AXIsProcessTrusted() else { return .failure(FindError(message: "Clicky isn't trusted for Accessibility")) }
+        guard AXIsProcessTrusted() else { return .failure(FindError(message: "Pointer Assistant isn't trusted for Accessibility")) }
         guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
             return .failure(FindError(message: "no running app with bundle \(bundleIdentifier)"))
         }

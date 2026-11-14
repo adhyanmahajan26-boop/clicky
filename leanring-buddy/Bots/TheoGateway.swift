@@ -157,10 +157,10 @@ final class TheoGateway {
     }
 
     private func respond(to request: TheoGatewayHTTP.Request, on connection: NWConnection) async {
-        guard Self.isEnabled, let token = TheoGatewayToken.read() else { return send(connection, status: 503, ["error": "Theo's local API is off"]) }
+        guard Self.isEnabled, let token = TheoGatewayToken.read() else { return send(connection, status: 503, ["error": "Vello's local API is off"]) }
         switch TheoGatewayHTTP.check(request, port: Self.port, token: token) {
         case .forbidden(let why): return send(connection, status: 403, ["error": why])
-        case .unauthorized: return send(connection, status: 401, ["error": "Needs Authorization: Bearer <token from Theo's Settings>"])
+        case .unauthorized: return send(connection, status: 401, ["error": "Needs Authorization: Bearer <token from Vello's Settings>"])
         case nil: break
         }
         let store = BotsStore.shared

@@ -139,12 +139,12 @@ def write_stand_in_tools(folder):
 
 # ---------- fake Theo builds ----------
 
-def theo_zip(build, signature, bundle_id=BUNDLE_ID):
+def theo_zip(build, signature, bundle_id=BUNDLE_ID, app_name="Vello.app"):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("Theo.app/Contents/Info.plist", plistlib.dumps({"CFBundleIdentifier": bundle_id, "CFBundleVersion": str(build)}))
-        archive.writestr("Theo.app/Contents/MacOS/Clicky", "#!/bin/sh\n")
-        archive.writestr("Theo.app/Contents/_CodeSignature/stand-in.json", json.dumps(signature))
+        archive.writestr(app_name + "/Contents/Info.plist", plistlib.dumps({"CFBundleIdentifier": bundle_id, "CFBundleVersion": str(build)}))
+        archive.writestr(app_name + "/Contents/MacOS/Clicky", "#!/bin/sh\n")
+        archive.writestr(app_name + "/Contents/_CodeSignature/stand-in.json", json.dumps(signature))
     return buffer.getvalue()
 
 
@@ -189,7 +189,7 @@ threading.Thread(target=SERVER.serve_forever, daemon=True).start()
 
 
 def publish(repo, build, zip_bytes, signer=None, signer_in_sums=True, sums=True):
-    zip_name = "Theo-%s.zip" % build
+    zip_name = "Vello-%s.zip" % build
     assets = {zip_name: zip_bytes}
     lines = ["%s  %s" % (hashlib.sha256(zip_bytes).hexdigest(), zip_name)]
     if signer is not None:
@@ -230,7 +230,7 @@ def main():
             return result.returncode, result.stdout + result.stderr
 
         def installed_build():
-            plist = apps / "Theo.app/Contents/Info.plist"
+            plist = apps / "Vello.app/Contents/Info.plist"
             return plistlib.loads(plist.read_bytes())["CFBundleVersion"] if plist.exists() else None
 
         def check(name, condition, output):
@@ -256,13 +256,22 @@ def main():
         code, out = run()
         check("upgrade_from_another_signer_refused", code != 0 and "not by the same signer" in out and installed_build() == "101", out)
         code, out = run("--allow-new-signer")
-        check("allow_new_signer_lets_it_through", code == 0 and installed_build() == "102" and "ask for Theo's permissions again" in out, out)
+        check("allow_new_signer_lets_it_through", code == 0 and installed_build() == "102" and "ask for Vello's permissions again" in out, out)
+        shutil.rmtree(apps, ignore_errors=True)
+
+        # 3b. A Mac installed before the rename has Theo.app: the upgrade puts Vello.app in its place, same signer.
+        apps.mkdir(parents=True)
+        with zipfile.ZipFile(io.BytesIO(theo_zip(99, team_signature(TEAM_A), app_name="Theo.app"))) as archive:
+            archive.extractall(apps)
+        publish("o/r", 103, theo_zip(103, team_signature(TEAM_A)), signer=RULE_A)
+        code, out = run()
+        check("theo_app_upgrades_to_vello_app", code == 0 and installed_build() == "103" and not (apps / "Theo.app").exists() and "Upgrading" in out, out)
         shutil.rmtree(apps, ignore_errors=True)
 
         # 4. Fresh installs: a SIGNER file that names another team, one that's too loose, one SHA256SUMS doesn't list, none at all.
         publish("o/r", 100, theo_zip(100, team_signature(TEAM_A)), signer=RULE_B)
         code, out = run()
-        check("fresh_install_wrong_signer_refused", code != 0 and "not Theo's signing identity" in out and installed_build() is None, out)
+        check("fresh_install_wrong_signer_refused", code != 0 and "not Vello's signing identity" in out and installed_build() is None, out)
         for loose_rule in ('identifier "com.personal.clicky" and anchor apple generic',
                            RULE_A + " or anchor apple generic",
                            'identifier "com.example.other" and anchor apple generic and certificate leaf[subject.OU] = "%s"' % TEAM_A):
@@ -282,7 +291,7 @@ def main():
         # 5. Ad hoc builds are refused even by a matching-looking release, and a self-signed certificate rule works.
         publish("o/r", 100, theo_zip(100, {"kind": "adhoc", "cdhash": "ab12"}), signer=RULE_A)
         code, out = run()
-        check("ad_hoc_build_refused", code != 0 and "not Theo's signing identity" in out and installed_build() is None, out)
+        check("ad_hoc_build_refused", code != 0 and "not Vello's signing identity" in out and installed_build() is None, out)
         leaf = "0123456789abcdef0123456789abcdef01234567"
         self_signed_rule = 'identifier "com.personal.clicky" and certificate leaf = H"%s"' % leaf
         publish("o/r", 100, theo_zip(100, {"kind": "certificate", "leaf": leaf}), signer=self_signed_rule)
@@ -299,7 +308,7 @@ def main():
         shutil.rmtree(apps, ignore_errors=True)
         publish("o/r", 100, theo_zip(100, team_signature(TEAM_B, "CERT000002")), signer=RULE_B)
         code, out = run(script=stamped, env={"THEO_RELEASES_REPO": None}, stdin_script=True)
-        check("published_copy_pin_beats_release_signer_file", code != 0 and "not Theo's signing identity" in out and installed_build() is None, out)
+        check("published_copy_pin_beats_release_signer_file", code != 0 and "not Vello's signing identity" in out and installed_build() is None, out)
 
         # 7. Where releases come from, and what a private repo says.
         code, out = run(env={"THEO_RELEASES_REPO": "private/theo"})
@@ -316,7 +325,7 @@ def main():
 
         # 8. A checksum that doesn't match changes nothing; a cut-off download runs nothing.
         publish("o/r", 100, theo_zip(100, team_signature(TEAM_A)), signer=RULE_A)
-        RELEASES["o/r"]["assets"]["SHA256SUMS"] = ("0" * 64 + "  Theo-100.zip\n").encode()
+        RELEASES["o/r"]["assets"]["SHA256SUMS"] = ("0" * 64 + "  Vello-100.zip\n").encode()
         code, out = run()
         check("checksum_mismatch_refused", code != 0 and "doesn't match its checksum" in out and installed_build() is None, out)
         cut = scratch / "cut-install.sh"

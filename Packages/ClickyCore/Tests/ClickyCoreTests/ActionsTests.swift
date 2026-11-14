@@ -341,11 +341,11 @@ struct ActionTierTests {
     /// Live 2026-11-13: "press the device settings for me on this app" with Theo's own window in front. Clicky saw only the
     /// desktop and asked which app. Theo's main windows are now seen; pressing there waits for the owner's yes.
     @Test func theosMainWindowWaitsForAYesAndItsPanelsStayRefused() {
-        let settingsButton = ActionTargetFacts(bundleIdentifier: "com.personal.clicky", applicationName: "Theo", windowTitle: "Theo", groundingRole: .text,
+        let settingsButton = ActionTargetFacts(bundleIdentifier: "com.personal.clicky", applicationName: "Vello", windowTitle: "Vello", groundingRole: .text,
                                                label: "Devices", isOwnApplication: true, isOwnMainWindow: true)
         let click = ActionTierClassifier.classify(.click(elementID: 1), target: settingsButton, context: ActionTurnContext(ownerTranscript: "press the device settings"))
         #expect(click.tier == .confirm)
-        #expect(click.confirmQuestion?.contains("Theo") == true)
+        #expect(click.confirmQuestion?.contains("Vello") == true)
         #expect(tier(.key(ActionKeyCombo.parse("cmd+f")!), settingsButton) == .confirm)
         #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: false), settingsButton) == .confirm)
         #expect(tier(.scroll(elementID: nil, direction: .down, amount: 3), settingsButton) == .free)
@@ -489,7 +489,7 @@ struct ActionTaskLoopTests {
     }
 
     @Test func confirmReplies() {
-        for yes in ["yes", "Yeah.", "yes please", "go ahead", "Clicky, do it", "okay", "send it", "yep send it".replacingOccurrences(of: "yep ", with: "yes ")] {
+        for yes in ["yes", "Yeah.", "yes please", "go ahead", "Pointer Assistant, do it", "okay", "send it", "yep send it".replacingOccurrences(of: "yep ", with: "yes ")] {
             #expect(ActionConfirmReply.parse(yes) == .yes, "\(yes)")
         }
         for no in ["no", "Nope", "cancel", "don't", "never mind", "stop"] {
@@ -502,7 +502,7 @@ struct ActionTaskLoopTests {
 
     @Test func stopCommands() {
         #expect(ActionStopCommand.isStop("stop"))
-        #expect(ActionStopCommand.isStop("Clicky, stop!"))
+        #expect(ActionStopCommand.isStop("Pointer Assistant, stop!"))
         #expect(ActionStopCommand.isStop("cancel that please"))
         #expect(!ActionStopCommand.isStop("stop the music from playing in spotify"))
         #expect(!ActionStopCommand.isStop("open chrome"))
@@ -681,7 +681,7 @@ struct ActionSupportTests {
         #expect(ActionsDebugAXCommand.bundleRefusal("com.apple.TextEdit", ownBundleIdentifier: "com.personal.clicky") == nil)
         #expect(ActionsDebugAXCommand.bundleRefusal("com.apple.Notes", ownBundleIdentifier: "com.personal.clicky") == nil)
         #expect(ActionsDebugAXCommand.bundleRefusal("com.apple.Safari", ownBundleIdentifier: "com.personal.clicky") == "never Safari")
-        #expect(ActionsDebugAXCommand.bundleRefusal("com.personal.clicky", ownBundleIdentifier: "com.personal.clicky") == "never Clicky itself")
+        #expect(ActionsDebugAXCommand.bundleRefusal("com.personal.clicky", ownBundleIdentifier: "com.personal.clicky") == "never Pointer Assistant itself")
         #expect(ActionsDebugAXCommand.bundleRefusal("com.google.Chrome", ownBundleIdentifier: nil)?.hasPrefix("only") == true)
         #expect(ActionsDebugAXCommand.bundleRefusal(nil, ownBundleIdentifier: nil) == "needs \"bundle\"")
     }

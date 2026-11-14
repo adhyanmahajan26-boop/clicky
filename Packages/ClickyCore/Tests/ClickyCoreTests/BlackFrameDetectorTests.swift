@@ -102,7 +102,7 @@ private let editorWindow = CGRect(x: 800, y: 160, width: 720, height: 560)
     let windows = [
         WindowInfo(windowID: 1, processIdentifier: 10, layer: 0, boundsCG: CGRect(x: 80, y: 40, width: 480, height: 320), alpha: 1, ownerName: "Chrome", title: nil),
         WindowInfo(windowID: 2, processIdentifier: 11, layer: 25, boundsCG: CGRect(x: 0, y: 0, width: 800, height: 24), alpha: 1, ownerName: "Menubar", title: nil),
-        WindowInfo(windowID: 3, processIdentifier: 99, layer: 0, boundsCG: CGRect(x: 0, y: 0, width: 300, height: 300), alpha: 1, ownerName: "Clicky", title: nil),
+        WindowInfo(windowID: 3, processIdentifier: 99, layer: 0, boundsCG: CGRect(x: 0, y: 0, width: 300, height: 300), alpha: 1, ownerName: "Pointer Assistant", title: nil),
         WindowInfo(windowID: 4, processIdentifier: 12, layer: 0, boundsCG: CGRect(x: 900, y: 0, width: 300, height: 300), alpha: 1, ownerName: "Other screen", title: nil),
     ]
     let stack = WindowStack(windows: windows, ownProcessIdentifier: 99, displays: [display])

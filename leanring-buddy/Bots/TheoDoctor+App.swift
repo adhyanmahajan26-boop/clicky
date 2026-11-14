@@ -46,11 +46,11 @@ extension BotsStore {
             if let data = try? Data(contentsOf: url), (try? JSONSerialization.jsonObject(with: data)) != nil {
                 findings.append(.init(.ok, name, "Reads back cleanly."))
             } else {
-                findings.append(.init(.fail, name, "Can't be read. Theo keeps a .lastgood copy beside it; quit Theo and move that back."))
+                findings.append(.init(.fail, name, "Can't be read. Vello keeps a .lastgood copy beside it; quit Vello and move that back."))
             }
         }
         if !fileManager.isWritableFile(atPath: folder.path) {
-            findings.append(.init(.fail, "Bots folder", "Theo can't write to \(folder.path), so nothing new is saved."))
+            findings.append(.init(.fail, "Bots folder", "Vello can't write to \(folder.path), so nothing new is saved."))
         }
         // Routines pointing nowhere.
         for routine in routines where !routine.paused {
