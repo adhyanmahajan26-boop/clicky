@@ -180,6 +180,14 @@ struct BotsRootView: View {
                         }
                         hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
                         if products.isOn(.theo) {
+                            // Said in words near the top, where it's seen without scrolling. The small icon beside the
+                            // CEO row and ⌘N do the same, but on their own they read as no way to add a bot.
+                            hairlineRow("compose", "New bot", trailing: "⌘N", isSelected: false) {
+                                addingBotToSectionID = nil
+                                addingBot = true
+                            }
+                        }
+                        if products.isOn(.theo) {
                             let pinned = pinnedItems
                             if !pinned.isEmpty {
                                 sectionTitle("Pinned", count: pinned.count).dropTarget { items in items.forEach { store.setPinned(true, $0) } }
@@ -193,7 +201,6 @@ struct BotsRootView: View {
                                 // Clicky's own team leaves with Clicky (Settings › Products).
                                 ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
                                 unfiledBots
-                                newBotButton
                                 newCategoryButton
                             }
                         }
@@ -324,22 +331,6 @@ struct BotsRootView: View {
             sectionTitle("Other bots", count: unfiled.count)
             ForEach(unfiled, id: \.id) { bot in itemRow("bot:\(bot.id)") }
         }
-    }
-
-    /// A labelled way to make a bot, under the teams. The small icon beside the CEO row and ⌘N do the same, but they're
-    /// easy to miss, so the sidebar says it in words too.
-    private var newBotButton: some View {
-        Button { addingBotToSectionID = nil; addingBot = true } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
-                Text("New bot").font(.system(size: 11.5))
-            }
-            .foregroundColor(DS.Colors.textTertiary)
-            .padding(.horizontal, 20).frame(height: 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).pointerCursor().padding(.top, 6)
     }
 
     /// Makes a category and opens its page, where it's named, filled and given a manager.
