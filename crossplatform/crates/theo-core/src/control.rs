@@ -70,11 +70,15 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
             if let Some(e) = cmd.get("enabled").and_then(|e| e.as_bool()) { bot.enabled = Some(e); }
             if let Some(a) = s(cmd, "authority").filter(|a| ["member", "lead", "ceo"].contains(&a.as_str())) { bot.authority = Some(a); }
             if let Some(list) = cmd.get("canMessage").and_then(|c| c.as_array()) { bot.can_message = Some(list.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()); }
+            // null: it may message anyone again.
+            if cmd.get("canMessage").map(|c| c.is_null()).unwrap_or(false) { bot.can_message = None; }
             if let Some(p) = s(cmd, "provider").filter(|p| !p.is_empty()) {
                 if !crate::brains::is_known_engine(&p) { return err("Theo doesn't know that brain."); }
                 bot.provider = p;
             }
             if let Some(m) = s(cmd, "model").filter(|m| !m.is_empty()) { bot.model = m; bot.effort = None; }
+            // After the model, so a new model and its effort can come together. "" is the model's own default.
+            if let Some(e) = s(cmd, "effort") { bot.effort = if e.is_empty() { None } else { Some(e) }; }
             if let Some(i) = s(cmd, "instructions").filter(|i| !i.is_empty()) { bot.instructions = i; }
             if let Some(n) = s(cmd, "name").filter(|i| !i.is_empty()) { bot.name = n; }
             if let Some(d) = s(cmd, "description") { bot.description = d; }
@@ -104,6 +108,11 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "botDelete" => {
             let Some(id) = s(cmd, "id") else { return err("Needs id.") };
+            match h.bot(&id) {
+                None => return err("No such bot."),
+                Some(b) if b.primary || b.id == "theo" => return err(&format!("{} can't be deleted.", b.name)),
+                _ => {}
+            }
             h.delete_bot(&id);
             ok(json!({"deleted": id}))
         }
@@ -408,7 +417,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
                                  "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
-        _ => err(&format!("Unknown command {name}")),
+        _ => crate::teams_control::handle(h, &name, cmd).await,
     }
 }
 

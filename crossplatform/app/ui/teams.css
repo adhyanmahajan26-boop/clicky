@@ -1,0 +1,143 @@
+/* Teams in the sidebar, the team page, the group chat editor, menus and the bot settings column (teams.js, bot-settings.js).
+   On the Theo Pixel kit's tokens; the crown's gold is the one colour of its own, as on the Mac. */
+:root { --gold: #E9B949; }
+.on-light { --gold: #A87900; }
+
+/* The sort switch at the top of the bot list. */
+.seg { display: flex; gap: 2px; padding: 2px; margin: 2px 8px 6px; border-radius: 9px; background: var(--card2); }
+.seg button { flex: 1; height: 24px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--t2); }
+.seg button.on { background: var(--bg); color: var(--t1); box-shadow: 0 0 0 1px var(--line2); }
+.seg.wide { margin: 0 0 8px; }
+
+/* Bot rows: the manager's crown, and a category's label (open its page, fold it, drop bots on it). */
+.brow .nm { display: flex; align-items: center; gap: 6px; }
+.brow .nm-t { overflow: hidden; text-overflow: ellipsis; }
+.mgr { display: inline-flex; align-items: center; gap: 3px; font: 600 9.5px/1 var(--body); color: var(--gold); flex: none; }
+.crown { width: 11px; height: 11px; fill: var(--gold); flex: none; }
+.team-label { align-items: center; gap: 4px; padding: 14px 8px 6px 4px; border-radius: 7px; }
+.team-label.selected .tl-name { color: var(--t1); }
+.tl-fold { width: 14px; font-size: 9px; color: var(--t3); flex: none; }
+.tl-name { flex: 1; min-width: 0; text-align: left; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-name:hover { color: var(--t1); }
+.drop-hint { margin: 2px 8px 4px 22px; height: 28px; display: flex; align-items: center; padding: 0 10px; font-size: 11px; color: var(--t3); border: 1px dashed var(--line2); border-radius: 8px; }
+.drop-on { background: color-mix(in srgb, var(--acc) 14%, transparent); }
+.new-category { margin-top: 6px; font-size: 12px; min-height: 30px; }
+
+/* The header's Settings / Edit button. */
+#head-actions { margin-left: auto; display: flex; gap: 6px; }
+
+/* A right-click menu. */
+.menu { position: fixed; z-index: 60; min-width: 200px; max-width: 280px; padding: 5px; border-radius: 10px; background: var(--card); border: 1px solid var(--line2); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; }
+.menu button:hover:not([disabled]), .menu button:focus { background: rgba(255,255,255,.07); outline: none; }
+.on-light .menu button:hover:not([disabled]), .on-light .menu button:focus { background: rgba(0,0,0,.05); }
+.menu button[disabled] { color: var(--t3); cursor: default; }
+.menu .menu-h { font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--t3); padding: 8px 10px 4px; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+.menu .danger, .btn.danger, .btn.ghost.danger { color: var(--bad-t); }
+.btn.danger:not(.ghost) { border-color: var(--bad-line); }
+#confirm-dialog { width: 400px; }
+#confirm-dialog p { margin: 0; }
+
+/* A switch, for "Has a manager" and a bot's on/off. */
+.switch { position: relative; display: inline-block; width: 34px; height: 20px; flex: none; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch i { position: absolute; inset: 0; border-radius: 10px; background: var(--line2); transition: background .15s; pointer-events: none; }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--t1); transition: transform .15s; }
+.switch input:checked + i { background: var(--ok); }
+.switch input:checked + i::after { transform: translateX(14px); background: #fff; }
+.switch input:focus-visible + i { outline: 2px solid var(--acc); outline-offset: 2px; }
+.switch input:disabled + i { opacity: .5; }
+
+/* The team page. */
+.team-page { --ring: var(--card); }
+.team-card { display: flex; gap: 16px; align-items: flex-start; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.team-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.team-name, .team-purpose { background: none; border: 1px solid transparent; border-radius: 7px; color: var(--t1); padding: 2px 6px; margin-left: -7px; outline: none; }
+.team-name { font: 600 22px/1.25 var(--display); }
+.team-purpose { font: 14px/1.4 var(--body); color: var(--t2); }
+.team-name:hover, .team-purpose:hover { border-color: var(--line); }
+.team-name:focus, .team-purpose:focus { border-color: var(--acc); }
+.team-card .pills { margin-top: 6px; }
+.chain { flex-direction: column; gap: 14px; }
+.chain-top { display: flex; align-items: center; gap: 10px; width: 100%; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.chain-top .tx { flex: 1; min-width: 0; }
+.chain-top b { display: block; font-size: 13px; }
+.chain-top small { color: var(--t2); font-size: 12px; }
+.chain-top .crown { width: 14px; height: 14px; fill: var(--t3); }
+.chain-top .crown.on { fill: var(--gold); }
+.chain-row { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0; width: 100%; }
+.node { display: flex; flex-direction: column; gap: 8px; min-width: 90px; max-width: 150px; }
+.node-h { font: 600 10px/1 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--t3); white-space: nowrap; }
+.node-i { height: 34px; display: flex; align-items: center; gap: 3px; }
+.node-d { font-size: 12px; color: var(--t2); }
+.flow { width: 54px; height: 12px; margin: 39px 6px 0; flex: none; background: linear-gradient(var(--line2), var(--line2)) center / 100% 1px no-repeat; position: relative; }
+.flow::after { content: ""; position: absolute; right: 0; top: 2px; border: 4px solid transparent; border-left: 6px solid var(--line2); border-right: 0; }
+.crowned { position: relative; display: inline-flex; }
+.crowned .crown { position: absolute; top: -9px; left: 50%; transform: translateX(-50%); width: 12px; height: 12px; }
+.empty-box { width: 30px; height: 30px; border-radius: 9px; border: 1px dashed var(--line2); display: inline-block; }
+.chain-pick { margin-left: auto; display: flex; flex-direction: column; gap: 8px; min-width: 190px; }
+.chain-pick label, .bs-sec label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 600; color: var(--t3); }
+.chain-pick select, .row-h select, #bot-settings select, #bot-settings input, #bot-settings textarea {
+  background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: 13px var(--body); width: 100%; }
+.row-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.row-h h2 { margin: 0; }
+.row-h select { width: auto; }
+.members { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.member { display: flex; gap: 12px; align-items: flex-start; padding: 14px; min-height: 104px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); cursor: pointer; --ring: var(--card); }
+.member:hover { border-color: var(--line2); }
+.member.leader { border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
+.member .m-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.member b { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.member small { font-size: 12px; color: var(--t2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.m-st { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--t3); }
+.m-st i { width: 6px; height: 6px; border-radius: 50%; background: var(--t2); }
+.m-st i.busy { background: var(--ok); } .m-st i.off { background: var(--line2); }
+.member .btns { margin-top: 4px; }
+.members-empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px; border: 1px dashed var(--line2); border-radius: 14px; text-align: center; }
+.reports { display: flex; flex-direction: column; gap: 10px; }
+.report { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: 12px; background: var(--card); --ring: var(--card); }
+.report .r-h { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.report time { font-size: 11px; color: var(--t3); }
+.report .r-t { font-size: 13px; color: var(--t2); white-space: pre-wrap; }
+.team-foot { padding-top: 6px; }
+
+/* The group chat editor. */
+.hint { font-size: 11.5px; color: var(--t3); margin: 4px 0 8px; white-space: normal; }
+.hint.warn { color: var(--ask-t); }
+.hint.err { color: var(--bad-t); min-height: 0; margin: 0; }
+.lbl { font-size: 12px; color: var(--t2); margin: 10px 0 6px; }
+.pick-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px; --ring: var(--card); }
+dialog label.pick { display: flex; align-items: center; gap: 8px; margin: 0; padding: 5px 8px; border-radius: 7px; font-size: 13px; color: var(--t1); cursor: pointer; }
+dialog label.pick:hover { background: rgba(255,255,255,.04); }
+dialog label.pick input { width: auto; margin: 0; display: inline; }
+dialog label.pick small { color: var(--t3); font-size: 11px; margin-left: auto; }
+dialog menu .grow { flex: 1; }
+
+/* A bot's settings column. */
+#bot-settings { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; width: 360px; max-width: 100vw; overflow-y: auto; padding: 14px 16px 24px; background: var(--card); border-left: 1px solid var(--line2); box-shadow: -10px 0 30px rgba(0,0,0,.25); --ring: var(--card); display: flex; flex-direction: column; gap: 12px; }
+.bs-head { display: flex; align-items: center; justify-content: space-between; }
+.bs-head b { font: 600 15px/1 var(--display); }
+.bs-id { display: flex; gap: 12px; align-items: center; }
+.bs-look { border-radius: 14px; flex: none; }
+.bs-look:hover { background: rgba(255,255,255,.05); }
+.bs-names { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+#bot-settings #bs-name { font: 600 16px var(--body); }
+.bs-on { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: var(--card2); }
+.bs-on .tx { flex: 1; min-width: 0; }
+.bs-on b { display: block; font-size: 12.5px; color: var(--t3); }
+.bs-on b.is-on { color: var(--ok-t); }
+.bs-on small { font-size: 11px; color: var(--t3); }
+.bs-sec { display: flex; flex-direction: column; gap: 8px; }
+.bs-h { font: 600 10.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--t3); }
+.bs-sec .hint { margin: 0; }
+#bot-settings textarea { resize: vertical; min-height: 100px; line-height: 1.45; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-t { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--line2); font-size: 12px; color: var(--t2); }
+.chip-t.on { border-color: var(--acc); color: var(--t1); background: color-mix(in srgb, var(--acc) 12%, transparent); }
+.bs-apps { display: flex; flex-direction: column; gap: 6px; }
+#bot-settings label.bs-app { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 500; color: var(--t1); }
+#bot-settings label.bs-app select { width: 150px; flex: none; }
+.bs-foot { display: flex; justify-content: space-between; padding-top: 10px; border-top: 1px solid var(--line); }
+@media (max-width: 760px) { #bot-settings { width: 100vw; } .chain-pick { margin-left: 0; width: 100%; } }
+.bs-sec .btn, .bs-foot .btn { align-self: flex-start; }

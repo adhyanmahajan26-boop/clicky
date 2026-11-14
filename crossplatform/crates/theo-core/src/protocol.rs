@@ -278,6 +278,31 @@ pub fn mentions_ordered(text: &str, bots: &[(String, String)]) -> Vec<String> { 
 /// Like `mentions_ordered`, but a name counts with or without the @ (only the head's turns use this).
 pub fn mentions_named(text: &str, bots: &[(String, String)]) -> Vec<String> { find_names(text, bots, false) }
 
+/// Bots the owner addresses by name without an @: "Ledger: the break-even", "Scout, two risks". The name has to be written as
+/// the bot is named (case and all), at the start of a line or a sentence, and followed by ":" or ",", so "the runner crashed
+/// again" or "my Ledger looks off" brings nobody in. In the order addressed. ClickyCore's `BotMentions.addressed`.
+pub fn mentions_addressed(text: &str, bots: &[(String, String)]) -> Vec<String> {
+    let text = without_code(text);
+    let mut found: Vec<(usize, String)> = vec![];
+    for (id, name) in bots {
+        if name.is_empty() { continue; }
+        let pattern = format!(r"(?m)(?:^[ \t]*(?:[-*\u{{2022}}][ \t]*)?|[.!?;][ \t]+)({})[ \t]*[:,]", regex::escape(name));
+        let Ok(re) = Regex::new(&pattern) else { continue };
+        if let Some(c) = re.captures(&text) {
+            found.push((c.get(1).map(|m| m.start()).unwrap_or(0), id.clone()));
+        }
+    }
+    found.sort_by_key(|f| f.0);
+    found.into_iter().map(|f| f.1).collect()
+}
+
+/// Words that start a group's build discussion (plan, critiques, merge) rather than a plain round. ClickyCore's
+/// `CodingIntent.wantsDiscussion`.
+pub fn wants_discussion(text: &str) -> bool {
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b(idea|plan|critique|discuss|what do you think|build|make|create|website|app|game|feature|design|prompt)\b").unwrap());
+    RE.is_match(text)
+}
+
 // MARK: Caps on private messages
 
 pub const MAX_ROUND_TRIPS: u32 = 3;
@@ -328,15 +353,19 @@ impl GroupTurnPlan {
     pub const MAX_TURNS: u32 = 8;
     pub const MAX_TURNS_PER_BOT: u32 = 2;
 
-    pub fn new(head: &str, first: &[String]) -> Self {
+    /// `first`: who was tagged, or the head when nobody was. A head who's tagged too reads it first.
+    /// `asked`: members the owner's message names without tagging ("Ledger: the break-even"): they answer after whoever goes
+    /// first, in the order named, whether or not the head hands them anything.
+    pub fn new(head: &str, first: &[String], asked: &[String]) -> Self {
         let mut seen = std::collections::HashSet::new();
         let list: Vec<String> = if first.is_empty() { vec![head.to_string()] } else { first.to_vec() };
         let unique: Vec<String> = list.into_iter().filter(|x| seen.insert(x.clone())).collect();
-        let queue = if unique.iter().any(|x| x == head) {
+        let mut queue: Vec<String> = if unique.iter().any(|x| x == head) {
             std::iter::once(head.to_string()).chain(unique.into_iter().filter(|x| x != head)).collect()
         } else {
             unique
         };
+        queue.extend(asked.iter().filter(|x| x.as_str() != head && seen.insert((*x).clone())).cloned());
         Self { head: head.into(), queue, turns_taken: 0, spoke: Default::default(), wrapping_up: false, finished: false, needs_wrap_up: false }
     }
 
@@ -352,9 +381,12 @@ impl GroupTurnPlan {
             return Step::Finished;
         }
         if can_hand_out {
+            // The head may bring a bot back once; a member can only bring in someone who hasn't answered yet, so a member's
+            // @Name can't hand out extra turns to bots that already had theirs.
             let wanted: Vec<String> = mentions.iter().filter(|id| {
+                let spoken = self.spoke.get(*id).copied().unwrap_or(0);
                 id.as_str() != by && id.as_str() != self.head && others.contains(id) && !self.queue.contains(id)
-                    && self.spoke.get(*id).copied().unwrap_or(0) < Self::MAX_TURNS_PER_BOT
+                    && if by == self.head { spoken < Self::MAX_TURNS_PER_BOT } else { spoken == 0 }
             }).cloned().collect();
             if by == self.head {
                 self.queue.extend(wanted);
@@ -473,19 +505,19 @@ mod tests {
 
     #[test]
     fn group_plan_order() {
-        let mut plan = GroupTurnPlan::new("h", &[]);
+        let mut plan = GroupTurnPlan::new("h", &[], &[]);
         assert_eq!(plan.start(), Step::Speak { bot: "h".into(), wrap_up: false });
         let others = vec!["a".to_string(), "b".to_string()];
         assert_eq!(plan.turn_ended("h", &["b".into(), "a".into()], true, &others), Step::Speak { bot: "b".into(), wrap_up: false });
         assert_eq!(plan.turn_ended("b", &["a".into()], true, &others), Step::Speak { bot: "a".into(), wrap_up: false });
-        assert_eq!(plan.turn_ended("a", &["b".into()], true, &others), Step::Speak { bot: "b".into(), wrap_up: false });
-        assert_eq!(plan.turn_ended("b", &[], true, &others), Step::Speak { bot: "h".into(), wrap_up: true });
+        // b already answered, so a member's @b brings nobody back.
+        assert_eq!(plan.turn_ended("a", &["b".into()], true, &others), Step::Speak { bot: "h".into(), wrap_up: true });
         assert_eq!(plan.turn_ended("h", &["a".into()], false, &others), Step::Finished);
     }
 
     #[test]
     fn hijacker_cannot_loop() {
-        let mut plan = GroupTurnPlan::new("h", &[]);
+        let mut plan = GroupTurnPlan::new("h", &[], &[]);
         plan.start();
         let others = vec!["a".to_string(), "b".to_string()];
         let mut step = plan.turn_ended("h", &["a".into()], true, &others);
@@ -496,6 +528,29 @@ mod tests {
             step = plan.turn_ended(&bot, &mentions, !wrap_up, &others);
         }
         assert!(turns <= GroupTurnPlan::MAX_TURNS);
+    }
+
+    #[test]
+    fn owner_addresses_members_without_at() {
+        let bots = vec![("1".to_string(), "Ledger".to_string()), ("2".to_string(), "Scout".to_string()), ("3".to_string(), "Runner".to_string())];
+        assert_eq!(mentions_addressed("Plan it. Scout: two risks.\nLedger, the break-even.", &bots), vec!["2", "1"]);
+        assert!(mentions_addressed("the runner crashed again, my Ledger looks off", &bots).is_empty());
+        let mut plan = GroupTurnPlan::new("h", &[], &["1".to_string(), "h".to_string()]);
+        assert_eq!(plan.start(), Step::Speak { bot: "h".into(), wrap_up: false });
+        assert_eq!(plan.turn_ended("h", &[], true, &["1".to_string()]), Step::Speak { bot: "1".into(), wrap_up: false });
+    }
+
+    #[test]
+    fn a_member_hands_on_only_to_a_bot_that_hasnt_answered() {
+        let others = vec!["a".to_string(), "b".to_string()];
+        let mut plan = GroupTurnPlan::new("h", &[], &[]);
+        plan.start();
+        assert_eq!(plan.turn_ended("h", &["a".into(), "b".into()], true, &others), Step::Speak { bot: "a".into(), wrap_up: false });
+        assert_eq!(plan.turn_ended("a", &[], true, &others), Step::Speak { bot: "b".into(), wrap_up: false });
+        // b names a, who already answered: nobody new, so the head wraps up.
+        assert_eq!(plan.turn_ended("b", &["a".into()], true, &others), Step::Speak { bot: "h".into(), wrap_up: true });
+        assert!(wants_discussion("Build me a website for the bakery"));
+        assert!(!wants_discussion("How's everyone today?"));
     }
 
     #[test]
