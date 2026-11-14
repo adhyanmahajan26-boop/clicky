@@ -46,7 +46,7 @@ final class StudioController: ObservableObject {
     }()
 
     /// The hidden screens live on this Mac, on or off: it can make them, and of two linked Macs it's the one they're set to
-    /// (Settings › Devices, by default the always-on Mac). The other Mac shows them in its Studio panel instead.
+    /// (Settings › Devices, by default the main Mac). The other Mac shows them in its VM screens panel instead.
     static var isAvailable: Bool { canMakeHiddenScreens && DeviceRoles.runsHere(.studioScreens) }
 
     enum Keys {
@@ -286,6 +286,17 @@ final class StudioController: ObservableObject {
         if enabled, DeviceRoles.runsHere(.studioScreens) { start() } else { stop() }
     }
 
+    /// One click from Settings › VM screens: they belong to this Mac from now on (if they were set to the other one) and they're on.
+    func setUpHere() {
+        guard Self.canMakeHiddenScreens else { return }
+        if !DeviceRoles.runsHere(.studioScreens) {
+            UserDefaults.standard.set(DeviceChoice.thisMac.rawValue, forKey: DeviceRoles.key(.studioScreens))
+            objectWillChange.send()
+            TheoLink.shared.objectWillChange.send()
+        }
+        setEnabled(true)
+    }
+
     /// Settings › Devices changed where the screens belong.
     func followDeviceSetting() {
         if !DeviceRoles.runsHere(.studioScreens) { stop() }
@@ -324,7 +335,7 @@ final class StudioController: ObservableObject {
         rememberMonitors()
         var made: [VirtualDisplay] = []
         for (index, spec) in config.screens.enumerated() {
-            guard let display = VirtualDisplay(name: "Theo Studio \(index + 1)", serial: UInt32(0x7400 + index), size: spec.size, hiDPI: spec.hiDPI, refresh: Double(spec.refresh)) else {
+            guard let display = VirtualDisplay(name: "VM screen \(index + 1)", serial: UInt32(0x7400 + index), size: spec.size, hiDPI: spec.hiDPI, refresh: Double(spec.refresh)) else {
                 problem = "This version of macOS wouldn't make the hidden screens."
                 made.forEach { $0.remove() }
                 isStarting = false

@@ -25,7 +25,7 @@ struct StudioPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 HairlineIcon(name: "studio", size: 20, color: DS.Colors.textPrimary, live: studio.isOn && studio.liveCount > 0)
-                Text("Studio").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text("VM screens").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 if studio.isOn {
                     HStack(spacing: 6) {
                         LiveDot()
@@ -38,7 +38,7 @@ struct StudioPanel: View {
                 Button { selection.openSettings(.studio) } label: {
                     HairlineIcon(name: "expand", size: 16, color: DS.Colors.textSecondary).frame(width: 30, height: 30).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).help("Studio settings")
+                .buttonStyle(.plain).help("VM screens settings")
             }
             .frame(height: 30)
             if studio.isOn {
@@ -342,7 +342,7 @@ struct RemoteStudioPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 HairlineIcon(name: "studio", size: 20, color: DS.Colors.textPrimary, live: view?.tiles.isEmpty == false)
-                Text("Studio").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                Text("VM screens").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                 if let count = view?.tiles.count, count > 0 {
                     HStack(spacing: 6) {
                         LiveDot()
@@ -464,26 +464,18 @@ struct StudioTileThumb: View {
     }
 }
 
-// MARK: - Settings › Studio
+// MARK: - Settings › VM screens
 
 struct StudioSettingsContent: View {
     @ObservedObject private var studio = StudioController.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Studio screens", hint: "Off by default. macOS treats these as part of your desktop, so Theo puts your pointer and windows straight back if they land on one. Experimental. While these are on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't turn them on during Netflix.") {
-                SettingRow(title: "Hidden bot screens", detail: "They come up when a bot needs one and sleep after 15 quiet minutes") {
-                    Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
-                }
-            }
-            if StudioController.isAvailable {
-                StudioScreensSection()
-            } else {
-                TheoSection(title: "Screens", hint: "Screens live on your other Mac (Settings › Devices). Set them up there, and this Mac shows them in the Studio panel.") { EmptyView() }
-            }
+            VMScreensSetupSection()
+            if StudioController.isAvailable { StudioScreensSection() }
             ResearchAgentSettingsSection()
             TheoSection(title: "Research", hint: "When a plain fetch can't read a page, Researcher opens it in a new window of your own Chrome on a hidden screen, reads the text and closes it. It only reads: no clicks, no typing, no cookies or passwords touched, and private places like mail and banks never open. Chrome blinks to the front for a moment each time, so it waits until you pause. Visits show in your Chrome history. If a site wants a human check, it waits for you.") {
-                SettingRow(title: "Research agents use my browser on Studio screens", detail: "Clicky's research agents, one tile each. Tiles are freed when they're done") {
+                SettingRow(title: "Research agents use my browser on VM screens", detail: "Clicky's research agents, one tile each. Tiles are freed when they're done") {
                     Toggle("", isOn: Binding(get: { studio.researchUsesBrowser }, set: { studio.researchUsesBrowser = $0 })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
                 }
                 if studio.researchUsesBrowser {
@@ -512,6 +504,36 @@ struct StudioSettingsContent: View {
         let permission = studio.hasCapturePermission ? "" : " It also needs Screen Recording, which Theo never asks for by itself."
         return "Capturing can black out Netflix on your monitors, the way screen recording does, so nothing is captured while anything's playing: tiles show the page's words instead, and pictures come back when it stops. A tile with another app shows its bot and status instead." + permission
     }
+}
+
+/// The top of Settings › VM screens: one click sets them up on this Mac, whichever Mac they were set to before.
+struct VMScreensSetupSection: View {
+    @ObservedObject private var studio = StudioController.shared
+    @ObservedObject private var link = TheoLink.shared
+
+    private static let videoNote = "Experimental. macOS treats VM screens as part of your desktop, so your pointer and windows are put straight back if they land on one. While they're on, macOS takes your monitors out of HDR, and turning them on or off nudges a monitor aside for a second. Either can interrupt a video that's playing, so don't set them up during Netflix."
+
+    var body: some View {
+        TheoSection(title: "VM screens", hint: Self.videoNote) {
+            if !StudioController.canMakeHiddenScreens {
+                SettingRow(title: "This Mac can't make VM screens", detail: link.isPaired ? "Set them up on your other Mac, and this Mac shows them in the VM screens panel." : "It needs macOS virtual displays, which this Mac doesn't have.") { EmptyView() }
+            } else if !StudioController.isAvailable {
+                SettingRow(title: "VM screens are on \(otherMacName)", detail: "Use this Mac instead and they move here, with this Mac's own screens. Nothing changes on the other Mac until you say so there.") {
+                    Button("Use this Mac") { studio.setUpHere() }.buttonStyle(.theo(.primary, .small))
+                }
+            } else if !studio.isEnabled {
+                SettingRow(title: "Set up VM screens", detail: "One click: virtual screens on this Mac, ready for your bots. Change their size or count here any time.") {
+                    Button("Set up") { studio.setUpHere() }.buttonStyle(.theo(.primary, .small))
+                }
+            } else {
+                SettingRow(title: "VM screens", detail: studio.isOn ? "On, with \(studio.config.screens.count) screen\(studio.config.screens.count == 1 ? "" : "s"). They sleep after 15 quiet minutes and come back when a bot needs one." : "Ready. They come up when a bot needs one and sleep after 15 quiet minutes.") {
+                    Toggle("", isOn: Binding(get: { studio.isEnabled }, set: { studio.setEnabled($0) })).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
+                }
+            }
+        }
+    }
+
+    private var otherMacName: String { TheoLink.shortName(link.peerName ?? link.knownPeerName ?? "your other Mac") }
 }
 
 /// A small segmented choice, the chosen one raised on a hairline.

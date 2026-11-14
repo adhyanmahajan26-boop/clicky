@@ -113,7 +113,7 @@ final class BrowserResearcher: ObservableObject {
     /// `label`: the agent's job, shown on its tile. `agent`: holds one tile across pages until `endAgent`; with none, the tile is
     /// freed after this page.
     func read(_ url: URL, label: String? = nil, agent: String? = nil) async -> Outcome {
-        guard isReady, let researcherID else { return .skipped("Studio screens or my browser aren't available") }
+        guard isReady, let researcherID else { return .skipped("VM screens or my browser aren't available") }
         guard BrowserResearchPolicy.mayOpen(url, allowsLocalHostForTests: testAllowsLocalHost) else { return .skipped("not opened in your browser: it looks private") }
         let host = url.host ?? "page"
         let prefix = label.map { "\($0) · " } ?? ""

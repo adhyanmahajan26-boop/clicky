@@ -187,6 +187,8 @@ final class TheoLink: ObservableObject {
 
     func start() {
         if isPaired { startNetworking() }
+        // Not linked yet: Macs nearby can see this one and link to it in one click (Settings › Devices).
+        NearbyLinking.shared.update()
     }
 
     /// Test profile only: a link of its own. `dialHost` empty: it only listens.
@@ -223,6 +225,7 @@ final class TheoLink: ObservableObject {
         code = newCode
         isPaired = true
         restart()
+        NearbyLinking.shared.update()
     }
 
     func unpair() {
@@ -230,6 +233,7 @@ final class TheoLink: ObservableObject {
         code = nil
         isPaired = false
         stopNetworking()
+        NearbyLinking.shared.update()
     }
 
     private func restart() {

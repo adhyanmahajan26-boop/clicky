@@ -3105,6 +3105,8 @@ extension BotsStore {
             if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) {
                 peerDevice = theirs
                 DeviceRoles.rememberOtherMac(theirs)
+                // The other Mac may have picked a new main Mac: the VM screens leave this one if they're no longer its.
+                StudioController.shared.followDeviceSetting()
             }
         case "runs":
             guard let theirs = try? decoder.decode([T3Run].self, from: data) else { return }

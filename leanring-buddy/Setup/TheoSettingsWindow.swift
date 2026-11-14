@@ -29,8 +29,8 @@ enum SettingsTab {
         case products, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
-        /// The pages this Mac has: Studio is on the Mac the hidden screens live on.
-        @MainActor static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.isAvailable } }
+        /// The pages this Mac has: VM screens on any Mac that can make them (it sets them up here in one click), or that's linked to one.
+        @MainActor static var shown: [Section] { allCases.filter { $0 != .studio || StudioController.canMakeHiddenScreens || TheoLink.shared.isPaired } }
 
         /// Its Hairline icon.
         var icon: String {
@@ -57,7 +57,7 @@ enum SettingsTab {
             case .products: return "Products"
             case .look: return "Look"
             case .devices: return "Devices"
-            case .studio: return "Studio"
+            case .studio: return "VM screens"
             case .clicky: return "Clicky"
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
@@ -76,7 +76,7 @@ enum SettingsTab {
             case .products: return "Theo, Clicky and Dictation are separate. Turn on the ones you want."
             case .look: return "How Theo looks and moves. Click one and it changes right away."
             case .devices: return "Choose which Mac does what."
-            case .studio: return "Hidden screens your bots work on, with small live views inside Theo."
+            case .studio: return "Virtual screens your bots work on, set up in one click, with small live views."
             case .clicky: return "Everything about your screen companion, in one place."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Theo."

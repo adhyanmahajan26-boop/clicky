@@ -14,11 +14,36 @@ import SwiftUI
 enum DeviceRoles {
     static func key(_ feature: DeviceFeature) -> String { "v3.devices.\(feature.rawValue)" }
     private static let otherMacKey = "v5.devices.otherMac"
+    private static let mainMacKey = "v6.devices.mainMac"
+    private static let mainMacAtKey = "v6.devices.mainMacChosenAt"
 
-    /// This Mac, as the routing rules know it. Its Routines choice goes to the other Mac too, so both agree on which one fires them.
+    /// This Mac, as the routing rules know it. Its Routines choice and its main Mac pick go to the other Mac too, so both agree.
     static var thisMac: LinkedMac {
-        LinkedMac(id: thisMacID, name: TheoLink.localName, isDesktop: thisMacIsDesktop, routinesChoice: choice(.routines))
+        LinkedMac(id: thisMacID, name: TheoLink.localName, isDesktop: thisMacIsDesktop, routinesChoice: choice(.routines),
+                  mainMacID: mainMacPick?.id, mainMacChosenAt: mainMacPick?.at)
     }
+
+    /// The main Mac as picked on this Mac (Settings › Devices), and when. Nil: never picked here.
+    static var mainMacPick: (id: String, at: Date)? {
+        guard let id = UserDefaults.standard.string(forKey: mainMacKey) else { return nil }
+        return (id, UserDefaults.standard.object(forKey: mainMacAtKey) as? Date ?? .distantPast)
+    }
+
+    /// The main Mac does what one Mac does for both: routines, the research browser and the VM screens, unless one is set to a
+    /// Mac of its own. Picking it on either Mac is enough: the newest pick wins on both.
+    @MainActor static func makeMainMac(id: String) {
+        UserDefaults.standard.set(id, forKey: mainMacKey)
+        UserDefaults.standard.set(Date(), forKey: mainMacAtKey)
+        StudioController.shared.followDeviceSetting()
+        TheoLink.shared.objectWillChange.send()
+        TheoLink.shared.syncSoon()
+    }
+
+    /// This Mac is the main one, by the owner's pick or, without one, as the always-on Mac.
+    @MainActor static var thisMacIsMain: Bool { DeviceRouting.alwaysOnMacIsThisOne(pair) }
+
+    /// The main Mac was picked by the owner, rather than worked out.
+    @MainActor static var mainMacWasPicked: Bool { DeviceRouting.pickedMainMacID(pair) != nil }
 
     /// The Mac's hardware UUID: it stays when the Mac is renamed, and isn't copied to a new Mac with the settings, as a saved id
     /// would be. Two test profiles on one Mac stand in for two Macs, so a test profile goes by its link name instead.
@@ -118,24 +143,32 @@ enum DeviceRoles {
 
 struct DevicesSettingsContent: View {
     @ObservedObject private var link = TheoLink.shared
+    @ObservedObject private var nearby = NearbyLinking.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            TheoSection(title: "Your Macs", hint: nil) {
-                macRow(name: TheoLink.shortName(TheoLink.localName), isDesktop: DeviceRoles.thisMacIsDesktop, firesRoutines: link.isPaired && DeviceRoles.runsHere(.routines),
-                       tag: "This Mac", isOnline: true, build: currentBuild)
+            if let request = nearby.incoming { LinkRequestSection(request: request) }
+            TheoSection(title: "Your Macs", hint: macsHint) {
+                let thisIsMain = link.isPaired && DeviceRoles.thisMacIsMain
+                macRow(name: TheoLink.shortName(TheoLink.localName), isDesktop: DeviceRoles.thisMacIsDesktop, isMain: thisIsMain,
+                       tag: "This Mac", isOnline: true, build: currentBuild,
+                       makeMain: link.isPaired && !thisIsMain ? DeviceRoles.thisMacID : nil)
                 RowDivider()
-                if let other = link.peerName ?? link.knownPeerName {
-                    macRow(name: TheoLink.shortName(other), isDesktop: DeviceRoles.otherMac?.isDesktop, firesRoutines: !DeviceRoles.runsHere(.routines),
-                           tag: nil, isOnline: link.isConnected, build: link.peerBuild)
+                if link.isPaired, let other = link.peerName ?? link.knownPeerName {
+                    let otherID = DeviceRoles.otherMac?.id
+                    macRow(name: TheoLink.shortName(other), isDesktop: DeviceRoles.otherMac?.isDesktop, isMain: !thisIsMain,
+                           tag: nil, isOnline: link.isConnected, build: link.peerBuild,
+                           makeMain: thisIsMain ? otherID : nil)
                     if link.isConnected, let theirs = link.peerBuild, let mine = currentBuild, theirs < mine {
                         RowDivider()
                         SettingRow(title: "Update \(TheoLink.shortName(other))", detail: "It checks for the latest build and installs it once it's idle.") {
                             Button("Update it") { _ = link.request("updateWhenIdle", [:]) }.buttonStyle(.theoSecondary)
                         }
                     }
+                } else if link.isPaired {
+                    SettingRow(title: "Looking for your other Mac", detail: "Open Theo on it. Both need to be on the same network, or reachable at the address in Your other Mac.") { EmptyView() }
                 } else {
-                    SettingRow(title: "No other Mac linked", detail: "Link one in Your other Mac to share the work between them.") { EmptyView() }
+                    NearbyMacRows()
                 }
             }
             TheoSection(title: "What runs where", hint: "Theo works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there. If that Mac is offline, the chat says so at once and offers to run it here.") {
@@ -148,30 +181,101 @@ struct DevicesSettingsContent: View {
         }
     }
 
+    private var macsHint: String {
+        if link.isPaired {
+            return "The main Mac does what one Mac does for both: routines, the research browser and the VM screens. Pick the one you leave on. Picking it on either Mac is enough."
+        }
+        return "This Mac works on its own, with nothing to set up. To share bots, chats and memory with another Mac, open Theo on it and press Link below."
+    }
+
     private var currentBuild: Int? { Bundle.main.infoDictionary?["CFBundleVersion"].flatMap { ($0 as? String).flatMap(Int.init) } }
 
-    /// "Desktop · fires routines": what kind of Mac it is, when known, and whether it's the one routines fire on.
-    private func macRow(name: String, isDesktop: Bool?, firesRoutines: Bool, tag: String?, isOnline: Bool, build: Int?) -> some View {
+    /// "Desktop · Main": what kind of Mac it is, when known, whether it's the main one, and a button to make it the main one
+    /// (`macID`, nil when it already is or isn't known yet).
+    private func macRow(name: String, isDesktop: Bool?, isMain: Bool, tag: String?, isOnline: Bool, build: Int?, makeMain macID: String?) -> some View {
         HStack(spacing: 10) {
             HairlineIcon(name: "screen", size: 20, color: DS.Colors.textSecondary, selected: tag != nil)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(name).font(TheoType.bodyMedium).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
-                    if let tag {
-                        Text(tag).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.accentText)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(DS.Colors.accentSoft))
-                    }
+                    if let tag { macTag(tag) }
+                    if isMain { macTag("Main") }
                 }
                 let kind = isDesktop.map { $0 ? "Desktop" : "Laptop" }
-                let caption = [kind, firesRoutines ? "fires routines" : nil].compactMap { $0 }.joined(separator: " · ")
+                let caption = [kind, isMain ? "routines, research and VM screens run here" : nil].compactMap { $0 }.joined(separator: " · ")
                 if !caption.isEmpty { Text(caption).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary) }
             }
             Spacer()
+            if let macID { Button("Make main") { DeviceRoles.makeMainMac(id: macID) }.buttonStyle(.theo(.secondary, .small)).help("Make this the main Mac, on both Macs") }
             if let build { Text("build \(String(build))").font(.system(size: 11, design: .monospaced)).foregroundColor(DS.Colors.textTertiary) }
             StatusPill(text: isOnline ? "Online" : "Offline", tone: isOnline ? .good : .neutral)
         }
         .padding(12)
+    }
+
+    private func macTag(_ words: String) -> some View {
+        Text(words).font(.system(size: 10.5, weight: .medium)).foregroundColor(DS.Colors.accentText)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(DS.Colors.accentSoft))
+    }
+}
+
+/// Macs nearby with Theo open and not linked yet, each with a one-click Link.
+private struct NearbyMacRows: View {
+    @ObservedObject private var nearby = NearbyLinking.shared
+
+    var body: some View {
+        switch nearby.outgoing {
+        case .asking(let name, let checkNumber):
+            SettingRow(title: "Asking \(TheoLink.shortName(name))", detail: checkNumber.map { "Press Allow on it. It shows \(NearbyPairing.spaced($0)), the same as here." } ?? "Reaching it…") {
+                HStack(spacing: 8) {
+                    if let checkNumber { Text(NearbyPairing.spaced(checkNumber)).font(.system(size: 15, weight: .semibold, design: .monospaced)).foregroundColor(DS.Colors.textPrimary) }
+                    Button("Cancel") { nearby.cancelOutgoing() }.buttonStyle(.theo(.ghost, .small))
+                }
+            }
+            RowDivider()
+        case .declined(let name):
+            SettingRow(title: "\(TheoLink.shortName(name)) didn't allow it", detail: "Nothing changed. Try again whenever you like.") { EmptyView() }
+            RowDivider()
+        case .failed(let name, let reason):
+            SettingRow(title: "Couldn't link \(TheoLink.shortName(name))", detail: reason) { EmptyView() }
+            RowDivider()
+        case .idle, .linked:
+            EmptyView()
+        }
+        if nearby.nearby.isEmpty {
+            SettingRow(title: "No other Mac nearby yet", detail: "Open Theo on your other Mac, on the same network, and it shows up here. Elsewhere, link with a code in Your other Mac.") {
+                Button("Use a code") { BotsSelection.shared.openSettings(.link) }.buttonStyle(.theo(.ghost, .small))
+            }
+        } else {
+            ForEach(Array(nearby.nearby.enumerated()), id: \.element.id) { index, mac in
+                if index > 0 { RowDivider() }
+                SettingRow(title: TheoLink.shortName(mac.name), detail: "Nearby, with Theo open. Link it and both Macs share bots, chats and memory.") {
+                    Button("Link") { nearby.link(with: mac) }.buttonStyle(.theo(.primary, .small)).disabled(isAsking)
+                }
+            }
+        }
+    }
+
+    private var isAsking: Bool {
+        if case .asking = nearby.outgoing { return true }
+        return false
+    }
+}
+
+/// Another Mac asked to link with this one: Allow saves the code it sent, and both Macs are linked.
+private struct LinkRequestSection: View {
+    let request: NearbyLinking.IncomingRequest
+
+    var body: some View {
+        TheoSection(title: "\(TheoLink.shortName(request.name)) wants to link", hint: nil) {
+            SettingRow(title: NearbyPairing.spaced(request.checkNumber), detail: "Check \(TheoLink.shortName(request.name)) shows the same number, then press Allow. Both Macs then share bots, chats and memory. If you didn't ask, press Don't allow.") {
+                HStack(spacing: 8) {
+                    Button("Don't allow") { NearbyLinking.shared.deny() }.buttonStyle(.theo(.ghost, .small))
+                    Button("Allow") { NearbyLinking.shared.allow() }.buttonStyle(.theo(.primary, .small))
+                }
+            }
+        }
     }
 }
 
