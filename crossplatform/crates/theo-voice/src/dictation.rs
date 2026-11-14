@@ -363,6 +363,24 @@ impl Controller {
             }),
         );
         controller.apply_settings();
+        // Setup and Settings › Products turn `products.dictation` on and off with a plain setSetting, so the switch and the
+        // chord are also checked every two seconds.
+        let weak = Arc::downgrade(&controller);
+        std::thread::Builder::new()
+            .name("theo-dictation-settings".into())
+            .spawn(move || {
+                let mut applied: Option<Option<Chord>> = None;
+                loop {
+                    std::thread::sleep(Duration::from_secs(2));
+                    let Some(controller) = weak.upgrade() else { return };
+                    let wanted = is_on(&controller.harness).then(|| chord(&controller.harness));
+                    if applied.is_some() && applied != Some(wanted) {
+                        controller.apply_settings();
+                    }
+                    applied = Some(wanted);
+                }
+            })
+            .ok();
         controller
     }
 

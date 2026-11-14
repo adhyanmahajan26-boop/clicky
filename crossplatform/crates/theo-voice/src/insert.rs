@@ -243,6 +243,21 @@ mod windows_insert {
         sent
     }
 
+    fn modifiers_released_within(limit: Duration) -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
+        let started = std::time::Instant::now();
+        loop {
+            let held = [VK_LWIN, VK_RWIN, VK_MENU, VK_SHIFT, VK_CONTROL].iter().any(|key| unsafe { GetAsyncKeyState(key.0 as i32) } as u16 & 0x8000 != 0);
+            if !held {
+                return true;
+            }
+            if started.elapsed() >= limit {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     fn type_text(text: &str) -> bool {
         let mut inputs = vec![];
         for line_piece in text.split("\r\n").enumerate() {
@@ -268,7 +283,9 @@ mod windows_insert {
         if focused_field_is_password() {
             bail!(PASSWORD_REFUSAL);
         }
-        if paste(text) {
+        // Ctrl+V while the owner still holds Win (or Alt, or Shift) from the chord would be another shortcut (Win+Ctrl+V
+        // opens the sound panel), so it waits for the keys to come up, and types instead if they don't.
+        if modifiers_released_within(Duration::from_millis(1500)) && paste(text) {
             return Ok(InsertOutcome { method: "paste" });
         }
         if type_text(text) {
