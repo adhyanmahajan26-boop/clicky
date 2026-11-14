@@ -6,6 +6,9 @@ use std::sync::Arc;
 use tauri::Manager;
 use theo_core::Harness;
 
+mod clicky;
+mod clicky_voice;
+
 /// Started by the system at sign-in: Theo comes up in the tray without opening its window.
 const BACKGROUND_ARG: &str = "--background";
 
@@ -222,11 +225,14 @@ fn main() {
                 }
             }
             watch_faces(app.handle().clone(), harness.clone());
-            app.manage(harness);
+            app.manage(harness.clone());
+            // Clicky, the voice and screen companion: its spark, push-to-talk and voice (clicky.rs).
+            clicky::start(app.handle(), harness.clone());
 
             let open_item = tauri::menu::MenuItem::with_id(app, "open", "Open Theo", true, None::<&str>)?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit Theo", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&open_item, &quit_item])?;
+            let clicky_item = clicky::tray_item(app.handle(), &harness)?;
+            let menu = tauri::menu::Menu::with_items(app, &[&open_item, &clicky_item, &quit_item])?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray/awake.png"))?;
             tauri::tray::TrayIconBuilder::with_id("theo")
                 .icon(icon)
@@ -236,6 +242,7 @@ fn main() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_main_window(app),
                     "quit" => app.exit(0),
+                    clicky::TRAY_ITEM => clicky::tray_item_picked(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

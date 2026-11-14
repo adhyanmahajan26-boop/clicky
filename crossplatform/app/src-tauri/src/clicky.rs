@@ -161,6 +161,7 @@ impl ClickyApp {
             "lastTranscript": inner.last_transcript,
             "lastPlan": inner.last_plan,
             "lastError": inner.last_error,
+            "pushToTalk": crate::clicky_voice::hook_status(),
         })
     }
 
@@ -250,7 +251,7 @@ impl ClickyApp {
         for (label, handle) in overlays {
             if want {
                 if cfg!(windows) {
-                    theo_core::clicky::desktop::show_without_activating(handle);
+                    theo_voice::overlay::show_without_focus(handle);
                 } else if let Some(window) = self.app.get_webview_window(&label) {
                     let _ = window.show();
                 }
@@ -303,7 +304,8 @@ impl ClickyApp {
         let handle = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
         #[cfg(not(windows))]
         let handle = 0isize;
-        theo_core::clicky::desktop::make_overlay(handle);
+        theo_voice::overlay::prepare(handle);
+        theo_core::clicky::desktop::exclude_from_capture(handle);
         // A window made on one monitor and moved to another of a different scale is resized by Windows: put it back.
         let (x, y, width, height) = (monitor.x, monitor.y, monitor.width, monitor.height);
         let moved = window.clone();

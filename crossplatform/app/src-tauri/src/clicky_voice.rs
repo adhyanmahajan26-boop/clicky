@@ -18,29 +18,36 @@ pub fn chord(clicky: &ClickyApp) -> Chord {
     clicky.harness.settings.string(theo_core::clicky::SHORTCUT_SETTING).and_then(|id| Chord::from_id(&id)).unwrap_or(Chord::CtrlAlt)
 }
 
-/// Keeps the chord watched while Clicky is on, on the chord the settings name.
+/// The name Clicky's chord is registered under in theo-voice's one keyboard hook (shared with Dictation).
+const HUB_NAME: &str = "clicky";
+
+/// Keeps Clicky's chord in the app's one keyboard hook while Clicky is on, on the chord the settings name.
 pub fn start(clicky: Arc<ClickyApp>) {
     std::thread::Builder::new()
         .name("clicky-hotkey".into())
         .spawn(move || {
-            let mut watching: Option<(Chord, theo_voice::hotkey::HotkeyHandle)> = None;
+            let mut registered: Option<Chord> = None;
             loop {
                 let wanted = if theo_core::clicky::is_on(&clicky.harness) { Some(chord(&clicky)) } else { None };
-                let current = watching.as_ref().map(|(chord, _)| *chord);
-                if wanted != current {
-                    if let Some((_, handle)) = watching.take() {
-                        handle.stop();
+                if wanted != registered {
+                    match wanted {
+                        Some(chord) => {
+                            let listener = clicky.clone();
+                            theo_voice::hub::register(HUB_NAME, vec![chord], move |_, event| on_event(&listener, event));
+                        }
+                        None => theo_voice::hub::unregister(HUB_NAME),
                     }
-                    if let Some(chord) = wanted {
-                        let listener = clicky.clone();
-                        let handle = theo_voice::hotkey::watch(vec![chord], move |_, event| on_event(&listener, event));
-                        watching = Some((chord, handle));
-                    }
+                    registered = wanted;
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
         })
         .ok();
+}
+
+/// Whether the keyboard hook is listening for Clicky's chord, and why not.
+pub fn hook_status() -> serde_json::Value {
+    serde_json::json!({"listening": theo_voice::hub::is_listening_for(HUB_NAME), "hook": theo_voice::hub::status()})
 }
 
 /// One chord event: pressed starts listening, released sends what was said, cancelled throws it away.
