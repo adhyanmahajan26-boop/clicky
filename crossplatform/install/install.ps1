@@ -40,7 +40,7 @@ function Main {
     Write-Output @"
 Theo for Windows installer
 
-  -Version <build>   install this build (default: the latest release)
+  -Version <build>   install this build (default: the newest release with a Windows installer)
   -Dir <folder>      install here instead of the default per-user folder
   -From <file|url>   install this setup.exe instead of downloading; needs -Sha256
   -Sha256 <hex>      the checksum -From must match
@@ -91,13 +91,19 @@ private releases repo, a public one needs nothing; falls back to GH_TOKEN, GITHU
       $headers = @{ "Accept" = "application/vnd.github+json"; "User-Agent" = "theo-installer" }
       $token = Get-Token
       if ($token) { $headers["Authorization"] = "Bearer $token" }
-      $url = if ($Version) { "$Api/repos/$Repo/releases/tags/build-$($Version -replace '^build-','')" } else { "$Api/repos/$Repo/releases/latest" }
+      # Without -Version: list the releases and take the newest build-* one that has a Windows installer, never
+      # /releases/latest, which is the Mac's (a Mac-only build must not leave Windows with nothing to install).
+      $url = if ($Version) { "$Api/repos/$Repo/releases/tags/build-$($Version -replace '^build-','')" } else { "$Api/repos/$Repo/releases?per_page=100" }
       try {
-        $release = Invoke-RestMethod -Uri $url -Headers $headers
+        $answer = Invoke-RestMethod -Uri $url -Headers $headers
       } catch {
         $status = 0
         if ($_.Exception.Response) { try { $status = [int]$_.Exception.Response.StatusCode } catch { } }
         throw (Get-ReleaseFailureMessage -Status $status -SentToken ([bool]$token) -Repo $Repo)
+      }
+      if ($Version) { $release = $answer } else {
+        $release = Select-NewestRelease -Releases @($answer) -Suffix "-windows-x64-setup.exe"
+        if (-not $release) { throw "No release in $Repo has a Windows installer yet." }
       }
       $build = $release.tag_name -replace '^build-', ''
       $installed = Get-InstalledBuild
@@ -131,6 +137,22 @@ private releases repo, a public one needs nothing; falls back to GH_TOKEN, GITHU
   } finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
   }
+}
+
+# The newest published build-<number> release that has an asset ending in $Suffix and a SHA256SUMS. Drafts and prereleases
+# don't count.
+function Select-NewestRelease([object[]]$Releases, [string]$Suffix) {
+  $best = $null; $bestBuild = [int64]-1
+  foreach ($r in $Releases) {
+    if (-not $r -or $r.draft -or $r.prerelease) { continue }
+    if ("$($r.tag_name)" -notmatch '^build-(\d+)$') { continue }
+    $number = [int64]$Matches[1]
+    $names = @($r.assets | ForEach-Object { "$($_.name)" })
+    if (-not ($names -contains "SHA256SUMS")) { continue }
+    if (-not ($names | Where-Object { $_.EndsWith($Suffix) })) { continue }
+    if ($number -gt $bestBuild) { $best = $r; $bestBuild = $number }
+  }
+  return $best
 }
 
 # The releases repo: THEO_RELEASES_REPO, else the one this copy was published with, else releases-repo next to the script
