@@ -465,7 +465,9 @@ try {
   $total = [TimeSpan]::FromSeconds([double]::Parse($env:THEO_SPEECH_SECONDS, [System.Globalization.CultureInfo]::InvariantCulture))
   $words = New-Object System.Collections.Generic.List[string]
   for ($i = 0; $i -lt 400; $i++) {
-    $result = $engine.Recognize()
+    # At the end of the file System.Speech lets go of its input, and the next Recognize says "No audio input is
+    # supplied": that's the end of the words, not a failure.
+    try { $result = $engine.Recognize() } catch [System.InvalidOperationException] { if ($i -gt 0) { break } else { throw } }
     if ($result -ne $null -and $result.Text) { $words.Add($result.Text) }
     elseif ($engine.RecognizerAudioPosition -ge ($total - [TimeSpan]::FromMilliseconds(300))) { break }
     if ($engine.RecognizerAudioPosition -ge $total) { break }
