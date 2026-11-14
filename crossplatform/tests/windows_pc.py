@@ -588,7 +588,7 @@ def fresh(setup_exe, msi=None):
         page.press("#input", "Enter")
         t0 = time.time()
         try:
-            page.wait_for_selector(".tc.ask:has-text('Sign in to Claude Code')", timeout=300000)
+            page.wait_for_selector(".tc.ask:has-text('Claude Code is signed out')", timeout=300000)
         except Exception:
             return False, {"waited_s": round(time.time() - t0), "card_texts": page.locator(".tc").all_inner_texts()[-3:], **theo_state()}, screenshot("chat-no-signin-card")
         took = round(time.time() - t0)
@@ -643,6 +643,7 @@ def fresh(setup_exe, msi=None):
         # Give Researcher the working connector, from the page (each server Claude Code has shows up as an app on the Claude
         # account; one whose tools Theo can't tell apart is all or nothing, so "Everything").
         rid = bot_id("Researcher")
+        page.click("#pane [data-row='theo-echo']")  # a row's details hold each bot's level
         page.select_option("select[data-app='theo-echo'][data-botapp='%s']" % rid, "full")
         apps = wait_until(lambda: [b for b in P({"cmd": "botsState"})["result"]["bots"] if b["id"] == rid and "theo-echo" in (b.get("apps") or [])], 10)
         shot = screenshot("connectors")

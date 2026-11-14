@@ -309,6 +309,9 @@ pub struct CodingRun {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The title of the agent's own chat this run carries on (in the folder itself, nothing committed or pushed by Theo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued: Option<String>,
     /// The pitch message it came from, so a repeated answer can't start it twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_digest: Option<String>,

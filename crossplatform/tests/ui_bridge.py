@@ -48,6 +48,18 @@ CREW = {
 }
 
 
+# A long answer, drawn as a brief card with a reader (cards.js), and a PDF of it.
+BRIEF = ("# Launch copy plan\n\nThe launch page says too much in its first screen. Visitors read the headline and the first line, then scroll.\n\n"
+         "## Headline\n\nLead with what changes for the reader: their bots keep working while they sleep. Cut the feature list from the hero.\n\n"
+         "## Proof\n\nOne customer quote with a number beats three without. Use the 40% faster triage line from the pilot.\n\n"
+         "## Pricing\n\nShow the monthly price first and the yearly saving second, as a small note under it.\n\n"
+         "- Keep the free tier visible\n- Move FAQ below pricing\n- One button per section\n\n"
+         "| Section | Words now | Target |\n|---|---|---|\n| Hero | 64 | 25 |\n| Proof | 120 | 60 |\n\n"
+         "## Next\n\nI can draft the new hero and proof sections tonight, then you pick between two headlines in the morning. "
+         "After that, the pricing note and the FAQ move take about an hour, and the table above is the check: every section at or under its target.\n\n"
+         "That brings the page from about 900 words to 500, which reads in two minutes. [PDF: launch-copy.md]")
+
+
 def seed():
     T.setd("setup.completed", True)
     T.setd("test.engine.claude", str(T.FAKE)); T.setd("test.bots.retryDelays", [0.2]); T.setd("v3.bots.fallbackModels", ["off"])
@@ -60,6 +72,7 @@ def seed():
         {"system": r"You are Code Reviewer", "reply": "Reviewed the checkout PR: two small issues (an unchecked null in `cart.ts` and a missing test for refunds). Otherwise good to merge."},
         {"system": r"You are Manager", "reply": "We can ship Friday if we cut one thing. [CHOOSE: What should we cut for Friday? | Dark mode: two days saved, nobody asked for it yet | Export to CSV: one day saved, two customers want it]"},
         {"system": r"You are Ledger", "reply": "At $8 a month with $1,200 of costs, you break even at **150 subscribers**.", "sleep": 1.5},
+        {"system": r"You are Copy Editor", "reply": BRIEF},
         {"system": r"You are Theo", "prompt": "answered you privately", "reply": "Ledger says you break even at 150 subscribers; everything after that is $8 of margin each."},
         {"system": r"You are Theo", "prompt": "Ledger", "reply": "Asking Ledger for the numbers.\n[TELL: Ledger: break-even subscribers at $8/month with $1,200/month costs?]"},
         {"system": r"You are Theo", "prompt": "hello-demo", "reply": "One small script.\nProject: Hello demo\nNew folder: hello-demo\n```prompt\nIn the current folder create hello.txt containing hello from Theo. Nothing else.\n```"},
@@ -78,6 +91,10 @@ def seed():
         T.P({"cmd": "teamAdd", "name": team, "members": [ids[n] for n, (desc, _) in CREW.items() if desc == team]})
     T.P({"cmd": "groupSave", "id": "launch", "name": "Launch room", "head": "theo", "members": [ids["Builder"], ids["Designer"], ids["Ledger"]]})
     T.P({"cmd": "routineAdd", "name": "Morning brief", "target": ids["Researcher"], "when": "weekdays 08:00", "do": "Send me the morning brief."})
+    memory = T.BOTS / "memory" / ids["Copy Editor"]
+    memory.mkdir(parents=True, exist_ok=True)
+    (memory / "launch-copy.md").write_text(BRIEF.replace(" [PDF: launch-copy.md]", ""), encoding="utf-8")
+    T.say(ids["Copy Editor"], "Tighten the launch page copy and give me a PDF.")
     T.say(ids["Code Reviewer"], "Review the checkout PR, please.")
     T.say(ids["Inbox Triage"], "Sort today's mail.")
     T.say(ids["Manager"], "Can we ship on Friday?")

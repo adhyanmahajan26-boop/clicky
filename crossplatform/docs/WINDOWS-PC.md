@@ -84,13 +84,32 @@ About 30 minutes on a Windows 10 or 11 PC:
    should then say "Updated to build N", and your bots and chats should still be there.
 9. **Products.** In Settings › Products, turn Theo off. The bots, groups, Routines and Usage should leave the sidebar,
    and Home should show the products page. Turn it back on and everything should come back.
-10. **Teams and group chats.** With three or more bots: in the sidebar (Teams), press New category, add two bots on its page
+10. **Routines.** On Routines press New routine, pick a bot, write what it does, pick Weekly, a day and a time, and Add
+    routine. Check the card says "Every <day> at <time> · next in …". Press Run now, then open "Last run …" to see the run.
+    Edit it to Every N hours, turn it off (Paused shows), then on again; Delete asks "Delete it?" first.
+11. **Chat cards.** Ask a bot for a long write-up with headings: it shows as a brief card; Open reads it in full, Share
+    copies it. Ask a bot to "make a PDF of your notes" (it writes a file in its folder and adds `[PDF: notes.md]`): the PDF
+    card's Open opens it in your PDF reader. Ask a bot to choose with you: a `[CHOOSE: …]` shows as buttons or a list with
+    Use this and Skip. Turn a bot off in its settings: its chat shows "This bot is off" with Turn on. Ask Theo to ask another
+    bot something: the private exchange folds into one card that opens.
+12. **Sign-in words for each brain.** Put a bot on an agent that's signed out (Codex, say): the card says "Codex is signed
+    out" with Sign in (opens a terminal) and Use an API key instead, never Claude Code. Put one on a bad API key: the card
+    says the key didn't work and opens Settings.
+13. **Home.** With a bot that needs you, one that failed and one working, check Home's lanes: the sign-in or choice card can
+    be answered right there, Try again on the failed one, and Asleep shows a bot's next routine with Run now.
+14. **The run card.** Ask a bot for a coding plan without asking it to build: the "Start this coding run?" card has the
+    agent, folder and chat choices. Pick New folder…, type a name (made in the projects folder with git), Start run; or pick
+    an existing folder where you've used Claude Code before and a chat from the list, and Continue chat (it carries on that
+    session in the folder, no branch). Change the projects folder from the card's Change link.
+15. **Connectors page.** Click a row to open its details (Reached, Last worked, Used by, each bot's level). Remove… asks
+    before removing. Add your own with Address (https only) or Command.
+16. **Teams and group chats.** With three or more bots: in the sidebar (Teams), press New category, add two bots on its page
     and check the first gets the crown and "Manager". Press "Report to Theo now" and check the reports land in the manager's
     chat, then the roll-up in Theo's; ask Theo anything and check he mentions it. Right-click a bot: move it, open Settings,
     change its model and instructions, turn it off and on. Make a group chat (New group chat), ask Theo "Ask <group> to plan
     a tiny page in a new folder called test-page" and check the group plans, critiques and starts one run. Delete the group
     and a bot; check Theo can't be deleted.
-11. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+17. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
     AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits

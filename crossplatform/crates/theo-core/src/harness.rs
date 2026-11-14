@@ -459,6 +459,7 @@ impl Harness {
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.extend(self.reporting_lines(bot));
+        parts.push(crate::pdf::HOW_TO.to_string());
         parts.push(self.reach_note(bot));
         if !bot.apps.is_empty() {
             parts.push(self.apps_note(bot));
@@ -859,6 +860,12 @@ impl Harness {
                     tells.clear();
                 }
             }
+            // [PDF: file]: Theo renders a document the bot wrote in its own folder (pdf.rs).
+            let mut pdf_files: Vec<String> = vec![];
+            if let Some(said) = answer.clone() {
+                let (text, files) = crate::pdf::extract(&said);
+                if !files.is_empty() { answer = Some(text); pdf_files = files; }
+            }
             let streamed = me.with(|s| s.replying.get(&bot.id).cloned());
             me.release(&bot.id);
             if was_stopped {
@@ -884,7 +891,7 @@ impl Harness {
                             }
                             record.messages.push(message);
                         }
-                        Some(_) if tells.is_empty() && clicky_orders == 0 => {
+                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() => {
                             record.messages.push(ChatMessage::new(&bot.id, "(No answer this time. Send it again, or try another model.)").with_exchange(exchange.clone()));
                         }
                         _ => {}
@@ -899,6 +906,7 @@ impl Harness {
                 return Some(protocol::QUIET_MARKER.to_string());
             }
             me.fire_hook("turn-finished", json!({"bot": bot.id, "botName": bot.name, "chat": conversation_id, "fromOwner": opts.from_owner, "privately": opts.privately.is_some(), "ok": answer.is_some(), "reply": answer.clone().unwrap_or_default()}));
+            crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
             if clicky_orders > 0 && bot.primary {
                 me.post(ChatMessage::note("Clicky isn't part of this build of Theo yet, so that order to Clicky wasn't carried out."), &conversation_id);
             }
@@ -2172,7 +2180,7 @@ impl Harness {
                 let (detail, since): (String, Option<DateTime<Utc>>) = match state {
                     "needs" if b.last_failure.as_ref().map(|f| f.kind == "signin").unwrap_or(false) => {
                         let f = b.last_failure.as_ref().unwrap();
-                        (if f.reason.contains("isn't installed") { "Install Claude Code".into() } else { "Sign in to Claude Code".into() }, Some(f.at))
+                        (crate::chat_controls::sign_in_detail(&b.provider, &f.reason), Some(f.at))
                     }
                     "needs" => match (ask, choose) {
                         (Some(m), _) => (if m.card.as_deref().unwrap_or("").contains("\"kind\":\"run\"") { "Start a coding run?".into() } else { "Set up a routine?".into() }, Some(m.at)),
@@ -2190,7 +2198,8 @@ impl Harness {
                     _ => (String::new(), messages.last().map(|m| m.at)),
                 };
                 json!({"id": b.id, "state": state, "word": crate::faces::word(state), "detail": detail, "since": since.map(|d| d.to_rfc3339()),
-                       "unread": unread, "look": b.look.clone().unwrap_or_else(|| Look::for_bot(&b.id))})
+                       "unread": unread, "look": b.look.clone().unwrap_or_else(|| Look::for_bot(&b.id)),
+                       "provider": b.provider, "failure": b.last_failure.as_ref().map(|f| json!({"kind": f.kind, "reason": f.reason, "at": f.at.to_rfc3339()}))})
             }).collect()
         })
     }
@@ -2345,7 +2354,7 @@ impl Harness {
                 "replying": s.replying.keys().collect::<Vec<_>>(),
                 "replyingIn": s.replying_in,
                 "live": s.replying,
-                "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary})).collect::<Vec<_>>(),
+                "runs": s.runs.iter().map(|r| json!({"id": r.id, "title": r.title, "phase": r.phase, "folder": r.folder, "startedAt": r.started_at.to_rfc3339(), "harness": r.harness, "session": r.session_id, "branch": r.branch, "pullRequest": r.pull_request, "room": r.room, "summary": r.summary, "digest": r.prompt_digest, "continued": r.continued})).collect::<Vec<_>>(),
                 "exchanges": s.live_exchanges.iter().map(|(id, e)| json!({"id": id, "from": e.sender, "to": e.target, "room": e.room, "replying": e.replying})).collect::<Vec<_>>(),
                 "threads": threads,
                 "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps, "appLevels": b.app_levels})).collect::<Vec<_>>(),
