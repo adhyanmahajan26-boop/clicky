@@ -32,7 +32,7 @@ final class BrowserTabTracker {
     /// Called right before Clicky opens a new tab: its earlier tabs go.
     func closeEarlierTabs() {
         let closedCount = closeTracked()
-        if closedCount > 0 { print("🗂️ Closed \(closedCount) earlier Clicky tab(s)") }
+        if closedCount > 0 { print("🗂️ Closed \(closedCount) earlier Pointer Assistant tab(s)") }
     }
 
     /// Called after a search / open_url step: remembers the tab once its title settles.
@@ -50,7 +50,7 @@ final class BrowserTabTracker {
             }
             guard let self, let lastTitle, !Self.looksLikeLoading(lastTitle) else { return }
             self.trackedTabs.append(TrackedTab(processIdentifier: processIdentifier, title: Self.pageTitle(lastTitle), openedAt: Date()))
-            print("🗂️ Tracking Clicky tab “\(lastTitle)”")
+            print("🗂️ Tracking Pointer Assistant tab “\(lastTitle)”")
         }
     }
 

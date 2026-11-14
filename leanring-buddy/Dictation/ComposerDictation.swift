@@ -146,7 +146,7 @@ final class ComposerDictation: ObservableObject {
         capture.onLevel = { [weak self] level in self?.noteLevel(level) }
         capture.onWords = { [weak self] words in self?.noteWords(words) }
         let language = ComposerDictationSettings.currentLanguage
-        let phrases = ["Theo", "Clicky", "Claude", "Sarvam"] + DictationSettings.dictionary.words
+        let phrases = ["Vello", "Pointer Assistant", "Claude", "Sarvam"] + DictationSettings.dictionary.words
         let hasRecognizer = capture.startRecognizer(localeIdentifier: language.apple, phrases: phrases)
         guard hasRecognizer || DictationSettings.usesSarvam else {
             refuse(.noRecognizer)

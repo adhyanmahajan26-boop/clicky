@@ -76,13 +76,13 @@ public enum UpdateFeed {
         switch statusCode {
         case 404 where !sentToken:
             return "This build's updates are private, so this Mac can't see them. If you were given access to \(repositoryName), "
-                + "paste a GitHub token that can read it below. Otherwise, new builds come from whoever gave you Theo."
+                + "paste a GitHub token that can read it below. Otherwise, new builds come from whoever gave you Vello."
         case 404:
             return "No updates found: \(repositoryName) has no published build yet, or the saved GitHub token can't read it."
         case 401:
             return "GitHub refused the saved token. Paste a new one below, or remove it if the updates are public."
         case 403, 429:
-            return "GitHub is limiting how often this Mac can check for updates. Theo tries again later by itself."
+            return "GitHub is limiting how often this Mac can check for updates. Vello tries again later by itself."
         default:
             return "The update check answered \(statusCode)."
         }
@@ -135,7 +135,7 @@ public enum UpdateFeed {
         let targetAppPath = (installedAppPath as NSString).deletingLastPathComponent + "/" + (newAppPath as NSString).lastPathComponent
         return """
         #!/bin/zsh
-        # Waits for Clicky (pid \(processIdentifier)) to quit, swaps in the new app and opens it.
+        # Waits for Pointer Assistant (pid \(processIdentifier)) to quit, swaps in the new app and opens it.
         for i in {1..100}; do kill -0 \(processIdentifier) 2>/dev/null || break; sleep 0.1; done
         backup=\(quoted(installedAppPath + ".previous"))
         rm -rf "$backup"

@@ -36,7 +36,7 @@ struct ConnectorHubRulesTests {
     }
 
     @Test func aFailureAnswerIsNotAList() {
-        #expect(HubAppRecord.list(fromHubAnswer: ["ok": false, "error": "Say where Theo's data folder is"]) == nil)
+        #expect(HubAppRecord.list(fromHubAnswer: ["ok": false, "error": "Say where Vello's data folder is"]) == nil)
     }
 
     // MARK: Levels

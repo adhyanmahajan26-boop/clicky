@@ -117,13 +117,13 @@ public enum ComposerDictationProblem: Equatable, Sendable {
 
     public var message: String {
         switch self {
-        case .microphoneDenied, .microphoneUndecided: return "Theo needs the microphone to dictate."
-        case .speechDenied, .speechUndecided: return "Theo needs Speech Recognition to dictate."
+        case .microphoneDenied, .microphoneUndecided: return "Vello needs the microphone to dictate."
+        case .speechDenied, .speechUndecided: return "Vello needs Speech Recognition to dictate."
         case .microphoneFailed: return "The microphone didn't start."
         case .noUsableMicrophone: return "No usable microphone."
         case .noRecognizer: return "This Mac has no recognizer for that language."
         case .nothingHeard: return "Didn't catch that."
-        case .busy: return "The microphone is in use by a call or by Clicky."
+        case .busy: return "The microphone is in use by a call or by Pointer Assistant."
         case .needsKey: return "Dictation needs a Sarvam API key."
         }
     }

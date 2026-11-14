@@ -264,7 +264,7 @@ struct BotsRootView: View {
             Button("Cancel", role: .cancel) { confirmingDelete = nil }
         } message: {
             Text(confirmingDelete.flatMap { store.bot(String($0.dropFirst(4))) }?.owner != nil
-                 ? "Its chat goes too, and a hidden helper does this job for Clicky from now on. To keep it working out of sight, hide it instead."
+                 ? "Its chat goes too, and a hidden helper does this job for Pointer Assistant from now on. To keep it working out of sight, hide it instead."
                  : "Its chat and its routines go too. To keep it working out of sight, hide it instead.")
         }
     }
@@ -281,7 +281,7 @@ struct BotsRootView: View {
     }
 
     private func itemName(_ item: String) -> String {
-        if item == "clicky" { return "Clicky" }
+        if item == "clicky" { return "Pointer Assistant" }
         if item.hasPrefix("bot:") { return store.bot(String(item.dropFirst(4)))?.name ?? "this bot" }
         return store.group(String(item.dropFirst(6)))?.name ?? "this group chat"
     }
@@ -517,7 +517,7 @@ struct BotsRootView: View {
                 HStack(spacing: 10) {
                     if let ceo { BotAvatar(bot: ceo, size: 30, state: .idle) }
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(ceo?.name ?? "Theo").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
+                        Text(ceo?.name ?? "Vello").font(.system(size: 14, weight: .semibold)).foregroundColor(DS.Colors.textPrimary).lineLimit(1)
                         Text("CEO · \(store.workingCount) of \(others) bots working").font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
@@ -561,7 +561,7 @@ struct BotsRootView: View {
             HStack(spacing: 10) {
                 ClickyAvatar(size: 34, isActive: store.isClickyBusy)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Clicky").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                    Text("Pointer Assistant").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
                     Text(dictation.isActive ? "Dictating\u{2026}" : store.isClickyBusy ? "Working" : micDown ? "Mic unavailable" : listening ? "Listening for \u{201C}hey \(ClickySettings.assistantName)\u{201D}" : "Awake")
                         .font(.system(size: 11.5)).foregroundColor(DS.Colors.textSecondary).lineLimit(1)
                 }
@@ -1013,7 +1013,7 @@ struct BotChatScreen: View {
             HairlineIcon(name: "more", size: 18, color: DS.Colors.textSecondary).frame(width: 30, height: 30)
                 .coverMenu(help: "More") {
                     if bot?.primary == true {
-                        Button { TheoCallController.start() } label: { Label("Call \(bot?.name ?? "Theo")", systemImage: "phone") }
+                        Button { TheoCallController.start() } label: { Label("Call \(bot?.name ?? "Vello")", systemImage: "phone") }
                     }
                     Button {
                         store.clearConversation(conversationID)
@@ -1082,7 +1082,7 @@ struct BotChatScreen: View {
                 ChatStatusCards(bot: store.bot(bot.id) ?? bot).frame(maxWidth: 440).padding(.top, 8)
             } else if isProjectRoom {
                 Text("Group chat").font(.system(size: 18, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-                Text("Theo leads this group: the head hands your request to the others and merges their answers.")
+                Text("Vello leads this group: the head hands your request to the others and merges their answers.")
                     .font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).multilineTextAlignment(.center)
             } else if let group, let head = store.head(of: group) {
                 BotAvatar(bot: head, size: 84, state: .idle)
@@ -1621,9 +1621,9 @@ struct ConnectorsScreen: View {
     /// With the hub every brain reaches the same apps; without it, the old split between Claude and the other engines.
     private var headerWords: String {
         if ConnectorHub.isAvailable {
-            return "Theo's own apps, the same for every bot whatever its engine. Sign in here, then give an app to a bot in its settings and say how far it may go. Apps through your Claude account still need Claude Code."
+            return "Vello's own apps, the same for every bot whatever its engine. Sign in here, then give an app to a bot in its settings and say how far it may go. Apps through your Claude account still need Claude Code."
         }
-        return "Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Theo, on the same account, read and draft only. "
+        return "Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Vello, on the same account, read and draft only. "
             + ConnectorHub.helperMissingWords
     }
 
@@ -1726,7 +1726,7 @@ struct ConnectorsScreen: View {
         let openCodeSide = health.onOpenCode(connector)
         return VStack(alignment: .leading, spacing: 6) {
             detailLine("Bots on Claude", connector.claudeServer == nil ? "Not available" : claudeSide.label)
-            detailLine("Bots on OpenCode and Grok", BotConnectors.bridged(connector) ? "Through Theo, on your Claude sign-in" : (connector.openCodeServer == nil ? "Not available" : openCodeSide.label))
+            detailLine("Bots on OpenCode and Grok", BotConnectors.bridged(connector) ? "Through Vello, on your Claude sign-in" : (connector.openCodeServer == nil ? "Not available" : openCodeSide.label))
             if let reason = claudeSide.failureReason ?? openCodeSide.failureReason { detailLine("What it said", reason) }
             detailLine("Last worked", health.lastConnected[connector.id].map { ConnectorListing.workedAgo($0).replacingOccurrences(of: "worked ", with: "") } ?? "Not seen connected yet")
             detailLine("Used by", users.isEmpty ? "No bot yet" : users.map(\.name).joined(separator: ", "))
@@ -1764,7 +1764,7 @@ struct ConnectorsScreen: View {
                                     Button("Sign in") { BotConnectors.openClaudeConnectors() }.buttonStyle(.theo(.primary, .small))
                                 } else if ConnectorHub.isAvailable, server.engine == "Claude" {
                                     // Kept as an app Theo reaches through the Claude account, so it can be given to bots.
-                                    Button(working == server.name ? "Adding…" : "Add to Theo") { addClaudeServer(server.name) }
+                                    Button(working == server.name ? "Adding…" : "Add to Vello") { addClaudeServer(server.name) }
                                         .buttonStyle(.theo(.secondary, .small)).disabled(working != nil)
                                 } else if server.state.isFailed {
                                     Button("Try again") { Task { await health.refresh() } }.buttonStyle(.theo(.secondary, .small))
@@ -1808,7 +1808,7 @@ struct ConnectorsScreen: View {
     private func connect(_ connector: BotConnector, state: ConnectorHealth.RowState) {
         if state == .missing, connector.claudeServer?.hasPrefix("claude.ai") == true {
             BotConnectors.openClaudeConnectors()
-            note = "claude.ai's connector page is open. Add \(connector.name) there; Theo checks again when you press Refresh."
+            note = "claude.ai's connector page is open. Add \(connector.name) there; Vello checks again when you press Refresh."
             return
         }
         working = connector.id

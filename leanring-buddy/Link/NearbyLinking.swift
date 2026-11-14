@@ -141,7 +141,7 @@ final class NearbyLinking: ObservableObject {
             case .hello:
                 guard let theirKey = message.publicKey, let agreement = NearbyPairing.agree(myPrivateKey: privateKey, theirPublicKeyBase64: theirKey),
                       let sealed = NearbyPairing.seal(code: code, with: agreement.key) else {
-                    return self.finishOutgoing(.failed(name: mac.name, reason: "It didn't answer the way Theo does."))
+                    return self.finishOutgoing(.failed(name: mac.name, reason: "It didn't answer the way Vello does."))
                 }
                 answeringTestLinkPort = message.testLinkPort
                 self.outgoing = .asking(name: mac.name, checkNumber: agreement.checkNumber)

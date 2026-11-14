@@ -86,7 +86,7 @@ public enum CodeModeToggle {
     }
 
     private static let togglePhraseWords: Set<String> = [
-        "turn", "switch", "on", "off", "enable", "disable", "start", "activate", "code", "coding", "cold", "coat", "mod", "mode", "codemode", "codingmode", "please", "clicky", "hey", "can",
+        "turn", "switch", "on", "off", "enable", "disable", "start", "activate", "code", "coding", "cold", "coat", "mod", "mode", "codemode", "codingmode", "please", "clicky", "vello", "pointer", "assistant", "hey", "can",
         "you", "could", "would", "the", "now", "ok", "okay", "go", "into", "to", "put", "me", "in", "get", "and", "just", "for"
     ]
 

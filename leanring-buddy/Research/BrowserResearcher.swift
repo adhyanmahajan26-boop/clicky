@@ -538,9 +538,9 @@ struct ResearchBrowserPermissionRow: View {
     var body: some View {
         switch browser.permission {
         case .allowed, .chromeNotRunning:
-            SettingRow(title: "Chrome", detail: browser.permission == .allowed ? "Theo can open windows in your Chrome" : "Starts in the background when a page needs it") { EmptyView() }
+            SettingRow(title: "Chrome", detail: browser.permission == .allowed ? "Vello can open windows in your Chrome" : "Starts in the background when a page needs it") { EmptyView() }
         case .notAsked:
-            SettingRow(title: "Let Theo open windows in Chrome", detail: "macOS asks once. Until then, research reads pages the plain way.") {
+            SettingRow(title: "Let Vello open windows in Chrome", detail: "macOS asks once. Until then, research reads pages the plain way.") {
                 Button(isAsking ? "Asking…" : "Allow") {
                     isAsking = true
                     Task { @MainActor in
@@ -551,7 +551,7 @@ struct ResearchBrowserPermissionRow: View {
                 .buttonStyle(.theoSecondary).disabled(isAsking)
             }
         case .refused:
-            SettingRow(title: "Theo isn't allowed to control Chrome", detail: "Turn on Google Chrome under Theo in Privacy & Security › Automation.") {
+            SettingRow(title: "Vello isn't allowed to control Chrome", detail: "Turn on Google Chrome under Vello in Privacy & Security › Automation.") {
                 Button("Open Settings") {
                     if !TheoProfile.isTest, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") { NSWorkspace.shared.open(url) }
                 }
@@ -578,7 +578,7 @@ struct ResearchAgentSettingsSection: View {
     @AppStorage(ResearchAgentSettings.pagesKey) private var pages = ResearchAgentPlan.defaultPages
 
     var body: some View {
-        TheoSection(title: "Research agents", hint: "Each question is split between agents with different jobs, one tile each. Clicky merges what they find into one brief.") {
+        TheoSection(title: "Research agents", hint: "Each question is split between agents with different jobs, one tile each. Pointer Assistant merges what they find into one brief.") {
             SettingRow(title: "Research agents per question") {
                 HairlineSegments(options: ResearchAgentPlan.countRange.map { (String($0), String($0)) }, selection: Binding(get: { String(count) }, set: { count = Int($0) ?? ResearchAgentPlan.defaultCount }))
                     .frame(width: 120)

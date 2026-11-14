@@ -30,7 +30,7 @@ public enum BotPersonaRefresh {
 
     /// The turn's message with the current instructions on top, marked as replacing the ones the session began with.
     public static func refreshedPrompt(_ prompt: String, persona: String) -> String {
-        "(Theo: your instructions have changed since this conversation began. From now on follow these; they replace the earlier ones.\n\n" +
+        "(Vello: your instructions have changed since this conversation began. From now on follow these; they replace the earlier ones.\n\n" +
             persona + "\n\nEnd of your instructions.)\n\n" + prompt
     }
 }

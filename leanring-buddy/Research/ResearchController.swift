@@ -54,7 +54,7 @@ final class ResearchController: CompanionActivitySource {
             return true
         }
         if ResearchTrigger.isHandover(transcript) {
-            say(BotsStore.shared.handResearchToCEO() ? "Sent the research to Theo." : "There's no finished research to send yet.", speaks: speaks)
+            say(BotsStore.shared.handResearchToCEO() ? "Sent the research to Vello." : "There's no finished research to send yet.", speaks: speaks)
             return true
         }
         guard let request = ResearchTrigger.parse(transcript) else { return false }

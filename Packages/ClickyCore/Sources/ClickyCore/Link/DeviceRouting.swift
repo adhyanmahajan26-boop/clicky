@@ -18,7 +18,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         case .routines: return "Routines"
         case .studioScreens: return "VM screens"
         case .researchBrowser: return "Research browser"
-        case .clicky: return "Clicky"
+        case .clicky: return "Pointer Assistant"
         case .dictation: return "Dictation"
         case .voice: return "Voice"
         }
@@ -32,7 +32,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         case .researchBrowser: return "Where Researcher opens blocked pages in your Chrome."
         case .clicky: return "Seeing your screen, pointing, answering."
         case .dictation: return "Talking into the chat box, and the shortcut in any app."
-        case .voice: return "Listening for \u{201C}hey Theo\u{201D}."
+        case .voice: return "Listening for \u{201C}hey Vello\u{201D}."
         }
     }
 

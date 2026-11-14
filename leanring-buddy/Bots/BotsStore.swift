@@ -313,7 +313,7 @@ final class BotsStore: ObservableObject {
         if !isHostingTests {
             // Engines a crash left running with nobody listening are ended before anything new starts.
             let leftovers = BotProcesses.endLeftovers()
-            if leftovers > 0 { NSLog("Theo ended %d engine process group(s) left running before this launch", leftovers) }
+            if leftovers > 0 { NSLog("Vello ended %d engine process group(s) left running before this launch", leftovers) }
             // A file that couldn't be read is said plainly, once, where the owner will see it.
             for problem in BotsSavedFile.takeProblems() { post(BotChatMessage(author: Self.noteAuthor, text: problem), to: primary?.id ?? "theo") }
             // Turns Theo was in the middle of when it quit or crashed get answered, not silently dropped.
@@ -571,7 +571,7 @@ final class BotsStore: ObservableObject {
         if CodingIntent.asksToCancelRun(command ?? text) {
             if let live = t3Runs.last(where: { $0.phase == "running" || $0.phase == "waiting" }) {
                 stopRun(live.id)
-                cancelNote = "Theo has already stopped \"\(live.title)\" as \(BotPrompts.ownerName) asked, and it's really stopped. Just confirm it."
+                cancelNote = "Vello has already stopped \"\(live.title)\" as \(BotPrompts.ownerName) asked, and it's really stopped. Just confirm it."
             } else {
                 cancelNote = "\(OwnerName.startingSentence(BotPrompts.ownerName)) asked to cancel a run, but no coding run is going on right now, so there's nothing to stop. Say so plainly."
             }
@@ -1397,9 +1397,9 @@ final class BotsStore: ObservableObject {
                 let folder = BotMemory.file(botID: bot.id).deletingLastPathComponent()
                 do {
                     let pdf = try BotPDF.make(named: name, in: folder)
-                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Theo made the PDF \(pdf.lastPathComponent) for \(bot.name): [\(pdf.lastPathComponent)](\(pdf.absoluteString))\n\(pdf.path)", exchangeID: privately?.exchangeID), to: conversationID)
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Vello made the PDF \(pdf.lastPathComponent) for \(bot.name): [\(pdf.lastPathComponent)](\(pdf.absoluteString))\n\(pdf.path)", exchangeID: privately?.exchangeID), to: conversationID)
                 } catch {
-                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Theo couldn't make a PDF for \(bot.name): \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Vello couldn't make a PDF for \(bot.name): \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
                 }
             }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
@@ -1417,7 +1417,7 @@ final class BotsStore: ObservableObject {
                     let target = self.group(forRoom: conversationID).map { "group:\($0.id)" } ?? bot.id
                     self.addRoutineFromChat(request, target: target, conversationID: conversationID, author: bot.id)
                 } else {
-                    self.post(BotChatMessage(author: Self.noteAuthor, text: "\(bot.name) wrote a routine (\(request.name), \(request.when)), but you didn't ask for one, so Theo didn't set it up. Ask for it in your own words if you want it."), to: conversationID)
+                    self.post(BotChatMessage(author: Self.noteAuthor, text: "\(bot.name) wrote a routine (\(request.name), \(request.when)), but you didn't ask for one, so Vello didn't set it up. Ask for it in your own words if you want it."), to: conversationID)
                 }
             }
             // The answers come back before this turn counts as over, so a group's next bot doesn't start writing on top of it.
@@ -1582,7 +1582,7 @@ final class BotsStore: ObservableObject {
             let reallyStopped = run.harness == nil ? await BotsT3.stopThread(run) : true
             let state = BotsT3.ThreadState(status: "cancelled", busy: false, waitingForAnswer: false, lastMessage: nil, worktree: run.worktree, pullRequest: nil)
             var report = await BotsT3.report(for: &run, state: state) { [weak self] in self?.setStage($0, runID: runID) }
-            if !reallyStopped { report += "\n\nThis T3 Code can't stop a thread from outside, so its agent may still be working in T3 Code. Theo has stopped following it. Stop it in T3 Code if you need to." }
+            if !reallyStopped { report += "\n\nThis T3 Code can't stop a thread from outside, so its agent may still be working in T3 Code. Vello has stopped following it. Stop it in T3 Code if you need to." }
             run.phase = "failed"
             run.finishedAt = Date()
             self?.upsert(run)
@@ -1982,12 +1982,12 @@ enum BotImport {
     /// one who hands builds to T3 Code. It's saved with the bot, so it doesn't name the owner: every turn's "who you are"
     /// note does that, and follows a change of name in Settings.
     static let primaryInstructions =
-        "You are Theo, the owner's primary bot. Help directly with anything they ask. " +
+        "You are Vello, the owner's primary bot. Help directly with anything they ask. " +
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
     /// The same instructions as saved by versions that had the owner's name built in, so a demoted bot loses them too.
     static let primaryInstructionsBeforeOwnerNameSetting =
-        "You are Theo, \(OwnerName.nameBeforeItWasASetting)'s primary bot. Help directly with anything \(OwnerName.nameBeforeItWasASetting) asks. " +
+        "You are Vello, \(OwnerName.nameBeforeItWasASetting)'s primary bot. Help directly with anything \(OwnerName.nameBeforeItWasASetting) asks. " +
         "In a group chat you lead, hand parts of the work to the others with @Name, then merge their answers."
 
     /// A fresh setup starts with Theo and the Clicky team (BotImport.addClickyTeam); the owner adds every other bot.
@@ -2000,7 +2000,7 @@ enum BotImport {
 
     /// Theo, the primary bot, on `engine`.
     static func starter(on engine: BotEngineChoice) -> NativeBot {
-        NativeBot(id: "theo", name: "Theo", description: "Your primary bot. Helps with anything and hands builds to your coding agent.",
+        NativeBot(id: "theo", name: "Vello", description: "Your primary bot. Helps with anything and hands builds to your coding agent.",
                   instructions: primaryInstructions,
                   hue: 268, accentHue: 300, primary: true, provider: engine.provider, model: engine.model, effort: nil,
                   apps: ["theo"], category: "project")
@@ -2021,6 +2021,11 @@ enum BotImport {
             var bot = bot
             if bot.category == nil { bot.category = defaultCategory(bot.id) }
             if bot.primary && bot.instructions.contains("Project Manager only") { bot.instructions = primaryInstructions }
+            // Theo is called Vello now. Only the starter's own name and opening words change: a name the owner gave stays.
+            if bot.id == "theo" && bot.name == "Theo" { bot.name = "Vello" }
+            if bot.id == "theo" && bot.instructions.hasPrefix("You are Theo,") {
+                bot.instructions = "You are Vello," + bot.instructions.dropFirst("You are Theo,".count)
+            }
             // Only the old sentence goes: anything the owner added stays.
             if bot.primary, let old = bot.instructions.range(of: #"[^.\n]*write one final prompt for T3 Code's coding agent[^.\n]*\.?"#, options: .regularExpression) {
                 bot.instructions.replaceSubrange(old, with: "Hand coding work to a harness as described under Coding.")
@@ -2102,18 +2107,18 @@ enum BotPrompts {
         let apps = BotConnectors.known.filter { bot.apps.contains($0.id) }
         if !apps.isEmpty {
             parts.append("Apps you can use: \(apps.map(\.name).joined(separator: ", ")). If one isn't available, " +
-                         "say it needs connecting in Theo's Connectors page. Never send messages or emails or make " +
+                         "say it needs connecting in Vello's Connectors page. Never send messages or emails or make " +
                          "outward changes without the user's go-ahead.")
             let bridged = apps.filter { BotConnectors.bridged($0) }
             if bot.provider != "claude" && !bridged.isEmpty {
-                parts.append("On your engine, reach \(bridged.map(\.name).joined(separator: ", ")) with Theo's claudia_app tool " +
+                parts.append("On your engine, reach \(bridged.map(\.name).joined(separator: ", ")) with Vello's claudia_app tool " +
                              "(app: \(bridged.map(\.id).joined(separator: ", "))): describe what to look up or draft and it " +
                              "returns what it found. Don't say an app needs connecting before you've tried it.")
             }
             // Apps from Theo's connector hub: the same tools on every brain, from its theo_apps server.
             let throughHub = apps.filter { $0.hub != nil && !(bot.provider == "claude" && $0.hub?.isClaudeAccount == true) }
             if !throughHub.isEmpty {
-                parts.append("Reach \(throughHub.map(\.name).joined(separator: ", ")) with the tools of Theo's theo_apps server, named " +
+                parts.append("Reach \(throughHub.map(\.name).joined(separator: ", ")) with the tools of Vello's theo_apps server, named " +
                              "<app>__<tool> (\(throughHub.map { "\($0.id)__…" }.joined(separator: ", "))). Each app only lets you do what the owner " +
                              "allowed for you; a refused call says why. Don't say an app needs connecting before you've tried its tools.")
             }
@@ -2138,13 +2143,13 @@ enum BotPrompts {
         if bot.owner == nil { parts.append(reachNote(for: bot)) }
         if bot.provider.hasPrefix("api:") {
             // Theo reads the memory file in for it; its tools (its memory folder and its apps) are listed by `APIChatToolbox`.
-            parts.append("You run directly on a model API: you can't run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Theo runs it on a coding harness.")
+            parts.append("You run directly on a model API: you can't run commands or change code yourself. To change code, end with a line \"Project: <short name>\", a \"Repo: <path>\" line when the owner named a folder, and the prompt in a ```prompt fenced block, and Vello runs it on a coding harness.")
         } else if bot.owner != nil {
             // Clicky's team gets what it needs in each job.
             if BotMemory.isClickyMemoryHelper(bot) {
                 // Asked in its own chat, nothing comes with the question: it reads the log, never an old session's memory of it.
                 let log = BotMemory.clickyLogFolder.path
-                parts.append("Clicky's log is \(log)/said.jsonl (what \(ownerName) said to Clicky, one JSON line each, oldest first) and " +
+                parts.append("Pointer Assistant's log is \(log)/said.jsonl (what \(ownerName) said to Pointer Assistant, one JSON line each, oldest first) and " +
                              "\(log)/summaries.jsonl. When asked what was said, Grep it or read its end; don't answer from an earlier session's memory of it.")
             }
         } else {
@@ -2390,7 +2395,7 @@ extension BotsStore {
                 && now.timeIntervalSince(routines[index].runs[run].startedAt) > Self.longestRoutineRun {
                 routines[index].runs[run].status = "failed"
                 routines[index].runs[run].finishedAt = now
-                routines[index].runs[run].summary = "Theo stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner."
+                routines[index].runs[run].summary = "Vello stopped before this run finished, so it didn't get done. It runs again at its next time; Run now runs it sooner."
                 changed = true
             }
         }
@@ -2416,7 +2421,7 @@ extension BotsStore {
             if RoutineCatchUp.decide(due: due, now: now, periodSeconds: routine.schedule.periodSeconds) == .missed {
                 let late = Self.lateness(now.timeIntervalSince(due))
                 record(routine.id, .init(startedAt: now, finishedAt: now, status: "missed",
-                                         summary: "Missed the \(due.formatted(date: .abbreviated, time: .shortened)) run: Theo wasn't running then, and \(late) late is too late to catch up."))
+                                         summary: "Missed the \(due.formatted(date: .abbreviated, time: .shortened)) run: Vello wasn't running then, and \(late) late is too late to catch up."))
                 continue
             }
             start(routine, scheduled: true)
@@ -3176,7 +3181,7 @@ extension BotsStore {
                 return
             }
             guard !research.isRunning else {
-                _ = TheoLink.shared.request("reply", ["replyID": replyID, "message": "Clicky's agents on your \(TheoLink.shortName(TheoLink.localName)) are already researching something, so I didn't start this: \(question)"])
+                _ = TheoLink.shared.request("reply", ["replyID": replyID, "message": "Pointer Assistant's agents on your \(TheoLink.shortName(TheoLink.localName)) are already researching something, so I didn't start this: \(question)"])
                 return
             }
             research.start(request, speaks: false, askedByOtherMac: true)
@@ -3239,7 +3244,7 @@ extension BotsStore {
             options.onTurnFinished = { directory, error in
                 Task { @MainActor in
                     let said = directory.flatMap { ClaudiaControlInbox.spokenAnswer(inTurn: $0) } ?? ""
-                    let answer = error.map { "Clicky couldn't do that: \($0.localizedDescription)" } ?? said
+                    let answer = error.map { "Pointer Assistant couldn't do that: \($0.localizedDescription)" } ?? said
                     if !answer.isEmpty { _ = TheoLink.shared.request("clickyAnswer", ["text": answer, "speaks": speaks]) }
                 }
             }

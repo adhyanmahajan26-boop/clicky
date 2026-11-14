@@ -81,7 +81,7 @@ final class UpdateController: ObservableObject {
                 return
             }
             guard let release = UpdateFeed.parseRelease(data) else {
-                if !quietly { state = .failed("The newest release isn't a Clicky build.") }
+                if !quietly { state = .failed("The newest release isn't a Pointer Assistant build.") }
                 return
             }
             state = UpdateFeed.isNewer(release, thanBuild: currentBuild) ? .available(release) : .upToDate
@@ -197,7 +197,7 @@ final class UpdateController: ObservableObject {
     private func verifySameIdentity(_ newAppURL: URL) throws {
         try runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", newAppURL.path])
         guard let newBundle = Bundle(url: newAppURL), newBundle.bundleIdentifier == Bundle.main.bundleIdentifier else {
-            throw UpdateError(message: "the new app isn't Clicky")
+            throw UpdateError(message: "the new app isn't Pointer Assistant")
         }
         guard Self.satisfiesDesignatedRequirement(of: Bundle.main.bundleURL, candidate: newAppURL) else {
             throw UpdateError(message: "the new app isn't signed by the same developer, so macOS would ask for every permission again")

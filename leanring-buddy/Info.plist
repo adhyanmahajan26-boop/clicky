@@ -15,14 +15,14 @@
 		<string>_theopairtest._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Theo uses your local network to stay in step with Theo on your other Mac.</string>
+	<string>Vello uses your local network to stay in step with Vello on your other Mac.</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Theo opens research pages in new Chrome windows on its VM screens, and closes them when it's done.</string>
+	<string>Vello opens research pages in new Chrome windows on its VM screens, and closes them when it's done.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clicky uses your microphone so you can talk to it</string>
+	<string>Vello uses your microphone so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Clicky needs screen recording access to see your screen and help you.</string>
+	<string>Vello needs screen recording access so Pointer Assistant can see your screen and help you.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clicky uses speech recognition to transcribe your voice when you talk to it</string>
+	<string>Vello uses speech recognition to transcribe your voice when you talk to it</string>
 </dict>
 </plist>

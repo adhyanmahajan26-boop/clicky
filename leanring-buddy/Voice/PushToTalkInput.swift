@@ -112,7 +112,7 @@ final class PushToTalkRecorder: ObservableObject {
     var isDictationInProgress: Bool { isPreparingToRecord || isRecordingFromKeyboardShortcut || isFinalizingTranscript }
 
     /// Names and words the recognizer should expect.
-    var expectedPhrases: [String] = ["Theo", "Claude", "T3 Code", "Codex", "whiteboard", "flowchart"]
+    var expectedPhrases: [String] = ["Vello", "Claude", "T3 Code", "Codex", "whiteboard", "flowchart"]
 
     private let engine = AVAudioEngine()
     private var recognizer: SFSpeechRecognizer?

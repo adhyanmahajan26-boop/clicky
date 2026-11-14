@@ -239,10 +239,10 @@ def step_first_run(theo, record):
     theo.send({"cmd": "uiSet", "key": "v4.owner.name", "value": OWNER})
     theo.result({"cmd": "uiPixel", "action": "products", "on": {"theo": True, "clicky": False, "dictation": False}})
     opened = theo.result({"cmd": "uiPixel", "action": "setup", "step": "done"})
-    pressed = theo.send({"cmd": "uiPress", "label": "Open Theo", "window": opened.get("window")})
+    pressed = theo.send({"cmd": "uiPress", "label": "Open Vello", "window": opened.get("window")})
     if not pressed.get("ok"):
         # SwiftUI can leave the in-process accessibility tree empty (no accessibility client has asked yet), so the label
-        # isn't found. Return presses the same button: "Open Theo" is the step's default action.
+        # isn't found. Return presses the same button: "Open Vello" is the step's default action.
         pressed = dict(theo.send({"cmd": "uiKey", "key": "return", "window": opened.get("window")}), by="return")
     deadline = time.time() + 20
     while time.time() < deadline and theo.read_default("v2.setup.completed") != "1":

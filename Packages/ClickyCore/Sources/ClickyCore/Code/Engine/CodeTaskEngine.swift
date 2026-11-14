@@ -112,7 +112,7 @@ public enum CodeTaskEngineError: Error, Equatable, Sendable, CustomStringConvert
         case .agentNeedsInput(let question): return question
         case .unsafeBranchName: return "That PR's branch name looks unsafe, so I stopped."
         case .nothingChanged: return "The agent didn't change anything, so there's nothing to review."
-        case .deniedRepository: return "That's Clicky's own code, and I don't work on that one."
+        case .deniedRepository: return "That's Pointer Assistant's own code, and I don't work on that one."
         case .localOnlyRepository: return "That repo has no GitHub remote, so I can only read it or change it locally."
         }
     }
@@ -147,7 +147,7 @@ public enum CodeTaskAttachments {
         if lines.contains(where: { $0.trimmingCharacters(in: .whitespaces) == excludeLine }) { return existingText }
         var text = existingText
         if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
-        return text + "# Clicky: screenshots for the code agent (never committed)\n" + excludeLine + "\n"
+        return text + "# Pointer Assistant: screenshots for the code agent (never committed)\n" + excludeLine + "\n"
     }
 
     /// "screenshot.png", "screenshot-2.png", …
@@ -483,7 +483,7 @@ public final class CodeTaskEngine: @unchecked Sendable {
         let (commitOID, diffText) = try await commitAndDiff(worktree: worktree, workspace: workspace, result: result.result)
 
         let commitLines = result.result.commitMessage.components(separatedBy: "\n")
-        let title = commitLines.first.map { String($0.prefix(120)) }.flatMap { $0.isEmpty ? nil : $0 } ?? "Change from Clicky"
+        let title = commitLines.first.map { String($0.prefix(120)) }.flatMap { $0.isEmpty ? nil : $0 } ?? "Change from Pointer Assistant"
         let pullRequestBody = commitLines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         let pullRequestBodyURL = try workspace.writeOutboxFile("pr-body.md", pullRequestBody.isEmpty ? result.result.spokenSummary : pullRequestBody)
         let canPushToBase = repository.isLocalOnly ? false
@@ -692,7 +692,7 @@ public final class CodeTaskEngine: @unchecked Sendable {
     }
 
     private func commitAndDiff(worktree: ClickyWorktree, workspace: CodeTaskWorkspace, result: AgentResult) async throws -> (String, String) {
-        let message = result.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Change from Clicky" : result.commitMessage
+        let message = result.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Change from Pointer Assistant" : result.commitMessage
         let messageURL = try workspace.writeOutboxFile("commit-msg.txt", message)
         let commitOID: String
         do {

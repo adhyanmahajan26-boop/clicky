@@ -121,7 +121,7 @@ struct NotesEmptyState: View {
             }
             Text(isFiltering ? "Nothing matches" : "No notes yet")
                 .font(.system(size: 16, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
-            Text(isFiltering ? "Try another search or filter." : "Ask Theo to save an article, research a link or draw a whiteboard, and it lands here.")
+            Text(isFiltering ? "Try another search or filter." : "Ask Vello to save an article, research a link or draw a whiteboard, and it lands here.")
                 .font(.system(size: 13)).foregroundColor(DS.Colors.textTertiary)
                 .multilineTextAlignment(.center).frame(maxWidth: 320)
         }

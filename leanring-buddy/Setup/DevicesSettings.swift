@@ -166,12 +166,12 @@ struct DevicesSettingsContent: View {
                         }
                     }
                 } else if link.isPaired {
-                    SettingRow(title: "Looking for your other Mac", detail: "Open Theo on it. Both need to be on the same network, or reachable at the address in Your other Mac.") { EmptyView() }
+                    SettingRow(title: "Looking for your other Mac", detail: "Open Vello on it. Both need to be on the same network, or reachable at the address in Your other Mac.") { EmptyView() }
                 } else {
                     NearbyMacRows()
                 }
             }
-            TheoSection(title: "What runs where", hint: "Theo works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there. If that Mac is offline, the chat says so at once and offers to run it here.") {
+            TheoSection(title: "What runs where", hint: "Vello works on the Mac you're using: a message you type here is answered here, with this Mac's folders and coding runs. Bots and chats show on both Macs. Set a row to the other Mac and what you send goes there. If that Mac is offline, the chat says so at once and offers to run it here.") {
                 ForEach(Array(DeviceFeature.allCases.enumerated()), id: \.element.id) { index, feature in
                     if index > 0 { RowDivider() }
                     DeviceFeatureRow(feature: feature)
@@ -185,7 +185,7 @@ struct DevicesSettingsContent: View {
         if link.isPaired {
             return "The main Mac does what one Mac does for both: routines, the research browser and the VM screens. Pick the one you leave on. Picking it on either Mac is enough."
         }
-        return "This Mac works on its own, with nothing to set up. To share bots, chats and memory with another Mac, open Theo on it and press Link below."
+        return "This Mac works on its own, with nothing to set up. To share bots, chats and memory with another Mac, open Vello on it and press Link below."
     }
 
     private var currentBuild: Int? { Bundle.main.infoDictionary?["CFBundleVersion"].flatMap { ($0 as? String).flatMap(Int.init) } }
@@ -244,13 +244,13 @@ private struct NearbyMacRows: View {
             EmptyView()
         }
         if nearby.nearby.isEmpty {
-            SettingRow(title: "No other Mac nearby yet", detail: "Open Theo on your other Mac, on the same network, and it shows up here. Elsewhere, link with a code in Your other Mac.") {
+            SettingRow(title: "No other Mac nearby yet", detail: "Open Vello on your other Mac, on the same network, and it shows up here. Elsewhere, link with a code in Your other Mac.") {
                 Button("Use a code") { BotsSelection.shared.openSettings(.link) }.buttonStyle(.theo(.ghost, .small))
             }
         } else {
             ForEach(Array(nearby.nearby.enumerated()), id: \.element.id) { index, mac in
                 if index > 0 { RowDivider() }
-                SettingRow(title: TheoLink.shortName(mac.name), detail: "Nearby, with Theo open. Link it and both Macs share bots, chats and memory.") {
+                SettingRow(title: TheoLink.shortName(mac.name), detail: "Nearby, with Vello open. Link it and both Macs share bots, chats and memory.") {
                     Button("Link") { nearby.link(with: mac) }.buttonStyle(.theo(.primary, .small)).disabled(isAsking)
                 }
             }

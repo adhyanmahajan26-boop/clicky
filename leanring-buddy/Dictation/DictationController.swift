@@ -365,7 +365,7 @@ final class DictationController: ObservableObject {
         guard !isBlocked(), capture == nil, !ComposerDictation.shared.isActive else { return }
         // No Sarvam key is fine: Apple's recognizer on this Mac does the listening (DictationSettings.usesSarvam).
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            showFailure("Theo needs the microphone")
+            showFailure("Vello needs the microphone")
             return
         }
         hideTask?.cancel()
@@ -415,7 +415,7 @@ final class DictationController: ObservableObject {
     }
 
     private static func expectedPhrases() -> [String] {
-        ["Theo", "Clicky", "Claude", "Sarvam"] + DictationSettings.dictionary.words
+        ["Vello", "Pointer Assistant", "Claude", "Sarvam"] + DictationSettings.dictionary.words
     }
 
     private func noteLevel(_ level: CGFloat) {

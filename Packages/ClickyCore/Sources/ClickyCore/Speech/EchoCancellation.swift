@@ -140,7 +140,7 @@ public extension EchoGuard {
     /// That share of them heard in Clicky's recent words = the mic heard Clicky.
     static let echoOverlapThreshold = 0.6
     /// The only things that count while Clicky plays in "aec" mode.
-    static let commandPhrasesWhilePlaying: [[String]] = [["stop"], ["wait"], ["clicky", "stop"]]
+    static let commandPhrasesWhilePlaying: [[String]] = [["stop"], ["wait"], ["clicky", "stop"], ["vello", "stop"], ["pointer", "assistant", "stop"], ["pointer", "stop"]]
 
     /// Words of `text` in order, lowercased, letters only.
     static func orderedWords(in text: String) -> [String] {

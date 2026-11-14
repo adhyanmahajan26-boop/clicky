@@ -19,7 +19,7 @@ private func containsInOrder(_ needles: [String], in haystack: [String]) -> Bool
 @Test(arguments: [SystemPromptFeatures.current, SystemPromptFeatures()])
 func mainPromptAlwaysCarriesTheGreetingAndMishearingRules(features: SystemPromptFeatures) {
     let prompt = SystemPromptBuilder.mainSystemPrompt(features: features)
-    #expect(prompt.contains("a greeting or small talk (hi, hi again, hey clicky, thanks, how are you) isn't a request"))
+    #expect(prompt.contains("a greeting or small talk (hi, hi again, hey vello, thanks, how are you) isn't a request"))
     #expect(prompt.contains("never apologise for or refer to anything else as if it happened earlier"))
     #expect(prompt.contains("say you didn't catch that and ask them to say it again"))
 }

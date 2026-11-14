@@ -16,8 +16,8 @@ public enum ProviderUse: String, CaseIterable, Identifiable, Sendable {
     public var label: String {
         switch self {
         case .bots: return "Bots"
-        case .theo: return "Theo"
-        case .clicky: return "Clicky"
+        case .theo: return "Vello"
+        case .clicky: return "Pointer Assistant"
         }
     }
 }

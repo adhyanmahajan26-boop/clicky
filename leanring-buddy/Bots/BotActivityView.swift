@@ -22,7 +22,7 @@ struct ActivityItem: Identifiable {
 extension BotsStore {
     private func activityName(_ id: String) -> String {
         if id == "user" { return "You" }
-        if id == Self.clickyID { return "Clicky" }
+        if id == Self.clickyID { return "Pointer Assistant" }
         if id == "routine" { return "Call" }
         return bot(id)?.name ?? group(forRoom: id)?.name ?? (id == Self.teamID ? "Project room" : id)
     }
@@ -57,9 +57,9 @@ extension BotsStore {
         for run in t3Runs where run.startedAt >= since {
             let engine = run.harness.map(HarnessCatalog.label) ?? "T3 Code"
             let model = run.model.map { " on \(NativeBot.label(for: $0))" } ?? ""
-            items.append(ActivityItem(id: "run-start" + run.id, at: run.startedAt, from: "Theo", to: engine, text: "Started \(run.title)\(model), in \(run.folder)", isProblem: false, room: run.room))
+            items.append(ActivityItem(id: "run-start" + run.id, at: run.startedAt, from: "Vello", to: engine, text: "Started \(run.title)\(model), in \(run.folder)", isProblem: false, room: run.room))
             if let finished = run.finishedAt {
-                items.append(ActivityItem(id: "run-end" + run.id, at: finished, from: engine, to: "Theo", text: "\(run.title): \(run.phase)", isProblem: run.phase == "failed", room: run.room))
+                items.append(ActivityItem(id: "run-end" + run.id, at: finished, from: engine, to: "Vello", text: "\(run.title): \(run.phase)", isProblem: run.phase == "failed", room: run.room))
             }
         }
         return items.sorted { $0.at != $1.at ? $0.at < $1.at : $0.id < $1.id }

@@ -18,7 +18,7 @@ public enum ConnectorClaims {
 
     /// What the bot is told on its second go.
     public static func retryNote(_ names: [String]) -> String {
-        "(Theo: \(names.joined(separator: " and ")) is connected. It was still loading when you started, which is why it looked gone. " +
+        "(Vello: \(names.joined(separator: " and ")) is connected. It was still loading when you started, which is why it looked gone. " +
             "Load its tools with ToolSearch now and do the task. Only if a tool call itself fails, say so, quoting the error.)"
     }
 }

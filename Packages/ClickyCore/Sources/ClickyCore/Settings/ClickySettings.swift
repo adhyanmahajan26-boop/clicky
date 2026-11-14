@@ -148,7 +148,7 @@ public enum ClickySettings {
         public static let modelsCode = "v2.models.code"
         /// "cursor" (default: the spark follows the pointer) or "docked" (it lives on its own in a corner of Claudia's screen).
         public static let sparkMode = "v2.spark.mode"
-        /// String, default "Theo": what the assistant is called (UI, T3 Code, how it names itself, and "hey <name>").
+        /// String, default "Vello" ("Theo" before the rename, moved by `migrateAssistantNameIfNeeded`): what the assistant is called (UI, T3 Code, how it names itself, and "hey <name>").
         public static let assistantName = "v2.assistant.name"
         /// Colour theme of the notes panel and Claudia's UI page: "system" (default), "claude", "midnight", "paper", "neon", "forest".
         public static let uiTheme = "v2.ui.theme"
@@ -502,7 +502,7 @@ public enum ClickySettings {
     public static var assistantName: String {
         get {
             let name = (defaults.string(forKey: Keys.assistantName) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? "Theo" : String(name.prefix(32))
+            return name.isEmpty ? "Vello" : String(name.prefix(32))
         }
         set { defaults.set(newValue, forKey: Keys.assistantName) }
     }
@@ -588,6 +588,13 @@ public enum ClickySettings {
 
     /// The name as typed, for setup's and Settings' field: empty when none is saved.
     public static var savedOwnerName: String { defaults.string(forKey: Keys.ownerName) ?? "" }
+
+    /// Once, at launch: the assistant was called Theo before the rename, so a Mac that saved that name (Setup saves the
+    /// default) now calls it Vello. Any other name the owner typed stays.
+    public static func migrateAssistantNameIfNeeded() {
+        let savedName = (defaults.string(forKey: Keys.assistantName) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if savedName == "Theo" { defaults.set("Vello", forKey: Keys.assistantName) }
+    }
 
     /// Once, at launch: a Mac that finished setup before the name was a setting keeps the name its bots knew.
     public static func migrateOwnerNameIfNeeded() {

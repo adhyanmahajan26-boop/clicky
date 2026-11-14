@@ -39,7 +39,7 @@ struct AppSignInCard: View {
                             health.resolve(bot.id, card: card)
                         },
                       ],
-                      foot: note ?? "Opens \(connector.name)'s own sign-in page. Theo never sees your password.") {
+                      foot: note ?? "Opens \(connector.name)'s own sign-in page. Vello never sees your password.") {
                 PixelObjectRow(symbol: connector.symbol, name: connector.name, line: Self.scope(connector), pill: (.needs, "Needs sign-in"), badge: .needs)
             }
         }
@@ -53,7 +53,7 @@ struct AppSignInCard: View {
     static func scope(_ connector: BotConnector) -> String {
         if let hub = connector.hub {
             // A hub app: every brain reaches it the same way, and each bot's settings say how far it may go.
-            return hub.isClaudeAccount ? "Through your Claude account. Each bot's settings say what it may do." : "Signed in inside Theo. Each bot's settings say what it may do."
+            return hub.isClaudeAccount ? "Through your Claude account. Each bot's settings say what it may do." : "Signed in inside Vello. Each bot's settings say what it may do."
         }
         return BotConnectors.bridged(connector) ? "Read and draft only. Never sends or deletes." : "Used by your bots on this Mac."
     }
@@ -244,10 +244,10 @@ struct PermissionCard: View {
     let open: () -> Void
 
     var body: some View {
-        PixelCard(tone: .needs, lead: .look(BotsStore.shared.clickyBot.crewLook, .needs), name: "Clicky", context: "can't \(detail.lowercased()) yet",
-                  question: "Turn on \(title) for Theo",
+        PixelCard(tone: .needs, lead: .look(BotsStore.shared.clickyBot.crewLook, .needs), name: "Pointer Assistant", context: "can't \(detail.lowercased()) yet",
+                  question: "Turn on \(title) for Vello",
                   buttons: [PixelCardButton(title: isAsked ? "Open System Settings" : "Allow", primary: true, action: open)],
-                  foot: "Only you can flip this switch. Theo picks it up as soon as you do.") {
+                  foot: "Only you can flip this switch. Vello picks it up as soon as you do.") {
             PixelObjectRow(symbol: symbol, name: title, line: "In System Settings › Privacy & Security", pill: isAsked ? (.needs, "Needs you") : (.quiet, "Not asked"), badge: .needs)
         }
     }

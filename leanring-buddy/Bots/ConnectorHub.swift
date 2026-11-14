@@ -73,7 +73,7 @@ enum ConnectorHub {
     static var isAvailable: Bool { helperURL != nil }
 
     /// The words every screen uses when the helper isn't in this build.
-    static let helperMissingWords = "Connector helper missing: this build of Theo was made without it, so apps work only through Claude Code, as before."
+    static let helperMissingWords = "Connector helper missing: this build of Vello was made without it, so apps work only through Claude Code, as before."
 
     /// A test instance's tools process (`Clicky --mcp` started by a test bot) is told the test home this way.
     private static var controlHome: URL? {

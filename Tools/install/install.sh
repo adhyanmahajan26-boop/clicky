@@ -1,23 +1,23 @@
 #!/bin/bash
-# Theo installer for macOS: install, upgrade or uninstall Theo from Terminal.
+# Vello installer for macOS: install, upgrade or uninstall Vello from Terminal.
 #
 #   curl -fsSL https://github.com/<releases repo>/releases/latest/download/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --uninstall
 #
-# A download made by curl never gets macOS's quarantine flag, so Theo opens without the
+# A download made by curl never gets macOS's quarantine flag, so Vello opens without the
 # "Apple could not verify" dialog and no paid Apple Developer account is needed. In return,
 # this script checks what it downloads instead: the zip's SHA-256 must match the release's
-# checksum, and the app inside must have a valid signature from Theo's signer with Theo's
-# bundle id. When Theo is already installed, the new app must also satisfy the installed app's
+# checksum, and the app inside must have a valid signature from Vello's signer with Vello's
+# bundle id. When Vello is already installed, the new app must also satisfy the installed app's
 # own signature rule, so an upgrade can never swap in someone else's build and macOS keeps
-# Theo's permissions. Anything else is refused and nothing is changed.
+# Vello's permissions. Anything else is refused and nothing is changed.
 #
-# Who Theo's signer is (the "signer rule", a code requirement), first one found:
+# Who Vello's signer is (the "signer rule", a code requirement), first one found:
 #   1. THEO_SIGNER_REQUIREMENT, if you set it;
 #   2. the rule Tools/release.sh wrote into this copy of the script when it published it;
 #   3. the release's SIGNER file, only when the release's SHA256SUMS lists it and it matches;
-#   4. when upgrading, the installed Theo's own rule.
-# A rule must pin Theo's bundle id and one Apple team or one certificate (the two forms in
+#   4. when upgrading, the installed Vello's own rule.
+# A rule must pin Vello's bundle id and one Apple team or one certificate (the two forms in
 # docs/INSTALL.md, "Signing"); anything looser is refused. Nobody's team is written in the
 # script in the repo: a copy run from a checkout reads the release's SIGNER file.
 #
@@ -27,12 +27,12 @@
 #                       when /Applications isn't writable without a password)
 #   --from <zip|url>    install this zip instead of a release (needs --sha256)
 #   --sha256 <hex>      the checksum the --from zip must have
-#   --no-launch         don't open Theo afterwards
-#   --force             reinstall the same build, allow an older build, or quit a Theo that won't quit
+#   --no-launch         don't open Vello afterwards
+#   --force             reinstall the same build, allow an older build, or quit a Vello that won't quit
 #   --allow-new-signer  upgrade even though the new build has another signer than the installed
-#                       Theo (macOS then asks for every permission again)
-#   --uninstall         remove Theo (your chats, bots and settings are kept)
-#   --purge             with --uninstall, also move Theo's data to the Trash and remove its
+#                       Vello (macOS then asks for every permission again)
+#   --uninstall         remove Vello (your chats, bots and settings are kept)
+#   --purge             with --uninstall, also move Vello's data to the Trash and remove its
 #                       settings, saved keys and macOS permissions
 #   --yes               don't ask before --purge
 #   -h, --help          show this help
@@ -40,14 +40,14 @@
 # Environment
 #   THEO_RELEASES_REPO  GitHub repo with the releases (owner/name). Default: the repo this copy
 #                       was published to, or THEO_RELEASES_REPO in Config/Theo.xcconfig when the
-#                       script runs from a checkout of Theo's source
+#                       script runs from a checkout of Vello's source
 #   THEO_INSTALL_DIR    same as --dir
 #   THEO_GITHUB_TOKEN   only for a private releases repo: a token that can read it (GH_TOKEN,
 #                       GITHUB_TOKEN or a signed-in `gh` work too). A public repo needs nothing.
 #   THEO_SIGNER_REQUIREMENT  the signer rule to use (see above)
 #
 # The release layout this expects (Tools/release.sh makes it): tag build-<yyyyMMddHHmm>, one
-# asset Theo-<build>.zip, the checksum in a SHA256SUMS asset ("<hex>  Theo-<build>.zip") or,
+# asset Vello-<build>.zip, the checksum in a SHA256SUMS asset ("<hex>  Vello-<build>.zip") or,
 # for older releases, a "sha256: <hex>" line in the release notes, and a SIGNER asset with the
 # signer rule (listed in SHA256SUMS).
 #
@@ -63,12 +63,14 @@ PUBLISHED_SIGNER_REQUIREMENT=''
 RELEASES_REPO="${THEO_RELEASES_REPO:-}"
 GITHUB_API="${THEO_GITHUB_API:-https://api.github.com}"   # tests point this at a local fake
 BUNDLE_ID="com.personal.clicky"
-# Who must have signed Theo, as a code requirement (the language macOS uses for permissions).
+# Who must have signed Vello, as a code requirement (the language macOS uses for permissions).
 # Chosen in choose_signer_rule (see the top of this file); a zip whose app doesn't satisfy it is refused.
 SIGNER_REQUIREMENT=""
 SIGNER_SOURCE=""
 RELEASE_SIGNER_FILE=""
-APP_NAME="Theo.app"
+APP_NAME="Vello.app"
+# What this app was called before Vello. An install there is upgraded in place to Vello.app.
+LEGACY_APP_NAME="Theo.app"
 EXECUTABLE="Clicky"
 MIN_MACOS="14.2"
 
@@ -92,21 +94,21 @@ die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'HELP'
-Theo installer for macOS.
+Vello installer for macOS.
 
   curl -fsSL <url>/install.sh | bash                      install or upgrade to the latest build
-  curl -fsSL <url>/install.sh | bash -s -- --uninstall    remove Theo, keep its data
+  curl -fsSL <url>/install.sh | bash -s -- --uninstall    remove Vello, keep its data
 
 Options
   --version <build>   install that build (202611121716 or build-202611121716); default: latest
   --dir <folder>      install folder (default /Applications, or ~/Applications if that needs a password)
   --from <zip|url>    install this zip instead of a release (needs --sha256)
   --sha256 <hex>      the checksum the --from zip must have
-  --no-launch         don't open Theo afterwards
-  --force             reinstall the same build, allow an older one, or quit a Theo that won't quit
+  --no-launch         don't open Vello afterwards
+  --force             reinstall the same build, allow an older one, or quit a Vello that won't quit
   --allow-new-signer  upgrade to a build from another signer (macOS asks for permissions again)
-  --uninstall         remove Theo (chats, bots and settings are kept)
-  --purge             with --uninstall: also remove Theo's data, saved keys and macOS permissions
+  --uninstall         remove Vello (chats, bots and settings are kept)
+  --purge             with --uninstall: also remove Vello's data, saved keys and macOS permissions
   --yes               don't ask before --purge
 
 Environment: THEO_RELEASES_REPO (owner/name), THEO_INSTALL_DIR, THEO_GITHUB_TOKEN (only for a private
@@ -139,7 +141,7 @@ parse_args() {
   return 0
 }
 
-# THEO_RELEASES_REPO in Config/Theo.xcconfig, when this script runs from a checkout of Theo's source
+# THEO_RELEASES_REPO in Config/Theo.xcconfig, when this script runs from a checkout of Vello's source
 # (Tools/install/install.sh). Nothing when it was piped from curl.
 checkout_releases_repo() {
   local script_path="${BASH_SOURCE[0]:-}"
@@ -152,7 +154,7 @@ checkout_releases_repo() {
 choose_releases_repo() {
   [ -n "$RELEASES_REPO" ] || RELEASES_REPO="$PUBLISHED_RELEASES_REPO"
   [ -n "$RELEASES_REPO" ] || RELEASES_REPO="$(checkout_releases_repo)"
-  [ -n "$RELEASES_REPO" ] || die "this copy of the installer doesn't say where Theo's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install.sh attached to a release."
+  [ -n "$RELEASES_REPO" ] || die "this copy of the installer doesn't say where Vello's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install.sh attached to a release."
   case "$RELEASES_REPO" in
     */*/*|/*|*/) die "THEO_RELEASES_REPO must look like owner/name (got '$RELEASES_REPO')" ;;
     */*) ;;
@@ -176,10 +178,10 @@ version_at_least() { # $1 >= $2, dotted numbers
 
 check_system() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    die "this installer is for macOS. Theo for Windows and Linux has its own installer."
+    die "this installer is for macOS. Vello for Windows and Linux has its own installer."
   fi
   local os; os="$(sw_vers -productVersion)"
-  version_at_least "$os" "$MIN_MACOS" || die "Theo needs macOS $MIN_MACOS or newer (this Mac has $os)."
+  version_at_least "$os" "$MIN_MACOS" || die "Vello needs macOS $MIN_MACOS or newer (this Mac has $os)."
   local tool
   for tool in curl shasum ditto codesign xattr osascript; do
     command -v "$tool" >/dev/null 2>&1 || die "missing $tool"
@@ -223,7 +225,7 @@ explain_release_failure() { # http status, url
   case "$1" in
     404)
       if [ -z "$AUTH_HEADER_FILE" ]; then
-        die "this build's updates are private: $RELEASES_REPO can't be read without access. Ask whoever gave you Theo for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
+        die "this build's updates are private: $RELEASES_REPO can't be read without access. Ask whoever gave you Vello for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
       fi
       die "couldn't read $2: no such release in $RELEASES_REPO, or the GitHub token can't read that repo." ;;
     401) die "GitHub refused the token (THEO_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN or gh's). A public releases repo needs no token: unset it and try again." ;;
@@ -243,7 +245,7 @@ function run(argv) {
   var text = $.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null).js;
   var r = JSON.parse(text);
   var assets = r.assets || [];
-  var zip = assets.filter(function (a) { return /^Theo-.*\.zip$/i.test(a.name) && !/(windows|linux)/i.test(a.name); })[0]
+  var zip = assets.filter(function (a) { return /^Vello-.*\.zip$/i.test(a.name) && !/(windows|linux)/i.test(a.name); })[0]
          || assets.filter(function (a) { return /\.zip$/i.test(a.name); })[0];
   var sums = assets.filter(function (a) { return a.name === 'SHA256SUMS'; })[0];
   var signer = assets.filter(function (a) { return a.name === 'SIGNER'; })[0];
@@ -275,7 +277,7 @@ fetch_release() {
     local tag="$VERSION"; case "$tag" in build-*) ;; *) tag="build-$tag" ;; esac
     url="$api/tags/$tag"
   fi
-  step "Finding Theo ($VERSION) in $RELEASES_REPO"
+  step "Finding Vello ($VERSION) in $RELEASES_REPO"
   local status; status="$(github_status "$url" "$WORK/release.json")"
   [ "$status" = 200 ] || explain_release_failure "$status" "$url"
   local fields; fields="$(release_fields "$WORK/release.json")" || die "couldn't read the release details"
@@ -284,7 +286,7 @@ fetch_release() {
     read -r signer_url; read -r signer_api; } <<EOF
 $fields
 EOF
-  [ "$zip_name" != "-" ] || die "release $tag has no Theo zip"
+  [ "$zip_name" != "-" ] || die "release $tag has no Vello zip"
   if [ "$sums_url" != "-" ]; then
     download_asset "$sums_url" "$sums_api" "$WORK/SHA256SUMS" || die "couldn't download SHA256SUMS"
     EXPECTED_SHA="$(sum_for "SHA256SUMS" "$zip_name")"
@@ -339,7 +341,7 @@ build_of() { plutil -extract CFBundleVersion raw -o - "$1/Contents/Info.plist" 2
 designated_requirement_of() { codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'; }
 
 # A signer rule is accepted only in one of the two forms Tools/install/signer-requirement.sh writes:
-# Theo's bundle id plus one Apple team, or Theo's bundle id plus one certificate. Anything looser
+# Vello's bundle id plus one Apple team, or Vello's bundle id plus one certificate. Anything looser
 # ("any Apple-issued certificate", an "or", a different bundle id) would let someone else's build in.
 signer_rule_is_strict() {
   local id_pattern='identifier "com\.personal\.clicky"'
@@ -349,7 +351,7 @@ signer_rule_is_strict() {
 }
 
 # Sets SIGNER_REQUIREMENT and SIGNER_SOURCE (see the top of this file). Empty when nothing names a signer;
-# the installed Theo's own rule is checked separately when upgrading.
+# the installed Vello's own rule is checked separately when upgrading.
 choose_signer_rule() {
   local rule="" source=""
   if [ -n "${THEO_SIGNER_REQUIREMENT:-}" ]; then rule="$THEO_SIGNER_REQUIREMENT"; source="THEO_SIGNER_REQUIREMENT"
@@ -363,7 +365,7 @@ choose_signer_rule() {
   SIGNER_SOURCE="$source"
 }
 
-# Unzips into the work folder and checks the app is Theo, signed by Theo's signer. Sets NEW_APP.
+# Unzips into the work folder and checks the app is Vello, signed by Vello's signer. Sets NEW_APP.
 unpack_and_verify() {
   mkdir -p "$WORK/unpacked"
   ditto -x -k "$ZIP" "$WORK/unpacked" || die "couldn't unzip the download"
@@ -372,22 +374,22 @@ unpack_and_verify() {
   # curl never adds quarantine; a zip given with --from may have been downloaded by a browser.
   xattr -dr com.apple.quarantine "$NEW_APP" 2>/dev/null || true
   codesign --verify --deep --strict "$NEW_APP" 2>/dev/null || die "the app's signature isn't valid. Nothing was installed."
-  [ "$(bundle_id_of "$NEW_APP")" = "$BUNDLE_ID" ] || die "the zip doesn't contain Theo. Nothing was installed."
+  [ "$(bundle_id_of "$NEW_APP")" = "$BUNDLE_ID" ] || die "the zip doesn't contain Vello. Nothing was installed."
   if [ -n "$SIGNER_REQUIREMENT" ] && ! codesign --verify -R "=$SIGNER_REQUIREMENT" "$NEW_APP" 2>/dev/null; then
-    die "the app is signed by '$(signer_of "$NEW_APP")', not Theo's signing identity (from $SIGNER_SOURCE). Nothing was installed."
+    die "the app is signed by '$(signer_of "$NEW_APP")', not Vello's signing identity (from $SIGNER_SOURCE). Nothing was installed."
   fi
 }
 
-# When Theo is already installed, the new app must satisfy the installed app's designated requirement: the rule
-# macOS keeps Theo's permissions against, and the same check Theo's own Update button makes.
+# When Vello is already installed, the new app must satisfy the installed app's designated requirement: the rule
+# macOS keeps Vello's permissions against, and the same check Vello's own Update button makes.
 verify_same_signer_as_installed() { # installed app
   local installed_rule; installed_rule="$(designated_requirement_of "$1")"
   if [ -n "$installed_rule" ] && codesign --verify -R "=$installed_rule" "$NEW_APP" 2>/dev/null; then return 0; fi
   if [ "$ALLOW_NEW_SIGNER" = 1 ]; then
-    warn "the new build is signed by '$(signer_of "$NEW_APP")', the installed Theo by '$(signer_of "$1")'. Going ahead (--allow-new-signer): macOS will ask for Theo's permissions again."
+    warn "the new build is signed by '$(signer_of "$NEW_APP")', the installed Vello by '$(signer_of "$1")'. Going ahead (--allow-new-signer): macOS will ask for Vello's permissions again."
     return 0
   fi
-  die "the new build is signed by '$(signer_of "$NEW_APP")', not by the same signer as the Theo in $1 ('$(signer_of "$1")'), so macOS would ask for every permission again. Nothing was installed. If you expected a new signer, run again with --allow-new-signer."
+  die "the new build is signed by '$(signer_of "$NEW_APP")', not by the same signer as the Vello in $1 ('$(signer_of "$1")'), so macOS would ask for every permission again. Nothing was installed. If you expected a new signer, run again with --allow-new-signer."
 }
 
 # ---------- install ----------
@@ -397,14 +399,14 @@ choose_dir() {
   if [ -w /Applications ]; then INSTALL_DIR="/Applications"
   else
     INSTALL_DIR="$HOME/Applications"; mkdir -p "$INSTALL_DIR"
-    say "    /Applications needs an administrator password here, so Theo goes in ~/Applications."
+    say "    /Applications needs an administrator password here, so Vello goes in ~/Applications."
   fi
 }
 
-# Process ids of Theo running from this exact app (any profile).
+# Process ids of Vello running from this exact app (any profile).
 running_pids() { # app path; the app's own processes, never a `Clicky --mcp` helper
   local exe="$1/Contents/MacOS/$EXECUTABLE" pid
-  # Claude Code (Theo's plugin), T3 Code and OpenCode run `Clicky --mcp` from the installed app as their MCP server.
+  # Claude Code (Vello's plugin), T3 Code and OpenCode run `Clicky --mcp` from the installed app as their MCP server.
   # Quitting one would cut another session's tools; it keeps running from the old copy and starts the new one next time.
   ps -axo pid=,comm= | awk -v exe="$exe" '{ pid=$1; $1=""; sub(/^ /, ""); if ($0 == exe) print pid }' | while read -r pid; do
     case " $(ps -o args= -p "$pid" 2>/dev/null) " in
@@ -414,11 +416,11 @@ running_pids() { # app path; the app's own processes, never a `Clicky --mcp` hel
   done
 }
 
-quit_running() { # app path; returns 0 if Theo was running
+quit_running() { # app path; returns 0 if Vello was running
   local pids; pids="$(running_pids "$1")"
   [ -n "$pids" ] || return 1
-  step "Quitting the running Theo"
-  # SIGTERM lets Theo save and end its engines; it resumes unanswered messages on the next launch.
+  step "Quitting the running Vello"
+  # SIGTERM lets Vello save and end its engines; it resumes unanswered messages on the next launch.
   kill -TERM $pids 2>/dev/null || true
   local i
   for i in $(seq 1 60); do
@@ -426,7 +428,7 @@ quit_running() { # app path; returns 0 if Theo was running
     sleep 0.25
   done
   if [ "$FORCE" = 1 ]; then kill -KILL $(running_pids "$1") 2>/dev/null || true; sleep 1; return 0; fi
-  die "Theo didn't quit within 15 seconds. Quit it from the menu bar and run this again (or add --force)."
+  die "Vello didn't quit within 15 seconds. Quit it from the menu bar and run this again (or add --force)."
 }
 
 do_install() {
@@ -439,59 +441,62 @@ do_install() {
 
   choose_dir
   local dest="$INSTALL_DIR/$APP_NAME"
+  # The copy being upgraded: Vello.app, or an install from before the rename (Theo.app), which becomes Vello.app.
+  local existing="$dest" legacy="$INSTALL_DIR/$LEGACY_APP_NAME"
+  if [ ! -e "$dest" ] && [ -d "$legacy" ] && [ "$(bundle_id_of "$legacy")" = "$BUNDLE_ID" ]; then existing="$legacy"; fi
   local installed_theo=""
-  if [ -e "$dest" ] && [ "$(bundle_id_of "$dest")" = "$BUNDLE_ID" ]; then installed_theo="$dest"; fi
+  if [ -e "$existing" ] && [ "$(bundle_id_of "$existing")" = "$BUNDLE_ID" ]; then installed_theo="$existing"; fi
   if [ -n "$installed_theo" ]; then
     verify_same_signer_as_installed "$installed_theo"
   elif [ -z "$SIGNER_REQUIREMENT" ]; then
-    die "can't tell who should have signed this build: nothing names Theo's signer (no SIGNER file in the release, and Theo isn't installed here yet). Set THEO_SIGNER_REQUIREMENT (docs/INSTALL.md, \"Signing\"), or use the install.sh attached to the release. Nothing was installed."
+    die "can't tell who should have signed this build: nothing names Vello's signer (no SIGNER file in the release, and Vello isn't installed here yet). Set THEO_SIGNER_REQUIREMENT (docs/INSTALL.md, \"Signing\"), or use the install.sh attached to the release. Nothing was installed."
   fi
   step "Signature OK ($(signer_of "$NEW_APP"), build $(build_of "$NEW_APP"))"
   local new_build; new_build="$(build_of "$NEW_APP")"
   local was_running=0 upgrading=0
-  if [ -e "$dest" ]; then
-    [ "$(bundle_id_of "$dest")" = "$BUNDLE_ID" ] || die "$dest exists and isn't Theo; move it away first."
-    local old_build; old_build="$(build_of "$dest")"
-    if [ "$old_build" = "$new_build" ] && [ "$FORCE" = 0 ]; then
-      say "Theo build $new_build is already installed at $dest."
+  if [ -e "$existing" ]; then
+    [ "$(bundle_id_of "$existing")" = "$BUNDLE_ID" ] || die "$existing exists and isn't Vello; move it away first."
+    local old_build; old_build="$(build_of "$existing")"
+    if [ "$old_build" = "$new_build" ] && [ "$FORCE" = 0 ] && [ "$existing" = "$dest" ]; then
+      say "Vello build $new_build is already installed at $dest."
       exit 0
     fi
     if [ "$new_build" -lt "$old_build" ] 2>/dev/null && [ "$FORCE" = 0 ]; then
-      die "$dest has build $old_build, newer than $new_build. Add --force to go back."
+      die "$existing has build $old_build, newer than $new_build. Add --force to go back."
     fi
     upgrading=1
-    step "Upgrading Theo $old_build -> $new_build in $INSTALL_DIR"
-    if quit_running "$dest"; then was_running=1; fi
+    step "Upgrading Vello $old_build -> $new_build in $INSTALL_DIR"
+    if quit_running "$existing"; then was_running=1; fi
   else
-    step "Installing Theo $new_build in $INSTALL_DIR"
+    step "Installing Vello $new_build in $INSTALL_DIR"
   fi
 
-  # Copy beside the destination first, then two renames, so a failure never leaves Theo half-replaced.
-  local staging="$INSTALL_DIR/.Theo.app.installing-$$" old="$INSTALL_DIR/.Theo.app.previous-$$"
+  # Copy beside the destination first, then two renames, so a failure never leaves Vello half-replaced.
+  local staging="$INSTALL_DIR/.Vello.app.installing-$$" old="$INSTALL_DIR/.Vello.app.previous-$$"
   rm -rf "$staging" "$old"
-  ditto "$NEW_APP" "$staging" || { rm -rf "$staging"; die "couldn't copy Theo into $INSTALL_DIR"; }
-  if [ -e "$dest" ]; then mv "$dest" "$old" || { rm -rf "$staging"; die "couldn't move the old Theo aside"; }; fi
+  ditto "$NEW_APP" "$staging" || { rm -rf "$staging"; die "couldn't copy Vello into $INSTALL_DIR"; }
+  if [ -e "$existing" ]; then mv "$existing" "$old" || { rm -rf "$staging"; die "couldn't move the old Vello aside"; }; fi
   if ! mv "$staging" "$dest"; then
-    [ -e "$old" ] && mv "$old" "$dest"
+    [ -e "$old" ] && mv "$old" "$existing"
     rm -rf "$staging"
-    die "couldn't put Theo in place; the previous version was restored."
+    die "couldn't put Vello in place; the previous version was restored."
   fi
   rm -rf "$old"
   codesign --verify --deep --strict "$dest" 2>/dev/null || die "the installed copy failed its signature check: $dest"
   xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
 
   say ""
-  say "Theo build $new_build is installed: $dest"
+  say "Vello build $new_build is installed: $dest"
   if [ "$upgrading" = 1 ]; then
     say "Your chats, bots, settings and macOS permissions carry over (same signature as before)."
   else
     say ""
-    say "First launch: Theo's Setup guide walks you through the brain, the voice and permissions."
+    say "First launch: Vello's Setup guide walks you through the brain, the voice and permissions."
     say "macOS asks for three permissions. They may be listed under the name \"Clicky\":"
     say "  - Microphone: a normal Allow box."
     say "  - Accessibility and Screen & System Audio Recording: macOS opens System Settings >"
-    say "    Privacy & Security; switch Theo on there. Screen recording takes effect after Theo restarts."
-    say "Updates keep these permissions, whether from Theo's own Update button or this script."
+    say "    Privacy & Security; switch Vello on there. Screen recording takes effect after Vello restarts."
+    say "Updates keep these permissions, whether from Vello's own Update button or this script."
   fi
   say "To update later, run the same command again. To remove: add --uninstall (or --uninstall --purge)."
 
@@ -522,35 +527,36 @@ move_to_trash() { # path label
 do_uninstall() {
   local -a found=()
   local candidate
-  if [ -n "$INSTALL_DIR" ]; then set -- "$INSTALL_DIR/$APP_NAME"; else set -- "/Applications/$APP_NAME" "$HOME/Applications/$APP_NAME"; fi
+  if [ -n "$INSTALL_DIR" ]; then set -- "$INSTALL_DIR/$APP_NAME" "$INSTALL_DIR/$LEGACY_APP_NAME"
+  else set -- "/Applications/$APP_NAME" "$HOME/Applications/$APP_NAME" "/Applications/$LEGACY_APP_NAME" "$HOME/Applications/$LEGACY_APP_NAME"; fi
   for candidate in "$@"; do
     if [ -d "$candidate" ] && [ "$(bundle_id_of "$candidate")" = "$BUNDLE_ID" ]; then found+=("$candidate"); fi
   done
 
   if [ "$PURGE" = 1 ]; then
-    say "This removes Theo and moves its chats, bots, notes and settings to the Trash, and deletes its saved"
+    say "This removes Vello and moves its chats, bots, notes and settings to the Trash, and deletes its saved"
     say "keys (Keychain) and its macOS permissions. Screenshots in ~/Pictures/Clicky are kept."
-    confirm "Remove Theo and all of its data?" || die "nothing was removed"
+    confirm "Remove Vello and all of its data?" || die "nothing was removed"
   fi
 
   local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
   if [ ${#found[@]} -eq 0 ]; then
-    say "Theo isn't installed${INSTALL_DIR:+ in $INSTALL_DIR}."
+    say "Vello isn't installed${INSTALL_DIR:+ in $INSTALL_DIR}."
   else
     for candidate in "${found[@]}"; do
       quit_running "$candidate" || true
       step "Removing $candidate"
-      move_to_trash "$candidate" "Theo-$stamp.app"
+      move_to_trash "$candidate" "Vello-$stamp.app"
     done
   fi
 
   if [ "$PURGE" = 1 ]; then
-    step "Removing Theo's data"
+    step "Removing Vello's data"
     local path
     for path in "$HOME/Library/Application Support/Theo" "$HOME/Library/Application Support/Clicky" \
                 "$HOME/.clicky" "$HOME/Library/Logs/Clicky" "$HOME/Library/Caches/$BUNDLE_ID" \
                 "$HOME/Library/HTTPStorages/$BUNDLE_ID"; do
-      if [ -e "$path" ]; then mkdir -p "$HOME/.Trash/Theo-data-$stamp"; move_to_trash "$path" "Theo-data-$stamp/$(basename "$path")"; fi
+      if [ -e "$path" ]; then mkdir -p "$HOME/.Trash/Vello-data-$stamp"; move_to_trash "$path" "Vello-data-$stamp/$(basename "$path")"; fi
     done
     # Test runs set THEO_UNINSTALL_SKIP_SYSTEM=1: these three act on the real user account, whatever $HOME is.
     if [ "${THEO_UNINSTALL_SKIP_SYSTEM:-0}" != 1 ]; then

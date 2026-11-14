@@ -155,13 +155,13 @@ enum CrewTestCommands {
         let brief = """
         # Studio Screens: four bots, two hidden displays
 
-        Two invisible 1440×900 screens, each split into two tiles. Your bots work side by side while you watch small live views inside Theo, and nothing lands on your own monitors.
+        Two invisible 1440×900 screens, each split into two tiles. Your bots work side by side while you watch small live views inside Vello, and nothing lands on your own monitors.
 
         ## Why
         Bots that open browsers and terminals on your screens get in the way. A screen nobody sees is the simplest place for that work to happen, and Builder and Designer can keep at it while you do something else entirely.
 
         ## How it works
-        Theo makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the VM screens panel, only while it's open.
+        Vello makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the VM screens panel, only while it's open.
 
         ## Cost on Studio
         About three percent of the CPU and 180 MB with four tiles live. Thumbnails stop the moment the panel closes.
@@ -170,7 +170,7 @@ enum CrewTestCommands {
         Experimental, on any Mac, and off until you turn it on. Bots don't move onto the tiles by themselves yet; that comes after you've tried it.
         """
         store.seedForTest(theo.id, messages: [
-            message("user", "Plan the Studio screens launch and get Builder started on the tiles.", 200),
+            message("user", "Plan the VM screens launch and get Builder started on the tiles.", 200),
             message(theo.id, "Done. Here's the brief, Builder is already on it, and I need one quick call from you.", 190),
             message(theo.id, brief, 185),
             message(theo.id, "[CHOOSE: How should each screen be split? | Side by side: Best for code and browsers | Stacked: Better for wide timelines]", 20),

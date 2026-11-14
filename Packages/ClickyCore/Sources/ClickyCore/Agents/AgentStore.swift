@@ -408,9 +408,9 @@ public struct AgentStore: Codable, Equatable, Sendable {
     public mutating func markInterruptedAgents(at date: Date = Date()) {
         for record in records where record.status.isActive && record.kind != .projectTask {
             update(record.id) { interruptedRecord in
-                interruptedRecord.logLines.append(AgentLogLine(date: date, text: "Clicky quit while this was running."))
+                interruptedRecord.logLines.append(AgentLogLine(date: date, text: "Pointer Assistant quit while this was running."))
             }
-            finish(record.id, status: .cancelled, errorDescription: "Clicky quit while this was running.", at: date)
+            finish(record.id, status: .cancelled, errorDescription: "Pointer Assistant quit while this was running.", at: date)
         }
     }
 

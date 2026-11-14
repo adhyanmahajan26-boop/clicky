@@ -21,6 +21,7 @@ struct TheoApp: App {
         TheoProfile.prepareAtLaunch()
         // Before anything builds a prompt: a Mac set up when the owner's name and the call language were built in keeps them.
         ClickySettings.migrateOwnerNameIfNeeded()
+        ClickySettings.migrateAssistantNameIfNeeded()
         CallSettings.migrateLanguageIfNeeded()
         // Helpers now follow the main brain; a Mac set up when they were always Haiku keeps Haiku.
         ClickyModels.keepEarlierHelperDefaultOnce(setupWasCompleted: ClickySettings.isSetupCompleted)
@@ -93,7 +94,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         // It holds what was said to Theo: readable by the owner only.
         chmod(log.path, 0o600)
         setvbuf(stdout, nil, _IOLBF, 0)
-        print("—— Theo started \(Date()) ——")
+        print("—— Vello started \(Date()) ——")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -117,7 +118,7 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         setenv("PWD", home, 1)
         unsetenv("OLDPWD")
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        print("✨ Theo \(version) starting")
+        print("✨ Vello \(version) starting")
 
         Self.sharedCompanionManager = companionManager
         menuBar = MenuBarPanelManager(companionManager: companionManager)
@@ -208,6 +209,6 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
     private func openAtLogin() {
         let service = SMAppService.mainApp
         guard service.status != .enabled else { return }
-        do { try service.register() } catch { print("⚠️ Theo couldn't add itself to Login Items: \(error)") }
+        do { try service.register() } catch { print("⚠️ Vello couldn't add itself to Login Items: \(error)") }
     }
 }

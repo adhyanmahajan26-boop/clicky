@@ -148,13 +148,13 @@ final class TheoLink: ObservableObject {
     var isWorkMac: Bool { !ClickySettings.claudiaScreenName.isEmpty }
 
     private var clickyElsewhere: String {
-        "Clicky's set to work on \(Self.shortName(clickyMacNow)), which isn't connected right now. You can switch it in the menu bar."
+        "Pointer Assistant's set to work on \(Self.shortName(clickyMacNow)), which isn't connected right now. You can switch it in the menu bar."
     }
 
     /// Something said to Clicky here goes to the Mac it works on. It's never done here instead.
     func sendClickyToOtherMac(_ text: String, speaks: Bool) {
         let sent = request("clicky", ["text": text, "speaks": speaks ? "yes" : "no"])
-        CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Clicky's on it, on \(Self.shortName(clickyMacNow))" : "\(Self.shortName(clickyMacNow)) isn't connected")
+        CompanionManager.current?.showHandsFreeStatusMessage(sent ? "Pointer Assistant's on it, on \(Self.shortName(clickyMacNow))" : "\(Self.shortName(clickyMacNow)) isn't connected")
         if sent { BotsStore.shared.post(BotChatMessage(author: "user", text: text), to: BotsStore.clickyID) }
         if !sent { BotsStore.shared.post(BotChatMessage(author: BotsStore.clickyID, text: clickyElsewhere), to: BotsStore.clickyID) }
     }
@@ -694,7 +694,7 @@ struct ClickyMacSwitch: View {
     var body: some View {
         if link.clickyMacChoices.count > 1, DeviceRoles.choice(.clicky) != .any {
             HStack(spacing: 8) {
-                Text("Clicky works on").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                Text("Pointer Assistant works on").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                 Spacer(minLength: 0)
                 Picker("", selection: Binding(get: { link.clickyMacNow }, set: { link.setClickyMac($0) })) {
                     ForEach(link.clickyMacChoices, id: \.self) { name in Text(TheoLink.shortName(name)).tag(name) }
@@ -728,7 +728,7 @@ struct LinkSettingsContent: View {
 
     private var statusLine: String {
         guard link.isPaired else { return "Not linked yet." }
-        guard let name = link.peerName else { return link.problem ?? "Looking for your other Mac. Theo has to be open on both." }
+        guard let name = link.peerName else { return link.problem ?? "Looking for your other Mac. Vello has to be open on both." }
         let synced = link.lastSync.map { " Last in step \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))." } ?? ""
         return "Linked to \(name).\(synced)"
     }
@@ -775,11 +775,11 @@ struct LinkSettingsContent: View {
             if link.isPaired {
                 VStack(alignment: .leading, spacing: 6) {
                     ClickyMacSwitch()
-                    Text("Anything you ask Clicky, by voice, in its chat or through Theo, happens on that Mac's screen, and it answers where you asked. Change it here, in the menu bar, or say \"Clicky, work on the Air\".")
+                    Text("Anything you ask Pointer Assistant, by voice, in its chat or through Vello, happens on that Mac's screen, and it answers where you asked. Change it here, in the menu bar, or say \"Pointer Assistant, work on the Air\".")
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            Text("Bots, group chats, chats, private messages between bots, Clicky's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
+            Text("Bots, group chats, chats, private messages between bots, Pointer Assistant's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }

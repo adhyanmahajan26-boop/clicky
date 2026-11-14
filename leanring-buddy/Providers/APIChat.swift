@@ -185,7 +185,7 @@ enum APIChat {
             answer += "\n\n_(The connection ended early, so this may be cut off.)_"
         }
         if outcome.stoppedAtRoundCap {
-            answer += "\n\n_(Theo stopped the tools after \(APIChatToolWire.maximumToolRounds) rounds, so this answer works from what they found so far.)_"
+            answer += "\n\n_(Vello stopped the tools after \(APIChatToolWire.maximumToolRounds) rounds, so this answer works from what they found so far.)_"
         }
         if let wordsOnlyNote { answer += "\n\n" + wordsOnlyNote }
         let finalAnswer = answer

@@ -188,7 +188,7 @@ extension BotsStore {
         let chats = await HarnessChats.list(harness: harness, folder: folder)
         let label = HarnessCatalog.label(harness)
         if chats.isEmpty, harness == "t3", !HarnessChats.isT3ServerUp {
-            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If \(BotPrompts.ownerName) names one by its title, write it in a \"Continue:\" line anyway, and Theo opens T3 Code to find it."
+            return "T3 Code isn't open on this Mac, so its threads in \(folder) can't be listed right now. If \(BotPrompts.ownerName) names one by its title, write it in a \"Continue:\" line anyway, and Vello opens T3 Code to find it."
         }
         guard !chats.isEmpty else { return "There are no earlier \(label) chats in \(folder), so a run there starts a new one. Say so if \(BotPrompts.ownerName) asked to continue one." }
         let lines = chats.prefix(8).map { "- \($0.title) (\(HarnessChatText.age(of: $0.updatedAt)) ago): \($0.id)" }.joined(separator: "\n")

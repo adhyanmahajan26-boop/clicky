@@ -362,8 +362,8 @@ public enum ActionTierClassifier {
         if let target, target.isOwnApplication, decision.tier < .confirm {
             switch step {
             case .click, .type, .key:
-                return ActionTierDecision(.confirm, "\(step.shortDescription) in Theo's own window waits for your yes",
-                                          confirmQuestion: "Do that in Theo's window? Say yes.")
+                return ActionTierDecision(.confirm, "\(step.shortDescription) in Vello's own window waits for your yes",
+                                          confirmQuestion: "Do that in Vello's window? Say yes.")
             default: break
             }
         }
@@ -463,7 +463,7 @@ public enum ActionTierClassifier {
             default: return ActionTierDecision(.refused, "couldn't tell what it would act on")
             }
         }
-        if target.isOwnApplication && !target.isOwnMainWindow { return ActionTierDecision(.refused, "that's Clicky's own window") }
+        if target.isOwnApplication && !target.isOwnMainWindow { return ActionTierDecision(.refused, "that's Pointer Assistant's own window") }
         if isSecurityApplication(target) { return ActionTierDecision(.refused, "keychain, password and security prompts are off limits") }
         if isProtectedFromActions(target, leavesSafariAlone: context.leavesSafariAlone)
             && !context.ownerNamedSafariOrNetflix && !context.safariFollowUpCovers(target) {
@@ -488,7 +488,7 @@ public enum ActionTierClassifier {
             if target.isSecureEventInputOn { return ActionTierDecision(.refused, "a password prompt has secure input on") }
             // Claude Code's prompt in a terminal is a chat box; anything else there is a shell.
             if isTerminal(target) && target.terminalForeground != .claudeCode {
-                return ActionTierDecision(.refused, "Clicky doesn't type into a shell — that goes through code mode", spokenLine: shellRefusalLine)
+                return ActionTierDecision(.refused, "Pointer Assistant doesn't type into a shell — that goes through code mode", spokenLine: shellRefusalLine)
             }
             if isPasswordLabelled(target) { return ActionTierDecision(.refused, "that looks like a password field") }
         default:

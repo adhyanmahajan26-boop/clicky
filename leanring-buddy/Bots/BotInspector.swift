@@ -45,7 +45,7 @@ struct BotInspector: View {
                     InspectorSection("Screen", hint: StudioController.isAvailable ? "Where this bot's screen jobs and its desk go: its own screen first, then the shared pool. A coder's terminal stays on your monitors." : "The VM screens aren't on this Mac.") {
                         if StudioController.isAvailable { BotScreenPicker(botID: bot.id).labelsHidden() }
                     }
-                    InspectorSection("Instructions", hint: "Your words come first. Every bot also learns Theo's harness guide: how to message, hand over, schedule and start code.") {
+                    InspectorSection("Instructions", hint: "Your words come first. Every bot also learns Vello's harness guide: how to message, hand over, schedule and start code.") {
                         TextEditor(text: Binding(get: { draft?.instructions ?? "" }, set: { draft?.instructions = $0; saveSoon() }))
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)
                             .padding(8).frame(minHeight: 130)
@@ -107,7 +107,7 @@ struct BotInspector: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(draft?.owner != nil
-                 ? "Its chat goes too, and a hidden helper does this job for Clicky from now on. Turn it off or hide it instead to keep it."
+                 ? "Its chat goes too, and a hidden helper does this job for Pointer Assistant from now on. Turn it off or hide it instead to keep it."
                  : "Its chat and routines go too. Turn it off or hide it instead to keep it.")
         }
     }
@@ -254,8 +254,8 @@ struct ClickyInspector: View {
                 HStack(spacing: 12) {
                     LookButton(bot: Binding(get: { store.clickyBot }, set: { if let look = $0.look { store.setLook(look, for: BotsStore.clickyID) } }))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Clicky").font(.system(size: 17, weight: .semibold))
-                        Text("Your screen companion. Sees your screens, points, draws boards, researches and acts on Theo's own screen.")
+                        Text("Pointer Assistant").font(.system(size: 17, weight: .semibold))
+                        Text("Your screen companion. Sees your screens, points, draws boards, researches and acts on Vello's own screen.")
                             .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary)
                     }
                 }
@@ -280,7 +280,7 @@ struct ClickyInspector: View {
                     }))
                     Text("Hidden helpers").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                     BrainModelPicker(title: "Hidden helpers", setting: Binding(get: { helper }, set: { helper = $0; ClickyModels.helper = $0 }))
-                    Button("All of Clicky's settings") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
+                    Button("All of Pointer Assistant's settings") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
                 }
                 InspectorSection("Cursor", hint: "One click changes it everywhere.") {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
@@ -299,7 +299,7 @@ struct ClickyInspector: View {
                     }
                 }
                 InspectorSection("Voice") {
-                    Button("Choose Clicky's voice") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
+                    Button("Choose Pointer Assistant's voice") { TheoSettingsWindowController.show(section: .clicky) }.buttonStyle(.theo(.ghost, .small))
                 }
                 InspectorSection("Behaviour") {
                     toggle("Listens for \"hey \(ClickySettings.assistantName)\"", $listens) { value in
@@ -321,7 +321,7 @@ struct ClickyInspector: View {
 
     /// The bots Clicky runs, and what Memory has kept.
     private var team: some View {
-        InspectorSection("Team", hint: "Clicky hands these bots its background jobs. Rename or remove any of them; a hidden helper does a removed bot's job.") {
+        InspectorSection("Team", hint: "Pointer Assistant hands these bots its background jobs. Rename or remove any of them; a hidden helper does a removed bot's job.") {
             ForEach(store.clickyTeam) { bot in
                 Button { BotsSelection.shared.pane = .bot(bot.id) } label: {
                     HStack(spacing: 10) {
@@ -340,7 +340,7 @@ struct ClickyInspector: View {
             if store.clickyTeam.isEmpty {
                 Text("Hidden helpers do the team's jobs now.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
             }
-            TextField("Search what you've said to Clicky", text: $memoryQuery)
+            TextField("Search what you've said to Pointer Assistant", text: $memoryQuery)
                 .textFieldStyle(.plain).font(.system(size: 12.5))
                 .padding(.horizontal, 10).frame(height: 30)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Colors.hover))

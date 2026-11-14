@@ -105,7 +105,7 @@ public enum BrainCLI {
 
         follow the instructions above exactly (they define your output format, tags included). \
         the screenshots attached to this message are the user's screens, in order (screen1, screen2, …). \
-        you have no tools in this run and must not try to use any: Clicky itself opens apps, searches, clicks, types and reads \
+        you have no tools in this run and must not try to use any: Pointer Assistant itself opens apps, searches, clicks, types and reads \
         articles when your reply contains the tags and blocks described above, so answer only with that reply text.
 
         \(userText)

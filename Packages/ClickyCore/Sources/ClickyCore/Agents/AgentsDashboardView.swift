@@ -212,7 +212,7 @@ public struct AgentsDashboardView: View {
                 Text("No agents yet")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(AgentsDashboardColors.secondaryText)
-                Text("Ask Clicky something and its brain, helpers and code tasks show up here.")
+                Text("Ask Pointer Assistant something and its brain, helpers and code tasks show up here.")
                     .font(.system(size: 12))
                     .foregroundColor(AgentsDashboardColors.tertiaryText)
                     .multilineTextAlignment(.center)

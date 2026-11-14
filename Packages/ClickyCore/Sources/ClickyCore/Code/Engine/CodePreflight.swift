@@ -173,7 +173,7 @@ public struct CodePreflight: Sendable {
                            remedy: "Remove them from your managed Claude Code settings or update Claude Code, " + CodePreflightReport.recheckHint, flagReport: helpOnlyReport)
         }
         guard probeResult.pluginNames.isEmpty else {
-            return .failed("Claude Code still loads plugins (\(Self.spokenList(probeResult.pluginNames))) even when Clicky switches them off for its coding agent",
+            return .failed("Claude Code still loads plugins (\(Self.spokenList(probeResult.pluginNames))) even when Pointer Assistant switches them off for its coding agent",
                            remedy: "Update Claude Code with claude update, or uninstall those plugins, " + CodePreflightReport.recheckHint, flagReport: helpOnlyReport)
         }
 

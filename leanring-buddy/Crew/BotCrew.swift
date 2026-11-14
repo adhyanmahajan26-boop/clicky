@@ -61,7 +61,7 @@ extension BotsStore {
         // A signed-out coding agent is something the owner does, not a failure: its card asks for the sign-in (needs you).
         let signIn = BotFailureWords.signedOutHarness(in: reason)
         // A failure that happens in the chat the owner is looking at has been seen.
-        let watching = NSApp.windows.contains { $0.isVisible && !$0.isMiniaturized && $0.title == "Theo" }
+        let watching = NSApp.windows.contains { $0.isVisible && !$0.isMiniaturized && $0.title == "Vello" }
         guard FailureTriage.marksUnseen(botID: botID, viewing: viewing, isWatching: watching, isSignIn: signIn != nil) else {
             if let signIn, viewing != botID || !watching { BotAlerts.shared.needs(bot: bot, line: "Sign in to \(signIn.label)") }
             return

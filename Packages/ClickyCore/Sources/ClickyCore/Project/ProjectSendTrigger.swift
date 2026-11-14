@@ -34,7 +34,7 @@ public enum ProjectSendTrigger {
 
     /// The prompt line: Claude can't send anything itself, so it tells the
     /// owner the words that do.
-    public static let promptLine = "project hand-off: you can't send anything to any project or project coordinator yourself. \"send this to my project\" followed by the task reaches only the Clicky project (this Claude Code project); if the user asks you to hand a task to it but didn't say the phrase, tell them to say \"send this to my project\" followed by the task. for a different project, tell them to say \"send this to the <project name> project\" followed by the task: clicky then finds that project on their mac and works on it in code mode, or offers to put the message into the Claude app for them to send."
+    public static let promptLine = "project hand-off: you can't send anything to any project or project coordinator yourself. \"send this to my project\" followed by the task reaches only the Pointer Assistant project (this Claude Code project); if the user asks you to hand a task to it but didn't say the phrase, tell them to say \"send this to my project\" followed by the task. for a different project, tell them to say \"send this to the <project name> project\" followed by the task: clicky then finds that project on their mac and works on it in code mode, or offers to put the message into the Claude app for them to send."
 
     /// Phrases anywhere in the transcript.
     private static let phrasePatterns: [String] = [

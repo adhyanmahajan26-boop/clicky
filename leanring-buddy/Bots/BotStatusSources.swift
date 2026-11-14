@@ -161,7 +161,7 @@ final class ConnectorHealth: ObservableObject {
                 hubApps = checked
                 hubProblem = nil
             } else {
-                hubProblem = "Theo's connector helper didn't answer. Details are in ~/Library/Logs/Clicky/connectors.log."
+                hubProblem = "Vello's connector helper didn't answer. Details are in ~/Library/Logs/Clicky/connectors.log."
             }
             // The engines' own listings still tell Clicky's tools' and Chrome's states, and the servers that aren't in Theo yet.
             claude = ConnectorListing.parseClaude(claudeText)
@@ -398,7 +398,7 @@ final class ConnectorHealth: ObservableObject {
                     return error.localizedDescription
                 }
             }
-            if record.takesPastedToken { return "\(record.name) takes a token: paste it in Theo's Connectors page." }
+            if record.takesPastedToken { return "\(record.name) takes a token: paste it in Vello's Connectors page." }
             if !record.isClaudeAccount { return "\(record.name) needs no sign-in. Try again from Connectors." }
         }
         let onOpenCode = bot.map { $0.provider == "opencode" } ?? false
@@ -410,7 +410,7 @@ final class ConnectorHealth: ObservableObject {
             return await BotConnectors.addToOpenCode(connector)
         }
         BotConnectors.openClaudeConnectors()
-        return "claude.ai's connector page is open. Sign in to \(connector.name) there; Theo checks again when you come back."
+        return "claude.ai's connector page is open. Sign in to \(connector.name) there; Vello checks again when you come back."
     }
 }
 

@@ -483,7 +483,7 @@ final class ActionExecutor {
                         ClaudiaScreen.moveFrontWindow(of: runningApplication)
                     }
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
-                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
+                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Vello's screen"), nil)
                 }
                 guard await BackgroundInput.bringToFront(runningApplication) else {
                     return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
@@ -527,7 +527,7 @@ final class ActionExecutor {
                         frontmostBefore.restore(ifStolenBy: browsers.map(\.processIdentifier).filter { $0 != browser.processIdentifier } + [browser.processIdentifier])
                     }
                     BrowserTabTracker.shared.noteOpenedTab(in: browser, expectedHost: url.host)
-                    return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Theo's screen"), nil)
+                    return (.done(detail: "in a new \(target.facts?.applicationName ?? "browser") window on Vello's screen"), nil)
                 }
             }
             do {
@@ -633,7 +633,7 @@ final class ActionExecutor {
                     AXUIElementSetAttributeValue(windowElement, kAXMainAttribute as CFString, kCFBooleanTrue)
                     ClaudiaScreen.move(window: windowElement, of: target.runningApplication)
                     if let processIdentifier = target.processIdentifier { frontmostBefore.restore(ifStolenBy: [processIdentifier]) }
-                    return (.done(detail: "raised on Theo's screen"), nil)
+                    return (.done(detail: "raised on Vello's screen"), nil)
                 }
                 if let runningApplication = target.runningApplication, !(await BackgroundInput.bringToFront(runningApplication)) {
                     return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
@@ -650,7 +650,7 @@ final class ActionExecutor {
                         ClaudiaScreen.moveFrontWindow(of: runningApplication)
                     }
                     frontmostBefore.restore(ifStolenBy: [runningApplication.processIdentifier])
-                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Theo's screen"), nil)
+                    return (.done(detail: isOwnersApp ? "it's already open in front of you" : "showed it on Vello's screen"), nil)
                 }
                 guard await BackgroundInput.bringToFront(runningApplication) else {
                     return (.failed(reason: "macOS didn't bring \(runningApplication.localizedName ?? "it") to the front"), nil)
@@ -720,7 +720,7 @@ final class ActionExecutor {
     /// Theo's own cursor flies to the target; the click is AXPress, then a press on whatever supports one at that
     /// point, then a click posted to the app's process. The real pointer and keyboard focus are never touched.
     private func backgroundClick(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
-        if target.processIdentifier == getpid() { return .failed(reason: "Theo's own window can't be pressed in the background") }
+        if target.processIdentifier == getpid() { return .failed(reason: "Vello's own window can't be pressed in the background") }
         let frame = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
         let point = frame.flatMap { $0.width > 0 && $0.height > 0 ? CGPoint(x: $0.midX, y: $0.midY) : nil }
         if let point {

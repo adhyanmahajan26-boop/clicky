@@ -29,7 +29,7 @@ struct TodayView: View {
                         Button { TheoCallController.start() } label: {
                             HStack(spacing: 7) {
                                 Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
-                                Text("Call \(store.primary?.name ?? "Theo")").font(.system(size: 13, weight: .semibold))
+                                Text("Call \(store.primary?.name ?? "Vello")").font(.system(size: 13, weight: .semibold))
                             }
                             .foregroundColor(DS.Colors.textOnAccent).padding(.horizontal, 14).frame(height: 34)
                             .background(Capsule().fill(DS.Colors.accent))
@@ -37,7 +37,7 @@ struct TodayView: View {
                         }
                         .buttonStyle(.plain).help("Start a voice call")
                     }
-                    Text(products.isOn(.clicky) ? "Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Clicky, or open a bot on the left." : "Open a bot on the left. Clicky is off; turn it on in Settings \u{203A} Products.")
+                    Text(products.isOn(.clicky) ? "Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Pointer Assistant, or open a bot on the left." : "Open a bot on the left. Pointer Assistant is off; turn it on in Settings \u{203A} Products.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
                 // What needs you and what failed come first, as cards you can answer right here.
@@ -76,13 +76,13 @@ struct TodayView: View {
                 }
                 section("Companion") {
                     if products.isOn(.clicky) {
-                        row(icon: AnyView(ClickyAvatar(size: 28)), title: "Clicky",
+                        row(icon: AnyView(ClickyAvatar(size: 28)), title: "Pointer Assistant",
                             detail: "Screen companion on \(NativeBot.label(for: ClickyModels.main))",
                             trailing: (CompanionManager.current?.isClickyCursorEnabled ?? true) ? "Awake" : "Asleep") {
                             selection.pane = .clicky
                         }
                     } else {
-                        row(icon: AnyView(IconTile(symbol: TheoProduct.clicky.symbol, colors: TheoProduct.clicky.colors, size: 28)), title: "Clicky",
+                        row(icon: AnyView(IconTile(symbol: TheoProduct.clicky.symbol, colors: TheoProduct.clicky.colors, size: 28)), title: "Pointer Assistant",
                             detail: "Off. Watch its demo and turn it on in Products.", trailing: "Off") {
                             selection.openSettings(.products)
                         }
@@ -104,7 +104,7 @@ struct TodayView: View {
                 section("Builds") {
                     let runs = store.t3Runs.suffix(3).reversed()
                     if runs.isEmpty {
-                        empty("Ask Theo to build something and the coding run shows here with its result.")
+                        empty("Ask Vello to build something and the coding run shows here with its result.")
                     }
                     ForEach(Array(runs)) { run in
                         row(icon: AnyView(symbolTile(run.phase == "done" ? "checkmark" : run.phase == "failed" ? "exclamationmark" : "hammer")),

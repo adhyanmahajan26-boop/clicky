@@ -263,7 +263,7 @@ struct BotCodeCard: View {
         switch language.lowercased() {
         case "prompt": return "Prompt for \(HarnessCatalog.label(HarnessPrefs.codingTarget))"
         case "followup": return "Change for the coding agent"
-        case "routine": return "Schedule for Theo to run"
+        case "routine": return "Schedule for Vello to run"
         case "": return "Code"
         default: return language
         }
@@ -384,7 +384,7 @@ struct T3ResultCard: View {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: tests.hasPrefix("passed") ? "checkmark.circle.fill" : tests.hasPrefix("failed") ? "xmark.circle.fill" : "questionmark.circle")
                         .font(.system(size: 12)).foregroundColor(tests.hasPrefix("passed") ? DS.Colors.success : tests.hasPrefix("failed") ? DS.Colors.destructiveText : DS.Colors.textTertiary)
-                    Text("Tests (Theo's own run): \(tests)").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Tests (Vello's own run): \(tests)").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if !isStopped, run.phase != "failed", run.noRemote == true, let branch = run.branch {

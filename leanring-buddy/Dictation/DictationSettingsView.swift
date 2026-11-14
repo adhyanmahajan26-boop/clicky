@@ -124,7 +124,7 @@ struct DictationSettingsContent: View {
             TheoSection(title: "Your words", hint: "Names and terms it should always get right. To fix something it keeps mishearing, write it as heard = written.") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        TextField("Sarvam, or theo klicky = Theo Clicky", text: $newWord, onCommit: addWord).theoField()
+                        TextField("Sarvam, or vello = Vello", text: $newWord, onCommit: addWord).theoField()
                         Button("Add", action: addWord).buttonStyle(.theoSecondary).disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     if !lines.isEmpty {

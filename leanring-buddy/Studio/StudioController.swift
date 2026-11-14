@@ -237,7 +237,7 @@ final class StudioController: ObservableObject {
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard let self else { return }
             let live = self.live
-            self.measuredAfterApply = "Measured after Apply: Theo \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
+            self.measuredAfterApply = "Measured after Apply: Vello \(Int(live.cpuPercent))% CPU, \(Int(live.memoryMB)) MB memory, \(Int(live.measuredFPS)) fps. Estimated for the screens: \(StudioScreenCost.total(self.config.screens).label). macOS doesn't report graphics memory per display, so that part stays an estimate."
         }
     }
 

@@ -20,8 +20,8 @@ import Foundation
 enum ClaudiaT3Integration {
     /// The program agents start for Theo's tools. The test profile never points them at a test build.
     static var executablePath: String {
-        if TheoProfile.isTest { return "/Applications/Theo.app/Contents/MacOS/Clicky" }
-        return Bundle.main.executablePath ?? "/Applications/Theo.app/Contents/MacOS/Clicky"
+        if TheoProfile.isTest { return "/Applications/Vello.app/Contents/MacOS/Clicky" }
+        return Bundle.main.executablePath ?? "/Applications/Vello.app/Contents/MacOS/Clicky"
     }
 
     struct Outcome {

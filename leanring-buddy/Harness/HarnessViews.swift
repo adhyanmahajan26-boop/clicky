@@ -24,7 +24,7 @@ struct CodingSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Install them, sign in, or use your own key. Theo runs each one in its own terminal.").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
+                    Text("Install them, sign in, or use your own key. Vello runs each one in its own terminal.").font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                     Spacer()
                     Button { center.refresh(force: true) } label: {
                         Label(center.isRefreshing ? "Checking…" : "Re-check all", systemImage: "arrow.clockwise")
@@ -39,7 +39,7 @@ struct CodingSettingsView: View {
                     })
                 }
             }
-            TheoSection(title: "Defaults", hint: "T3 Code tracks a build in its own app. Any other harness runs in a live terminal inside Theo. Every bot can pick its own engine in its settings.") {
+            TheoSection(title: "Defaults", hint: "T3 Code tracks a build in its own app. Any other harness runs in a live terminal inside Vello. Every bot can pick its own engine in its settings.") {
                 defaultRow(title: "Builds go to", harnesses: HarnessCatalog.codingTargets, selection: Binding(get: { center.codingTarget }, set: { center.codingTarget = $0 }),
                            model: Binding(get: { center.codingModel ?? "" }, set: { center.codingModel = $0.isEmpty ? nil : $0 }),
                            effort: Binding(get: { center.codingEffort ?? "" }, set: { center.codingEffort = $0.isEmpty ? nil : $0 }))
@@ -249,7 +249,7 @@ struct HarnessCard: View {
         if !status.installed && !isChecking {
             Button { openTerminal(.install(info)) } label: { Label("Install", systemImage: "arrow.down.circle") }.buttonStyle(.theo(.primary, .small))
         } else if info.id == "t3" {
-            Button { showsConnect.toggle() } label: { Label(showsConnect ? "Hide" : "Connect Theo", systemImage: "link") }
+            Button { showsConnect.toggle() } label: { Label(showsConnect ? "Hide" : "Connect Vello", systemImage: "link") }
                 .buttonStyle(.theo(showsConnect ? .ghost : .secondary, .small))
         } else if status.installed && status.loggedIn != true && info.id != "opencode" {
             Button { openTerminal(.signIn(info)) } label: { Label("Sign in", systemImage: "person.crop.circle.badge.checkmark") }.buttonStyle(.theo(.primary, .small))
