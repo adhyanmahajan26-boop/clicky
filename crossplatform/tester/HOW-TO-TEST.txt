@@ -1,7 +1,7 @@
 Testing Theo on your Windows PC
 ===============================
 
-Thanks for helping! This takes about 15 minutes. You don't need any account, and you
+Thanks for helping! This takes about 25 minutes. You don't need any account, and you
 don't need to be an administrator.
 
 What Theo is: a desktop app where you make small AI "bots" that each have a job and a
@@ -45,7 +45,14 @@ the window, or quitting from the tray icon. Do that, then come back to the blue
 window and press Enter.
 
 When Theo's setup reaches "Pick a brain": if you don't have an AI key or AI app,
-press "Skip for now". That's part of the test.
+press "Skip for now". That's part of the test. At "Pick products", please turn on
+all three: Theo, Clicky and Dictation.
+
+Then it shows you what's new in this build, one thing at a time: teams in the
+sidebar, editing and deleting a bot, a group chat, a routine, checking for
+updates, and (if you have a microphone) Dictation: hold Ctrl + the Windows key
+in Notepad, talk, and let go. If you gave Theo a brain, it also asks you to try
+Clicky: hold Ctrl + Alt, ask a question about your screen, and let go.
 
 The last step offers to uninstall Theo. Saying yes is helpful, because it checks
 that Theo removes itself cleanly.
