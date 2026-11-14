@@ -417,8 +417,9 @@ if (-not $Unattended) {
 $botsAfter = Get-BotCount
 if ($null -ne $botsAfter) {
   if ($Unattended) { Record "Bots list readable" "pass" "$botsAfter bots" }
-  elseif ($botsAfter -gt 0) { Record "A bot was made" "pass" "$botsAfter bots" }
-  else { Record "A bot was made" "fail" "Theo has no bots" }
+  elseif ($null -ne $botsBefore -and $botsAfter -gt $botsBefore) { Record "A bot was made" "pass" "$botsBefore bots before setup, $botsAfter after" }
+  elseif ($null -eq $botsBefore -and $botsAfter -gt 0) { Record "A bot was made" "pass" "$botsAfter bots" }
+  else { Record "A bot was made" "info" "no new bot ($botsAfter bots); the tester may have skipped that step" }
 } else { Record "Bots list readable" "fail" "no answer from Theo" }
 [void](Save-TheoShot "2-after-setup")
 
