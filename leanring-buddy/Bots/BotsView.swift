@@ -1155,8 +1155,7 @@ struct BotChatScreen: View {
                         Button("@code (straight to the coding agent)") { draft += "@code " }
                     }
                 if let bot {
-                    ModelChip(store: store, bot: bot)
-                    EffortChip(store: store, bot: bot)
+                    ModelSelectorChip(store: store, bot: bot)
                 }
                 Spacer()
                 if dictationEnabled && products.isOn(.dictation) {
@@ -1254,81 +1253,6 @@ struct BotChatScreen: View {
         panel.prompt = "Attach"
         guard panel.runModal() == .OK else { return }
         attachments += panel.urls.filter { !attachments.contains($0) }
-    }
-}
-
-/// The composer's model: click for this engine's models, one click from the rest of the bot's settings.
-struct ModelChip: View {
-    @ObservedObject var store: BotsStore
-    let bot: NativeBot
-    @State private var open = false
-
-    var body: some View {
-        Button { open.toggle() } label: {
-            Text(bot.modelLabel.replacingOccurrences(of: "Claude ", with: "")).font(.system(size: 12)).lineLimit(1)
-                .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 9).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.selected))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).help("Change the model")
-        .popover(isPresented: $open, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 1) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 1) {
-                        ForEach(BotModels.list(for: bot), id: \.self) { model in
-                            Button {
-                                var edited = bot
-                                edited.model = model
-                                store.save(edited)
-                                open = false
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).frame(width: 12).opacity(bot.model == model ? 1 : 0)
-                                    Text(BotModels.label(model, on: bot.provider)).font(.system(size: 13)).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .foregroundColor(DS.Colors.textPrimary).padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
-                            }
-                            .buttonStyle(SidebarButtonStyle(isSelected: false))
-                        }
-                    }
-                }
-                .frame(maxHeight: 280)
-                RowDivider().padding(.vertical, 4)
-                Button {
-                    open = false
-                    NotificationCenter.default.post(name: .theoShowBotSettings, object: nil)
-                } label: {
-                    Text("Engine, effort and more…").font(.system(size: 13)).foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
-                }
-                .buttonStyle(SidebarButtonStyle(isSelected: false))
-            }
-            .padding(6).frame(width: 260)
-        }
-    }
-}
-
-/// How hard the bot thinks: Auto until someone picks.
-struct EffortChip: View {
-    @ObservedObject var store: BotsStore
-    let bot: NativeBot
-
-    var body: some View {
-        let levels = HarnessCatalog.info(bot.provider)?.efforts ?? []
-        Text(bot.effort?.capitalized ?? "Auto").font(.system(size: 12)).lineLimit(1)
-            .foregroundColor(DS.Colors.textSecondary).padding(.horizontal, 9).frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.selected))
-            .coverMenu(help: "How hard it thinks") {
-                Button("Auto") { set(nil) }
-                ForEach(levels, id: \.self) { level in Button(level.capitalized) { set(level) } }
-            }
-    }
-
-    private func set(_ effort: String?) {
-        var edited = bot
-        edited.effort = effort
-        store.save(edited)
     }
 }
 
@@ -2224,28 +2148,16 @@ struct BotModelSettings: View {
     var compact = false
     @ObservedObject private var catalog = BrainCatalog.shared
 
-    private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
-    private static let openCodeEfforts = ["minimal", "low", "medium", "high", "max"]
-
     private var isClaude: Bool { bot.provider == "claude" }
 
     static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
-    private static let grokEfforts = ["low", "medium", "high"]
 
     @ObservedObject private var harnesses = HarnessCenter.shared
     @ObservedObject private var keys = ProviderKeys.shared
 
     private var models: [String] { BotModels.list(for: bot) }
 
-    private var efforts: [String] {
-        if bot.provider.hasPrefix("api:") { return [] }
-        switch bot.provider {
-        case "claude": return Self.claudeEfforts
-        case "grok": return Self.grokEfforts
-        case "opencode": return Self.openCodeEfforts
-        default: return harnesses.efforts(for: bot.provider, model: bot.model)
-        }
-    }
+    private var efforts: [String] { BotModels.efforts(for: bot.provider, model: bot.model) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2298,7 +2210,12 @@ struct BotModelSettings: View {
                     TextField("Model id", text: Binding(get: { bot.model }, set: { bot.model = $0; commit() }))
                         .textFieldStyle(.roundedBorder).frame(width: compact ? nil : 260)
                 } else {
-                    Picker("Model", selection: Binding(get: { bot.model }, set: { bot.model = $0; commit() })) {
+                    Picker("Model", selection: Binding(get: { bot.model }, set: { model in
+                        bot.model = model
+                        // A level the new model doesn't take goes back to the default.
+                        bot.effort = ModelEffort.carriedOver(effort: bot.effort, toLevels: efforts)
+                        commit()
+                    })) {
                         ForEach(models, id: \.self) { model in
                             Text(BotModels.label(model, on: bot.provider)).tag(model)
                         }
@@ -2306,12 +2223,15 @@ struct BotModelSettings: View {
                     .labelsHidden().frame(maxWidth: compact ? .infinity : 260)
                 }
             }
-            row("Effort") {
-                Picker("Effort", selection: Binding(get: { bot.effort ?? "" }, set: { bot.effort = $0.isEmpty ? nil : $0; commit() })) {
-                    Text("Default").tag("")
-                    ForEach(efforts, id: \.self) { Text($0.capitalized).tag($0) }
+            if !efforts.isEmpty {
+                row("Effort") {
+                    Picker("Effort", selection: Binding(get: { ModelEffort.carriedOver(effort: bot.effort, toLevels: efforts) ?? "" },
+                                                        set: { bot.effort = $0.isEmpty ? nil : $0; commit() })) {
+                        Text("Auto").tag("")
+                        ForEach(efforts, id: \.self) { Text(ModelEffort.title(for: $0)).tag($0) }
+                    }
+                    .labelsHidden().frame(maxWidth: compact ? .infinity : 160)
                 }
-                .labelsHidden().frame(maxWidth: compact ? .infinity : 160)
             }
             row("Thinking") {
                 Spacer(minLength: 0)
