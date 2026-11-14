@@ -15,6 +15,7 @@
 //! empty = the first that works here), `clicky.model`, `clicky.voice`, `clicky.rate` (-10 to 10), `clicky.shortcut`
 //! (`ctrl+alt`), `clicky.spark` (`always` | `talking`).
 
+pub mod desktop;
 pub mod prompt;
 pub mod screens;
 pub mod speech;
@@ -592,6 +593,22 @@ pub async fn state(h: &Harness) -> Value {
     })
 }
 
+/// The desktop app's side of Clicky (the overlay, the voice, push-to-talk), when this engine runs inside the app.
+pub trait Desktop: Send + Sync {
+    /// Runs a whole turn as if `transcript` had been said: screenshots, the spark, the bubble and the voice.
+    fn ask(&self, transcript: String) -> Value;
+    /// Escape: speech stops, the answer is dropped, marks go.
+    fn stop(&self) -> Value;
+    /// What the overlay is doing.
+    fn status(&self) -> Value;
+}
+
+static DESKTOP: once_cell::sync::OnceCell<Arc<dyn Desktop>> = once_cell::sync::OnceCell::new();
+
+pub fn set_desktop(desktop: Arc<dyn Desktop>) {
+    let _ = DESKTOP.set(desktop);
+}
+
 fn s(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(|x| x.as_str()).map(str::to_string)
 }
@@ -603,10 +620,29 @@ fn s(v: &Value, k: &str) -> Option<String> {
 ///   answer; `fresh` forgets earlier exchanges first.
 /// - `clickyCapture {save?}`: a real screenshot of every monitor (Windows), optionally saved as JPEGs in a folder.
 /// - `clickyVoices`, `clickySpeak {text, voice?, toFile?}`
+/// - `clickyAsk {text}`: in the app, a whole turn with the real screen, spark and voice (Settings' "Try it"); in theod, the
+///   turn with the real screen, answered here. `clickyStop`: Escape. `clickyOverlay`: what the app's overlay is doing.
 pub async fn control(h: &Arc<Harness>, name: &str, cmd: &Value) -> Value {
     use crate::control::{err, ok};
     match name {
-        "clickyState" => ok(state(h).await),
+        "clickyState" => {
+            let mut result = state(h).await;
+            result["desktop"] = DESKTOP.get().map(|desktop| desktop.status()).unwrap_or(Value::Null);
+            ok(result)
+        }
+        "clickyAsk" => {
+            let Some(text) = s(cmd, "text").filter(|t| !t.trim().is_empty()) else { return err("Needs text.") };
+            if let Some(desktop) = DESKTOP.get() {
+                return ok(desktop.ask(text));
+            }
+            let screens = if screens::can_capture() { tokio::task::spawn_blocking(screens::capture_all).await.ok().and_then(Result::ok).unwrap_or_default() } else { vec![] };
+            match turn(h, &text, &screens, Cancel::new(), Arc::new(|_: &str| {})).await {
+                Ok(plan) => ok(plan),
+                Err(problem) => err(&problem),
+            }
+        }
+        "clickyStop" => ok(DESKTOP.get().map(|desktop| desktop.stop()).unwrap_or_else(|| json!({"stopped": false}))),
+        "clickyOverlay" => ok(DESKTOP.get().map(|desktop| desktop.status()).unwrap_or(Value::Null)),
         "clickyTest" => {
             let Some(text) = s(cmd, "text").filter(|t| !t.trim().is_empty()) else { return err("Needs text.") };
             if cmd["fresh"].as_bool() == Some(true) {
