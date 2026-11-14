@@ -1205,8 +1205,8 @@ def t24():
         "run": r, "pushed_file": text, "draft_prs": len(pr), "own_worktree_left_main_checkout_alone": main_clean}
 
 
-@test("T24b", "A repo with no remote still gets its own branch and worktree; nothing is pushed and main is untouched", "coding")
-def t24b():
+@test("T24e", "A repo with no remote still gets its own branch and worktree; nothing is pushed and main is untouched", "coding")
+def t24e():
     T.fake("ok"); n = T.nonce(); title = "Local " + n
     work = T.ROOT / ("local-only-" + n)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
