@@ -28,7 +28,12 @@ Each line is a step in `tests/windows_pc.py`, run on both Windows versions.
 - Closing the window keeps Theo running in the tray. A bot that needs you raises a Windows notification (logged as sent by
   Windows' notification API).
 - Opening Theo again while it runs brings the same window back instead of starting a second copy.
-- Quit leaves nothing running. Opening again keeps bots and chats, and setup isn't shown again.
+- Setup's steps are Welcome (your name), Pick a brain, Pick what you want (Theo, Clicky, Dictation), then Theo's coding
+  check and first bot when Theo is on, then done.
+- Quit leaves nothing running. Opening again keeps bots and chats. Setup comes back only while no brain can think (the Mac's
+  rule), on its brain step with Not now.
+- The Update row is at the bottom of the sidebar. Settings › Updates says which build this is and where builds come from,
+  and Settings › Products has the three switches.
 - Uninstall removes the app, the Start menu shortcut and the sign-in entry, and keeps your bots and chats.
 - The .msi installs for everyone, opens, finds the same data and uninstalls.
 - Installing the new build over the last build from `main` replaces the app and keeps bots and chats.
@@ -72,7 +77,14 @@ About 30 minutes on a Windows 10 or 11 PC:
 6. **Other brains.** In setup, paste a real API key (OpenAI or Anthropic) and check the first bot answers with it. Install
    and sign in one of Codex, Cursor Agent, Gemini CLI or Grok from Settings › Brains, put a bot on it and give it an app.
 7. **Display.** Check a 150% or 200% scaled screen and dark mode look right.
-8. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+8. **In-app update.** Install an older build with the per-user setup.exe. If the releases repo is private, open Settings ›
+   Updates and save a GitHub token that can read it (the row then says it's saved in the Credential Manager, and the
+   token is never shown again). Press Check for updates: the Update row at the bottom of the sidebar says "Build N". Press it (or Update to build N). Theo should close,
+   update with no installer window and no admin prompt, and open again by itself on the new build. Settings › Updates
+   should then say "Updated to build N", and your bots and chats should still be there.
+9. **Products.** In Settings › Products, turn Theo off. The bots, groups, Routines and Usage should leave the sidebar,
+   and Home should show the products page. Turn it back on and everything should come back.
+10. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 9. **Routines.** On Routines press New routine, pick a bot, write what it does, pick Weekly, a day and a time, and Add
    routine. Check the card says "Every <day> at <time> · next in …". Press Run now, then open "Last run …" to see the run.

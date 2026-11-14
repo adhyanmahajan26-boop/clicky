@@ -46,12 +46,33 @@ pub fn home() -> PathBuf {
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub root: PathBuf,
+    /// The owner's own projects folder (`code.projectsFolder`, Settings › Coding runs), when they picked one.
+    projects_folder: std::sync::Arc<std::sync::RwLock<Option<PathBuf>>>,
 }
+
+/// Settings key: the folder coding runs make new projects in. Unset: `Projects` in Theo's data folder.
+pub const PROJECTS_FOLDER_SETTING: &str = "code.projectsFolder";
 
 impl Paths {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        // Read once here, before anything asks where projects go; Settings › Coding runs changes it with `set_projects_folder`.
+        let chosen = std::fs::read(root.join("settings.json")).ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+            .and_then(|values| values.get(PROJECTS_FOLDER_SETTING).and_then(|v| v.as_str()).map(PathBuf::from))
+            .filter(|folder| check_projects_folder(folder, &root).is_ok());
+        Self { root, projects_folder: std::sync::Arc::new(std::sync::RwLock::new(chosen)) }
     }
+
+    /// The default projects folder, inside Theo's data folder.
+    pub fn default_projects_dir(&self) -> PathBuf { self.root.join("Projects") }
+
+    /// The owner's choice of projects folder, or None for the default.
+    pub fn set_projects_folder(&self, folder: Option<PathBuf>) {
+        *self.projects_folder.write().unwrap() = folder;
+    }
+
+    pub fn chosen_projects_folder(&self) -> Option<PathBuf> { self.projects_folder.read().unwrap().clone() }
     pub fn bots_dir(&self) -> PathBuf { self.root.join("Bots") }
     pub fn bots_file(&self) -> PathBuf { self.bots_dir().join("bots.json") }
     pub fn groups_file(&self) -> PathBuf { self.bots_dir().join("groups.json") }
@@ -65,7 +86,8 @@ impl Paths {
     pub fn memory_file(&self, bot_id: &str) -> PathBuf { self.memory_dir(bot_id).join("memory.md") }
     pub fn shared_skills_dir(&self) -> PathBuf { self.memory_root().join("skills") }
     pub fn skills_dir(&self, bot_id: &str) -> PathBuf { self.memory_dir(bot_id).join("skills") }
-    pub fn projects_dir(&self) -> PathBuf { self.root.join("Projects") }
+    /// Where coding runs make new projects: the owner's own folder when they picked one, else `Projects` in Theo's data folder.
+    pub fn projects_dir(&self) -> PathBuf { self.chosen_projects_folder().unwrap_or_else(|| self.default_projects_dir()) }
     pub fn hooks_dir(&self) -> PathBuf { self.root.join("Hooks") }
     pub fn settings_file(&self) -> PathBuf { self.root.join("settings.json") }
     pub fn engines_running_file(&self) -> PathBuf { self.root.join("engines-running.json") }
@@ -83,7 +105,8 @@ impl Paths {
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
-        for dir in [self.bots_dir(), self.chats_dir(), self.memory_root(), self.shared_skills_dir(), self.projects_dir(), self.hooks_dir(), self.logs_dir()] {
+        // The owner's own projects folder is made only when the first project needs it.
+        for dir in [self.bots_dir(), self.chats_dir(), self.memory_root(), self.shared_skills_dir(), self.default_projects_dir(), self.hooks_dir(), self.logs_dir()] {
             std::fs::create_dir_all(dir)?;
         }
         // Chats, bots, memory, the token file and the control inbox live here: only this user may read or write them, as
@@ -91,6 +114,24 @@ impl Paths {
         make_private(&self.root);
         Ok(())
     }
+}
+
+/// Whether `folder` may be the projects folder. Coding agents get full access in it and bots may read it, so it must be a
+/// folder of its own: written out in full, not a drive or the home folder itself, and not inside Theo's own data folder.
+pub fn check_projects_folder(folder: &Path, data_root: &Path) -> Result<(), String> {
+    if !folder.is_absolute() {
+        return Err("Write the folder out in full, starting from the drive or /.".into());
+    }
+    if folder.parent().is_none() || folder.components().count() <= 1 {
+        return Err("Pick a folder, not a whole drive.".into());
+    }
+    if folder == home().as_path() {
+        return Err("Pick a folder inside your home folder, not the home folder itself.".into());
+    }
+    if folder.starts_with(data_root) || data_root.starts_with(folder) {
+        return Err("Pick a folder outside Theo's own data folder.".into());
+    }
+    Ok(())
 }
 
 /// Only this user may list, read or write `dir` (Unix). Windows' per-user AppData already is.
@@ -119,6 +160,29 @@ pub fn rule_path(path: &Path) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn a_projects_folder_must_be_a_folder_of_its_own() {
+        let data = if cfg!(windows) { PathBuf::from(r"C:\Users\a\AppData\Roaming\Theo-Desktop") } else { PathBuf::from("/home/a/.local/share/theo-desktop") };
+        let good = if cfg!(windows) { PathBuf::from(r"C:\Users\a\Projects") } else { PathBuf::from("/home/a/Projects") };
+        assert!(check_projects_folder(&good, &data).is_ok());
+        assert!(check_projects_folder(Path::new("Projects"), &data).is_err());
+        assert!(check_projects_folder(&data.join("Projects"), &data).is_err());
+        assert!(check_projects_folder(Path::new(if cfg!(windows) { r"C:\" } else { "/" }), &data).is_err());
+    }
+
+    #[test]
+    fn the_projects_folder_follows_the_owners_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("theo");
+        std::fs::create_dir_all(&root).unwrap();
+        let mine = dir.path().join("mine");
+        std::fs::write(root.join("settings.json"), serde_json::json!({PROJECTS_FOLDER_SETTING: mine.to_string_lossy()}).to_string()).unwrap();
+        let paths = Paths::new(root.clone());
+        assert_eq!(paths.projects_dir(), mine);
+        paths.set_projects_folder(None);
+        assert_eq!(paths.projects_dir(), root.join("Projects"));
+    }
+
+    #[test]
     fn rule_paths() {
         assert_eq!(rule_path(Path::new("/Users/a/x")), "//Users/a/x");
         assert_eq!(rule_path(Path::new("C:\\Users\\a\\x")), "//c/Users/a/x");
@@ -132,7 +196,7 @@ mod private_tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("theo");
-        let paths = super::Paths { root: root.clone() };
+        let paths = super::Paths::new(root.clone());
         paths.ensure().unwrap();
         assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
     }

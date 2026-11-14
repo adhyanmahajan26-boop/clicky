@@ -6,7 +6,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCRIPT = HERE.parent / "install" / "install-linux.sh"
 ARCH = "aarch64" if os.uname().machine in ("arm64", "aarch64") else "x86_64"
 APP = b"#!/bin/sh\necho theo\n"
-STATE = {"tamper": False, "auth": [], "paths": [], "builds": ["202611130300", "202611120100"]}
+STATE = {"tamper": False, "auth": [], "paths": [], "builds": ["202611130300", "202611120100"], "only_mac": False}
 
 
 def release(build):
@@ -15,6 +15,26 @@ def release(build):
         {"name": "Theo-%s.zip" % build, "url": "http://127.0.0.1:%d/asset/zip" % PORT},
         {"name": name, "url": "http://127.0.0.1:%d/asset/app/%s" % (PORT, build)},
         {"name": "SHA256SUMS", "url": "http://127.0.0.1:%d/asset/sums/%s" % (PORT, build)}]}
+
+
+def release_list():
+    """GitHub's release list, newest first, as the Mac's and Windows' own builds leave it: the newest is a Mac-only build (what
+    /releases/latest would answer), then a draft and a prerelease, then a build for the other processor, then Linux builds."""
+    other = "x86_64" if ARCH == "aarch64" else "aarch64"
+    port = PORT
+    mac_only = {"tag_name": "build-202611150000", "draft": False, "prerelease": False, "assets": [
+        {"name": "Theo-202611150000.zip", "url": "http://127.0.0.1:%d/asset/zip" % port},
+        {"name": "SHA256SUMS", "url": "http://127.0.0.1:%d/asset/sums/202611150000" % port}]}
+    if STATE["only_mac"]:
+        return [mac_only]
+    draft = dict(release("202611149000"), draft=True)
+    pre = dict(release("202611148000"), prerelease=True)
+    other_arch = {"tag_name": "build-202611140000", "assets": [
+        {"name": "Theo-202611140000-linux-%s.AppImage" % other, "url": "http://127.0.0.1:%d/asset/app/202611140000" % port},
+        {"name": "SHA256SUMS", "url": "http://127.0.0.1:%d/asset/sums/202611140000" % port}]}
+    not_a_build = dict(release("202611139999"), tag_name="nightly")
+    # The older build comes first on purpose: the newest build number wins, not the order GitHub lists them in.
+    return [mac_only, draft, pre, other_arch, not_a_build] + [release(b) for b in reversed(STATE["builds"])]
 
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -30,8 +50,10 @@ class H(http.server.BaseHTTPRequestHandler):
         p = self.path
         if p.startswith("/repos/private/"):   # what GitHub answers for a private repo the request can't see
             return self.send(b'{"message":"Not Found"}', code=404)
-        if p == "/repos/o/r/releases/latest":
-            return self.send(json.dumps(release(STATE["builds"][0])).encode())
+        if p == "/repos/o/r/releases/latest":   # the Mac's latest: the installer must never ask for it
+            return self.send(b'{"message":"install-linux.sh must list releases, not ask for the latest"}', code=500)
+        if p == "/repos/o/r/releases?per_page=100":
+            return self.send(json.dumps(release_list()).encode())
         if p.startswith("/repos/o/r/releases/tags/build-"):
             b = p.rsplit("build-", 1)[1]
             return self.send(json.dumps(release(b)).encode()) if b in STATE["builds"] else self.send(b"{}", code=404)
@@ -103,9 +125,11 @@ def main():
     with tempfile.TemporaryDirectory() as home:
         opt = pathlib.Path(home, ".local/opt/theo")
         code, out = run(home)
-        results["installs_latest"] = code == 0 and (opt / "BUILD").read_text().strip() == STATE["builds"][0] and os.access(opt / "Theo.AppImage", os.X_OK)
+        results["installs_newest_linux_build"] = code == 0 and (opt / "BUILD").read_text().strip() == STATE["builds"][0] and os.access(opt / "Theo.AppImage", os.X_OK)
         results["links_and_menu_entry"] = pathlib.Path(home, ".local/bin/theo").is_symlink() and pathlib.Path(home, ".local/share/applications/theo.desktop").exists()
         results["token_sent_as_header"] = "Bearer secret-token" in STATE["auth"]
+        results["lists_releases_never_latest"] = (any(path.startswith("/repos/o/r/releases?") for path in STATE["paths"])
+                                                  and not any(path.endswith("/releases/latest") for path in STATE["paths"]))
         code, out = run(home)
         results["already_installed_is_a_no_op"] = code == 0 and "already installed" in out
         code, out = run(home, "--version", "202611120100")
@@ -114,6 +138,12 @@ def main():
         code, out = run(home, "--force")
         results["refuses_on_checksum_mismatch"] = code != 0 and "refusing" in out and (opt / "BUILD").read_text().strip() == "202611120100"
         STATE["tamper"] = False
+        # Only a Mac build published so far: says so, and leaves what's installed alone.
+        STATE["only_mac"] = True
+        code, out = run(home, "--force")
+        STATE["only_mac"] = False
+        results["no_linux_build_said_plainly"] = (code != 0 and "has a Linux %s AppImage" % ARCH in out
+                                                  and (opt / "BUILD").read_text().strip() == "202611120100")
         f = pathlib.Path(home, "local.AppImage"); f.write_bytes(APP)
         code, out = run(home, "--from", str(f), "--sha256", "0" * 64)
         results["from_file_checks_sha"] = code != 0 and "mismatch" in out

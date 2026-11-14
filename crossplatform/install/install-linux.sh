@@ -24,7 +24,7 @@ Theo for Linux installer
 
   install-linux.sh [options]
 
-  --version <build>    install this build (build-202611130300 or 202611130300); default: the latest release
+  --version <build>    install this build (build-202611130300 or 202611130300); default: the newest release with a Linux build
   --dir <folder>       install here instead of ~/.local/opt/theo (also THEO_INSTALL_DIR)
   --from <file|url>    install this AppImage instead of downloading from the release; needs --sha256
   --sha256 <hex>       the checksum --from must match
@@ -203,12 +203,33 @@ main() {
     command -v python3 >/dev/null || die "needs python3 to read the release list"
     local arch; arch="$(arch_name)"
     choose_repo
-    local url="$API/repos/$REPO/releases/latest"
+    # Without --version: list the releases and take the newest build-* one that has this computer's AppImage, never
+    # /releases/latest, which is the Mac's (a Mac-only or Windows-only build must not leave Linux with nothing).
+    local url="$API/repos/$REPO/releases?per_page=100"
     if [ -n "$version" ]; then url="$API/repos/$REPO/releases/tags/build-${version#build-}"; fi
     local status sent_token=0
     [ -n "$(token)" ] && sent_token=1
     status="$(gh_status "$url" "$TMP/release.json")"
     [ "$status" = 200 ] || explain_release_failure "$status" "$sent_token"
+    if [ -z "$version" ]; then
+      python3 - "$TMP/release.json" "-linux-$arch.AppImage" <<'PICK' || die "no release in $REPO has a Linux $arch AppImage yet"
+import json, re, sys
+path, suffix = sys.argv[1], sys.argv[2]
+best = None
+for r in json.load(open(path)):
+    if r.get("draft") or r.get("prerelease"):
+        continue
+    m = re.fullmatch(r"build-(\d+)", r.get("tag_name") or "")
+    names = [a.get("name", "") for a in r.get("assets") or []]
+    if not m or "SHA256SUMS" not in names or not any(n.endswith(suffix) for n in names):
+        continue
+    if best is None or int(m.group(1)) > best[0]:
+        best = (int(m.group(1)), r)
+if best is None:
+    sys.exit(1)
+json.dump(best[1], open(path, "w"))
+PICK
+    fi
     local build; build="$(json_get "import json;print(json.load(open('$TMP/release.json'))['tag_name'].replace('build-',''))")"
     [ -n "$build" ] || die "the release has no build number"
     if [ "$force" != 1 ] && [ "$(installed_build)" = "$build" ]; then say "Theo $build is already installed (--force reinstalls)."; exit 0; fi

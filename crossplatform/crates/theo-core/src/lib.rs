@@ -34,5 +34,7 @@ pub mod pdf;
 pub mod harness_chats;
 pub mod run_choices;
 pub mod chat_controls;
+pub mod products;
+pub mod update;
 
 pub use harness::Harness;

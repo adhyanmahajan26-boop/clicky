@@ -470,6 +470,24 @@ def claude_cli():
 
 # ---------------------------------------------------------------- fresh install
 
+def setup_as_expected(page):
+    """Setup shows at launch only when it was never finished or no brain can think (setupState's needsSetup, the Mac's
+    rule). Returns whether the window matches that, and closes setup ("Not now") when it's up so the next steps can click."""
+    st = P({"cmd": "setupState"}, timeout=90).get("result", {})
+    expected_hidden = not st.get("needsSetup", False)
+    if not expected_hidden:
+        try:
+            page.wait_for_selector("#setup:not([hidden]) [data-close]", timeout=15000)
+        except Exception:
+            return False, st
+    hidden = page.locator("#setup").get_attribute("hidden") is not None
+    ok = hidden == expected_hidden
+    if not hidden:
+        page.click("#setup [data-close]")
+        page.wait_for_selector("#setup[hidden]", state="attached", timeout=10000)
+    return ok, st
+
+
 def fresh(setup_exe, msi=None):
     n = uuid.uuid4().hex[:8]
     shutil.rmtree(DATA, ignore_errors=True)
@@ -534,12 +552,16 @@ def fresh(setup_exe, msi=None):
     def coding_step():
         page = PAGE["page"]
         page.click("#setup .btn.ghost[data-next]")  # "Skip for now": no brain is ready (Claude Code is signed out, no key)
+        # Pick products: Theo is on by default, so Continue goes on to Theo's own steps.
+        page.wait_for_selector("#setup h1:has-text('Pick what you want')", timeout=10000)
+        PAGE["products_shot"] = screenshot("setup-products")
+        page.click("#setup .btn.pri[data-next]")
         page.wait_for_selector("#setup h1:has-text('Coding runs')", timeout=10000)
         wait_until(lambda: "Checking" not in text_of(page, "#setup .list"), 60)
         rows = text_of(page, "#setup .list")
         shot = screenshot("setup-coding")
-        return "git" in rows and "GitHub CLI" in rows, {"rows": rows}, shot
-    check("Setup's coding step: git and the GitHub CLI checked", coding_step, must=False)
+        return "git" in rows and "GitHub CLI" in rows, {"rows": rows, "products": PAGE.get("products_shot")}, shot
+    check("Setup's products step, then the coding step: git and the GitHub CLI checked", coding_step, must=False)
 
     def first_bot():
         page = PAGE["page"]
@@ -661,6 +683,22 @@ def fresh(setup_exe, msi=None):
         return ok, {"run_key": run_key, "every_user_run_key": machine_wide, "settings_text": text[:600]}, shot
     check("Settings: health check, and Theo set to open at sign-in (Windows Run key, starts in the tray)", settings)
 
+    def updates_and_products():
+        # The Update row at the bottom of the sidebar is always there; Settings › Updates says which build this is and where
+        # builds come from; Settings › Products has the three switches.
+        page = PAGE["page"]
+        row = text_of(page, "#update-row")
+        page.click(".row.nav[data-pane='settings']")
+        page.click("[data-jump='updates']")
+        wait_until(lambda: "This is Theo" in text_of(page, "#set-updates"), 20)
+        updates = text_of(page, "#set-updates")
+        switches = page.locator("#set-products button.switch[data-product]").count()
+        state = P({"cmd": "updates"}).get("result", {})
+        shot = screenshot("settings-updates")
+        ok = bool(row) and "This is Theo" in updates and switches == 3 and state.get("installKind") == "windowsForThisUser"
+        return ok, {"update_row": row, "updates": updates[:400], "product_switches": switches, "state": state}, shot
+    check("Settings › Updates and Products: the Update row, this build, where builds come from, three product switches", updates_and_products, must=False)
+
     def close_keeps_running():
         pid = theo_pids()[0]
         hwnd, visible = main_window()
@@ -707,11 +745,11 @@ def fresh(setup_exe, msi=None):
         PAGE["page"] = page = connect()
         page.wait_for_selector("#bots [data-bot]", timeout=30000)
         after = len(chat(rid, 500))
-        setup_hidden = page.locator("#setup").get_attribute("hidden") is not None
         shot = screenshot("reopened")
-        ok = quitted and not leftovers and took is not None and after == before and before > 0 and setup_hidden
-        return ok, {"quit": quitted, "left_running": leftovers, "messages_before": before, "messages_after": after, "setup_hidden": setup_hidden}, shot
-    check("Quit, then open again: nothing left running, bots and chats kept, setup not shown again", quit_and_reopen)
+        setup_right, st = setup_as_expected(page)
+        ok = quitted and not leftovers and took is not None and after == before and before > 0 and setup_right
+        return ok, {"quit": quitted, "left_running": leftovers, "messages_before": before, "messages_after": after, "setup_as_expected": setup_right, "needs_setup": st.get("needsSetup"), "any_brain_ready": st.get("anyReady")}, shot
+    check("Quit, then open again: nothing left running, bots and chats kept, setup back only while no brain can think", quit_and_reopen)
 
     def at_sign_in():
         quit_theo()
@@ -883,12 +921,12 @@ def upgrade(old_exe, new_exe):
         PAGE["page"] = page = connect()
         page.wait_for_selector("#bots [data-bot='%s']" % state["bot"], timeout=30000)
         after = len(chat(state["bot"], 500))
-        setup_hidden = page.locator("#setup").get_attribute("hidden") is not None
         entries = sum(1 for _ in [installed()] if _)
         shot = screenshot("after-upgrade")
-        ok = code == 0 and replaced and took is not None and after == state["messages"] and setup_hidden
-        return ok, {"exe_replaced": replaced, "messages_before": state["messages"], "messages_after": after, "setup_hidden": setup_hidden, "apps_entries": entries, "version": info.get("version")}, shot
-    check("The new installer over the older build: app replaced, bots and chats kept, setup not shown again", new)
+        setup_right, st = setup_as_expected(page)
+        ok = code == 0 and replaced and took is not None and after == state["messages"] and setup_right
+        return ok, {"exe_replaced": replaced, "messages_before": state["messages"], "messages_after": after, "setup_as_expected": setup_right, "needs_setup": st.get("needsSetup"), "setup_completed": st.get("completed"), "apps_entries": entries, "version": info.get("version")}, shot
+    check("The new installer over the older build: app replaced, bots and chats kept, setup back only while no brain can think", new)
     quit_theo()
     info = installed()
     if info:

@@ -50,7 +50,26 @@ One GitHub release per build, tagged `build-<yyyyMMddHHmm>`, shared with the Mac
 them all to `SHA256SUMS`. The Mac `install.sh` skips assets whose names contain `windows` or `linux`.
 
 The CI workflow (`.github/workflows/crossplatform.yml`) builds every installer on each push and keeps them as workflow
-artifacts. It never publishes a release.
+artifacts. It never publishes a release. It bakes a build number into the app (`THEO_BUILD`, the run's `yyyyMMddHHmm` in
+UTC, also written to `dist/BUILD`); a release's tag must be that number (`build-<THEO_BUILD>`), or the in-app updater will
+keep offering the same build. A build made by hand without `THEO_BUILD` is build 0 and says "a build made by hand".
+
+**Which release each platform takes.** The Windows and Linux installers and the in-app updater list the releases
+(`/releases?per_page=100`) and take the newest published `build-<number>` release that has their own asset and a
+`SHA256SUMS`; drafts and prereleases don't count, and none of them reads `/releases/latest`. The Mac's updater does use
+the latest release, so:
+
+- A release with every platform's assets can be the latest, as before.
+- A release with only Windows and Linux assets must not become the latest, or Macs would find no zip: publish it with
+  `gh release create build-<n> … --latest=false`. Windows and Linux still find it.
+- A Mac-only release (from `Tools/release.sh`) is fine: Windows and Linux skip it and keep the newest build that has theirs.
+
+The one-liners download `install.ps1` / `install-linux.sh` from `releases/latest/download/`, so the latest release must
+carry them (any build's copy works, since the scripts look for the newest build themselves).
+
+**In-app updates on Windows and Linux.** The Update row at the bottom of the sidebar and Settings › Updates. The per-user
+Windows install updates itself silently and reopens; an AppImage replaces itself; the .msi, the .deb and hand builds open
+the releases page. Details: [PLATFORMS.md](PLATFORMS.md#updates).
 
 ## Decisions for Addy
 

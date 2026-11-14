@@ -33,6 +33,44 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 | `[PDF: file]`: a real PDF of a Markdown, text or HTML file in the bot's folder, with a card that opens it | Yes | Yes | Yes | `pdf.rs`, written by Theo itself (no PDF library, standard fonts, A4) |
 | Home: needs you, failed, working now, finished today, asleep with the next routine | Yes | Yes | Yes | `app/ui/home.js` (the Mac's `HomeLanes`) |
 | Data folder | `~/Library/Application Support/Theo-Desktop` | `%APPDATA%\Theo-Desktop` | `~/.local/share/theo-desktop` | never the Swift app's `Theo` folder |
+| Projects folder for coding runs | Setting | Setting | Setting | `code.projectsFolder` (Settings › Coding runs), default `<data folder>/Projects`, made only when a run needs it; a relative path, a drive, the home folder or Theo's own data folder is refused (`paths.rs`) |
+| In-app updates (Update row, Settings › Updates) | The Swift app's own | Per-user install: downloads, checks, installs silently and reopens | AppImage: replaces itself and reopens | `update.rs`, the app's `updater.rs`; see Updates below |
+| Products (Theo, Clicky, Dictation on or off) | Yes | Yes | Yes | `products.rs`, Setup's "Pick what you want" and Settings › Products |
+| Settings with a list of sections, Setup (Welcome and your name, brain, products, coding, first bot) | Yes | Yes | Yes | `app/ui/settings.js`, `app.js` `drawSetup` |
+
+### Updates
+
+The build number is baked in when the app is built (`THEO_BUILD`, the `yyyyMMddHHmm` of a release's `build-<number>` tag;
+CI sets it; a build made by hand is build 0 and says so). The releases repo is `install/releases-repo`, compiled in
+(`THEO_RELEASES_REPO` overrides it). Theo checks 20 seconds after it starts and every 6 hours, and never installs by itself:
+the Update row at the bottom of the sidebar says "Build N" when there is one, and pressing it updates.
+
+- **Which release.** Theo lists the repo's releases (`/releases?per_page=100`) and takes the newest published
+  `build-<number>` release that has this platform's installer (`-windows-x64-setup.exe`, `-linux-x86_64.AppImage` or
+  `-linux-aarch64.AppImage`) and a `SHA256SUMS`. It never reads `/releases/latest`, which is the Mac's: a Mac-only build
+  doesn't hide a Windows one, and a Windows-only build published with `gh release create … --latest=false` doesn't move
+  the Mac's latest. Drafts and prereleases don't count. `install.ps1` and `install-linux.sh` pick the same way.
+- **Installing.** The installer is downloaded to `<data folder>/Updates` and checked against `SHA256SUMS`; a mismatch is
+  refused and deleted. On Windows a per-user install (the setup.exe, `uninstall.exe` beside the app) quits and runs the
+  installer silently (`/S /UPDATE /D=<its folder>`, no admin) from a hidden PowerShell script that waits for Theo to end,
+  then reopens it; `Logs/update.log` says what happened. An AppImage replaces its own file and reopens. The .msi (for
+  everyone, needs an administrator), the .deb and a build made by hand open the releases page instead.
+- **A private repo** is said plainly, as the Mac does (`checkFailureMessage`): "This build's updates are private". Someone
+  with access saves a GitHub token in Settings › Updates; it goes in the Credential Manager (Windows), the Keychain (Mac
+  build) or a 0600 file (Linux), and is only ever sent as an `Authorization` header to GitHub. A test profile never uses
+  `gh auth token`.
+- Control inbox: `updates {action: state | check | token | removeToken | install | openPage}` (`install` in a test profile
+  only, where it downloads and checks, then writes `update install build N` in `Logs/opened.log`).
+
+### Products
+
+Theo, Clicky and Dictation are each on or off (`products.theo`, `products.clicky`, `products.dictation` in settings.json).
+No saved choice means Theo on, Clicky and Dictation off. Setup's "Pick what you want" step chooses them (Continue needs at
+least one) and finishing Setup saves all three; Settings › Products changes them later. `setupState` and the `products`
+command report them. A product that's off leaves the sidebar, and its pages show a "turned off" page with its demo and a
+Turn on button. With Theo off, Home shows the products. Turning Theo off only hides; routines and the local API keep their
+own switches. Setup opens at launch when it was never finished, or when Theo or Clicky is on and no brain can think
+(`setupState.needsSetup`, the Mac's rule); then it starts at the brain step with Not now.
 
 ### Brains
 

@@ -1,0 +1,113 @@
+/* Settings with its list of sections, the sidebar's Update row, the products (cards, switches, demos, the "turned off"
+   page) and Setup's extras. On the Theo Pixel kit's tokens. */
+
+/* ---------- Settings ---------- */
+.settings { display: grid; grid-template-columns: 184px minmax(0, 760px); gap: 28px; justify-content: center; align-items: start; }
+.set-nav { position: sticky; top: 0; display: flex; flex-direction: column; gap: 1px; padding-top: 2px; }
+.set-nav .section-label { padding-top: 6px; }
+.set-nav-item { text-align: left; padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--t2); }
+.set-nav-item:hover { background: rgba(255,255,255,.045); color: var(--t1); }
+.on-light .set-nav-item:hover { background: rgba(0,0,0,.04); }
+.set-nav-item.on { background: rgba(255,255,255,.08); color: var(--t1); }
+.on-light .set-nav-item.on { background: rgba(0,0,0,.06); }
+.set-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-bottom: 40vh; }
+.set-sec { display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 4px; padding-top: 14px; }
+.set-sec + .set-sec { border-top: 1px solid var(--line); }
+.set-sec h2.set-title { font-size: 18px; margin: 4px 0 0; }
+.set-sec .set-sub { margin: -4px 0 4px; }
+.set-sec h2:not(.set-title) { font-size: 13px; color: var(--t2); margin: 10px 0 2px; }
+.set-sec .crow .act.many input, #owner-name { background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font: 13px var(--body); width: 200px; }
+#projects-folder-input { width: 230px; }
+#update-token { width: 170px; }
+@media (max-width: 1000px) { .settings { grid-template-columns: 1fr; } .set-nav { position: static; flex-direction: row; flex-wrap: wrap; } .set-nav .section-label { display: none; } }
+
+/* ---------- the Update row at the bottom of the sidebar ---------- */
+#update-row { gap: 10px; }
+#update-row .ur-name { flex: 1; white-space: nowrap; }
+#update-row .ur-st { font-size: 11.5px; color: var(--t3); white-space: nowrap; font-weight: 500; }
+#update-row.has-update { background: color-mix(in srgb, var(--acc) 13%, transparent); color: var(--t1); }
+#update-row.has-update .ic, #update-row.has-update .ur-st { color: var(--acc); }
+#update-row.has-update .ur-name { font-weight: 600; }
+#update-row[disabled] { cursor: default; }
+#update-row[disabled] .ic { animation: ur-pulse 1.2s ease-in-out infinite; }
+@keyframes ur-pulse { 50% { opacity: .35; } }
+
+/* ---------- a switch ---------- */
+.switch { width: 36px; height: 21px; border-radius: 11px; background: var(--line2); position: relative; flex: none; transition: background .15s; cursor: pointer; }
+.switch i { position: absolute; top: 2.5px; left: 2.5px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.switch.on { background: var(--ok); }
+.switch.on i { transform: translateX(15px); }
+.switch:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+.switch[disabled] { opacity: .6; cursor: default; }
+
+/* ---------- product cards ---------- */
+.product-cards { display: flex; flex-direction: column; gap: 12px; }
+.product-card { display: grid; grid-template-columns: 236px 1fr; gap: 18px; padding: 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); --ring: var(--card); }
+.product-card.on { border-color: color-mix(in srgb, var(--acc) 70%, transparent); }
+.pc-tx { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.pc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pc-head b { font: 600 16px/1.2 var(--display); }
+.pc-tx p { margin: 0; color: var(--t2); font-size: 13.5px; }
+.pc-tx ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.pc-tx li::before { content: "✓"; color: var(--t3); font-size: 10px; font-weight: 700; margin-right: 7px; }
+.pc-tx small { font-size: 12px; }
+@media (max-width: 900px) { .product-card { grid-template-columns: 1fr; } }
+
+/* ---------- the demos: short CSS loops, still with reduced motion ---------- */
+.demo { position: relative; height: 132px; border-radius: 11px; background: var(--card2); overflow: hidden; border: 1px solid var(--line); --ring: var(--card2); }
+.demo-theo { display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 10px 12px; }
+.dt-row { display: flex; align-items: center; gap: 8px; }
+.dt-face { flex: none; display: inline-flex; }
+.dt-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 11px; line-height: 1.25; }
+.dt-tx b { font-size: 11.5px; }
+.dt-st { position: relative; height: 14px; color: var(--t3); }
+.dt-st i { position: absolute; left: 0; top: 0; font-style: normal; white-space: nowrap; }
+.dt-done { color: var(--ok-t); opacity: 0; }
+.dt-bar { width: 40px; height: 3px; border-radius: 2px; background: var(--line2); overflow: hidden; }
+.dt-bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+.dt-row .dt-work { animation: dt-work 9.5s infinite; } .dt-row .dt-done { animation: dt-done 9.5s infinite; } .dt-row .dt-bar i { animation: dt-bar 9.5s infinite; }
+.dt-1 .dt-work, .dt-1 .dt-done, .dt-1 .dt-bar i { animation-delay: 1.2s; }
+.dt-2 .dt-work, .dt-2 .dt-done, .dt-2 .dt-bar i { animation-delay: 2.4s; }
+@keyframes dt-bar { 0%, 5% { width: 0; } 40% { width: 100%; } 85% { width: 100%; opacity: 1; } 95%, 100% { width: 100%; opacity: 0; } }
+@keyframes dt-work { 0%, 40% { opacity: 1; } 44%, 92% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes dt-done { 0%, 40% { opacity: 0; } 44%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+
+.dc-win { position: absolute; inset: 12px 14px 30px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); }
+.dc-dots { position: absolute; top: 6px; left: 8px; display: flex; gap: 3px; } .dc-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line2); }
+.dc-lines { position: absolute; top: 24px; left: 10px; right: 70px; display: flex; flex-direction: column; gap: 6px; } .dc-lines i { height: 5px; border-radius: 3px; background: var(--line2); } .dc-lines i:nth-child(2) { width: 70%; } .dc-lines i:nth-child(3) { width: 85%; }
+.dc-btn { position: absolute; top: 18px; right: 10px; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: var(--card2); border: 1px solid var(--line2); }
+.dc-ring { position: absolute; top: 12px; right: 4px; width: 62px; height: 30px; border-radius: 16px; border: 2px solid var(--acc); opacity: 0; animation: dc-ring 8s infinite; }
+.dc-spark { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 12px var(--acc); left: 24px; top: 96px; animation: dc-spark 8s infinite; }
+.dc-say { position: absolute; left: 12px; right: 12px; bottom: 7px; font-size: 11px; color: var(--t2); opacity: 0; animation: dc-say 8s infinite; }
+@keyframes dc-spark { 0%, 15% { left: 24px; top: 96px; } 45%, 80% { left: calc(100% - 55px); top: 33px; } 95%, 100% { left: 24px; top: 96px; } }
+@keyframes dc-ring { 0%, 45% { opacity: 0; transform: scale(1.3); } 52%, 82% { opacity: 1; transform: scale(1); } 90%, 100% { opacity: 0; } }
+@keyframes dc-say { 0%, 48% { opacity: 0; } 55%, 85% { opacity: 1; } 92%, 100% { opacity: 0; } }
+
+.demo-dictation { display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 14px; }
+.dd-field { display: flex; align-items: center; height: 34px; padding: 0 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); font-size: 12px; overflow: hidden; }
+.dd-text { white-space: nowrap; overflow: hidden; width: 0; animation: dd-type 7.5s steps(34) infinite; }
+.dd-caret { width: 1.5px; height: 15px; background: var(--acc); flex: none; animation: dd-blink 1s steps(2) infinite; }
+.dd-mic { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--t2); }
+.dd-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad, #FF4A5E); animation: dd-pulse 7.5s infinite; }
+@keyframes dd-type { 0%, 12% { width: 0; } 62%, 90% { width: 34ch; } 100% { width: 0; } }
+@keyframes dd-blink { 50% { opacity: 0; } }
+@keyframes dd-pulse { 0%, 10% { opacity: .25; transform: scale(.8); } 15%, 60% { opacity: 1; transform: scale(1.1); } 65%, 100% { opacity: .25; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) {
+  .demo *, #update-row .ic { animation: none !important; }
+  .dt-done { opacity: 1; } .dt-work { opacity: 0; } .dt-bar i { width: 100%; }
+  .dc-spark { left: calc(100% - 55px); top: 33px; } .dc-ring, .dc-say { opacity: 1; } .dd-text { width: 34ch; }
+}
+
+/* ---------- a product that's off ---------- */
+.product-off { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; margin-top: 8vh; }
+.product-off .demo { width: min(420px, 100%); height: 150px; }
+.product-off .lead { max-width: 440px; }
+.btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+body.theo-off #new-bot, body.theo-off #bots, body.theo-off #groups, body.theo-off #sidebar > .section-label,
+body.theo-off .row.nav[data-pane="routines"], body.theo-off .row.nav[data-pane="usage"] { display: none; }
+
+/* ---------- Setup ---------- */
+.su-close { margin-top: auto; align-self: flex-start; }
+.su-products { margin: 0; padding-left: 18px; color: var(--t2); line-height: 1.7; font-size: 14px; }
+.su-products b { color: var(--t1); }
+#login-row:empty { display: none; }
