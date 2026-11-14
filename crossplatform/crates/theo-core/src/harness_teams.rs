@@ -423,7 +423,7 @@ impl Harness {
     pub(super) fn is_discussing(&self, room: &str) -> bool {
         self.with(|s| {
             s.teams.briefs.contains_key(room) || s.teams.waiters.contains_key(room)
-                || (s.bots.iter().any(|b| b.primary && b.id == room) && !s.teams.briefs.is_empty())
+                || (s.bots.iter().any(|b| b.primary && b.id == room) && s.teams.briefs.values().any(|b| b.reports_to.is_some()))
         })
     }
 
