@@ -37,7 +37,7 @@ def why_it_exited_at_launch(instance_log_file):
     newest_crash_report = None
     # macOS takes a few seconds to write the report after the process is gone.
     for _ in range(40):
-        recent_reports = [report for report in crash_reports_folder.glob("Clicky*.ips") if time.time() - report.stat().st_mtime < 120]
+        recent_reports = [report for report in crash_reports_folder.glob("Clicky*.ips") if time.time() - report.stat().st_mtime < 600]
         if recent_reports:
             newest_crash_report = max(recent_reports, key=lambda report: report.stat().st_mtime)
             break
@@ -361,6 +361,11 @@ def step_two_laptops(binary):
         firing = [name for name, route in routes.items() if route == "runHere"]
         checks = {"linked": all(s.get("otherMac") for s in states.values()), "both_laptops": all(s.get("thisMac", {}).get("isDesktop") is False for s in states.values()),
                   "exactly_one_fires_routines": len(firing) == 1}
+        if not all(checks.values()):
+            # Say what each instance was doing: one that quit or stopped answering is the usual reason nothing linked.
+            for profile in (first, second):
+                print("%s: %s" % (profile.argument, "still running" if profile.process.poll() is None else "quit with %s" % profile.process.returncode), flush=True)
+                print(why_it_exited_at_launch(profile.root / "test-instance.log"), flush=True)
         return all(checks.values()), dict(checks, routes=routes, names={n: s.get("thisMac", {}).get("name") for n, s in states.items()})
     finally:
         first.stop()
