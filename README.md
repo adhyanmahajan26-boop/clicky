@@ -10,3 +10,7 @@ and hands your notes and marked screenshots to your coding agents in T3 Code.
 - Install from Terminal (no Apple Developer account needed): [docs/INSTALL.md](docs/INSTALL.md)
 - Setup and usage: [PERSONAL_SETUP.md](PERSONAL_SETUP.md)
 - Architecture and conventions for coding agents: [AGENTS.md](AGENTS.md)
+
+## License
+
+MIT. See [LICENSE](LICENSE). Theo is built on the original Clicky by Farza, also MIT.
