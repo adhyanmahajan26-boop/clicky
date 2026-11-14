@@ -47,6 +47,9 @@ against a real Claude account. Without it, the summary says they were skipped.
 
 ## Simulated, not real
 
+- Clicky's turns in CI (`clickyTest`, suite cases K01 to K05) get the pictures from the test and stand-in brains
+  (`tests/fake_api.py`, `tests/fake_engine.py`); K05 captures the Windows runner's real monitors and speaks to a file with
+  its real voices. No microphone, keyboard hook or spark over another app is exercised.
 - Dictation's path from a WAV file to tidied text (`dictationTest`, suite cases D01 and D02) uses stand-in speech services
   (`tests/fake_voice.py`); D02 asks Windows' real built-in recognizer on the Windows runners. No microphone, keyboard hook
   or typing into another app is exercised in CI.
@@ -96,7 +99,24 @@ About 30 minutes on a Windows 10 or 11 PC:
      Clicky.
    - Turn off Windows' microphone access (Settings › Privacy & security › Microphone) and hold the chord: the pill says
      where to turn it back on.
-9. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
+9. **Clicky** (about 10 minutes; best with two monitors, one of them scaled to 150% or more). Settings › Clicky › Turn on
+   (or pick it in Setup's products step, or the tray's "Show Clicky"). Then:
+   - The orange spark sits by the pointer on every monitor and follows it smoothly. Clicks go through it to whatever is
+     underneath, it never takes focus from the app you're typing in, and it stays over a maximized window.
+   - Open a web page, hold **Ctrl + Alt**, ask "where's the search box?", let go. The spark pulses while you talk, spins
+     while it thinks, an answer appears in a bubble by the pointer and is spoken, and the spark flies to the search box and
+     back. Ask about something on the other monitor: it flies there and lands on the right spot, also on the scaled one.
+   - Ask "walk me through the settings on this page": numbered steps or circles appear on the screen and clear after about
+     20 seconds, or at once on Esc. Esc while it's talking stops the voice.
+   - Settings › Clicky: pick another voice and press Hear it; set the spark to "Only while talking" and check it hides when
+     idle; pick another shortcut and check it works at once and Ctrl + Alt no longer does.
+   - Brains: with only an API key (Anthropic or OpenAI) it should still see the screen; put Clicky on Gemini CLI (Brain row)
+     and check it says once that it can't see the screen and answers from your words.
+   - Type a question in "Try it" and press Ask: the same turn runs without the microphone, and the answer shows there too.
+   - Turn on Dictation with its own chord too: Ctrl + Alt is only Clicky's, Ctrl + Win only Dictation's. Set Dictation to
+     Ctrl + Alt as well: Settings › Clicky says the two share keys and Clicky stands aside.
+   - Turn Clicky off: the spark goes away on every monitor and Ctrl + Alt does nothing.
+10. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
    AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
 ## Known limits
@@ -106,3 +126,6 @@ About 30 minutes on a Windows 10 or 11 PC:
 - The .msi leaves the sign-in Run entry behind when it uninstalls. The per-user installer removes it.
 - Dictation can't type into an app running as administrator (Windows keeps a normal app's keys out of it) unless Theo
   runs as administrator too. On keyboards where AltGr sends Ctrl + Alt, a Ctrl + Alt chord also fires on AltGr.
+- Clicky's Ctrl + Alt has the same AltGr catch: typing an AltGr letter cancels the listen at once, but someone who holds
+  AltGr alone will wake Clicky; pick another shortcut in Settings › Clicky on those keyboards. Clicky can't see a window
+  that blocks capture (some video players, DRM content): those parts of the picture come back black.
