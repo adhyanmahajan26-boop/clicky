@@ -476,7 +476,7 @@ struct BotProtocolTests {
         #expect(DeviceRouting.route(.bots, choice: .otherMac, pair: linkedPair(on: airMac)) == .sendAcross)
         #expect(DeviceRouting.route(.bots, choice: .thisMac, pair: linkedPair(on: studioMac)) == .runHere)
         #expect(DeviceFeature.bots.anyChoiceTitle == "The Mac you're using")
-        #expect(DeviceFeature.routines.anyChoiceTitle == "The always-on Mac")
+        #expect(DeviceFeature.routines.anyChoiceTitle == "The main Mac")
         #expect(DeviceFeature.clicky.anyChoiceTitle == "Any")
     }
 

@@ -168,7 +168,7 @@ struct BotsRootView: View {
                     } else {
                         hairlineRow("home", "Home", isSelected: selection.pane == .home) { selection.pane = .home }
                         if StudioController.hasPanel {
-                            hairlineRow("studio", "Studio", trailing: studio.isOn ? "\(studio.liveCount) live" : (studio.remoteView?.tiles.isEmpty == false ? "\(studio.remoteView?.tiles.count ?? 0) live" : nil), isSelected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0) {
+                            hairlineRow("studio", "VM screens", trailing: studio.isOn ? "\(studio.liveCount) live" : (studio.remoteView?.tiles.isEmpty == false ? "\(studio.remoteView?.tiles.count ?? 0) live" : nil), isSelected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0) {
                                 withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() }
                             }
                         }
@@ -1005,7 +1005,7 @@ struct BotChatScreen: View {
                 Button { withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() } } label: {
                     HStack(spacing: 6) {
                         HairlineIcon(name: "studio", size: 16, color: DS.Colors.textPrimary, selected: studio.panelVisible, live: studio.isOn && studio.liveCount > 0)
-                        Text("Studio")
+                        Text("VM screens")
                     }
                 }
                 .buttonStyle(.theoSecondary).help("Show or hide your bots' screens")
@@ -1916,7 +1916,7 @@ struct T3RunCard: View {
                     Button { studio.panelVisible = true } label: {
                         HStack(spacing: 6) { HairlineIcon(name: "eye", size: 15, color: DS.Colors.textPrimary); Text("Watch on Screen \(tile.screen + 1)") }
                     }
-                    .buttonStyle(.theoSecondary).help("Show its tile in the Studio panel")
+                    .buttonStyle(.theoSecondary).help("Show its tile in the VM screens panel")
                 }
                 if session != nil {
                     Button {

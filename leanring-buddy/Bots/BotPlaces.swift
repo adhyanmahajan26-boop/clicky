@@ -47,7 +47,8 @@ enum DeviceSnapshotBuilder {
         for provider in ProviderKeys.shared.usableChatProviders { ready["api:\(provider.id)"] = true }
         return DeviceSnapshot(name: TheoLink.localName, projectsFolder: BotsT3.projectsFolder.path, projects: BotsT3.projects(), harnesses: ready,
                               hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines),
-                              deviceID: DeviceRoles.thisMacID, isDesktop: DeviceRoles.thisMacIsDesktop, routinesChoice: DeviceRoles.choice(.routines).rawValue)
+                              deviceID: DeviceRoles.thisMacID, isDesktop: DeviceRoles.thisMacIsDesktop, routinesChoice: DeviceRoles.choice(.routines).rawValue,
+                              mainMacID: DeviceRoles.mainMacPick?.id, mainMacChosenAt: DeviceRoles.mainMacPick?.at)
     }
 }
 

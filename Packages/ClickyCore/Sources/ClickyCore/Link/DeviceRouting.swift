@@ -16,7 +16,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .bots: return "Bots & coding"
         case .routines: return "Routines"
-        case .studioScreens: return "Studio screens"
+        case .studioScreens: return "VM screens"
         case .researchBrowser: return "Research browser"
         case .clicky: return "Pointer Assistant"
         case .dictation: return "Dictation"
@@ -28,7 +28,7 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .bots: return "Where a bot answers, and where its folders and coding runs are. Chats stay the same on both Macs."
         case .routines: return "The Mac that fires your routines, so each one runs once. Best on a Mac that's always on."
-        case .studioScreens: return "The hidden screens, on one Mac. Experimental, and off until you turn them on in Settings › Studio."
+        case .studioScreens: return "The VM screens your bots work on, on one Mac. Experimental, and off until you set them up in Settings › VM screens."
         case .researchBrowser: return "Where Researcher opens blocked pages in your Chrome."
         case .clicky: return "Seeing your screen, pointing, answering."
         case .dictation: return "Talking into the chat box, and the shortcut in any app."
@@ -41,13 +41,13 @@ public enum DeviceFeature: String, CaseIterable, Identifiable, Sendable {
     /// Work the other Mac can be asked to do. The rest simply doesn't happen here.
     public var canBeSentAcross: Bool { self == .bots || self == .routines || self == .researchBrowser }
 
-    /// With two Macs linked, one of them does this for both, so "Any" means the Mac that's always on (`DeviceRouting.alwaysOnMacIsThisOne`).
+    /// With two Macs linked, one of them does this for both, so "Any" means the main Mac (`DeviceRouting.alwaysOnMacIsThisOne`).
     public var isDoneByOneMac: Bool { self == .routines || self == .studioScreens || self == .researchBrowser }
 
     /// What "Any" means for this feature, in the Settings picker.
     public var anyChoiceTitle: String {
         if self == .bots { return "The Mac you're using" }
-        return isDoneByOneMac ? "The always-on Mac" : "Any"
+        return isDoneByOneMac ? "The main Mac" : "Any"
     }
 }
 
@@ -87,12 +87,18 @@ public struct LinkedMac: Codable, Equatable, Sendable {
     public var isDesktop: Bool
     /// This Mac's own Routines choice, said from its side. Nil when it isn't known (a build from before it was shared).
     public var routinesChoice: DeviceChoice?
+    /// The Mac this one was told is the main one (a `LinkedMac.id`), and when. Either Mac can pick, and the newest pick wins on both.
+    /// Nil: nobody picked, so the main Mac is the always-on one.
+    public var mainMacID: String?
+    public var mainMacChosenAt: Date?
 
-    public init(id: String, name: String, isDesktop: Bool, routinesChoice: DeviceChoice? = nil) {
+    public init(id: String, name: String, isDesktop: Bool, routinesChoice: DeviceChoice? = nil, mainMacID: String? = nil, mainMacChosenAt: Date? = nil) {
         self.id = id
         self.name = name
         self.isDesktop = isDesktop
         self.routinesChoice = routinesChoice
+        self.mainMacID = mainMacID
+        self.mainMacChosenAt = mainMacChosenAt
     }
 }
 
@@ -236,8 +242,8 @@ public enum DeviceRouting {
     /// other) goes to the Mac that's always on.
     public static func routinesFireHere(thisMacChoice: DeviceChoice, pair: MacPair) -> Bool {
         guard pair.paired else { return true }
-        // Nothing heard from the other Mac yet, so its choice isn't known: only a desktop takes them meanwhile.
-        guard let otherMac = pair.otherMac else { return pair.thisMac.isDesktop }
+        // Nothing heard from the other Mac yet, so its choice isn't known: only the main Mac takes them meanwhile (a desktop, unless one was picked).
+        guard let otherMac = pair.otherMac else { return alwaysOnMacIsThisOne(pair) }
         let otherMacChoice = otherMac.routinesChoice ?? .any
         let votesForThisMac = (thisMacChoice == .thisMac ? 1 : 0) + (otherMacChoice == .otherMac ? 1 : 0)
         let votesForOtherMac = (thisMacChoice == .otherMac ? 1 : 0) + (otherMacChoice == .thisMac ? 1 : 0)
@@ -245,10 +251,26 @@ public enum DeviceRouting {
         return alwaysOnMacIsThisOne(pair)
     }
 
-    /// Of two linked Macs, the one that does what one Mac does for both when nobody picked: a desktop over a laptop, since it's
+    /// The main Mac the owner picked, as a `LinkedMac.id`: of the two Macs' picks, the newer one, so both agree once they've heard
+    /// from each other. Nil when nobody picked, or the pick names neither Mac (one that was unlinked since).
+    public static func pickedMainMacID(_ pair: MacPair) -> String? {
+        let picks = [pair.thisMac, pair.otherMac].compactMap { mac -> (id: String, at: Date)? in
+            guard let mac, let id = mac.mainMacID else { return nil }
+            return (id, mac.mainMacChosenAt ?? .distantPast)
+        }
+        guard let newest = picks.max(by: { $0.at < $1.at }) else { return nil }
+        let knownIDs = [pair.thisMac.id, pair.otherMac?.id].compactMap { $0 }
+        return knownIDs.contains(newest.id) ? newest.id : nil
+    }
+
+    /// Of two linked Macs, the main one: it does what one Mac does for both (routines, the research browser, the VM screens) when a
+    /// feature is set to "The main Mac". The owner's pick first (`pickedMainMacID`); without one, a desktop over a laptop, since it's
     /// the one left on, and between two of a kind the smaller id. Both Macs know both ids, so they agree.
     public static func alwaysOnMacIsThisOne(_ pair: MacPair) -> Bool {
         guard pair.paired else { return true }
+        if let picked = pickedMainMacID(pair) { return picked == pair.thisMac.id }
+        // Nothing heard from the other Mac yet: a pick made here that names another Mac means this one isn't the main one.
+        if pair.otherMac == nil, let mine = pair.thisMac.mainMacID { return mine == pair.thisMac.id }
         guard let otherMac = pair.otherMac else { return pair.thisMac.isDesktop }
         if pair.thisMac.isDesktop != otherMac.isDesktop { return pair.thisMac.isDesktop }
         if pair.thisMac.id != otherMac.id { return pair.thisMac.id < otherMac.id }

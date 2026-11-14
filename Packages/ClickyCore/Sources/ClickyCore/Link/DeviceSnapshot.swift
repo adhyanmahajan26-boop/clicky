@@ -40,9 +40,12 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
     public var isDesktop: Bool?
     /// Its own Routines choice (`DeviceChoice` raw value), said from its side.
     public var routinesChoice: String?
+    /// The main Mac it was told of (`LinkedMac.mainMacID`) and when. Nil from builds before there was a main Mac.
+    public var mainMacID: String?
+    public var mainMacChosenAt: Date?
 
     public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil, firesRoutines: Bool? = nil,
-                deviceID: String? = nil, isDesktop: Bool? = nil, routinesChoice: String? = nil) {
+                deviceID: String? = nil, isDesktop: Bool? = nil, routinesChoice: String? = nil, mainMacID: String? = nil, mainMacChosenAt: Date? = nil) {
         self.name = name
         self.projectsFolder = projectsFolder
         self.projects = projects
@@ -53,13 +56,16 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
         self.deviceID = deviceID
         self.isDesktop = isDesktop
         self.routinesChoice = routinesChoice
+        self.mainMacID = mainMacID
+        self.mainMacChosenAt = mainMacChosenAt
     }
 
     /// The other Mac, as the routing rules see it. A build from before ids were shared is known by its name, and only a Mac Studio
     /// had screens then, so `hasScreens` says whether it's a desktop.
     public var linkedMac: LinkedMac {
         LinkedMac(id: deviceID ?? "name:\(name)", name: name, isDesktop: isDesktop ?? hasScreens,
-                  routinesChoice: routinesChoice.flatMap { DeviceChoice.fromSaved($0, thisMacWasMacStudio: hasScreens) })
+                  routinesChoice: routinesChoice.flatMap { DeviceChoice.fromSaved($0, thisMacWasMacStudio: hasScreens) },
+                  mainMacID: mainMacID, mainMacChosenAt: mainMacChosenAt)
     }
 }
 

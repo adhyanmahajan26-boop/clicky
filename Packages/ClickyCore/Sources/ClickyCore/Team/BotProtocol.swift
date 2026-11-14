@@ -374,7 +374,7 @@ public enum BotProtocol {
         "Vello makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Vello's line says so."
 
     public static func screenHowTo(owner: String) -> String {
-        "\(OwnerName.startingSentence(owner))'s Mac has hidden screens set aside for you, and \(owner) watches them in the Studio panel. For a simple job in an " +
+        "\(OwnerName.startingSentence(owner))'s Mac has hidden screens set aside for you, and \(owner) watches them in the VM screens panel. For a simple job in an " +
         "ordinary app (Stickies, Calculator, Clock, Notes and the like) put a line [SCREEN: what to do, in plain words] in your reply. " +
         "Pointer Assistant does it on a free tile without touching \(owner)'s own monitors, then tells you what happened. Say a job happened only if " +
         "that report says so. Browsers, terminals, mail and chat apps aren't allowed there. " +

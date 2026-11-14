@@ -22,11 +22,41 @@ enum CrewTestCommands {
         case "uiStudio": return studio(command)
         case "uiSeedDemo": return seed()
         case "uiLink": return link(command)
+        case "uiNearby": return nearby(command)
+        case "uiMainMac": return mainMac(command)
         case "uiBotPrompt": return botPrompt(command)
         default:
             if let key = command["key"] as? String { UserDefaults.standard.set(command["value"], forKey: key) }
             return [:] as [String: Any]
         }
+    }
+
+    /// One-click linking between two test profiles: {action: state}, {action: link, name}, {action: allow}, {action: deny},
+    /// {action: unlink}. Test profiles advertise their own Bonjour type, so the owner's Macs never see them.
+    private static func nearby(_ command: [String: Any]) -> Any {
+        let nearby = NearbyLinking.shared
+        switch command["action"] as? String ?? "state" {
+        case "link":
+            let name = command["name"] as? String ?? ""
+            guard let mac = nearby.nearby.first(where: { $0.name == name }) else { return ["error": "not nearby: \(name)", "nearby": nearby.nearby.map(\.name)] }
+            nearby.link(with: mac)
+        case "allow": nearby.allow()
+        case "deny": nearby.deny()
+        case "unlink": TheoLink.shared.unpair()
+        default: break
+        }
+        return nearby.testState
+    }
+
+    /// {action: state} or {action: thisMac} / {action: otherMac}: the main Mac, as Settings › Devices picks it.
+    private static func mainMac(_ command: [String: Any]) -> Any {
+        switch command["action"] as? String ?? "state" {
+        case "thisMac": DeviceRoles.makeMainMac(id: DeviceRoles.thisMacID)
+        case "otherMac": if let other = DeviceRoles.otherMac { DeviceRoles.makeMainMac(id: other.id) }
+        default: break
+        }
+        return ["thisMacIsMain": DeviceRoles.thisMacIsMain, "picked": DeviceRoles.mainMacWasPicked, "pick": DeviceRoles.mainMacPick?.id ?? "",
+                "studioScreensRoute": "\(DeviceRoles.route(.studioScreens))", "routinesRoute": "\(DeviceRoles.route(.routines))"]
     }
 
     /// {action: start, code, port, dialHost, dialPort}, {action: down}, {action: up}, {action: state}: a test profile's own link.
@@ -131,7 +161,7 @@ enum CrewTestCommands {
         Bots that open browsers and terminals on your screens get in the way. A screen nobody sees is the simplest place for that work to happen, and Builder and Designer can keep at it while you do something else entirely.
 
         ## How it works
-        Vello makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the Studio panel, only while it's open.
+        Vello makes two virtual displays when you turn the feature on and removes them when you turn it off or quit. Each display is split into a left and a right tile, and a bot gets one tile. Small views at two frames a second sit in the VM screens panel, only while it's open.
 
         ## Cost on Studio
         About three percent of the CPU and 180 MB with four tiles live. Thumbnails stop the moment the panel closes.
@@ -140,7 +170,7 @@ enum CrewTestCommands {
         Experimental, on any Mac, and off until you turn it on. Bots don't move onto the tiles by themselves yet; that comes after you've tried it.
         """
         store.seedForTest(theo.id, messages: [
-            message("user", "Plan the Studio screens launch and get Builder started on the tiles.", 200),
+            message("user", "Plan the VM screens launch and get Builder started on the tiles.", 200),
             message(theo.id, "Done. Here's the brief, Builder is already on it, and I need one quick call from you.", 190),
             message(theo.id, brief, 185),
             message(theo.id, "[CHOOSE: How should each screen be split? | Side by side: Best for code and browsers | Stacked: Better for wide timelines]", 20),

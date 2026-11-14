@@ -653,7 +653,7 @@ extension BotsStore {
             guard await studio.wakeForWork() else {
                 let said = studio.isEnabled
                     ? "The hidden screens are asleep while something's playing, because waking them can interrupt it. Nothing was done, so ask again when it's stopped."
-                    : "I can't do that: the hidden screens are off, so nothing was done. \(OwnerName.startingSentence(BotPrompts.ownerName)) can turn them on in Settings › Studio."
+                    : "I can't do that: the hidden screens are off, so nothing was done. \(OwnerName.startingSentence(BotPrompts.ownerName)) can set them up in Settings › VM screens."
                 if let onReport { onReport(said) } else { self.post(BotChatMessage(author: bot.id, text: said), to: room) }
                 return
             }
@@ -730,7 +730,7 @@ extension BotsStore {
             return
         }
         guard let choice = BotScreenGift.choice(for: gift.screen, in: StudioController.shared.config) else {
-            post(BotChatMessage(author: bot.id, text: "There's no free screen matching \"\(gift.screen)\". You can make one in Settings › Studio › Screens. Nothing changed."), to: room)
+            post(BotChatMessage(author: bot.id, text: "There's no free screen matching \"\(gift.screen)\". You can make one in Settings › VM screens. Nothing changed."), to: room)
             return
         }
         post(BotChatMessage(author: bot.id, text: "Confirm this and it's done:", card: "screen|\(target.id)|\(choice.tag)"), to: room)

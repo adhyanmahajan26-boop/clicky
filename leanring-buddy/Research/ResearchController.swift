@@ -355,7 +355,7 @@ final class ResearchController: CompanionActivitySource {
                         switch await BrowserResearcher.shared.read(job.url) {
                         case .page(let title, let text):
                             page = (title, text)
-                            await MainActor.run { agentsCenter.log(agentID, "read in your browser on a Studio screen") }
+                            await MainActor.run { agentsCenter.log(agentID, "read in your browser on a VM screen") }
                         case .skipped(let reason):
                             await MainActor.run { agentsCenter.log(agentID, reason) }
                         }
