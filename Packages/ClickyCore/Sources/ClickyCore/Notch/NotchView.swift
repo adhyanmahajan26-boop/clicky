@@ -9,6 +9,11 @@
 //  model, elapsed, cost; a click selects one for Cancel) and quick actions
 //  (Cancel, Open review, the Agents window, the Code mode switch).
 //
+//  The bots are always on it: a chip per lane (yellow needs you, red failed,
+//  green working) sits beside the logo whenever any bot is in one, and the
+//  edge turns red or yellow while a bot has failed or needs you. Expanded,
+//  the bots come first, most urgent first: face, name, one line, one button.
+//
 //  The pill is black in light and dark mode, like a hardware notch; dark
 //  mode adds a faint edge so it still reads against a dark menu bar. The
 //  view fills its window and draws the pill top-centred at the collapsed or
@@ -33,6 +38,8 @@ public struct NotchActions {
     public var botFace: ((String, String) -> AnyView)? = nil
     /// The bot line's button.
     public var botLineAction: (String) -> Void = { _ in }
+    /// A click anywhere else on a bot's row: open its chat.
+    public var openBot: (String) -> Void = { _ in }
 
     public init(expand: @escaping () -> Void, selectAgent: @escaping (String) -> Void, cancelAgent: @escaping (String) -> Void,
                 openReview: @escaping (String) -> Void, showAgentsWindow: @escaping () -> Void, setCodeModeEnabled: @escaping (Bool) -> Void) {
@@ -133,16 +140,28 @@ public struct NotchView: View {
 
     /// The pill's size for this content (the app sizes the panel the same way).
     public static func pillSize(content: NotchContent, layout: NotchLayout, isExpanded: Bool) -> CGSize {
-        guard isExpanded else { return NotchGeometry.collapsedSize(layout: layout, isIdle: isIdle(content)) }
+        guard isExpanded else {
+            return NotchGeometry.collapsedSize(layout: layout, isIdle: isIdle(content), botChipCount: content.botTally.chips.count)
+        }
         return NotchGeometry.expandedSize(layout: layout, agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0,
                                           hasCaption: content.captionText != nil, actionStepLineCount: content.actionStepLines.count,
-                                          hasBotLine: content.botLine != nil)
+                                          botRowCount: content.botLines.count, hasMoreBotsLine: content.hiddenBotCount > 0)
     }
 
-    /// Nothing to show beside the logo: no status, no helpers orbiting it.
+    /// Nothing to show beside the logo: no status, no helpers orbiting it, no bot working, failed or waiting.
     private static func isIdle(_ content: NotchContent) -> Bool {
-        content.phase == .idle && content.statusText.isEmpty && content.orbitingAgentIDs.isEmpty
+        content.phase == .idle && content.statusText.isEmpty && content.orbitingAgentIDs.isEmpty && content.botTally.isEmpty
     }
+
+    /// While the companion is quiet, the edge says the most urgent thing about the bots:
+    /// red while one has failed, yellow while one needs you. Static, so it costs nothing.
+    private var urgentEdgeColor: Color? {
+        if content.botTally.failed > 0 { return Self.color(NotchBotLane.failed.hex) }
+        if content.botTally.needsYou > 0 { return Self.color(NotchBotLane.needsYou.hex) }
+        return nil
+    }
+
+    static func color(_ hex: UInt32) -> Color { Color(cgColor: CompanionIconStyle.color(hex)) }
 
     private var pillShape: NotchShape {
         NotchShape(topFlareRadius: NotchGeometry.topFlareRadius,
@@ -172,6 +191,8 @@ public struct NotchView: View {
                                                    center: .center, angle: .degrees(seconds.truncatingRemainder(dividingBy: 2.4) / 2.4 * 360)),
                                    lineWidth: 1.6)
                 }
+            } else if let urgentEdgeColor {
+                outline.stroke(urgentEdgeColor.opacity(0.75), lineWidth: 1.4)
             } else {
                 outline.stroke(Color.white.opacity(colorScheme == .dark || style.isFloating ? 0.14 : 0), lineWidth: 1)
             }
@@ -197,25 +218,36 @@ public struct NotchView: View {
 
     private var collapsedContent: some View {
         let isIdle = Self.isIdle(content)
-        let bodySize = NotchGeometry.collapsedBodySize(layout: layout, isIdle: isIdle)
-        let wingWidth = NotchGeometry.collapsedWingWidth(layout: layout, isIdle: isIdle)
+        let chips = content.botTally.chips
+        let bodySize = NotchGeometry.collapsedBodySize(layout: layout, isIdle: isIdle, botChipCount: chips.count)
+        let wingWidth = NotchGeometry.collapsedWingWidth(layout: layout, isIdle: isIdle, botChipCount: chips.count)
         return Group {
             if layout.hasPhysicalNotch {
-                // The hardware notch hides the middle: logo in the left wing, status in the right.
+                // The hardware notch hides the middle: logo and bot chips in the left wing, status in the right.
                 HStack(spacing: 0) {
-                    logo.frame(width: wingWidth)
+                    if chips.isEmpty {
+                        logo.frame(width: wingWidth)
+                    } else {
+                        HStack(spacing: NotchGeometry.botChipsLeadingGap) {
+                            logo
+                            NotchBotChipsView(chips: chips)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: wingWidth)
+                    }
                     Spacer().frame(width: layout.notchRect.width)
                     statusLabel
-                        .frame(width: wingWidth - 10, alignment: .leading)
+                        .frame(width: max(0, wingWidth - 10), alignment: .leading)
                         .padding(.trailing, 10)
                 }
-            } else if content.statusText.isEmpty {
+            } else if content.statusText.isEmpty && chips.isEmpty {
                 logo
             } else {
                 HStack(spacing: 7) {
                     logo
                     statusLabel
                     Spacer(minLength: 0)
+                    if !chips.isEmpty { NotchBotChipsView(chips: chips) }
                 }
                 .padding(.horizontal, 10)
             }
@@ -224,8 +256,13 @@ public struct NotchView: View {
         .contentShape(Rectangle())
         .onTapGesture { actions.expand() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(content.statusText.isEmpty ? "Vello" : "Vello, \(content.statusText)")
+        .accessibilityLabel(collapsedAccessibilityLabel)
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// "Vello, Researcher needs you, 1 needs you, 2 working".
+    private var collapsedAccessibilityLabel: String {
+        (["Vello", content.statusText, content.botTally.spokenText]).filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     private var statusLabel: some View {
@@ -262,8 +299,9 @@ public struct NotchView: View {
         VStack(spacing: 0) {
             header.frame(height: layout.headerHeight)
             Spacer().frame(height: NotchGeometry.expandedTopPadding)
-            if let botLine = content.botLine {
-                botLineRow(botLine).frame(height: NotchGeometry.botLineHeight)
+            if !content.botLines.isEmpty {
+                botsSection
+                    .frame(height: NotchGeometry.botsSectionHeight(botRowCount: content.botLines.count, hasMoreBotsLine: content.hiddenBotCount > 0))
                 Spacer().frame(height: NotchGeometry.sectionSpacing)
             }
             if let captionText = content.captionText {
@@ -274,9 +312,11 @@ public struct NotchView: View {
                 actionStepsCard.frame(height: NotchGeometry.actionStepsHeight(lineCount: content.actionStepLines.count))
                 Spacer().frame(height: NotchGeometry.sectionSpacing)
             }
-            agentsSection
-                .frame(height: NotchGeometry.agentsSectionHeight(agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0))
-            Spacer().frame(height: NotchGeometry.sectionSpacing)
+            if NotchGeometry.showsAgentsSection(agentRowCount: content.agentRows.count, botRowCount: content.botLines.count) {
+                agentsSection
+                    .frame(height: NotchGeometry.agentsSectionHeight(agentRowCount: content.agentRows.count, hasMoreAgentsLine: content.hiddenAgentCount > 0))
+                Spacer().frame(height: NotchGeometry.sectionSpacing)
+            }
             actionsRow.frame(height: NotchGeometry.actionsRowHeight)
             Spacer().frame(height: NotchGeometry.expandedBottomPadding)
         }
@@ -293,44 +333,49 @@ public struct NotchView: View {
             HStack(spacing: 0) {
                 HStack(spacing: 6) {
                     logo
-                    headerTitle(content.statusText.isEmpty ? "Pointer Assistant" : content.statusText, isPrimary: content.statusText.isEmpty)
+                    headerTitle(content.statusText.isEmpty ? "Vello" : content.statusText, isPrimary: content.statusText.isEmpty)
                 }
                 .frame(width: sideWidth, alignment: .leading)
                 Spacer(minLength: 0)
-                runningSummaryLabel.frame(width: sideWidth, alignment: .trailing)
+                headerTrailing.frame(width: sideWidth, alignment: .trailing)
             }
         } else {
             HStack(spacing: 7) {
                 logo
-                headerTitle("Pointer Assistant", isPrimary: true)
+                headerTitle("Vello", isPrimary: true)
                 if !content.statusText.isEmpty { headerTitle(content.statusText, isPrimary: false) }
                 Spacer(minLength: 8)
-                runningSummaryLabel
+                headerTrailing
             }
         }
     }
 
-    /// "Researcher needs you / Sign in to Notion / [Sign in]": the face at 28 pt, a title, one line, one button.
-    private func botLineRow(_ botLine: NotchBotLine) -> some View {
-        HStack(spacing: 10) {
-            if let face = actions.botFace { face(botLine.botID, botLine.state).frame(width: 28, height: 28) }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(botLine.title).font(.system(size: 13, weight: .semibold)).foregroundColor(.white).lineLimit(1)
-                Text(botLine.line).font(.system(size: 11.5)).foregroundColor(.white.opacity(0.6)).lineLimit(1)
+    /// The bot chips while any bot is working, failed or needs you; otherwise how many helpers are running.
+    @ViewBuilder private var headerTrailing: some View {
+        if content.botTally.isEmpty {
+            runningSummaryLabel
+        } else {
+            NotchBotChipsView(chips: content.botTally.chips)
+        }
+    }
+
+    /// The bots, most urgent first: needs you, failed, working, then one that just finished.
+    private var botsSection: some View {
+        VStack(alignment: .leading, spacing: NotchGeometry.botRowSpacing) {
+            ForEach(content.botLines) { botLine in
+                NotchBotRowView(botLine: botLine, face: actions.botFace?(botLine.botID, botLine.state),
+                                buttonAction: { actions.botLineAction(botLine.botID) },
+                                openAction: { actions.openBot(botLine.botID) })
+                    .frame(height: NotchGeometry.botRowHeight)
             }
-            Spacer(minLength: 8)
-            if let button = botLine.button {
-                Button(button) { actions.botLineAction(botLine.botID) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(botLine.button == "Sign in" || botLine.button == "Fix" ? .black : .white)
-                    .padding(.horizontal, 11).frame(height: 26)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(botLine.button == "Sign in" || botLine.button == "Fix" ? Color(cgColor: CompanionIconStyle.color(style.accentHex)) : Color.white.opacity(0.12)))
+            if content.hiddenBotCount > 0 {
+                Text("+\(content.hiddenBotCount) more on Home")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.white.opacity(0.45))
+                    .frame(height: NotchGeometry.moreBotsLineHeight)
             }
         }
-        .padding(.horizontal, 10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func headerTitle(_ title: String, isPrimary: Bool) -> some View {
@@ -496,6 +541,167 @@ struct NotchLogoView: View {
                     .rotationEffect(.degrees(-90 + Double(miniIndex) * 360 / Double(visibleMiniCount)))
             }
             .rotationEffect(.degrees(orbitDegrees))
+        }
+    }
+}
+
+// MARK: - Bots
+
+/// The count chips: a dot in the lane's colour and the number, one per lane with bots in it.
+struct NotchBotChipsView: View {
+    let chips: [NotchBotChip]
+
+    var body: some View {
+        HStack(spacing: NotchGeometry.botChipSpacing) {
+            ForEach(chips) { chip in
+                let laneColor = NotchView.color(chip.lane.hex)
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(laneColor)
+                        .frame(width: 6, height: 6)
+                    Text(NotchBotTally.countText(chip.count))
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(.white.opacity(0.95))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .frame(width: NotchGeometry.botChipWidth, height: 16)
+                .background(Capsule().fill(laneColor.opacity(0.2)))
+                .accessibilityLabel(chip.lane == .needsYou && chip.count == 1 ? "1 needs you" : "\(chip.count) \(chip.lane.countWord)")
+            }
+        }
+        .fixedSize()
+    }
+}
+
+/// One bot on the board: a stripe in its lane's colour, its face, its name and lane, one line,
+/// and the one button (Sign in, Answer, Fix, Open) or how long it has been working.
+private struct NotchBotRowView: View {
+    let botLine: NotchBotLine
+    let face: AnyView?
+    let buttonAction: () -> Void
+    let openAction: () -> Void
+    @State private var isHovering = false
+
+    private var laneColor: Color { NotchView.color(botLine.lane.hex) }
+
+    private var laneWord: String {
+        switch botLine.lane {
+        case .needsYou: return "Needs you"
+        case .failed: return "Failed"
+        case .working: return "Working"
+        case .done: return "Done"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Capsule()
+                .fill(laneColor)
+                .frame(width: 3, height: 24)
+            Group {
+                if let face {
+                    face
+                } else {
+                    NotchFallbackFace(laneColor: laneColor)
+                }
+            }
+            .frame(width: 26, height: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(botLine.name)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Text(laneWord)
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundColor(laneColor.opacity(botLine.lane == .done ? 0.6 : 1))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text(botLine.line)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 6)
+            trailing
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(isHovering ? 0.1 : 0.06)))
+        .contentShape(Rectangle())
+        .onTapGesture { openAction() }
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(botLine.title): \(botLine.line)")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if let button = botLine.button {
+            NotchBotButton(title: button, lane: botLine.lane, action: buttonAction)
+        } else if let sinceText = botLine.sinceText, !sinceText.isEmpty {
+            Text(sinceText)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundColor(.white.opacity(0.55))
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+}
+
+/// A bot row's one button: filled in the lane's colour for needs you and failed, quiet otherwise.
+private struct NotchBotButton: View {
+    let title: String
+    let lane: NotchBotLane
+    let action: () -> Void
+    @State private var isHovering = false
+
+    private var isUrgent: Bool { lane == .needsYou || lane == .failed }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundColor(lane == .needsYou ? .black : .white)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isUrgent ? NotchView.color(lane.hex).opacity(isHovering ? 1 : 0.9) : Color.white.opacity(isHovering ? 0.2 : 0.12)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+}
+
+/// A plain face for renders and previews, where the app's Pixel faces aren't available.
+private struct NotchFallbackFace: View {
+    let laneColor: Color
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(white: 0.17))
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1).fill(laneColor).frame(width: 4, height: 6)
+                RoundedRectangle(cornerRadius: 1).fill(laneColor).frame(width: 4, height: 6)
+            }
         }
     }
 }

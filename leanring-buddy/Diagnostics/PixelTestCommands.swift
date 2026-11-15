@@ -75,10 +75,15 @@ enum PixelTestCommands {
             return result
         case "notch":
             let view = NotchPreview().environment(\.colorScheme, .dark)
-            return show(id: "notch", title: "Notch", size: NSSize(width: 620, height: 560), view: view, theme: nil)
+            return show(id: "notch", title: "Notch", size: NSSize(width: 620, height: 760), view: view, theme: nil)
         case "notchLine":
-            let line = NotchPanelController.botLine(store: store)
-            return ["title": line?.title as Any? ?? NSNull(), "line": line?.line as Any? ?? NSNull(), "button": line?.button as Any? ?? NSNull()] as [String: Any]
+            // The notch's bot board right now: the chips' counts and each row, most urgent first.
+            let board = NotchPanelController.botBoard(store: store, now: Date())
+            let first = board.lines.first
+            return ["title": first?.title as Any? ?? NSNull(), "line": first?.line as Any? ?? NSNull(), "button": first?.button as Any? ?? NSNull(),
+                    "tally": ["needsYou": board.tally.needsYou, "failed": board.tally.failed, "working": board.tally.working],
+                    "hidden": board.hiddenCount,
+                    "rows": board.lines.map { ["bot": $0.botID, "lane": $0.title, "line": $0.line, "button": $0.button as Any? ?? NSNull()] as [String: Any] }] as [String: Any]
         case "panel":
             guard let manager = CompanionManager.current else { return ["error": "No companion."] }
             let view = TheoPanelView(companionManager: manager, close: {}).padding(16).background(Color.black)
@@ -284,26 +289,24 @@ enum PixelTestCommands {
     }
 }
 
-/// The notch as it draws a bot's line: the most urgent bot right now (from the store), Listening, and a bot that is done.
+/// The notch as it draws the bots: the live board (from the store) collapsed and expanded, then Listening.
 struct NotchPreview: View {
     var body: some View {
         let layout = NotchLayout.sample(hasPhysicalNotch: false)
         var actions = NotchActions.inert
         actions.botFace = { botID, state in
             guard let bot = BotsStore.shared.bot(botID) else { return AnyView(EmptyView()) }
-            return AnyView(CrewAvatar(look: bot.crewLook, size: 28, pose: PixelState(rawValue: state) ?? .awake, interactive: false, name: bot.name, ring: .black))
+            return AnyView(CrewAvatar(look: bot.crewLook, size: 26, pose: PixelState(rawValue: state) ?? .awake, interactive: false, name: bot.name, ring: .black))
         }
-        let live = NotchPanelController.botLine(store: BotsStore.shared)
-        let builder = BotsStore.shared.bots.first { $0.name == "Builder" }
-        let examples: [NotchContent] = [
-            NotchContent(statusText: live?.title ?? "", botLine: live),
-            NotchContent(phase: .listening, statusText: "Listening…", captionText: "\u{201C}Hey Vello, what's Builder doing?\u{201D}"),
-            NotchContent(botLine: builder.map { NotchBotLine(botID: $0.id, state: "done", title: "Builder is done", line: "Draft pull request is ready", button: "Open") }),
-        ]
+        var live = NotchContent()
+        live.apply(botBoard: NotchPanelController.botBoard(store: BotsStore.shared, now: Date()))
+        var listening = NotchContent(phase: .listening, statusText: "Listening…", captionText: "\u{201C}Hey Vello, what's Builder doing?\u{201D}")
+        listening.apply(botBoard: NotchPanelController.botBoard(store: BotsStore.shared, now: Date()))
+        let examples: [(NotchContent, Bool)] = [(live, false), (live, true), (listening, true)]
         return VStack(spacing: 14) {
-            ForEach(Array(examples.enumerated()), id: \.offset) { _, content in
-                NotchView(content: content, layout: layout, isExpanded: true, actions: actions, fixedAnimationDate: Date(timeIntervalSinceReferenceDate: 0))
-                    .frame(height: NotchView.pillSize(content: content, layout: layout, isExpanded: true).height)
+            ForEach(Array(examples.enumerated()), id: \.offset) { _, example in
+                NotchView(content: example.0, layout: layout, isExpanded: example.1, actions: actions, fixedAnimationDate: Date(timeIntervalSinceReferenceDate: 0))
+                    .frame(height: NotchView.pillSize(content: example.0, layout: layout, isExpanded: example.1).height)
             }
         }
         .padding(16)

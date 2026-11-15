@@ -54,21 +54,162 @@ public struct NotchAgentRow: Identifiable, Equatable, Sendable {
     }
 }
 
-/// One bot that wants the owner, or just finished: "Researcher needs you / Sign in to Notion / [Sign in]".
-public struct NotchBotLine: Equatable, Sendable {
+/// Which lane a bot's line sits in on the notch, most urgent first. Green is working, yellow needs you, red only ever failed.
+public enum NotchBotLane: Int, CaseIterable, Comparable, Sendable {
+    case needsYou, failed, working, done
+
+    public static func < (lhs: NotchBotLane, rhs: NotchBotLane) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// The lane for a PixelState name ("needs", "failed", "working", "thinking", "done"); nil for a bot with nothing to report.
+    public static func lane(forPixelState state: String) -> NotchBotLane? {
+        switch state {
+        case "needs": return .needsYou
+        case "failed": return .failed
+        case "working", "thinking": return .working
+        case "done": return .done
+        default: return nil
+        }
+    }
+
+    /// The colour of the lane's dot, chip and words: the Pixel faces' own colours.
+    public var hex: UInt32 {
+        switch self {
+        case .needsYou: return 0xFFD938
+        case .failed: return 0xFF4A5E
+        case .working: return 0x22D391
+        case .done: return 0xF4F4F5
+        }
+    }
+
+    /// "need you", "failed", "working": the word after a count.
+    public var countWord: String {
+        switch self {
+        case .needsYou: return "need you"
+        case .failed: return "failed"
+        case .working: return "working"
+        case .done: return "done"
+        }
+    }
+}
+
+/// One bot on the notch: "Researcher · Sign in to Notion · [Sign in]", "Builder · Running the tests · 4m".
+public struct NotchBotLine: Identifiable, Equatable, Sendable {
     public var botID: String
+    public var name: String
     /// A PixelState name, for the face.
     public var state: String
-    public var title: String
+    public var lane: NotchBotLane
+    /// What it's doing, or what it needs, in one line.
     public var line: String
+    /// The one button ("Sign in", "Answer", "Fix", "Open"); nil shows the time instead.
     public var button: String?
+    /// How long it has been in this state ("4m", "1:42"), when known.
+    public var sinceText: String?
 
-    public init(botID: String, state: String, title: String, line: String, button: String?) {
+    public var id: String { botID }
+
+    /// "Researcher needs you", "Builder failed", "Builder is working", "Builder is done".
+    public var title: String {
+        switch lane {
+        case .needsYou: return "\(name) needs you"
+        case .failed: return "\(name) failed"
+        case .working: return "\(name) is working"
+        case .done: return "\(name) is done"
+        }
+    }
+
+    public init(botID: String, name: String, state: String, lane: NotchBotLane, line: String, button: String? = nil, sinceText: String? = nil) {
         self.botID = botID
+        self.name = name
         self.state = state
-        self.title = title
+        self.lane = lane
         self.line = line
         self.button = button
+        self.sinceText = sinceText
+    }
+}
+
+/// How many bots are in each lane, for the chips that are always on the pill.
+public struct NotchBotTally: Equatable, Sendable {
+    public var needsYou: Int
+    public var failed: Int
+    public var working: Int
+
+    public init(needsYou: Int = 0, failed: Int = 0, working: Int = 0) {
+        self.needsYou = needsYou
+        self.failed = failed
+        self.working = working
+    }
+
+    public var isEmpty: Bool { needsYou == 0 && failed == 0 && working == 0 }
+
+    /// The chips in the order they're drawn (needs you, failed, working), only the ones above zero.
+    public var chips: [NotchBotChip] {
+        [NotchBotChip(lane: .needsYou, count: needsYou), NotchBotChip(lane: .failed, count: failed), NotchBotChip(lane: .working, count: working)]
+            .filter { $0.count > 0 }
+    }
+
+    /// "1 needs you, 2 failed, 3 working" for VoiceOver and tooltips.
+    public var spokenText: String {
+        chips.map { chip in chip.lane == .needsYou && chip.count == 1 ? "1 needs you" : "\(chip.count) \(chip.lane.countWord)" }.joined(separator: ", ")
+    }
+
+    /// A chip's number: up to 9, then "9+" so the chip keeps its width.
+    public static func countText(_ count: Int) -> String { count > 9 ? "9+" : "\(count)" }
+}
+
+/// One count chip on the pill: a dot in the lane's colour and the number.
+public struct NotchBotChip: Identifiable, Equatable, Sendable {
+    public var lane: NotchBotLane
+    public var count: Int
+    public var id: Int { lane.rawValue }
+
+    public init(lane: NotchBotLane, count: Int) {
+        self.lane = lane
+        self.count = count
+    }
+}
+
+/// The bot board: every bot that needs the owner, failed, is working or just finished, sorted and cut to what fits.
+public enum NotchBots {
+    /// Rows in the expanded panel; the rest are counted in a "+N more" line.
+    public static let maximumRows = 4
+
+    public struct Board: Equatable, Sendable {
+        public var lines: [NotchBotLine]
+        public var hiddenCount: Int
+        public var tally: NotchBotTally
+
+        public init(lines: [NotchBotLine] = [], hiddenCount: Int = 0, tally: NotchBotTally = NotchBotTally()) {
+            self.lines = lines
+            self.hiddenCount = hiddenCount
+            self.tally = tally
+        }
+    }
+
+    /// Needs you first, then failed, then working, then done (each lane keeps the order it was given in).
+    /// Done bots only fill rows nothing more urgent wants, and are never counted in the tally.
+    public static func board(from lines: [NotchBotLine], maximumRows: Int = maximumRows) -> Board {
+        let sorted = lines.enumerated().sorted { first, second in
+            first.element.lane == second.element.lane ? first.offset < second.offset : first.element.lane < second.element.lane
+        }.map(\.element)
+        let tally = NotchBotTally(needsYou: sorted.filter { $0.lane == .needsYou }.count,
+                                  failed: sorted.filter { $0.lane == .failed }.count,
+                                  working: sorted.filter { $0.lane == .working }.count)
+        let shown = Array(sorted.prefix(maximumRows))
+        let hiddenUrgentOrWorking = sorted.dropFirst(maximumRows).filter { $0.lane != .done }.count
+        return Board(lines: shown, hiddenCount: hiddenUrgentOrWorking, tally: tally)
+    }
+
+    /// The collapsed pill's words when the companion itself is quiet: the most urgent bot by name
+    /// ("Researcher needs you"), else who's working ("Builder is working", "3 bots working"). "" when nothing is going on.
+    public static func collapsedStatus(board: Board) -> String {
+        if let first = board.lines.first, first.lane == .needsYou || first.lane == .failed { return first.title }
+        switch board.tally.working {
+        case 0: return ""
+        case 1: return board.lines.first { $0.lane == .working }?.title ?? "1 bot working"
+        default: return "\(board.tally.working) bots working"
+        }
     }
 }
 
@@ -95,14 +236,20 @@ public struct NotchContent: Equatable, Sendable {
     public var wakeIndicator: NotchWakeIndicator
     /// P7: the running action task's newest step lines (at most NotchGeometry.maximumActionStepLines).
     public var actionStepLines: [String]
-    /// A bot that needs the owner, failed, or is done.
-    public var botLine: NotchBotLine?
+    /// The bots that need the owner, failed, are working or just finished (at most NotchBots.maximumRows).
+    public var botLines: [NotchBotLine]
+    /// Bots not listed that still need the owner, failed or are working (they're on Home).
+    public var hiddenBotCount: Int
+    /// How many bots are in each lane: the chips that are always on the pill.
+    public var botTally: NotchBotTally
 
     public init(phase: NotchCompanionPhase = .idle, statusText: String = "", orbitingAgentIDs: [String] = [], agentRows: [NotchAgentRow] = [],
                 hiddenAgentCount: Int = 0, agentRowsAreRecent: Bool = false, captionText: String? = nil, isCodeModeOn: Bool = false,
                 selectedAgentID: String? = nil, cancelTargetID: String? = nil, reviewTargetID: String? = nil,
-                wakeIndicator: NotchWakeIndicator = .hidden, actionStepLines: [String] = [], botLine: NotchBotLine? = nil) {
-        self.botLine = botLine
+                wakeIndicator: NotchWakeIndicator = .hidden, actionStepLines: [String] = [], botBoard: NotchBots.Board = NotchBots.Board()) {
+        self.botLines = botBoard.lines
+        self.hiddenBotCount = botBoard.hiddenCount
+        self.botTally = botBoard.tally
         self.phase = phase
         self.statusText = statusText
         self.orbitingAgentIDs = orbitingAgentIDs
@@ -121,6 +268,15 @@ public struct NotchContent: Equatable, Sendable {
     /// True while the logo should move (spin, pulse or carry orbiting minis);
     /// an idle pill with nothing running stays still and costs nothing.
     public var isLogoAnimating: Bool { phase != .idle || !orbitingAgentIDs.isEmpty }
+
+    /// Puts the bot board on the pill. With the companion quiet and no helper status of its own,
+    /// the collapsed words name the most urgent bot, so a glance says who needs you.
+    public mutating func apply(botBoard: NotchBots.Board) {
+        botLines = botBoard.lines
+        hiddenBotCount = botBoard.hiddenCount
+        botTally = botBoard.tally
+        if phase == .idle, statusText.isEmpty { statusText = NotchBots.collapsedStatus(board: botBoard) }
+    }
 }
 
 public enum NotchStatus {

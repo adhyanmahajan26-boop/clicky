@@ -47,12 +47,16 @@ public struct NotchLayout: Equatable, Sendable {
     public let screenFrame: CGRect
     /// Logo / status wings beside a real notch, scaled to that notch.
     public let wingWidth: CGFloat
+    /// The widest a wing may grow for the bot chips: half the free menu bar on the narrower side.
+    public let maximumWingWidth: CGFloat
 
-    public init(notchRect: CGRect, hasPhysicalNotch: Bool, screenFrame: CGRect, wingWidth: CGFloat = NotchGeometry.physicalNotchWingWidth) {
+    public init(notchRect: CGRect, hasPhysicalNotch: Bool, screenFrame: CGRect, wingWidth: CGFloat = NotchGeometry.physicalNotchWingWidth,
+                maximumWingWidth: CGFloat = NotchGeometry.physicalNotchWingWidth * 2) {
         self.notchRect = notchRect
         self.hasPhysicalNotch = hasPhysicalNotch
         self.screenFrame = screenFrame
         self.wingWidth = wingWidth
+        self.maximumWingWidth = max(wingWidth, maximumWingWidth)
     }
 
     /// The height of the collapsed pill and of the expanded panel's header row.
@@ -121,7 +125,8 @@ public enum NotchGeometry {
                 let notchRect = CGRect(x: screenFrame.minX + leftArea.width, y: screenFrame.maxY - notchHeight, width: notchWidth, height: notchHeight)
                 // Room for a short status beside the notch, never wider than the free menu bar.
                 let wingWidth = min(physicalNotchWingWidth, min(leftArea.width, rightArea.width) * 0.5)
-                return NotchLayout(notchRect: notchRect, hasPhysicalNotch: true, screenFrame: screenFrame, wingWidth: wingWidth)
+                return NotchLayout(notchRect: notchRect, hasPhysicalNotch: true, screenFrame: screenFrame, wingWidth: wingWidth,
+                                   maximumWingWidth: min(leftArea.width, rightArea.width) * 0.5)
             }
         }
         // No notch: a virtual one in proportion to the display, as tall as its menu bar.
@@ -137,22 +142,50 @@ public enum NotchGeometry {
         return CGSize(width: width.rounded(), height: height.rounded())
     }
 
-    /// One wing beside a real notch: slim while idle, wide enough for the status otherwise.
-    public static func collapsedWingWidth(layout: NotchLayout, isIdle: Bool) -> CGFloat {
-        isIdle ? min(idleWingWidth, layout.wingWidth) : layout.wingWidth
+    // The bot chips that are always on the collapsed pill: one per lane with bots in it
+    // (needs you, failed, working), a coloured dot and a number.
+    public static let botChipWidth: CGFloat = 24
+    public static let botChipSpacing: CGFloat = 3
+    /// Between the logo and the chips beside a real notch, and between the status and the chips on a virtual one.
+    public static let botChipsLeadingGap: CGFloat = 4
+    /// After the chips, before the wing's or the pill's edge.
+    public static let botChipsTrailingPadding: CGFloat = 8
+
+    /// The width of `chipCount` chips side by side (0 for none).
+    public static func botChipsWidth(chipCount: Int) -> CGFloat {
+        let visibleChipCount = min(max(0, chipCount), NotchBotLane.allCases.count - 1)
+        guard visibleChipCount > 0 else { return 0 }
+        return CGFloat(visibleChipCount) * botChipWidth + CGFloat(visibleChipCount - 1) * botChipSpacing
     }
 
-    /// The black body of the collapsed pill (without the top flares).
-    public static func collapsedBodySize(layout: NotchLayout, isIdle: Bool = false) -> CGSize {
-        let bodyWidth = layout.hasPhysicalNotch
-            ? layout.notchRect.width + 2 * collapsedWingWidth(layout: layout, isIdle: isIdle)
-            : layout.notchRect.width
+    /// One wing beside a real notch: slim while idle, wide enough for the status otherwise. With bot chips
+    /// the left wing holds the logo and the chips, and both wings grow to match so the pill stays centred on the notch.
+    public static func collapsedWingWidth(layout: NotchLayout, isIdle: Bool, botChipCount: Int = 0) -> CGFloat {
+        if isIdle { return min(idleWingWidth, layout.wingWidth) }
+        guard botChipCount > 0 else { return layout.wingWidth }
+        let logoAndChips = logoFrameWidth + botChipsLeadingGap + botChipsWidth(chipCount: botChipCount) + botChipsTrailingPadding
+        return min(max(layout.wingWidth, logoAndChips), layout.maximumWingWidth)
+    }
+
+    /// The logo's frame (NotchLogoView.frameDiameter), for the wing maths.
+    public static let logoFrameWidth: CGFloat = 26
+
+    /// The black body of the collapsed pill (without the top flares). A virtual notch grows on the
+    /// right by the width of the bot chips, so the logo and status keep their places.
+    public static func collapsedBodySize(layout: NotchLayout, isIdle: Bool = false, botChipCount: Int = 0) -> CGSize {
+        let bodyWidth: CGFloat
+        if layout.hasPhysicalNotch {
+            bodyWidth = layout.notchRect.width + 2 * collapsedWingWidth(layout: layout, isIdle: isIdle, botChipCount: botChipCount)
+        } else {
+            let chipsWidth = botChipsWidth(chipCount: botChipCount)
+            bodyWidth = layout.notchRect.width + (chipsWidth > 0 ? chipsWidth + botChipsLeadingGap : 0)
+        }
         return CGSize(width: bodyWidth, height: layout.notchRect.height)
     }
 
     /// The collapsed pill including its flares (the panel's collapsed size).
-    public static func collapsedSize(layout: NotchLayout, isIdle: Bool = false) -> CGSize {
-        let bodySize = collapsedBodySize(layout: layout, isIdle: isIdle)
+    public static func collapsedSize(layout: NotchLayout, isIdle: Bool = false, botChipCount: Int = 0) -> CGSize {
+        let bodySize = collapsedBodySize(layout: layout, isIdle: isIdle, botChipCount: botChipCount)
         return CGSize(width: bodySize.width + 2 * topFlareRadius, height: bodySize.height)
     }
 
@@ -165,20 +198,39 @@ public enum NotchGeometry {
         return rowsHeight + (hasMoreAgentsLine ? moreAgentsLineHeight : 0)
     }
 
-    /// The expanded panel including its flares: header, optional caption,
-    /// agent rows (at most 4, plus a "+N more" line), the actions row.
-    /// A bot's line: face, title, one line and one button.
-    public static let botLineHeight: CGFloat = 50
+    // The bots section: one row per bot (face, name, one line, one button or the time),
+    // most urgent first, at most NotchBots.maximumRows, plus a "+N more on Home" line.
+    public static let botRowHeight: CGFloat = 42
+    public static let botRowSpacing: CGFloat = 4
+    public static let moreBotsLineHeight: CGFloat = 16
 
+    /// Height of the bots section for this many rows (0 rows: no section).
+    public static func botsSectionHeight(botRowCount: Int, hasMoreBotsLine: Bool) -> CGFloat {
+        let visibleRowCount = min(max(0, botRowCount), NotchBots.maximumRows)
+        guard visibleRowCount > 0 else { return 0 }
+        return CGFloat(visibleRowCount) * botRowHeight + CGFloat(visibleRowCount - 1) * botRowSpacing
+            + (hasMoreBotsLine ? moreBotsLineHeight : 0)
+    }
+
+    /// With bots on the board and no helper agents, the "No agents running" line is left out:
+    /// the bots already say what's going on.
+    public static func showsAgentsSection(agentRowCount: Int, botRowCount: Int) -> Bool {
+        agentRowCount > 0 || botRowCount == 0
+    }
+
+    /// The expanded panel including its flares: header, the bots, optional caption,
+    /// action steps, agent rows (at most 4, plus a "+N more" line), the actions row.
     public static func expandedSize(layout: NotchLayout, agentRowCount: Int, hasMoreAgentsLine: Bool, hasCaption: Bool, actionStepLineCount: Int = 0,
-                                    hasBotLine: Bool = false) -> CGSize {
+                                    botRowCount: Int = 0, hasMoreBotsLine: Bool = false) -> CGSize {
         let bodyWidth = max(expandedBodyWidth, collapsedBodySize(layout: layout).width)
         var height = layout.headerHeight + expandedTopPadding
-        if hasBotLine { height += botLineHeight + sectionSpacing }
+        if botRowCount > 0 { height += botsSectionHeight(botRowCount: botRowCount, hasMoreBotsLine: hasMoreBotsLine) + sectionSpacing }
         if hasCaption { height += captionHeight + sectionSpacing }
         if actionStepLineCount > 0 { height += actionStepsHeight(lineCount: actionStepLineCount) + sectionSpacing }
-        height += agentsSectionHeight(agentRowCount: agentRowCount, hasMoreAgentsLine: hasMoreAgentsLine)
-        height += sectionSpacing + actionsRowHeight + expandedBottomPadding
+        if showsAgentsSection(agentRowCount: agentRowCount, botRowCount: botRowCount) {
+            height += agentsSectionHeight(agentRowCount: agentRowCount, hasMoreAgentsLine: hasMoreAgentsLine) + sectionSpacing
+        }
+        height += actionsRowHeight + expandedBottomPadding
         return CGSize(width: bodyWidth + 2 * topFlareRadius, height: height)
     }
 
