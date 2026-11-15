@@ -310,7 +310,7 @@ fn openai_style(engine: SttEngine, base: &str, key: &str, audio: &Audio, languag
         let body = multipart_body(&boundary, &fields, "file", "audio.wav", "audio/wav", &wav);
         let request = agent(&address).post(&address).set("Authorization", &format!("Bearer {key}")).set("Content-Type", &format!("multipart/form-data; boundary={boundary}"));
         match send(request, &body, service)? {
-            Sent::Answer(text) => return openai_transcript(&text).ok_or_else(|| anyhow!("{service} gave an answer Theo couldn't read.")),
+            Sent::Answer(text) => return openai_transcript(&text).ok_or_else(|| anyhow!("{service} gave an answer Vello couldn't read.")),
             // An account without this model: the next one.
             Sent::Refused(status @ (400 | 403 | 404), body) if service_said(&body).to_lowercase().contains("model") => last_problem = refusal_sentence(service, status, &body),
             Sent::Refused(status, body) => return Err(anyhow!(refusal_sentence(service, status, &body))),
@@ -337,7 +337,7 @@ fn sarvam(base: &str, key: &str, audio: &Audio, language: &DictationLanguage, ke
             let request = agent(&address).post(&address).set("api-subscription-key", key).set("Content-Type", &format!("multipart/form-data; boundary={boundary}"));
             match send(request, &body, "Sarvam")? {
                 Sent::Answer(text) => {
-                    pieces.push(sarvam_transcript(&text).ok_or_else(|| anyhow!("Sarvam gave an answer Theo couldn't read."))?);
+                    pieces.push(sarvam_transcript(&text).ok_or_else(|| anyhow!("Sarvam gave an answer Vello couldn't read."))?);
                     break;
                 }
                 // The docs disagree on whether this model takes `mode`: once more without it (as the Mac does).
@@ -371,7 +371,7 @@ fn deepgram(base: &str, key: &str, audio: &Audio, language: &DictationLanguage, 
     let address = deepgram_address(base, language, keyterms);
     let request = agent(&address).post(&address).set("Authorization", &format!("Token {key}")).set("Content-Type", "audio/wav");
     match send(request, &audio.to_wav(), "Deepgram")? {
-        Sent::Answer(text) => deepgram_transcript(&text).ok_or_else(|| anyhow!("Deepgram gave an answer Theo couldn't read.")),
+        Sent::Answer(text) => deepgram_transcript(&text).ok_or_else(|| anyhow!("Deepgram gave an answer Vello couldn't read.")),
         Sent::Refused(status, body) => Err(anyhow!(refusal_sentence("Deepgram", status, &body))),
     }
 }
@@ -586,18 +586,18 @@ mod tests {
 
     #[test]
     fn requests_are_built_like_the_macs() {
-        let fields = sarvam_fields("codemix", true, "hi-IN", &["Theo".into(), "x".repeat(80)]);
+        let fields = sarvam_fields("codemix", true, "hi-IN", &["Vello".into(), "x".repeat(80)]);
         assert_eq!(fields[0], ("model", "saaras:v4".to_string()));
         assert_eq!(fields[1], ("mode", "codemix".to_string()));
         assert_eq!(fields[2], ("language_code", "hi-IN".to_string()));
-        assert!(fields[3].1.starts_with("[\"Theo\",\"xxxx") && !fields[3].1.contains(&"x".repeat(65)));
+        assert!(fields[3].1.starts_with("[\"Vello\",\"xxxx") && !fields[3].1.contains(&"x".repeat(65)));
         assert_eq!(sarvam_fields("transcribe", false, "en-IN", &[]).len(), 2);
         let body = multipart_body("B", &[("model", "m".into())], "file", "audio.wav", "audio/wav", b"RIFF");
         let text = String::from_utf8(body).unwrap();
         assert!(text.starts_with("--B\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nm\r\n--B\r\n"));
         assert!(text.contains("filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF\r\n--B--\r\n"));
-        let address = deepgram_address("https://api.deepgram.com", language("en-US"), &["Theo Clicky".into()]);
-        assert_eq!(address, "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en&keyterm=Theo%20Clicky");
+        let address = deepgram_address("https://api.deepgram.com", language("en-US"), &["Vello Pointer Assistant".into()]);
+        assert_eq!(address, "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en&keyterm=Vello%20Pointer%20Assistant");
         assert!(deepgram_address("x", language("auto"), &[]).ends_with("&detect_language=true"));
     }
 

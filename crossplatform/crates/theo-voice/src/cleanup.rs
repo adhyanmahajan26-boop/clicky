@@ -402,7 +402,7 @@ pub async fn choose_brain(harness: &Harness) -> Option<CleanupBrain> {
 pub async fn ask(harness: &Harness, brain: &CleanupBrain, system: &str, message: &str) -> Result<String, String> {
     match brain {
         CleanupBrain::Api { provider, model } => {
-            let api = brains::api_provider(harness, provider).ok_or("Theo doesn't know that provider.")?;
+            let api = brains::api_provider(harness, provider).ok_or("Vello doesn't know that provider.")?;
             let key = brains::api_key(harness, provider);
             if key.is_none() && !api.keyless {
                 return Err(format!("{} has no API key saved.", api.label));
@@ -578,18 +578,18 @@ mod tests {
 
     #[test]
     fn dictionary_lines_are_read_like_the_macs() {
-        let dictionary = Dictionary::from_lines("sarvam\n  theo klicky = Theo Clicky \n\n= nothing\nbroken =\n");
+        let dictionary = Dictionary::from_lines("sarvam\n  theo klicky = Vello Pointer Assistant \n\n= nothing\nbroken =\n");
         assert_eq!(dictionary.entries.len(), 3);
         assert_eq!(dictionary.entries[0], DictionaryEntry { heard: None, written: "sarvam".into() });
-        assert_eq!(dictionary.entries[1], DictionaryEntry { heard: Some("theo klicky".into()), written: "Theo Clicky".into() });
+        assert_eq!(dictionary.entries[1], DictionaryEntry { heard: Some("theo klicky".into()), written: "Vello Pointer Assistant".into() });
         assert_eq!(dictionary.entries[2], DictionaryEntry { heard: None, written: "nothing".into() });
-        assert_eq!(dictionary.words(), vec!["sarvam", "Theo Clicky", "nothing"]);
+        assert_eq!(dictionary.words(), vec!["sarvam", "Vello Pointer Assistant", "nothing"]);
     }
 
     #[test]
     fn dictionary_spells_whole_words_only() {
-        let dictionary = Dictionary::from_lines("Sarvam\ntheo klicky = Theo Clicky");
-        assert_eq!(dictionary.apply("ask sarvam and THEO KLICKY now"), "ask Sarvam and Theo Clicky now");
+        let dictionary = Dictionary::from_lines("Sarvam\ntheo klicky = Vello Pointer Assistant");
+        assert_eq!(dictionary.apply("ask sarvam and THEO KLICKY now"), "ask Sarvam and Vello Pointer Assistant now");
         assert_eq!(dictionary.apply("sarvamx stays"), "sarvamx stays");
         assert_eq!(dictionary.apply("(sarvam)."), "(Sarvam).");
     }
@@ -613,9 +613,9 @@ mod tests {
     fn model_pass_rules() {
         assert!(!needs_model_pass("two words"));
         assert!(needs_model_pass("three words here"));
-        let prompt = system_prompt(&Dictionary::from_lines("Sarvam\nx = Theo"));
+        let prompt = system_prompt(&Dictionary::from_lines("Sarvam\nx = Vello"));
         assert!(prompt.starts_with("You tidy up dictated text."));
-        assert!(prompt.ends_with("Spell these as written here: Sarvam, Theo."));
+        assert!(prompt.ends_with("Spell these as written here: Sarvam, Vello."));
         assert!(!system_prompt(&Dictionary::default()).contains("Spell these"));
         assert_eq!(user_message("hi"), "<dictation>hi</dictation>");
     }

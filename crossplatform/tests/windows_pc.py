@@ -344,7 +344,7 @@ def windows_of(pid):
             length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
-            if buf.value == "Theo":
+            if buf.value in ("Vello", "Theo"):  # the window is titled Vello; an older build's is Theo
                 found.append((hwnd, bool(user32.IsWindowVisible(hwnd))))
         return True
     user32.EnumWindows(proc(each), 0)
@@ -655,7 +655,7 @@ def fresh(setup_exe, msi=None):
         page = PAGE["page"]
         page.click(".row.nav[data-pane='settings']")
         page.wait_for_selector("#pane h2:has-text('Health check')", timeout=60000)
-        wait_until(lambda: "Open Theo when you sign in" in text_of(page, "#pane"), 10)
+        wait_until(lambda: "Open Vello when you sign in" in text_of(page, "#pane"), 10)
         text = text_of(page, "#pane")
         run_key = {}
         try:
@@ -678,7 +678,7 @@ def fresh(setup_exe, msi=None):
             except OSError:
                 pass
         shot = screenshot("settings")
-        ok = ("Open Theo when you sign in" in text and list(run_key) == ["Theo"] and not machine_wide
+        ok = ("Open Vello when you sign in" in text and list(run_key) == ["Theo"] and not machine_wide
               and all(v.startswith('"') and v.endswith(" --background") for v in run_key.values()))
         return ok, {"run_key": run_key, "every_user_run_key": machine_wide, "settings_text": text[:600]}, shot
     check("Settings: health check, and Theo set to open at sign-in (Windows Run key, starts in the tray)", settings)
@@ -690,12 +690,12 @@ def fresh(setup_exe, msi=None):
         row = text_of(page, "#update-row")
         page.click(".row.nav[data-pane='settings']")
         page.click("[data-jump='updates']")
-        wait_until(lambda: "This is Theo" in text_of(page, "#set-updates"), 20)
+        wait_until(lambda: "This is Vello" in text_of(page, "#set-updates"), 20)
         updates = text_of(page, "#set-updates")
         switches = page.locator("#set-products button.switch[data-product]").count()
         state = P({"cmd": "updates"}).get("result", {})
         shot = screenshot("settings-updates")
-        ok = bool(row) and "This is Theo" in updates and switches == 3 and state.get("installKind") == "windowsForThisUser"
+        ok = bool(row) and "This is Vello" in updates and switches == 3 and state.get("installKind") == "windowsForThisUser"
         return ok, {"update_row": row, "updates": updates[:400], "product_switches": switches, "state": state}, shot
     check("Settings › Updates and Products: the Update row, this build, where builds come from, three product switches", updates_and_products, must=False)
 

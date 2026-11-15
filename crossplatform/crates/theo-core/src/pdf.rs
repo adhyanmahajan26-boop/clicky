@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 pub const MAXIMUM_PER_REPLY: usize = 3;
 
 /// What a bot is told about PDFs (ClickyCore `BotProtocol.pdfHowTo`).
-pub const HOW_TO: &str = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: Theo makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Theo's line says so.";
+pub const HOW_TO: &str = "For a PDF, write the document as Markdown or HTML in your memory folder, then put a line [PDF: file name] in your reply: Vello makes the PDF next to that file and puts it in the chat. Say the PDF is made only once Vello's line says so.";
 
 /// The reply without its `[PDF: …]` tags, and the files they name (at most three).
 pub fn extract(text: &str) -> (String, Vec<String>) {
@@ -69,11 +69,11 @@ pub fn make_for_turn(h: &Harness, bot: &Bot, files: &[String], room: &str, excha
         let message = match make(name, &folder) {
             Ok(pdf) => {
                 let file = pdf.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let mut m = ChatMessage::note(format!("Theo made the PDF {file} for {}.\n{}", bot.name, pdf.to_string_lossy()));
+                let mut m = ChatMessage::note(format!("Vello made the PDF {file} for {}.\n{}", bot.name, pdf.to_string_lossy()));
                 m.card = Some(format!("pdf:{}", json!({"path": pdf.to_string_lossy(), "name": file, "bot": bot.id})));
                 m
             }
-            Err(problem) => ChatMessage::note(format!("Theo couldn't make a PDF for {}: {problem}", bot.name)),
+            Err(problem) => ChatMessage::note(format!("Vello couldn't make a PDF for {}: {problem}", bot.name)),
         };
         h.post(message.with_exchange(exchange.clone()), room);
     }
@@ -84,7 +84,7 @@ pub fn make_for_turn(h: &Harness, bot: &Bot, files: &[String], room: &str, excha
 pub fn open_file(h: &Harness, path: &str) -> Result<(), String> {
     let wanted = std::fs::canonicalize(path).map_err(|_| "That file isn't there any more.".to_string())?;
     let root = std::fs::canonicalize(&h.paths.root).map_err(|e| e.to_string())?;
-    if !wanted.starts_with(&root) || !wanted.is_file() { return Err("Theo only opens files it made.".into()); }
+    if !wanted.starts_with(&root) || !wanted.is_file() { return Err("Vello only opens files it made.".into()); }
     if h.settings.is_test {
         let folder = h.paths.logs_dir();
         let _ = std::fs::create_dir_all(&folder);
@@ -449,7 +449,7 @@ fn document(pages: &[String], title: &str) -> Vec<u8> {
     objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into());
     objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".into());
     objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>".into());
-    objects.push(format!("<< /Title {} /Producer (Theo) >>", literal(title)));
+    objects.push(format!("<< /Title {} /Producer (Vello) >>", literal(title)));
     for (i, content) in pages.iter().enumerate() {
         objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PAGE_WIDTH} {PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents {} 0 R >>", first_page + i * 2 + 1));
         objects.push(format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content));

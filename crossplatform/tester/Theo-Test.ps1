@@ -1,4 +1,4 @@
-# Theo for Windows: a guided check for a tester on their own PC.
+# Vello for Windows: a guided check for a tester on their own PC.
 #
 # It asks a few yes/no questions, checks what it can by itself, and writes everything into one zip
 # on the Desktop (Theo-test-results-<date>.zip) for the tester to send back. Nothing is uploaded.
@@ -91,7 +91,7 @@ function Wait-Enter([string]$what) {
   [void](Read-Host "  Press Enter when you're done")
 }
 
-# Theo's engine answers JSON files dropped in its control-inbox folder (the same way its own tests drive it).
+# Vello's engine answers JSON files dropped in its control-inbox folder (the same way its own tests drive it).
 function Send-Theo($command, [int]$timeoutSeconds = 10) {
   $inbox = Join-Path $DataFolder "control-inbox"
   $outbox = Join-Path $DataFolder "control-outbox"
@@ -191,7 +191,7 @@ function Get-BotCount {
   return $null
 }
 
-# A picture of Theo's window only (brought to the front first), never the whole screen.
+# A picture of Vello's window only (brought to the front first), never the whole screen.
 Add-Type -ErrorAction SilentlyContinue -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -245,8 +245,8 @@ function Test-Command([string]$name) {
 # ------------------------------------------------------------------ start
 
 Clear-Host
-Say "Theo for Windows - tester check" "Cyan"
-Say "This takes about 15 minutes. It asks a few questions and checks Theo by itself."
+Say "Vello for Windows - tester check" "Cyan"
+Say "This takes about 15 minutes. It asks a few questions and checks Vello by itself."
 Say "At the end it makes one zip on your Desktop to send back. Nothing is uploaded."
 Say "The zip has no passwords, keys or chats, and your Windows user name is replaced with <user>."
 Say "You can stop at any time with Ctrl+C."
@@ -295,11 +295,11 @@ try {
   $Facts["defender_realtime"] = [bool]$mp.RealTimeProtectionEnabled
 } catch { $Facts["defender_realtime"] = "unknown" }
 foreach ($k in $Facts.Keys) { Say ("  " + $k + ": " + (Hide-Private ([string]$Facts[$k]))) }
-if ($Facts["cpu_arch"] -eq "ARM64") { [void]$Notes.Add("This is a Windows on ARM PC; Theo is x64 and runs under emulation.") }
+if ($Facts["cpu_arch"] -eq "ARM64") { [void]$Notes.Add("This is a Windows on ARM PC; Vello is x64 and runs under emulation.") }
 
 # ------------------------------------------------------------------ 2. installing
 
-Title "2. Installing Theo"
+Title "2. Installing Vello"
 if (-not $Installer) {
   $found = Get-ChildItem -Path $Here -Filter "Theo-*-windows-x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $found) { $found = Get-ChildItem -Path $Here -Filter "*setup*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
@@ -320,7 +320,7 @@ if ($Installer -and (Test-Path $Installer)) {
 $entry = Get-UninstallEntry
 $alreadyInstalled = [bool]$entry
 if ($alreadyInstalled) {
-  Say "  Theo is installed already (version $($entry.DisplayVersion))."
+  Say "  Vello is installed already (version $($entry.DisplayVersion))."
   if (-not $Unattended) {
     $smart = Ask-YesNo "When you double-clicked the installer, did Windows show a blue 'Windows protected your PC' box?" $true
     if ($smart) {
@@ -331,14 +331,14 @@ if ($alreadyInstalled) {
     if ($other) { Record "Install went smoothly" "fail" (Ask-Text "What happened?") } else { Record "Install went smoothly" "pass" }
   }
 } elseif ($Installer -and (Test-Path $Installer)) {
-  Say "  Theo isn't installed yet. Installing it now for this Windows user (no admin needed)..."
+  Say "  Vello isn't installed yet. Installing it now for this Windows user (no admin needed)..."
   $p = Start-Process -FilePath $Installer -ArgumentList "/S" -PassThru -Wait
   Start-Sleep -Seconds 2
   $entry = Get-UninstallEntry
-  if ($entry) { Record "Silent per-user install" "pass" ("exit code " + $p.ExitCode) } else { Record "Silent per-user install" "fail" ("exit code " + $p.ExitCode + ", no Theo in Apps") }
-  [void]$Notes.Add("The script installed Theo itself, so the SmartScreen warning wasn't tried by hand.")
+  if ($entry) { Record "Silent per-user install" "pass" ("exit code " + $p.ExitCode) } else { Record "Silent per-user install" "fail" ("exit code " + $p.ExitCode + ", no Vello in Apps") }
+  [void]$Notes.Add("The script installed Vello itself, so the SmartScreen warning wasn't tried by hand.")
 } else {
-  Record "Theo installed" "fail" "not installed, and no installer next to this script"
+  Record "Vello installed" "fail" "not installed, and no installer next to this script"
 }
 
 if ($entry) {
@@ -351,26 +351,26 @@ if ($exe) {
   $hub = Get-ChildItem -Path (Split-Path -Parent $exe) -Filter "theo-connectors*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($hub) { Record "Connector helper is next to the app" "pass" $hub.Name } else { Record "Connector helper is next to the app" "fail" "theo-connectors.exe missing" }
 }
-if (Get-StartMenuShortcut) { Record "Start menu shortcut" "pass" } else { Record "Start menu shortcut" "fail" "no Theo in the Start menu" }
+if (Get-StartMenuShortcut) { Record "Start menu shortcut" "pass" } else { Record "Start menu shortcut" "fail" "no Vello in the Start menu" }
 try {
   $threats = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { ($_.Resources -join " ") -match "(?i)theo" })
-  if ($threats.Count -gt 0) { Record "Windows Defender left Theo alone" "fail" ("Defender flagged: " + (($threats | ForEach-Object { $_.Resources -join " " }) -join "; ")) }
-  else { Record "Windows Defender left Theo alone" "pass" }
-} catch { Record "Windows Defender left Theo alone" "skip" "couldn't read Defender's history without admin" }
+  if ($threats.Count -gt 0) { Record "Windows Defender left Vello alone" "fail" ("Defender flagged: " + (($threats | ForEach-Object { $_.Resources -join " " }) -join "; ")) }
+  else { Record "Windows Defender left Vello alone" "pass" }
+} catch { Record "Windows Defender left Vello alone" "skip" "couldn't read Defender's history without admin" }
 
 # ------------------------------------------------------------------ 3. first open
 
-Title "3. Opening Theo"
+Title "3. Opening Vello"
 if ((Get-TheoProcesses).Count -eq 0) {
   $how = Open-Theo
-  if ($how) { Say "  Opened Theo from the $how." } else { Say "  Couldn't find Theo to open." "Yellow" }
+  if ($how) { Say "  Opened Vello from the $how." } else { Say "  Couldn't find Vello to open." "Yellow" }
 }
 $secs = Wait-TheoAnswers 90
-if ($null -ne $secs) { Record "Theo starts and its engine answers" "pass" "$secs s" }
-else { Record "Theo starts and its engine answers" "fail" ("processes: " + (Get-TheoProcesses).Count) }
+if ($null -ne $secs) { Record "Vello starts and its engine answers" "pass" "$secs s" }
+else { Record "Vello starts and its engine answers" "fail" ("processes: " + (Get-TheoProcesses).Count) }
 
 $status = Send-Theo @{ cmd = "status" } 10
-if ($status -and $status.ok) { $Facts["engine"] = "Theo " + $status.result.version + " " + $status.result.os + "/" + $status.result.arch }
+if ($status -and $status.ok) { $Facts["engine"] = "Vello " + $status.result.version + " " + $status.result.os + "/" + $status.result.arch }
 $doctor = Send-Theo @{ cmd = "doctor" } 60
 if ($doctor -and $doctor.ok) {
   [IO.File]::WriteAllText((Join-Path $OutDir "health-check.txt"), (Hide-Private ([string]$doctor.result.text)))
@@ -383,7 +383,7 @@ $shot = Save-TheoShot "1-first-open"
 if ($shot) { Record "Theo's window is on screen" "pass" } else { Record "Theo's window is on screen" "info" "couldn't find its window to take a picture" }
 
 if (-not $Unattended) {
-  $seen = Ask-YesNo "Can you see Theo's window (it starts with a short setup)?" $true
+  $seen = Ask-YesNo "Can you see Vello's window (it starts with a short setup)?" $true
   if ($seen) { Record "Tester sees the window" "pass" } else { Record "Tester sees the window" "fail" (Ask-Text "What do you see instead?") }
   $looks = Ask-YesNo "Does it look right: sharp text, nothing cut off or overlapping?" $true
   if ($looks) { Record "Window looks right" "pass" } else { Record "Window looks right" "fail" (Ask-Text "What looks wrong?") }
@@ -394,15 +394,15 @@ if (-not $Unattended) {
 Title "4. Setup and your first bot"
 $botsBefore = Get-BotCount
 if (-not $Unattended) {
-  Say "  In Theo, go through the setup:"
+  Say "  In Vello, go through the setup:"
   Say "   - Welcome: type any name."
   Say "   - 'Pick a brain': you don't need one for this test. If you have an OpenAI or Anthropic API key,"
   Say "     or Gemini CLI / Codex / OpenCode signed in, you can use it. Otherwise press 'Skip for now'."
-  Say "   - 'Pick products': turn on all three (Theo, Clicky and Dictation) so you can try them later."
+  Say "   - 'Pick products': turn on all three (Vello, Pointer Assistant and Dictation) so you can try them later."
   Say "   - 'Your first bot': pick any job and look, then press 'Make ...'."
   Say "   - Click around: the bot's chat, Bots, Connectors, Settings. Send the bot a message like 'hi'."
-  Wait-Enter "Go through setup and make a bot in Theo now."
-  $hadBrain = Ask-YesNo "Did you give Theo a brain (an API key or a signed-in agent)?" $false
+  Wait-Enter "Go through setup and make a bot in Vello now."
+  $hadBrain = Ask-YesNo "Did you give Vello a brain (an API key or a signed-in agent)?" $false
   $Facts["tester_used_a_brain"] = $hadBrain
   if ($hadBrain) {
     $Facts["brain_used"] = Ask-Text "Which one (for example 'OpenAI key' or 'Gemini CLI')?"
@@ -421,33 +421,33 @@ if ($null -ne $botsAfter) {
   elseif ($null -ne $botsBefore -and $botsAfter -gt $botsBefore) { Record "A bot was made" "pass" "$botsBefore bots before setup, $botsAfter after" }
   elseif ($null -eq $botsBefore -and $botsAfter -gt 0) { Record "A bot was made" "pass" "$botsAfter bots" }
   else { Record "A bot was made" "info" "no new bot ($botsAfter bots); the tester may have skipped that step" }
-} else { Record "Bots list readable" "fail" "no answer from Theo" }
+} else { Record "Bots list readable" "fail" "no answer from Vello" }
 [void](Save-TheoShot "2-after-setup")
 
 # ------------------------------------------------------------------ 5. tray, closing and opening again
 
 Title "5. Closing the window, the tray, and opening again"
 if (-not $Unattended) {
-  Wait-Enter "Close Theo's window with the X in its top-right corner."
+  Wait-Enter "Close Vello's window with the X in its top-right corner."
   Start-Sleep -Seconds 2
-  if ((Get-TheoProcesses).Count -gt 0) { Record "Closing the window keeps Theo running in the tray" "pass" }
-  else { Record "Closing the window keeps Theo running in the tray" "fail" "Theo quit when its window closed" }
-  $tray = Ask-YesNo "Is Theo's icon in the tray (bottom-right, maybe behind the ^ arrow)?" $true
+  if ((Get-TheoProcesses).Count -gt 0) { Record "Closing the window keeps Vello running in the tray" "pass" }
+  else { Record "Closing the window keeps Vello running in the tray" "fail" "Vello quit when its window closed" }
+  $tray = Ask-YesNo "Is Vello's icon in the tray (bottom-right, maybe behind the ^ arrow)?" $true
   if ($tray) {
     Record "Tray icon shows" "pass"
-    $menu = Ask-YesNo "Right-click it: does the menu have 'Open Theo' and 'Quit Theo'?" $true
-    if ($menu) { Record "Tray menu has Open Theo and Quit Theo" "pass" } else { Record "Tray menu has Open Theo and Quit Theo" "fail" (Ask-Text "What does it show?") }
+    $menu = Ask-YesNo "Right-click it: does the menu have 'Open Vello' and 'Quit Vello'?" $true
+    if ($menu) { Record "Tray menu has Open Vello and Quit Vello" "pass" } else { Record "Tray menu has Open Vello and Quit Vello" "fail" (Ask-Text "What does it show?") }
   } else { Record "Tray icon shows" "fail" }
 }
-# Opening Theo while it runs should bring the same window back, not start a second Theo.
+# Opening Vello while it runs should bring the same window back, not start a second Vello.
 $before = (Get-TheoProcesses).Count
 [void](Open-Theo)
 Start-Sleep -Seconds 6
 $after = (Get-TheoProcesses).Count
-if ($before -ge 1 -and $after -eq $before) { Record "Opening it again doesn't start a second Theo" "pass" }
-elseif ($before -ge 1) { Record "Opening it again doesn't start a second Theo" "fail" "$before before, $after after" }
+if ($before -ge 1 -and $after -eq $before) { Record "Opening it again doesn't start a second Vello" "pass" }
+elseif ($before -ge 1) { Record "Opening it again doesn't start a second Vello" "fail" "$before before, $after after" }
 if (-not $Unattended) {
-  $back = Ask-YesNo "Did Theo's window come back?" $true
+  $back = Ask-YesNo "Did Vello's window come back?" $true
   if ($back) { Record "Window comes back from the Start menu" "pass" } else { Record "Window comes back from the Start menu" "fail" }
 }
 
@@ -455,9 +455,9 @@ if (-not $Unattended) {
 
 Title "6. Quit and open again"
 if (-not $Unattended) {
-  Wait-Enter "Right-click Theo's tray icon and choose 'Quit Theo'."
-  if (Wait-TheoGone 20) { Record "Quit Theo leaves nothing running" "pass" }
-  else { Record "Quit Theo leaves nothing running" "fail" "still running 20 s later" }
+  Wait-Enter "Right-click Vello's tray icon and choose 'Quit Vello'."
+  if (Wait-TheoGone 20) { Record "Quit Vello leaves nothing running" "pass" }
+  else { Record "Quit Vello leaves nothing running" "fail" "still running 20 s later" }
 }
 if ((Get-TheoProcesses).Count -gt 0) {
   [void](Send-Theo @{ cmd = "quit" } 10)
@@ -479,7 +479,7 @@ if (-not $Unattended) {
     if ($noSetup) { Record "Setup isn't shown again" "pass" } else { Record "Setup isn't shown again" "fail" }
   } else {
     # With no brain at all, Setup comes back on purpose (as on the Mac) and should say why.
-    $why = Ask-YesNo "With no brain, setup may come back. Did Theo open either to your bots or to setup's brain step saying it needs one?" $true
+    $why = Ask-YesNo "With no brain, setup may come back. Did Vello open either to your bots or to setup's brain step saying it needs one?" $true
     if ($why) { Record "Reopens sensibly with no brain" "pass" } else { Record "Reopens sensibly with no brain" "fail" (Ask-Text "What did it show?") }
   }
 }
@@ -489,7 +489,7 @@ if (-not $Unattended) {
 Title "7. New in this build"
 foreach ($probe in @(@{ name = "Products answer"; cmd = @{ cmd = "products" } }, @{ name = "Updates answer"; cmd = @{ cmd = "updates" } })) {
   $r = Send-Theo $probe.cmd 15
-  if ($r -and $r.ok) { Record $probe.name "pass" } elseif ($r) { Record $probe.name "info" ($r.error) } else { Record $probe.name "fail" "no answer from Theo" }
+  if ($r -and $r.ok) { Record $probe.name "pass" } elseif ($r) { Record $probe.name "info" ($r.error) } else { Record $probe.name "fail" "no answer from Vello" }
 }
 if (-not $Unattended) {
   Say "  A few quick looks at what's new. Answer n to anything you can't find, and say what you saw."
@@ -504,11 +504,11 @@ if (-not $Unattended) {
   Check-New "New routine" "Open Routines, press New routine, pick a bot, choose 'Every day' at any time, and add it." "Is the routine in the list with its next time?"
   Check-New "Updates in Settings" "Open Settings, then Updates, and press 'Check for updates'." "Did it say something clear (up to date, a new build, or why it couldn't check)?"
   if (Ask-YesNo "Try Dictation? (needs a microphone; no brain needed)" $true) {
-    Check-New "Dictation types into another app" "Open Notepad, click in it, hold Ctrl + Windows key, say 'hello from Theo', then let go." "Did your words appear in Notepad (a small pill showed while you talked)?"
+    Check-New "Dictation types into another app" "Open Notepad, click in it, hold Ctrl + Windows key, say 'hello from Vello', then let go." "Did your words appear in Notepad (a small pill showed while you talked)?"
   } else { Record "Dictation" "skip" }
-  if ($hadBrain -and (Ask-YesNo "Try Clicky? (needs a microphone and the brain you gave Theo)" $true)) {
-    Check-New "Clicky answers about the screen" "Hold Ctrl + Alt, ask 'what's on my screen?', then let go." "Did Clicky answer out loud and on screen near the pointer (the orange spark)?"
-    Check-New "Clicky points at things" "Hold Ctrl + Alt and ask 'where is the Start button?'." "Did the spark fly to it?"
+  if ($hadBrain -and (Ask-YesNo "Try Pointer Assistant? (needs a microphone and the brain you gave Vello)" $true)) {
+    Check-New "Pointer Assistant answers about the screen" "Hold Ctrl + Alt, ask 'what's on my screen?', then let go." "Did Pointer Assistant answer out loud and on screen near the pointer (the orange spark)?"
+    Check-New "Pointer Assistant points at things" "Hold Ctrl + Alt and ask 'where is the Start button?'." "Did the spark fly to it?"
   } else { Record "Clicky" "skip" "needs a brain and a microphone" }
 }
 [void](Save-TheoShot "4-new-features")
@@ -518,13 +518,13 @@ if (-not $Unattended) {
 Title "8. Extras (optional)"
 if (-not $Unattended) {
   if (Ask-YesNo "Try a notification? (needs a brain; skip if you have none)" $false) {
-    Wait-Enter "Ask a bot to do something that needs your answer (e.g. 'ask me which colour I like'), then close Theo's window and wait."
-    $toast = Ask-YesNo "Did a Windows notification from Theo appear?" $true
+    Wait-Enter "Ask a bot to do something that needs your answer (e.g. 'ask me which colour I like'), then close Vello's window and wait."
+    $toast = Ask-YesNo "Did a Windows notification from Vello appear?" $true
     if ($toast) { Record "Notification appears" "pass" } else { Record "Notification appears" "fail" }
   } else { Record "Notification" "skip" }
-  $scale = Ask-YesNo "Want to check display scaling? (Settings > Display > Scale 150%, look at Theo, then set it back)" $false
+  $scale = Ask-YesNo "Want to check display scaling? (Settings > Display > Scale 150%, look at Vello, then set it back)" $false
   if ($scale) {
-    $ok = Ask-YesNo "Did Theo look right at the other scale?" $true
+    $ok = Ask-YesNo "Did Vello look right at the other scale?" $true
     if ($ok) { Record "Looks right at another display scale" "pass" } else { Record "Looks right at another display scale" "fail" (Ask-Text "What looked wrong?") }
   } else { Record "Display scaling" "skip" }
 }
@@ -534,8 +534,8 @@ if (-not $Unattended) {
 Title "9. Uninstall (optional)"
 $doUninstall = $Unattended
 if (-not $Unattended) {
-  Say "  This checks that Theo removes itself cleanly. It keeps Theo's data folder, so reinstalling brings your bots back."
-  $doUninstall = Ask-YesNo "Uninstall Theo now?" $true
+  Say "  This checks that Vello removes itself cleanly. It keeps Vello's data folder, so reinstalling brings your bots back."
+  $doUninstall = Ask-YesNo "Uninstall Vello now?" $true
 }
 if ($doUninstall) {
   if ((Get-TheoProcesses).Count -gt 0) {
@@ -553,13 +553,13 @@ if ($doUninstall) {
   # The uninstaller copies itself and returns early; give it time to finish.
   $start = Get-Date
   while ((Get-UninstallEntry) -and ((Get-Date) - $start).TotalSeconds -lt 60) { Start-Sleep -Seconds 1 }
-  if (-not (Get-UninstallEntry)) { Record "Uninstall removes Theo from Apps" "pass" } else { Record "Uninstall removes Theo from Apps" "fail" }
+  if (-not (Get-UninstallEntry)) { Record "Uninstall removes Vello from Apps" "pass" } else { Record "Uninstall removes Vello from Apps" "fail" }
   Start-Sleep -Seconds 2
   if (-not (Get-StartMenuShortcut)) { Record "Uninstall removes the Start menu shortcut" "pass" } else { Record "Uninstall removes the Start menu shortcut" "fail" }
   $run = $null
   try { $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction Stop).PSObject.Properties | Where-Object { $_.Name -match "(?i)theo" } } catch { }
   if (-not $run) { Record "Uninstall removes the open-at-sign-in entry" "pass" } else { Record "Uninstall removes the open-at-sign-in entry" "fail" }
-  if (Test-Path $DataFolder) { Record "Uninstall keeps Theo's data (bots, chats)" "pass" } else { Record "Uninstall keeps Theo's data (bots, chats)" "info" "data folder gone" }
+  if (Test-Path $DataFolder) { Record "Uninstall keeps Vello's data (bots, chats)" "pass" } else { Record "Uninstall keeps Vello's data (bots, chats)" "info" "data folder gone" }
 } else { Record "Uninstall" "skip" }
 
 # ------------------------------------------------------------------ results
@@ -586,7 +586,7 @@ $skipped = @($Results | Where-Object { $_.result -eq "skip" }).Count
 $Facts["finished"] = (Get-Date).ToString("s")
 
 $lines = New-Object System.Collections.ArrayList
-[void]$lines.Add("Theo for Windows - tester results")
+[void]$lines.Add("Vello for Windows - tester results")
 [void]$lines.Add("$passed passed, $failed failed, $skipped skipped")
 [void]$lines.Add("")
 [void]$lines.Add("This PC")

@@ -26,7 +26,7 @@ const ROUTINES = (() => {
   }
   function when(iso) { return new Date(Date.parse(iso)).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
   // What each run status means, in words (RoutineQuiet, RoutineCatchUp).
-  const STATUS_WORDS = { done: "done", quiet: "nothing to report", failed: "failed", missed: "missed while Theo was closed", running: "running", skipped: "skipped: the bot was busy" };
+  const STATUS_WORDS = { done: "done", quiet: "nothing to report", failed: "failed", missed: "missed while Vello was closed", running: "running", skipped: "skipped: the bot was busy" };
   const dot = (status) => `<i class="rt-dot rt-${esc(status)}"></i>`;
   function targetName(target) {
     if (target.startsWith("group:")) { const g = state.groups.find((x) => `group:${x.id}` === target); return g ? `${g.name} (group chat)` : "A group chat"; }

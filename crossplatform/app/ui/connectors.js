@@ -48,7 +48,7 @@ const CONNECTORS = (() => {
     const isOpen = openRow === c.id;
     const tile = `<span class="app">${esc(c.name.slice(0, 1).toUpperCase())}${TP.badge(tone === "ok" ? "ok" : tone === "needs" ? "needs" : tone === "failed" ? "failed" : "none")}</span>`;
     const signIn = c.signIn && c.signIn.state === "waiting"
-      ? `<div class="tc ask cn-wait"><div class="tc-q">Finish signing in to ${esc(c.name)} in your browser</div><p>Theo opened the sign-in page. If it didn't open, copy the address into your browser.</p><div class="tc-field"><span>${esc(c.signIn.url)}</span><button class="btn sm" data-copy="${esc(c.signIn.url)}">Copy</button></div></div>`
+      ? `<div class="tc ask cn-wait"><div class="tc-q">Finish signing in to ${esc(c.name)} in your browser</div><p>Vello opened the sign-in page. If it didn't open, copy the address into your browser.</p><div class="tc-field"><span>${esc(c.signIn.url)}</span><button class="btn sm" data-copy="${esc(c.signIn.url)}">Copy</button></div></div>`
       : c.signIn && c.signIn.state === "failed" ? `<div class="tc bad cn-wait"><div class="tc-q">Signing in to ${esc(c.name)} didn't work</div><p>${esc(c.signIn.error)}</p></div>` : "";
     return `<div class="cn-row${isOpen ? " open" : ""}"><div class="crow cn-head" data-row="${esc(c.id)}"><svg class="ic chev" viewBox="0 0 24 24"><path d="${isOpen ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"}"/></svg>${tile}`
       + `<span class="tx"><b>${esc(c.name)}</b><small>${who}</small>${extra}</span>${TP.pill(tone, word)}<span class="act cn-act">${button}</span></div>`
@@ -61,7 +61,7 @@ const CONNECTORS = (() => {
       + line("Last worked", workedWords(c.lastConnected)) + line("Used by", usedBy);
     if (takesToken(c)) {
       html += `<form class="cn-token" data-token="${esc(c.id)}"><input type="password" name="token" autocomplete="off" placeholder="${c.signedIn ? "Paste a new token to replace it" : "Paste its token"}" aria-label="Token"><button class="btn pri sm" type="submit">Save token</button></form>`
-        + `<small class="muted">It stays encrypted on this computer, with its key in this computer's credential store. Theo never shows it again.</small>`;
+        + `<small class="muted">It stays encrypted on this computer, with its key in this computer's credential store. Vello never shows it again.</small>`;
     }
     const acts = [];
     if (browserSignIn(c)) acts.push(c.signedIn ? `<button class="btn sm" data-signout="${esc(c.id)}" data-did="Signed out of ${esc(c.name)}.">Sign out</button>` : `<button class="btn pri sm" data-signin="${esc(c.id)}">Sign in</button>`);
@@ -69,7 +69,7 @@ const CONNECTORS = (() => {
     else if (c.kind === "claude-account" && (c.status === "needsSignIn" || c.status === "failed")) acts.push(`<button class="btn sm" data-claude-open>Open claude.ai connectors</button>`);
     acts.push(`<button class="btn sm" data-enable="${esc(c.id)}" data-on="${c.enabled === false ? "1" : "0"}">${c.enabled === false ? "Turn on" : "Turn off"}</button>`);
     acts.push(confirmRemove === c.id
-      ? `<span class="cn-confirm">Remove ${esc(c.name)} from Theo? Its sign-in is forgotten too. You can add it again any time. <button class="btn sm cn-danger" data-remove="${esc(c.id)}">Remove</button><button class="btn sm ghost" data-remove-cancel>Cancel</button></span>`
+      ? `<span class="cn-confirm">Remove ${esc(c.name)} from Vello? Its sign-in is forgotten too. You can add it again any time. <button class="btn sm cn-danger" data-remove="${esc(c.id)}">Remove</button><button class="btn sm ghost" data-remove-cancel>Cancel</button></span>`
       : `<button class="btn sm ghost" data-remove-ask="${esc(c.id)}">Remove…</button>`);
     html += `<div class="btns">${acts.join("")}</div>`;
     // Who may use it, and how far: a bot only gets an app's tools when it's given the app here.
@@ -116,8 +116,8 @@ const CONNECTORS = (() => {
     const pills = (connected ? TP.pill("ok", `${connected} connected`) : "") + (signIn ? TP.pill("needs", `${signIn} need${signIn === 1 ? "s" : ""} sign-in`) : "") + (failed ? TP.pill("failed", `${failed} can't connect`) : "");
     const checked = result.checked ? ` Checked ${ago(result.checked) === "now" ? "just now" : `${ago(result.checked)} ago`}.` : "";
     const have = new Set(list.map((c) => c.catalogId || c.id));
-    pane.innerHTML = `<div class="column cn"><div><h1>Connectors</h1><p class="muted">Theo's own apps, the same for every bot whatever its brain. Sign in here, then give an app to a bot and say how far it may go. Apps through your Claude account are reached with Claude Code.${checked}</p></div>`
-      + (result.helper === false ? `<p class="w-bad">The connector helper is missing from this install, so apps can't be checked or used. Reinstall Theo to put it back.</p>` : "")
+    pane.innerHTML = `<div class="column cn"><div><h1>Connectors</h1><p class="muted">Vello's own apps, the same for every bot whatever its brain. Sign in here, then give an app to a bot and say how far it may go. Apps through your Claude account are reached with Claude Code.${checked}</p></div>`
+      + (result.helper === false ? `<p class="w-bad">The connector helper is missing from this install, so apps can't be checked or used. Reinstall Vello to put it back.</p>` : "")
       + (result.note ? `<p class="muted">${esc(result.note)}</p>` : "")
       + `<div class="cn-bar"><div class="pills">${pills}</div><button class="btn sm" data-refresh${checking ? " disabled" : ""}><svg class="ic" viewBox="0 0 24 24"><path d="M19.5 12A7.5 7.5 0 1 1 17.3 6.7M13.9 6.8h3.6V3.2"/></svg>${checking ? "Checking…" : "Refresh"}</button></div>`
       + (note ? `<p class="muted cn-note">${esc(note)}</p>` : "")

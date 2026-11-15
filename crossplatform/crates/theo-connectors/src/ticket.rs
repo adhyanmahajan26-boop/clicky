@@ -58,7 +58,7 @@ pub fn load_ticket(paths: &HubPaths, ticket_file: &Path) -> Result<Ticket, Strin
     let canonical_folder = std::fs::canonicalize(&ticket_folder).map_err(|_| "No ticket for this turn: the bot's apps are off.".to_string())?;
     let canonical_file = std::fs::canonicalize(ticket_file).map_err(|_| "No ticket for this turn (it ended, or was never written): the bot's apps are off.".to_string())?;
     if canonical_file.parent() != Some(canonical_folder.as_path()) {
-        return Err("That ticket isn't one Theo wrote: the bot's apps are off.".into());
+        return Err("That ticket isn't one Vello wrote: the bot's apps are off.".into());
     }
     let bytes = std::fs::read(&canonical_file).map_err(|_| "The ticket for this turn can't be read: the bot's apps are off.".to_string())?;
     let ticket: Ticket = serde_json::from_slice(&bytes).map_err(|_| "The ticket for this turn is damaged: the bot's apps are off.".to_string())?;

@@ -216,11 +216,11 @@ mod platform {
     use super::Monitor;
 
     pub fn monitors_and_cursor() -> Result<(Vec<Monitor>, (i32, i32)), String> {
-        Err("Clicky can only see the screen on Windows in this build.".into())
+        Err("Pointer Assistant can only see the screen on Windows in this build.".into())
     }
 
     pub fn capture() -> Result<(Vec<(Monitor, image::RgbImage)>, (i32, i32)), String> {
-        Err("Clicky can only see the screen on Windows in this build.".into())
+        Err("Pointer Assistant can only see the screen on Windows in this build.".into())
     }
 }
 
@@ -327,7 +327,7 @@ mod platform {
             DeleteDC(memory);
             ReleaseDC(std::ptr::null_mut(), screen);
             if copied == 0 || lines == 0 {
-                return Err("Windows didn't let Theo capture the screen (a secure desktop or a locked screen?).".into());
+                return Err("Windows didn't let Vello capture the screen (a secure desktop or a locked screen?).".into());
             }
             // BGRA → RGB.
             let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);

@@ -47,17 +47,17 @@
     html += row("Dictate anywhere", s.on ? `Hold ${keyCaps(chord.keys)} in any app, talk, then let go. Your words are tidied up and typed wherever the cursor is.` : "Dictation is off. It's a product of its own. Turn it on to use the shortcut and the chat box's mic.",
       `${pill(s.on ? "ok" : "none", s.on ? "On" : "Off")}<span class="act"><button class="btn sm" id="dict-on">${s.on ? "Turn off" : "Use Dictation"}</button></span>`);
     if (s.on && onWindows && !hook.dictationListening) {
-      html += row("The shortcut isn't listening", escape(hook.problem || "Theo couldn't watch the keyboard. Quit Theo from the tray and open it again."), pill("needs", "Needs you"), "w-ask");
+      html += row("The shortcut isn't listening", escape(hook.problem || "Vello couldn't watch the keyboard. Quit Vello from the tray and open it again."), pill("needs", "Needs you"), "w-ask");
     } else if (s.on && !onWindows) {
       html += row("The shortcut", "Holding a chord to talk works on Windows in this build. The chat box's mic and the test below work here when there's a microphone.", pill("none", "Windows only"));
     }
     const chordOptions = (s.chords || []).map((c) => `<option value="${escape(c.id)}"${c.id === s.chord ? " selected" : ""}>${escape(c.title)}</option>`).join("");
-    const clash = s.chord === "ctrlAlt" ? " That's Clicky's push-to-talk too: pick another so the two never overlap." : " Clicky's push-to-talk stays on Ctrl + Alt; the two never overlap.";
+    const clash = s.chord === "ctrlAlt" ? " That's Pointer Assistant's push-to-talk too: pick another so the two never overlap." : " Pointer Assistant's push-to-talk stays on Ctrl + Alt; the two never overlap.";
     html += row("Shortcut", `Fn never reaches Windows, so the Mac's Control + Fn is ${keyCaps(["Ctrl", "Win"])} here.${clash}`, `<span class="act many"><select id="dict-chord" aria-label="Shortcut">${chordOptions}</select></span>`);
     const mics = s.microphones || [];
     const micOptions = [`<option value="">Windows' default${s.defaultMicrophone ? ` (${escape(s.defaultMicrophone)})` : ""}</option>`]
       .concat(mics.map((m) => `<option value="${escape(m)}"${m === s.microphone ? " selected" : ""}>${escape(m)}</option>`)).join("");
-    html += row("Microphone", mics.length || !onWindows ? "Theo never asks for the mic: if Windows' microphone privacy switch is off, the pill says where it is." : "No microphone found. Plug one in.", `<span class="act many"><select id="dict-mic" aria-label="Microphone">${micOptions}</select></span>`);
+    html += row("Microphone", mics.length || !onWindows ? "Vello never asks for the mic: if Windows' microphone privacy switch is off, the pill says where it is." : "No microphone found. Plug one in.", `<span class="act many"><select id="dict-mic" aria-label="Microphone">${micOptions}</select></span>`);
     html += `</div>`;
 
     // Hears you with
@@ -82,7 +82,7 @@
     html += `<h2>Clean-up</h2><div class="list">`;
     html += row("Tidy up with a fast model", `Small filler words like “um” always go, even with this off. ${brain}`, `${pill(s.cleanup ? "ok" : "none", s.cleanup ? "On" : "Off")}<span class="act"><button class="btn sm" id="dict-cleanup">${s.cleanup ? "Turn off" : "Turn on"}</button></span>`);
     html += `<div class="crow dict-words"><span class="tx"><b>Your words</b><small style="white-space:normal">Names and terms it should always get right. To fix something it keeps mishearing, write it as heard = written.</small>`
-      + `<textarea id="dict-dictionary" rows="3" spellcheck="false" placeholder="Sarvam, or theo klicky = Theo Clicky">${escape(s.dictionary || "")}</textarea></span></div>`;
+      + `<textarea id="dict-dictionary" rows="3" spellcheck="false" placeholder="Sarvam, or theo klicky = Vello Pointer Assistant">${escape(s.dictionary || "")}</textarea></span></div>`;
     html += `</div>`;
 
     // Test

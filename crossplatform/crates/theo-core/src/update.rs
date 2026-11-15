@@ -196,11 +196,11 @@ pub fn check_failure_message(status: u16, sent_token: bool, repository: Option<&
     let repository = repository.unwrap_or("the updates repo");
     match status {
         404 if !sent_token => format!(
-            "This build's updates are private, so this computer can't see them. If you were given access to {repository}, paste a GitHub token that can read it below. Otherwise, new builds come from whoever gave you Theo."
+            "This build's updates are private, so this computer can't see them. If you were given access to {repository}, paste a GitHub token that can read it below. Otherwise, new builds come from whoever gave you Vello."
         ),
         404 => format!("No updates found: {repository} has no published build yet, or the saved GitHub token can't read it."),
         401 => "GitHub refused the saved token. Paste a new one below, or remove it if the updates are public.".to_string(),
-        403 | 429 => "GitHub is limiting how often this computer can check for updates. Theo tries again later by itself.".to_string(),
+        403 | 429 => "GitHub is limiting how often this computer can check for updates. Vello tries again later by itself.".to_string(),
         _ => format!("The update check answered {status}."),
     }
 }
@@ -261,7 +261,7 @@ pub fn windows_install_script(pid: u32, setup: &Path, folder: &Path, exe: &Path,
     let marker = data_root.join("INSTALLED_BUILD");
     let arguments = format!("/S /UPDATE /D={}", folder.display());
     format!(
-        "# Theo's update to build {build}: waits for Theo (process {pid}) to quit, installs the new build over it and opens Theo again.\r\n\
+        "# Vello's update to build {build}: waits for Vello (process {pid}) to quit, installs the new build over it and opens Vello again.\r\n\
 $ErrorActionPreference = 'Continue'\r\n\
 $log = {log}\r\n\
 function Note([string]$text) {{ try {{ Add-Content -Path $log -Value ((Get-Date -Format o) + \"`t\" + $text) }} catch {{ }} }}\r\n\
@@ -379,7 +379,7 @@ pub async fn check(h: &Harness, quietly: bool) -> Value {
         if quietly { *state = previous.clone(); } else { state.phase = Phase::Failed(message); }
     };
     let Some(suffix) = this_platform_suffix() else {
-        fail(format!("Theo can't update itself on {} yet. New builds are on the releases page.", platform_words()));
+        fail(format!("Vello can't update itself on {} yet. New builds are on the releases page.", platform_words()));
         return report(h);
     };
     let Some(repo) = releases_repo(h) else {
@@ -542,10 +542,10 @@ async fn record_install(h: &Harness) -> Result<Value, String> {
 
 fn phase_words(phase: &Phase) -> (&'static str, String) {
     match phase {
-        Phase::Idle => ("idle", "Theo checks when it starts and every 6 hours. Updating keeps your bots, chats and settings.".into()),
+        Phase::Idle => ("idle", "Vello checks when it starts and every 6 hours. Updating keeps your bots, chats and settings.".into()),
         Phase::Checking => ("checking", "Checking…".into()),
         Phase::UpToDate => ("upToDate", "You have the newest build.".into()),
-        Phase::Available => ("available", "A newer build is ready. Theo quits, updates itself and reopens, keeping your bots, chats and settings.".into()),
+        Phase::Available => ("available", "A newer build is ready. Vello quits, updates itself and reopens, keeping your bots, chats and settings.".into()),
         Phase::Installing(message) => ("installing", message.clone()),
         Phase::Failed(message) => ("failed", message.clone()),
     }
@@ -603,7 +603,7 @@ pub async fn control(h: &Harness, cmd: &Value) -> Result<Value, String> {
         }
         "install" => {
             if !h.settings.is_test {
-                return Err("Theo's window installs updates: use the Update button there.".into());
+                return Err("Vello's window installs updates: use the Update button there.".into());
             }
             record_install(h).await
         }
@@ -737,9 +737,9 @@ mod tests {
         let (sep, drive) = if cfg!(windows) { ("\\", "C:") } else { ("/", "/c") };
         let windows_path = |parts: &[&str]| PathBuf::from(format!("{drive}{sep}{}", parts.join(sep)));
         let program_files = vec![windows_path(&["Program Files"]), windows_path(&["Program Files (x86)"])];
-        let per_user = windows_path(&["Users", "Some One", "AppData", "Local", "Theo", "theo-desktop.exe"]);
-        assert_eq!(install_kind("windows", &per_user, true, &program_files, None), InstallKind::WindowsForThisUser { folder: windows_path(&["Users", "Some One", "AppData", "Local", "Theo"]) });
-        let lower_case = PathBuf::from(windows_path(&["program files", "Theo", "theo-desktop.exe"]).to_string_lossy().to_lowercase());
+        let per_user = windows_path(&["Users", "Some One", "AppData", "Local", "Vello", "theo-desktop.exe"]);
+        assert_eq!(install_kind("windows", &per_user, true, &program_files, None), InstallKind::WindowsForThisUser { folder: windows_path(&["Users", "Some One", "AppData", "Local", "Vello"]) });
+        let lower_case = PathBuf::from(windows_path(&["program files", "Vello", "theo-desktop.exe"]).to_string_lossy().to_lowercase());
         assert_eq!(install_kind("windows", &lower_case, true, &program_files, None), InstallKind::WindowsForEveryone);
         assert_eq!(install_kind("windows", &windows_path(&["src", "target", "release", "theo-desktop.exe"]), false, &program_files, None), InstallKind::Elsewhere);
         assert_eq!(install_kind("linux", Path::new("/tmp/.mount_x/usr/bin/theo-desktop"), false, &[], Some(Path::new("/home/a/.local/opt/theo/Theo.AppImage"))),

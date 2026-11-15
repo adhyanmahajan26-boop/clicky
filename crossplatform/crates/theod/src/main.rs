@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             "--help" | "-h" => {
-                println!("theod [--data DIR] [--test]\n\nRuns Theo's harness engine. Commands go in DIR/control-inbox as JSON files; answers appear in DIR/control-outbox.");
+                println!("theod [--data DIR] [--test]\n\nRuns Vello's harness engine. Commands go in DIR/control-inbox as JSON files; answers appear in DIR/control-outbox.");
                 return Ok(());
             }
             other => anyhow::bail!("unknown argument {other}"),

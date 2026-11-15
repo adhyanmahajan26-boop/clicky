@@ -20,7 +20,7 @@ pub struct InsertOutcome {
 /// How long the words stay on the clipboard before the owner's own clipboard is put back.
 pub const CLIPBOARD_RESTORE_MILLISECONDS: u64 = 450;
 
-pub const PASSWORD_REFUSAL: &str = "That's a password field, so Theo didn't type there.";
+pub const PASSWORD_REFUSAL: &str = "That's a password field, so Vello didn't type there.";
 
 /// The text as it is typed: Windows line ends, no stray carriage returns or control characters.
 pub fn text_for_typing(text: &str) -> String {

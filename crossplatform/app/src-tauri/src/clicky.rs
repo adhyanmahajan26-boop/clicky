@@ -91,7 +91,7 @@ struct DesktopHook(Arc<ClickyApp>);
 impl theo_core::clicky::Desktop for DesktopHook {
     fn ask(&self, transcript: String) -> Value {
         if !theo_core::clicky::is_on(&self.0.harness) {
-            return json!({"started": false, "why": "Clicky is off. Turn it on in Settings › Clicky."});
+            return json!({"started": false, "why": "Pointer Assistant is off. Turn it on in Settings › Pointer Assistant."});
         }
         let clicky = self.0.clone();
         tauri::async_runtime::spawn(async move { clicky.answer(transcript).await });
@@ -278,7 +278,7 @@ impl ClickyApp {
     fn make_overlay(&self, label: &str, monitor: &Monitor) -> Result<isize, String> {
         let page_label = label.to_string();
         let builder = tauri::WebviewWindowBuilder::new(&self.app, label, tauri::WebviewUrl::App("spark.html".into()))
-            .title("Clicky")
+            .title("Pointer Assistant")
             .decorations(false)
             .transparent(true)
             .shadow(false)
@@ -574,7 +574,7 @@ pub struct TrayItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
 /// first time, then switches between always shown and only while talking.
 pub fn tray_item(app: &AppHandle, harness: &Harness) -> tauri::Result<tauri::menu::CheckMenuItem<tauri::Wry>> {
     let checked = theo_core::clicky::is_on(harness) && harness.settings.string(theo_core::clicky::SPARK_SETTING).as_deref() != Some("talking");
-    let item = tauri::menu::CheckMenuItem::with_id(app, TRAY_ITEM, "Show Clicky", true, checked, None::<&str>)?;
+    let item = tauri::menu::CheckMenuItem::with_id(app, TRAY_ITEM, "Show Pointer Assistant", true, checked, None::<&str>)?;
     app.manage(TrayItem(item.clone()));
     Ok(item)
 }

@@ -142,7 +142,7 @@ pub fn check(req: &Request, port: u16, token: &str) -> Option<(u16, &'static str
         return Some((403, "Browser requests aren't accepted"));
     }
     let given = req.headers.get("authorization").and_then(|a| a.strip_prefix("Bearer ")).unwrap_or("");
-    if token.is_empty() || !constant_time_eq(given, token) { return Some((401, "Needs Authorization: Bearer <token from Theo's Settings>")); }
+    if token.is_empty() || !constant_time_eq(given, token) { return Some((401, "Needs Authorization: Bearer <token from Vello's Settings>")); }
     None
 }
 
@@ -188,7 +188,7 @@ async fn serve(h: Arc<Harness>, mut stream: tokio::net::TcpStream, port: u16) {
 async fn respond(h: &Arc<Harness>, req: Request, port: u16) -> (u16, Value) {
     let token = match (h.settings.gateway_enabled(), crate::secrets::read(&h.paths.token_file(), h.settings.is_test)) {
         (true, Some(t)) => t,
-        _ => return (503, json!({"error": "Theo's local API is off"})),
+        _ => return (503, json!({"error": "Vello's local API is off"})),
     };
     if let Some((status, why)) = check(&req, port, &token) {
         return (status, json!({"error": why}));

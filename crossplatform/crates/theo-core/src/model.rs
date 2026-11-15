@@ -138,7 +138,7 @@ impl Bot {
         }
     }
     pub fn theo() -> Self {
-        let mut bot = Self::new("Theo", "Your CEO: runs the team", "You are Theo, the owner's CEO bot. You run the team of bots, answer directly when you can, and hand work to the right bot when that's better.", "claude", "claude-sonnet-5-5");
+        let mut bot = Self::new("Vello", "Your CEO: runs the team", "You are Vello, the owner's CEO bot. You run the team of bots, answer directly when you can, and hand work to the right bot when that's better.", "claude", "claude-sonnet-5-5");
         bot.id = "theo".into();
         bot.primary = true;
         bot

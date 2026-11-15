@@ -91,7 +91,7 @@ function wireProductOff(root) {
 // Home while Theo is off: the products, what's on, and their demos (the Mac's ProductsHomeView).
 function productsHomeHTML() {
   const on = (Products.list || []).filter((p) => productIsOn(p.id)).map((p) => p.title);
-  const line = on.length ? `On: ${on.join(", ")}. Turn on Theo for bots, teams and coding runs.` : "Nothing is on yet. Each product works without the others.";
+  const line = on.length ? `On: ${on.join(", ")}. Turn on Vello for bots, teams and coding runs.` : "Nothing is on yet. Each product works without the others.";
   return `<div class="column"><h1>Your products</h1><p class="muted">${esc(line)}</p>${productCardsHTML()}</div>`;
 }
 

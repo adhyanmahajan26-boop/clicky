@@ -374,7 +374,7 @@ mod tests {
         let ben = bots.iter().find(|b| b.id == "ben").unwrap();
         let theo = bots.iter().find(|b| b.id == "theo").unwrap();
         let manager = reporting_lines(ana, &layout, &bots).join(" ");
-        assert!(manager.contains("You are its manager") && manager.contains("report to Theo, the CEO"), "{manager}");
+        assert!(manager.contains("You are its manager") && manager.contains("report to Vello, the CEO"), "{manager}");
         let member = reporting_lines(ben, &layout, &bots).join(" ");
         assert!(member.contains("Ana is your manager") && member.contains("(Inbox and calendar)"), "{member}");
         let ceo = reporting_lines(theo, &layout, &bots).join(" ");

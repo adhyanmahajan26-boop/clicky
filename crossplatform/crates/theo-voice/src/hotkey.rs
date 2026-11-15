@@ -433,7 +433,7 @@ mod windows_hook {
                 let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_procedure), module, 0) {
                     Ok(hook) => hook,
                     Err(error) => {
-                        *problem.lock().unwrap() = Some(format!("Windows didn't let Theo watch the keyboard ({error})."));
+                        *problem.lock().unwrap() = Some(format!("Windows didn't let Vello watch the keyboard ({error})."));
                         return;
                     }
                 };

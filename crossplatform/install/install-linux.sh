@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Theo for Linux: install, update or remove, from a GitHub release.
+# Vello for Linux: install, update or remove, from a GitHub release.
 #
 #   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install-linux.sh | bash
 #
-# Installs the AppImage to ~/.local/opt/theo, links ~/.local/bin/theo, and adds Theo to the app menu. No root needed.
+# Installs the AppImage to ~/.local/opt/theo, links ~/.local/bin/theo, and adds Vello to the app menu. No root needed.
 # The whole script runs from main() at the very end, so a download cut short runs nothing.
 
 set -euo pipefail
@@ -20,7 +20,7 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/theo-desktop"
 
 usage() {
   cat <<'USAGE'
-Theo for Linux installer
+Vello for Linux installer
 
   install-linux.sh [options]
 
@@ -28,10 +28,10 @@ Theo for Linux installer
   --dir <folder>       install here instead of ~/.local/opt/theo (also THEO_INSTALL_DIR)
   --from <file|url>    install this AppImage instead of downloading from the release; needs --sha256
   --sha256 <hex>       the checksum --from must match
-  --no-launch          don't open Theo afterwards
+  --no-launch          don't open Vello afterwards
   --force              reinstall even if this build is already installed
-  --uninstall          remove Theo, keep its data (chats, bots, memory)
-  --purge              remove Theo and its data (asks first; --yes to skip the question)
+  --uninstall          remove Vello, keep its data (chats, bots, memory)
+  --purge              remove Vello and its data (asks first; --yes to skip the question)
   --yes                answer yes to --purge's question
   --help               this text
 
@@ -63,7 +63,7 @@ gh_curl() {
 }
 
 # The releases repo: THEO_RELEASES_REPO, else the one this copy was published with, else releases-repo next to the script
-# when it runs from a checkout of Theo's source.
+# when it runs from a checkout of Vello's source.
 choose_repo() {
   [ -n "$REPO" ] || REPO="$PUBLISHED_RELEASES_REPO"
   if [ -z "$REPO" ]; then
@@ -72,7 +72,7 @@ choose_repo() {
       REPO="$(head -n 1 "$(dirname "$script_path")/releases-repo" | tr -d '[:space:]')"
     fi
   fi
-  [ -n "$REPO" ] || die "this copy of the installer doesn't say where Theo's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install-linux.sh attached to a release."
+  [ -n "$REPO" ] || die "this copy of the installer doesn't say where Vello's releases are. Set THEO_RELEASES_REPO=<owner>/<repo>, or use the install-linux.sh attached to a release."
   case "$REPO" in */*/*|/*|*/|*" "*) die "THEO_RELEASES_REPO must look like owner/name (got '$REPO')" ;; */*) ;; *) die "THEO_RELEASES_REPO must look like owner/name (got '$REPO')" ;; esac
 }
 
@@ -81,7 +81,7 @@ explain_release_failure() { # http status, whether a token was sent (1/0)
   case "$1" in
     404)
       if [ "$2" = 0 ]; then
-        die "this build's updates are private: $REPO can't be read without access. Ask whoever gave you Theo for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
+        die "this build's updates are private: $REPO can't be read without access. Ask whoever gave you Vello for a new installer. (If you do have access to that repo, set THEO_GITHUB_TOKEN to a token that can read it.)"
       fi
       die "no such release in $REPO, or the GitHub token can't read that repo" ;;
     401) die "GitHub refused the token (THEO_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN or gh's). A public releases repo needs no token: unset it and try again." ;;
@@ -110,7 +110,7 @@ arch_name() {
   case "$(uname -m)" in
     x86_64|amd64) echo "x86_64" ;;
     aarch64|arm64) echo "aarch64" ;;
-    *) die "this computer's processor ($(uname -m)) has no Theo build yet" ;;
+    *) die "this computer's processor ($(uname -m)) has no Vello build yet" ;;
   esac
 }
 
@@ -123,14 +123,14 @@ uninstall() {
   if [ -f "$APPS_DIR/theo.desktop" ] && grep -qxF "Exec=$INSTALL_DIR/Theo.AppImage" "$APPS_DIR/theo.desktop"; then rm -f "$APPS_DIR/theo.desktop"; fi
   rm -f "$INSTALL_DIR/Theo.AppImage" "$INSTALL_DIR/Theo.AppImage.new" "$INSTALL_DIR/BUILD"
   rmdir "$INSTALL_DIR" 2>/dev/null || true
-  say "Theo is removed. Its data is still in $DATA_DIR."
+  say "Vello is removed. Its data is still in $DATA_DIR."
 }
 
 purge() {
   local yes="$1"
   if [ "$yes" != 1 ]; then
     if [ -t 0 ] || [ -e /dev/tty ]; then
-      printf 'This deletes Theo and all its data in %s (bots, chats, memory). Type yes to go on: ' "$DATA_DIR"
+      printf 'This deletes Vello and all its data in %s (bots, chats, memory). Type yes to go on: ' "$DATA_DIR"
       local answer=""; read -r answer < /dev/tty || true
       [ "$answer" = "yes" ] || die "nothing was deleted"
     else
@@ -139,7 +139,7 @@ purge() {
   fi
   uninstall
   rm -rf "$DATA_DIR"
-  say "Theo's data is deleted too."
+  say "Vello's data is deleted too."
 }
 
 install_file() {
@@ -152,13 +152,13 @@ install_file() {
   cat > "$APPS_DIR/theo.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Theo
+Name=Vello
 Comment=Your team of bots
 Exec=$INSTALL_DIR/Theo.AppImage
 Terminal=false
 Categories=Office;Utility;
 DESKTOP
-  say "Theo $build is installed in $INSTALL_DIR (run it with: theo)."
+  say "Vello $build is installed in $INSTALL_DIR (run it with: theo)."
   case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "Add $BIN_DIR to your PATH to run 'theo' from a terminal." ;; esac
   if ! ldconfig -p 2>/dev/null | grep -q libfuse.so.2; then
     say "Note: AppImages need FUSE 2 (Ubuntu: sudo apt install libfuse2t64, or libfuse2 on older releases)."
@@ -232,7 +232,7 @@ PICK
     fi
     local build; build="$(json_get "import json;print(json.load(open('$TMP/release.json'))['tag_name'].replace('build-',''))")"
     [ -n "$build" ] || die "the release has no build number"
-    if [ "$force" != 1 ] && [ "$(installed_build)" = "$build" ]; then say "Theo $build is already installed (--force reinstalls)."; exit 0; fi
+    if [ "$force" != 1 ] && [ "$(installed_build)" = "$build" ]; then say "Vello $build is already installed (--force reinstalls)."; exit 0; fi
     local pick="import json,sys
 r=json.load(open('$TMP/release.json'))
 want=sys.argv[1]

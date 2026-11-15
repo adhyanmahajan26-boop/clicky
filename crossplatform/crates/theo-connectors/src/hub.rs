@@ -229,7 +229,7 @@ impl Hub {
                     Err(reason) => (AppStatus::Failed, Some(reason.clone()), None),
                     Ok(servers) => match servers.iter().find(|server| Some(server.server.as_str()) == entry.server.as_deref()) {
                         Some(server) => (server.status, server.reason.clone(), None),
-                        None => (AppStatus::Failed, Some("Claude Code doesn't have this app any more. Connect it on claude.ai, or add it to Theo directly.".into()), None),
+                        None => (AppStatus::Failed, Some("Claude Code doesn't have this app any more. Connect it on claude.ai, or add it to Vello directly.".into()), None),
                     },
                 };
                 match outcome.0 {

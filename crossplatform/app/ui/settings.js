@@ -3,16 +3,16 @@
 // #settings-clicky and #settings-dictation, and the "theo-settings" event on document fires each time the page is drawn.
 const SETTINGS_SECTIONS = [
   ["about", "About", "Your name and the setup guide."],
-  ["products", "Products", "Theo, Clicky and Dictation are separate. Turn on the ones you want."],
+  ["products", "Products", "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."],
   ["brains", "Models & API keys", "Bring your own key for any provider, or use an agent you're signed in to. Any one is enough."],
   ["coding", "Coding runs", "Your coding agents and where builds go."],
   ["connectors", "Connectors", "The apps your bots can use, and what each bot may do with them."],
-  ["clicky", "Clicky", "Everything about your screen companion, in one place."],
+  ["clicky", "Pointer Assistant", "Everything about your screen companion, in one place."],
   ["dictation", "Dictation", "Talk into the chat box, or hold a shortcut in any app."],
-  ["updates", "Updates", "Keep Theo current."],
+  ["updates", "Updates", "Keep Vello current."],
   ["api", "Local API", "Scripts on this computer can message a bot."],
-  ["login", "Start at sign-in", "Theo in the tray, so routines run without you opening it."],
-  ["health", "Health check", "What Theo checked on this computer."],
+  ["login", "Start at sign-in", "Vello in the tray, so routines run without you opening it."],
+  ["health", "Health check", "What Vello checked on this computer."],
 ];
 
 function settingsJump(id) {
@@ -39,7 +39,7 @@ async function renderSettingsPage() {
     ? `<div class="list">${settingRowHTML(`${esc(productTitle(id))} is off`, "Turn it on to use it on this computer.", `<button class="btn sm" data-turn-on="${id}">Turn on</button>`)}</div>` : "";
   const about = `<div class="list">${settingRowHTML("Your name", `What your bots call you. Empty: they say "the owner".`, `<input id="owner-name" value="${esc(s.ownerName || "")}" maxlength="40" placeholder="Your first name">`)}`
     + settingRowHTML("Setup guide", "A brain, your products, coding runs and a first bot, one step at a time.", `<button class="btn sm" data-setup-again>Run it again</button>`)
-    + settingRowHTML("This is Theo", `${esc(s.versionLabel || s.version)} on ${esc(s.os)} ${esc(s.arch)}`, "") + `</div>`;
+    + settingRowHTML("This is Vello", `${esc(s.versionLabel || s.version)} on ${esc(s.os)} ${esc(s.arch)}`, "") + `</div>`;
   const coding = `<section id="coding-settings"></section><div class="list" id="projects-folder"></div>`;
   const connectors = `<div class="list">${settingRowHTML("Your apps", "Add apps, sign in to them and choose which bots may use each one, on the Connectors page.", `<button class="btn sm" data-open-connectors>Open Connectors</button>`)}</div>`;
   const api = `<div class="list"><div class="crow"><span class="tx"><b>Local API</b><small style="white-space:normal">Lets scripts on this computer message a bot on 127.0.0.1:${g.port}. Needs a token; never counts as you.</small></span>${TP.pill(g.listening ? "ok" : "none", g.listening ? "On" : "Off")}<span class="act"><button class="btn sm" id="gw">${g.listening ? "Turn off" : "Turn on"}</button></span></div></div>`;
@@ -51,7 +51,7 @@ async function renderSettingsPage() {
     + section("brains", `<section id="brains-settings"></section>`)
     + section("coding", coding)
     + section("connectors", connectors)
-    + section("clicky", `${productLine("clicky")}<div id="settings-clicky"><p class="muted">Clicky's own settings show here once Clicky is set up on this computer.</p></div>`)
+    + section("clicky", `${productLine("clicky")}<div id="settings-clicky"><p class="muted">Pointer Assistant's own settings show here once Pointer Assistant is set up on this computer.</p></div>`)
     + section("dictation", `${productLine("dictation")}<div id="settings-dictation"><p class="muted">Dictation's own settings show here once it's set up on this computer.</p></div>`)
     + section("updates", `<div id="settings-updates-body"></div>`)
     + section("api", api)
@@ -112,7 +112,7 @@ async function renderSettingsPage() {
   // Open at sign-in lives in the app, not the engine; the browser stand-in for the UI has no answer, so the row stays out.
   const drawLogin = (on) => {
     if (typeof on !== "boolean" || !$("#login-row")) return;
-    $("#login-row").innerHTML = `<div class="crow"><span class="tx"><b>Open Theo when you sign in</b><small style="white-space:normal">Theo starts in the tray, so routines run without you opening it. Closing the window keeps Theo running; quit it from the tray icon.</small></span>${TP.pill(on ? "ok" : "none", on ? "On" : "Off")}<span class="act"><button class="btn sm" id="login-toggle">${on ? "Turn off" : "Turn on"}</button></span></div>`;
+    $("#login-row").innerHTML = `<div class="crow"><span class="tx"><b>Open Vello when you sign in</b><small style="white-space:normal">Vello starts in the tray, so routines run without you opening it. Closing the window keeps Vello running; quit it from the tray icon.</small></span>${TP.pill(on ? "ok" : "none", on ? "On" : "Off")}<span class="act"><button class="btn sm" id="login-toggle">${on ? "Turn off" : "Turn on"}</button></span></div>`;
     $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
   };
   window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
@@ -126,7 +126,7 @@ async function drawProjectsFolder(problem) {
   const r = await invoke({ cmd: "projectsFolder" });
   if (!r.ok || !$("#projects-folder")) return;
   const p = r.result;
-  const detail = `${esc(String(p.projectsFolder))}${p.chosen ? "" : " (the default, in Theo's data folder)"}. Made when the first project needs it.`
+  const detail = `${esc(String(p.projectsFolder))}${p.chosen ? "" : " (the default, in Vello's data folder)"}. Made when the first project needs it.`
     + (problem ? `<br><span class="w-bad">${esc(problem)}</span>` : "");
   box.innerHTML = settingRowHTML("Projects folder", detail, `<input id="projects-folder-input" placeholder="${esc(String(p.projectsFolder))}" aria-label="Projects folder" spellcheck="false"><button class="btn sm" data-projects-save>Save</button>${p.chosen ? `<button class="btn sm ghost" data-projects-default>Use the default</button>` : ""}`);
   const input = box.querySelector("#projects-folder-input");

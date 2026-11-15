@@ -2266,7 +2266,7 @@ def u02():
     titles = [p["title"] for p in default["products"]]
     expected_needs = (not st["completed"]) or (not st["anyReady"])
     checks = {
-        "defaults": default["on"] == {"theo": True, "clicky": False, "dictation": False} and titles == ["Theo", "Clicky", "Dictation"],
+        "defaults": default["on"] == {"theo": True, "clicky": False, "dictation": False} and titles == ["Vello", "Pointer Assistant", "Dictation"],
         "each_has_words": all(p["tagline"] and len(p["points"]) == 3 for p in default["products"]),
         "unknown_refused": unknown.get("ok") is False,
         "setup_state_has_products": st.get("products") == {"theo": True, "clicky": True, "dictation": False},

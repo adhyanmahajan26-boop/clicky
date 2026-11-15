@@ -83,16 +83,16 @@ impl LoadProblems {
         if let Some((rescued_data, value)) = rescued {
             if rescued_data.len() >= old.as_ref().map(|o| o.0.len()).unwrap_or(0) {
                 let _ = write_atomic(file, &rescued_data);
-                self.note(format!("Theo couldn't read all of {what}, so it kept everything that could still be read. The damaged file is kept as {aside_name}."));
+                self.note(format!("Vello couldn't read all of {what}, so it kept everything that could still be read. The damaged file is kept as {aside_name}."));
                 return Some(value);
             }
         }
         if let Some((good, value)) = old {
             let _ = write_atomic(file, &good);
-            self.note(format!("Theo couldn't read {what}, so it used the last copy that read fine. The unreadable file is kept as {aside_name}."));
+            self.note(format!("Vello couldn't read {what}, so it used the last copy that read fine. The unreadable file is kept as {aside_name}."));
             return Some(value);
         }
-        self.note(format!("Theo couldn't read {what} and had no earlier copy to use. Nothing was deleted: the file is kept as {aside_name}."));
+        self.note(format!("Vello couldn't read {what} and had no earlier copy to use. Nothing was deleted: the file is kept as {aside_name}."));
         None
     }
 }

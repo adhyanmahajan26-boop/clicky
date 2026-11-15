@@ -67,7 +67,7 @@ fn show_pill(app: &tauri::AppHandle, state: serde_json::Value) {
 
 fn make_pill(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     let window = tauri::WebviewWindowBuilder::new(app, PILL_LABEL, tauri::WebviewUrl::App("pill.html".into()))
-        .title("Theo dictation")
+        .title("Vello dictation")
         .inner_size(PILL_WIDTH, PILL_HEIGHT)
         .decorations(false)
         .transparent(true)

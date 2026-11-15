@@ -34,12 +34,12 @@ fn cannot_install_here(kind: &InstallKind, build: Option<u64>) -> Option<String>
     match kind {
         InstallKind::WindowsForThisUser { .. } | InstallKind::AppImage { .. } => None,
         InstallKind::WindowsForEveryone => Some(format!(
-            "This Theo was installed for everyone on this PC from the .msi, so updating it needs an administrator. The releases page is open: run {which}'s .msi, or its setup .exe to install Theo just for you."
+            "This Vello was installed for everyone on this PC from the .msi, so updating it needs an administrator. The releases page is open: run {which}'s .msi, or its setup .exe to install Vello just for you."
         )),
         InstallKind::Elsewhere => Some(if cfg!(target_os = "linux") {
-            format!("This Theo came from the .deb package (or was built by hand), so it doesn't replace itself. The releases page is open: install {which}'s .deb with apt, or use the AppImage.")
+            format!("This Vello came from the .deb package (or was built by hand), so it doesn't replace itself. The releases page is open: install {which}'s .deb with apt, or use the AppImage.")
         } else {
-            format!("This copy of Theo wasn't put here by Theo's installer, so it doesn't replace itself. The releases page is open: {which} is there.")
+            format!("This copy of Vello wasn't put here by Vello's installer, so it doesn't replace itself. The releases page is open: {which} is there.")
         }),
     }
 }
@@ -62,7 +62,7 @@ pub async fn install_update(app: tauri::AppHandle, harness: tauri::State<'_, Arc
     let handed_over = match &kind {
         InstallKind::WindowsForThisUser { folder } => run_windows_installer(&h, &installer, folder, release.build),
         InstallKind::AppImage { file } => update::replace_appimage(&installer, file, release.build).and_then(|()| relaunch_appimage(file)),
-        _ => Err("This copy of Theo can't update itself.".into()),
+        _ => Err("This copy of Vello can't update itself.".into()),
     };
     match handed_over {
         Ok(()) => {
@@ -130,7 +130,7 @@ fn relaunch_appimage(appimage: &std::path::Path) -> Result<(), String> {
         .process_group(0)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("Theo couldn't be reopened ({e})"))
+        .map_err(|e| format!("Vello couldn't be reopened ({e})"))
 }
 
 #[cfg(not(unix))]
