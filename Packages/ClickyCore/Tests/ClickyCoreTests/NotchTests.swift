@@ -353,6 +353,130 @@ struct NotchPanelTests {
     }
 }
 
+// MARK: - Bot board
+
+struct NotchBotBoardTests {
+    static func line(_ botID: String, _ lane: NotchBotLane, button: String? = nil) -> NotchBotLine {
+        NotchBotLine(botID: botID, name: botID.capitalized, state: "x", lane: lane, line: "line", button: button)
+    }
+
+    @Test func pixelStatesMapToLanes() {
+        #expect(NotchBotLane.lane(forPixelState: "needs") == .needsYou)
+        #expect(NotchBotLane.lane(forPixelState: "failed") == .failed)
+        #expect(NotchBotLane.lane(forPixelState: "working") == .working)
+        #expect(NotchBotLane.lane(forPixelState: "thinking") == .working)
+        #expect(NotchBotLane.lane(forPixelState: "done") == .done)
+        for quiet in ["awake", "idle", "off", "talking", "listening"] {
+            #expect(NotchBotLane.lane(forPixelState: quiet) == nil)
+        }
+        // Green working, yellow needs you, red failed: the faces' own colours.
+        #expect(NotchBotLane.working.hex == PixelState.working.hex)
+        #expect(NotchBotLane.needsYou.hex == PixelState.needs.hex)
+        #expect(NotchBotLane.failed.hex == PixelState.failed.hex)
+    }
+
+    @Test func mostUrgentFirstAndOrderKeptInsideALane() {
+        let board = NotchBots.board(from: [Self.line("a", .working), Self.line("b", .done), Self.line("c", .failed),
+                                           Self.line("d", .needsYou), Self.line("e", .working), Self.line("f", .needsYou)])
+        #expect(board.lines.map(\.botID) == ["d", "f", "c", "a"])
+        #expect(board.tally == NotchBotTally(needsYou: 2, failed: 1, working: 2))
+        // "e" is still working but didn't fit; the done bot isn't counted.
+        #expect(board.hiddenCount == 1)
+    }
+
+    @Test func tallyChipsOnlyForLanesWithBots() {
+        #expect(NotchBotTally().chips.isEmpty)
+        #expect(NotchBotTally().isEmpty)
+        let tally = NotchBotTally(needsYou: 0, failed: 2, working: 12)
+        #expect(tally.chips.map(\.lane) == [.failed, .working])
+        #expect(NotchBotTally.countText(12) == "9+")
+        #expect(NotchBotTally.countText(3) == "3")
+        #expect(NotchBotTally(needsYou: 1, failed: 0, working: 3).spokenText == "1 needs you, 3 working")
+    }
+
+    @Test func doneBotsAloneMakeNoChips() {
+        let board = NotchBots.board(from: [Self.line("a", .done)])
+        #expect(board.lines.count == 1)
+        #expect(board.tally.isEmpty)
+        #expect(NotchBots.collapsedStatus(board: board) == "")
+    }
+
+    @Test func collapsedWordsNameTheMostUrgentBot() {
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .working), Self.line("researcher", .needsYou)])) == "Researcher needs you")
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .failed)])) == "Builder failed")
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .working)])) == "Builder is working")
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("a", .working), Self.line("b", .working)])) == "2 bots working")
+    }
+
+    @Test func companionWordsWinOverTheBots() {
+        var listening = NotchContent(phase: .listening, statusText: "listening…")
+        listening.apply(botBoard: NotchBots.board(from: [Self.line("researcher", .needsYou)]))
+        #expect(listening.statusText == "listening…")
+        // The chips stay: the bots are always on the pill.
+        #expect(listening.botTally.needsYou == 1)
+
+        var idle = NotchContent()
+        idle.apply(botBoard: NotchBots.board(from: [Self.line("researcher", .needsYou)]))
+        #expect(idle.statusText == "Researcher needs you")
+    }
+
+    @Test func chipsWidenTheVirtualNotchOnTheRight() {
+        let layout = NotchGeometry.layout(for: NotchGeometryTests.ultrawide)
+        let plain = NotchGeometry.collapsedBodySize(layout: layout)
+        let three = NotchGeometry.collapsedBodySize(layout: layout, botChipCount: 3)
+        #expect(three.width - plain.width == NotchGeometry.botChipsWidth(chipCount: 3) + NotchGeometry.botChipsLeadingGap)
+        #expect(NotchGeometry.botChipsWidth(chipCount: 0) == 0)
+        #expect(NotchGeometry.botChipsWidth(chipCount: 9) == NotchGeometry.botChipsWidth(chipCount: 3))
+    }
+
+    @Test func chipsWidenBothWingsOfARealNotchSoItStaysCentred() {
+        let layout = NotchLayout.sample(hasPhysicalNotch: true)
+        let wing = NotchGeometry.collapsedWingWidth(layout: layout, isIdle: false, botChipCount: 3)
+        #expect(wing == NotchGeometry.logoFrameWidth + NotchGeometry.botChipsLeadingGap + NotchGeometry.botChipsWidth(chipCount: 3) + NotchGeometry.botChipsTrailingPadding)
+        #expect(wing > layout.wingWidth)
+        #expect(wing <= layout.maximumWingWidth)
+        let size = NotchGeometry.collapsedSize(layout: layout, isIdle: false, botChipCount: 3)
+        #expect(size.width == layout.notchRect.width + 2 * wing + 2 * NotchGeometry.topFlareRadius)
+        let frame = NotchGeometry.panelFrame(layout: layout, size: size)
+        #expect(frame.midX == layout.notchRect.midX)
+        // Idle with nothing going on stays slim.
+        #expect(NotchGeometry.collapsedWingWidth(layout: layout, isIdle: true, botChipCount: 0) == NotchGeometry.idleWingWidth)
+    }
+
+    @Test func aNarrowMenuBarCapsTheWings() {
+        let metrics = NotchScreenMetrics(screenFrame: CGRect(x: 0, y: 0, width: 600, height: 400), safeAreaTopInset: 32,
+                                         auxiliaryTopLeftArea: CGRect(x: 0, y: 368, width: 200, height: 32),
+                                         auxiliaryTopRightArea: CGRect(x: 400, y: 368, width: 200, height: 32))
+        let layout = NotchGeometry.layout(for: metrics)
+        #expect(layout.maximumWingWidth == 100)
+        #expect(NotchGeometry.collapsedWingWidth(layout: layout, isIdle: false, botChipCount: 3) == 100)
+    }
+
+    @Test func expandedPanelMakesRoomForTheBots() {
+        let layout = NotchGeometry.layout(for: NotchGeometryTests.ultrawide)
+        let empty = NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false)
+        let twoBots = NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false, botRowCount: 2)
+        // Two bot rows replace the "No agents running" line.
+        #expect(twoBots.height - empty.height == 2 * NotchGeometry.botRowHeight + NotchGeometry.botRowSpacing - NotchGeometry.noAgentsLineHeight)
+        let withAgents = NotchGeometry.expandedSize(layout: layout, agentRowCount: 1, hasMoreAgentsLine: false, hasCaption: false, botRowCount: 2)
+        #expect(withAgents.height - twoBots.height == NotchGeometry.agentRowHeight + NotchGeometry.sectionSpacing)
+        let many = NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false, botRowCount: 9, hasMoreBotsLine: true)
+        let four = NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false, botRowCount: 4, hasMoreBotsLine: true)
+        #expect(many == four)
+    }
+
+    @MainActor @Test func pillSizeFollowsTheBoard() {
+        let layout = NotchLayout.sample(hasPhysicalNotch: false)
+        var content = NotchContent()
+        let quiet = NotchView.pillSize(content: content, layout: layout, isExpanded: false)
+        content.apply(botBoard: NotchBots.board(from: [Self.line("a", .working), Self.line("b", .failed)]))
+        let busy = NotchView.pillSize(content: content, layout: layout, isExpanded: false)
+        #expect(busy.width == quiet.width + NotchGeometry.botChipsWidth(chipCount: 2) + NotchGeometry.botChipsLeadingGap)
+        let expanded = NotchView.pillSize(content: content, layout: layout, isExpanded: true)
+        #expect(expanded == NotchGeometry.expandedSize(layout: layout, agentRowCount: 0, hasMoreAgentsLine: false, hasCaption: false, botRowCount: 2))
+    }
+}
+
 // MARK: - Renders
 
 /// Offscreen renders of the notch pill (ImageRenderer: no window, nothing on
@@ -426,6 +550,48 @@ struct NotchRenderTests {
         let tiff = try #require(image.tiffRepresentation)
         let png = try #require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
         try png.write(to: outputDirectory.appendingPathComponent(fileName))
+    }
+
+    /// A board as the promo shows it: one bot needs you, one failed, two working.
+    static func sampleBotBoard() -> NotchBots.Board {
+        NotchBots.board(from: [
+            NotchBotLine(botID: "ledger", name: "Ledger", state: "working", lane: .working, line: "Reading 6 sources for the weekly summary", sinceText: "4:12"),
+            NotchBotLine(botID: "builder", name: "Builder", state: "failed", lane: .failed, line: "GitHub sign-in expired", button: "Fix"),
+            NotchBotLine(botID: "researcher", name: "Researcher", state: "needs", lane: .needsYou, line: "Sign in to Notion", button: "Sign in"),
+            NotchBotLine(botID: "scout", name: "Scout", state: "working", lane: .working, line: "Drafting replies to 3 emails", sinceText: "1:05")
+        ])
+    }
+
+    /// The bot board on the pill: collapsed (chips beside the logo, the most urgent bot named), expanded, and with
+    /// the companion listening. Written as notch-bots-*.png for the promo and the PR.
+    @Test func rendersTheBotBoard() throws {
+        let virtualLayout = NotchLayout.sample(hasPhysicalNotch: false)
+        let physicalLayout = NotchLayout.sample(hasPhysicalNotch: true)
+        var board = NotchContent()
+        board.apply(botBoard: Self.sampleBotBoard())
+        #expect(board.statusText == "Researcher needs you")
+        var working = NotchContent()
+        working.apply(botBoard: NotchBots.board(from: Self.sampleBotBoard().lines.filter { $0.lane == .working }))
+        var listening = NotchContent(phase: .listening, statusText: "listening…", captionText: "\u{201C}Hey Vello, what's Builder stuck on?\u{201D}")
+        listening.apply(botBoard: Self.sampleBotBoard())
+
+        let renders: [(name: String, content: NotchContent, layout: NotchLayout, isExpanded: Bool, canvasWidth: CGFloat)] = [
+            ("bots-collapsed", board, virtualLayout, false, 360),
+            ("bots-collapsed-working", working, virtualLayout, false, 360),
+            ("bots-collapsed-physical", board, physicalLayout, false, 520),
+            ("bots-expanded", board, virtualLayout, true, 560),
+            ("bots-expanded-physical", board, physicalLayout, true, 560),
+            ("bots-expanded-listening", listening, virtualLayout, true, 560)
+        ]
+        for render in renders {
+            for (schemeName, appearanceName, colorScheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
+                let image = try Self.render(content: render.content, layout: render.layout, isExpanded: render.isExpanded, canvasWidth: render.canvasWidth,
+                                            appearanceName: appearanceName, colorScheme: colorScheme)
+                try Self.writePNG(image, named: "notch-\(render.name)-\(schemeName).png")
+                let pillSize = NotchView.pillSize(content: render.content, layout: render.layout, isExpanded: render.isExpanded)
+                #expect(abs(image.size.height - (pillSize.height + 24)) < 1, "\(render.name) height")
+            }
+        }
     }
 
     @Test func rendersCollapsedAndExpandedInLightAndDark() throws {
