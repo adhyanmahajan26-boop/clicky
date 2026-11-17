@@ -1,0 +1,51 @@
+/* VM screens (vmscreens.js): the panel's tiles, Settings › VM screens and the research cards, on the Theo Pixel kit's tokens. */
+
+.vm-panel { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.vm-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--t2); }
+.vm-head > span { flex: 1; min-width: 0; }
+.vm-foot { margin: 0; font-size: 12px; color: var(--t3); }
+.vm-panel .w-bad, #settings-vmscreens .w-bad { color: var(--bad-t); font-size: 12.5px; margin: 0; }
+
+/* One tile per screen: the picture (16:10, as the screens are 1280 by 800), then its name, page and job. */
+.vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.vm-grid.one { display: block; max-width: 380px; margin-top: 8px; }
+.vm-tile { border: 1px solid var(--line); border-radius: 14px; background: var(--card); overflow: hidden; display: flex; flex-direction: column; --ring: var(--card); min-width: 0; }
+.vm-tile.live { border-color: var(--ok-line); }
+.vm-shot { aspect-ratio: 16 / 10; background: var(--card2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.vm-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+.vm-blank { color: var(--t3); font-size: 12px; padding: 0 16px; text-align: center; }
+.vm-meta { padding: 9px 12px 11px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.vm-name { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.vm-name b { flex: 1; font-weight: 600; }
+.vm-title, .vm-url, .vm-doing { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-title { font-size: 12.5px; color: var(--t1); }
+.vm-url { font: 11px var(--mono); color: var(--t3); }
+.vm-doing { font-size: 12px; color: var(--t2); min-height: 16px; }
+
+/* Settings › VM screens. */
+.vm-seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; }
+.vm-seg button { height: 28px; min-width: 32px; padding: 0 10px; border: 0; background: transparent; color: var(--t2); font-weight: 600; font-size: 12.5px; cursor: pointer; }
+.vm-seg button + button { border-left: 1px solid var(--line); }
+.vm-seg button.on { background: var(--acc); color: var(--acc-ink); }
+.vm-seg button:hover:not(.on) { color: var(--t1); background: var(--card2); }
+.vm-roles { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.vm-role { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--t1); cursor: pointer; }
+.vm-role input { margin: 0; }
+.vm-role small { color: var(--t3); white-space: normal; }
+.vm-try { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 4px; }
+.vm-try input { flex: 1; min-width: 200px; background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font: 13px var(--body); }
+
+/* The research brief card and its sources. */
+.vm-sources { display: flex; flex-direction: column; gap: 4px; }
+.vm-source { display: flex; align-items: center; gap: 9px; text-align: left; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--t1); padding: 6px 9px; min-width: 0; cursor: default; }
+.vm-source[data-vm-link] { cursor: pointer; }
+.vm-source[data-vm-link]:hover { background: var(--card2); }
+.vm-source .n { font: 600 11px var(--mono); color: var(--t3); width: 16px; flex: none; }
+.vm-source .tx { display: flex; flex-direction: column; min-width: 0; }
+.vm-source .tx b, .vm-source .tx small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-source .tx b { font-weight: 600; font-size: 12.5px; }
+.vm-source .tx small { font-size: 11.5px; color: var(--t3); }
+.vm-source.bad { opacity: .6; }
+.vm-brief .tc-foot { margin-left: auto; font-size: 11.5px; color: var(--t3); }
+#vm-reader { width: 760px; max-height: calc(100vh - 48px); padding: 0; display: none; }
+#vm-reader[open] { display: flex; flex-direction: column; }

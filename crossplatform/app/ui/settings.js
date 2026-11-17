@@ -9,6 +9,7 @@ const SETTINGS_SECTIONS = [
   ["connectors", "Connectors", "The apps your bots can use, and what each bot may do with them."],
   ["clicky", "Pointer Assistant", "Everything about your screen companion, in one place."],
   ["dictation", "Dictation", "Talk into the chat box, or hold a shortcut in any app."],
+  ["vmscreens", "VM screens", "Hidden browser windows where research agents read the web. Experimental."],
   ["updates", "Updates", "Keep Vello current."],
   ["api", "Local API", "Scripts on this computer can message a bot."],
   ["login", "Start at sign-in", "Vello in the tray, so routines run without you opening it."],
@@ -53,6 +54,7 @@ async function renderSettingsPage() {
     + section("connectors", connectors)
     + section("clicky", `${productLine("clicky")}<div id="settings-clicky"><p class="muted">Pointer Assistant's own settings show here once Pointer Assistant is set up on this computer.</p></div>`)
     + section("dictation", `${productLine("dictation")}<div id="settings-dictation"><p class="muted">Dictation's own settings show here once it's set up on this computer.</p></div>`)
+    + section("vmscreens", `<div id="settings-vmscreens"><p class="muted">Checking for Chrome or Edge…</p></div>`)
     + section("updates", `<div id="settings-updates-body"></div>`)
     + section("api", api)
     + section("login", login)
@@ -116,7 +118,7 @@ async function renderSettingsPage() {
     $("#login-toggle").onclick = async () => drawLogin(await window.__TAURI__.core.invoke("open_at_login", { enabled: !on }).catch(() => on));
   };
   window.__TAURI__.core.invoke("open_at_login", {}).then(drawLogin).catch(() => {});
-  document.dispatchEvent(new CustomEvent("theo-settings", { detail: { clicky: "#settings-clicky", dictation: "#settings-dictation" } }));
+  document.dispatchEvent(new CustomEvent("theo-settings", { detail: { clicky: "#settings-clicky", dictation: "#settings-dictation", vmscreens: "#settings-vmscreens" } }));
 }
 
 // Where coding runs make new projects (code.projectsFolder). Empty means the default, inside Theo's data folder.

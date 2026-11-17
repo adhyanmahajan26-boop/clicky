@@ -430,6 +430,8 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         other if crate::chat_controls::handles(other) => crate::chat_controls::handle(h, other, cmd).await,
         // Clicky, the voice and screen companion (clicky/mod.rs).
         n if n.starts_with("clicky") => crate::clicky::control(h, n, cmd).await,
+        // VM screens (hidden browser windows) and the research agents that read on them (vmscreens/).
+        n @ ("vmScreens" | "research") => crate::vmscreens::control(h, n, cmd).await,
         other if crate::teams_control::handles(other) => crate::teams_control::handle(h, other, cmd).await,
         // Commands of the crates built on theo-core (dictation, Clicky), when theod or the app registered them.
         _ => match crate::control_ext::handle(h, cmd).await {

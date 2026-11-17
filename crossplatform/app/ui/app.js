@@ -74,7 +74,7 @@ function renderHead() {
     const writing = Object.entries(state.replyingIn || {}).filter(([, r]) => r === room()).map(([b]) => nameOf(b));
     detail = writing.length ? `${writing.join(", ")} writing…` : `${(g.members || []).length + 1} bots`;
   } else {
-    name = { home: "Home", connectors: "Connectors", routines: "Routines", usage: "Usage", settings: "Settings", team: teamHeadName() }[view.kind] || "";
+    name = { home: "Home", connectors: "Connectors", routines: "Routines", usage: "Usage", settings: "Settings", vmscreens: "VM screens", team: teamHeadName() }[view.kind] || "";
     if (view.kind === "team") detail = teamHeadDetail();
   }
   renderHeadActions();
@@ -137,6 +137,7 @@ async function renderChat() {
     if (m.card && m.card.startsWith("answered:")) { html += answeredLine(m); last = null; return; }
     if (m.card && m.card.startsWith("dm:")) { html += CARDS.dm(m); last = null; return; }
     if (m.card && m.card.startsWith("pdf:")) { html += CARDS.pdf(m); last = null; return; }
+    if (m.card && typeof VMSCREENS !== "undefined" && VMSCREENS.handles(m)) { html += VMSCREENS.card(m); last = null; return; }
     if (m.run) {
       // One card per run, where its latest line is.
       if (msgs.slice(i + 1).some((x) => x.run === m.run)) return;
@@ -161,6 +162,7 @@ async function renderChat() {
   pane.innerHTML = `<div class="column">${html}</div>`;
   wire(pane);
   CARDS.wire(pane);
+  if (typeof VMSCREENS !== "undefined") VMSCREENS.wire(pane);
   if (atBottom || !sigs.scrolled) { pane.scrollTop = pane.scrollHeight; sigs.scrolled = true; }
 }
 
@@ -292,6 +294,7 @@ function render() {
   if (view.kind === "routines") renderRoutines();
   if (view.kind === "usage") renderUsage();
   if (view.kind === "settings") renderSettings();
+  if (view.kind === "vmscreens" && typeof renderVMScreens === "function") renderVMScreens();
 }
 async function say(text) {
   await invoke({ cmd: "botSay", bot: view.kind === "group" ? `group:${view.id}` : view.id, text });

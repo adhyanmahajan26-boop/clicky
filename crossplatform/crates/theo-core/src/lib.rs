@@ -40,5 +40,6 @@ pub mod chat_controls;
 pub mod products;
 pub mod update;
 pub mod clicky;
+pub mod vmscreens;
 
 pub use harness::Harness;

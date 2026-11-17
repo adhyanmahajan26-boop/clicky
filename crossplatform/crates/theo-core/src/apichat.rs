@@ -518,6 +518,8 @@ pub struct Toolbox {
     memory_folder: PathBuf,
     hub_tools: BTreeMap<String, HubTool>,
     ticket: Option<PathBuf>,
+    /// Whose turn it is (the research tool's brief lands in that bot's chat).
+    bot_id: String,
 }
 
 impl Drop for Toolbox {
@@ -545,7 +547,8 @@ impl Toolbox {
     pub async fn for_turn(harness: &Harness, bot: &Bot, from_owner: bool) -> Toolbox {
         let memory_folder = harness.paths.memory_dir(&bot.id);
         let _ = std::fs::create_dir_all(&memory_folder);
-        let mut toolbox = Toolbox { definitions: memory_tool_definitions(), prompt_section: String::new(), memory_folder, hub_tools: BTreeMap::new(), ticket: None };
+        let mut toolbox = Toolbox { definitions: memory_tool_definitions(), prompt_section: String::new(), memory_folder, hub_tools: BTreeMap::new(), ticket: None, bot_id: bot.id.clone() };
+        toolbox.definitions.push(crate::vmscreens::research::tool_definition());
         let mut apps_not_reachable: Vec<String> = vec![];
         let mut ticket_apps: BTreeMap<String, String> = BTreeMap::new();
         let mut described: Vec<String> = vec![];
@@ -603,6 +606,7 @@ impl Toolbox {
         let mut lines = vec![format!(
             "Your tools: {MEMORY_LIST_TOOL}, {MEMORY_READ_TOOL} and {MEMORY_WRITE_TOOL} reach your own memory folder and nothing else. Save what you'll need next time to memory.md there, short and current."
         )];
+        lines.push(format!("Also: {}", crate::vmscreens::research::TOOL_PROMPT_LINE));
         if !described.is_empty() {
             lines.push(format!("Your apps, as tools named <app>__<tool>: {}. Use them when the request needs them, and only say something was done when the tool's answer shows it was.", described.join(", ")));
         }
@@ -621,6 +625,7 @@ impl Toolbox {
             MEMORY_LIST_TOOL => list_memory(&self.memory_folder),
             MEMORY_READ_TOOL => read_memory(&self.memory_folder, arguments["path"].as_str().unwrap_or("")),
             MEMORY_WRITE_TOOL => write_memory(&self.memory_folder, arguments["path"].as_str().unwrap_or(""), arguments["content"].as_str(), arguments["append"].as_bool().unwrap_or(false)),
+            crate::vmscreens::research::TOOL_NAME => crate::vmscreens::research::run_tool(harness, &self.bot_id, &arguments).await,
             other => match (self.hub_tools.get(other), &self.ticket) {
                 // Only a tool this bot was offered: a name it made up, or another bot's app, never reaches the hub.
                 (Some(tool), Some(ticket)) => {
