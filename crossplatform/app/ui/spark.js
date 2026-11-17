@@ -211,7 +211,18 @@
     }
   }
 
-  if (window.__TAURI__ && window.__TAURI__.event) window.__TAURI__.event.listen("spark", (event) => handle(event.payload || {}));
+  // Only this window's own messages. Tauri 2's plain event.listen hears an emit_to aimed at any window, so with one overlay
+  // per monitor every spark took every monitor's cursor and moved on all screens at once.
+  function listenHere(name, handler) {
+    const tauri = window.__TAURI__;
+    if (!tauri || !tauri.event) return;
+    const current = tauri.webviewWindow && tauri.webviewWindow.getCurrentWebviewWindow && tauri.webviewWindow.getCurrentWebviewWindow();
+    if (current && current.listen) return current.listen(name, handler);
+    const metadata = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.metadata;
+    const label = metadata && metadata.currentWebview && metadata.currentWebview.label;
+    if (label) return tauri.event.listen(name, handler, { target: { kind: "WebviewWindow", label } });
+  }
+  listenHere("spark", (event) => handle(event.payload || {}));
   // A page opened in a browser (the design check) shows the spark at rest.
   else { cursor = { x: 200, y: 200 }; place(222, 220); showSpark(); }
 })();
