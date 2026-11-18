@@ -156,6 +156,17 @@ About 30 minutes on a Windows 10 or 11 PC:
 19. **Unusual setups**, if you have them: a username with a space or non-English letters, a PC with no Git, a work PC whose
     AppData is on a network drive, and a Windows on ARM PC (Theo is x64 only, so it runs under emulation).
 
+20. **VM screens** (about 10 minutes, with Chrome or Edge installed). Settings › VM screens › Turn on: the browser row
+    names Chrome or Edge (on a PC with neither, it says "Vello needs Chrome or Edge" and Get Chrome opens the download
+    page). In Try it, open `https://en.wikipedia.org/wiki/Fern`: a tile appears with the page and its first words, and no
+    browser window, taskbar button or Alt+Tab entry shows up. Open VM screens in the sidebar. Ask a bot "Research the best
+    beginner houseplants and give me a brief": within a few minutes the tiles show pages being read, then a Research card
+    lands in the chat with numbered sources; Open the brief reads it, a source opens in your own browser. If a page asks
+    you to prove you're human, a "Needs you" card says so and nothing tries to get past it. Ask Pointer Assistant "research
+    electric bikes for me": it says it's researching, and the brief lands in the main bot's chat. Then quit Vello from the
+    tray and check Task Manager: no `chrome.exe` or `msedge.exe` started by Vello is left (your own browser stays). Also
+    try it with Chrome closed, with your own Chrome open, and on a PC with only Edge.
+
 ## Known limits
 
 - Coding runs on very deep folders can hit Windows' 260-character path limit unless long paths are turned on.
@@ -166,3 +177,6 @@ About 30 minutes on a Windows 10 or 11 PC:
 - Clicky's Ctrl + Alt has the same AltGr catch: typing an AltGr letter cancels the listen at once, but someone who holds
   AltGr alone will wake Clicky; pick another shortcut in Settings › Clicky on those keyboards. Clicky can't see a window
   that blocks capture (some video players, DRM content): those parts of the picture come back black.
+- VM screens read with Vello's own throwaway browser profile, so pages that need you signed in show their signed-out
+  version. Some sites, DuckDuckGo included, may treat a headless browser as a robot and ask for a human check: that
+  becomes a "Needs you" card, and the research carries on with the other pages.

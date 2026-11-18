@@ -1449,6 +1449,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "ureq",
+ "url",
  "uuid",
  "windows-sys 0.59.0",
 ]

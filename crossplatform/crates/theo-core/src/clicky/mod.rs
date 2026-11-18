@@ -228,6 +228,21 @@ pub async fn ask_brain(h: &Harness, pick: &BrainPick, transcript: &str, screens:
     Ok(answer)
 }
 
+/// One request on a brain with words only: no pictures, no history (the research agents' readers and their brief,
+/// `vmscreens/research.rs`).
+pub async fn ask_words(h: &Harness, pick: &BrainPick, system: &str, message: &str, cancel: Arc<Cancel>) -> Result<String, String> {
+    let quiet: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_: &str| {});
+    if let Some(provider_id) = crate::brains::api_provider_id(&pick.engine) {
+        let provider = crate::brains::api_provider(h, provider_id).ok_or("Vello doesn't know that provider.")?;
+        let key = crate::brains::api_key(h, provider_id);
+        if key.is_none() && !provider.keyless {
+            return Err(format!("{} needs an API key. Add one in Settings › Brains.", provider.label));
+        }
+        return ask_api(&provider, key, &pick.model, system, message, &[], cancel, quiet).await.map_err(ApiError::into_words);
+    }
+    ask_agent(h, pick, system, message, &[], cancel, quiet).await
+}
+
 #[derive(Debug)]
 enum ApiError {
     RefusedPictures(String),
@@ -555,6 +570,14 @@ pub fn overlay_plan(answer: &str, screens: &[Screen]) -> Value {
 
 /// One whole turn on the brain picked: the answer, its overlay plan, and the exchange remembered for the next question.
 pub async fn turn(h: &Harness, transcript: &str, screens: &[Screen], cancel: Arc<Cancel>, on_text: Arc<dyn Fn(&str) + Send + Sync>) -> Result<Value, String> {
+    // "Research … for me": research agents take it in the background (vmscreens/research.rs), as on the Mac.
+    if let Some(line) = crate::vmscreens::research::pointer_assistant_request(h, transcript) {
+        on_text(&line);
+        let mut plan = overlay_plan(&line, screens);
+        plan["answer"] = line.into();
+        plan["research"] = true.into();
+        return Ok(plan);
+    }
     let pick = pick_brain(h).await.ok_or("Pointer Assistant has no brain yet: add an API key or sign in to an agent in Settings › Brains.")?;
     let started = std::time::Instant::now();
     let answer = ask_brain(h, &pick, transcript, screens, cancel, on_text).await?;

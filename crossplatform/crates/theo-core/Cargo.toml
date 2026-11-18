@@ -19,6 +19,8 @@ sha2 = "0.10"
 # Clicky: screenshots scaled and encoded for the brain, and pictures in requests.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64 = "0.22"
+# VM screens and research: web addresses checked before a hidden browser window opens them.
+url = "2.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -173,7 +173,7 @@ Control commands (theod's inbox and the window): `teams`, `teamAdd`, `teamUpdate
 
 - Theo Link (two Macs as one Theo). The protocol could be ported; nothing in it is Mac-only except Bonjour, which has mDNS equivalents.
 - Sub-categories, pinning and hiding bots in the sidebar, and a category's own colour and symbol.
-- `[SCREEN:]` and `[RESEARCH:]` jobs (those need Clicky and the Studio).
+- `[SCREEN:]` jobs (they need the Mac's Clicky actions). `[RESEARCH:]` is here: see VM screens below.
 - Harness cards for T3 Code, and the run card's Mac choice; coding runs in a terminal you can watch (they run headless here
   and report back in the chat). Codex chats kept only in its newer sqlite store, and Cursor Agent chats kept only in its
   `store.db`, aren't listed for carrying on yet.
@@ -208,8 +208,8 @@ pointing on a real multi-monitor PC need a person ([WINDOWS-PC.md](WINDOWS-PC.md
 
 Not in this build yet (the Mac has them): hands-free sessions (double tap), the "Hey Clicky" wake word, doing things on the
 screen (`<actions>`, article highlights and notes), `[WORKER:]` helpers and Clicky's team, the notch pill, `[SNAP:]`
-screenshots and the local fast path for spoken commands. The Studio's hidden screens stay Mac-only: on Windows they would
-need a signed display driver.
+screenshots and the local fast path for spoken commands. The Mac's hidden displays would need a signed display driver on
+Windows, so Windows and Linux have VM screens made of hidden browser windows instead (below).
 
 ## Dictation (hold a key, talk, the words are typed where you are): Mac and Windows
 
@@ -232,6 +232,39 @@ jobs and here with `cargo check --target x86_64-pc-windows-gnu`; suite cases D01
 WAV through transcribe and clean-up, no microphone) on Linux and Windows, D02 asking Windows' real recognizer on the
 Windows runners. The hook, the microphone, typing into other apps and the pill need a person at a real PC
 ([WINDOWS-PC.md](WINDOWS-PC.md)).
+
+## VM screens and research agents: Mac, Windows and Linux
+
+The Mac's VM screens are virtual displays holding Chrome windows (`leanring-buddy/Studio`, `Research/`). A virtual display
+on Windows needs a signed driver and admin rights, so on Windows and Linux a VM screen is a **hidden browser window**: the
+owner's own Chrome or Edge started with `--headless=new`, no window, no taskbar button, nothing in Alt+Tab, no driver and
+no admin. The code is `crates/theo-core/src/vmscreens/` (`browser.rs` finds and starts the browser, `cdp.rs` is a small
+DevTools client, `page.rs` the rules for what may be opened and how a page is read, `mod.rs` the screens, `research.rs`
+the agents); the window's part is `app/ui/vmscreens.js` and `vmscreens.css`.
+
+| What | Mac | Windows and Linux (this build) |
+|---|---|---|
+| A screen | A virtual display parked in a corner, with a Chrome window on it | A headless Chrome, Edge or Chromium of its own (found in Program Files, Local AppData or on PATH; `vmScreens.browser` names one by hand), 1280 by 800, its own throwaway profile under Vello's data folder (`VMScreens/`, wiped at start), DevTools on 127.0.0.1 at a port the browser picks (`DevToolsActivePort`). Never the owner's own profile, cookies or sign-ins. Up to 4 (`vmScreens.count`, default 2) |
+| Turning it on | Settings › VM screens, off by default | The same (`vmScreens.on`, off by default). Off, research still works: pages are fetched the plain way and read from their HTML |
+| What a screen may open | Rules in ClickyCore `Research/BrowserResearch.swift` | `page.rs`: only `http`/`https` on a public host. Never this computer, the network around it (private, link-local, `.local`) or a page that looks like an action (sign-out, delete, checkout, unsubscribe, a token in the address). Every page load, redirects included, goes through the DevTools `Fetch` gate and is refused there if it leads somewhere else; downloads are refused |
+| Reading | Accessibility, in reading order | A script in the page: the main or article part first, else the body, leaving out navigation, headers, footers, asides, forms and hidden text, at most 40,000 characters. A small JPEG of the screen every 2 s while it's working, for the tile |
+| A human check (captcha, "verify you are human") | A card, never a workaround | The same: the page is skipped and a "Needs you" card in the chat offers to open it in the owner's own browser |
+| When it closes | When idle, and when Theo quits | After 60 s idle, when turned off or the count lowered, and when Vello quits. Each browser is in a Job Object (Windows) or its own process group (Linux), and on the engine's list of children, so even a crash leaves no browser behind: the next start ends them |
+| Research agents | `ResearchRole`, `ResearchAgentPlan`: Ideas and Info by default, up to 4 | The same jobs (Ideas, Info, Examples, Check; `research.agents` 2 to 4, `research.role.<id>`), each searching DuckDuckGo's plain results page in its own screen, opening its best pages (`research.pages`, 2 to 4, no page or site twice across agents) and having the brain in use read each as data. Then that brain writes one brief with numbered sources, saved as Markdown in `Research/` and posted as a card |
+| Who can start one | Clicky's Researcher, `[RESEARCH:]` from Theo | A `[RESEARCH: question]` line in any bot's reply (taken out of the shown text; the brief lands in that chat), the `research` tool for bots on an API key (waits for the brief and answers with it), and Pointer Assistant when asked to research or look something up (spoken "Researching … in the background", the brief lands in the primary bot's chat). One research at a time, three waiting at most, 15 minutes at most |
+| The panel | The VM screens panel | VM screens in the sidebar (shown while they're on): a live tile per screen with its page, address and what its agent is doing, and Stop the research. Settings › VM screens: on or off, how many, the browser found (or "Vello needs Chrome or Edge" with a link), the jobs, and Try it |
+
+Every brain works: the readers and the brief use `clicky::ask_words` (any API key, Claude Code, Codex, OpenCode, Gemini
+CLI, Cursor Agent or Grok); with no brain at all the brief is the agents' notes and sources joined in plain words.
+
+Control commands: `vmScreens {action: state|on|off|open|read|close}` (`open {url, screen?}` reads a page on a screen and
+returns its words and tile; `on {count?}`), `research {question, agents?, bot?, wait?}` and `research {action:
+state|cancel}`. Suite cases V01 to V09 (`tests/suite_vmscreens.py`) run them against `tests/vm_pages.py`, a local
+stand-in for the search page and the pages it links to (`test.research.searchURL`; a test profile may open 127.0.0.1),
+and are skipped with the reason printed where no Chrome, Edge or Chromium is installed.
+
+Not in this build yet (the Mac has them): research on links already on the owner's screen, the Researcher bot of Clicky's
+team, live views of other apps' windows, and a VM screens panel on another linked computer.
 
 ## Not yet verified
 

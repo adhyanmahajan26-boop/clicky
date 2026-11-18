@@ -195,6 +195,7 @@ impl Harness {
     pub fn shutdown(&self) {
         for c in self.procs.lock().unwrap().values() { c.cancel(); }
         for c in self.coding_procs.lock().unwrap().values() { c.cancel(); }
+        crate::vmscreens::close_all();
         self.registry.kill_all();
         let _ = std::fs::remove_file(self.paths.pid_file());
     }
@@ -224,6 +225,7 @@ impl Harness {
         tokio::spawn(async move { crate::hub::move_old_app_names(&me).await });
         self.fire_hook("app-started", json!({"bots": self.with(|s| s.bots.len())}));
         crate::gateway::apply(self);
+        crate::vmscreens::attach(self);
     }
 
     pub fn load(&self) {
@@ -461,6 +463,7 @@ impl Harness {
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.extend(self.reporting_lines(bot));
         parts.push(crate::pdf::HOW_TO.to_string());
+        parts.push(crate::vmscreens::research::HOW_TO.to_string());
         parts.push(self.reach_note(bot));
         if !bot.apps.is_empty() {
             parts.push(self.apps_note(bot));
@@ -867,6 +870,12 @@ impl Harness {
                 let (text, files) = crate::pdf::extract(&said);
                 if !files.is_empty() { answer = Some(text); pdf_files = files; }
             }
+            // [RESEARCH: question]: research agents read the web, and the brief lands in this chat (vmscreens/research.rs).
+            let mut research_question: Option<String> = None;
+            if let Some(said) = answer.clone() {
+                let (text, question) = crate::vmscreens::research::extract(&said);
+                if question.is_some() { answer = Some(text); research_question = question; }
+            }
             let streamed = me.with(|s| s.replying.get(&bot.id).cloned());
             me.release(&bot.id);
             if was_stopped {
@@ -892,7 +901,7 @@ impl Harness {
                             }
                             record.messages.push(message);
                         }
-                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() => {
+                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && research_question.is_none() => {
                             record.messages.push(ChatMessage::new(&bot.id, "(No answer this time. Send it again, or try another model.)").with_exchange(exchange.clone()));
                         }
                         _ => {}
@@ -908,6 +917,7 @@ impl Harness {
             }
             me.fire_hook("turn-finished", json!({"bot": bot.id, "botName": bot.name, "chat": conversation_id, "fromOwner": opts.from_owner, "privately": opts.privately.is_some(), "ok": answer.is_some(), "reply": answer.clone().unwrap_or_default()}));
             crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
+            crate::vmscreens::research::start_for_turn(&me, &bot, research_question, &conversation_id, exchange.clone());
             if clicky_orders > 0 && bot.primary {
                 me.post(ChatMessage::note("Pointer Assistant isn't part of this build of Vello yet, so that order to Pointer Assistant wasn't carried out."), &conversation_id);
             }

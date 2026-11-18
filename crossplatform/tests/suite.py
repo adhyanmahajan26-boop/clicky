@@ -2562,6 +2562,11 @@ def k05():
     return all(checks.values()), dict(checks, screens=screens, voices=voices, spoke=spoke)
 
 
+# VM screens (hidden browser windows) and research agents (V01-V08): their cases live in their own file.
+import suite_vmscreens  # noqa: E402
+suite_vmscreens.add_cases(sys.modules[__name__])
+
+
 NOT_PORTED = {
     "T22, T23, T28, E-series": "Need a real model's own choices (writing memory, multi-hop reasoning, making a PDF). T22's harness part (memory in the prompt) is P_memory_in_prompt; T23's is the private-message path T01/A01 exercise. The PDF a [PDF:] tag makes is W02.",
     "T30, T31, F14, C08-C13": "Two linked Macs (Theo Link) aren't part of the cross-platform engine yet.",
