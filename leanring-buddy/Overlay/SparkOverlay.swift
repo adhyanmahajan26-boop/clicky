@@ -172,7 +172,9 @@ struct SparkScreenLayer: View {
     var body: some View {
         let _ = OverlayPerfMonitor.shared.note(.overlayBodyEvaluations)
         ZStack {
-            Color.black.opacity(0.001)
+            // Nothing fills the whole layer: even a nearly invisible full-screen fill makes WindowServer blend this
+            // window over everything on every screen, on every frame anything under it changes.
+            Color.clear
 
             MarkSceneView(drawings: companionManager.markDrawings, displayBoundsCG: displayCG)
 
@@ -199,18 +201,19 @@ struct SparkScreenLayer: View {
                 opacityFadeSeconds: fadeSeconds,
                 flightScale: flightScale
             )
+            // No SwiftUI animation on the position: a spring here re-ran SwiftUI's animator and committed a frame at the
+            // display's full rate (120 Hz) for as long as the pointer moved. The ride is smoothed in startRiding instead.
             FollowReader(follow: follow) { spot in
                 spark
                     .frame(width: ClaudeCompanionView.companionFrameDiameter, height: ClaudeCompanionView.companionFrameDiameter)
                     .position(spot)
-                    .animation(motion == .riding ? .interactiveSpring(response: 0.18, dampingFraction: 0.7) : nil, value: spot)
             }
             .animation(.easeIn(duration: 0.25), value: companionManager.voiceState)
 
             let meter = LevelMeter(level: companionManager.currentAudioPowerLevel, isRunning: showsSpark && isListening)
                 .opacity(showsSpark && isListening ? sparkOpacity : 0)
             FollowReader(follow: follow) { spot in
-                meter.position(spot).animation(.interactiveSpring(response: 0.18, dampingFraction: 0.7), value: spot)
+                meter.position(spot)
             }
             .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
         }
@@ -270,6 +273,22 @@ struct SparkScreenLayer: View {
         }
     }
 
+    /// Each follow tick closes most of the gap to the pointer, so the spark trails it a little (the feel the old spring
+    /// gave) without any SwiftUI animation. The follow loop keeps ticking for a second after the pointer stops, which is
+    /// far longer than this needs to settle. A big jump (the pointer came over from another screen) lands at once.
+    private static let rideCatchUpFraction: CGFloat = 0.6
+    private static let rideSnapDistance: CGFloat = 0.5
+    private static let rideJumpDistance: CGFloat = 400
+
+    private static func easedRidePosition(from current: CGPoint, toward target: CGPoint) -> CGPoint {
+        let gap = hypot(target.x - current.x, target.y - current.y)
+        if gap <= rideSnapDistance || gap >= rideJumpDistance { return target }
+        let eased = CGPoint(x: current.x + (target.x - current.x) * rideCatchUpFraction,
+                            y: current.y + (target.y - current.y) * rideCatchUpFraction)
+        // Whole points, so a settling spark stops writing state once it's there.
+        return CGPoint(x: eased.x.rounded(), y: eased.y.rounded())
+    }
+
     private func move(to point: CGPoint) {
         guard follow.position != point else { return }
         follow.position = point
@@ -302,7 +321,10 @@ struct SparkScreenLayer: View {
                 return
             }
             let riding = Self.local(pointer, in: screenFrame, offset: Self.rideOffset)
-            guard here, showsSpark, companionManager.voiceState != .listening, sparkOpacity > 0 else {
+            // The pointer is on another screen: this screen's spark is hidden, so leave it where it is. Moving it anyway
+            // made every screen's full-screen layer update and commit on each tick.
+            guard here else { return }
+            guard showsSpark, companionManager.voiceState != .listening, sparkOpacity > 0 else {
                 companionManager.sparkClickTarget.reset()
                 move(to: riding)
                 return
@@ -312,7 +334,7 @@ struct SparkScreenLayer: View {
             if let held = companionManager.sparkClickTarget.sparkCenterWhileHolding(mouseLocation: pointer, followingSparkCenter: ridingAppKit) {
                 move(to: Self.local(held, in: screenFrame))
             } else {
-                move(to: riding)
+                move(to: Self.easedRidePosition(from: follow.position, toward: riding))
             }
         }
     }

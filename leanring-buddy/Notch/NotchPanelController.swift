@@ -61,6 +61,10 @@ final class NotchPanelController: NSObject {
     private var screenParametersObserver: NSObjectProtocol?
     private var refreshTimer: Timer?
     private var collapsedRefreshTick = 0
+    /// The last full-screen answer for a display. Reading the whole system window list every second showed up in samples of
+    /// the main thread; going full screen changes the Space or the frontmost app, and those notifications check at once.
+    private var lastFullScreenCheck: (displayID: CGDirectDisplayID, isCovering: Bool, checkedAt: TimeInterval)?
+    private static let fullScreenRecheckSeconds: TimeInterval = 5
     private var collapseCheckTask: Task<Void, Never>?
     private var panelShrinkTask: Task<Void, Never>?
 
@@ -87,13 +91,17 @@ final class NotchPanelController: NSObject {
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         for notificationName in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
             workspaceObservers.append(workspaceCenter.addObserver(forName: notificationName, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshPlacementAndVisibility() }
+                MainActor.assumeIsolated { self?.refreshPlacementAndVisibility(recheckFullScreen: true) }
+                // The full-screen animation is still running when the Space changes: look once more after it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    MainActor.assumeIsolated { self?.refreshPlacementAndVisibility(recheckFullScreen: true) }
+                }
             })
         }
         screenParametersObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.currentDisplayID = nil
-                self?.refreshPlacementAndVisibility()
+                self?.refreshPlacementAndVisibility(recheckFullScreen: true)
             }
         }
         // Settings, the cursor's display, full screen and the elapsed times.
@@ -108,7 +116,7 @@ final class NotchPanelController: NSObject {
             }
         }
         rebuildContent()
-        refreshPlacementAndVisibility()
+        refreshPlacementAndVisibility(recheckFullScreen: true)
     }
 
     func stop() {
@@ -219,7 +227,7 @@ final class NotchPanelController: NSObject {
                            menuBarHeight: max(0, screen.frame.maxY - screen.visibleFrame.maxY))
     }
 
-    private func refreshPlacementAndVisibility() {
+    private func refreshPlacementAndVisibility(recheckFullScreen: Bool = false) {
         guard let screen = targetScreen(), let displayID = Self.displayID(of: screen) else {
             hidePanel()
             return
@@ -227,7 +235,7 @@ final class NotchPanelController: NSObject {
         let isEnabled = ClickySettings.isNotchEnabled
         let hidesOverFullScreen = ClickySettings.isNotchHiddenOverFullScreen
         // The window list is only read when the answer can matter.
-        let isFullScreenAppCovering = isEnabled && hidesOverFullScreen && Self.isFullScreenAppCovering(displayID: displayID)
+        let isFullScreenAppCovering = isEnabled && hidesOverFullScreen && fullScreenAppCovering(displayID: displayID, recheck: recheckFullScreen)
         let shouldShow = NotchFullScreenPolicy.shouldShowNotch(isEnabled: isEnabled, hidesOverFullScreen: hidesOverFullScreen,
                                                                isFullScreenAppCovering: isFullScreenAppCovering)
         guard shouldShow else {
@@ -256,6 +264,18 @@ final class NotchPanelController: NSObject {
             applyPanelFrame(immediately: true)
             panel.orderFrontRegardless()
         }
+    }
+
+    /// The cached full-screen answer while it's fresh, else a new read of the window list.
+    private func fullScreenAppCovering(displayID: CGDirectDisplayID, recheck: Bool) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !recheck, let lastFullScreenCheck, lastFullScreenCheck.displayID == displayID,
+           now - lastFullScreenCheck.checkedAt < Self.fullScreenRecheckSeconds {
+            return lastFullScreenCheck.isCovering
+        }
+        let isCovering = Self.isFullScreenAppCovering(displayID: displayID)
+        lastFullScreenCheck = (displayID, isCovering, now)
+        return isCovering
     }
 
     /// Full screen on this display, from the on-screen window list (bounds,
