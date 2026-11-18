@@ -3,8 +3,9 @@
 
   python3 Tools/install/check-release-config.py
 
-- Config/Theo.xcconfig (Mac side) and crossplatform/install/releases-repo (Windows and Linux) name the same releases repo
-  (Tools/set-releases-repo.sh changes both).
+- Config/Theo.xcconfig (Mac side) and crossplatform/install/releases-repo (Windows and Linux) each name a releases repo.
+  They may differ: Mac builds go to the Mac's repo with Tools/release.sh, and Windows builds are published by
+  .github/workflows/windows-release.yml to the repo in releases-repo (Tools/set-releases-repo.sh changes either or both).
 - No code, script or project file names a releases repo or an Apple team itself: they read those two files, or have it
   written into the copy a release publishes (Tools/install/stamp-installer.py). Docs may explain them.
 - The installers in the repo carry their published-repo and signer markers, empty.
@@ -30,11 +31,14 @@ def xcconfig_repository():
     return found[0]
 
 
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 mac_repository = xcconfig_repository()
 other_repository = (ROOT / "crossplatform/install/releases-repo").read_text().strip()
-if mac_repository != other_repository:
-    problems.append("Config/Theo.xcconfig says %r but crossplatform/install/releases-repo says %r: run Tools/set-releases-repo.sh"
-                    % (mac_repository, other_repository))
+for where, repository in (("Config/Theo.xcconfig", mac_repository), ("crossplatform/install/releases-repo", other_repository)):
+    if repository and not REPOSITORY_PATTERN.match(repository):
+        problems.append("%s names %r, which isn't owner/name: run Tools/set-releases-repo.sh" % (where, repository))
+if not other_repository:
+    problems.append("crossplatform/install/releases-repo is empty: run Tools/set-releases-repo.sh --windows-linux <owner>/<repo>")
 
 tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
 for relative in tracked:
@@ -42,9 +46,10 @@ for relative in tracked:
     if path.suffix not in CODE_SUFFIXES or relative == "Tools/install/check-release-config.py" or not path.is_file():
         continue
     text = path.read_text(errors="replace")
-    if relative not in REPOSITORY_HOMES and mac_repository and mac_repository in text:
-        problems.append("%s names the releases repo %s itself; read it from Config/Theo.xcconfig or crossplatform/install/releases-repo"
-                        % (relative, mac_repository))
+    for repository in {mac_repository, other_repository}:
+        if relative not in REPOSITORY_HOMES and repository and repository in text:
+            problems.append("%s names the releases repo %s itself; read it from Config/Theo.xcconfig or crossplatform/install/releases-repo"
+                            % (relative, repository))
     if relative != "Config/Signing.local.xcconfig.example" and TEAM_PATTERN.search(text):
         problems.append("%s sets an Apple team; teams belong in Config/Signing.local.xcconfig (not committed)" % relative)
 
@@ -52,6 +57,8 @@ markers = {
     "Tools/install/install.sh": ['PUBLISHED_RELEASES_REPO=""', "PUBLISHED_SIGNER_REQUIREMENT=''"],
     "crossplatform/install/install-linux.sh": ['PUBLISHED_RELEASES_REPO=""'],
     "crossplatform/install/install.ps1": ['$PublishedReleasesRepo = ""'],
+    "crossplatform/tester/Theo-Test.ps1": ['$PublishedReleasesRepo = ""'],
+    "crossplatform/tester/RUN-TEST.cmd": ['set "PUBLISHED_RELEASES_REPO="'],
 }
 for relative, lines in markers.items():
     text_lines = (ROOT / relative).read_text().splitlines()
@@ -63,4 +70,5 @@ for problem in problems:
     print("FAIL  " + problem)
 if problems:
     sys.exit(1)
-print("OK    releases repo %s in one place per side; no Apple team in code; installer markers present" % mac_repository)
+print("OK    releases repos: Mac %s, Windows and Linux %s, each in one place; no Apple team in code; installer markers present"
+      % (mac_repository, other_repository))

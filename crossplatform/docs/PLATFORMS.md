@@ -42,7 +42,8 @@ one Rust engine and one Tauri window on all three. This page says, feature by fe
 
 The build number is baked in when the app is built (`THEO_BUILD`, the `yyyyMMddHHmm` of a release's `build-<number>` tag;
 CI sets it; a build made by hand is build 0 and says so). The releases repo is `install/releases-repo`, compiled in
-(`THEO_RELEASES_REPO` overrides it). Theo checks 20 seconds after it starts and every 6 hours, and never installs by itself:
+(`THEO_RELEASES_REPO` overrides it); Windows builds are published there from every green `main` build by
+`.github/workflows/windows-release.yml` ([DISTRIBUTION.md](DISTRIBUTION.md#windows-builds-publish-themselves)). Theo checks 20 seconds after it starts and every 6 hours, and never installs by itself:
 the Update row at the bottom of the sidebar says "Build N" when there is one, and pressing it updates.
 
 - **Which release.** Theo lists the repo's releases (`/releases?per_page=100`) and takes the newest published

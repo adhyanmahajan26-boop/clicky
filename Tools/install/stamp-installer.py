@@ -5,7 +5,8 @@
 
 The scripts in the repo leave these empty, so nobody's repo or Apple team is written in them:
   install.sh, install-linux.sh   PUBLISHED_RELEASES_REPO=""   and (install.sh) PUBLISHED_SIGNER_REQUIREMENT=''
-  install.ps1                    $PublishedReleasesRepo = ""
+  install.ps1, Theo-Test.ps1     $PublishedReleasesRepo = ""
+  RUN-TEST.cmd                   set "PUBLISHED_RELEASES_REPO="
 Each marker must be there exactly once, so a renamed line fails the release instead of shipping a blank.
 """
 import argparse, pathlib, re, sys
@@ -33,12 +34,16 @@ def main():
     text = script_path.read_text(encoding="utf-8")
     if script_path.suffix == ".ps1":
         text = replace_once(text, r'^(\$PublishedReleasesRepo = )""', '"%s"' % arguments.repo, "$PublishedReleasesRepo", script_path)
+    elif script_path.suffix == ".cmd":
+        text = replace_once(text, r'^(set "PUBLISHED_RELEASES_REPO=)"$', '%s"' % arguments.repo, 'set "PUBLISHED_RELEASES_REPO="', script_path)
     else:
         text = replace_once(text, r'^(PUBLISHED_RELEASES_REPO=)""', '"%s"' % arguments.repo, "PUBLISHED_RELEASES_REPO", script_path)
         if arguments.signer:
             if "'" in arguments.signer or "\n" in arguments.signer:
                 sys.exit("--signer can't hold a single quote or a line break")
             text = replace_once(text, r"^(PUBLISHED_SIGNER_REQUIREMENT=)''", "'%s'" % arguments.signer, "PUBLISHED_SIGNER_REQUIREMENT", script_path)
+    if script_path.suffix == ".cmd":
+        text = text.replace("\n", "\r\n")   # read_text gave plain line ends; cmd.exe wants CRLF back
     output_path = pathlib.Path(arguments.output)
     with open(output_path, "w", encoding="utf-8", newline="") as output_file:   # open(): Python 3.9 on macOS has no write_text(newline=)
         output_file.write(text)

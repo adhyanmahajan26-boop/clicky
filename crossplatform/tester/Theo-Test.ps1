@@ -1,26 +1,118 @@
 # Vello for Windows: a guided check for a tester on their own PC.
 #
 # It asks a few yes/no questions, checks what it can by itself, and writes everything into one zip
-# on the Desktop (Theo-test-results-<date>.zip) for the tester to send back. Nothing is uploaded.
+# on the Desktop (Theo-test-results-<date>.zip). If the tester pasted the results code they were given
+# (once; it's kept for this Windows user only, encrypted), it also sends the results back by itself to a
+# private GitHub repo; otherwise the tester sends the zip.
 # The results never hold the Windows user name (it is replaced with <user>) and no keys or chats.
+#
+# It keeps itself and Vello up to date: it first swaps itself for the newest Theo-Test.ps1 published in the
+# releases repo (crossplatform/install/releases-repo, written into the copy a release carries), installs the
+# newest build when Vello isn't installed, and has the tester update an older Vello with its own Update button.
 #
 # Run it from RUN-TEST.cmd (double-click), or:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Theo-Test.ps1
-# -Unattended answers every question with its default and skips the hands-on steps (for CI).
+# -Unattended answers every question with its default and skips the hands-on steps (for CI): it doesn't
+# update itself or send anything. -NoSelfUpdate and -NoSend switch those off for a person too.
 # Works on Windows PowerShell 5.1 (built into Windows 10 and 11).
 
 param(
   [switch]$Unattended,
+  [switch]$NoSelfUpdate,
+  [switch]$NoSend,
   [string]$Installer = "",
   [string]$OutDir = ""
 )
 
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
-$ScriptVersion = "2"
+$ScriptVersion = "3"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DataFolder = Join-Path $env:APPDATA "Theo-Desktop"
 $ExeName = "theo-desktop.exe"
+# Where this copy was published (a release's copy has it filled in; the repo's copy reads releases-repo beside it).
+$PublishedReleasesRepo = ""
+# The results code, kept apart from Vello's own data so uninstalling Vello doesn't forget it.
+$TesterFolder = Join-Path $env:LOCALAPPDATA "Vello-Tester"
+$ResultsCodeFile = Join-Path $TesterFolder "results-code.dat"
+# Windows PowerShell 5.1 may still offer only old TLS, which GitHub refuses.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+
+# ------------------------------------------------------------------ releases (updates for this script and Vello)
+
+function Get-ReleasesRepo {
+  $repo = $env:THEO_RELEASES_REPO
+  if (-not $repo) { $repo = $PublishedReleasesRepo }
+  if (-not $repo) {
+    foreach ($file in @((Join-Path $Here "releases-repo"), (Join-Path $Here "..\install\releases-repo"))) {
+      if (Test-Path $file) { $repo = (Get-Content $file -Raw).Trim(); break }
+    }
+  }
+  if ($repo -and $repo -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { return $repo }
+  return $null
+}
+
+# The newest published build-<number> release that carries an asset ending in $suffix and a SHA256SUMS, or $null.
+function Get-NewestRelease([string]$suffix) {
+  $repo = Get-ReleasesRepo
+  if (-not $repo) { return $null }
+  try {
+    $list = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri "https://api.github.com/repos/$repo/releases?per_page=30" -Headers @{ Accept = "application/vnd.github+json" }
+  } catch { return $null }
+  $best = $null
+  foreach ($release in $list) {
+    if ($release.draft -or $release.prerelease) { continue }
+    if ($release.tag_name -notmatch '^build-(\d+)$') { continue }
+    $build = [int64]$Matches[1]
+    $asset = $release.assets | Where-Object { $_.name.ToLower().EndsWith($suffix.ToLower()) } | Select-Object -First 1
+    $sums = $release.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1
+    if (-not $asset -or -not $sums) { continue }
+    if ($best -and $best.build -ge $build) { continue }
+    $best = [pscustomobject]@{ build = $build; tag = $release.tag_name; name = $asset.name; url = $asset.browser_download_url; sums = $sums.browser_download_url }
+  }
+  return $best
+}
+
+# Downloads a release's asset into $folder and checks it against the release's SHA256SUMS (also saved there). The file's
+# path, or $null (a file that doesn't match is deleted).
+function Get-CheckedAsset($release, [string]$folder) {
+  try {
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    $file = Join-Path $folder (Split-Path -Leaf $release.name)
+    $sumsFile = Join-Path $folder "SHA256SUMS"
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 900 -Uri $release.url -OutFile $file
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $release.sums -OutFile $sumsFile
+    $expected = Get-Content $sumsFile | Where-Object { $_ -match ("\s\*?" + [regex]::Escape($release.name) + "$") } | ForEach-Object { ($_ -split "\s+")[0].ToLower() } | Select-Object -First 1
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
+    if ($expected -and $expected -eq $actual) { return $file }
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+  } catch { }
+  return $null
+}
+
+# This script, swapped for the newest published copy when that one is different, then run again. Quietly carries on with
+# this copy when there's no network or nothing newer.
+if (-not $Unattended -and -not $NoSelfUpdate -and $PSCommandPath) {
+  $newest = Get-NewestRelease "Theo-Test.ps1"
+  if ($newest) {
+    $fresh = Get-CheckedAsset $newest (Join-Path $env:TEMP ("Vello-tester-" + [guid]::NewGuid().ToString("N")))
+    if ($fresh -and (Get-FileHash -Algorithm SHA256 -Path $fresh).Hash -ne (Get-FileHash -Algorithm SHA256 -Path $PSCommandPath).Hash) {
+      try {
+        Copy-Item -LiteralPath $fresh -Destination $PSCommandPath -Force
+        Write-Host "The tester check was updated to the one for build $($newest.build). Starting it..." -ForegroundColor Cyan
+        $again = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath, "-NoSelfUpdate")
+        if ($NoSend) { $again += "-NoSend" }
+        if ($Installer) { $again += @("-Installer", $Installer) }
+        if ($OutDir) { $again += @("-OutDir", $OutDir) }
+        & powershell.exe @again
+        exit $LASTEXITCODE
+      } catch {
+        Write-Host "Couldn't update the tester check ($_); carrying on with this one." -ForegroundColor Yellow
+      }
+    }
+  }
+}
+
 $Stamp = Get-Date -Format "yyyyMMdd-HHmm"
 if (-not $OutDir) {
   $desktop = [Environment]::GetFolderPath("Desktop")
@@ -242,12 +334,89 @@ function Test-Command([string]$name) {
   return $false
 }
 
+# ------------------------------------------------------------------ sending the results back
+
+# The results code is "<owner>/<repo> <token>": a private GitHub repo for results and a token that can only write to it
+# (crossplatform/tester/HOW-TO-TEST.txt says how to make one). It's kept encrypted for this Windows user (DPAPI).
+function Split-ResultsCode([string]$code) {
+  if ($code -match '^\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)[\s:]+([A-Za-z0-9_]{20,255})\s*$') {
+    return [pscustomobject]@{ repo = $Matches[1]; token = $Matches[2] }
+  }
+  return $null
+}
+
+function Read-ResultsCode {
+  if (-not (Test-Path $ResultsCodeFile)) { return $null }
+  try {
+    $secure = ConvertTo-SecureString (Get-Content $ResultsCodeFile -Raw).Trim()
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    return (Split-ResultsCode $plain)
+  } catch { return $null }
+}
+
+function Save-ResultsCode([string]$code) {
+  try {
+    New-Item -ItemType Directory -Force -Path $TesterFolder | Out-Null
+    $secure = ConvertTo-SecureString $code -AsPlainText -Force
+    Set-Content -Path $ResultsCodeFile -Value (ConvertFrom-SecureString $secure)
+  } catch { }
+}
+
+# One file into the results repo through GitHub's contents API. "ok", or what went wrong (never the token).
+function Send-ResultsFile($code, [string]$file, [string]$path, [string]$message) {
+  $body = @{ message = $message; content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) } | ConvertTo-Json -Compress
+  $headers = @{ Authorization = ("Bearer " + $code.token); Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
+  try {
+    [void](Invoke-RestMethod -UseBasicParsing -TimeoutSec 300 -Method Put -Uri ("https://api.github.com/repos/" + $code.repo + "/contents/" + $path) -Headers $headers -Body $body -ContentType "application/json")
+    return "ok"
+  } catch {
+    $status = 0
+    try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+    if ($status -in @(401, 403, 404)) { return "refused" }
+    if ($status) { return "GitHub answered $status" }
+    return "no connection to GitHub"
+  }
+}
+
+# Asks first, then sends RESULTS.txt and the zip to reports/<date>-<id>/ in the results repo. $true when both went.
+function Send-Results([string]$zip, [string]$summary, [int]$passed, [int]$failed) {
+  $code = Read-ResultsCode
+  if (-not $code) {
+    Write-Host ""
+    Say "  If the person who asked you to test gave you a results code, paste it here and the results will be sent back"
+    Say "  by themselves, this time and every time after (it's kept on this PC for your Windows user only)."
+    $typed = Read-Host "  Results code (press Enter to skip and send the zip yourself)"
+    if (-not $typed) { return $false }
+    $code = Split-ResultsCode $typed
+    if (-not $code) { Say "  That doesn't look like a results code (it's a repo name, a space, then a long token). Send the zip instead." "Yellow"; return $false }
+    Save-ResultsCode ($code.repo + " " + $code.token)
+  }
+  if (-not (Ask-YesNo ("Send these results to " + $code.repo + " now? (the same zip you can open on your Desktop)") $true)) { return $false }
+  $zipBytes = (Get-Item $zip).Length
+  if ($zipBytes -gt 45MB) { Say "  The zip is too big to send this way ($([math]::Round($zipBytes / 1MB)) MB). Please send it by hand." "Yellow"; return $false }
+  $folder = "reports/" + $Stamp + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6)
+  $title = "Tester results " + $Stamp + ": " + $passed + " passed, " + $failed + " failed"
+  Say "  Sending..."
+  $first = Send-ResultsFile $code $summary ($folder + "/RESULTS.txt") $title
+  $second = "skipped"
+  if ($first -eq "ok") { $second = Send-ResultsFile $code $zip ($folder + "/" + (Split-Path -Leaf $zip)) $title }
+  if ($first -eq "ok" -and $second -eq "ok") { return $true }
+  if ($first -eq "refused" -or $second -eq "refused") {
+    Remove-Item -LiteralPath $ResultsCodeFile -Force -ErrorAction SilentlyContinue
+    Say "  GitHub refused the results code (it may have expired), so it was forgotten. Send the zip by hand, and ask for a new code." "Yellow"
+  } else {
+    Say ("  Couldn't send the results (" + $(if ($first -ne "ok") { $first } else { $second }) + "). Please send the zip by hand.") "Yellow"
+  }
+  return $false
+}
+
 # ------------------------------------------------------------------ start
 
 Clear-Host
 Say "Vello for Windows - tester check" "Cyan"
 Say "This takes about 15 minutes. It asks a few questions and checks Vello by itself."
-Say "At the end it makes one zip on your Desktop to send back. Nothing is uploaded."
+Say "At the end it makes one zip on your Desktop. If you were given a results code, it can send the zip back by itself"
+Say "(it asks first); otherwise you send the zip."
 Say "The zip has no passwords, keys or chats, and your Windows user name is replaced with <user>."
 Say "You can stop at any time with Ctrl+C."
 
@@ -301,9 +470,21 @@ if ($Facts["cpu_arch"] -eq "ARM64") { [void]$Notes.Add("This is a Windows on ARM
 
 Title "2. Installing Vello"
 if (-not $Installer) {
-  $found = Get-ChildItem -Path $Here -Filter "Theo-*-windows-x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  $found = Get-ChildItem -Path $Here -Filter "*-windows-x64-setup.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $found) { $found = Get-ChildItem -Path $Here -Filter "*setup*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
   if ($found) { $Installer = $found.FullName }
+}
+# The tester ran an installer from this kit by hand (so the SmartScreen questions make sense), or not.
+$installerBesideScript = [bool]$Installer
+# Nothing installed and no installer here: the newest build from the releases page, checked against its SHA256SUMS.
+if (-not $Installer -and -not (Get-UninstallEntry)) {
+  $newestSetup = Get-NewestRelease "-windows-x64-setup.exe"
+  if ($newestSetup) {
+    Say "  Downloading Vello build $($newestSetup.build)..."
+    $Installer = Get-CheckedAsset $newestSetup (Join-Path $env:TEMP "Vello-tester-setup")
+    if ($Installer) { Record "Downloaded the newest build ($($newestSetup.build)) and it matches its checksum" "pass" }
+    else { Record "Downloaded the newest build" "fail" "the download failed or didn't match SHA256SUMS" }
+  } else { Record "Found a build to install on the releases page" "fail" ("couldn't read the releases of " + (Get-ReleasesRepo)) }
 }
 if ($Installer -and (Test-Path $Installer)) {
   $Facts["installer"] = (Split-Path -Leaf $Installer)
@@ -321,7 +502,7 @@ $entry = Get-UninstallEntry
 $alreadyInstalled = [bool]$entry
 if ($alreadyInstalled) {
   Say "  Vello is installed already (version $($entry.DisplayVersion))."
-  if (-not $Unattended) {
+  if (-not $Unattended -and $installerBesideScript) {
     $smart = Ask-YesNo "When you double-clicked the installer, did Windows show a blue 'Windows protected your PC' box?" $true
     if ($smart) {
       $ok = Ask-YesNo "Did 'More info' then 'Run anyway' let it install?" $true
@@ -368,6 +549,45 @@ if ((Get-TheoProcesses).Count -eq 0) {
 $secs = Wait-TheoAnswers 90
 if ($null -ne $secs) { Record "Vello starts and its engine answers" "pass" "$secs s" }
 else { Record "Vello starts and its engine answers" "fail" ("processes: " + (Get-TheoProcesses).Count) }
+
+# Vello's own updater: an older build is updated the way the tester will from now on, with the Update button, so the rest of
+# the check runs on the newest build (and the updater itself gets tested every time).
+$updates = Send-Theo @{ cmd = "updates"; action = "check" } 60
+if ($updates -and $updates.ok) {
+  $Facts["build_at_start"] = $updates.result.build
+  $Facts["updates_from"] = $updates.result.repo
+  $waiting = $updates.result.available
+  if ($waiting -and $waiting.build -and -not $Unattended) {
+    Say "  Vello build $($updates.result.build) is open, and build $($waiting.build) is out."
+    Wait-Enter "In Vello, click 'Update' at the bottom of the sidebar (or Settings, Updates). Vello closes, updates and opens again by itself. Wait until it's back"
+    $updatedTo = $null
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $deadline) {
+      $now = Send-Theo @{ cmd = "updates"; action = "state" } 5
+      if ($now -and $now.ok -and [int64]$now.result.build -ge [int64]$waiting.build) { $updatedTo = $now.result.build; break }
+      Start-Sleep -Seconds 2
+    }
+    if ($updatedTo) { Record "Vello updated itself with its Update button" "pass" ("build " + $updates.result.build + " to " + $updatedTo) }
+    else {
+      $now = Send-Theo @{ cmd = "updates"; action = "state" } 10
+      $why = "still build " + $updates.result.build
+      if ($now -and $now.ok -and $now.result.message) { $why += ": " + $now.result.message }
+      Record "Vello updated itself with its Update button" "fail" $why
+      if ((Get-TheoProcesses).Count -eq 0) { [void](Open-Theo); [void](Wait-TheoAnswers 90) }
+    }
+  } elseif ($waiting -and $waiting.build) {
+    Record "Vello is the newest build" "info" ("build " + $updates.result.build + "; " + $waiting.build + " is out")
+  } elseif ($updates.result.state -eq "upToDate") {
+    Record "Vello is the newest build" "pass" ("build " + $updates.result.build)
+  } elseif ($Unattended) {
+    # CI installs a build from a branch, whose releases page may have nothing for it yet: worth seeing, not a failure.
+    Record "Vello could check for updates" "info" ([string]$updates.result.message)
+  } else {
+    Record "Vello could check for updates" "fail" ([string]$updates.result.message)
+  }
+  $after = Send-Theo @{ cmd = "updates"; action = "state" } 10
+  if ($after -and $after.ok) { $Facts["build"] = $after.result.build }
+} else { Record "Vello could check for updates" "skip" "no answer from Vello" }
 
 $status = Send-Theo @{ cmd = "status" } 10
 if ($status -and $status.ok) { $Facts["engine"] = "Vello " + $status.result.version + " " + $status.result.os + "/" + $status.result.arch }
@@ -613,7 +833,14 @@ try {
 
 Write-Host ""
 Say "Done: $passed passed, $failed failed, $skipped skipped." "Cyan"
-if ($zip -and (Test-Path $zip)) {
+$sent = $false
+if ($zip -and (Test-Path $zip) -and -not $Unattended -and -not $NoSend) {
+  $sent = Send-Results $zip $summary $passed $failed
+}
+if ($sent) {
+  Say "The results were sent back, so there's nothing to send by hand. A copy is on your Desktop:" "Green"
+  Say ("  " + $zip) "Green"
+} elseif ($zip -and (Test-Path $zip)) {
   Say "Please send this file back:" "Green"
   Say ("  " + $zip) "Green"
   if (-not $Unattended) { Start-Process explorer.exe -ArgumentList ("/select,`"" + $zip + "`"") }

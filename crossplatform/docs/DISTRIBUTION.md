@@ -17,9 +17,11 @@ skips the question). They read the same environment: `THEO_RELEASES_REPO`, `THEO
 a private releases repo; falls back to `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`; sent as a header, never on a command
 line), `THEO_GITHUB_API`.
 
-**Where releases come from.** `install/releases-repo` is the one place this side keeps the releases repo (owner/name); it must
-match `THEO_RELEASES_REPO` in the Mac side's `Config/Theo.xcconfig`, and `Tools/set-releases-repo.sh` changes both
-(`Tools/install/check-release-config.py` fails when they differ). The scripts in the repo leave the repo empty and read
+**Where releases come from.** `install/releases-repo` is the one place this side keeps the releases repo (owner/name). It may
+differ from `THEO_RELEASES_REPO` in the Mac side's `Config/Theo.xcconfig`, and today it does: Windows builds are published to
+this public source repo's own Releases (below), and the Mac's stay in their private releases repo.
+`Tools/set-releases-repo.sh [--mac | --windows-linux] <owner>/<repo>` changes either or both, and
+`Tools/install/check-release-config.py` checks each is set and named nowhere else in code. The scripts in the repo leave the repo empty and read
 `releases-repo` beside themselves; `tools/collect_installers.py` writes copies with it filled in, which are the ones a
 release carries, so the one-liners need no settings. `THEO_RELEASES_REPO` overrides it. A copy with no repo at all (an
 unstamped script piped from somewhere) says so instead of guessing.
@@ -31,9 +33,37 @@ The Linux script runs everything from `main()` at the end, so a download cut sho
 likewise only acts in `Main` at the end. `tests/install_test.py` and `tests/install_ps_test.py` check all of this against a
 stand-in for GitHub's API (the Windows one installs and removes the real installer on a Windows runner).
 
+## Windows builds publish themselves
+
+`.github/workflows/windows-release.yml` runs after each successful "Theo cross-platform" run from a push to `main`. It builds
+nothing: it takes that run's tested Windows installers (`theo-installers-windows-2022`, carrying the run's `THEO_BUILD`),
+names them `Vello-<build>-windows-x64-setup.exe` and `.msi`, adds `install.ps1`, the tester kit (`Theo-Test.ps1`,
+`RUN-TEST.cmd`, `HOW-TO-TEST.txt`) with the repo written in, writes `SHA256SUMS`, and publishes release `build-<build>` as the
+latest, with the commits since the previous one as its notes. It keeps the newest 15 and removes older ones. It publishes
+only when `install/releases-repo` names the repo it runs in (the job's own token can't write anywhere else), and it runs on
+a Linux runner for about a minute, which is free on a public repo. To publish a particular run by hand: Actions › Windows
+release › Run workflow, with that run's id.
+
+So a Windows PC installs once (`irm https://github.com/<owner>/<repo>/releases/latest/download/install.ps1 | iex`, or the
+setup `.exe` from the releases page) and then updates itself from every green `main` build: Vello checks 20 seconds after it
+opens and every 6 hours, and the Update row installs the new build silently and reopens. Linux builds aren't published this
+way yet (the Linux and Windows jobs bake different build numbers), so a Linux copy says no Linux build is published.
+
+**A tester's kit.** A tester keeps `RUN-TEST.cmd`. Each run swaps `Theo-Test.ps1` for the newest published copy (checked
+against `SHA256SUMS`), installs the newest build if Vello isn't installed, and has the tester press Vello's own Update button
+when the installed build is older, so the updater is tested every time. At the end it can send the results back itself:
+the tester pastes a results code once, `<owner>/<repo> <token>`, kept encrypted for that Windows user (DPAPI) in
+`%LOCALAPPDATA%\Vello-Tester`. The script asks before each send and puts `RESULTS.txt` and the zip in
+`reports/<date>-<id>/` of that repo through GitHub's contents API; without a code, or if sending fails, the tester sends the
+zip as before. To make a code: create a private repo for results (with a README, so it isn't empty), then a fine-grained
+personal access token (GitHub › Settings › Developer settings › Fine-grained tokens) with access to that repo only and
+the permission Contents: Read and write, and send the tester `<owner>/<repo> <token>`. The worst a leaked code can do is
+write to that one repo.
+
 ## What a release holds
 
-One GitHub release per build, tagged `build-<yyyyMMddHHmm>`, shared with the Mac app:
+The Mac's releases: one GitHub release per build, tagged `build-<yyyyMMddHHmm>`. When both platforms share a releases repo,
+a release may carry every platform's assets:
 
 | Asset | Who it's for |
 |---|---|
@@ -73,11 +103,10 @@ the releases page. Details: [PLATFORMS.md](PLATFORMS.md#updates).
 
 ## Decisions for Addy
 
-1. **Where releases live.** The one-liners only work for strangers if the releases repo is public. Today the repo in
-   `install/releases-repo` is private. Either make it public, or make a new public repo for releases and run
-   `Tools/set-releases-repo.sh <owner>/<repo>`. Nothing here changes any repo's visibility.
-2. **Publishing.** When you want a public build, add the Windows and Linux assets to the same `build-…` release as the Mac
-   zip (the workflow's artifacts are ready to attach), then add the two install scripts and regenerate `SHA256SUMS`.
+1. **Where releases live.** Windows builds are published to this public repo's Releases (decided in November 2026, so
+   a tester's copy updates itself with no token). The Mac's releases repo stays private; making it public, or moving the
+   Mac's releases too, is `Tools/set-releases-repo.sh --mac <owner>/<repo>`. Nothing here changes any repo's visibility.
+2. **Publishing.** Windows: automatic from `main` (above). Mac: `Tools/release.sh` on the Mac Studio.
 
 ## Package managers (also free, later)
 

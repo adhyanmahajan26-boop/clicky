@@ -14,8 +14,10 @@ on:
       - "crossplatform/install/**"
       - "crossplatform/tests/install_test.py"
       - "crossplatform/tools/collect_installers.py"
+      - "crossplatform/tester/**"
       - "leanring-buddy.xcodeproj/project.pbxproj"
       - ".github/workflows/installers.yml"
+      - ".github/workflows/windows-release.yml"
   push:
     branches: [main]
     paths:
@@ -50,10 +52,12 @@ jobs:
         run: |
           bash -n Tools/install/install.sh Tools/install/test-install.sh Tools/install/make-cask.sh \
             Tools/install/signer-requirement.sh Tools/setup-signing.sh Tools/set-releases-repo.sh crossplatform/install/install-linux.sh
-          pwsh -NoProfile -Command '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("crossplatform/install/install.ps1", [ref]$null, [ref]$e); if ($e) { $e; exit 1 }'
+          for script in crossplatform/install/install.ps1 crossplatform/tester/Theo-Test.ps1; do
+            SCRIPT="$script" pwsh -NoProfile -Command '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:SCRIPT, [ref]$null, [ref]$e); if ($e) { $e; exit 1 }'
+          done
       - name: Mac install.sh on a stand-in Mac against a stand-in GitHub
         run: python3 Tools/install/test-install-stand-in.py
       - name: Linux install-linux.sh against a stand-in GitHub
         run: python3 crossplatform/tests/install_test.py
       - name: Homebrew cask reads the releases repo from Config/Theo.xcconfig
-        run: Tools/install/make-cask.sh 202611140000 "$(printf '0%.0s' $(seq 64))" | grep -q "github.com/$(cat crossplatform/install/releases-repo)/releases"
+        run: Tools/install/make-cask.sh 202611140000 "$(printf '0%.0s' $(seq 64))" | grep -q "github.com/$(sed -n 's/^[[:space:]]*THEO_RELEASES_REPO[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' Config/Theo.xcconfig | head -n 1)/releases"
