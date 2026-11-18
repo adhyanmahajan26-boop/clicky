@@ -11,31 +11,40 @@ this test: we're checking that Vello installs, opens, looks right, and closes cl
 You need: Windows 10 or 11.
 
 
-1. Unzip
---------
-Right-click the zip you were sent, choose "Extract All...", then Extract.
-Open the folder it made. You'll see:
-  - Theo-...-windows-x64-setup.exe   (the installer)
-  - RUN-TEST.cmd                     (the test)
-  - SHA256SUMS, Theo-Test.ps1, and this file
+1. Get the test (only the first time)
+------------------------------------
+You only need one file: RUN-TEST.cmd. Keep it somewhere you'll find it again, like
+your Desktop. If you were sent a zip, right-click it, choose "Extract All...", then
+Extract, and keep the folder it made.
+
+Each time you run it, the test first fetches its own newest version and, if Vello
+isn't installed yet, the newest Vello. So you never need a new zip: when you're told
+there's a new build, just run RUN-TEST.cmd again.
 
 
-2. Install Vello
----------------
-Double-click the "Theo-...-setup.exe" file.
+2. Installing Vello
+-------------------
+If there's a "...-windows-x64-setup.exe" next to RUN-TEST.cmd, you can double-click
+it. Otherwise the test downloads and installs Vello for you in step 3.
 
 Windows will probably show a blue box saying "Windows protected your PC". That's
 expected: the app isn't signed with a paid certificate yet. Click "More info", then
 "Run anyway". Please remember whether you saw that box; the test will ask.
 
-The installer runs by itself and doesn't ask for an admin password. Vello may open
-when it finishes. That's fine, leave it open.
+The installer doesn't ask for an admin password. Vello may open when it finishes.
+That's fine, leave it open.
+
+From then on Vello updates itself: when a new build is out, "Update" shows at the
+bottom of Vello's sidebar. Click it, and Vello closes, updates and opens again,
+keeping your bots and settings. The test will ask you to do that when your Vello is
+older than the newest build.
 
 
 3. Run the test
 ---------------
 Double-click "RUN-TEST.cmd". A blue PowerShell window opens. (If Windows warns
-about this file too, click "More info", then "Run anyway".)
+about this file too, click "More info", then "Run anyway".) It may say it updated
+itself first; that's normal.
 
 It asks simple yes/no questions: type y or n and press Enter. Pressing Enter on
 its own picks the suggested answer (the capital letter).
@@ -60,10 +69,16 @@ that Vello removes itself cleanly.
 
 4. Send the results back
 ------------------------
-At the end, a folder opens with a file selected named something like
+At the end the test makes a file on your Desktop named something like
    Theo-test-results-20261114-1530.zip
-(it's on your Desktop). Please send that file back the same way you got the
-test (email, WhatsApp, etc.).
+
+If you were given a "results code" (a line with a name, a space and a long token),
+paste it when the test asks. It then sends the results back by itself, this time and
+every time after; it asks before each send. The code is kept on this PC for your
+Windows user only.
+
+Without a code, a folder opens with that file selected: please send it back the
+same way you got the test (email, WhatsApp, etc.).
 
 What's in it: yes/no answers, any comments you typed, your Windows version, screen
 scale and light or dark mode, pictures of Vello's window only, and Vello's own logs.

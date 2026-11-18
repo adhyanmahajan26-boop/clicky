@@ -1,0 +1,149 @@
+# Publishes each green Windows build from main as a release of the Windows and Linux releases repo, so Vello on Windows
+# finds it with its Update button and installs it itself (crossplatform/crates/theo-core/src/update.rs), and the one-line
+# installer and the tester kit get it too. Nothing is built here: it takes the Windows installers that the
+# "Theo cross-platform" run on main just built and tested (with their build number baked in), names them, adds the
+# install script and the tester kit with the releases repo written in, writes SHA256SUMS and publishes `build-<number>`.
+#
+# It publishes only when crossplatform/install/releases-repo names this repo (GITHUB_TOKEN can't write anywhere else), so a
+# fork or a repo pointed elsewhere does nothing. Runs on a Linux runner for a minute; free on a public repo.
+# By hand: Actions › Windows release › Run workflow, optionally with the id of a successful "Theo cross-platform" run on main.
+name: Windows release
+
+on:
+  workflow_run:
+    workflows: ["Theo cross-platform"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "A successful 'Theo cross-platform' run on main to publish (empty: the newest one)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish the Windows build
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+      INPUT_RUN_ID: ${{ inputs.run_id }}
+      # How many Windows builds stay on the releases page; older ones are removed with their tags.
+      KEEP_RELEASES: "15"
+    steps:
+      - name: Which build
+        id: run
+        run: |
+          set -euo pipefail
+          run_id="${EVENT_RUN_ID:-$INPUT_RUN_ID}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --repo "$REPO" --workflow crossplatform.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::not a run id: $run_id"; exit 1; }
+          read -r conclusion branch event sha < <(gh run view "$run_id" --repo "$REPO" --json conclusion,headBranch,event,headSha --jq '[.conclusion, .headBranch, .event, .headSha] | @tsv')
+          if [ "$conclusion" != "success" ] || [ "$branch" != "main" ] || [ "$event" != "push" ]; then
+            echo "::error::run $run_id is $conclusion on $branch ($event); only a successful push to main is published"
+            exit 1
+          fi
+          echo "id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.run.outputs.sha }}
+          fetch-depth: 300
+      - name: Is this repo the releases repo?
+        id: target
+        run: |
+          set -euo pipefail
+          wanted=$(tr -d '[:space:]' < crossplatform/install/releases-repo)
+          if [ "$wanted" = "$REPO" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::crossplatform/install/releases-repo names '$wanted', not $REPO, so nothing is published here."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The run's Windows installers
+        if: steps.target.outputs.publish == 'true'
+        id: build
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.run.outputs.id }}" --repo "$REPO" --name theo-installers-windows-2022 --dir artifact
+          build=$(tr -d '[:space:]' < artifact/BUILD)
+          [[ "$build" =~ ^[0-9]{12}$ ]] || { echo "::error::the run's BUILD isn't yyyyMMddHHmm: '$build'"; exit 1; }
+          echo "number=$build" >> "$GITHUB_OUTPUT"
+          if gh release view "build-$build" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::notice::build-$build is published already."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Name the files and checksum them
+        if: steps.target.outputs.publish == 'true' && steps.build.outputs.new == 'true'
+        run: |
+          set -euo pipefail
+          build="${{ steps.build.outputs.number }}"
+          mkdir release
+          setup=$(ls artifact/*-windows-x64-setup.exe | head -n 1)
+          cp "$setup" "release/Vello-$build-windows-x64-setup.exe"
+          if ls artifact/*-windows-x64.msi >/dev/null 2>&1; then
+            cp "$(ls artifact/*-windows-x64.msi | head -n 1)" "release/Vello-$build-windows-x64.msi"
+          fi
+          for script in crossplatform/install/install.ps1 crossplatform/tester/Theo-Test.ps1 crossplatform/tester/RUN-TEST.cmd; do
+            python3 Tools/install/stamp-installer.py "$script" "release/$(basename "$script")" --repo "$REPO"
+          done
+          cp crossplatform/tester/HOW-TO-TEST.txt release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+          cat release/SHA256SUMS
+      - name: What changed since the last Windows build
+        if: steps.target.outputs.publish == 'true' && steps.build.outputs.new == 'true'
+        run: |
+          set -euo pipefail
+          build="${{ steps.build.outputs.number }}"
+          sha="${{ steps.run.outputs.sha }}"
+          previous=$(gh api "repos/$REPO/releases?per_page=100" --jq '[.[] | select(.draft == false and (.tag_name | test("^build-[0-9]+$")))] | sort_by(.tag_name) | last | .tag_name // empty')
+          changes=""
+          if [ -n "$previous" ] && git fetch --quiet --depth=300 origin "refs/tags/$previous:refs/tags/$previous" 2>/dev/null; then
+            changes=$(git log --no-merges --format='- %s' "$previous..$sha" -- crossplatform 2>/dev/null | head -n 25) || true
+          fi
+          [ -n "$changes" ] || changes="- $(git log -1 --format=%s "$sha")"
+          {
+            echo "Vello for Windows, build $build."
+            echo
+            echo "What changed:"
+            echo "$changes"
+            echo
+            echo "Install once, in PowerShell: \`irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex\`"
+            echo "(or run the setup .exe below). After that Vello updates itself: Update at the bottom of the sidebar."
+            echo
+            echo "Testers: keep RUN-TEST.cmd; it fetches the newest check and build each time."
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        if: steps.target.outputs.publish == 'true' && steps.build.outputs.new == 'true'
+        run: |
+          set -euo pipefail
+          build="${{ steps.build.outputs.number }}"
+          gh release create "build-$build" release/* --repo "$REPO" --target "${{ steps.run.outputs.sha }}" \
+            --title "Vello for Windows, build $build" --notes-file notes.md --latest
+          echo "::notice::Published https://github.com/$REPO/releases/tag/build-$build"
+      - name: Keep the newest builds only
+        if: steps.target.outputs.publish == 'true' && steps.build.outputs.new == 'true'
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases?per_page=100" --jq '[.[] | select(.tag_name | test("^build-[0-9]+$"))] | sort_by(.tag_name) | reverse | .[].tag_name' > tags.txt
+          tail -n +"$((KEEP_RELEASES + 1))" tags.txt | while read -r tag; do
+            echo "removing $tag"
+            gh release delete "$tag" --repo "$REPO" --cleanup-tag --yes
+          done
