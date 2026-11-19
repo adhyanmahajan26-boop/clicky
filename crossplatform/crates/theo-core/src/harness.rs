@@ -458,6 +458,7 @@ impl Harness {
             if !others.is_empty() {
                 parts.push(format!("Your teammates: {}.", others.join("; ")));
             }
+            parts.push(crate::team_build::how_to(&owner));
         }
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
@@ -876,6 +877,12 @@ impl Harness {
                 let (text, question) = crate::vmscreens::research::extract(&said);
                 if question.is_some() { answer = Some(text); research_question = question; }
             }
+            // ```team: the CEO making the new bots and categories the owner asked for (team_build.rs).
+            let mut team_order: Option<crate::team_build::TeamBuildOrder> = None;
+            if let Some(said) = answer.clone() {
+                let (text, order) = crate::team_build::extract(&said);
+                if order.is_some() { answer = Some(text); team_order = order; }
+            }
             let streamed = me.with(|s| s.replying.get(&bot.id).cloned());
             me.release(&bot.id);
             if was_stopped {
@@ -901,7 +908,7 @@ impl Harness {
                             }
                             record.messages.push(message);
                         }
-                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && research_question.is_none() => {
+                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && research_question.is_none() && team_order.is_none() => {
                             record.messages.push(ChatMessage::new(&bot.id, "(No answer this time. Send it again, or try another model.)").with_exchange(exchange.clone()));
                         }
                         _ => {}
@@ -918,6 +925,9 @@ impl Harness {
             me.fire_hook("turn-finished", json!({"bot": bot.id, "botName": bot.name, "chat": conversation_id, "fromOwner": opts.from_owner, "privately": opts.privately.is_some(), "ok": answer.is_some(), "reply": answer.clone().unwrap_or_default()}));
             crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
             crate::vmscreens::research::start_for_turn(&me, &bot, research_question, &conversation_id, exchange.clone());
+            if let Some(order) = team_order {
+                crate::team_build::build_for_turn(&me, &bot, order, &conversation_id, opts.from_owner).await;
+            }
             if clicky_orders > 0 && bot.primary {
                 me.post(ChatMessage::note("Pointer Assistant isn't part of this build of Vello yet, so that order to Pointer Assistant wasn't carried out."), &conversation_id);
             }

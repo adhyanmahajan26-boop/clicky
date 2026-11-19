@@ -392,6 +392,18 @@ public enum BotProtocol {
         "time, and \(owner) can pause, run or delete it."
     }
 
+    /// How the CEO makes new bots and categories when the owner asks for them (`TeamBuildOrder`).
+    public static func teamBuildHowTo(owner: String) -> String {
+        "New bots and categories: you can make them yourself. When \(owner) asks for a new bot, agent, team or category, " +
+        "don't tell them to use a button and don't write files for it: say in a line what you'll make, then add one ```team " +
+        "block with JSON {\"categories\": [{\"name\": \"Marketing\", \"purpose\": \"one line\"}], \"bots\": [{\"name\": \"Ada\", " +
+        "\"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", " +
+        "\"category\": \"Marketing\"}]}. Either list can be left out. A bot's category is made if it doesn't exist yet, and a " +
+        "bot that already exists is filed into it instead of made twice. At most \(TeamBuildOrder.mostBots) bots and " +
+        "\(TeamBuildOrder.mostCategories) categories at a time. Vello makes them and says so in the chat; never say they're " +
+        "made before that line shows. Only when \(owner) asked for it in their own words."
+    }
+
     /// How any bot starts a coding run. Bots don't edit code themselves: a harness does it in its own branch.
     public static func codingHowTo(harnessLabel: String) -> String {
         "Coding: when the owner asks to build, fix or change code, don't edit files yourself. Plan it in a sentence or two, then write: a line " +

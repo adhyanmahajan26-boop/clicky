@@ -256,3 +256,48 @@ def add_cases(S):
                   "can_message_anyone_again": anyone is None, "one_primary": primary == [bid("Courier")], "primary_cant_be_deleted": not refused.get("ok"),
                   "theo_primary_again": back == ["theo"], "deletable_flag": got.get("deletable") is True}
         return all(checks.values()), checks
+
+    # ------------------------------------------------------------ Vello makes bots and categories from chat
+
+    @test("TM07", "Asked in chat, Vello makes a new category and a bot in it; the block never shows, and the CEO is told how", "teams")
+    def tm07():
+        n = T.nonce()
+        category, name = "Growth %s" % n, "Penny%s" % n
+        block = json.dumps({"categories": [{"name": category, "purpose": "Launch posts and ads"}],
+                            "bots": [{"name": name, "does": "Writes launch posts", "category": category}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "I'll set up %s with %s.\n```team\n%s\n```" % (category, name, block)}, {"reply": "ok"}])
+        mark = T.calls_mark()
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a new category called %s with a bot named %s that writes launch posts." % (category, name))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        bots = [b for b in T.state()["bots"] if b["name"] == name]
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == category), None)
+        theo = T.chat("theo", 400)[start:]
+        shown = [m["text"] for m in theo if m["author"] == "theo"]
+        made_note = [m["text"] for m in theo if m["author"] == "note" and name in m["text"]]
+        told = any("```team" in (c.get("system") or "") + (c.get("prompt") or "") for c in T.calls(mark))
+        member = bool(bots) and team is not None and bots[0]["id"] in team["members"]
+        checks = {"bot_made": len(bots) == 1, "category_made": team is not None, "bot_in_category": member,
+                  "purpose_saved": team is not None and team.get("purpose") == "Launch posts and ads",
+                  "block_not_shown": bool(shown) and not any("```team" in t for t in shown), "note_says_so": bool(made_note),
+                  "ceo_told_how": told}
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        for b in bots: P({"cmd": "botDelete", "id": b["id"]})
+        T.fake("ok")
+        return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "note": made_note[-1:]}
+
+    @test("TM08", "A team block the owner never asked for makes nothing, and the chat says so", "limits")
+    def tm08():
+        n = T.nonce()
+        name = "Sneaky%s" % n
+        block = json.dumps({"bots": [{"name": name, "does": "Not asked for"}], "categories": [{"name": "Shadow %s" % n}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Here's the summary.\n```team\n%s\n```" % block}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Summarise what happened today.")
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        made = [b for b in T.state()["bots"] if b["name"] == name]
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == "Shadow %s" % n), None)
+        refused = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note" and "didn't make them" in m["text"]]
+        T.fake("ok")
+        ok = idle and not made and team is None and bool(refused)
+        return ok, {"settled": idle, "seconds": secs, "bot_made": bool(made), "category_made": team is not None, "said_so": refused[-1:]}

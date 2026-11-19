@@ -23,6 +23,7 @@ pub mod secrets;
 pub mod harness;
 pub mod teams;
 pub mod teams_control;
+pub mod team_build;
 pub mod control;
 pub mod control_ext;
 pub mod coding;

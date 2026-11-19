@@ -1339,6 +1339,13 @@ final class BotsStore: ObservableObject {
                 answer = taken.text
                 pdfFiles = taken.files
             }
+            // A ```team block: the CEO making the new bots and categories the owner asked for (`buildTeamFromChat`).
+            var teamBuildOrder: TeamBuildOrder?
+            if bot.owner == nil, let said = answer {
+                let taken = TeamBuildOrder.extract(from: said)
+                answer = taken.text
+                teamBuildOrder = taken.order
+            }
             var screenOrders: [String] = []
             var researchOrders: [String] = []
             var screenGifts: [(bot: String, screen: String)] = []
@@ -1380,7 +1387,7 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.ownAnswers = (record.ownAnswers ?? [:]).merging([bot.id: (record.ownAnswers?[bot.id] ?? []) + [message.id]]) { _, new in new } }
-            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty && teamBuildOrder == nil {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
             // Its engine session has now seen everything in this chat, on this Mac.
@@ -1402,6 +1409,7 @@ final class BotsStore: ObservableObject {
                     self.post(BotChatMessage(author: Self.noteAuthor, text: "Vello couldn't make a PDF for \(bot.name): \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
                 }
             }
+            if let teamBuildOrder { self.buildTeamFromChat(teamBuildOrder, maker: bot, conversationID: conversationID, fromOwner: fromOwner) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
             for gift in screenGifts { self.proposeScreen(gift, from: bot, room: conversationID) }
@@ -2129,11 +2137,14 @@ enum BotPrompts {
                 parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
             }
             parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name), owner: ownerName))
+            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName))
             let roster = BotsStore.shared.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
             let work = BotsStore.shared.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
         }
+        // Vello's own bot keeps making bots and categories when another bot was made CEO (`BotsStore.mayBuildTeam`).
+        if !bot.primary && bot.id == BotsRootView.theoID { parts.append(BotProtocol.teamBuildHowTo(owner: ownerName)) }
         if bot.owner == nil {
             parts.append(BotPrompts.routineHowTo)
             parts.append(BotPrompts.codingHowTo)

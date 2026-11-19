@@ -136,7 +136,7 @@ struct BotStencil: Identifiable {
     }
 
     static let all: [BotStencil] = [
-        BotStencil(id: "blank", name: "Blank", summary: "Start from nothing and write its job yourself.",
+        BotStencil(id: "blank", name: "Start from scratch", summary: "An empty bot: you write its job yourself.",
                    instructions: "", glyph: "", colour: "slate", apps: []),
         BotStencil(id: "researcher", name: "Researcher", summary: "Digs into a question and answers with sources.",
                    instructions: "Investigate the question, read primary sources, and answer with a short brief that cites them. Say what's uncertain.",
