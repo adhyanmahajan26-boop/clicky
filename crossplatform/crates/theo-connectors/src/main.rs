@@ -161,6 +161,7 @@ fn run(raw_arguments: Vec<String>) -> Result<Option<Value>, String> {
             let mut secret_value = String::new();
             std::io::stdin().read_to_string(&mut secret_value).map_err(|error| format!("Couldn't read the secret from standard input: {error}"))?;
             let secret_value = secret_value.trim().to_string();
+            let nothing_was_pasted = secret_value.is_empty();
             let mut secrets = hub.vault.read(&app_id);
             let what = if let Some(variable_name) = command_line.option("--env") {
                 if entry.kind != AppKind::Local {
@@ -183,6 +184,10 @@ fn run(raw_arguments: Vec<String>) -> Result<Option<Value>, String> {
                 "token".to_string()
             };
             hub.vault.write(&app_id, &secrets)?;
+            // Empty input removes the secret: say so, so a caller never takes "nothing pasted" for "saved".
+            if nothing_was_pasted {
+                return Ok(Some(json!({"ok": true, "app": app_id, "removed": what})));
+            }
             Ok(Some(json!({"ok": true, "app": app_id, "saved": what})))
         }
         "signin" => sign_in(&hub, &app_id_argument()?, &command_line),

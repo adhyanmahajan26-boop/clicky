@@ -493,6 +493,10 @@ fn composio_takes_one_key_connects_apps_by_link_and_judges_each_run_by_what_it_r
     assert!(checked["apps"][0]["reason"].as_str().unwrap().contains("API key"), "{checked}");
 
     // The right key: one session, its tools, and which apps are connected on Composio.
+    // Nothing pasted removes, and says so rather than "saved".
+    let (removed, _) = hub_with_input(data.path(), &["set-secret", "composio"], "\n");
+    assert_eq!(removed["removed"], "token", "{removed}");
+    assert!(removed.get("saved").is_none(), "{removed}");
     let (saved, _) = hub_with_input(data.path(), &["set-secret", "composio"], "ck-test-key\n");
     assert_eq!(saved["saved"], "token");
     let (checked, _) = hub(data.path(), &["check", "composio"]);

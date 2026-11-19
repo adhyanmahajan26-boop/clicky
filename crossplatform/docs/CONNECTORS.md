@@ -78,7 +78,7 @@ and says to use `set-secret`, which reads the value from standard input so it ne
 | `add --json '<app>' [--no-check]` / `add --catalog <id> [--id <new id>]` | `{"ok":true,"app":"<id>","status":…,"reason":…,"toolCount":…}`. Checks the app straight away unless `--no-check`. |
 | `remove <id>` | `{"ok":true,"removed":"<id>"}`. Forgets its sign-in and state too. |
 | `enable <id>` / `disable <id>` | `{"ok":true,"app":"<id>","enabled":true\|false}` |
-| `set-secret <id>` (pasted token) / `--env NAME` (local secret setting) / `--client-secret` | `{"ok":true,"app":"<id>","saved":"token"\|"env NAME"\|"client secret"}`. The value is read from standard input; empty input removes it. |
+| `set-secret <id>` (pasted token) / `--env NAME` (local secret setting) / `--client-secret` | `{"ok":true,"app":"<id>","saved":"token"\|"env NAME"\|"client secret"}`. The value is read from standard input; empty input removes it and prints `"removed"` in place of `"saved"`. |
 | `signin <id> [--timeout <seconds>]` | Two lines. First `{"event":"open","app":"<id>","url":"<address>"}`: open that address in the browser. Then, when the browser comes back (default limit 300 s), `{"ok":true,"event":"done","app":"<id>","status":"connected",…}` or the usual failure line. |
 | `signout <id>` | `{"ok":true,"app":"<id>","status":"needsSignIn"}`. Forgets the tokens and pasted token; keeps the client the hub registered. |
 | `check [<id>]` | `{"ok":true,"apps":[{"id","status","reason","toolCount"}]}`. Reconnects (refreshing a token first if needed) and records the result. All claude-account apps share one `claude mcp list`. |
