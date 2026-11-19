@@ -118,7 +118,10 @@ impl ServerState {
                 }
                 let exposed_name = exposed_tool_name(&entry.id, &tool.name);
                 self.tool_names.lock().unwrap().insert(exposed_name.clone(), (entry.id.clone(), tool.name.clone(), tool.effect));
-                let description = format!("[{}] {}", entry.name, tool.description.clone().unwrap_or_default()).trim().to_string();
+                let mut description = format!("[{}] {}", entry.name, tool.description.clone().unwrap_or_default()).trim().to_string();
+                if tool.judged_per_call {
+                    description.push_str(&format!(" (Vello checks every tool this runs: this bot may {} in {}.)", level_words(level), entry.name));
+                }
                 let mut offered = json!({
                     "name": exposed_name,
                     "description": description,
@@ -154,9 +157,11 @@ impl ServerState {
         let Some(level) = ticket.level_for(&app_id) else {
             return refusal(format!("This bot wasn't given {}.", entry.name));
         };
+        let tool_effect = self.hub.effect_of_call(&entry, &tool_name, tool_effect, &arguments);
         if !level.allows(tool_effect) {
             let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, tool_effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted.".to_string() } else { String::new() };
-            return refusal(format!("Not allowed: {tool_name} {}, and this bot may {} in {}.{why}", effect_words(tool_effect), level_words(level), entry.name));
+            let what = if entry.is_composio() { crate::composio::call_words(&tool_name, &arguments) } else { tool_name.clone() };
+            return refusal(format!("Not allowed: {what} {}, and this bot may {} in {}.{why}", effect_words(tool_effect), level_words(level), entry.name));
         }
         match self.with_connection(&entry, tool_effect == ToolEffect::Reads, |hub, connection| hub.call_on(connection, &tool_name, arguments.clone(), level)) {
             Ok(result) => {

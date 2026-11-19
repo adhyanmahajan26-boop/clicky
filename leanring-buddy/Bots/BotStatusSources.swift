@@ -398,6 +398,7 @@ final class ConnectorHealth: ObservableObject {
                     return error.localizedDescription
                 }
             }
+            if record.isComposio { return "Composio needs your API key: paste it on Composio's row in Vello's Connectors page." }
             if record.takesPastedToken { return "\(record.name) takes a token: paste it in Vello's Connectors page." }
             if !record.isClaudeAccount { return "\(record.name) needs no sign-in. Try again from Connectors." }
         }

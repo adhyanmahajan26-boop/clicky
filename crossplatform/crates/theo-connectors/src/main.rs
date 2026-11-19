@@ -33,7 +33,9 @@ commands:
                                             run one tool for a bot
   serve --ticket <file>                     an MCP server on standard input and output, for one bot turn
   ticket issue --json '<ticket>' | ticket revoke <file>
-  discover-claude                           the apps Claude Code has, as claude-account entries to add";
+  discover-claude                           the apps Claude Code has, as claude-account entries to add
+  composio-link <id> <app>                  a link that connects an app (gmail, slack, …) to the owner's Composio account
+  composio-apps <id>                        the apps connected on Composio";
 
 struct CommandLine {
     data_folder: Option<PathBuf>,
@@ -230,6 +232,25 @@ fn run(raw_arguments: Vec<String>) -> Result<Option<Value>, String> {
             }
         }
         "call" => call_tool(&hub, &command_line),
+        "composio-link" => {
+            let app_id = app_id_argument()?;
+            let toolkit = command_line.positional(1).ok_or("composio-link needs an app id and the app to connect, such as gmail.")?;
+            let entry = hub.app(&app_id)?;
+            if !entry.is_composio() {
+                return Err(format!("{} isn't a Composio app.", entry.name));
+            }
+            let link = theo_connectors::composio::connect_link(&hub.paths, &hub.vault, &entry, &toolkit)?;
+            Ok(Some(json!({"ok": true, "app": app_id, "toolkit": theo_connectors::composio::toolkit_slug(&toolkit), "url": link})))
+        }
+        "composio-apps" => {
+            let app_id = app_id_argument()?;
+            let entry = hub.app(&app_id)?;
+            if !entry.is_composio() {
+                return Err(format!("{} isn't a Composio app.", entry.name));
+            }
+            let connected = theo_connectors::composio::connected_apps(&hub.paths, &hub.vault, &entry)?;
+            Ok(Some(json!({"ok": true, "app": app_id, "connected": connected})))
+        }
         "serve" => {
             let ticket_file = command_line.option("--ticket").ok_or("serve needs --ticket <file>.")?;
             serve(hub, PathBuf::from(ticket_file))?;
@@ -413,9 +434,11 @@ fn call_tool(hub: &Hub, command_line: &CommandLine) -> Result<Option<Value>, Str
         }
     };
     let tool = tools.iter().find(|tool| tool.name == tool_name).ok_or_else(|| format!("{} has no tool called {tool_name}.", entry.name))?;
-    if !level.allows(tool.effect) {
-        let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, tool.effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted." } else { "" };
-        return Err(format!("Not allowed: {tool_name} {}, and this bot may {} in {}.{why}", effect_words(tool.effect), level_words(level), entry.name));
+    let effect = hub.effect_of_call(&entry, &tool_name, tool.effect, &arguments);
+    if !level.allows(effect) {
+        let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted." } else { "" };
+        let what = if entry.is_composio() { theo_connectors::composio::call_words(&tool_name, &arguments) } else { tool_name.clone() };
+        return Err(format!("Not allowed: {what} {}, and this bot may {} in {}.{why}", effect_words(effect), level_words(level), entry.name));
     }
     match hub.call_on(&mut connection, &tool_name, arguments, level) {
         Ok(result) => {

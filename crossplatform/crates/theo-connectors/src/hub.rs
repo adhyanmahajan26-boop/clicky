@@ -36,6 +36,10 @@ pub struct HubTool {
     pub input_schema: Value,
     pub effect: ToolEffect,
     pub read_only: bool,
+    /// Judged again on each call by what the call runs (Composio's tool that runs other tools). `effect` is then the least
+    /// it can do, so the tool is offered at that level.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub judged_per_call: bool,
 }
 
 /// What checking one app found: its status, why it failed, and how many tools it has.
@@ -62,6 +66,8 @@ impl ReachError {
 /// An open connection to one app.
 pub enum AppConnection {
     Mcp(McpSession),
+    /// The owner's Composio tool-router session: MCP, with each tool judged by `composio.rs`.
+    Composio(McpSession),
     ClaudeAccount(AppEntry),
 }
 
@@ -127,6 +133,9 @@ impl Hub {
                 };
                 McpSession::start_local(command, CONNECT_TIME_LIMIT_FOR_LOCAL_APPS).map(AppConnection::Mcp).map_err(reach_error_from)
             }
+            AppKind::Remote if entry.is_composio() => {
+                crate::composio::connect(&self.paths, &self.vault, entry, CONNECT_TIME_LIMIT_FOR_REMOTE_APPS).map(AppConnection::Composio)
+            }
             AppKind::Remote => {
                 let server_address = entry.url.clone().unwrap_or_default();
                 match entry.auth {
@@ -164,7 +173,7 @@ impl Hub {
                 .into_iter()
                 .map(|(name, description, input_schema)| {
                     let effect = claude_account_tool_effect(entry, &name);
-                    HubTool { read_only: effect == ToolEffect::Reads, effect, name, title: None, description: Some(description), input_schema }
+                    HubTool { read_only: effect == ToolEffect::Reads, effect, name, title: None, description: Some(description), input_schema, judged_per_call: false }
                 })
                 .collect()),
             AppConnection::Mcp(session) => {
@@ -173,7 +182,27 @@ impl Hub {
                     .into_iter()
                     .map(|tool| {
                         let effect = tool_effect(&tool.name, tool.annotations.as_ref());
-                        HubTool { read_only: effect == ToolEffect::Reads, effect, name: tool.name, title: tool.title, description: tool.description, input_schema: tool.input_schema }
+                        HubTool { read_only: effect == ToolEffect::Reads, effect, name: tool.name, title: tool.title, description: tool.description, input_schema: tool.input_schema, judged_per_call: false }
+                    })
+                    .collect())
+            }
+            AppConnection::Composio(session) => {
+                let server_tools = session.list_tools(CONNECT_TIME_LIMIT_FOR_REMOTE_APPS).map_err(reach_error_from)?;
+                Ok(server_tools
+                    .into_iter()
+                    .map(|tool| {
+                        let effect = crate::composio::listed_effect(&tool.name, tool.annotations.as_ref());
+                        let judged_per_call = crate::composio::is_judged_per_call(&tool.name);
+                        HubTool {
+                            // A tool judged per call may still send: it is never "read only" to a brain.
+                            read_only: effect == ToolEffect::Reads && !judged_per_call,
+                            effect,
+                            name: tool.name,
+                            title: tool.title,
+                            description: tool.description,
+                            input_schema: tool.input_schema,
+                            judged_per_call,
+                        }
                     })
                     .collect())
             }
@@ -185,12 +214,22 @@ impl Hub {
     pub fn call_on(&self, connection: &mut AppConnection, tool_name: &str, arguments: Value, level: crate::model::AccessLevel) -> Result<Value, ReachError> {
         match connection {
             AppConnection::ClaudeAccount(entry) => call_claude_account_tool(entry, tool_name, &arguments, level).map_err(ReachError::Failed),
-            AppConnection::Mcp(session) => match session.call_tool(tool_name, arguments, TOOL_CALL_TIME_LIMIT) {
+            AppConnection::Mcp(session) | AppConnection::Composio(session) => match session.call_tool(tool_name, arguments, TOOL_CALL_TIME_LIMIT) {
                 Ok(result) => Ok(result),
                 // A JSON-RPC error on a tool call is the tool failing, not the app: hand it back as a tool error.
                 Err(McpError::Refused { code, message }) => Ok(json!({"content": [{"type": "text", "text": format!("The app refused ({code}): {message}")}], "isError": true})),
                 Err(error) => Err(reach_error_from(error)),
             },
+        }
+    }
+
+    /// What one call really does: for most tools what they were listed as; for a Composio tool that runs other tools, the
+    /// most any tool it runs does.
+    pub fn effect_of_call(&self, entry: &AppEntry, tool_name: &str, listed_effect: ToolEffect, arguments: &Value) -> ToolEffect {
+        if entry.is_composio() {
+            crate::composio::call_effect(tool_name, listed_effect, arguments)
+        } else {
+            listed_effect
         }
     }
 
@@ -205,6 +244,12 @@ impl Hub {
         let outcome = self.connect(entry).and_then(|mut connection| self.tools_of(&mut connection));
         match outcome {
             Ok(tools) => {
+                if entry.is_composio() {
+                    // Which apps are connected on Composio, for the Connectors page. Best effort: the tools already work.
+                    if let Err(reason) = crate::composio::connected_apps(&self.paths, &self.vault, entry) {
+                        eprintln!("theo-connectors: couldn't list Composio's connected apps: {reason}");
+                    }
+                }
                 self.record_worked(&entry.id, Some(tools.len()));
                 (AppStatus::Connected, None, Some(tools.len()))
             }
@@ -273,6 +318,9 @@ impl Hub {
                 item["lastChecked"] = record.last_checked.clone().map(Value::String).unwrap_or(Value::Null);
                 if let Some(tool_count) = record.tool_count {
                     item["toolCount"] = json!(tool_count);
+                }
+                if entry.is_composio() {
+                    item["composioConnectedApps"] = json!(record.composio_connected_apps.clone().unwrap_or_default());
                 }
                 item["signedIn"] = json!(has_sign_in && matches!(entry.kind, AppKind::Remote) && entry.auth != RemoteSignIn::Nothing);
                 item

@@ -434,3 +434,137 @@ fn claude_account_apps_take_their_status_from_claude_code() {
     let checked: Value = serde_json::from_str(String::from_utf8_lossy(&output.stdout).lines().last().unwrap()).unwrap();
     assert_eq!(checked["apps"][0]["status"], "failed", "{checked}");
 }
+
+struct StandInComposio {
+    child: Child,
+    port: u16,
+}
+
+impl StandInComposio {
+    fn start() -> StandInComposio {
+        let mut child = Command::new(python())
+            .arg(stand_in_folder().join("composio_stub.py"))
+            .env("COMPOSIO_TEST_KEY", "ck-test-key")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut first_line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut first_line).unwrap();
+        StandInComposio { child, port: first_line.trim().parse().unwrap() }
+    }
+
+    fn address(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    fn stats(&self) -> Value {
+        serde_json::from_str(&ureq::get(&self.address("/debug/stats")).call().unwrap().into_string().unwrap()).unwrap()
+    }
+}
+
+impl Drop for StandInComposio {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn composio_takes_one_key_connects_apps_by_link_and_judges_each_run_by_what_it_runs() {
+    let data = tempfile::tempdir().unwrap();
+    let composio = StandInComposio::start();
+
+    // The catalog offers it, as a token app on Composio's API.
+    let (catalog, _) = hub(data.path(), &["catalog"]);
+    let offered = catalog["catalog"]["apps"].as_array().unwrap().iter().find(|app| app["id"] == "composio").cloned().expect("composio in the catalog");
+    assert_eq!(offered["auth"], "token");
+    assert_eq!(offered["url"], "https://backend.composio.dev");
+
+    // Added (pointed at the stand-in), it needs its key before anything else.
+    let app = json!({"id": "composio", "name": "Composio", "kind": "remote", "url": composio.address(""), "auth": "token", "composio": {"userId": "vello"}});
+    let (added, _) = hub(data.path(), &["add", "--json", &app.to_string()]);
+    assert_eq!(added["status"], "needsSignIn", "{added}");
+
+    // A wrong key says so plainly.
+    hub_with_input(data.path(), &["set-secret", "composio"], "not-the-key\n");
+    let (checked, _) = hub(data.path(), &["check", "composio"]);
+    assert_eq!(checked["apps"][0]["status"], "failed", "{checked}");
+    assert!(checked["apps"][0]["reason"].as_str().unwrap().contains("API key"), "{checked}");
+
+    // The right key: one session, its tools, and which apps are connected on Composio.
+    let (saved, _) = hub_with_input(data.path(), &["set-secret", "composio"], "ck-test-key\n");
+    assert_eq!(saved["saved"], "token");
+    let (checked, _) = hub(data.path(), &["check", "composio"]);
+    assert_eq!(checked["apps"][0]["status"], "connected", "{checked}");
+    assert_eq!(checked["apps"][0]["toolCount"], 4);
+    let (listing, _) = hub(data.path(), &["list"]);
+    let listed = app_in_listing(&listing, "composio");
+    assert_eq!(listed["signedIn"], true);
+    assert_eq!(listed["composioConnectedApps"], json!(["gmail", "slack"]), "only active connections count");
+    let (tools, _) = hub(data.path(), &["tools", "composio"]);
+    let executor = tools["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "COMPOSIO_MULTI_EXECUTE_TOOL").unwrap();
+    assert_eq!(executor["effect"], "read");
+    assert_eq!(executor["judgedPerCall"], true);
+    assert_eq!(executor["readOnly"], false);
+    let stats = composio.stats();
+    assert_eq!(stats["userIds"], json!(["vello"]));
+    assert_eq!(stats["sessionRequests"][0]["manage_connections"]["enable_connection_removal"], false, "bots never disconnect an app");
+
+    // A link to connect an app, from its plain name.
+    let (link, _) = hub(data.path(), &["composio-link", "composio", "Google Calendar"]);
+    assert_eq!(link["ok"], true, "{link}");
+    assert_eq!(link["toolkit"], "googlecalendar");
+    assert_eq!(link["url"], "https://app.composio.dev/link/lt_googlecalendar");
+    let (no_such_app, _) = hub(data.path(), &["composio-link", "composio", "no such app"]);
+    assert_eq!(no_such_app["ok"], false);
+    assert!(no_such_app["error"].as_str().unwrap().contains("nosuchapp"), "{no_such_app}");
+    let (connected, _) = hub(data.path(), &["composio-apps", "composio"]);
+    assert_eq!(connected["connected"], json!(["gmail", "slack"]));
+
+    // A bot that reads and drafts: Composio's runner is offered, its code sandbox isn't; drafts run, sends don't.
+    let ticket = issue_ticket(data.path(), json!({"composio": "readAndDraft"}), true, 600);
+    let mut server = McpServerUnderTest::start(data.path(), &ticket);
+    let names = server.tool_names();
+    assert!(names.contains(&"composio__COMPOSIO_MULTI_EXECUTE_TOOL".to_string()), "{names:?}");
+    assert!(names.contains(&"composio__COMPOSIO_MANAGE_CONNECTIONS".to_string()), "{names:?}");
+    assert!(!names.contains(&"composio__COMPOSIO_REMOTE_WORKBENCH".to_string()), "{names:?}");
+    let drafted = server.call("composio__COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "GMAIL_FETCH_EMAILS", "arguments": {}}, {"tool_slug": "GMAIL_CREATE_EMAIL_DRAFT", "arguments": {}}]}));
+    assert_eq!(drafted["isError"], false, "{drafted}");
+    let refused = server.call("composio__COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "GMAIL_FETCH_EMAILS"}, {"tool_slug": "GMAIL_SEND_EMAIL", "arguments": {"recipient_email": "a@example.com"}}]}));
+    assert_eq!(refused["isError"], true);
+    assert!(result_text(&refused).contains("GMAIL_SEND_EMAIL"), "{refused}");
+    let hidden_under_another_key = server.call("composio__COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"name": "GMAIL_SEND_EMAIL", "tool_slug": "GMAIL_FETCH_EMAILS"}]}));
+    assert_eq!(hidden_under_another_key["isError"], true, "a slug under any key counts");
+    let link_in_chat = server.call("composio__COMPOSIO_MANAGE_CONNECTIONS", json!({"toolkits": ["notion"]}));
+    assert!(result_text(&link_in_chat).contains("app.composio.dev/link"), "{link_in_chat}");
+    drop(server);
+
+    // Everything, but not from the owner's own words: still no send. From the owner: it sends.
+    let routine_ticket = issue_ticket(data.path(), json!({"composio": "full"}), false, 600);
+    let (routine_send, _) = hub(data.path(), &["call", "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", "--args", &json!({"tools": [{"tool_slug": "SLACK_CHAT_POST_MESSAGE"}]}).to_string(), "--ticket", &routine_ticket]);
+    assert_eq!(routine_send["ok"], false);
+    assert!(routine_send["error"].as_str().unwrap().contains("owner's own words"), "{routine_send}");
+    let owner_ticket = issue_ticket(data.path(), json!({"composio": "full"}), true, 600);
+    let (owner_send, _) = hub(data.path(), &["call", "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", "--args", &json!({"tools": [{"tool_slug": "GMAIL_SEND_EMAIL"}]}).to_string(), "--ticket", &owner_ticket]);
+    assert_eq!(owner_send["ok"], true, "{owner_send}");
+    let read_ticket = issue_ticket(data.path(), json!({"composio": "read"}), true, 600);
+    let (read_draft, _) = hub(data.path(), &["call", "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", "--args", &json!({"tools": [{"tool_slug": "NOTION_CREATE_NOTION_PAGE"}]}).to_string(), "--ticket", &read_ticket]);
+    assert_eq!(read_draft["ok"], false, "{read_draft}");
+
+    let stats = composio.stats();
+    let ran: Vec<Value> = stats["ran"].as_array().unwrap().clone();
+    assert_eq!(ran, vec![json!(["GMAIL_FETCH_EMAILS", "GMAIL_CREATE_EMAIL_DRAFT"]), json!(["GMAIL_SEND_EMAIL"])], "only allowed runs reached Composio");
+    let sessions_before = stats["sessionsMade"].as_u64().unwrap();
+    assert_eq!(sessions_before, 1, "the wrong key made none; the right one made one, kept and reused by every command");
+
+    // A session Composio forgot is replaced once, without the owner doing anything.
+    ureq::post(&composio.address("/debug/forget-sessions")).call().unwrap();
+    let (checked, _) = hub(data.path(), &["check", "composio"]);
+    assert_eq!(checked["apps"][0]["status"], "connected", "{checked}");
+    assert_eq!(composio.stats()["sessionsMade"].as_u64().unwrap(), sessions_before + 1);
+
+    // The key went only in x-api-key, and is nowhere in Vello's files in the clear.
+    assert_eq!(composio.stats()["keyOutsideItsHeader"], false);
+    assert!(!everything_under(data.path()).contains("ck-test-key"));
+}

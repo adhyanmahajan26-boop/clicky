@@ -18,7 +18,15 @@ const CONNECTORS = (() => {
   }
   function commandWords(line) { return (line.match(/"[^"]*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, "")); }
   function workedWords(iso) { if (!iso) return "Not seen connected yet"; const a = ago(iso); return a === "now" ? "just now" : `${a} ago`; }
+  // Composio: one API key for hundreds of apps, each connected once on Composio with a link (crates/theo-connectors/src/composio.rs).
+  const isComposio = (c) => c.kind === "remote" && !!c.composio;
+  const COMPOSIO_KEYS = "https://dashboard.composio.dev";
+  function appWords(slug) {
+    const known = { gmail: "Gmail", googlecalendar: "Google Calendar", googledrive: "Google Drive", googledocs: "Google Docs", googlesheets: "Google Sheets", github: "GitHub", slack: "Slack", notion: "Notion", linear: "Linear", outlook: "Outlook", hubspot: "HubSpot", jira: "Jira", discord: "Discord", twitter: "X (Twitter)", linkedin: "LinkedIn", trello: "Trello", asana: "Asana", airtable: "Airtable", dropbox: "Dropbox", zoom: "Zoom" };
+    return known[slug] || slug.charAt(0).toUpperCase() + slug.slice(1);
+  }
   function reached(c) {
+    if (isComposio(c)) return `Composio, with your Composio API key: every app you connect there, for the account "${(c.composio && c.composio.userId) || "vello"}"`;
     if (c.kind === "claude-account") return `Through your Claude account (${c.server || c.name}), with Claude Code`;
     if (c.kind === "local") return `A program on this computer: ${[c.command].concat(c.args || []).filter(Boolean).join(" ") || "a command"}`;
     const signIn = c.auth === "oauth" ? "signs in in your browser" : c.auth === "token" ? "with a token you pasted" : "no sign-in";
@@ -38,10 +46,10 @@ const CONNECTORS = (() => {
     const using = users(c);
     const who = using.length ? `<span class="cn-users">${using.slice(0, 4).map((b) => botHTML(b.id, 16, { badge: false })).join("")}</span><span>${esc(using.map((b) => b.name).join(", "))}</span>` : `<span>No bot uses it yet</span>`;
     const extra = c.status === "failed" && c.enabled !== false ? `<small class="w-bad">${esc(c.reason || "Not answering")}${c.lastConnected ? ` · worked ${esc(workedWords(c.lastConnected))}` : ""}</small>`
-      : c.status === "needsSignIn" && c.enabled !== false ? `<small class="w-ask">${c.kind === "claude-account" ? "Sign in on claude.ai so bots can use it" : takesToken(c) ? "Paste its token so bots can use it" : "Sign in so bots can use it"}</small>` : "";
+      : c.status === "needsSignIn" && c.enabled !== false ? `<small class="w-ask">${c.kind === "claude-account" ? "Sign in on claude.ai so bots can use it" : isComposio(c) ? "Paste your Composio API key so bots can use it" : takesToken(c) ? "Paste its token so bots can use it" : "Sign in so bots can use it"}</small>` : "";
     let button = "";
     if (c.enabled === false) button = `<button class="btn sm" data-enable="${esc(c.id)}" data-on="1">Turn on</button>`;
-    else if (c.status === "needsSignIn" && takesToken(c)) button = `<button class="btn pri sm" data-open-row="${esc(c.id)}">Add token</button>`;
+    else if (c.status === "needsSignIn" && takesToken(c)) button = `<button class="btn pri sm" data-open-row="${esc(c.id)}">${isComposio(c) ? "Add key" : "Add token"}</button>`;
     else if (c.status === "needsSignIn" && browserSignIn(c)) button = `<button class="btn pri sm" data-signin="${esc(c.id)}">${c.signIn && c.signIn.state === "waiting" ? "Signing in…" : "Sign in"}</button>`;
     else if (c.status === "needsSignIn" && c.kind === "claude-account") button = `<button class="btn pri sm" data-claude-signin="${esc(c.name)}">Sign in</button>`;
     else if (c.status === "failed") button = `<button class="btn sm" data-check="${esc(c.id)}">Try again</button>`;
@@ -59,12 +67,23 @@ const CONNECTORS = (() => {
     const usedBy = using.length ? using.map((b) => `${b.name} (${(LEVEL_WORDS[levelOf(b, c.id)] || "").toLowerCase()})`).join(", ") : "No bot yet. Give it to a bot below.";
     let html = `<div class="cn-details">` + line("Reached", reached(c)) + (c.status === "failed" && c.reason ? line("What it said", c.reason) : "")
       + line("Last worked", workedWords(c.lastConnected)) + line("Used by", usedBy);
-    if (takesToken(c)) {
+    if (isComposio(c)) {
+      const apps = c.composioConnectedApps || [];
+      html += line("Apps connected", apps.length ? apps.map(appWords).join(", ") : c.signedIn ? "None yet. Connect one below, or ask a bot to." : "Paste your key first");
+      html += `<form class="cn-token" data-token="${esc(c.id)}" data-composio="1"><input type="password" name="token" autocomplete="off" placeholder="${c.signedIn ? "Paste a new API key to replace it" : "Paste your Composio API key"}" aria-label="Composio API key"><button class="btn pri sm" type="submit">Save key</button></form>`
+        + `<small class="muted">Get a key in your Composio dashboard (Settings, API keys); the free plan is enough to start. It stays encrypted on this computer, with its key in this computer's credential store. Vello never shows it again. <a href="#" data-composio-keys>Open Composio</a></small>`;
+      if (c.signedIn) {
+        html += `<div class="cn-h">Connect an app</div><form class="cn-token" data-composio-link="${esc(c.id)}"><input name="toolkit" autocomplete="off" spellcheck="false" placeholder="gmail, slack, github, googlecalendar, notion…" aria-label="App to connect" list="composio-apps"><button class="btn sm" type="submit">Connect</button></form>`
+          + `<datalist id="composio-apps">${["gmail", "googlecalendar", "googledrive", "googlesheets", "googledocs", "slack", "github", "notion", "linear", "outlook", "hubspot", "jira", "discord", "trello", "asana", "airtable"].map((slug) => `<option value="${slug}">${appWords(slug)}</option>`).join("")}</datalist>`
+          + `<small class="muted">Opens Composio's page in your browser: approve it there, then press Check. Every bot you give Composio can then use that app, on this computer and any other with the same key. A bot can also give you this link in its chat.</small>`;
+      }
+    } else if (takesToken(c)) {
       html += `<form class="cn-token" data-token="${esc(c.id)}"><input type="password" name="token" autocomplete="off" placeholder="${c.signedIn ? "Paste a new token to replace it" : "Paste its token"}" aria-label="Token"><button class="btn pri sm" type="submit">Save token</button></form>`
         + `<small class="muted">It stays encrypted on this computer, with its key in this computer's credential store. Vello never shows it again.</small>`;
     }
     const acts = [];
     if (browserSignIn(c)) acts.push(c.signedIn ? `<button class="btn sm" data-signout="${esc(c.id)}" data-did="Signed out of ${esc(c.name)}.">Sign out</button>` : `<button class="btn pri sm" data-signin="${esc(c.id)}">Sign in</button>`);
+    else if (isComposio(c) && c.signedIn) acts.push(`<button class="btn sm" data-check="${esc(c.id)}">Check</button>`, `<button class="btn sm" data-signout="${esc(c.id)}" data-did="Forgot ${esc(c.name)}'s API key.">Forget key</button>`);
     else if (takesToken(c) && c.signedIn) acts.push(`<button class="btn sm" data-signout="${esc(c.id)}" data-did="Forgot ${esc(c.name)}'s token.">Forget token</button>`);
     else if (c.kind === "claude-account" && (c.status === "needsSignIn" || c.status === "failed")) acts.push(`<button class="btn sm" data-claude-open>Open claude.ai connectors</button>`);
     acts.push(`<button class="btn sm" data-enable="${esc(c.id)}" data-on="${c.enabled === false ? "1" : "0"}">${c.enabled === false ? "Turn on" : "Turn off"}</button>`);
@@ -163,7 +182,22 @@ const CONNECTORS = (() => {
       act(b, invoke({ cmd: "connectorRemove", id: b.dataset.remove }), `Removed ${name}. Bots that had it lose it; add it again any time.`).then(async () => { state = (await invoke({ cmd: "botsState" })).result || state; });
     });
     pane.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => act(b, invoke({ cmd: "connectorSignOut", id: b.dataset.signout }), b.dataset.did));
-    pane.querySelectorAll("[data-add-catalog]").forEach((b) => b.onclick = () => act(b, invoke({ cmd: "connectorAdd", catalog: b.dataset.addCatalog }), `Added ${b.dataset.name}. Give it to a bot in its row.`));
+    pane.querySelectorAll("[data-add-catalog]").forEach((b) => b.onclick = () => {
+      const entry = ((catalog && catalog.apps) || []).find((a) => a.id === b.dataset.addCatalog) || {};
+      // A token app (Composio) opens straight to its key field.
+      if (entry.auth === "token") openRow = entry.id;
+      act(b, invoke({ cmd: "connectorAdd", catalog: b.dataset.addCatalog }), entry.composio ? `Added ${b.dataset.name}. Paste your Composio API key in its row, then connect your apps.` : `Added ${b.dataset.name}. Give it to a bot in its row.`);
+    });
+    pane.querySelectorAll("[data-composio-keys]").forEach((a) => a.onclick = async (e) => { e.preventDefault(); const r = await invoke({ cmd: "openLink", url: COMPOSIO_KEYS }); if (!r.ok) { note = r.error; draw(result); } });
+    pane.querySelectorAll("form[data-composio-link]").forEach((f) => f.onsubmit = async (e) => {
+      e.preventDefault();
+      const toolkit = String(new FormData(f).get("toolkit") || "").trim();
+      if (!toolkit) return;
+      f.querySelector("button").disabled = true;
+      const a = await invoke({ cmd: "connectorComposioLink", id: f.dataset.composioLink, toolkit });
+      note = a.ok ? `Opened Composio's page to connect ${appWords(a.result.toolkit)}. Approve it there, then press Check. If it didn't open: ${a.result.url}` : a.error;
+      render();
+    });
     pane.querySelectorAll("[data-signin]").forEach((b) => b.onclick = async () => {
       b.disabled = true; b.textContent = "Signing in…";
       const a = await invoke({ cmd: "connectorSignIn", id: b.dataset.signin });
@@ -183,7 +217,7 @@ const CONNECTORS = (() => {
       const value = String(new FormData(f).get("token") || "");
       if (!value) return;
       const name = (list.find((c) => c.id === f.dataset.token) || {}).name || "the app";
-      act(f.querySelector("button"), invoke({ cmd: "connectorSecret", id: f.dataset.token, value }), `Saved ${name}'s token.`);
+      act(f.querySelector("button"), invoke({ cmd: "connectorSecret", id: f.dataset.token, value }), f.dataset.composio ? `Saved your Composio key. Connect an app below, then give Composio to a bot.` : `Saved ${name}'s token.`);
     });
     pane.querySelectorAll("select[data-botapp]").forEach((s) => s.onchange = async () => {
       await invoke({ cmd: "botApp", bot: s.dataset.botapp, app: s.dataset.app, level: s.value });

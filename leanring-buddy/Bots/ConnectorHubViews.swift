@@ -23,6 +23,7 @@ struct HubAppDetails: View {
     @Binding var note: String?
     @ObservedObject private var health = ConnectorHealth.shared
     @State private var pastedToken = ""
+    @State private var composioAppToConnect = ""
     @State private var working = false
     @State private var confirmsRemove = false
 
@@ -33,7 +34,10 @@ struct HubAppDetails: View {
             line("Last worked", record.lastWorked.map { ConnectorListing.workedAgo($0).replacingOccurrences(of: "worked ", with: "") } ?? "Not seen connected yet")
             line("Used by", users.isEmpty ? "No bot yet. Give it to a bot in the bot's settings." :
                     users.map { "\($0.name) (\(HubAccessLevel(saved: $0.appLevels?[record.id]).label.lowercased()))" }.joined(separator: ", "))
-            if record.takesPastedToken {
+            if record.isComposio {
+                line("Apps connected", ComposioWords.connectedLine(record.composioConnectedApps, hasKey: record.signedIn))
+                composioKeyAndApps
+            } else if record.takesPastedToken {
                 HStack(spacing: 8) {
                     SecureField(record.signedIn ? "Paste a new token to replace it" : "Paste its token", text: $pastedToken)
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
@@ -60,6 +64,11 @@ struct HubAppDetails: View {
                         }
                         .buttonStyle(.theo(.primary, .small))
                     }
+                } else if record.isComposio, record.signedIn {
+                    Button("Check") { act("Checked \(record.name).") { try await ConnectorHub.check(record.id) } }
+                        .buttonStyle(.theo(.secondary, .small))
+                    Button("Forget key") { act("Forgot your Composio key.") { try await ConnectorHub.signOut(record.id) } }
+                        .buttonStyle(.theo(.secondary, .small))
                 } else if record.takesPastedToken, record.signedIn {
                     Button("Forget token") { act("Forgot \(record.name)'s token.") { try await ConnectorHub.signOut(record.id) } }
                         .buttonStyle(.theo(.secondary, .small))
@@ -89,7 +98,63 @@ struct HubAppDetails: View {
         }
     }
 
+    /// Composio: its API key, where to get one, and connecting an app (Composio's page opens in the browser; approve there).
+    @ViewBuilder private var composioKeyAndApps: some View {
+        HStack(spacing: 8) {
+            SecureField(record.signedIn ? "Paste a new API key to replace it" : "Paste your Composio API key", text: $pastedToken)
+                .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+            Button(working ? "Saving…" : "Save key") { saveToken() }
+                .buttonStyle(.theo(.primary, .small)).disabled(working || pastedToken.isEmpty)
+        }
+        .padding(.top, 2)
+        HStack(spacing: 6) {
+            Text("Get a key in your Composio dashboard (Settings, API keys); the free plan is enough to start. It stays encrypted on this Mac, with its key in your Keychain.")
+                .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
+            Button("Open Composio") { if let url = URL(string: ComposioWords.keysAddress) { TheoOpen.url(url) } }
+                .buttonStyle(.theo(.ghost, .small)).fixedSize()
+        }
+        if record.signedIn {
+            Text("Connect an app").font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary).padding(.top, 6)
+            HStack(spacing: 8) {
+                TextField("gmail, slack, github, googlecalendar, notion…", text: $composioAppToConnect)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                    .onSubmit { connectComposioApp() }
+                Menu("Pick") {
+                    ForEach(ComposioWords.suggestedApps, id: \.self) { slug in
+                        Button(ComposioWords.appName(slug)) { composioAppToConnect = slug }
+                    }
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                Button(working ? "Opening…" : "Connect") { connectComposioApp() }
+                    .buttonStyle(.theo(.secondary, .small))
+                    .disabled(working || composioAppToConnect.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text("Opens Composio's page in your browser: approve it there, then press Check. Every bot you give Composio can then use that app, on this Mac and anywhere else with the same key. A bot can also hand you this link in its chat.")
+                .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func connectComposioApp() {
+        let typed = composioAppToConnect.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty, !working else { return }
+        working = true
+        Task {
+            do {
+                let link = try await ConnectorHub.composioLink(record.id, app: typed)
+                TheoOpen.url(link.url)
+                note = "Opened Composio's page to connect \(ComposioWords.appName(link.toolkit)). Approve it there, then press Check."
+                composioAppToConnect = ""
+            } catch {
+                note = error.localizedDescription
+            }
+            working = false
+        }
+    }
+
     private var reachedWords: String {
+        if record.isComposio {
+            return "Composio, with your Composio API key: every app you connect there, for the account \"\(record.composioUserID ?? ComposioWords.defaultUserID)\""
+        }
         switch record.kind {
         case .claudeAccount: return "Through your Claude account (\(record.server ?? record.name)), so it needs Claude Code"
         case .remote:
@@ -109,7 +174,7 @@ struct HubAppDetails: View {
     private func saveToken() {
         let token = pastedToken
         pastedToken = ""
-        act("Saved \(record.name)'s token.") {
+        act(record.isComposio ? "Saved your Composio key. Connect an app below, then give Composio to a bot." : "Saved \(record.name)'s token.") {
             try await ConnectorHub.savePastedToken(record.id, token: token)
             try? await ConnectorHub.check(record.id)
         }
@@ -221,7 +286,8 @@ struct AddConnectorSection: View {
         Task {
             do {
                 try await ConnectorHub.addFromCatalog(entry.id)
-                note = "Added \(entry.name). Give it to a bot in the bot's settings."
+                note = entry.isComposio ? "Added \(entry.name). Open its row above, paste your Composio API key, then connect your apps."
+                    : "Added \(entry.name). Give it to a bot in the bot's settings."
             } catch {
                 note = error.localizedDescription
             }
