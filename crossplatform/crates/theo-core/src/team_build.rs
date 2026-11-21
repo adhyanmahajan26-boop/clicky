@@ -1,4 +1,4 @@
-//! The CEO makes new bots and categories when the owner asks for them in chat (the Mac's ClickyCore `TeamBuildOrder` and
+//! The CEO makes new bots and categories, picks their managers and moves bots between them, when the owner asks in chat (the Mac's ClickyCore `TeamBuildOrder` and
 //! `BotsStore.buildTeamFromChat`). The CEO writes one ```team block with JSON; Theo takes it out of the shown answer, checks
 //! the owner's own words asked for new bots or categories, and makes them as the New bot dialog and New category row do.
 
@@ -23,6 +23,12 @@ const LONGEST_INSTRUCTIONS: usize = 4000;
 pub struct NewCategory {
     pub name: String,
     pub purpose: Option<String>,
+    /// The bot who manages it, by name, or "none" for everyone reporting to the CEO. None: left as it is.
+    pub manager: Option<String>,
+}
+
+impl NewCategory {
+    pub fn wants_no_manager(&self) -> bool { self.manager.as_deref().map(|m| same_name(m, "none")).unwrap_or(false) }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -32,7 +38,7 @@ pub struct NewBot {
     pub does: String,
     /// Its own instructions. Empty: Theo writes "You are <name>. <does>".
     pub instructions: String,
-    /// The category it joins, by name. None: it sits under "Other bots".
+    /// The category it joins, by name (a bot that already exists is moved there). None: it sits under "Other bots".
     pub category: Option<String>,
 }
 
@@ -49,7 +55,7 @@ impl TeamBuildOrder {
 /// What the CEO is told (ClickyCore `BotProtocol.teamBuildHowTo`).
 pub fn how_to(owner: &str) -> String {
     format!(
-        "New bots and categories: you can make them yourself. When {owner} asks for a new bot, agent, team or category, don't tell them to use a button and don't write files for it: say in a line what you'll make, then add one ```team block with JSON {{\"categories\": [{{\"name\": \"Marketing\", \"purpose\": \"one line\"}}], \"bots\": [{{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}}]}}. Either list can be left out. A bot's category is made if it doesn't exist yet, and a bot that already exists is filed into it instead of made twice. At most {MOST_BOTS} bots and {MOST_CATEGORIES} categories at a time. Vello makes them and says so in the chat; never say they're made before that line shows. Only when {owner} asked for it in their own words."
+        "Bots, categories and managers: you can set them up yourself. When {owner} asks for a new bot, agent, team or category, a category's manager, or a bot moved to another team, don't tell them to use a button and don't write files for it: say in a line what you'll do, then add one ```team block with JSON {{\"categories\": [{{\"name\": \"Marketing\", \"purpose\": \"one line\", \"manager\": \"Ada\"}}], \"bots\": [{{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}}]}}. Either list can be left out. A category or bot that already exists is used, not made twice: list an existing category to give it a manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot as manager by itself, unless it's set to \"none\". At most {MOST_BOTS} bots and {MOST_CATEGORIES} categories at a time. Vello does it and says so in the chat; never say it's done before that line shows. Only when {owner} asked for it in their own words."
     )
 }
 
@@ -83,7 +89,7 @@ pub fn parse(body: &str) -> Option<TeamBuildOrder> {
     for entry in object.get("categories").and_then(|c| c.as_array()).into_iter().flatten() {
         let Some(name) = cleaned(entry.get("name"), LONGEST_CATEGORY_NAME) else { continue };
         if order.categories.iter().any(|c| same_name(&c.name, &name)) { continue; }
-        order.categories.push(NewCategory { name, purpose: cleaned(entry.get("purpose"), LONGEST_DOES) });
+        order.categories.push(NewCategory { name, purpose: cleaned(entry.get("purpose"), LONGEST_DOES), manager: cleaned(entry.get("manager"), LONGEST_BOT_NAME) });
     }
     for entry in object.get("bots").and_then(|b| b.as_array()).into_iter().flatten() {
         let Some(name) = cleaned(entry.get("name"), LONGEST_BOT_NAME) else { continue };
@@ -97,7 +103,7 @@ pub fn parse(body: &str) -> Option<TeamBuildOrder> {
     let wanted: Vec<String> = order.bots.iter().filter_map(|b| b.category.clone()).collect();
     for category in wanted {
         if !order.categories.iter().any(|c| same_name(&c.name, &category)) {
-            order.categories.push(NewCategory { name: category, purpose: None });
+            order.categories.push(NewCategory { name: category, purpose: None, manager: None });
         }
     }
     order.categories.truncate(MOST_CATEGORIES);
@@ -120,6 +126,12 @@ pub fn owner_asked(text: &str) -> bool {
             format!(r"\b(make|makes|making|made|create|creates|creating|add|adding|set\s+up|setup|build|start|spin\s+up|hire|need|want|get|give\s+me)\b[^.?!\n]{{0,60}}\b{things}\b"),
             format!(r"\b(new|another|more|extra)\s+([a-z-]+\s+){{0,3}}{things}\b"),
             r"\b(a|an)\s+([a-z-]+\s+){0,3}(bot|agent|assistant)\s+(that|which|who|for|to)\b".to_string(),
+            // "make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the team"
+            r"\b(make|set|put|assign|appoint|promote|let|turn|have|change|switch)\b[^.?!\n]{0,60}\b(manager|lead|head|boss|in\s+charge)\b".to_string(),
+            r"\b(should|to|will|can)\s+(manage|lead|head|run)\b".to_string(),
+            r"\bno\s+(manager|lead|boss)\b".to_string(),
+            // "move Penny to Sales", "put Rex into Growth"
+            r"\b(move|put|file|shift|transfer)\b[^.?!\n]{0,60}\b(to|into|under|in)\b".to_string(),
         ]
         .iter()
         .map(|p| Regex::new(p).unwrap())
@@ -146,18 +158,28 @@ pub fn may_build(bot: &Bot) -> bool { bot.primary }
 pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder, room: &str, from_owner: bool) {
     let asked = from_owner && may_build(maker) && h.recent_owner_words(room).as_deref().map(owner_asked).unwrap_or(false);
     if !asked {
-        h.post(ChatMessage::note(format!("{} wrote new bots or categories, but they weren't asked for in your own words here, so Vello didn't make them. Ask for them yourself if you want them.", maker.name)), room);
+        h.post(ChatMessage::note(format!("{} wrote changes to the bots or categories, but they weren't asked for in your own words here, so Vello didn't make them. Ask for them yourself if you want them.", maker.name)), room);
         return;
     }
     let mut made_categories: Vec<String> = vec![];
     let mut made_bots: Vec<String> = vec![];
     let mut filed: Vec<String> = vec![];
+    let mut manager_lines: Vec<String> = vec![];
+
+    // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the job)
+    // is said in the note too, and the CEO doesn't think the category has none.
+    let managers_before: HashMap<String, Option<String>> = h.layout().sections.iter().map(|s| (s.id.clone(), s.leader_id.clone())).collect();
+    let mut managed_by_order: Vec<String> = vec![];
 
     // Categories first, so the bots can join them. One with the same name is used rather than made twice.
     let mut category_ids: HashMap<String, String> = HashMap::new();
     for wanted in &order.categories {
         if let Some(existing) = h.layout().sections.iter().find(|s| same_name(&s.name, &wanted.name)) {
             category_ids.insert(wanted.name.to_lowercase(), existing.id.clone());
+            if let Some(purpose) = wanted.purpose.clone().filter(|p| Some(p) != existing.purpose.as_ref()) {
+                let id = existing.id.clone();
+                h.change_layout(|layout, _| { if let Some(s) = layout.section_mut(&id) { s.purpose = Some(purpose) } });
+            }
             continue;
         }
         let purpose = wanted.purpose.clone();
@@ -183,10 +205,12 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
         let category_id = wanted.category.as_ref().and_then(|c| category_ids.get(&c.to_lowercase()).cloned());
         let in_words = wanted.category.as_ref().map(|c| format!(" in {c}")).unwrap_or_default();
         if let Some(existing) = h.bots().into_iter().find(|b| same_name(&b.name, &wanted.name)) {
-            // Already there: filed into its category rather than made a second time. The CEO stays on top.
-            if let Some(id) = category_id.as_deref().filter(|_| !existing.primary) {
-                h.change_layout(|layout, bots| { if let Some(s) = layout.section_mut(id) { s.add_member(&existing.id, bots) } });
-                filed.push(format!("{} was already here, so it's now{in_words}", existing.name));
+            // Already there: moved into its category rather than made a second time. The CEO stays on top.
+            let already_in = category_id.as_deref().and_then(|id| h.layout().section(id).map(|s| s.contains(&existing.id))).unwrap_or(true);
+            if let Some(id) = category_id.as_deref().filter(|_| !existing.primary && !already_in) {
+                h.change_layout(|layout, bots| layout.move_bot(&existing.id, Some(id), bots));
+                let saved = h.layout().section(id).map(|s| s.name.clone()).unwrap_or_default();
+                filed.push(format!("{} moved to {saved}", existing.name));
             }
             continue;
         }
@@ -198,6 +222,50 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
         made_bots.push(format!("{}{in_words}", bot.name));
     }
 
+    // Managers last, so a bot made in this same answer can be one.
+    for wanted in order.categories.iter().filter(|c| c.manager.is_some()) {
+        let Some(id) = category_ids.get(&wanted.name.to_lowercase()).cloned() else { continue };
+        let Some(team) = h.layout().section(&id).cloned() else { continue };
+        managed_by_order.push(id.clone());
+        if wanted.wants_no_manager() {
+            if team.leader_id.is_some() || team.wants_manager != Some(false) {
+                h.change_layout(|layout, bots| { if let Some(s) = layout.section_mut(&id) { s.set_has_manager(false, bots) } });
+                manager_lines.push(format!("{} has no manager now, so its bots report to {}", team.name, maker.name));
+            }
+            continue;
+        }
+        let name = wanted.manager.clone().unwrap_or_default();
+        let Some(manager) = h.bots().into_iter().find(|b| same_name(&b.name, &name) && !b.primary) else {
+            manager_lines.push(format!("Vello couldn't make {name} the manager of {}: there's no bot by that name that can manage a team", team.name));
+            continue;
+        };
+        // Already the manager: said anyway when it only became one in this answer (a new category's first bot takes the job as it
+        // joins, before this loop), so the note always names the manager it was asked for.
+        if team.leader_id.as_deref() == Some(manager.id.as_str()) {
+            if managers_before.get(&id).and_then(|m| m.as_deref()) != Some(manager.id.as_str()) {
+                manager_lines.push(format!("{} manages {} now", manager.name, team.name));
+            }
+            continue;
+        }
+        h.change_layout(|layout, bots| {
+            if let Some(s) = layout.section_mut(&id) {
+                s.add_member(&manager.id, bots);
+                s.set_leader(Some(manager.id.clone()), bots);
+            }
+        });
+        manager_lines.push(format!("{} manages {} now", manager.name, team.name));
+    }
+
+    // A manager the block didn't name but the category got anyway: a new category's first bot, or the next bot in one whose
+    // manager moved out.
+    let bots_now = h.bots();
+    for section in h.layout().sections.iter().filter(|s| !managed_by_order.contains(&s.id)) {
+        let Some(leader) = section.leader_id.as_deref() else { continue };
+        if managers_before.get(&section.id).and_then(|m| m.as_deref()) == Some(leader) { continue; }
+        let Some(manager) = bots_now.iter().find(|b| b.id == leader) else { continue };
+        manager_lines.push(format!("{} manages {} now, as its first bot (ask for another manager, or none, if you'd like)", manager.name, section.name));
+    }
+
     let mut sentences: Vec<String> = vec![];
     if !made_bots.is_empty() {
         sentences.push(format!("Vello made {} {}.", if made_bots.len() == 1 { "the bot" } else { "the bots" }, listed_in_words(&made_bots)));
@@ -206,13 +274,20 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
         sentences.push(format!("New {} {}.", if made_categories.len() == 1 { "category:" } else { "categories:" }, listed_in_words(&made_categories)));
     }
     sentences.extend(filed.into_iter().map(|f| format!("{f}.")));
+    sentences.extend(manager_lines.into_iter().map(|f| format!("{f}.")));
     if sentences.is_empty() {
-        sentences.push(format!("Everything {} asked for was already here, so Vello didn't make anything new.", maker.name));
+        sentences.push(format!("Everything {} asked for was already set up that way, so nothing changed.", maker.name));
     } else if !made_bots.is_empty() {
         sentences.push("They're in the sidebar, and each one's settings can change its brain, model and apps.".into());
     }
-    h.post(ChatMessage::note(sentences.join(" ")), room);
+    // Marked as a team note so the CEO reads it at the start of its next turn (`take_waiting_reports`) and knows what was made.
+    let mut note = ChatMessage::note(sentences.join(" "));
+    note.card = Some(TEAM_NOTE_CARD.into());
+    h.post(note, room);
 }
+
+/// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
+pub const TEAM_NOTE_CARD: &str = "team-note";
 
 #[cfg(test)]
 mod tests {
@@ -224,7 +299,7 @@ mod tests {
         let (shown, order) = extract(answer);
         assert_eq!(shown, "I'll set up a Marketing team with a writer.");
         let order = order.unwrap();
-        assert_eq!(order.categories, vec![NewCategory { name: "Marketing".into(), purpose: Some("Launch posts".into()) }]);
+        assert_eq!(order.categories, vec![NewCategory { name: "Marketing".into(), purpose: Some("Launch posts".into()), manager: None }]);
         assert_eq!(order.bots, vec![NewBot { name: "Ada".into(), does: "Writes launch posts".into(), instructions: String::new(), category: Some("Marketing".into()) }]);
     }
 
@@ -268,6 +343,18 @@ mod tests {
         }
         for words in ["what did the team do today?", "summarise my inbox", "write me a launch post"] {
             assert!(!owner_asked(words), "{words}");
+        }
+    }
+
+    #[test]
+    fn a_category_can_name_its_manager() {
+        let order = parse(r#"{"categories": [{"name": "Growth", "manager": "Penny"}, {"name": "Sales", "manager": "None"}]}"#).unwrap();
+        assert_eq!(order.categories[0].manager.as_deref(), Some("Penny"));
+        assert!(!order.categories[0].wants_no_manager());
+        assert!(order.categories[1].wants_no_manager());
+        for words in ["make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the marketing team",
+                      "Growth needs no manager", "move Penny to Sales", "assign a manager to every team"] {
+            assert!(owner_asked(words), "{words}");
         }
     }
 

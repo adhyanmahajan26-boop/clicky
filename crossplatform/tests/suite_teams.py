@@ -301,3 +301,72 @@ def add_cases(S):
         T.fake("ok")
         ok = idle and not made and team is None and bool(refused)
         return ok, {"settled": idle, "seconds": secs, "bot_made": bool(made), "category_made": team is not None, "said_so": refused[-1:]}
+
+    @test("TM09", "Asked in chat, Vello makes a bot a category's manager, moves another bot there, and can take the manager away", "teams")
+    def tm09():
+        n = T.nonce()
+        scout, forge = bid("Scout"), bid("Forge")
+        name = "Crew %s" % n
+        tid = P({"cmd": "teamAdd", "name": name, "members": [scout]})["result"]["id"]
+        block = json.dumps({"categories": [{"name": name, "manager": "Forge"}], "bots": [{"name": "Archivist", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Forge will run %s, and Archivist joins it.\n```team\n%s\n```" % (name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make Forge the manager of %s and move Archivist to %s." % (name, name))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next(t for t in P({"cmd": "teams"})["result"] if t["id"] == tid)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        managed = team["leader"] == forge and forge in team["members"]
+        moved = bid("Archivist") in team["members"]
+        block2 = json.dumps({"categories": [{"name": name, "manager": "none"}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Done.\n```team\n%s\n```" % block2}, {"reply": "ok"}])
+        T.say("theo", "%s needs no manager." % name)
+        idle2, _ = T.wait_idle(seconds=90, quiet=3)
+        after = next(t for t in P({"cmd": "teams"})["result"] if t["id"] == tid)
+        P({"cmd": "teamDelete", "id": tid})
+        T.fake("ok")
+        checks = {"forge_manages": managed, "archivist_moved": moved, "note_says_manager": any("Forge manages %s now" % name in t for t in notes),
+                  "note_says_moved": any("Archivist moved to %s" % name in t for t in notes),
+                  "no_manager_after": after["leader"] is None and not after["hasManager"]}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-2:]}
+
+    @test("TM10", "A new category's first bot becoming its manager is said in Vello's note, and the CEO reads that note at its next turn", "teams")
+    def tm10():
+        n = T.nonce()
+        scout = bid("Scout")
+        name = "Desk %s" % n
+        block = json.dumps({"categories": [{"name": name}], "bots": [{"name": "Scout", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Scout goes to %s.\n```team\n%s\n```" % (name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a category called %s and move Scout to it." % name)
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == name), None)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        mark = T.calls_mark()
+        T.say("theo", "What does %s look like now?" % name); idle2, _ = T.wait_idle(seconds=60)
+        read = theo_prompts(mark, "Vello's note on the team changes")
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        T.fake("ok")
+        checks = {"scout_manages": team is not None and team["leader"] == scout,
+                  "note_says_first_bot_manages": any("Scout manages %s now, as its first bot" % name in t for t in notes),
+                  "ceo_reads_the_note": bool(read) and ("Scout manages %s now" % name) in read[-1]}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-1:]}
+
+    @test("TM11", "A new category's first bot named as its manager in the same answer is still named in Vello's note", "teams")
+    def tm11():
+        n = T.nonce()
+        name, bot = "Leads %s" % n, "Rex%s" % n
+        block = json.dumps({"categories": [{"name": name, "manager": bot}], "bots": [{"name": bot, "does": "Finds leads", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "%s will run %s.\n```team\n%s\n```" % (bot, name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a category called %s with a bot named %s who finds leads." % (name, bot))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == name), None)
+        made = [b for b in T.state()["bots"] if b["name"] == bot]
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        for b in made: P({"cmd": "botDelete", "id": b["id"]})
+        T.fake("ok")
+        checks = {"manages": team is not None and bool(made) and team["leader"] == made[0]["id"],
+                  "note_names_manager": any("%s manages %s now" % (bot, name) in t for t in notes),
+                  "said_once": sum(t.count("%s manages %s now" % (bot, name)) for t in notes) == 1}
+        return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "notes": notes[-1:]}

@@ -283,11 +283,15 @@ impl Harness {
             let Some(record) = s.conversations.get_mut(&bot.id) else { return (vec![], vec![]) };
             let seen = record.seen.get(&bot.id).copied().unwrap_or(0).min(record.messages.len());
             let waiting: Vec<ChatMessage> = record.messages[seen..].iter().filter(|m| {
-                !m.text.is_empty() && m.author != OWNER_AUTHOR && m.author != bot.id && m.author != NOTE_AUTHOR && m.author != ROUTINE_AUTHOR && m.card.is_none()
+                !m.text.is_empty() && m.author != OWNER_AUTHOR && m.author != bot.id && m.author != ROUTINE_AUTHOR
+                    && (m.card.is_none() && m.author != NOTE_AUTHOR || m.card.as_deref() == Some(crate::team_build::TEAM_NOTE_CARD))
             }).cloned().collect();
             let waiting: Vec<ChatMessage> = waiting[waiting.len().saturating_sub(6)..].to_vec();
             record.seen.insert(bot.id.clone(), record.messages.len());
-            let lines: Vec<String> = waiting.iter().map(|m| format!("{}: {}", s.bots.iter().find(|b| b.id == m.author).map(|b| b.name.clone()).unwrap_or(m.author.clone()), m.text)).collect();
+            let lines: Vec<String> = waiting.iter().map(|m| {
+                if m.author == NOTE_AUTHOR { return format!("Vello's note on the team changes: {}", m.text); }
+                format!("{}: {}", s.bots.iter().find(|b| b.id == m.author).map(|b| b.name.clone()).unwrap_or(m.author.clone()), m.text)
+            }).collect();
             (lines, waiting.iter().map(|m| m.id.clone()).collect())
         });
         (teams::waiting_reports_note(&lines, &self.owner()), ids)

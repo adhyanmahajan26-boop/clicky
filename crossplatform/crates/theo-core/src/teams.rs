@@ -282,7 +282,7 @@ pub fn report_prompt(role: &str, purpose: Option<&str>, reader: &str, owner: &st
 /// The note at the top of the CEO's turn with what came in since it last spoke. Empty when nothing did.
 pub fn waiting_reports_note(lines: &[String], owner: &str) -> String {
     if lines.is_empty() { return String::new(); }
-    format!("(What came in since you last spoke, reports from your teams and any voice call with {owner}:\n\n{}\n\nUse it if it matters; don't recite it.)\n\n", lines.join("\n\n"))
+    format!("(What came in since you last spoke, reports from your teams, what Vello changed in the teams, and any voice call with {owner}:\n\n{}\n\nUse it if it matters; don't recite it.)\n\n", lines.join("\n\n"))
 }
 
 pub const REPORT_MARK: &str = "\u{1F4CB}";

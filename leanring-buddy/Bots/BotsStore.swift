@@ -2911,13 +2911,17 @@ extension BotsStore {
         var record = conversation(bot.id)
         let seen = record.seen[bot.id] ?? 0
         let waiting = record.messages.dropFirst(min(seen, record.messages.count)).filter { message in
-            !message.text.isEmpty && message.author != "user" && message.author != bot.id && message.author != Self.noteAuthor && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
+            !message.text.isEmpty && message.author != "user" && message.author != bot.id && (message.author != Self.noteAuthor || message.card == Self.teamNoteCard) && (message.author != "routine" || message.text.hasPrefix(Self.callMark))
         }.suffix(6)
         record.seen[bot.id] = record.messages.count
         conversations[bot.id] = record
         guard !waiting.isEmpty else { return "" }
-        let lines = waiting.map { $0.author == "routine" ? $0.text : "\(self.bot($0.author)?.name ?? $0.author): \($0.text)" }.joined(separator: "\n\n")
-        return "(What came in since you last spoke, reports from your teams and any voice call with \(BotPrompts.ownerName):\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
+        let lines = waiting.map { message -> String in
+            if message.author == "routine" { return message.text }
+            if message.author == Self.noteAuthor { return "Vello's note on the team changes: \(message.text)" }
+            return "\(self.bot(message.author)?.name ?? message.author): \(message.text)"
+        }.joined(separator: "\n\n")
+        return "(What came in since you last spoke, reports from your teams, what Vello changed in the teams, and any voice call with \(BotPrompts.ownerName):\n\n\(lines)\n\nUse it if it matters; don't recite it.)\n\n"
     }
 }
 
