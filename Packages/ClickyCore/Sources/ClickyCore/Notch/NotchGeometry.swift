@@ -143,7 +143,7 @@ public enum NotchGeometry {
     }
 
     // The bot chips that are always on the collapsed pill: one per lane with bots in it
-    // (needs you, failed, working), a coloured dot and a number.
+    // (needs you, failed, working, ready), a coloured dot and a number.
     public static let botChipWidth: CGFloat = 24
     public static let botChipSpacing: CGFloat = 3
     /// Between the logo and the chips beside a real notch, and between the status and the chips on a virtual one.
@@ -153,6 +153,7 @@ public enum NotchGeometry {
 
     /// The width of `chipCount` chips side by side (0 for none).
     public static func botChipsWidth(chipCount: Int) -> CGFloat {
+        // Every lane but done has a chip.
         let visibleChipCount = min(max(0, chipCount), NotchBotLane.allCases.count - 1)
         guard visibleChipCount > 0 else { return 0 }
         return CGFloat(visibleChipCount) * botChipWidth + CGFloat(visibleChipCount - 1) * botChipSpacing

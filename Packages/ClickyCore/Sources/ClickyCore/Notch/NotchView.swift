@@ -10,7 +10,7 @@
 //  (Cancel, Open review, the Agents window, the Code mode switch).
 //
 //  The bots are always on it: a chip per lane (yellow needs you, red failed,
-//  green working) sits beside the logo whenever any bot is in one, and the
+//  green working, grey ready) sits beside the logo whenever any bot is on, and the
 //  edge turns red or yellow while a bot has failed or needs you. Expanded,
 //  the bots come first, most urgent first: face, name, one line, one button.
 //
@@ -350,7 +350,7 @@ public struct NotchView: View {
         }
     }
 
-    /// The bot chips while any bot is working, failed or needs you; otherwise how many helpers are running.
+    /// The bot chips while any bot is on; otherwise how many helpers are running.
     @ViewBuilder private var headerTrailing: some View {
         if content.botTally.isEmpty {
             runningSummaryLabel
@@ -359,7 +359,7 @@ public struct NotchView: View {
         }
     }
 
-    /// The bots, most urgent first: needs you, failed, working, then one that just finished.
+    /// The bots, most urgent first: needs you, failed, working, then one that just finished, then the ready ones.
     private var botsSection: some View {
         VStack(alignment: .leading, spacing: NotchGeometry.botRowSpacing) {
             ForEach(content.botLines) { botLine in
@@ -592,6 +592,7 @@ private struct NotchBotRowView: View {
         case .failed: return "Failed"
         case .working: return "Working"
         case .done: return "Done"
+        case .ready: return "Ready"
         }
     }
 
@@ -616,7 +617,7 @@ private struct NotchBotRowView: View {
                         .lineLimit(1)
                     Text(laneWord)
                         .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundColor(laneColor.opacity(botLine.lane == .done ? 0.6 : 1))
+                        .foregroundColor(laneColor.opacity(botLine.lane == .done || botLine.lane == .ready ? 0.6 : 1))
                         .lineLimit(1)
                         .fixedSize()
                 }

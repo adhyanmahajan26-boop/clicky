@@ -365,10 +365,13 @@ struct NotchBotBoardTests {
         #expect(NotchBotLane.lane(forPixelState: "failed") == .failed)
         #expect(NotchBotLane.lane(forPixelState: "working") == .working)
         #expect(NotchBotLane.lane(forPixelState: "thinking") == .working)
+        #expect(NotchBotLane.lane(forPixelState: "talking") == .working)
         #expect(NotchBotLane.lane(forPixelState: "done") == .done)
-        for quiet in ["awake", "idle", "off", "talking", "listening"] {
-            #expect(NotchBotLane.lane(forPixelState: quiet) == nil)
+        for quiet in ["awake", "idle", "listening"] {
+            #expect(NotchBotLane.lane(forPixelState: quiet) == .ready)
         }
+        // Only a bot that's off stays off the notch.
+        #expect(NotchBotLane.lane(forPixelState: "off") == nil)
         // Green working, yellow needs you, red failed: the faces' own colours.
         #expect(NotchBotLane.working.hex == PixelState.working.hex)
         #expect(NotchBotLane.needsYou.hex == PixelState.needs.hex)
@@ -401,6 +404,30 @@ struct NotchBotBoardTests {
         #expect(NotchBots.collapsedStatus(board: board) == "")
     }
 
+    @Test func readyBotsAreOnTheNotchWhenAllAreQuiet() {
+        let board = NotchBots.board(from: [Self.line("builder", .ready), Self.line("planner", .ready), Self.line("researcher", .ready)])
+        #expect(board.lines.map(\.botID) == ["builder", "planner", "researcher"])
+        #expect(board.tally == NotchBotTally(ready: 3))
+        #expect(!board.tally.isEmpty)
+        #expect(board.tally.isQuiet)
+        #expect(board.tally.chips.map(\.lane) == [.ready])
+        #expect(board.tally.spokenText == "3 ready")
+        #expect(NotchBots.collapsedStatus(board: board) == "3 bots ready")
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .ready)])) == "Builder is ready")
+    }
+
+    @Test func readyBotsComeLastAndAreNotCountedAsMore() {
+        let board = NotchBots.board(from: [Self.line("a", .ready), Self.line("b", .ready), Self.line("c", .working), Self.line("d", .done),
+                                           Self.line("e", .ready), Self.line("f", .needsYou)])
+        #expect(board.lines.map(\.botID) == ["f", "c", "d", "a"])
+        #expect(board.hiddenCount == 0)
+        #expect(board.tally.chips.map(\.lane) == [.needsYou, .working, .ready])
+        #expect(board.tally.ready == 3)
+        // Something going on wins over the ready count.
+        #expect(NotchBots.collapsedStatus(board: board) == "F needs you")
+        #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("a", .ready), Self.line("c", .working)])) == "C is working")
+    }
+
     @Test func collapsedWordsNameTheMostUrgentBot() {
         #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .working), Self.line("researcher", .needsYou)])) == "Researcher needs you")
         #expect(NotchBots.collapsedStatus(board: NotchBots.board(from: [Self.line("builder", .failed)])) == "Builder failed")
@@ -426,7 +453,7 @@ struct NotchBotBoardTests {
         let three = NotchGeometry.collapsedBodySize(layout: layout, botChipCount: 3)
         #expect(three.width - plain.width == NotchGeometry.botChipsWidth(chipCount: 3) + NotchGeometry.botChipsLeadingGap)
         #expect(NotchGeometry.botChipsWidth(chipCount: 0) == 0)
-        #expect(NotchGeometry.botChipsWidth(chipCount: 9) == NotchGeometry.botChipsWidth(chipCount: 3))
+        #expect(NotchGeometry.botChipsWidth(chipCount: 9) == NotchGeometry.botChipsWidth(chipCount: 4))
     }
 
     @Test func chipsWidenBothWingsOfARealNotchSoItStaysCentred() {
