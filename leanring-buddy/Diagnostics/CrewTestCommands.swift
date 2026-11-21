@@ -5,7 +5,7 @@
 //  Test-profile commands for the crew and Studio screens (TheoUIDriver only runs in the test profile):
 //  uiCrew {pointer: {x, y}} moves a stand-in pointer in window points (the real one never moves); {pointer: null} lets go.
 //  uiCrew {action: "state"} says what the driver is doing.
-//  uiStudio {action: on|off|state|assign|clear|panel, botID, screen, tile}.
+//  uiStudio {action: on|off|state|assign|clear|panel|wake, botID, screen, tile, anyway}.
 //  uiSeedDemo fills the test profile with a team and a chat showing each card.
 //  uiSetDefaults {key, value}: a test profile preference.
 //
@@ -114,13 +114,18 @@ enum CrewTestCommands {
             if let bot = command["botID"] as? String { controller.assign(botID: bot, to: tile) }
             if let name = command["botName"] as? String, let bot = BotsStore.shared.bots.first(where: { $0.name == name }) { controller.assign(botID: bot.id, to: tile) }
         case "clear": controller.clear(tile)
+        case "wake":
+            // What the panel's Wake (or Wake anyway, with `anyway: true`) does. It answers at once; ask `state` a moment later.
+            // Set `test.studio.pretendPlaying` first to test the refusal without making real screens.
+            let evenWhilePlaying = command["anyway"] as? Bool ?? false
+            Task { @MainActor in _ = await controller.wakeForWork(evenWhilePlaying: evenWhilePlaying) }
         default: break
         }
         var roster: [String: String] = [:]
         for (key, value) in controller.roster.bots { roster["\(key.screen).\(key.tile)"] = value }
         return ["available": StudioController.isAvailable, "canMakeScreens": StudioController.canMakeHiddenScreens, "model": StudioGate.currentModel, "on": controller.isOn, "enabled": controller.isEnabled,
                 "displays": controller.displayBounds(), "roster": roster, "thumbnails": controller.thumbnails.count,
-                "captureAllowed": controller.hasCapturePermission, "liveCapture": controller.liveCapture, "problem": controller.problem ?? "", "monitorCheck": controller.lastMonitorCheck,
+                "captureAllowed": controller.hasCapturePermission, "liveCapture": controller.liveCapture, "problem": controller.problem ?? "", "asleepForPlayback": controller.isAsleepForPlayback, "monitorCheck": controller.lastMonitorCheck,
                 "allScreens": NSScreen.screens.map { ["name": $0.localizedName, "x": $0.frame.minX, "y": $0.frame.minY, "w": $0.frame.width, "h": $0.frame.height] as [String: Any] },
                 "ownerScreens": NSScreen.ownerScreens.map(\.localizedName)] as [String: Any]
     }
