@@ -14,6 +14,17 @@ def add_cases(S):
         names = {v: k for k, v in S.IDS.items()}
         return [names.get(m["author"], m["author"]) for m in msgs if m["author"] not in ("user", "note", "routine") and m.get("text")]
 
+    def team_notes_after(start, count=1, seconds=60):
+        """Vello's notes in Theo's chat from message `start` on, once `count` team notes are there. The ```team block is carried
+        out after the reply is done, and making a squad (each bot saved, the brains checked) can outlast wait_idle's quiet
+        spell on a slow Windows runner, so this waits for the note itself rather than for an idle engine."""
+        def notes():
+            messages = T.chat("theo", 5000)[start:]
+            if sum(1 for m in messages if m.get("card") == "team-note") < count:
+                return None
+            return [m["text"] for m in messages if m["author"] == "note"]
+        return T.wait_until(notes, seconds=seconds) or [m["text"] for m in T.chat("theo", 5000)[start:] if m["author"] == "note"]
+
     def theo_prompts(mark, pattern):
         return [c["prompt"] for c in T.calls(mark) if "You are Vello" in (c.get("system") or "") + (c.get("prompt") or "") and pattern in (c.get("prompt") or "")]
 
@@ -380,19 +391,19 @@ def add_cases(S):
                             "bots": [{"name": boss, "does": "Runs the dig", "category": squad, "model": "Claude Opus 5.5"}] +
                                     [{"name": w, "does": "Digs", "category": squad, "model": "haiku"} for w in workers]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Setting up the squad.\n```team\n%s\n```" % block}, {"reply": "ok"}])
-        start = len(T.chat("theo", 400))
+        start = len(T.chat("theo", 5000))
         T.say("theo", "Make a Super Digger Squad %s category with %s on Opus 5.5 as manager and ten Haiku workers." % (n, boss))
         idle, secs = T.wait_idle(seconds=90, quiet=3)
+        notes = team_notes_after(start)
         bots = {b["name"]: b for b in T.state()["bots"] if n in b["name"]}
         team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == squad), None)
-        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
         switch = json.dumps({"bots": [{"name": workers[0], "model": "sonnet"}]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Switching it.\n```team\n%s\n```" % switch}, {"reply": "ok"}])
-        start2 = len(T.chat("theo", 400))
+        start2 = len(T.chat("theo", 5000))
         T.say("theo", "Switch %s to Sonnet." % workers[0])
         idle2, _ = T.wait_idle(seconds=90, quiet=3)
+        notes2 = team_notes_after(start2)
         switched = next((b for b in T.state()["bots"] if b["name"] == workers[0]), {})
-        notes2 = [m["text"] for m in T.chat("theo", 400)[start2:] if m["author"] == "note"]
         if team: P({"cmd": "teamDelete", "id": team["id"]})
         for b in bots.values(): P({"cmd": "botDelete", "id": b["id"]})
         T.fake("ok")
@@ -416,17 +427,17 @@ def add_cases(S):
                                      {"name": scout, "does": "Scouts"}, {"name": old, "does": "Keeps the books"}],
                             "groups": [{"name": room, "head": lead, "members": [scout, old, "Nobody %s" % n]}]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Setting it up.\n```team\n%s\n```" % first}, {"reply": "ok"}])
-        start = len(T.chat("theo", 400))
+        start = len(T.chat("theo", 5000))
         T.say("theo", "Make a group chat %s with %s at its head, plus %s and %s." % (room, lead, scout, old))
         idle, secs = T.wait_idle(seconds=90, quiet=3)
-        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        notes = team_notes_after(start)
         second = json.dumps({"bots": [{"name": old, "rename": renamed, "instructions": "You are %s. Count everything twice." % renamed},
                                       {"name": lead, "memory": "Use NSE bhavcopy first."}, {"name": scout, "memory": "Prefer official sources."}]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Done.\n```team\n%s\n```" % second}, {"reply": "ok"}])
-        start2 = len(T.chat("theo", 400))
+        start2 = len(T.chat("theo", 5000))
         T.say("theo", "Rename %s to %s, change its instructions, and save the sources to their memory." % (old, renamed))
         idle2, _ = T.wait_idle(seconds=90, quiet=3)
-        notes2 = [m["text"] for m in T.chat("theo", 400)[start2:] if m["author"] == "note"]
+        notes2 = team_notes_after(start2)
         st = T.state()
         bots = {b["name"]: b for b in st["bots"] if n in b["name"]}
         group = next((g for g in st["groups"] if g["name"] == room), None)
