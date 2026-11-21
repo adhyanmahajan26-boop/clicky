@@ -301,6 +301,8 @@ mod tests {
         assert_eq!(free_name("notes", |c| taken.contains(&c)), "notes 2");
     }
 
+    // Unix paths: on Windows "/home/sam" isn't a whole path, and Windows reads its folders from the registry instead.
+    #[cfg(unix)]
     #[test]
     fn user_dirs_are_read_from_the_owners_own_file() {
         let home = Path::new("/home/sam");
