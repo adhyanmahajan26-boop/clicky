@@ -2,7 +2,8 @@
 //  TeamBuildOrder.swift
 //  ClickyCore
 //
-//  How the CEO makes new bots and categories when the owner asks for them in chat. The CEO writes one ```team block
+//  How the CEO makes new bots and categories, picks their managers and moves bots between them, when the owner asks
+//  for it in chat. The CEO writes one ```team block
 //  with JSON; the app takes it out of the shown answer, checks the owner's own words asked for new bots or categories,
 //  and makes them. Pure parsing and rules only: the app's `BotsStore.buildTeamFromChat` does the making. The Windows and
 //  Linux app has the same rules in `crossplatform/crates/theo-core/src/team_build.rs`.
@@ -14,10 +15,17 @@ public struct TeamBuildOrder: Equatable, Sendable {
     public struct NewCategory: Equatable, Sendable {
         public var name: String
         public var purpose: String?
-        public init(name: String, purpose: String? = nil) {
+        /// The bot who manages it, by name, or `noManager` for everyone reporting to the CEO. Nil: left as it is.
+        public var manager: String?
+        public init(name: String, purpose: String? = nil, manager: String? = nil) {
             self.name = name
             self.purpose = purpose
+            self.manager = manager
         }
+
+        /// The manager a category is given when it should have none.
+        public static let noManager = "none"
+        public var wantsNoManager: Bool { manager.map { TeamBuildOrder.sameName($0, Self.noManager) } ?? false }
     }
 
     public struct NewBot: Equatable, Sendable {
@@ -26,7 +34,7 @@ public struct TeamBuildOrder: Equatable, Sendable {
         public var does: String
         /// Its own instructions. Empty: Vello writes "You are <name>. <does>".
         public var instructions: String
-        /// The category it joins, by name. Nil: it sits under "Other bots".
+        /// The category it joins, by name (a bot that already exists is moved there). Nil: it sits under "Other bots".
         public var category: String?
         public init(name: String, does: String, instructions: String = "", category: String? = nil) {
             self.name = name
@@ -74,7 +82,8 @@ public struct TeamBuildOrder: Equatable, Sendable {
         for entry in object["categories"] as? [[String: Any]] ?? [] {
             guard let name = cleaned(entry["name"], longest: longestCategoryName) else { continue }
             guard !order.categories.contains(where: { sameName($0.name, name) }) else { continue }
-            order.categories.append(NewCategory(name: name, purpose: cleaned(entry["purpose"], longest: longestDoes)))
+            order.categories.append(NewCategory(name: name, purpose: cleaned(entry["purpose"], longest: longestDoes),
+                                                manager: cleaned(entry["manager"], longest: longestBotName)))
         }
         for entry in object["bots"] as? [[String: Any]] ?? [] {
             guard let name = cleaned(entry["name"], longest: longestBotName) else { continue }
@@ -128,6 +137,12 @@ public enum TeamBuildIntent {
             #"\b(new|another|more|extra)\s+([a-z-]+\s+){0,3}"# + things + #"\b"#,
             // "a bot that writes posts", "a bot for my inbox", "an agent to sort mail"
             #"\b(a|an)\s+([a-z-]+\s+){0,3}(bot|agent|assistant)\s+(that|which|who|for|to)\b"#,
+            // "make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the team"
+            #"\b(make|set|put|assign|appoint|promote|let|turn|have|change|switch)\b[^.?!\n]{0,60}\b(manager|lead|head|boss|in\s+charge)\b"#,
+            #"\b(should|to|will|can)\s+(manage|lead|head|run)\b"#,
+            #"\bno\s+(manager|lead|boss)\b"#,
+            // "move Penny to Sales", "put Rex into Growth"
+            #"\b(move|put|file|shift|transfer)\b[^.?!\n]{0,60}\b(to|into|under|in)\b"#,
         ]
         return patterns.contains { lower.range(of: $0, options: .regularExpression) != nil }
     }

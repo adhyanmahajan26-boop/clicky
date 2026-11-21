@@ -76,9 +76,24 @@ struct TeamBuildOrderTests {
         }
     }
 
+    @Test func aCategoryCanNameItsManager() {
+        let order = TeamBuildOrder.parse(#"{"categories": [{"name": "Growth", "manager": "Penny"}, {"name": "Sales", "manager": "None"}]}"#)
+        #expect(order?.categories.first?.manager == "Penny")
+        #expect(order?.categories.first?.wantsNoManager == false)
+        #expect(order?.categories.last?.wantsNoManager == true)
+    }
+
+    @Test func theOwnerAskingForManagersOrMoves() {
+        for words in ["make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the marketing team",
+                      "Growth needs no manager", "move Penny to Sales", "assign a manager to every team"] {
+            #expect(TeamBuildIntent.ownerAsked(words), "\(words)")
+        }
+    }
+
     @Test func theCEOIsToldHow() {
         let howTo = BotProtocol.teamBuildHowTo(owner: "the owner")
         #expect(howTo.contains("```team"))
         #expect(howTo.contains("own words"))
+        #expect(howTo.contains("\"manager\": \"none\""))
     }
 }

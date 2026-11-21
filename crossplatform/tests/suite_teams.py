@@ -301,3 +301,30 @@ def add_cases(S):
         T.fake("ok")
         ok = idle and not made and team is None and bool(refused)
         return ok, {"settled": idle, "seconds": secs, "bot_made": bool(made), "category_made": team is not None, "said_so": refused[-1:]}
+
+    @test("TM09", "Asked in chat, Vello makes a bot a category's manager, moves another bot there, and can take the manager away", "teams")
+    def tm09():
+        n = T.nonce()
+        scout, forge = bid("Scout"), bid("Forge")
+        name = "Crew %s" % n
+        tid = P({"cmd": "teamAdd", "name": name, "members": [scout]})["result"]["id"]
+        block = json.dumps({"categories": [{"name": name, "manager": "Forge"}], "bots": [{"name": "Archivist", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Forge will run %s, and Archivist joins it.\n```team\n%s\n```" % (name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make Forge the manager of %s and move Archivist to %s." % (name, name))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next(t for t in P({"cmd": "teams"})["result"] if t["id"] == tid)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        managed = team["leader"] == forge and forge in team["members"]
+        moved = bid("Archivist") in team["members"]
+        block2 = json.dumps({"categories": [{"name": name, "manager": "none"}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Done.\n```team\n%s\n```" % block2}, {"reply": "ok"}])
+        T.say("theo", "%s needs no manager." % name)
+        idle2, _ = T.wait_idle(seconds=90, quiet=3)
+        after = next(t for t in P({"cmd": "teams"})["result"] if t["id"] == tid)
+        P({"cmd": "teamDelete", "id": tid})
+        T.fake("ok")
+        checks = {"forge_manages": managed, "archivist_moved": moved, "note_says_manager": any("Forge manages %s now" % name in t for t in notes),
+                  "note_says_moved": any("Archivist moved to %s" % name in t for t in notes),
+                  "no_manager_after": after["leader"] is None and not after["hasManager"]}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-2:]}
