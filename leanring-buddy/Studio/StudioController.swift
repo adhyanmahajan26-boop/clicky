@@ -89,6 +89,8 @@ final class StudioController: ObservableObject {
     /// Tiles whose window has been pulled onto the owner's monitor.
     @Published private(set) var pulledOut: Set<StudioTileID> = []
     @Published private(set) var isOn = false
+    /// The last wake was refused because macOS said something was playing, so the panel can say why and offer Wake anyway.
+    @Published private(set) var isAsleepForPlayback = false
     @Published private(set) var displays: [VirtualDisplay] = []
     @Published private(set) var roster = StudioRoster()
     private(set) var thumbnails: [StudioTileID: CGImage] {
@@ -304,11 +306,16 @@ final class StudioController: ObservableObject {
 
     /// Bot work needs a screen. Up if they're allowed and nothing's playing, since making them moves a monitor and can black out
     /// a video. They stay up between jobs and sleep after a long quiet spell, so that move happens as rarely as possible.
-    func wakeForWork() async -> Bool {
+    /// `evenWhilePlaying` is only for the owner's own Wake anyway in the panel: they've seen the video may blink and chose to.
+    func wakeForWork(evenWhilePlaying: Bool = false) async -> Bool {
         lastBotWork = Date()
         if isOn { return true }
         guard Self.isAvailable, isEnabled, DeviceRoles.runsHere(.studioScreens) else { return false }
-        if await Task.detached(operation: { Self.somethingIsPlaying() }).value { return false }
+        if !evenWhilePlaying, await Task.detached(operation: { Self.somethingIsPlaying() }).value {
+            isAsleepForPlayback = true
+            return false
+        }
+        isAsleepForPlayback = false
         start()
         for _ in 0..<60 where !isOn {
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -808,6 +815,11 @@ final class StudioController: ObservableObject {
 
     /// Whether macOS says anything's playing right now.
     nonisolated static func somethingIsPlaying() -> Bool {
+        // A test profile can stand in for a video playing or not (`test.studio.pretendPlaying`), so the wake rules can be
+        // tested without making real hidden screens, which would move the owner's monitors.
+        if TheoProfile.isTest, let pretendPlaying = UserDefaults.standard.object(forKey: "test.studio.pretendPlaying") as? Bool {
+            return pretendPlaying
+        }
         var unmanaged: Unmanaged<CFDictionary>?
         guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess, let all = unmanaged?.takeRetainedValue() as? [AnyHashable: [[String: Any]]] else {
             // Can't tell: don't risk it.
