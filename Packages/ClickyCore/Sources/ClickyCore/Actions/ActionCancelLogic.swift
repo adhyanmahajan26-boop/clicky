@@ -51,6 +51,13 @@ public enum ActionCancelDecision: Equatable, Sendable {
 }
 
 public struct ActionCancelLogic: Equatable, Sendable {
+    /// The reason when the physical input was Escape.
+    public static let escapeReason = "you pressed Escape"
+
+    /// Whether a cancel for `reason` says "stopped: …" out loud. Not for Escape: Escape means "be quiet", and the
+    /// line used to play right after it (Air, 2026-11-13: "it keeps speaking after I press escape").
+    public static func cancelSpeaksLine(forReason reason: String) -> Bool { reason != escapeReason }
+
     public static let mouseJitterTolerance: CGFloat = 3
     public static let syntheticPointerGraceSeconds: TimeInterval = 0.15
 
@@ -98,7 +105,7 @@ public struct ActionCancelLogic: Equatable, Sendable {
         case .mouseDown: reason = "you clicked"
         case .mouseDragged: reason = "you dragged the mouse"
         case .scrollWheel: reason = "you scrolled"
-        case .keyDown(let keyCode): reason = keyCode == 53 ? "you pressed Escape" : "you pressed a key"
+        case .keyDown(let keyCode): reason = keyCode == 53 ? Self.escapeReason : "you pressed a key"
         case .flagsChanged: reason = "you pressed a modifier key"
         }
         hasCancelled = true
