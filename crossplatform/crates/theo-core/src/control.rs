@@ -281,6 +281,18 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                 Err(e) => err(&e),
             }
         }
+        // Composio: a link that connects one app (gmail, slack, …) to the owner's Composio account, opened in the browser.
+        "connectorComposioLink" => {
+            let (Some(id), Some(toolkit)) = (s(cmd, "id"), s(cmd, "toolkit")) else { return err("Needs id and toolkit.") };
+            match crate::hub::run_hub_command(h, &[String::from("composio-link"), id.clone(), toolkit], None, Duration::from_secs(60)).await {
+                Ok(answer) => {
+                    let url = answer.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string();
+                    crate::hub::open_in_browser(h, &url);
+                    ok(json!({"app": id, "toolkit": answer.get("toolkit").cloned().unwrap_or(Value::Null), "url": url}))
+                }
+                Err(e) => err(&e),
+            }
+        }
         "connectorSignOut" => {
             let Some(id) = s(cmd, "id") else { return err("Needs id.") };
             h.with(|s| { s.sign_ins.remove(&id); });

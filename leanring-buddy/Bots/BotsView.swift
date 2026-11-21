@@ -1692,7 +1692,7 @@ struct ConnectorsScreen: View {
                 switch state {
                 case .needsSignIn where hubRecord?.takesPastedToken == true:
                     // A token is pasted in the row's details.
-                    Button("Add token") { withAnimation(DS.Motion.hover) { openRow = connector.id } }
+                    Button(hubRecord?.isComposio == true ? "Add key" : "Add token") { withAnimation(DS.Motion.hover) { openRow = connector.id } }
                         .buttonStyle(.theo(.primary, .small))
                 case .missing where hubRecord?.enabled == false:
                     Button(working == connector.id ? "Turning on…" : "Turn on") { turnOn(connector) }

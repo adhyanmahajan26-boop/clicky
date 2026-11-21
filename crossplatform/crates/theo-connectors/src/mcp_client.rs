@@ -83,9 +83,15 @@ impl McpSession {
     }
 
     pub fn connect_http(server_address: &str, bearer_token: Option<String>, timeout: Duration) -> Result<McpSession, McpError> {
+        McpSession::connect_http_with_headers(server_address, bearer_token, vec![], timeout)
+    }
+
+    /// The same, with headers of the app's own (Composio's `x-api-key`). The caller decides which address may get them.
+    pub fn connect_http_with_headers(server_address: &str, bearer_token: Option<String>, extra_headers: Vec<(String, String)>, timeout: Duration) -> Result<McpSession, McpError> {
         let transport = Transport::StreamableHttp(HttpTransport {
             server_address: server_address.to_string(),
             bearer_token,
+            extra_headers,
             session_id: None,
             protocol_version: None,
         });
@@ -352,6 +358,7 @@ pub fn hide_console_window(_process: &mut Command) {}
 struct HttpTransport {
     server_address: String,
     bearer_token: Option<String>,
+    extra_headers: Vec<(String, String)>,
     session_id: Option<String>,
     protocol_version: Option<String>,
 }
@@ -365,6 +372,9 @@ impl HttpTransport {
             .set("Accept", "application/json, text/event-stream");
         if let Some(token) = &self.bearer_token {
             request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        for (header_name, header_value) in &self.extra_headers {
+            request = request.set(header_name, header_value);
         }
         if let Some(session_id) = &self.session_id {
             request = request.set("Mcp-Session-Id", session_id);

@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod claude_account;
+pub mod composio;
 pub mod files;
 pub mod http;
 pub mod hub;

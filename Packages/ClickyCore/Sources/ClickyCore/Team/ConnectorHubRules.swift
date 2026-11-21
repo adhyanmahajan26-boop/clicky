@@ -44,11 +44,15 @@ public struct HubAppRecord: Equatable, Sendable {
     public var writeTools: [String]
     /// The catalog entry it was added from.
     public var catalogID: String?
+    /// Composio (one API key for many apps): Composio's name for the owner, nil for any other app.
+    public var composioUserID: String?
+    /// Composio: the apps connected there (toolkit slugs such as `gmail`), as the hub last saw them.
+    public var composioConnectedApps: [String]
 
     public init(id: String, name: String, kind: Kind, enabled: Bool = true, status: String = "unknown", reason: String? = nil,
                 lastWorked: Date? = nil, lastChecked: Date? = nil, toolCount: Int? = nil, signedIn: Bool = false, url: String? = nil,
                 auth: String? = nil, command: String? = nil, server: String? = nil, readTools: [String] = [], writeTools: [String] = [],
-                catalogID: String? = nil) {
+                catalogID: String? = nil, composioUserID: String? = nil, composioConnectedApps: [String] = []) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -66,6 +70,8 @@ public struct HubAppRecord: Equatable, Sendable {
         self.readTools = readTools
         self.writeTools = writeTools
         self.catalogID = catalogID
+        self.composioUserID = composioUserID
+        self.composioConnectedApps = composioConnectedApps
     }
 
     /// Reads one app from the hub's JSON. Nil for an entry without an id, a name or a kind this app knows.
@@ -87,7 +93,9 @@ public struct HubAppRecord: Equatable, Sendable {
                   server: entry["server"] as? String,
                   readTools: entry["readTools"] as? [String] ?? [],
                   writeTools: entry["writeTools"] as? [String] ?? [],
-                  catalogID: entry["catalogId"] as? String)
+                  catalogID: entry["catalogId"] as? String,
+                  composioUserID: (entry["composio"] as? [String: Any]).map { ($0["userId"] as? String) ?? ComposioWords.defaultUserID },
+                  composioConnectedApps: entry["composioConnectedApps"] as? [String] ?? [])
     }
 
     /// The apps in a `list` answer (`{"ok":true,"apps":[…]}`), or nil when the answer isn't one.
@@ -115,6 +123,39 @@ public struct HubAppRecord: Equatable, Sendable {
     /// on claude.ai, and a token app takes a pasted token.
     public var signsInWithBrowser: Bool { kind == .remote && auth == "oauth" }
     public var takesPastedToken: Bool { kind == .remote && auth == "token" }
+    /// One Composio API key for many apps; its pasted token is that key.
+    public var isComposio: Bool { kind == .remote && composioUserID != nil }
+}
+
+/// The words for Composio's apps (toolkit slugs such as `googlecalendar`), and what the owner types to connect one.
+public enum ComposioWords {
+    public static let defaultUserID = "vello"
+    /// Where a key is made.
+    public static let keysAddress = "https://dashboard.composio.dev"
+    /// Offered when connecting an app; any other slug Composio knows works too.
+    public static let suggestedApps = ["gmail", "googlecalendar", "googledrive", "googlesheets", "googledocs", "slack", "github", "notion",
+                                       "linear", "outlook", "hubspot", "jira", "discord", "trello", "asana", "airtable"]
+
+    private static let knownNames = ["gmail": "Gmail", "googlecalendar": "Google Calendar", "googledrive": "Google Drive", "googledocs": "Google Docs",
+                                     "googlesheets": "Google Sheets", "github": "GitHub", "slack": "Slack", "notion": "Notion", "linear": "Linear",
+                                     "outlook": "Outlook", "hubspot": "HubSpot", "jira": "Jira", "discord": "Discord", "twitter": "X (Twitter)",
+                                     "linkedin": "LinkedIn", "trello": "Trello", "asana": "Asana", "airtable": "Airtable", "dropbox": "Dropbox", "zoom": "Zoom"]
+
+    /// `googlecalendar` → "Google Calendar"; an unknown slug gets a capital letter.
+    public static func appName(_ slug: String) -> String {
+        knownNames[slug] ?? (slug.prefix(1).uppercased() + slug.dropFirst())
+    }
+
+    /// "Google Calendar" → `googlecalendar`, the way the hub names it (`composio::toolkit_slug`).
+    public static func slug(fromTyped typed: String) -> String {
+        String(typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().filter { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "_" })
+    }
+
+    /// What the Connectors page says is connected.
+    public static func connectedLine(_ slugs: [String], hasKey: Bool) -> String {
+        if !hasKey { return "Paste your key first" }
+        return slugs.isEmpty ? "None yet. Connect one below, or ask a bot to." : slugs.map(appName).joined(separator: ", ")
+    }
 }
 
 /// The hub's times are RFC 3339 in whole seconds ("2026-11-13T21:40:33Z").

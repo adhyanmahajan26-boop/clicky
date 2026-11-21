@@ -187,8 +187,8 @@ final class NotchPanelController: NSObject {
             canCancel: { agentsCenter.canCancel($0) },
             canOpenReview: { record in record.kind == .codeTask && codeModeController.activeReviewAgentID == record.id }
         )
-        // The bots are always on the pill: chips for who needs you, who failed and who's working, and,
-        // with nothing else to say, the most urgent bot's name.
+        // The bots are always on the pill: chips for who needs you, who failed, who's working and who's ready,
+        // and, with nothing else to say, the most urgent bot's name (or how many are ready).
         newContent.apply(botBoard: Self.botBoard(store: BotsStore.shared, now: Date()))
         let sizeChanged = NotchView.pillSize(content: newContent, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
             != NotchView.pillSize(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
@@ -447,7 +447,7 @@ final class NotchPanelController: NSObject {
         applyPanelFrame()
     }
 
-    /// Every bot that needs the owner, failed, is working or just finished, as the notch's board
+    /// Every bot that's on, as the notch's board: needs the owner, failed, working, just finished, then ready
     /// (most urgent first, cut to what fits). Empty while the bots product is off. Pointer Assistant
     /// itself isn't on it: the notch's own logo is Pointer Assistant.
     static func botBoard(store: BotsStore, now: Date) -> NotchBots.Board {
@@ -456,7 +456,7 @@ final class NotchPanelController: NSObject {
         return NotchBots.board(from: lines)
     }
 
-    /// One bot's line, or nil when it has nothing to report (ready or asleep).
+    /// One bot's line (a quiet bot is ready), or nil for a bot that's off.
     static func botLine(for bot: NativeBot, store: BotsStore, now: Date) -> NotchBotLine? {
         let state = store.pixelState(of: bot).state
         guard let lane = NotchBotLane.lane(forPixelState: state.rawValue) else { return nil }
@@ -477,6 +477,9 @@ final class NotchPanelController: NSObject {
         case .done:
             let last = store.conversation(bot.id).messages.last(where: { $0.author == bot.id }).map { BotsStore.firstLine($0.text) } ?? "Finished"
             return NotchBotLine(botID: bot.id, name: bot.name, state: state.rawValue, lane: lane, line: last.isEmpty ? "Finished" : last, button: "Open")
+        case .ready:
+            return NotchBotLine(botID: bot.id, name: bot.name, state: state.rawValue, lane: lane,
+                                line: state == .idle ? "Asleep, nothing running" : "Nothing running", button: "Open")
         }
     }
 

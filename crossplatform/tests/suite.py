@@ -1849,6 +1849,39 @@ def c04():
     return all(checks.values()), checks
 
 
+@test("C06", "Composio from the Connectors page: offered in the catalog, its key pasted (never shown again), an app connected by a link opened in the browser, its connected apps listed, and its runner judged per call", "connectors")
+def c06():
+    server = subprocess.Popen([T.PY, str(T.HERE / "composio_stub.py")], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=dict(os.environ, COMPOSIO_TEST_KEY="ck-suite-key"))
+    try:
+        port = int(server.stdout.readline().strip())
+        catalog = P({"cmd": "connectorCatalog"}, timeout=60).get("result", {})
+        offered = next((a for a in catalog.get("apps", []) if a.get("id") == "composio"), {})
+        added = P({"cmd": "connectorAdd", "app": {"id": "composio", "name": "Composio", "kind": "remote", "url": "http://127.0.0.1:%d" % port, "auth": "token", "composio": {"userId": "vello"}}}, timeout=120)
+        before = hub_apps().get("composio", {})
+        saved = P({"cmd": "connectorSecret", "id": "composio", "value": "ck-suite-key"}, timeout=120)
+        after = hub_apps(refresh=True).get("composio", {})
+        opened_log = T.DATA / "Logs" / "opened.log"
+        link = P({"cmd": "connectorComposioLink", "id": "composio", "toolkit": "Google Calendar"}, timeout=90)
+        url = link.get("result", {}).get("url", "")
+        opened = opened_log.read_text(encoding="utf-8").split() if opened_log.exists() else []
+        tools = P({"cmd": "connectorTools", "id": "composio"}, timeout=60).get("result", {}).get("tools", [])
+        runner = next((t for t in tools if t.get("name") == "COMPOSIO_MULTI_EXECUTE_TOOL"), {})
+        everything = json.dumps([added, before, saved, after, link, tools, T.state()]) + (T.ROOT / "theod.log").read_text(encoding="utf-8", errors="replace")
+        for f in (T.DATA / "Connectors").glob("*.json"):
+            everything += f.read_text(encoding="utf-8", errors="replace")
+        checks = {"in_the_catalog": offered.get("auth") == "token" and "composio" in offered,
+                  "needs_its_key_first": before.get("status") == "needsSignIn",
+                  "connected_with_the_key": after.get("status") == "connected" and after.get("signedIn") is True,
+                  "connected_apps_listed": after.get("composioConnectedApps") == ["gmail", "slack"],
+                  "link_opened_in_the_browser": url == "https://app.composio.dev/link/lt_googlecalendar" and url in opened,
+                  "runner_judged_per_call": runner.get("effect") == "read" and runner.get("judgedPerCall") is True,
+                  "key_never_shown": "ck-suite-key" not in everything}
+        P({"cmd": "connectorRemove", "id": "composio"}, timeout=60)
+    finally:
+        server.kill()
+    return all(checks.values()), checks
+
+
 @test("C05", "Bots saved before the hub keep their apps: \"claude.ai Gmail\" and \"theo-echo\" move onto hub apps at start, and a removed app leaves every bot", "connectors")
 def c05():
     a = bid("Scout")

@@ -78,7 +78,7 @@ and says to use `set-secret`, which reads the value from standard input so it ne
 | `add --json '<app>' [--no-check]` / `add --catalog <id> [--id <new id>]` | `{"ok":true,"app":"<id>","status":…,"reason":…,"toolCount":…}`. Checks the app straight away unless `--no-check`. |
 | `remove <id>` | `{"ok":true,"removed":"<id>"}`. Forgets its sign-in and state too. |
 | `enable <id>` / `disable <id>` | `{"ok":true,"app":"<id>","enabled":true\|false}` |
-| `set-secret <id>` (pasted token) / `--env NAME` (local secret setting) / `--client-secret` | `{"ok":true,"app":"<id>","saved":"token"\|"env NAME"\|"client secret"}`. The value is read from standard input; empty input removes it. |
+| `set-secret <id>` (pasted token) / `--env NAME` (local secret setting) / `--client-secret` | `{"ok":true,"app":"<id>","saved":"token"\|"env NAME"\|"client secret"}`. The value is read from standard input; empty input removes it and prints `"removed"` in place of `"saved"`. |
 | `signin <id> [--timeout <seconds>]` | Two lines. First `{"event":"open","app":"<id>","url":"<address>"}`: open that address in the browser. Then, when the browser comes back (default limit 300 s), `{"ok":true,"event":"done","app":"<id>","status":"connected",…}` or the usual failure line. |
 | `signout <id>` | `{"ok":true,"app":"<id>","status":"needsSignIn"}`. Forgets the tokens and pasted token; keeps the client the hub registered. |
 | `check [<id>]` | `{"ok":true,"apps":[{"id","status","reason","toolCount"}]}`. Reconnects (refreshing a token first if needed) and records the result. All claude-account apps share one `claude mcp list`. |
@@ -229,6 +229,46 @@ the stand-ins in `crossplatform/tests`:
 - Levels and tickets: a `read` ticket can't run a changing tool, a turn not from the owner never sends, an expired ticket
   runs nothing, a ticket deleted mid-turn stops it, a ticket outside `tickets/` is refused.
 - `fake_engine.py` as Claude Code: claude-account statuses from `claude mcp list`, and a plain failure with no Claude Code.
+
+## Composio: one key, many apps
+
+Composio (composio.dev) reaches hundreds of apps (Gmail, Slack, GitHub, Notion, Google Calendar, Linear, …) through one
+MCP server. It's in the starter catalog as `composio`:
+
+```json
+{"id": "composio", "name": "Composio", "kind": "remote", "url": "https://backend.composio.dev", "auth": "token", "composio": {"userId": "vello"}}
+```
+
+- **Sign-in** is the owner's own Composio API key, pasted like any token (`set-secret composio`, kept in the vault). The
+  free plan is enough to start; Vello pays for nothing.
+- **Connecting.** The hub opens a tool-router session for `userId` (`POST <url>/api/v3.1/tool_router/session`, falling back to
+  `/api/v3/…` and `/api/v3/labs/…`), keeps its id and MCP address in `state.json`, and talks MCP to that address with the key in
+  `x-api-key`. A kept session Composio no longer knows is replaced once, by itself. The key only ever goes to Composio:
+  the API's own host or another `*.composio.dev` host (`composio.rs`, `may_send_key_to`). Sessions are opened with
+  connection removal off, so bots can connect apps but never disconnect one.
+- **`userId`** is the same on every computer (`vello` by default), so with the same key an app connected once on the Mac
+  works on Windows too.
+- **Apps on Composio** are connected with a link the owner opens in the browser: from the Connectors page (`composio-link`),
+  or from a bot, whose Composio tools hand one over in the chat. `check` also records which apps are connected
+  (`GET <url>/api/v3.1/connected_accounts`), and `list` shows them as `composioConnectedApps`.
+
+| Command | Prints |
+|---|---|
+| `composio-link <id> <app>` | `{"ok":true,"app":"<id>","toolkit":"googlecalendar","url":"https://…"}`. `<app>` is typed as the owner says it ("Google Calendar" becomes `googlecalendar`). The app opens `url`. |
+| `composio-apps <id>` | `{"ok":true,"app":"<id>","connected":["gmail","slack"]}` |
+
+**What a bot may do.** A session offers a few tools of Composio's own, and one of them runs any app's tool by its slug
+(`GMAIL_SEND_EMAIL`), so those can't be judged once by their names. The hub lists a tool that runs other tools (a name
+with `execute`) and the connection tool at `read`, with `judgedPerCall: true` in `tools`, and judges **each call** by what it
+runs: every slug in its arguments (under any key, and any text that is a slug on its own) through the usual word rule,
+the most of them counting; a raw request (`method`) reads only with GET. A call whose slugs can't be read counts as
+irreversible. Running code in Composio's workbench or shell is irreversible. Taking a connection away is irreversible.
+So a `readAndDraft` bot can fetch mail and write a draft through Composio but not send it, and a turn not from the
+owner's own words never sends, as with every other app. The refusal names the slugs it would have run.
+
+Checked on 19 November 2026 against Composio's documented API and the stand-in `tests/composio_stub.py`
+(`cargo test -p theo-connectors`, suite test C06); the names of Composio's own tools may change, which is why the rule
+goes by words in the name rather than a fixed list.
 
 ## Not done yet
 

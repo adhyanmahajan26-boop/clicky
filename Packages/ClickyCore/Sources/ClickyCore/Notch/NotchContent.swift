@@ -54,19 +54,22 @@ public struct NotchAgentRow: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Which lane a bot's line sits in on the notch, most urgent first. Green is working, yellow needs you, red only ever failed.
+/// Which lane a bot's line sits in on the notch, most urgent first. Green is working, yellow needs you, red only ever failed,
+/// grey is ready (on, with nothing going on), so the bots are on the notch even when they're all quiet.
 public enum NotchBotLane: Int, CaseIterable, Comparable, Sendable {
-    case needsYou, failed, working, done
+    case needsYou, failed, working, done, ready
 
     public static func < (lhs: NotchBotLane, rhs: NotchBotLane) -> Bool { lhs.rawValue < rhs.rawValue }
 
-    /// The lane for a PixelState name ("needs", "failed", "working", "thinking", "done"); nil for a bot with nothing to report.
+    /// The lane for a PixelState name ("needs", "failed", "working", "thinking", "talking", "done", and "awake", "listening",
+    /// "idle" for ready); nil only for a bot that's off.
     public static func lane(forPixelState state: String) -> NotchBotLane? {
         switch state {
         case "needs": return .needsYou
         case "failed": return .failed
-        case "working", "thinking": return .working
+        case "working", "thinking", "talking": return .working
         case "done": return .done
+        case "awake", "listening", "idle": return .ready
         default: return nil
         }
     }
@@ -78,16 +81,18 @@ public enum NotchBotLane: Int, CaseIterable, Comparable, Sendable {
         case .failed: return 0xFF4A5E
         case .working: return 0x22D391
         case .done: return 0xF4F4F5
+        case .ready: return 0xC6C7D1
         }
     }
 
-    /// "need you", "failed", "working": the word after a count.
+    /// "need you", "failed", "working", "ready": the word after a count.
     public var countWord: String {
         switch self {
         case .needsYou: return "need you"
         case .failed: return "failed"
         case .working: return "working"
         case .done: return "done"
+        case .ready: return "ready"
         }
     }
 }
@@ -115,6 +120,7 @@ public struct NotchBotLine: Identifiable, Equatable, Sendable {
         case .failed: return "\(name) failed"
         case .working: return "\(name) is working"
         case .done: return "\(name) is done"
+        case .ready: return "\(name) is ready"
         }
     }
 
@@ -134,18 +140,26 @@ public struct NotchBotTally: Equatable, Sendable {
     public var needsYou: Int
     public var failed: Int
     public var working: Int
+    /// Bots that are on with nothing going on: a grey chip, so the bots show on the notch even when all are quiet.
+    public var ready: Int
 
-    public init(needsYou: Int = 0, failed: Int = 0, working: Int = 0) {
+    public init(needsYou: Int = 0, failed: Int = 0, working: Int = 0, ready: Int = 0) {
         self.needsYou = needsYou
         self.failed = failed
         self.working = working
+        self.ready = ready
     }
 
-    public var isEmpty: Bool { needsYou == 0 && failed == 0 && working == 0 }
+    /// No bot at all on the notch (none on, or the bots product is off).
+    public var isEmpty: Bool { needsYou == 0 && failed == 0 && working == 0 && ready == 0 }
 
-    /// The chips in the order they're drawn (needs you, failed, working), only the ones above zero.
+    /// Nothing for the owner to look at: no bot needs them, failed or is working (ready bots may still be counted).
+    public var isQuiet: Bool { needsYou == 0 && failed == 0 && working == 0 }
+
+    /// The chips in the order they're drawn (needs you, failed, working, ready), only the ones above zero.
     public var chips: [NotchBotChip] {
-        [NotchBotChip(lane: .needsYou, count: needsYou), NotchBotChip(lane: .failed, count: failed), NotchBotChip(lane: .working, count: working)]
+        [NotchBotChip(lane: .needsYou, count: needsYou), NotchBotChip(lane: .failed, count: failed), NotchBotChip(lane: .working, count: working),
+         NotchBotChip(lane: .ready, count: ready)]
             .filter { $0.count > 0 }
     }
 
@@ -187,26 +201,33 @@ public enum NotchBots {
         }
     }
 
-    /// Needs you first, then failed, then working, then done (each lane keeps the order it was given in).
-    /// Done bots only fill rows nothing more urgent wants, and are never counted in the tally.
+    /// Needs you first, then failed, then working, then done, then ready (each lane keeps the order it was given in).
+    /// Done and ready bots only fill rows nothing more urgent wants, and aren't in "+N more"; done bots aren't in the tally.
     public static func board(from lines: [NotchBotLine], maximumRows: Int = maximumRows) -> Board {
         let sorted = lines.enumerated().sorted { first, second in
             first.element.lane == second.element.lane ? first.offset < second.offset : first.element.lane < second.element.lane
         }.map(\.element)
         let tally = NotchBotTally(needsYou: sorted.filter { $0.lane == .needsYou }.count,
                                   failed: sorted.filter { $0.lane == .failed }.count,
-                                  working: sorted.filter { $0.lane == .working }.count)
+                                  working: sorted.filter { $0.lane == .working }.count,
+                                  ready: sorted.filter { $0.lane == .ready }.count)
         let shown = Array(sorted.prefix(maximumRows))
-        let hiddenUrgentOrWorking = sorted.dropFirst(maximumRows).filter { $0.lane != .done }.count
+        let hiddenUrgentOrWorking = sorted.dropFirst(maximumRows).filter { $0.lane != .done && $0.lane != .ready }.count
         return Board(lines: shown, hiddenCount: hiddenUrgentOrWorking, tally: tally)
     }
 
     /// The collapsed pill's words when the companion itself is quiet: the most urgent bot by name
-    /// ("Researcher needs you"), else who's working ("Builder is working", "3 bots working"). "" when nothing is going on.
+    /// ("Researcher needs you"), else who's working ("Builder is working", "3 bots working"), else who's ready
+    /// ("Builder is ready", "5 bots ready"). "" only with no bots on.
     public static func collapsedStatus(board: Board) -> String {
         if let first = board.lines.first, first.lane == .needsYou || first.lane == .failed { return first.title }
         switch board.tally.working {
-        case 0: return ""
+        case 0:
+            switch board.tally.ready {
+            case 0: return ""
+            case 1: return board.lines.first { $0.lane == .ready }?.title ?? "1 bot ready"
+            default: return "\(board.tally.ready) bots ready"
+            }
         case 1: return board.lines.first { $0.lane == .working }?.title ?? "1 bot working"
         default: return "\(board.tally.working) bots working"
         }
