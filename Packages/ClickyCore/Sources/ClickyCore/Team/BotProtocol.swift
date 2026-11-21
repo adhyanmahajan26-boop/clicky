@@ -401,7 +401,8 @@ public enum BotProtocol {
         "\"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}]}. Either list " +
         "can be left out. A category or bot that already exists is used, not made twice: list an existing category to give it a " +
         "manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. " +
-        "A manager is a bot in that team (it joins if it isn't), never you. At most \(TeamBuildOrder.mostBots) bots and " +
+        "A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot " +
+        "as manager by itself, unless it's set to \"none\". At most \(TeamBuildOrder.mostBots) bots and " +
         "\(TeamBuildOrder.mostCategories) categories at a time. Vello does it and says so in the chat; never say it's done " +
         "before that line shows. Only when \(owner) asked for it in their own words."
     }

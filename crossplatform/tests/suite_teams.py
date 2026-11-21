@@ -328,3 +328,25 @@ def add_cases(S):
                   "note_says_moved": any("Archivist moved to %s" % name in t for t in notes),
                   "no_manager_after": after["leader"] is None and not after["hasManager"]}
         return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-2:]}
+
+    @test("TM10", "A new category's first bot becoming its manager is said in Vello's note, and the CEO reads that note at its next turn", "teams")
+    def tm10():
+        n = T.nonce()
+        scout = bid("Scout")
+        name = "Desk %s" % n
+        block = json.dumps({"categories": [{"name": name}], "bots": [{"name": "Scout", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Scout goes to %s.\n```team\n%s\n```" % (name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a category called %s and move Scout to it." % name)
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == name), None)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        mark = T.calls_mark()
+        T.say("theo", "What does %s look like now?" % name); idle2, _ = T.wait_idle(seconds=60)
+        read = theo_prompts(mark, "Vello's note on the team changes")
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        T.fake("ok")
+        checks = {"scout_manages": team is not None and team["leader"] == scout,
+                  "note_says_first_bot_manages": any("Scout manages %s now, as its first bot" % name in t for t in notes),
+                  "ceo_reads_the_note": bool(read) and ("Scout manages %s now" % name) in read[-1]}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-1:]}

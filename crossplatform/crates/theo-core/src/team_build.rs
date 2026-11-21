@@ -55,7 +55,7 @@ impl TeamBuildOrder {
 /// What the CEO is told (ClickyCore `BotProtocol.teamBuildHowTo`).
 pub fn how_to(owner: &str) -> String {
     format!(
-        "Bots, categories and managers: you can set them up yourself. When {owner} asks for a new bot, agent, team or category, a category's manager, or a bot moved to another team, don't tell them to use a button and don't write files for it: say in a line what you'll do, then add one ```team block with JSON {{\"categories\": [{{\"name\": \"Marketing\", \"purpose\": \"one line\", \"manager\": \"Ada\"}}], \"bots\": [{{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}}]}}. Either list can be left out. A category or bot that already exists is used, not made twice: list an existing category to give it a manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. A manager is a bot in that team (it joins if it isn't), never you. At most {MOST_BOTS} bots and {MOST_CATEGORIES} categories at a time. Vello does it and says so in the chat; never say it's done before that line shows. Only when {owner} asked for it in their own words."
+        "Bots, categories and managers: you can set them up yourself. When {owner} asks for a new bot, agent, team or category, a category's manager, or a bot moved to another team, don't tell them to use a button and don't write files for it: say in a line what you'll do, then add one ```team block with JSON {{\"categories\": [{{\"name\": \"Marketing\", \"purpose\": \"one line\", \"manager\": \"Ada\"}}], \"bots\": [{{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}}]}}. Either list can be left out. A category or bot that already exists is used, not made twice: list an existing category to give it a manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot as manager by itself, unless it's set to \"none\". At most {MOST_BOTS} bots and {MOST_CATEGORIES} categories at a time. Vello does it and says so in the chat; never say it's done before that line shows. Only when {owner} asked for it in their own words."
     )
 }
 
@@ -166,6 +166,11 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
     let mut filed: Vec<String> = vec![];
     let mut manager_lines: Vec<String> = vec![];
 
+    // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the job)
+    // is said in the note too, and the CEO doesn't think the category has none.
+    let managers_before: HashMap<String, Option<String>> = h.layout().sections.iter().map(|s| (s.id.clone(), s.leader_id.clone())).collect();
+    let mut managed_by_order: Vec<String> = vec![];
+
     // Categories first, so the bots can join them. One with the same name is used rather than made twice.
     let mut category_ids: HashMap<String, String> = HashMap::new();
     for wanted in &order.categories {
@@ -221,6 +226,7 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
     for wanted in order.categories.iter().filter(|c| c.manager.is_some()) {
         let Some(id) = category_ids.get(&wanted.name.to_lowercase()).cloned() else { continue };
         let Some(team) = h.layout().section(&id).cloned() else { continue };
+        managed_by_order.push(id.clone());
         if wanted.wants_no_manager() {
             if team.leader_id.is_some() || team.wants_manager != Some(false) {
                 h.change_layout(|layout, bots| { if let Some(s) = layout.section_mut(&id) { s.set_has_manager(false, bots) } });
@@ -243,6 +249,16 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
         manager_lines.push(format!("{} manages {} now", manager.name, team.name));
     }
 
+    // A manager the block didn't name but the category got anyway: a new category's first bot, or the next bot in one whose
+    // manager moved out.
+    let bots_now = h.bots();
+    for section in h.layout().sections.iter().filter(|s| !managed_by_order.contains(&s.id)) {
+        let Some(leader) = section.leader_id.as_deref() else { continue };
+        if managers_before.get(&section.id).and_then(|m| m.as_deref()) == Some(leader) { continue; }
+        let Some(manager) = bots_now.iter().find(|b| b.id == leader) else { continue };
+        manager_lines.push(format!("{} manages {} now, as its first bot (ask for another manager, or none, if you'd like)", manager.name, section.name));
+    }
+
     let mut sentences: Vec<String> = vec![];
     if !made_bots.is_empty() {
         sentences.push(format!("Vello made {} {}.", if made_bots.len() == 1 { "the bot" } else { "the bots" }, listed_in_words(&made_bots)));
@@ -257,8 +273,14 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
     } else if !made_bots.is_empty() {
         sentences.push("They're in the sidebar, and each one's settings can change its brain, model and apps.".into());
     }
-    h.post(ChatMessage::note(sentences.join(" ")), room);
+    // Marked as a team note so the CEO reads it at the start of its next turn (`take_waiting_reports`) and knows what was made.
+    let mut note = ChatMessage::note(sentences.join(" "));
+    note.card = Some(TEAM_NOTE_CARD.into());
+    h.post(note, room);
 }
+
+/// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
+pub const TEAM_NOTE_CARD: &str = "team-note";
 
 #[cfg(test)]
 mod tests {

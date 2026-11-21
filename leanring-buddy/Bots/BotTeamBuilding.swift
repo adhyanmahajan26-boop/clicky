@@ -33,6 +33,12 @@ extension BotsStore {
         var filedBotLines: [String] = []
         var managerLines: [String] = []
 
+        // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the
+        // job) is said in the note too, and the CEO doesn't think the category has none.
+        var managerBeforeBySectionID: [String: String] = [:]
+        for section in layout.sections { if let leaderID = section.leaderID { managerBeforeBySectionID[section.id] = leaderID } }
+        var categoryIDsWithManagerNamed: Set<String> = []
+
         // Categories first, so the bots can join them. One with the same name is used rather than made twice.
         var categoryIDsByName: [String: String] = [:]
         for wanted in order.categories {
@@ -77,6 +83,7 @@ extension BotsStore {
         for wanted in order.categories where wanted.manager != nil {
             guard let categoryID = categoryIDsByName[wanted.name.lowercased()], let team = category(categoryID),
                   team.leaderID != BotsStore.clickyID else { continue }
+            categoryIDsWithManagerNamed.insert(categoryID)
             if wanted.wantsNoManager {
                 if team.leaderID != nil || team.wantsManager != false {
                     setLeader(nil, of: categoryID)
@@ -96,6 +103,13 @@ extension BotsStore {
             managerLines.append("\(manager.name) manages \(team.name) now")
         }
 
+        // A manager the block didn't name but the category got anyway: a new category's first bot, or the next bot in one
+        // whose manager moved out.
+        for section in layout.sections where !categoryIDsWithManagerNamed.contains(section.id) && section.leaderID != BotsStore.clickyID {
+            guard let leaderID = section.leaderID, leaderID != managerBeforeBySectionID[section.id], let manager = bot(leaderID) else { continue }
+            managerLines.append("\(manager.name) manages \(section.name) now, as its first bot (ask for another manager, or none, if you'd like)")
+        }
+
         var sentences: [String] = []
         if !madeBotLines.isEmpty {
             sentences.append("Vello made " + (madeBotLines.count == 1 ? "the bot " : "the bots ") + Self.listedInWords(madeBotLines) + ".")
@@ -110,8 +124,12 @@ extension BotsStore {
         } else if !madeBotLines.isEmpty {
             sentences.append("They're in the sidebar, and each one's settings can change its brain, model and apps.")
         }
-        post(BotChatMessage(author: Self.noteAuthor, text: sentences.joined(separator: " ")), to: conversationID)
+        // Marked as a team note so the CEO reads it at the start of its next turn (`takeWaitingReports`) and knows what was made.
+        post(BotChatMessage(author: Self.noteAuthor, text: sentences.joined(separator: " "), card: Self.teamNoteCard), to: conversationID)
     }
+
+    /// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
+    static let teamNoteCard = "team-note"
 
     /// A category's name as it's saved, for the chat's note.
     private func savedCategoryName(_ name: String?) -> String {
