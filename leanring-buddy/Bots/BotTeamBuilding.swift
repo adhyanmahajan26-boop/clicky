@@ -2,7 +2,8 @@
 //  BotTeamBuilding.swift
 //  leanring-buddy
 //
-//  The CEO makes new bots and categories, picks their managers and moves bots between them, when the owner asks in chat. The CEO writes a ```team block
+//  The CEO makes new bots, categories and group chats, picks managers, moves bots, and renames a bot or changes its
+//  instructions, description, model or memory, when the owner asks in chat. The CEO writes a ```team block
 //  (ClickyCore `TeamBuildOrder`, how-to in `BotProtocol.teamBuildHowTo`); this makes what it asks for, the same way the
 //  New bot sheet and the New category row do, and says what it made in the chat.
 //
@@ -33,6 +34,10 @@ extension BotsStore {
         var filedBotLines: [String] = []
         var managerLines: [String] = []
         var brainLines: [String] = []
+        var editLines: [String] = []
+        var groupLines: [String] = []
+        // A bot renamed in this answer can still be named by its old name further down the block (a group chat, a manager).
+        var botIDsByOldName: [String: String] = [:]
 
         // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the
         // job) is said in the note too, and the CEO doesn't think the category has none.
@@ -85,6 +90,7 @@ extension BotsStore {
                         brainLines.append("\(existing.name) runs on \(brainWords(model: newModel, engine: pick.engine, makerEngine: maker.provider)) now")
                     }
                 }
+                editLines += editFromChat(existing.id, as: wanted, mayChange: mayChange, botIDsByOldName: &botIDsByOldName)
                 continue
             }
             let pick = TeamBuildBrains.pick(brain: wanted.brain, model: wanted.model, makerEngine: maker.provider, among: brains)
@@ -96,6 +102,7 @@ extension BotsStore {
                               provider: engine, model: model, groupID: nil)
             made.effort = engine.hasPrefix("api:") ? nil : HarnessPrefs.defaultEffort(engine)
             save(made)
+            if let memory = wanted.memory { writeMemoryFromChat(memory, botID: made.id, adding: false) }
             if let categoryID { addMember(made.id, to: categoryID) }
             let modelWords = wanted.model != nil || wanted.brain != nil ? brainWords(model: model, engine: engine, makerEngine: maker.provider) : ""
             madeBots.append(TeamBuildOrder.MadeBot(name: made.name, category: categoryID == nil ? nil : savedCategoryName(wanted.category), modelWords: modelWords))
@@ -133,6 +140,8 @@ extension BotsStore {
             managerLines.append("\(manager.name) manages \(team.name) now")
         }
 
+        groupLines = buildGroupsFromChat(order.groups, botIDsByOldName: botIDsByOldName)
+
         // A manager the block didn't name but the category got anyway: a new category's first bot, or the next bot in one
         // whose manager moved out.
         for section in layout.sections where !categoryIDsWithManagerNamed.contains(section.id) && section.leaderID != BotsStore.clickyID {
@@ -148,6 +157,8 @@ extension BotsStore {
         sentences += filedBotLines.map { $0 + "." }
         sentences += managerLines.map { $0 + "." }
         sentences += brainLines.map { $0 + "." }
+        sentences += editLines.map { $0 + "." }
+        sentences += groupLines.map { $0 + "." }
         if sentences.isEmpty {
             sentences.append("Everything \(maker.name) asked for was already set up that way, so nothing changed.")
         } else if !madeBots.isEmpty {
@@ -155,6 +166,118 @@ extension BotsStore {
         }
         // Marked as a team note so the CEO reads it at the start of its next turn (`takeWaitingReports`) and knows what was made.
         post(BotChatMessage(author: Self.noteAuthor, text: sentences.joined(separator: " "), card: Self.teamNoteCard), to: conversationID)
+    }
+
+    /// A bot that exists, listed with a new name, instructions, description or memory: changed as its settings would, and
+    /// said in the note. Vello itself, Pointer Assistant and its helpers stay as they are.
+    private func editFromChat(_ botID: String, as wanted: TeamBuildOrder.NewBot, mayChange: Bool,
+                              botIDsByOldName: inout [String: String]) -> [String] {
+        guard var edited = bot(botID) else { return [] }
+        let asksForEdit = wanted.newName != nil || !wanted.instructions.isEmpty || !wanted.does.isEmpty || wanted.memory != nil
+        guard asksForEdit else { return [] }
+        guard mayChange else {
+            // Only said when something it can't take was asked for: a description alone is often just the CEO restating it.
+            guard wanted.newName != nil || !wanted.instructions.isEmpty || wanted.memory != nil else { return [] }
+            return ["Vello doesn't change \(edited.name)'s name, instructions or memory from chat: its own settings can"]
+        }
+        var lines: [String] = []
+        var changes: [String] = []
+        let oldName = edited.name
+        if let newName = wanted.newName {
+            if bots.contains(where: { $0.id != botID && TeamBuildOrder.sameName($0.name, newName) }) {
+                lines.append("Vello couldn't rename \(oldName) to \(newName): another bot is called that")
+            } else if edited.name != newName {
+                edited.name = newName
+                botIDsByOldName[oldName.lowercased()] = botID
+                lines.append("\(oldName) is called \(newName) now")
+            }
+        }
+        if !wanted.instructions.isEmpty, wanted.instructions != edited.instructions {
+            edited.instructions = wanted.instructions
+            changes.append("new instructions")
+        }
+        if !wanted.does.isEmpty, wanted.does != edited.description {
+            edited.description = wanted.does
+            changes.append("a new description")
+        }
+        if edited != bot(botID) { save(edited) }
+        if !changes.isEmpty { lines.append("\(edited.name) has \(TeamBuildOrder.listedInWords(changes))") }
+        if let memory = wanted.memory {
+            lines.append(writeMemoryFromChat(memory, botID: botID, adding: true)
+                         ? "Vello added that to \(edited.name)'s memory"
+                         : "\(edited.name)'s memory already had that")
+        }
+        return lines
+    }
+
+    /// Writes what a bot should remember into its memory file: a new bot's file starts with it, a bot that exists has it added
+    /// at the end. False when its memory already held it.
+    @discardableResult
+    private func writeMemoryFromChat(_ memory: String, botID: String, adding: Bool) -> Bool {
+        let target = BotMemory.file(botID: botID)
+        let before = adding ? BotMemory.read(botID: botID) : ""
+        guard let after = TeamBuildOrder.memory(before, adding: memory) else { return false }
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? after.write(to: target, atomically: true, encoding: .utf8)
+        return true
+    }
+
+    /// Makes the group chats a block lists, or sets the head of one that exists and adds the members named, as the New group
+    /// sheet does. Each one's line for the note.
+    private func buildGroupsFromChat(_ wantedGroups: [TeamBuildOrder.NewGroup], botIDsByOldName: [String: String]) -> [String] {
+        var lines: [String] = []
+        // A bot by its name now, or by the name it had before this answer renamed it. Pointer Assistant and its helpers
+        // talk only in their own team.
+        func botNamed(_ name: String) -> NativeBot? {
+            let found = bots.first { TeamBuildOrder.sameName($0.name, name) } ?? botIDsByOldName[name.lowercased()].flatMap { bot($0) }
+            guard let found, found.id != Self.clickyID, found.owner == nil else { return nil }
+            return found
+        }
+        for wanted in wantedGroups {
+            let head = wanted.head.flatMap(botNamed)
+            var memberIDs: [String] = []
+            var missing: [String] = []
+            for name in ([wanted.head].compactMap { $0 } + wanted.members) {
+                guard let found = botNamed(name) else { missing.append(name); continue }
+                if !memberIDs.contains(found.id) { memberIDs.append(found.id) }
+            }
+            let missingLine = missing.isEmpty ? "" : " (Vello couldn't find \(TeamBuildOrder.listedInWords(missing)) to add)"
+            if var existing = groups.first(where: { $0.id != BotGroup.projectID && TeamBuildOrder.sameName($0.name, wanted.name) }) {
+                let before = existing
+                if let head, existing.headID != head.id {
+                    if let oldHead = existing.headID { existing.memberIDs.append(oldHead) }
+                    existing.headID = head.id
+                }
+                let joining = memberIDs.filter { $0 != existing.headID && !existing.memberIDs.contains($0) }
+                let room = TeamBuildOrder.mostGroupMembers - existing.allIDs.count
+                existing.memberIDs += joining.prefix(max(0, room))
+                existing.memberIDs.removeAll { $0 == existing.headID }
+                guard existing != before else {
+                    if !missing.isEmpty { lines.append("The \(existing.name) group chat stays as it was" + missingLine) }
+                    continue
+                }
+                save(existing)
+                var parts: [String] = []
+                if existing.headID != before.headID, let headName = existing.headID.flatMap({ bot($0)?.name }) { parts.append("\(headName) leads it now") }
+                let joinedNames = joining.prefix(max(0, room)).compactMap { bot($0)?.name }
+                if !joinedNames.isEmpty { parts.append(TeamBuildOrder.listedInWords(joinedNames) + " joined") }
+                if joining.count > max(0, room) { parts.append("it was full, so not everyone joined (six bots at most)") }
+                lines.append("In the \(existing.name) group chat, " + parts.joined(separator: "; ") + missingLine)
+                continue
+            }
+            guard let headID = head?.id ?? memberIDs.first, memberIDs.count >= TeamBuildOrder.fewestGroupMembers else {
+                lines.append("Vello couldn't make the \(wanted.name) group chat: it needs two bots that are here" + missingLine)
+                continue
+            }
+            var id = BotsT3.slug(wanted.name)
+            var suffix = 2
+            while group(id) != nil || id == BotGroup.projectID { id = "\(BotsT3.slug(wanted.name))-\(suffix)"; suffix += 1 }
+            let others = Array(memberIDs.filter { $0 != headID }.prefix(TeamBuildOrder.mostGroupMembers - 1))
+            save(BotGroup(id: id, name: wanted.name, symbol: "person.2.fill", headID: headID, memberIDs: others))
+            let headName = bot(headID)?.name ?? ""
+            lines.append("New group chat: \(wanted.name), with \(headName) at its head and \(TeamBuildOrder.listedInWords(others.compactMap { bot($0)?.name }))" + missingLine)
+        }
+        return lines
     }
 
     /// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
