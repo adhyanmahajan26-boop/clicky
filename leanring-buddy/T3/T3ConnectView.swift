@@ -15,8 +15,11 @@ import SwiftUI
 
 // MARK: - Self-test
 
-enum T3ConnectSelfTest {
-    struct Result {
+/// nonisolated: the app target defaults to MainActor isolation, so without it `run` would hop onto the main thread even
+/// from `Task.detached` and block it for the whole test. The running Vello answers the `claudia_status` call through its
+/// control inbox, which is read on the main thread, so it could never reply and the test always timed out.
+nonisolated enum T3ConnectSelfTest {
+    nonisolated struct Result {
         var passed: Bool
         var summary: String
         var detail: String
