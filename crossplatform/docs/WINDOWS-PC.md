@@ -133,7 +133,8 @@ About 30 minutes on a Windows 10 or 11 PC:
    Edit it to Every N hours, turn it off (Paused shows), then on again; Delete asks "Delete it?" first.
 13. **Chat cards.** Ask a bot for a long write-up with headings: it shows as a brief card; Open reads it in full, Share
     copies it. Ask a bot to "make a PDF of your notes" (it writes a file in its folder and adds `[PDF: notes.md]`): the PDF
-    card's Open opens it in your PDF reader. Ask a bot to choose with you: a `[CHOOSE: …]` shows as buttons or a list with
+    card's Open opens it in your PDF reader, Show in Explorer selects it, and Save to Desktop puts a copy there. Then say
+    "put it on my desktop": the bot adds `[SAVE FILE: notes.pdf -> Desktop]` and a second card shows the copy. Ask a bot to choose with you: a `[CHOOSE: …]` shows as buttons or a list with
     Use this and Skip. Turn a bot off in its settings: its chat shows "This bot is off" with Turn on. Ask Theo to ask another
     bot something: the private exchange folds into one card that opens.
 14. **Sign-in words for each brain.** Put a bot on an agent that's signed out (Codex, say): the card says "Codex is signed

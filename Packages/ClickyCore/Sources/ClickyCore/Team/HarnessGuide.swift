@@ -52,7 +52,7 @@ public enum HarnessGuide {
              "You can't run shell commands or edit files outside your memory folder (your skills live inside it). Anything that needs a command (a script, a build) goes to a coding run with a ```prompt block. " +
              "You can read only your memory folder, \(projectsFolder) and files or folders \(owner) names in the message: anything else is refused, and no setting opens it, " +
              "so use your app's connector or ask \(owner) to name its path. " +
-             BotProtocol.pdfHowTo + " " +
+             BotProtocol.pdfHowTo + " " + BotFileOrder.howTo(owner: owner) + " " +
              "Never say something happened until Vello's own line in the chat, a run card or a reply shows it."),
             ("Two Macs",
              "Vello can run on two linked Macs and keeps them in step. A message is answered on the Mac \(owner) typed it on, with that Mac's folders and coding runs, " +

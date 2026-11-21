@@ -6,7 +6,7 @@ use crate::harness::Harness;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub const COMMANDS: [&str; 10] = ["routineSave", "routinesList", "runChoices", "runChats", "projectMake", "projectsFolderSet", "runChoiceStart", "openFile", "pdfMake", "openLink"];
+pub const COMMANDS: [&str; 13] = ["routineSave", "routinesList", "runChoices", "runChats", "projectMake", "projectsFolderSet", "runChoiceStart", "openFile", "pdfMake", "openLink", "revealFile", "saveFileTo", "botFiles"];
 
 pub fn handles(name: &str) -> bool { COMMANDS.contains(&name) }
 
@@ -42,6 +42,31 @@ pub async fn handle(h: &Arc<Harness>, name: &str, cmd: &Value) -> Value {
                 Ok(()) => ok(json!({"opened": path})),
                 Err(e) => err(&e),
             }
+        }
+        // The file card's Show in folder: Explorer, Finder or the file manager with it selected (files.rs).
+        "revealFile" => {
+            let Some(path) = cmd.get("path").and_then(|p| p.as_str()) else { return err("Needs path.") };
+            match crate::files::reveal(h, path) {
+                Ok(()) => ok(json!({"shown": path})),
+                Err(e) => err(&e),
+            }
+        }
+        // The file card's Save to Desktop / Save to Downloads: a copy under a name that isn't taken there.
+        "saveFileTo" => {
+            let Some(path) = cmd.get("path").and_then(|p| p.as_str()) else { return err("Needs path.") };
+            let Some(place) = cmd.get("place").and_then(|p| p.as_str()).and_then(crate::files::Place::named) else { return err("Needs place: Desktop or Downloads.") };
+            match crate::files::save_copy(h, std::path::Path::new(path), place) {
+                Ok(copy) => ok(json!({"saved": copy.to_string_lossy(), "place": place.folder_name()})),
+                Err(e) => err(&e),
+            }
+        }
+        // A bot's finished reply with [FILE:] and [SAVE FILE:] lines, carried out as after its turn: for tests.
+        "botFiles" => {
+            let (Some(bot), Some(text)) = (cmd.get("bot").and_then(|b| b.as_str()).and_then(|id| h.bot(id)), cmd.get("text").and_then(|t| t.as_str())) else { return err("Needs bot and text.") };
+            let from_owner = cmd.get("fromOwner").and_then(|f| f.as_bool()).unwrap_or(true);
+            let (said, attached, saves) = crate::files::extract(text);
+            crate::files::carry_out_for_turn(h, &bot, &attached, &saves, &bot.id, None, from_owner);
+            ok(json!({"said": said, "attached": attached, "saves": saves.iter().map(|s| json!({"file": s.file, "place": s.place.folder_name()})).collect::<Vec<_>>()}))
         }
         // A web page in the owner's browser (claude.ai's connectors page, a pull request). Only https: never a file or a program.
         "openLink" => {

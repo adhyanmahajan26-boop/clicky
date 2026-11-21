@@ -303,12 +303,21 @@ const CARDS = (() => {
     });
   }
 
-  /* ---------------- a PDF Theo made from a bot's [PDF:] ---------------- */
-  function pdf(m) {
-    let p = {}; try { p = JSON.parse(m.card.slice(4)); } catch (e) { /* drawn from the words below */ }
-    return `<div class="tc ok"><div class="tc-h"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M9.5 13h5M9.5 16.5h5"/></svg></span><span class="who"><b>${esc(p.name || "PDF")}</b> · made for ${esc(nameOf(p.bot || ""))}</span>${TP.pill("ok", "Ready")}</div>`
-      + `<div class="tc-field"><span title="${esc(p.path || "")}">${esc(p.path || "")}</span><button class="btn sm" data-copy="${esc(p.path || "")}">Copy</button></div>`
-      + `<div class="btns"><button class="btn pri" data-open-file="${esc(p.path || "")}">Open</button></div></div>`;
+  /* ---------------- a file a bot made: [PDF:], [FILE:] or a copy from [SAVE FILE:] (files.rs) ---------------- */
+  // "pdf:{path, name, bot}" or "file:{path, name, bot, source?, place?}". Open opens the file in Vello's folder (a copy's source),
+  // Show in folder selects the file itself, and Save puts a copy on the Desktop or in Downloads.
+  const revealWords = /win/i.test(navigator.platform || navigator.userAgent) ? "Show in Explorer" : /mac/i.test(navigator.platform || "") ? "Show in Finder" : "Show in folder";
+  function pdf(m) { return fileCard(m); }
+  function fileCard(m) {
+    let p = {}; try { p = JSON.parse(m.card.slice(m.card.indexOf(":") + 1)); } catch (e) { /* drawn from the words below */ }
+    const path = p.path || "", inVello = p.source || path, name = p.name || "File";
+    const kind = ((name.match(/\.([a-z0-9]{1,8})$/i) || [])[1] || "file").toUpperCase();
+    const where = p.place ? `on your ${esc(p.place)}` : `made for ${esc(nameOf(p.bot || ""))}`;
+    const saves = ["Desktop", "Downloads"].filter((place) => place !== p.place)
+      .map((place) => `<button class="btn" data-save-file="${esc(inVello)}" data-place="${place}">Save to ${place}</button>`).join("");
+    return `<div class="tc ok tc-file"><div class="tc-h"><span class="app"><svg class="ic" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M9.5 13h5M9.5 16.5h5"/></svg></span><span class="who"><b>${esc(name)}</b> · ${kind} · ${where}</span>${TP.pill("ok", "Ready")}</div>`
+      + `<div class="tc-field"><span title="${esc(path)}">${esc(path)}</span><button class="btn sm" data-copy="${esc(path)}">Copy</button></div>`
+      + `<div class="btns"><button class="btn pri" data-open-file="${esc(inVello)}">Open</button><button class="btn" data-reveal-file="${esc(path)}">${revealWords}</button>${saves}</div></div>`;
   }
 
   /* ---------------- wiring ---------------- */
@@ -334,6 +343,13 @@ const CARDS = (() => {
     root.querySelectorAll("[data-turn-on]").forEach((b) => b.onclick = async () => { b.disabled = true; await invoke({ cmd: "botUpdate", id: b.dataset.turnOn, enabled: true }); sigs.chat = null; refresh(); });
     root.querySelectorAll("[data-open-pane]").forEach((b) => b.onclick = () => open({ kind: b.dataset.openPane }));
     root.querySelectorAll("[data-open-file]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "openFile", path: b.dataset.openFile }); b.textContent = r.ok ? "Opened" : r.error; });
+    root.querySelectorAll("[data-reveal-file]").forEach((b) => b.onclick = async () => { const r = await invoke({ cmd: "revealFile", path: b.dataset.revealFile }); if (!r.ok) b.textContent = r.error; });
+    root.querySelectorAll("[data-save-file]").forEach((b) => b.onclick = async () => {
+      b.disabled = true;
+      const r = await invoke({ cmd: "saveFileTo", path: b.dataset.saveFile, place: b.dataset.place });
+      if (r.ok) { b.textContent = `Saved to ${b.dataset.place}`; b.title = r.saved; b.onclick = () => invoke({ cmd: "revealFile", path: r.saved }); b.disabled = false; }
+      else { b.textContent = r.error; }
+    });
     wireDM(root);
     // Left alone with the chat open, a choice picks its highlighted option after ten minutes; a card more than an hour past that waits.
     while (autoTimers.length) clearTimeout(autoTimers.pop());
@@ -361,5 +377,5 @@ const CARDS = (() => {
     return JSON.stringify([(state.exchanges || []).map((e) => e.id + e.replying), [...dmOpen], !!brainsCache, state.bots.map((b) => b.enabled)]);
   }
 
-  return { parseBrief, parseCall, brief, choose, ask, failure, signInCard, plainFailureCard, off, dm, pdf, wire, sig, rich, firstSentence, brainLabel, SIGNIN, wantBrains, answerCall };
+  return { parseBrief, parseCall, brief, choose, ask, failure, signInCard, plainFailureCard, off, dm, pdf, fileCard, wire, sig, rich, firstSentence, brainLabel, SIGNIN, wantBrains, answerCall };
 })();
