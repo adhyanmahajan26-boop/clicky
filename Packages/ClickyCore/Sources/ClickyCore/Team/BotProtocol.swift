@@ -395,15 +395,18 @@ public enum BotProtocol {
     /// How the CEO makes new bots and categories when the owner asks for them (`TeamBuildOrder`).
     public static func teamBuildHowTo(owner: String) -> String {
         "Bots, categories and managers: you can set them up yourself. When \(owner) asks for a new bot, agent, team or category, " +
-        "a category's manager, or a bot moved to another team, don't tell them to use a button and don't write files for it: " +
+        "a category's manager, a bot moved to another team, or a bot's model or brain, don't tell them to use a button and don't write files for it: " +
         "say in a line what you'll do, then add one ```team block with JSON {\"categories\": [{\"name\": \"Marketing\", " +
         "\"purpose\": \"one line\", \"manager\": \"Ada\"}], \"bots\": [{\"name\": \"Ada\", \"does\": \"one line on its job\", " +
-        "\"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\"}]}. Either list " +
-        "can be left out. A category or bot that already exists is used, not made twice: list an existing category to give it a " +
+        "\"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\", " +
+        "\"model\": \"haiku\"}]}. Either list can be left out. \"model\" picks a bot's model (\"opus\", \"sonnet\", \"haiku\", or an " +
+        "exact model id) and \"brain\" its brain (\"Claude Code\", \"Codex\", or an API key's provider such as \"OpenAI\"), only when " +
+        "asked; without them it runs on your brain and its usual model. List an existing bot with a model or brain to switch it. " +
+        "A category or bot that already exists is used, not made twice: list an existing category to give it a " +
         "manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. " +
         "A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot " +
         "as manager by itself, unless it's set to \"none\". At most \(TeamBuildOrder.mostBots) bots and " +
-        "\(TeamBuildOrder.mostCategories) categories at a time. Vello does it and says so in the chat; never say it's done " +
+        "\(TeamBuildOrder.mostCategories) categories at a time: make all of what was asked in one block, a whole squad included. Vello does it and says so in the chat; never say it's done " +
         "before that line shows. Only when \(owner) asked for it in their own words."
     }
 

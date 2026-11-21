@@ -370,3 +370,37 @@ def add_cases(S):
                   "note_names_manager": any("%s manages %s now" % (bot, name) in t for t in notes),
                   "said_once": sum(t.count("%s manages %s now" % (bot, name)) for t in notes) == 1}
         return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "notes": notes[-1:]}
+
+    @test("TM12", "One answer makes a squad: an Opus manager and ten Haiku workers in a new category; then a worker is switched to Sonnet", "teams")
+    def tm12():
+        n = T.nonce()
+        squad, boss = "Super Digger Squad %s" % n, "Digger Boss %s" % n
+        workers = ["Digger %d %s" % (i, n) for i in range(1, 11)]
+        block = json.dumps({"categories": [{"name": squad, "manager": boss}],
+                            "bots": [{"name": boss, "does": "Runs the dig", "category": squad, "model": "Claude Opus 5.5"}] +
+                                    [{"name": w, "does": "Digs", "category": squad, "model": "haiku"} for w in workers]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Setting up the squad.\n```team\n%s\n```" % block}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a Super Digger Squad %s category with %s on Opus 5.5 as manager and ten Haiku workers." % (n, boss))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        bots = {b["name"]: b for b in T.state()["bots"] if n in b["name"]}
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == squad), None)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        switch = json.dumps({"bots": [{"name": workers[0], "model": "sonnet"}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Switching it.\n```team\n%s\n```" % switch}, {"reply": "ok"}])
+        start2 = len(T.chat("theo", 400))
+        T.say("theo", "Switch %s to Sonnet." % workers[0])
+        idle2, _ = T.wait_idle(seconds=90, quiet=3)
+        switched = next((b for b in T.state()["bots"] if b["name"] == workers[0]), {})
+        notes2 = [m["text"] for m in T.chat("theo", 400)[start2:] if m["author"] == "note"]
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        for b in bots.values(): P({"cmd": "botDelete", "id": b["id"]})
+        T.fake("ok")
+        def model(name): return (bots.get(name) or {}).get("model")
+        checks = {"eleven_made": len(bots) == 11, "all_in_squad": team is not None and all(b["id"] in team["members"] for b in bots.values()),
+                  "boss_on_opus": model(boss) == "claude-opus-5-5", "workers_on_haiku": all(model(w) == "claude-haiku-5-5" for w in workers),
+                  "boss_manages": team is not None and boss in bots and team["leader"] == bots[boss]["id"],
+                  "note_says_models": any(("Vello made 11 bots in %s: %s on Claude Opus 5.5; Digger 1" % (squad, boss)) in t and "Digger 10 %s on Claude Haiku 5.5." % n in t for t in notes),
+                  "switched_to_sonnet": switched.get("model") == "claude-sonnet-5-5",
+                  "note_says_switch": any("%s runs on Claude Sonnet 5.5 now" % workers[0] in t for t in notes2)}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": (notes + notes2)[-2:]}
