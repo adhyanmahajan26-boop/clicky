@@ -50,6 +50,9 @@ struct HubCatalogEntry: Identifiable, Equatable {
     let id: String
     let name: String
     let kind: String
+    /// none, oauth or token (remote apps).
+    var auth: String = ""
+    var isComposio: Bool = false
     let description: String
     /// How it is reached, in words ("Your Claude account (needs Claude Code)").
     let via: String
@@ -225,7 +228,8 @@ enum ConnectorHub {
         let apps = (answer["catalog"] as? [String: Any])?["apps"] as? [[String: Any]] ?? []
         return apps.compactMap { entry in
             guard let id = entry["id"] as? String, let name = entry["name"] as? String else { return nil }
-            return HubCatalogEntry(id: id, name: name, kind: entry["kind"] as? String ?? "", description: entry["description"] as? String ?? "",
+            return HubCatalogEntry(id: id, name: name, kind: entry["kind"] as? String ?? "", auth: entry["auth"] as? String ?? "",
+                                   isComposio: entry["composio"] != nil, description: entry["description"] as? String ?? "",
                                    via: entry["via"] as? String ?? "")
         }
     }
@@ -259,6 +263,16 @@ enum ConnectorHub {
     }
 
     static func signOut(_ appID: String) async throws { try await run(["signout", appID]) }
+
+    /// Composio: a link that connects one app (gmail, slack, …) to the owner's Composio account. Returns the app's slug and the
+    /// link, which the caller opens in the browser.
+    static func composioLink(_ appID: String, app typed: String) async throws -> (toolkit: String, url: URL) {
+        let answer = try await run(["composio-link", appID, typed], timeout: 60)
+        guard let address = answer["url"] as? String, let url = URL(string: address) else {
+            throw ConnectorHubError(message: "Composio didn't give a link.")
+        }
+        return (answer["toolkit"] as? String ?? ComposioWords.slug(fromTyped: typed), url)
+    }
 
     /// Signs in to an OAuth app: the hub prints the address to open (opened in the owner's browser by `open`), then waits for
     /// the browser to come back. Returns the app's status afterwards.

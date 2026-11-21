@@ -35,6 +35,19 @@ struct ConnectorHubRulesTests {
         #expect(failing.connectorState == .failed("HTTP 500"))
     }
 
+    @Test func composioIsATokenAppWithItsConnectedApps() throws {
+        let text = #"{"ok":true,"apps":[{"id":"composio","name":"Composio","kind":"remote","url":"https://backend.composio.dev","auth":"token","composio":{"userId":"vello"},"catalogId":"composio","status":"connected","signedIn":true,"composioConnectedApps":["gmail","googlecalendar"]},{"id":"linear","name":"Linear","kind":"remote","url":"https://mcp.linear.app/mcp","auth":"token","status":"needsSignIn","signedIn":false}]}"#
+        let answer = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        let apps = try #require(HubAppRecord.list(fromHubAnswer: answer))
+        #expect(apps[0].isComposio && apps[0].takesPastedToken && apps[0].composioUserID == "vello")
+        #expect(apps[0].composioConnectedApps == ["gmail", "googlecalendar"])
+        #expect(!apps[1].isComposio && apps[1].composioConnectedApps.isEmpty)
+        #expect(ComposioWords.connectedLine(apps[0].composioConnectedApps, hasKey: true) == "Gmail, Google Calendar")
+        #expect(ComposioWords.connectedLine([], hasKey: false) == "Paste your key first")
+        #expect(ComposioWords.slug(fromTyped: " Google Calendar ") == "googlecalendar")
+        #expect(ComposioWords.appName("whatsapp") == "Whatsapp")
+    }
+
     @Test func aFailureAnswerIsNotAList() {
         #expect(HubAppRecord.list(fromHubAnswer: ["ok": false, "error": "Say where Vello's data folder is"]) == nil)
     }

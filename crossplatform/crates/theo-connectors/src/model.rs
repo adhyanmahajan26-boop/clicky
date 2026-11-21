@@ -57,6 +57,18 @@ pub struct OAuthClientSettings {
     pub scopes: Option<Vec<String>>,
 }
 
+/// A Composio app: one API key that reaches every app the owner connects on Composio (Gmail, Slack, GitHub, …). The app is a
+/// `remote` app with `auth: "token"` (the pasted token is the Composio API key) and `url` the Composio API's address; the hub
+/// opens a Composio tool-router session for `userId` and talks MCP to the address that session gives (`composio.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposioSettings {
+    /// Composio's name for the person whose accounts are connected. The same on every computer with the same key, so an app
+    /// connected once works on the Mac and on Windows alike. Default `vello`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppEntry {
@@ -74,6 +86,9 @@ pub struct AppEntry {
     pub auth: RemoteSignIn,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<OAuthClientSettings>,
+    /// Set for a Composio app (see `ComposioSettings`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composio: Option<ComposioSettings>,
 
     // local
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +138,10 @@ pub fn is_valid_app_id(app_id: &str) -> bool {
 }
 
 impl AppEntry {
+    pub fn is_composio(&self) -> bool {
+        self.kind == AppKind::Remote && self.composio.is_some()
+    }
+
     /// Checks an entry before it is saved; the error is a sentence for the person adding the app.
     pub fn validate(&self) -> Result<(), String> {
         if !is_valid_app_id(&self.id) {
@@ -138,6 +157,9 @@ impl AppEntry {
                 let is_loopback = matches!(parsed_address.host_str(), Some("127.0.0.1") | Some("localhost") | Some("[::1]") | Some("::1"));
                 if parsed_address.scheme() != "https" && !(parsed_address.scheme() == "http" && is_loopback) {
                     return Err("A remote app's address must start with https:// (plain http only on this computer).".into());
+                }
+                if self.composio.is_some() && self.auth != RemoteSignIn::PastedToken {
+                    return Err("A Composio app signs in with its API key: its auth must be \"token\".".into());
                 }
             }
             AppKind::Local => {
@@ -267,6 +289,14 @@ pub struct AppStateRecord {
     pub last_checked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_count: Option<usize>,
+    /// Composio: the tool-router session the hub opened, reused until Composio stops taking it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composio_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composio_session_url: Option<String>,
+    /// Composio: the apps (toolkit slugs such as `gmail`) connected on Composio, as last seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composio_connected_apps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

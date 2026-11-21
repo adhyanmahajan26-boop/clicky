@@ -1,7 +1,20 @@
 {
   "version": 1,
-  "note": "Only apps whose address and sign-in have been tested go here. Anything else is added with \"Add your own\" (a URL or a command). Google's own MCP servers (gmailmcp.googleapis.com and the Drive, Docs and Sheets ones) need a Google OAuth client registered by the app's owner, so until there is one they come through a Claude account. See docs/CONNECTORS.md.",
+  "note": "Only apps whose address and sign-in have been tested go here (Composio is checked against its documented API; see docs/CONNECTORS.md). Anything else is added with \"Add your own\" (a URL or a command). Google's own MCP servers (gmailmcp.googleapis.com and the Drive, Docs and Sheets ones) need a Google OAuth client registered by the app's owner, so until there is one they come through a Claude account. See docs/CONNECTORS.md.",
   "apps": [
+    {
+      "id": "composio",
+      "name": "Composio",
+      "kind": "remote",
+      "url": "https://backend.composio.dev",
+      "auth": "token",
+      "composio": {
+        "userId": "vello"
+      },
+      "description": "One key for hundreds of apps: Gmail, Slack, GitHub, Notion, Google Calendar, Linear and more. Paste your Composio API key, then connect each app once with a link.",
+      "via": "Your Composio API key (composio.dev, free plan available)",
+      "tested": "Built 19 November 2026 against Composio's documented tool-router API (POST /api/v3.1/tool_router/session, its MCP address with x-api-key, and /link) and a local stand-in (crossplatform/tests/composio_stub.py)."
+    },
     {
       "id": "gmail",
       "name": "Gmail",
