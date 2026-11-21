@@ -823,7 +823,6 @@ struct BotChatScreen: View {
     let bot: NativeBot?
     /// The group whose chat this is (with no bot).
     var groupID: String? = nil
-    @State private var draft = ""
     /// Replies that were there when the chat opened show at once; new ones type in.
     @State private var settledIDs: Set<String> = []
     /// The text each bot last streamed here, so its finished message doesn't type out a second time.
@@ -835,11 +834,7 @@ struct BotChatScreen: View {
     @State private var showsModelSettings = false
     @State private var showsDetails = false
     @State private var editsGroup = false
-    @State private var attachments: [URL] = []
     @ObservedObject private var studio = StudioController.shared
-    @ObservedObject private var dictation = ComposerDictation.shared
-    @AppStorage(ComposerDictationSettings.enabledKey) private var dictationEnabled = true
-    @ObservedObject private var products = TheoProducts.shared
 
     private var record: BotConversationRecord { store.conversation(conversationID) }
     private var group: BotGroup? { groupID.flatMap { store.group($0) } }
@@ -959,7 +954,9 @@ struct BotChatScreen: View {
                 }
             }
             }
-            composer
+            BotChatComposer(store: store, conversationID: conversationID, bot: bot, groupID: groupID,
+                            groupName: group?.name, groupBots: groupBots,
+                            canStop: canStop, someoneIsWritingHere: !inProgress.isEmpty)
         }
         .onAppear { store.viewing = conversationID }
     }
@@ -1114,6 +1111,29 @@ struct BotChatScreen: View {
         guard names.count > 1 else { return names.first ?? "the others" }
         return names.dropLast().joined(separator: ", ") + " and " + names.last!
     }
+}
+
+/// The chat's composer, a view of its own so the draft is its own state. When the draft lived on BotChatScreen, every key
+/// typed (and a big paste) re-ran the whole chat's body, every shown message with it, which made typing under a long prompt lag.
+struct BotChatComposer: View {
+    @ObservedObject var store: BotsStore
+    let conversationID: String
+    /// Nil for a group chat.
+    let bot: NativeBot?
+    var groupID: String? = nil
+    var groupName: String? = nil
+    var groupBots: [NativeBot] = []
+    /// Stop has something to stop: a bot writing here, a group's round, or private messages this chat set off.
+    let canStop: Bool
+    /// A bot is writing its reply in this chat right now.
+    let someoneIsWritingHere: Bool
+    @State private var draft = ""
+    @State private var attachments: [URL] = []
+    @ObservedObject private var dictation = ComposerDictation.shared
+    @AppStorage(ComposerDictationSettings.enabledKey) private var dictationEnabled = true
+    @ObservedObject private var products = TheoProducts.shared
+
+    var body: some View { composer }
 
     @FocusState private var composerFocused: Bool
 
@@ -1148,7 +1168,7 @@ struct BotChatScreen: View {
                 ComposerDictationField(live: dictation.live, isFinishing: isFinishing)
                 ComposerDictationBar(live: dictation.live, isFinishing: isFinishing, onCancel: dictation.cancel, onKeep: dictation.stop)
             } else {
-            TextField(bot.map { "Message \($0.name), or type / for commands" } ?? "Message \(group?.name ?? "the group")",
+            TextField(bot.map { "Message \($0.name), or type / for commands" } ?? "Message \(groupName ?? "the group")",
                       text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
@@ -1183,7 +1203,7 @@ struct BotChatScreen: View {
                 if canStop && isEmpty {
                     Button {
                         if let bot {
-                            if !inProgress.isEmpty { store.stop(bot.id) }
+                            if someoneIsWritingHere { store.stop(bot.id) }
                             store.stopPrivateMessages(in: conversationID)
                         } else if let groupID {
                             store.stopGroup(groupID)
