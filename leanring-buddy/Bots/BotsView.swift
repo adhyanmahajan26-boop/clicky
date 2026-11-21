@@ -137,6 +137,8 @@ struct BotsRootView: View {
 
     @State private var editingGroup: BotGroup?
     @State private var addingBot = false
+    /// Set when the New bot sheet was opened from a category's right-click menu: the bot it makes joins that category.
+    @State private var addingBotToSectionID: String?
     @State private var detailsBot: NativeBot?
     @State private var namingSectionFor: String?
     @State private var sectionName = ""
@@ -177,6 +179,14 @@ struct BotsRootView: View {
                                         isSelected: selection.pane == .routines) { selection.pane = .routines }
                         }
                         hairlineRow("notes", "Notes", isSelected: selection.pane == .notes) { selection.pane = .notes }
+                        if products.isOn(.theo) {
+                            // Said in words near the top, where it's seen without scrolling. The small icon beside the
+                            // CEO row and ⌘N do the same, but on their own they read as no way to add a bot.
+                            hairlineRow("compose", "New bot", trailing: "⌘N", isSelected: false) {
+                                addingBotToSectionID = nil
+                                addingBot = true
+                            }
+                        }
                         if products.isOn(.theo) {
                             let pinned = pinnedItems
                             if !pinned.isEmpty {
@@ -221,10 +231,14 @@ struct BotsRootView: View {
                 editingGroup = nil
             }
         }
-        .sheet(isPresented: $addingBot) {
-            NewBotSheet(store: store) { bot in
-                if let bot { selection.pane = .bot(bot.id) }
+        .sheet(isPresented: $addingBot, onDismiss: { addingBotToSectionID = nil }) {
+            NewBotSheet(store: store, joiningTeamName: addingBotToSectionID.flatMap { id in store.layout.sections.first { $0.id == id }?.name }) { bot in
+                if let bot {
+                    if let addingBotToSectionID { store.addMember(bot.id, to: addingBotToSectionID) }
+                    selection.pane = .bot(bot.id)
+                }
                 addingBot = false
+                addingBotToSectionID = nil
             }
         }
         .sheet(item: $detailsBot) { bot in
@@ -675,6 +689,7 @@ struct BotsRootView: View {
             .buttonStyle(.plain)
             .contextMenu {
                 Button("Open team page") { selection.pane = .category(section.id) }
+                Button("New bot in \(section.name)…") { addingBotToSectionID = section.id; addingBot = true }
                 Button(collapsed ? "Show the team" : "Fold the team") { withAnimation(.easeOut(duration: 0.15)) { store.toggleCollapsed(section.id) } }
                 Menu("Manager") {
                     Button("No manager (everyone reports to \(store.primary?.name ?? "the CEO"))") { store.setLeader(nil, of: section.id) }
