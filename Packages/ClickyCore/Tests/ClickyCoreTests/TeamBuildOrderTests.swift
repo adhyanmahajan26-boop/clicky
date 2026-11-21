@@ -66,6 +66,7 @@ struct TeamBuildOrderTests {
         #expect(TeamBuildOrder.madeBotsSentence([.init(name: "Rex", category: "Sales")]) == "Vello made the bot Rex in Sales.")
         #expect(TeamBuildOrder.madeBotsSentence([.init(name: "Ada", category: "Growth"), .init(name: "Rex", category: "Sales"), .init(name: "Bo")])
                 == "Vello made 3 bots: in Growth, Ada; in Sales, Rex; outside any category, Bo.")
+        #expect(TeamBuildOrder.madeBotsSentence([.init(name: "Ada"), .init(name: "Bo")]) == "Vello made 2 bots: Ada and Bo.")
     }
 
     @Test func aBotCanNameItsBrain() {
@@ -120,6 +121,68 @@ struct TeamBuildOrderTests {
         #expect(howTo.contains("```team"))
         #expect(howTo.contains("own words"))
         #expect(howTo.contains("\"manager\": \"none\""))
+        #expect(howTo.contains("\"groups\": [{\"name\""))
+        #expect(howTo.contains("\"rename\""))
+        #expect(howTo.contains("\"memory\""))
+        #expect(howTo.contains("30000 characters"))
+    }
+
+    @Test func aGroupChatWithAHeadAndMembers() {
+        let order = TeamBuildOrder.parse(#"{"groups": [{"name": "Launch room", "head": "Ada", "members": ["Rex", "Bo", "ada", "rex"]}]}"#)
+        #expect(order?.groups == [.init(name: "Launch room", head: "Ada", members: ["Rex", "Bo"])])
+        #expect(order?.bots.isEmpty == true)
+    }
+
+    @Test func aGroupChatNeedsTwoBotsAndHoldsSix() {
+        #expect(TeamBuildOrder.parse(#"{"groups": [{"name": "Alone", "head": "Ada"}]}"#) == nil)
+        #expect(TeamBuildOrder.parse(#"{"groups": [{"name": "Pair", "members": ["Ada", "Rex"]}]}"#)?.groups.first?.head == nil)
+        let crowd = (1...10).map { "\"Bot \($0)\"" }.joined(separator: ", ")
+        let withHead = TeamBuildOrder.parse(#"{"groups": [{"name": "Crowd", "head": "Boss", "members": ["# + crowd + "]}]}")
+        #expect(withHead?.groups.first?.members.count == 5)
+        let withoutHead = TeamBuildOrder.parse(#"{"groups": [{"name": "Crowd", "members": ["# + crowd + "]}]}")
+        #expect(withoutHead?.groups.first?.members.count == 6)
+        let many = (1...10).map { #"{"name": "Room \#($0)", "members": ["Ada", "Rex"]}"# }.joined(separator: ", ")
+        #expect(TeamBuildOrder.parse(#"{"groups": ["# + many + "]}")?.groups.count == TeamBuildOrder.mostGroups)
+    }
+
+    @Test func aBotCanBeRenamedAndRemember() {
+        let order = TeamBuildOrder.parse(#"{"bots": [{"name": "Rex", "rename": "Max", "memory": "The owner trades on NSE.\nUse NSE bhavcopy first."}, {"name": "Bo", "newName": "bo"}]}"#)
+        #expect(order?.bots.first?.newName == "Max")
+        #expect(order?.bots.first?.memory == "The owner trades on NSE.\nUse NSE bhavcopy first.")
+        // The same name in other letters is no rename.
+        #expect(order?.bots.last?.newName == nil)
+    }
+
+    @Test func longInstructionsAndNamesStayWhole() {
+        let playbook = String(repeating: "Check the exchange's own data first, then two other sources.\n", count: 400)
+        #expect(playbook.count > 20000)
+        let name = "Global Super Digger Squad Lead for Commodities and Trade Data"
+        let body = try! JSONSerialization.data(withJSONObject: ["bots": [["name": name, "instructions": playbook]]])
+        let order = TeamBuildOrder.parse(String(decoding: body, as: UTF8.self))
+        #expect(order?.bots.first?.name == name)
+        #expect(order?.bots.first?.instructions == playbook.trimmingCharacters(in: .whitespacesAndNewlines))
+        let tooLong = String(repeating: "a", count: 40000)
+        let capped = try! JSONSerialization.data(withJSONObject: ["bots": [["name": "Ada", "instructions": tooLong]]])
+        #expect(TeamBuildOrder.parse(String(decoding: capped, as: UTF8.self))?.bots.first?.instructions.count == TeamBuildOrder.longestInstructions)
+    }
+
+    @Test func memoryIsAddedOnce() {
+        #expect(TeamBuildOrder.memory("", adding: "  Use NSE first. ") == "Use NSE first.\n")
+        #expect(TeamBuildOrder.memory("Old line.\n", adding: "Use NSE first.") == "Old line.\n\nUse NSE first.\n")
+        #expect(TeamBuildOrder.memory("Old line.\n\nUse NSE first.\n", adding: "Use NSE first.") == nil)
+        #expect(TeamBuildOrder.memory("Old line.", adding: "   ") == nil)
+    }
+
+    @Test func theOwnerAskingForGroupsRenamesAndMemory() {
+        for words in ["make a group chat with Ada and Rex", "set up a group with the diggers", "rename Rex to Max",
+                      "call Penny Ledger from now on", "change Rex's instructions", "give Ada a better prompt",
+                      "update the digger's description", "fix the prompt of the squad", "save this to Rex's memory",
+                      "Ada should remember that I trade on NSE", "add the sources to their memory"] {
+            #expect(TeamBuildIntent.ownerAsked(words), "\(words)")
+        }
+        for words in ["what's in my memory?", "do you remember yesterday?", "summarise the group's day"] {
+            #expect(!TeamBuildIntent.ownerAsked(words), "\(words)")
+        }
     }
 }
 
