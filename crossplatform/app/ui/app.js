@@ -84,7 +84,7 @@ function renderHead() {
 }
 
 /* ---------------- cards ---------------- */
-// The failure, sign-in, choice, brief, private-message, PDF and yes-or-no cards are in cards.js; the run choices in runchoices.js.
+// The failure, sign-in, choice, brief, private-message, file (PDF and [FILE:]) and yes-or-no cards are in cards.js; the run choices in runchoices.js.
 function answeredLine(m) {
   let p = {}; try { p = JSON.parse(m.card.slice(9)); } catch (e) {}
   const yes = p.choice === "yes";
@@ -136,7 +136,7 @@ async function renderChat() {
     if (m.card && m.card.startsWith("ask:")) { html += CARDS.ask(m, room()); last = null; return; }
     if (m.card && m.card.startsWith("answered:")) { html += answeredLine(m); last = null; return; }
     if (m.card && m.card.startsWith("dm:")) { html += CARDS.dm(m); last = null; return; }
-    if (m.card && m.card.startsWith("pdf:")) { html += CARDS.pdf(m); last = null; return; }
+    if (m.card && (m.card.startsWith("pdf:") || m.card.startsWith("file:"))) { html += CARDS.fileCard(m); last = null; return; }
     if (m.card && typeof VMSCREENS !== "undefined" && VMSCREENS.handles(m)) { html += VMSCREENS.card(m); last = null; return; }
     if (m.run) {
       // One card per run, where its latest line is.

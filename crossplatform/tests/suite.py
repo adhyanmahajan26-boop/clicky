@@ -1612,6 +1612,45 @@ def w02():
                 "opened": opened, "logged": logged, "outside_refused": outside.get("error"), "escape_refused": by_hand.get("error")}
 
 
+@test("W06", "[FILE:] and [SAVE FILE: -> Desktop] in a bot's answer: a file card, a copy on the Desktop only on the owner's turn, never a file outside its folder", "cards")
+def w06():
+    b = fresh_bot("Filer")
+    n = T.nonce()
+    memory = T.BOTS / "memory" / b
+    memory.mkdir(parents=True, exist_ok=True)
+    (memory / ("report-%s.md" % n)).write_text("# Report %s\n" % n, encoding="utf-8")
+    mark = T.calls_mark()
+    T.fake_reply("Here it is.\n[FILE: report-%s.md]\n[SAVE FILE: report-%s.md -> Desktop]\n[FILE: ../../bots.json]" % (n, n)); T.fake("reply")
+    T.say(b, "Put the report on my desktop."); T.wait_idle()
+    T.fake("ok")
+    msgs = T.chat(b, 30)
+    told = any("[SAVE FILE:" in (c.get("system", "") + c.get("prompt", "")) for c in T.calls(mark))
+    shown = next((m["text"] for m in msgs if m["author"] == b), "")
+    cards = [json.loads(m["card"][5:]) for m in msgs if (m.get("card") or "").startswith("file:")]
+    shared = next((c for c in cards if not c.get("place")), {})
+    copied = next((c for c in cards if c.get("place") == "Desktop"), {})
+    copy_path = pathlib.Path(copied.get("path", ""))
+    on_desktop = copy_path.is_file() and copy_path.parent.name == "Desktop" and "test-home" in str(copy_path) and copy_path.read_text(encoding="utf-8").startswith("# Report " + n)
+    escape_said = any("no file by that name" in m["text"] for m in msgs if m["author"] == "note")
+    # The card's buttons: a second copy never replaces the first, Downloads works, and only Vello's own files go anywhere.
+    again = P({"cmd": "saveFileTo", "path": shared.get("path", ""), "place": "Desktop"})
+    downloads = P({"cmd": "saveFileTo", "path": shared.get("path", ""), "place": "Downloads"})
+    second = pathlib.Path(again.get("result", {}).get("saved", ""))
+    outside = P({"cmd": "saveFileTo", "path": str(T.HERE / "suite.py"), "place": "Desktop"})
+    settings = P({"cmd": "saveFileTo", "path": str(T.DATA / "settings.json"), "place": "Desktop"})
+    revealed = P({"cmd": "revealFile", "path": str(copy_path)})
+    reveal_outside = P({"cmd": "revealFile", "path": str(T.HERE / "suite.py")})
+    # The same lines on a turn the owner didn't start (a routine or another bot): no copy.
+    not_owner = P({"cmd": "botFiles", "bot": b, "text": "[SAVE FILE: report-%s.md -> Downloads]" % n, "fromOwner": False})
+    refused_note = any("you didn't ask for that" in m["text"] for m in T.chat(b, 40) if m["author"] == "note")
+    ok = (told and "[FILE:" not in shown and "[SAVE FILE:" not in shown and shared.get("name") == "report-%s.md" % n and on_desktop and escape_said
+          and again.get("ok") and second.name == "report-%s 2.md" % n and downloads.get("ok") and not outside.get("ok") and not settings.get("ok") and revealed.get("ok")
+          and not reveal_outside.get("ok") and not_owner.get("ok") and refused_note)
+    return ok, {"prompt_told_how": told, "answer_shown": shown[:120], "cards": cards, "on_desktop": on_desktop, "escape_said": escape_said,
+                "second_copy": second.name, "downloads": downloads.get("result"), "outside_refused": outside.get("error"),
+                "reveal": revealed, "reveal_outside": reveal_outside.get("error"), "not_owner_refused": refused_note}
+
+
 def w_prompt(n, extra=""):
     return "Here's the plan.\nProject: Card %s\n%s```prompt\nIn the current folder create card/%s.md containing card %s. Nothing else.\n```" % (n, extra, n, n)
 

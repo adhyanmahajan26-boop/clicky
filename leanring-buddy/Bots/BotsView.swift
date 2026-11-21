@@ -880,7 +880,13 @@ struct BotChatScreen: View {
                             } else if let waiting = BotWaitingCard.id(of: message.card) {
                                 BotWaitingCard(store: store, id: waiting, text: message.text)
                             } else if message.author == BotsStore.noteAuthor {
-                                ChatNote(text: message.text)
+                                if let filePath = BotFileOrder.path(card: message.card, noteText: message.text) {
+                                    // A file a bot made: the note's words, then the file as an attachment (BotFileCards.swift).
+                                    ChatNote(text: BotFileOrder.noteWithoutPath(message.text))
+                                    BotFileCard(path: filePath)
+                                } else {
+                                    ChatNote(text: message.text)
+                                }
                             } else if message.author == "user" {
                                 UserBubble(text: message.text)
                             } else if message.author == "routine" {

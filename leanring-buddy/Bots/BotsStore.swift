@@ -1339,6 +1339,15 @@ final class BotsStore: ObservableObject {
                 answer = taken.text
                 pdfFiles = taken.files
             }
+            // [FILE: name] shows a file it made as an attachment card; [SAVE FILE: name -> Desktop] copies one out (BotFileCards.swift).
+            var attachedFiles: [String] = []
+            var fileSaves: [BotFileOrder.SaveOrder] = []
+            if bot.owner == nil, let said = answer {
+                let taken = BotFileOrder.extract(from: said)
+                answer = taken.text
+                attachedFiles = taken.attached
+                fileSaves = taken.saves
+            }
             // A ```team block: the CEO making the new bots and categories the owner asked for (`buildTeamFromChat`).
             var teamBuildOrder: TeamBuildOrder?
             if bot.owner == nil, let said = answer {
@@ -1387,7 +1396,7 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.ownAnswers = (record.ownAnswers ?? [:]).merging([bot.id: (record.ownAnswers?[bot.id] ?? []) + [message.id]]) { _, new in new } }
-            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty && teamBuildOrder == nil {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty && attachedFiles.isEmpty && fileSaves.isEmpty && teamBuildOrder == nil {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
             // Its engine session has now seen everything in this chat, on this Mac.
@@ -1400,15 +1409,8 @@ final class BotsStore: ObservableObject {
                                            "privately": privately != nil, "ok": answer != nil, "reply": answer ?? ""])
             let ownerSaid = fromOwner ? self.recentOwnerWords(in: conversationID) : nil
             for order in orders { self.carryOutOrder(order, ownerWords: ClickyOrder.tellTarget(in: order) == nil ? nil : ownerSaid) }
-            for name in pdfFiles {
-                let folder = BotMemory.file(botID: bot.id).deletingLastPathComponent()
-                do {
-                    let pdf = try BotPDF.make(named: name, in: folder)
-                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Vello made the PDF \(pdf.lastPathComponent) for \(bot.name): [\(pdf.lastPathComponent)](\(pdf.absoluteString))\n\(pdf.path)", exchangeID: privately?.exchangeID), to: conversationID)
-                } catch {
-                    self.post(BotChatMessage(author: Self.noteAuthor, text: "Vello couldn't make a PDF for \(bot.name): \(error.localizedDescription)", exchangeID: privately?.exchangeID), to: conversationID)
-                }
-            }
+            self.carryOutFileOrders(pdfs: pdfFiles, attached: attachedFiles, saves: fileSaves, bot: bot, conversationID: conversationID,
+                                    fromOwner: fromOwner, exchangeID: privately?.exchangeID)
             if let teamBuildOrder { self.buildTeamFromChat(teamBuildOrder, maker: bot, conversationID: conversationID, fromOwner: fromOwner) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
@@ -2149,6 +2151,7 @@ enum BotPrompts {
             parts.append(BotPrompts.routineHowTo)
             parts.append(BotPrompts.codingHowTo)
             if !bot.provider.hasPrefix("api:") { parts.append(BotProtocol.pdfHowTo) }
+            parts.append(BotFileOrder.howTo(owner: ownerName))
         }
         parts += BotPrompts.reportingLines(for: bot, store: BotsStore.shared)
         if bot.owner == nil { parts.append(reachNote(for: bot)) }

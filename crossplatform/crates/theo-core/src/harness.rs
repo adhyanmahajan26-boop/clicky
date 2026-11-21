@@ -464,6 +464,7 @@ impl Harness {
         parts.push(prompts::coding_how_to("Claude Code"));
         parts.extend(self.reporting_lines(bot));
         parts.push(crate::pdf::HOW_TO.to_string());
+        parts.push(crate::files::how_to(&owner));
         parts.push(crate::vmscreens::research::HOW_TO.to_string());
         parts.push(self.reach_note(bot));
         if !bot.apps.is_empty() {
@@ -871,6 +872,13 @@ impl Harness {
                 let (text, files) = crate::pdf::extract(&said);
                 if !files.is_empty() { answer = Some(text); pdf_files = files; }
             }
+            // [FILE: name] shows a file it made as a card; [SAVE FILE: name -> Desktop] copies one out (files.rs).
+            let mut attached_files: Vec<String> = vec![];
+            let mut file_saves: Vec<crate::files::SaveOrder> = vec![];
+            if let Some(said) = answer.clone() {
+                let (text, attached, saves) = crate::files::extract(&said);
+                if !attached.is_empty() || !saves.is_empty() { answer = Some(text); attached_files = attached; file_saves = saves; }
+            }
             // [RESEARCH: question]: research agents read the web, and the brief lands in this chat (vmscreens/research.rs).
             let mut research_question: Option<String> = None;
             if let Some(said) = answer.clone() {
@@ -908,7 +916,7 @@ impl Harness {
                             }
                             record.messages.push(message);
                         }
-                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && research_question.is_none() && team_order.is_none() => {
+                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && attached_files.is_empty() && file_saves.is_empty() && research_question.is_none() && team_order.is_none() => {
                             record.messages.push(ChatMessage::new(&bot.id, "(No answer this time. Send it again, or try another model.)").with_exchange(exchange.clone()));
                         }
                         _ => {}
@@ -924,6 +932,7 @@ impl Harness {
             }
             me.fire_hook("turn-finished", json!({"bot": bot.id, "botName": bot.name, "chat": conversation_id, "fromOwner": opts.from_owner, "privately": opts.privately.is_some(), "ok": answer.is_some(), "reply": answer.clone().unwrap_or_default()}));
             crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
+            crate::files::carry_out_for_turn(&me, &bot, &attached_files, &file_saves, &conversation_id, exchange.clone(), opts.from_owner);
             crate::vmscreens::research::start_for_turn(&me, &bot, research_question, &conversation_id, exchange.clone());
             if let Some(order) = team_order {
                 crate::team_build::build_for_turn(&me, &bot, order, &conversation_id, opts.from_owner).await;

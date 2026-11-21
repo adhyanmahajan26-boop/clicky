@@ -270,8 +270,8 @@ public enum BotTagWords {
 
     /// A reply still streaming, with these tags hidden, even half written.
     public static func withoutTags(streaming text: String) -> String {
-        var left = BotPDFOrder.extract(from: BotScreenGift.extract(from: BotResearchOrder.extract(from: text).text).text).text
-        if let open = left.range(of: #"(?i)\[\s*(?:P|PD|PDF|R|RE|RES|RESE|RESEA|RESEAR|RESEARC|RESEARCH|G|GI|GIV|GIVE|GIVE |GIVE S|GIVE SC|GIVE SCR|GIVE SCRE|GIVE SCREE|GIVE SCREEN)(?:\s*:[^\]]*)?$"#, options: .regularExpression) { left.removeSubrange(open) }
+        var left = BotFileOrder.extract(from: BotPDFOrder.extract(from: BotScreenGift.extract(from: BotResearchOrder.extract(from: text).text).text).text).text
+        if let open = left.range(of: #"(?i)\[\s*(?:P|PD|PDF|R|RE|RES|RESE|RESEA|RESEAR|RESEARC|RESEARCH|G|GI|GIV|GIVE|GIVE |GIVE S|GIVE SC|GIVE SCR|GIVE SCRE|GIVE SCREE|GIVE SCREEN|F|FI|FIL|FILE|S|SA|SAV|SAVE|SAVE |SAVE F|SAVE FI|SAVE FIL|SAVE FILE)(?:\s*:[^\]]*)?$"#, options: .regularExpression) { left.removeSubrange(open) }
         return left
     }
 }

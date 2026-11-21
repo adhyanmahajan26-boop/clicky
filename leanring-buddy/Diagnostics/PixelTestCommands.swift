@@ -12,6 +12,7 @@
 //  uiPixel {action: "opened"}                       what the cards' buttons would have opened (links are recorded, never opened).
 //  uiPixel {action: "alert", which?}                shows the newest alert inside a Theo window.
 //  uiPixel {action: "reply", bot, text?}            a bot shown replying (text nil: stop).
+//  uiPixel {action: "botFiles", bot, text, fromOwner?}  a finished reply's [PDF:], [FILE:] and [SAVE FILE:] lines, carried out as after a turn.
 //
 
 import AppKit
@@ -119,6 +120,19 @@ enum PixelTestCommands {
             ConnectorHealth.shared.noteTurn(bot: bot, answer: text, room: bot.id)
             return ["state": store.pixelState(of: bot).state.rawValue, "failure": store.bot(bot.id)?.lastFailure?.reason ?? NSNull(),
                     "block": ConnectorHealth.shared.block(of: bot.id)?.connectorID ?? NSNull()] as [String: Any]
+        case "botFiles":
+            // A bot's finished reply with file lines, through the same steps BotsStore.reply takes after a turn (BotFileCards.swift).
+            guard let bot = bot(), let text = command["text"] as? String else { return ["error": "Needs bot and text."] }
+            let pdfs = BotPDFOrder.extract(from: text)
+            let files = BotFileOrder.extract(from: pdfs.text)
+            if !files.text.isEmpty {
+                store.seedForTest(bot.id, messages: store.conversation(bot.id).messages + [BotChatMessage(author: bot.id, text: files.text)])
+            }
+            store.carryOutFileOrders(pdfs: pdfs.files, attached: files.attached, saves: files.saves, bot: bot, conversationID: bot.id,
+                                     fromOwner: command["fromOwner"] as? Bool ?? true, exchangeID: nil)
+            let messages = store.conversation(bot.id).messages.suffix(pdfs.files.count + files.attached.count + files.saves.count)
+            return ["said": files.text, "notes": messages.map { ["text": $0.text, "card": $0.card ?? NSNull()] as [String: Any] },
+                    "opened": TheoOpen.recorded]
         case "makeYourBot":
             let target = bot() ?? store.bots.first { $0.name == "Builder" } ?? store.primary
             guard let target else { return ["error": "No bot."] }
