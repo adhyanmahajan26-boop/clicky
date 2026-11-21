@@ -239,7 +239,14 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
             manager_lines.push(format!("Vello couldn't make {name} the manager of {}: there's no bot by that name that can manage a team", team.name));
             continue;
         };
-        if team.leader_id.as_deref() == Some(manager.id.as_str()) { continue; }
+        // Already the manager: said anyway when it only became one in this answer (a new category's first bot takes the job as it
+        // joins, before this loop), so the note always names the manager it was asked for.
+        if team.leader_id.as_deref() == Some(manager.id.as_str()) {
+            if managers_before.get(&id).and_then(|m| m.as_deref()) != Some(manager.id.as_str()) {
+                manager_lines.push(format!("{} manages {} now", manager.name, team.name));
+            }
+            continue;
+        }
         h.change_layout(|layout, bots| {
             if let Some(s) = layout.section_mut(&id) {
                 s.add_member(&manager.id, bots);

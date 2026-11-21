@@ -350,3 +350,23 @@ def add_cases(S):
                   "note_says_first_bot_manages": any("Scout manages %s now, as its first bot" % name in t for t in notes),
                   "ceo_reads_the_note": bool(read) and ("Scout manages %s now" % name) in read[-1]}
         return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": notes[-1:]}
+
+    @test("TM11", "A new category's first bot named as its manager in the same answer is still named in Vello's note", "teams")
+    def tm11():
+        n = T.nonce()
+        name, bot = "Leads %s" % n, "Rex%s" % n
+        block = json.dumps({"categories": [{"name": name, "manager": bot}], "bots": [{"name": bot, "does": "Finds leads", "category": name}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "%s will run %s.\n```team\n%s\n```" % (bot, name, block)}, {"reply": "ok"}])
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Make a category called %s with a bot named %s who finds leads." % (name, bot))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == name), None)
+        made = [b for b in T.state()["bots"] if b["name"] == bot]
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
+        if team: P({"cmd": "teamDelete", "id": team["id"]})
+        for b in made: P({"cmd": "botDelete", "id": b["id"]})
+        T.fake("ok")
+        checks = {"manages": team is not None and bool(made) and team["leader"] == made[0]["id"],
+                  "note_names_manager": any("%s manages %s now" % (bot, name) in t for t in notes),
+                  "said_once": sum(t.count("%s manages %s now" % (bot, name)) for t in notes) == 1}
+        return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "notes": notes[-1:]}

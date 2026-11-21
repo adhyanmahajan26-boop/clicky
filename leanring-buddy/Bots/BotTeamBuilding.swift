@@ -97,7 +97,12 @@ extension BotsStore {
                 managerLines.append("Vello couldn't make \(managerName) the manager of \(team.name): there's no bot by that name that can manage a team")
                 continue
             }
-            guard team.leaderID != manager.id else { continue }
+            // Already the manager: said anyway when it only became one in this answer (a new category's first bot takes the job
+            // as it joins, before this loop), so the note always names the manager it was asked for.
+            guard team.leaderID != manager.id else {
+                if managerBeforeBySectionID[categoryID] != manager.id { managerLines.append("\(manager.name) manages \(team.name) now") }
+                continue
+            }
             addMember(manager.id, to: categoryID)
             setLeader(manager.id, of: categoryID)
             managerLines.append("\(manager.name) manages \(team.name) now")
