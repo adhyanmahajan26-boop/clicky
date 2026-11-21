@@ -453,7 +453,7 @@ struct NotchBotBoardTests {
         let three = NotchGeometry.collapsedBodySize(layout: layout, botChipCount: 3)
         #expect(three.width - plain.width == NotchGeometry.botChipsWidth(chipCount: 3) + NotchGeometry.botChipsLeadingGap)
         #expect(NotchGeometry.botChipsWidth(chipCount: 0) == 0)
-        #expect(NotchGeometry.botChipsWidth(chipCount: 9) == NotchGeometry.botChipsWidth(chipCount: 3))
+        #expect(NotchGeometry.botChipsWidth(chipCount: 9) == NotchGeometry.botChipsWidth(chipCount: 4))
     }
 
     @Test func chipsWidenBothWingsOfARealNotchSoItStaysCentred() {
