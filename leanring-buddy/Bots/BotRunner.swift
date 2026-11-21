@@ -377,7 +377,7 @@ enum BotRunner {
     // MARK: Instructions a resumed session hasn't heard (ClickyCore `BotPersonaRefresh`)
 
     /// Bump when Theo's own wording of what bots are told changes, so sessions that began before an update hear the new wording.
-    static let personaRevision = "2026-11-21"
+    static let personaRevision = "2026-11-21b"
     static let sessionFingerprintsKey = "v3.bots.sessionFingerprints"
     static let maximumRememberedSessions = 400
     /// Tests use a suite of their own: hosted unit tests run with the owner's real preferences.

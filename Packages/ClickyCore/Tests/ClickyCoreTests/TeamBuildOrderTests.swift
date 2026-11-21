@@ -43,11 +43,35 @@ struct TeamBuildOrderTests {
     }
 
     @Test func oneAnswerCantFloodTheSidebar() {
-        let bots = (1...9).map { #"{"name": "Bot \#($0)"}"# }.joined(separator: ",")
-        let categories = (1...6).map { #"{"name": "Team \#($0)"}"# }.joined(separator: ",")
+        let bots = (1...30).map { #"{"name": "Bot \#($0)"}"# }.joined(separator: ",")
+        let categories = (1...10).map { #"{"name": "Team \#($0)"}"# }.joined(separator: ",")
         let order = TeamBuildOrder.parse(#"{"bots": [\#(bots)], "categories": [\#(categories)]}"#)
         #expect(order?.bots.count == TeamBuildOrder.mostBots)
         #expect(order?.categories.count == TeamBuildOrder.mostCategories)
+    }
+
+    @Test func aManagerAndTenWorkersFitInOneAnswer() {
+        let workers = (1...10).map { #"{"name": "Digger \#($0)", "category": "Super Digger Squad", "model": "haiku"}"# }
+        let boss = #"{"name": "Digger Boss", "category": "Super Digger Squad", "model": "Claude Opus 5.5"}"#
+        let order = TeamBuildOrder.parse(#"{"categories": [{"name": "Super Digger Squad", "manager": "Digger Boss"}], "bots": [\#(([boss] + workers).joined(separator: ","))]}"#)
+        #expect(order?.bots.count == 11)
+        #expect(order?.bots.first?.model == "Claude Opus 5.5")
+        #expect(order?.bots.last?.model == "haiku")
+    }
+
+    @Test func aSquadReadsInOneLine() {
+        let squad = [TeamBuildOrder.MadeBot(name: "Boss", category: "Squad", modelWords: "Claude Opus 5.5")] +
+            (1...3).map { TeamBuildOrder.MadeBot(name: "Digger \($0)", category: "Squad", modelWords: "Claude Haiku 5.5") }
+        #expect(TeamBuildOrder.madeBotsSentence(squad) == "Vello made 4 bots in Squad: Boss on Claude Opus 5.5; Digger 1, Digger 2 and Digger 3 on Claude Haiku 5.5.")
+        #expect(TeamBuildOrder.madeBotsSentence([.init(name: "Rex", category: "Sales")]) == "Vello made the bot Rex in Sales.")
+        #expect(TeamBuildOrder.madeBotsSentence([.init(name: "Ada", category: "Growth"), .init(name: "Rex", category: "Sales"), .init(name: "Bo")])
+                == "Vello made 3 bots: in Growth, Ada; in Sales, Rex; outside any category, Bo.")
+    }
+
+    @Test func aBotCanNameItsBrain() {
+        let order = TeamBuildOrder.parse(#"{"bots": [{"name": "Rex", "engine": "Codex", "model": "gpt-6"}]}"#)
+        #expect(order?.bots.first?.brain == "Codex")
+        #expect(order?.bots.first?.model == "gpt-6")
     }
 
     @Test func theSameNameTwiceIsOneBot() {
@@ -84,7 +108,8 @@ struct TeamBuildOrderTests {
     }
 
     @Test func theOwnerAskingForManagersOrMoves() {
-        for words in ["make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the marketing team",
+        for words in ["switch Rex to Haiku", "Penny should use Opus 5.5", "run the workers on Codex",
+                      "make Penny the manager of Growth", "put Ada in charge of Sales", "Rex should lead the marketing team",
                       "Growth needs no manager", "move Penny to Sales", "assign a manager to every team"] {
             #expect(TeamBuildIntent.ownerAsked(words), "\(words)")
         }
@@ -95,5 +120,54 @@ struct TeamBuildOrderTests {
         #expect(howTo.contains("```team"))
         #expect(howTo.contains("own words"))
         #expect(howTo.contains("\"manager\": \"none\""))
+    }
+}
+
+struct TeamBuildBrainsTests {
+    static let claude = TeamBuildBrains.Brain(engine: "claude", label: "Claude Code", models: [
+        .init(id: "claude-opus-5-5", label: "Claude Opus 5.5"), .init(id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5"),
+        .init(id: "claude-haiku-5-5", label: "Claude Haiku 5.5"), .init(id: "claude-haiku-4-5", label: "Claude Haiku 4.5"),
+    ])
+    static let codex = TeamBuildBrains.Brain(engine: "codex", label: "Codex")
+    static let openAI = TeamBuildBrains.Brain(engine: "api:openai", label: "OpenAI", models: [.init(id: "gpt-6"), .init(id: "gpt-6-mini")])
+    static let here = [claude, codex, openAI]
+
+    @Test func modelsByTheirWords() {
+        #expect(TeamBuildBrains.matchModel("haiku", among: Self.claude.models)?.id == "claude-haiku-5-5")
+        #expect(TeamBuildBrains.matchModel("Claude Opus 5.5", among: Self.claude.models)?.id == "claude-opus-5-5")
+        #expect(TeamBuildBrains.matchModel("haiku 4.5", among: Self.claude.models)?.id == "claude-haiku-4-5")
+        #expect(TeamBuildBrains.matchModel("CLAUDE-SONNET-5-5", among: Self.claude.models)?.id == "claude-sonnet-5-5")
+        #expect(TeamBuildBrains.matchModel("gpt-6", among: Self.openAI.models)?.id == "gpt-6")
+        #expect(TeamBuildBrains.matchModel("opus 4.1", among: Self.claude.models) == nil)
+    }
+
+    @Test func brainsByTheirNames() {
+        #expect(TeamBuildBrains.matchBrain("Claude Code", among: Self.here)?.engine == "claude")
+        #expect(TeamBuildBrains.matchBrain("codex", among: Self.here)?.engine == "codex")
+        #expect(TeamBuildBrains.matchBrain("OpenAI API key", among: Self.here)?.engine == "api:openai")
+        #expect(TeamBuildBrains.matchBrain("Gemini", among: Self.here) == nil)
+    }
+
+    @Test func aModelOnTheMakersBrain() {
+        #expect(TeamBuildBrains.pick(brain: nil, model: "haiku", makerEngine: "claude", among: Self.here) == .init(engine: "claude", model: "claude-haiku-5-5"))
+        #expect(TeamBuildBrains.pick(brain: nil, model: nil, makerEngine: "claude", among: Self.here) == .init(engine: "claude"))
+    }
+
+    @Test func aModelOnlyAnotherBrainHasMovesThere() {
+        #expect(TeamBuildBrains.pick(brain: nil, model: "gpt-6-mini", makerEngine: "claude", among: Self.here) == .init(engine: "api:openai", model: "gpt-6-mini"))
+        #expect(TeamBuildBrains.pick(brain: nil, model: "opus", makerEngine: "codex", among: [Self.codex, Self.claude]) == .init(engine: "claude", model: "claude-opus-5-5"))
+    }
+
+    @Test func aBrainWithoutAListTakesAnExactID() {
+        #expect(TeamBuildBrains.pick(brain: nil, model: "gpt-6", makerEngine: "codex", among: [Self.codex, Self.openAI]) == .init(engine: "codex", model: "gpt-6"))
+        #expect(TeamBuildBrains.pick(brain: "Codex", model: "gpt-6-codex", makerEngine: "claude", among: Self.here) == .init(engine: "codex", model: "gpt-6-codex"))
+    }
+
+    @Test func whatIsntHereIsSaid() {
+        let noBrain = TeamBuildBrains.pick(brain: "Gemini", model: nil, makerEngine: "claude", among: Self.here)
+        #expect(noBrain.engine == "claude")
+        #expect(noBrain.trouble == "there's no brain called Gemini set up here")
+        let noModel = TeamBuildBrains.pick(brain: "Claude Code", model: "Opus 4.1", makerEngine: "claude", among: Self.here)
+        #expect(noModel == .init(engine: "claude", model: nil, trouble: "Claude Code has no model called Opus 4.1"))
     }
 }

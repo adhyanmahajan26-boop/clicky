@@ -29,9 +29,10 @@ extension BotsStore {
         }
 
         var madeCategoryNames: [String] = []
-        var madeBotLines: [String] = []
+        var madeBots: [TeamBuildOrder.MadeBot] = []
         var filedBotLines: [String] = []
         var managerLines: [String] = []
+        var brainLines: [String] = []
 
         // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the
         // job) is said in the note too, and the CEO doesn't think the category has none.
@@ -54,29 +55,53 @@ extension BotsStore {
         }
 
         // New bots run on the same engine as the bot that made them, on that engine's usual starting model: it works on this
-        // Mac, which the owner's default engine may not.
-        let engine = maker.provider
+        // Mac, which the owner's default engine may not. A model or brain the block names is used when this Mac has it.
+        let brains = brainsForBotsFromChat(maker: maker)
         for wanted in order.bots {
             let categoryID = wanted.category.flatMap { categoryIDsByName[$0.lowercased()] }
-            let categoryWords = wanted.category.map { " in \($0)" } ?? ""
             if let existing = bots.first(where: { TeamBuildOrder.sameName($0.name, wanted.name) }) {
                 // Already there: moved into its category rather than made a second time. The CEO stays on top, and
                 // Pointer Assistant's own helpers stay on its team.
-                if let categoryID, !existing.primary, existing.id != Self.clickyID, existing.owner == nil,
+                let mayChange = !existing.primary && existing.id != Self.clickyID && existing.owner == nil
+                if let categoryID, mayChange,
                    !(category(categoryID)?.items.contains(BotsLayout.item(forBot: existing.id)) ?? false) {
                     move(BotsLayout.item(forBot: existing.id), toSection: categoryID)
                     filedBotLines.append("\(existing.name) moved to \(savedCategoryName(wanted.category))")
                 }
+                // A model or brain named for a bot that exists switches it, as its settings' model picker does.
+                if mayChange, wanted.model != nil || wanted.brain != nil {
+                    let pick = TeamBuildBrains.pick(brain: wanted.brain, model: wanted.model, makerEngine: existing.provider, among: brains)
+                    if let trouble = pick.trouble { brainLines.append("Vello couldn't switch \(existing.name) as asked: \(trouble)") }
+                    let newModel = pick.model ?? (pick.engine == existing.provider ? existing.model : BotModels.startingModel(for: pick.engine))
+                    if pick.engine != existing.provider || newModel != existing.model {
+                        var switched = existing
+                        let switching = pick.engine != existing.provider
+                        switched.provider = pick.engine
+                        switched.model = newModel
+                        let levels = BotModels.efforts(for: pick.engine, model: newModel)
+                        switched.effort = ModelEffort.carriedOver(effort: switching ? (existing.effort ?? HarnessPrefs.defaultEffort(pick.engine)) : existing.effort, toLevels: levels)
+                        if pick.engine != "claude" { switched.thinking = nil; switched.fast = nil }
+                        save(switched)
+                        brainLines.append("\(existing.name) runs on \(brainWords(model: newModel, engine: pick.engine, makerEngine: maker.provider)) now")
+                    }
+                }
                 continue
             }
+            let pick = TeamBuildBrains.pick(brain: wanted.brain, model: wanted.model, makerEngine: maker.provider, among: brains)
+            let engine = pick.engine
+            let model = pick.model ?? BotModels.startingModel(for: engine)
             var made = addBot(name: wanted.name,
                               description: wanted.does.isEmpty ? "Your \(wanted.name) bot." : wanted.does,
                               instructions: TeamBuildOrder.instructions(for: wanted),
-                              provider: engine, model: BotModels.startingModel(for: engine), groupID: nil)
+                              provider: engine, model: model, groupID: nil)
             made.effort = engine.hasPrefix("api:") ? nil : HarnessPrefs.defaultEffort(engine)
             save(made)
             if let categoryID { addMember(made.id, to: categoryID) }
-            madeBotLines.append("\(made.name)\(categoryWords)")
+            let modelWords = wanted.model != nil || wanted.brain != nil ? brainWords(model: model, engine: engine, makerEngine: maker.provider) : ""
+            madeBots.append(TeamBuildOrder.MadeBot(name: made.name, category: categoryID == nil ? nil : savedCategoryName(wanted.category), modelWords: modelWords))
+            if let trouble = pick.trouble {
+                brainLines.append("\(made.name) runs on \(brainWords(model: model, engine: engine, makerEngine: maker.provider)) because \(trouble)")
+            }
         }
 
         // Managers last, so a bot made in this same answer can be one.
@@ -116,17 +141,16 @@ extension BotsStore {
         }
 
         var sentences: [String] = []
-        if !madeBotLines.isEmpty {
-            sentences.append("Vello made " + (madeBotLines.count == 1 ? "the bot " : "the bots ") + Self.listedInWords(madeBotLines) + ".")
-        }
+        if !madeBots.isEmpty { sentences.append(TeamBuildOrder.madeBotsSentence(madeBots)) }
         if !madeCategoryNames.isEmpty {
-            sentences.append("New " + (madeCategoryNames.count == 1 ? "category: " : "categories: ") + Self.listedInWords(madeCategoryNames) + ".")
+            sentences.append("New " + (madeCategoryNames.count == 1 ? "category: " : "categories: ") + TeamBuildOrder.listedInWords(madeCategoryNames) + ".")
         }
         sentences += filedBotLines.map { $0 + "." }
         sentences += managerLines.map { $0 + "." }
+        sentences += brainLines.map { $0 + "." }
         if sentences.isEmpty {
             sentences.append("Everything \(maker.name) asked for was already set up that way, so nothing changed.")
-        } else if !madeBotLines.isEmpty {
+        } else if !madeBots.isEmpty {
             sentences.append("They're in the sidebar, and each one's settings can change its brain, model and apps.")
         }
         // Marked as a team note so the CEO reads it at the start of its next turn (`takeWaitingReports`) and knows what was made.
@@ -136,15 +160,35 @@ extension BotsStore {
     /// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
     static let teamNoteCard = "team-note"
 
+    /// The brains a bot made or switched from chat can run on here, the maker's own first: command-line agents that are
+    /// installed and not signed out, then API keys, each with the models Vello knows for it.
+    private func brainsForBotsFromChat(maker: NativeBot) -> [TeamBuildBrains.Brain] {
+        let center = HarnessCenter.shared
+        var engines = NewBotSheet.engines.map { (id: $0.id, label: $0.label) }.filter { engine in
+            engine.id == maker.provider || (center.hasStatus(for: engine.id) ? center.status(for: engine.id).ready : center.status(for: engine.id).installed)
+        }
+        engines += ProviderKeys.shared.usableChatProviders(for: .bots).map { (id: "api:\($0.id)", label: $0.label) }
+        if !engines.contains(where: { $0.id == maker.provider }) { engines.insert((id: maker.provider, label: BrainAvailability.name(of: maker.model)), at: 0) }
+        engines = engines.filter { $0.id == maker.provider } + engines.filter { $0.id != maker.provider }
+        return engines.map { engine in
+            let models = BotModels.list(for: engine.id, current: "").map { TeamBuildBrains.Model(id: $0, label: BotModels.label($0, on: engine.id)) }
+            return TeamBuildBrains.Brain(engine: engine.id, label: engine.label, models: models)
+        }
+    }
+
+    /// "Claude Haiku 5.5", or "gpt-6 on Codex" when it's not the maker's brain.
+    private func brainWords(model: String, engine: String, makerEngine: String) -> String {
+        let modelName = model.isEmpty ? "its usual model" : BotModels.label(model, on: engine)
+        guard engine != makerEngine else { return modelName }
+        let brainName = NewBotSheet.engines.first { $0.id == engine }?.label
+            ?? ProviderKeys.shared.usableChatProviders(for: .bots).first { "api:\($0.id)" == engine }.map { "\($0.label) API key" }
+            ?? engine
+        return "\(modelName) (\(brainName))"
+    }
+
     /// A category's name as it's saved, for the chat's note.
     private func savedCategoryName(_ name: String?) -> String {
         guard let name else { return "" }
         return layout.sections.first { TeamBuildOrder.sameName($0.name, name) }?.name ?? name
-    }
-
-    /// "A", "A and B", "A, B and C".
-    static func listedInWords(_ items: [String]) -> String {
-        guard items.count > 1 else { return items.first ?? "" }
-        return items.dropLast().joined(separator: ", ") + " and " + (items.last ?? "")
     }
 }
