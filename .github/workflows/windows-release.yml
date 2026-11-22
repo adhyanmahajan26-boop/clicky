@@ -32,7 +32,7 @@ concurrency:
 jobs:
   publish:
     name: Publish the Windows build
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -49,12 +49,14 @@ jobs:
           set -euo pipefail
           run_id="${EVENT_RUN_ID:-$INPUT_RUN_ID}"
           if [ -z "$run_id" ]; then
-            run_id=$(gh run list --repo "$REPO" --workflow crossplatform.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+            run_id=$(gh run list --repo "$REPO" --workflow crossplatform.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
           fi
           [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::not a run id: $run_id"; exit 1; }
           read -r conclusion branch event sha < <(gh run view "$run_id" --repo "$REPO" --json conclusion,headBranch,event,headSha --jq '[.conclusion, .headBranch, .event, .headSha] | @tsv')
-          if [ "$conclusion" != "success" ] || [ "$branch" != "main" ] || [ "$event" != "push" ]; then
-            echo "::error::run $run_id is $conclusion on $branch ($event); only a successful push to main is published"
+          # A run started by hand on main counts too: merges that skip CI (to keep the paid Mac runner off) are
+          # tested by running "Theo cross-platform" on main by hand, and that run is the one to publish.
+          if [ "$conclusion" != "success" ] || [ "$branch" != "main" ] || { [ "$event" != "push" ] && [ "$event" != "workflow_dispatch" ]; }; then
+            echo "::error::run $run_id is $conclusion on $branch ($event); only a successful run on main (a push, or started by hand) is published"
             exit 1
           fi
           echo "id=$run_id" >> "$GITHUB_OUTPUT"
