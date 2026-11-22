@@ -6,7 +6,7 @@
 //
 //  The ears hand over their words after about half a second of quiet. People pause far longer than that in the middle of
 //  a thought, so a call holds those words and waits for a real pause before Vello answers: the owner's Patience setting
-//  (two seconds unless changed), longer when the words sound unfinished ("and…", "so…", "matlab…"), shorter for a clear
+//  (a second and a half unless changed), longer when the words sound unfinished ("and…", "so…", "matlab…"), shorter for a clear
 //  question or a plain "yes". Talking again during the wait just carries on the same turn.
 //
 //  Listen mode: "listen mode" makes Vello only listen, keeping everything it hears; it answers when spoken to ("Vello,
@@ -18,8 +18,9 @@ import Foundation
 /// How long a call waits after the owner's voice stops before Vello answers.
 public enum CallTurnPatience {
     public static let settingKey = "v4.call.patienceSeconds"
-    public static let defaultSeconds = 2.0
-    public static let range: ClosedRange<Double> = 1.0...4.0
+    /// Two seconds made every answer feel slow on top of the ears' own wait, so the default is a second and a half.
+    public static let defaultSeconds = 1.5
+    public static let range: ClosedRange<Double> = 0.5...4.0
 
     /// The saved value, kept inside the range; nothing saved is the default.
     public static func seconds(saved: Double?) -> Double {
@@ -39,11 +40,11 @@ public enum CallTurnEnding: Equatable, Sendable {
 
 public enum CallTurnEnd {
     /// Added to the patience when the words sound unfinished.
-    public static let unfinishedExtraSeconds = 1.5
+    public static let unfinishedExtraSeconds = 1.0
     /// The shortest wait, even for a clear question.
-    public static let shortestSeconds = 0.8
+    public static let shortestSeconds = 0.6
     /// The longest wait, however unfinished it sounds.
-    public static let longestSeconds = 5.5
+    public static let longestSeconds = 4.0
 
     /// Words a thought never ends on, in English and Hinglish: joining words, fillers and words that need a noun after them.
     /// Said last, the owner is still thinking or about to go on, even if the ears put a question mark after it.
@@ -107,6 +108,23 @@ public enum CallTurnEnd {
     }
 }
 
+/// Words the ears heard while Vello's own voice was playing. Echo cancelling never takes all of it out, and the ears
+/// write down whatever is left, so those words are usually Vello hearing itself rather than the owner talking.
+public enum CallEcho {
+    /// How much of what was heard has to be in what Vello just said for it to count as its own voice coming back.
+    public static let sharedWordsShare = 0.6
+
+    /// Whether `heard` is mostly words from `vellosRecentWords` (what Vello's voice said in the last few seconds).
+    public static func soundsLikeVello(_ heard: String, vellosRecentWords: String) -> Bool {
+        let heardWords = CallTurnEnd.simplifiedWords(heard)
+        guard !heardWords.isEmpty else { return false }
+        let spoken = Set(CallTurnEnd.simplifiedWords(vellosRecentWords))
+        guard !spoken.isEmpty else { return false }
+        let shared = heardWords.filter(spoken.contains).count
+        return Double(shared) / Double(heardWords.count) >= sharedWordsShare
+    }
+}
+
 /// What the owner said about Listen mode, if anything.
 public enum CallListenModeCommand: Equatable, Sendable {
     case start
@@ -138,13 +156,28 @@ public enum CallListenMode {
         "tum kya sochte", "aap kya sochte", "kya khayal hai", "tumhara kya", "aapka kya", "क्या लगता है", "क्या सोचते",
     ]
 
+    /// Start phrases that name the mode itself, so they count anywhere in a short utterance.
+    static let namedStartPhrases = ["listen mode", "listening mode"]
+    /// Words that may follow a start phrase and still leave it a switch ("just listen for a bit", "listen only please").
+    static let trailingFillerWords: Set<String> = ["please", "now", "okay", "ok", "for", "a", "bit", "while", "vello", "yaar", "abhi", "thoda"]
+
     public static func command(in utterance: String) -> CallListenModeCommand? {
         let words = CallTurnEnd.simplifiedWords(utterance)
         guard !words.isEmpty, words.count <= longestCommandWords else { return nil }
         let joined = " " + words.joined(separator: " ") + " "
         // "stop listen mode" holds "listen mode", so stopping is checked first.
         if stopPhrases.contains(where: { joined.contains(" \($0) ") }) { return .stop }
-        if startPhrases.contains(where: { joined.contains(" \($0) ") }) { return .start }
+        if namedStartPhrases.contains(where: { joined.contains(" \($0) ") }) { return .start }
+        // "just listen", "only listen": only when that's how the utterance ends. "Just listen to me, open Safari" is an
+        // ordinary turn, and taking it as the switch left Vello silent for the rest of the call.
+        for phrase in startPhrases where !namedStartPhrases.contains(phrase) {
+            let phraseWords = CallTurnEnd.simplifiedWords(phrase)
+            guard let start = words.indices.first(where: { index in
+                index + phraseWords.count <= words.count && Array(words[index..<(index + phraseWords.count)]) == phraseWords
+            }) else { continue }
+            let after = words[(start + phraseWords.count)...]
+            if after.allSatisfy({ trailingFillerWords.contains($0) }) { return .start }
+        }
         return nil
     }
 

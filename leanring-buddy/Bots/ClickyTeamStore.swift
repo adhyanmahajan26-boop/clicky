@@ -491,15 +491,43 @@ extension BotsStore {
             onReport?("Pointer Assistant isn't running.")
             return
         }
+        let actions = manager.actionTaskController
+        // A step waiting for the owner's yes, and this order is that yes (or no), said on the call: it answers the step
+        // rather than starting a new turn, which used to leave the step waiting until it gave up.
+        if actions.isAwaitingConfirmation, let waitingTaskID = actions.activeTaskID,
+           actions.answerConfirmation(withWords: order) || (ownerWords.map { actions.answerConfirmation(withWords: Self.latestLine(of: $0)) } ?? false) {
+            setPhase(.working, job.id)
+            Task { [weak self] in
+                let outcome = await actions.waitForOutcome(ofTask: waitingTaskID, upToSeconds: Self.longestOrderWaitSeconds)
+                let report = outcome ?? "Still working on it on screen."
+                self?.finish(job.id, result: report, succeeded: true)
+                onReport?(report)
+            }
+            return
+        }
         Task { [weak self] in
-            // A turn the owner has going isn't cut off: the order waits for it (a minute at most).
-            for _ in 0..<200 where manager.voiceState != .idle { try? await Task.sleep(nanoseconds: 300_000_000) }
+            // A turn the owner has going isn't cut off, and neither are the steps of an earlier order still running on
+            // screen: a new turn used to start in the middle of them, and its own steps were ignored or mixed into the old
+            // task, so the second order ("now search this in Safari") was done halfway or not at all.
+            let giveUpDate = Date().addingTimeInterval(Self.longestOrderWaitSeconds)
+            while Date() < giveUpDate, manager.voiceState != .idle || (actions.isActive && !actions.isAwaitingConfirmation) {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            // The owner moved on from a step that was waiting for their yes.
+            if actions.isAwaitingConfirmation { actions.cancel(reason: "a new order came in", stopsSpeech: false, speaksLine: false) }
             guard let self else { return }
             self.setPhase(.working, job.id)
             var options = CompanionManager.TurnOptions(speaksResponse: false, keyUpDate: Date(), onTurnFinished: { [weak self] directory, error in
+                // The answer is written, but its steps on screen only start now: the report waits for them, so Vello
+                // hears what was really done instead of "Done." before anything was clicked.
+                let taskStartedByThisTurn = error == nil ? actions.activeTaskID : nil
                 Task { @MainActor in
                     let said = directory.flatMap { ClaudiaControlInbox.spokenAnswer(inTurn: $0) } ?? ""
-                    let report = error == nil ? (said.isEmpty ? "Done." : said) : "Pointer Assistant couldn't do that: \(error?.localizedDescription ?? "it stopped")."
+                    var report = error == nil ? (said.isEmpty ? "Done." : said) : "Pointer Assistant couldn't do that: \(error?.localizedDescription ?? "it stopped")."
+                    if let taskStartedByThisTurn {
+                        let outcome = await actions.waitForOutcome(ofTask: taskStartedByThisTurn, upToSeconds: Self.longestOrderWaitSeconds)
+                        report = (said.isEmpty ? "" : said + " ") + (outcome ?? "Still working on it on screen.")
+                    }
                     self?.finish(job.id, result: report, succeeded: error == nil)
                     onReport?(report)
                     if error == nil, let handedTo { self?.acknowledgeHandoff(to: handedTo, task: order, result: report) }
@@ -512,6 +540,14 @@ extension BotsStore {
             options.cameFromOtherMac = cameFromOtherMac
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
         }
+    }
+
+    /// How long an order waits for Pointer Assistant to be free, and then for its own steps on screen to end.
+    static let longestOrderWaitSeconds = 180.0
+
+    /// The newest of the owner's call lines (they come newest first, one per line).
+    static func latestLine(of ownerWordsNewestFirst: String) -> String {
+        ownerWordsNewestFirst.components(separatedBy: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
     }
 
     /// The bot Clicky's card went to says it has it, in its own chat.

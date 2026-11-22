@@ -690,7 +690,11 @@ final class ActionExecutor {
     // MARK: Click
 
     private func click(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
-        if BackgroundInput.isActive { return await backgroundClick(target) }
+        let targetFrameCG = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
+        if BackgroundInput.staysInBackground(targetFrameCG: targetFrameCG) { return await backgroundClick(target) }
+        // On the owner's screen the app comes forward first: a click in a window behind another one either hits the
+        // window in front ("something is covering it") or happens where the owner can't see it.
+        await bringTargetForward(target)
         if let element = target.axElement {
             let actionNames = Self.actionNames(of: element)
             if actionNames.contains(kAXPressAction as String) || actionNames.isEmpty {
@@ -764,7 +768,7 @@ final class ActionExecutor {
     private func type(_ text: String, into target: ResolvedActionTarget, focusesFirst: Bool, pressesReturn: Bool,
                       isCancelled: @escaping () -> Bool) async -> ActionStepOutcome {
         guard var element = target.axElement else { return .failed(reason: "no text field to type into") }
-        let background = BackgroundInput.isActive
+        let background = BackgroundInput.staysInBackground(targetFrameCG: target.frameCG ?? TypeForMeAccessibility.frameCG(of: element))
         let targetProcessIdentifier = target.processIdentifier ?? BackgroundInput.processIdentifier(of: element)
         if background {
             // Theo's own cursor goes to the field and shows it is typing; the owner's pointer and focus stay put.
@@ -774,6 +778,9 @@ final class ActionExecutor {
             VirtualCursor.shared.setTyping(true)
         }
         defer { if background { Task { @MainActor in VirtualCursor.shared.setTyping(false) } } }
+        // On the owner's screen the app comes forward before anything is typed: the words land where the owner can see
+        // them (Safari behind the Claude app got the search and never showed it), and typed keys go to the right app.
+        if !background { await bringTargetForward(target) }
         if focusesFirst {
             let didFocus = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
             if !didFocus, let frame = target.frameCG, frame.width > 0 {
@@ -860,7 +867,9 @@ final class ActionExecutor {
     private func bringTargetForward(_ target: ResolvedActionTarget) async {
         guard let processIdentifier = target.processIdentifier, processIdentifier != getpid(),
               NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier,
-              let application = NSRunningApplication(processIdentifier: processIdentifier) else { return }
+              let application = NSRunningApplication(processIdentifier: processIdentifier),
+              // A menu bar extra, the Dock or a notification has no front to come to.
+              application.activationPolicy == .regular else { return }
         await BackgroundInput.bringToFront(application)
         try? await Task.sleep(nanoseconds: 150_000_000)
     }

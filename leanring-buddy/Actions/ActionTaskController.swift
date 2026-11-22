@@ -76,6 +76,10 @@ final class ActionTaskController {
         var currentTranscript: String?
         /// Every tier decision, for actionsStatus.
         var tierDecisions: [[String: Any]] = []
+        /// Plain names for steps by their number ("click “Send” in Claude"), for the report of what was done.
+        var stepNames: [Int: String] = [:]
+        /// Why it was cancelled, for the report.
+        var cancelReason: String?
         let speaks: Bool
         /// False for the debug inbox's actionsRun: no observe turns.
         let continuesWithModel: Bool
@@ -106,6 +110,8 @@ final class ActionTaskController {
     /// "type it in Safari" covers that Safari window for 2 minutes of follow-ups (across tasks).
     private var safariFollowUp = ActionSafariFollowUp()
     private(set) var recentEvents: [String] = []
+    /// What each recently ended task did on screen, by its agent id (`ActionTaskReport`), for whoever ordered it.
+    private var endedTaskReports: [(agentID: String, report: String)] = []
 
     var isActive: Bool { task != nil }
     var isAwaitingConfirmation: Bool { task?.phase == .awaitingConfirmation }
@@ -349,9 +355,66 @@ final class ActionTaskController {
             entry["role"] = facts.role ?? facts.groundingRole?.rawValue ?? NSNull()
             entry["label"] = facts.label.map { String($0.prefix(60)) } ?? NSNull()
         }
+        task.stepNames[task.loop.nextStepNumber] = Self.plainStepName(step, facts: target.facts)
         task.tierDecisions.append(entry)
         if task.tierDecisions.count > 40 { task.tierDecisions.removeFirst(task.tierDecisions.count - 40) }
         companionManager.agentsCenter.log(task.agentID, "tier \(decision.tier.rawValue): \(step.shortDescription) — \(decision.reason)")
+    }
+
+    /// "click “Send” in Claude" for "click #14": an element id means nothing once its turn is over.
+    static func plainStepName(_ step: ActionStep, facts: ActionTargetFacts?) -> String {
+        var name = step.shortDescription
+        if let label = facts?.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            let quotedLabel = NSRegularExpression.escapedTemplate(for: "\u{201C}\(String(label.prefix(40)))\u{201D}")
+            name = name.replacingOccurrences(of: #"#\d+"#, with: quotedLabel, options: .regularExpression)
+        }
+        if let appName = facts?.applicationName, !appName.isEmpty, !name.localizedCaseInsensitiveContains(appName) {
+            name += " in \(appName)"
+        }
+        return name
+    }
+
+    // MARK: - Whoever ordered the task
+
+    /// The task running now, by its agent id.
+    var activeTaskID: String? { task?.agentID }
+
+    /// Waits until the task with this id has ended, or has stopped for the owner's yes, for at most `seconds`, and says
+    /// what it did on screen. Nil when it's still going after that long.
+    func waitForOutcome(ofTask agentID: String, upToSeconds seconds: Double) async -> String? {
+        let giveUpDate = Date().addingTimeInterval(seconds)
+        while Date() < giveUpDate {
+            if let task, task.agentID == agentID {
+                if task.phase == .awaitingConfirmation {
+                    return ActionTaskReport.summary(records: task.loop.records, ending: .waitingForYes,
+                                                    pendingQuestion: task.pendingConfirmation?.question, stepNames: task.stepNames)
+                }
+            } else {
+                return endedTaskReports.last(where: { $0.agentID == agentID })?.report
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return nil
+    }
+
+    /// A yes or no for the step that's waiting, given on a call: the owner said it to Vello, who passed it on.
+    /// True when these words answered it.
+    func answerConfirmation(withWords words: String) -> Bool {
+        guard let task, task.phase == .awaitingConfirmation else { return false }
+        if task.pendingConfirmation?.isReturnStep == true, ActionEnterIntent.ownerAsked(words, stepPressesReturn: true) {
+            approvePendingStep(how: "the call")
+            return true
+        }
+        switch ActionConfirmReply.parse(words) {
+        case .yes:
+            approvePendingStep(how: "the call")
+            return true
+        case .no:
+            declinePendingStep(how: "the call")
+            return true
+        case .notAReply:
+            return false
+        }
     }
 
     // MARK: - Confirm tier
@@ -532,6 +595,7 @@ final class ActionTaskController {
     func cancel(reason: String, stopsSpeech: Bool, speaksLine: Bool = true) {
         guard let task else { return }
         task.isCancelled = true
+        task.cancelReason = reason
         batchTask?.cancel()
         note("cancelled: \(reason)")
         if let pending = task.pendingConfirmation, let step = pending.steps.first {
@@ -554,6 +618,13 @@ final class ActionTaskController {
         companionManager.agentsCenter.finish(task.agentID, status: status, errorDescription: errorDescription)
         lastFinishedSummary = summary(of: task, status: status.rawValue)
         note("task \(status.rawValue) after \(task.loop.executedStepCount) steps")
+        let ending: ActionTaskReport.Ending = status == .done ? .done : (status == .failed ? .failed : .cancelled)
+        let report = ActionTaskReport.summary(records: task.loop.records, ending: ending, cancelReason: task.cancelReason ?? line,
+                                              stepNames: task.stepNames)
+        endedTaskReports.append((task.agentID, report))
+        if endedTaskReports.count > 10 { endedTaskReports.removeFirst(endedTaskReports.count - 10) }
+        // The next question knows what was already clicked and opened, instead of starting from nothing.
+        companionManager.rememberActionTaskOutcome(goal: task.loop.goal, report: report)
         if let line, task.speaks { companionManager.speakCodeModeLine(line) }
     }
 

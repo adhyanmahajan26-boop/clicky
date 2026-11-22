@@ -2,10 +2,10 @@ import Testing
 @testable import ClickyCore
 
 struct CallTurnTakingTests {
-    @Test func patienceDefaultsToTwoSecondsAndStaysInRange() {
-        #expect(CallTurnPatience.seconds(saved: nil) == 2.0)
-        #expect(CallTurnPatience.seconds(saved: 0) == 2.0)
-        #expect(CallTurnPatience.seconds(saved: 0.3) == 1.0)
+    @Test func patienceDefaultsToASecondAndAHalfAndStaysInRange() {
+        #expect(CallTurnPatience.seconds(saved: nil) == 1.5)
+        #expect(CallTurnPatience.seconds(saved: 0) == 1.5)
+        #expect(CallTurnPatience.seconds(saved: 0.3) == 0.5)
         #expect(CallTurnPatience.seconds(saved: 9) == 4.0)
         #expect(CallTurnPatience.seconds(saved: 2.5) == 2.5)
     }
@@ -13,7 +13,7 @@ struct CallTurnTakingTests {
     @Test func unfinishedWordsWaitLonger() {
         for words in ["So I was thinking that", "I want to build an app and", "Umm", "the thing is,", "Mujhe lagta hai ki", "Matlab", "and then the…", "Tell me about the?"] {
             #expect(CallTurnEnd.ending(of: words) == .soundsUnfinished, "\(words)")
-            #expect(CallTurnEnd.waitSeconds(after: words, patienceSeconds: 2) == 3.5, "\(words)")
+            #expect(CallTurnEnd.waitSeconds(after: words, patienceSeconds: 2) == 3.0, "\(words)")
         }
     }
 
@@ -98,5 +98,28 @@ extension CallTurnTakingTests {
         #expect(message.contains("You were just in listen mode"))
         #expect(message.contains("Listen mode is over now"))
         #expect(!message.contains("You stay in listen mode"))
+    }
+}
+
+extension CallTurnTakingTests {
+    @Test func justListenOnlySwitchesWhenItEndsTheUtterance() {
+        #expect(CallListenMode.command(in: "just listen") == .start)
+        #expect(CallListenMode.command(in: "okay only listen please") == .start)
+        #expect(CallListenMode.command(in: "Vello, listen only for now") == .start)
+        // An ordinary turn that happens to hold the words is not the switch.
+        #expect(CallListenMode.command(in: "just listen to me, open Safari") == nil)
+        #expect(CallListenMode.command(in: "only listen to the first part and tell me") == nil)
+        // Naming the mode still works anywhere in a short utterance.
+        #expect(CallListenMode.command(in: "go into listen mode for this meeting") == .start)
+    }
+
+    @Test func vellosOwnWordsComingBackAreTold() {
+        let said = "Sure, I'll get Pointer Assistant to open Safari and search for flights to Goa."
+        #expect(CallEcho.soundsLikeVello("open Safari and search for flights", vellosRecentWords: said))
+        #expect(CallEcho.soundsLikeVello("I'll get pointer assistant", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("no wait, search for hotels in Delhi instead", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("stop", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("open Safari", vellosRecentWords: ""))
+        #expect(!CallEcho.soundsLikeVello("", vellosRecentWords: said))
     }
 }
