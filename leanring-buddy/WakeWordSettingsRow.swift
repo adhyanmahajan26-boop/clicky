@@ -35,7 +35,7 @@ struct WakeWordSettingsRow: View {
                 ))
                 .toggleStyle(.switch)
                 .labelsHidden()
-                .tint(DS.Colors.accent)
+                .tint(DS.Colors.switchTint)
                 .scaleEffect(0.8)
                 .pointerCursor()
             }

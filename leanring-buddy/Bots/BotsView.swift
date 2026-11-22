@@ -386,7 +386,7 @@ struct BotsRootView: View {
         }
         .contextMenu { itemMenu(item) }
         .draggable(item) {
-            Text(itemName(item)).font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 6)
+            Text(itemName(item)).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textOnAccent).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Capsule().fill(DS.Colors.accent))
         }
     }

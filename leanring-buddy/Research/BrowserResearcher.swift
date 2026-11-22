@@ -607,7 +607,7 @@ private struct ResearchRoleRow: View {
 
     var body: some View {
         SettingRow(title: role.title, detail: role.detail) {
-            Toggle(role.title, isOn: $isOn).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent)
+            Toggle(role.title, isOn: $isOn).labelsHidden().toggleStyle(.switch).tint(DS.Colors.switchTint)
         }
     }
 }
