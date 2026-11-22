@@ -8,6 +8,7 @@
 //
 
 import ClickyCore
+import Combine
 import Foundation
 
 @MainActor

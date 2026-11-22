@@ -324,6 +324,8 @@ impl Harness {
 
     pub fn bot(&self, id: &str) -> Option<Bot> { self.with(|s| s.bots.iter().find(|b| b.id == id).cloned()) }
     pub fn bots(&self) -> Vec<Bot> { self.with(|s| s.bots.clone()) }
+    /// The ready-made teams Settings › Bot teams lists: Vello's own with the owner's changes, then the owner's own.
+    pub fn ready_teams(&self) -> Vec<crate::ready_teams::ReadyTeam> { crate::ready_teams::library(&crate::ready_teams::load(&self.paths.bots_dir())) }
     pub fn primary(&self) -> Option<Bot> { self.with(|s| s.bots.iter().find(|b| b.primary).or(s.bots.first()).cloned()) }
     pub fn group(&self, id: &str) -> Option<Group> { self.with(|s| s.groups.iter().find(|g| g.id == id).cloned()) }
     pub fn group_for_room(&self, room: &str) -> Option<Group> {
@@ -458,7 +460,8 @@ impl Harness {
             if !others.is_empty() {
                 parts.push(format!("Your teammates: {}.", others.join("; ")));
             }
-            parts.push(crate::team_build::how_to(&owner));
+            let ready: Vec<String> = self.ready_teams().into_iter().map(|t| t.name).collect();
+            parts.push(crate::team_build::how_to(&owner) + &crate::ready_teams::how_to(&owner, &ready));
         }
         parts.push(prompts::routine_how_to(&owner));
         parts.push(prompts::coding_how_to("Claude Code"));
