@@ -40,23 +40,53 @@ enum ClaudiaLibrary {
 
     /// Every item, newest first (at most 200).
     static func items() -> [Item] {
-        var items: [Item] = []
-        func scan(_ directory: URL, kind: String, extensions: Set<String>, titlePrefix: String = "") {
+        items(from: scanFiles(homePath: home.path, screenshotsFolderName: SnapshotCapture.screenshotsFolderName))
+    }
+
+    /// The same, with the folder scan run off the main thread: the Notes tab looks again every 2 s, and the scan used to
+    /// run on the main thread (the app's default actor isolation kept its Task.detached there), costing clicks and scrolls.
+    static func itemsWithoutBlocking() async -> [Item] {
+        items(from: await scanFilesOffMainThread(homePath: home.path, screenshotsFolderName: SnapshotCapture.screenshotsFolderName))
+    }
+
+    private static func items(from scannedFiles: [ScannedFile]) -> [Item] {
+        scannedFiles.map { scannedFile in
+            let url = URL(fileURLWithPath: scannedFile.path)
+            return Item(id: id(for: url), kind: scannedFile.kind, title: scannedFile.title, date: scannedFile.date, url: url)
+        }
+    }
+
+    /// A file the scan found, as plain values so the scan can run on any thread.
+    nonisolated struct ScannedFile: Sendable {
+        let kind: String
+        let title: String
+        let date: Date
+        let path: String
+    }
+
+    @concurrent nonisolated private static func scanFilesOffMainThread(homePath: String, screenshotsFolderName: String) async -> [ScannedFile] {
+        scanFiles(homePath: homePath, screenshotsFolderName: screenshotsFolderName)
+    }
+
+    /// The library's folders, newest first, at most 200 files.
+    nonisolated private static func scanFiles(homePath: String, screenshotsFolderName: String) -> [ScannedFile] {
+        let home = URL(fileURLWithPath: homePath, isDirectory: true)
+        var scannedFiles: [ScannedFile] = []
+        func scan(_ directory: URL, kind: String, extensions: Set<String>) {
             guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
             for name in names {
                 let url = directory.appendingPathComponent(name)
                 guard extensions.contains(url.pathExtension.lowercased()),
                       let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
                       let date = attributes[.modificationDate] as? Date else { continue }
-                let title = titlePrefix + url.deletingPathExtension().lastPathComponent
-                items.append(Item(id: id(for: url), kind: kind, title: title, date: date, url: url))
+                scannedFiles.append(ScannedFile(kind: kind, title: url.deletingPathExtension().lastPathComponent, date: date, path: url.path))
             }
         }
         scan(home.appendingPathComponent("Clicky Notes"), kind: "notes", extensions: ["md"])
         scan(home.appendingPathComponent("Clicky Notes/Research"), kind: "research", extensions: ["md"])
         scan(home.appendingPathComponent("Pictures/Clicky"), kind: "whiteboard", extensions: ["png"])
-        scan(home.appendingPathComponent("Desktop/\(SnapshotCapture.screenshotsFolderName)"), kind: "screenshot", extensions: ["png"])
-        return Array(items.sorted { $0.date > $1.date }.prefix(200))
+        scan(home.appendingPathComponent("Desktop/\(screenshotsFolderName)"), kind: "screenshot", extensions: ["png"])
+        return Array(scannedFiles.sorted { $0.date > $1.date }.prefix(200))
     }
 
     static func item(id: String) -> Item? { items().first { $0.id == id } }

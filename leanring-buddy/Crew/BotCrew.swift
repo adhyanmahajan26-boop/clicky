@@ -44,8 +44,9 @@ extension BotsStore {
 
     /// A question from this bot that's still waiting for the owner's answer.
     func openCall(of botID: String) -> BotCallPrompt? {
-        guard let last = conversation(botID).messages.last, last.author == botID, last.text.contains("[CHOOSE:") else { return nil }
-        return BotCallPrompt.parse(last.text)
+        guard let last = conversation(botID).messages.last, last.author == botID else { return nil }
+        // Read once per message: every sidebar row asks this several times on each redraw.
+        return BotMessageCards.call(for: last)
     }
 
     // MARK: Failures
@@ -164,10 +165,10 @@ extension BotsStore {
             return live.isEmpty ? "Thinking…" : live
         }
         // An old message can be nothing but a tag, from before those were taken out as they arrive.
-        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !Self.firstLine($0.text).isEmpty && !$0.text.hasPrefix("Couldn't reply: ") }) else {
+        guard let last = conversation(bot.id).messages.last(where: { $0.author == bot.id && !BotMessageCards.firstLine(of: $0).isEmpty && !$0.text.hasPrefix("Couldn't reply: ") }) else {
             return bot.description.isEmpty ? "Ready" : bot.description
         }
-        return Self.firstLine(last.text) + " · " + Self.shortAge(since: last.at)
+        return BotMessageCards.firstLine(of: last) + " · " + Self.shortAge(since: last.at)
     }
 
     /// Since when the bot has been in its current state, for the time on the right of its row ("4m", "1:42").

@@ -428,14 +428,13 @@ final class HarnessTerminalModel: ObservableObject {
         probing = true
         let info = task.info
         let kind = task.kind
-        Task.detached(priority: .userInitiated) { [weak self] in
-            if kind == .install { HarnessCatalog.findNpmGlobalFolder() }
-            let status = HarnessDetector.status(for: info.id)
-            await MainActor.run {
-                guard let self else { return }
-                self.probing = false
-                self.note(status, kind: kind)
-            }
+        // The checks run off the main thread (HarnessCatalog.runShortCommandOffMainThread), so the terminal stays responsive.
+        Task(priority: .userInitiated) { [weak self] in
+            if kind == .install { await HarnessCatalog.findNpmGlobalFolder() }
+            let status = await HarnessDetector.status(for: info.id)
+            guard let self else { return }
+            self.probing = false
+            self.note(status, kind: kind)
         }
     }
 

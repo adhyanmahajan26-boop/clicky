@@ -71,8 +71,6 @@ final class NotchPanelController: NSObject {
     /// The screen the pill is on now (its display id), and whether it's shown.
     private var currentDisplayID: CGDirectDisplayID?
     private var isPanelShown = false
-    /// True while Theo is speaking an answer (the pill stays open to show it).
-    private var isShowingAnswer = false
     private var lastPlacement = ClickySettings.islandPlacement
     private var showsOverFullScreenApps = !ClickySettings.isNotchHiddenOverFullScreen
     /// The pill's frame in global AppKit points (the part the pointer counts on).
@@ -194,11 +192,9 @@ final class NotchPanelController: NSObject {
             != NotchView.pillSize(content: viewModel.content, layout: viewModel.layout, isExpanded: viewModel.isExpanded)
         if newContent != viewModel.content { viewModel.content = newContent }
         if sizeChanged { applyPanelFrame() }
-        let answering = newContent.phase == .speaking && newContent.captionText != nil
-        if answering != isShowingAnswer {
-            isShowingAnswer = answering
-            applyPresentation()
-        }
+        // Speaking or listening never opens the pill by itself: on a laptop's notch the open panel
+        // dropped over the menu bar and the top of the window, where it caught clicks meant for them.
+        // The words are in the bubble by the cursor; hovering or clicking the pill still opens it.
     }
 
     // MARK: - Placement and visibility
@@ -439,8 +435,7 @@ final class NotchPanelController: NSObject {
     }
 
     private func applyPresentation() {
-        // While Theo talks, the pill opens on its own so the words are visible.
-        let isExpanded = presentationStateMachine.isExpanded || isShowingAnswer
+        let isExpanded = presentationStateMachine.isExpanded
         guard viewModel.isExpanded != isExpanded else { return }
         if isExpanded { rebuildContent() }
         viewModel.isExpanded = isExpanded

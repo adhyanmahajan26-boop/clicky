@@ -84,23 +84,21 @@ enum HarnessCatalog {
     private static let extraDirectoriesLock = NSLock()
     nonisolated(unsafe) private static var extraDirectories: [String] = []
 
-    /// Asks npm where its global commands go. Runs a command: call off the main thread.
-    static func findNpmGlobalFolder() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: LoginShell.shellPath())
-        process.arguments = LoginShell.arguments(forCommand: "npm config get prefix", interactive: false)
-        process.environment = childEnvironment()
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 8) { if process.isRunning { process.terminate() } }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let prefix = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Asks npm where its global commands go. The command runs off the main thread (`runShortCommandOffMainThread`), so a
+    /// caller on the main actor only waits, it never freezes the window.
+    static func findNpmGlobalFolder() async {
+        let output = await runShortCommandOffMainThread(executable: URL(fileURLWithPath: LoginShell.shellPath()),
+                                                        arguments: LoginShell.arguments(forCommand: "npm config get prefix", interactive: false),
+                                                        environment: childEnvironment(), timeout: 8, mergesErrorOutput: false)
+        let prefix = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard prefix.hasPrefix("/") else { return }
         extraDirectoriesLock.withLock { if !extraDirectories.contains("\(prefix)/bin") { extraDirectories.append("\(prefix)/bin") } }
+    }
+
+    /// Asks the login shell for its PATH (up to 5 s, once per launch) away from the main thread, so the first lookup
+    /// that needs it doesn't freeze the window while the shell starts.
+    @concurrent nonisolated static func loadLoginShellPathOffMainThread() async {
+        _ = loginShellPath
     }
 
     /// The folders the usual installers put their commands in. Looking here needs no shell, so a tool in one of them is
@@ -251,6 +249,34 @@ enum HarnessCatalog {
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// The same as `output(of:)`, for callers on the main actor: the command runs and is waited for off the main thread,
+    /// so clicks and scrolling keep working while a CLI answers (a status check can take several seconds).
+    static func outputWithoutBlocking(of executable: URL, _ arguments: [String], timeout: TimeInterval = 20, merge: Bool = true) async -> String {
+        await runShortCommandOffMainThread(executable: executable, arguments: arguments, environment: childEnvironment(),
+                                           timeout: timeout, mergesErrorOutput: merge)
+    }
+
+    /// The app's code runs on the main actor by default (SWIFT_DEFAULT_ACTOR_ISOLATION), and so did a `Task.detached` started
+    /// from it: every CLI status check used to block the main thread in `read()` for seconds. `@concurrent` makes this run
+    /// on the background pool whoever calls it. It only touches Foundation, never the app's state.
+    @concurrent nonisolated static func runShortCommandOffMainThread(executable: URL, arguments: [String], environment: [String: String],
+                                                                    timeout: TimeInterval, mergesErrorOutput: Bool) async -> String {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        process.environment = environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = mergesErrorOutput ? pipe : FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return "" }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
 }
 
 // MARK: - Status
@@ -270,8 +296,8 @@ struct HarnessStatus: Equatable {
 }
 
 enum HarnessDetector {
-    /// Checks one harness. Runs CLI commands: call off the main thread.
-    static func status(for id: String) -> HarnessStatus {
+    /// Checks one harness. Its CLI commands run off the main thread, so this can be awaited from the main actor.
+    static func status(for id: String) async -> HarnessStatus {
         var status = HarnessStatus(id: id)
         let home = FileManager.default.homeDirectoryForCurrentUser
         guard let executable = HarnessCatalog.executable(for: id) else {
@@ -283,7 +309,7 @@ enum HarnessDetector {
         status.path = executable.path
         if id != "t3" {
             // "2.1.312 (Claude Code)", "codex-cli 0.165.0", "grok 1.0.70 (f50904e)": the part with the digits.
-            let first = HarnessCatalog.output(of: executable, ["--version"], timeout: 8, merge: false).split(separator: "\n").first.map(String.init) ?? ""
+            let first = await HarnessCatalog.outputWithoutBlocking(of: executable, ["--version"], timeout: 8, merge: false).split(separator: "\n").first.map(String.init) ?? ""
             status.version = first.split(separator: " ").first { $0.first?.isNumber == true }.map(String.init)
         }
         switch id {
@@ -291,7 +317,7 @@ enum HarnessDetector {
             status.account = ClaudiaT3Integration.t3Apps.first.map { $0.deletingPathExtension().lastPathComponent }
             status.loggedIn = true
         case "claude":
-            let text = HarnessCatalog.output(of: executable, ["auth", "status"], timeout: 15, merge: false)
+            let text = await HarnessCatalog.outputWithoutBlocking(of: executable, ["auth", "status"], timeout: 15, merge: false)
             if let object = jsonObject(in: text) {
                 status.loggedIn = object["loggedIn"] as? Bool
                 let email = object["email"] as? String
@@ -300,7 +326,7 @@ enum HarnessDetector {
                 status.account = [email, plan].compactMap { $0 }.joined(separator: " · ")
             }
         case "codex":
-            let text = HarnessCatalog.output(of: executable, ["login", "status"], timeout: 15)
+            let text = await HarnessCatalog.outputWithoutBlocking(of: executable, ["login", "status"], timeout: 15)
             let lower = text.lowercased()
             status.loggedIn = lower.contains("logged in") && !lower.contains("not logged in")
             var parts: [String] = []
@@ -314,7 +340,7 @@ enum HarnessDetector {
             status.account = parts.isEmpty ? nil : parts.joined(separator: " · ")
         case "cursor":
             // `status` says "Login successful" even when the session has expired; `about` shows the real account.
-            let about = HarnessCatalog.output(of: executable, ["about"], timeout: 20)
+            let about = await HarnessCatalog.outputWithoutBlocking(of: executable, ["about"], timeout: 20)
             var email: String?
             var tier: String?
             for line in about.split(separator: "\n") {
@@ -330,7 +356,7 @@ enum HarnessDetector {
                     status.detail = "Sign in with `cursor-agent login`."
                 }
             } else {
-                let text = HarnessCatalog.output(of: executable, ["status"], timeout: 20).lowercased()
+                let text = await HarnessCatalog.outputWithoutBlocking(of: executable, ["status"], timeout: 20).lowercased()
                 // Nothing back (a check that timed out while the Mac was busy) says nothing: the card was stuck on "signed out"
                 // for four days after the 5 Nov install. Unknown keeps runs going, and the next check settles it.
                 status.loggedIn = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil
@@ -338,7 +364,7 @@ enum HarnessDetector {
             }
         case "grok":
             // `grok models` prints "You are logged in with grok.com." and the model list.
-            let text = HarnessCatalog.output(of: executable, ["models"], timeout: 15)
+            let text = await HarnessCatalog.outputWithoutBlocking(of: executable, ["models"], timeout: 15)
             if text.lowercased().contains("not authenticated") {
                 status.loggedIn = false
             } else if text.lowercased().contains("logged in") {
@@ -451,12 +477,12 @@ enum HarnessModels {
     }
 
     /// Runs `cursor-agent --list-models` (45 s limit).
-    static func fetchCursor(executable: URL) -> [HarnessModel] {
-        parseCursor(listing: HarnessCatalog.output(of: executable, ["--list-models"], timeout: 45, merge: false))
+    static func fetchCursor(executable: URL) async -> [HarnessModel] {
+        parseCursor(listing: await HarnessCatalog.outputWithoutBlocking(of: executable, ["--list-models"], timeout: 45, merge: false))
     }
 
-    static func opencode(executable: URL) -> [HarnessModel] {
-        BrainModelCatalog.openCodeModels(listing: HarnessCatalog.output(of: executable, ["models"], timeout: 20, merge: false))
+    static func opencode(executable: URL) async -> [HarnessModel] {
+        BrainModelCatalog.openCodeModels(listing: await HarnessCatalog.outputWithoutBlocking(of: executable, ["models"], timeout: 20, merge: false))
             .map { HarnessModel(id: $0, label: NativeBot.label(for: $0)) }
     }
 }
@@ -625,13 +651,13 @@ final class HarnessCenter: ObservableObject {
     /// Re-checks one harness (after a sign-in or install) without touching the others.
     func recheck(_ harness: String) {
         checking.insert(harness)
-        Task.detached(priority: .userInitiated) {
-            HarnessCatalog.findNpmGlobalFolder()
-            let status = HarnessDetector.status(for: harness)
-            await MainActor.run {
-                self.statuses[harness] = status
-                self.checking.remove(harness)
-            }
+        // On the main actor, but every slow part (the login shell, npm, the CLI's own checks) runs off the main thread.
+        Task(priority: .userInitiated) {
+            await HarnessCatalog.loadLoginShellPathOffMainThread()
+            await HarnessCatalog.findNpmGlobalFolder()
+            let status = await HarnessDetector.status(for: harness)
+            self.statuses[harness] = status
+            self.checking.remove(harness)
         }
     }
 
@@ -658,12 +684,15 @@ final class HarnessCenter: ObservableObject {
         lastRefresh = Date()
         isRefreshing = true
         let cachedCursorAge = HarnessModels.readCache().map { Date().timeIntervalSince($0.fetchedAt) } ?? .infinity
-        Task.detached(priority: .utility) {
-            _ = HarnessCatalog.searchDirectories // login-shell PATH, once
-            HarnessCatalog.findNpmGlobalFolder()
+        // On the main actor, but every slow part (the login shell, npm, each CLI's checks) runs off the main thread: this used
+        // to be a Task.detached, which the app's default main-actor isolation kept on the main thread, freezing the window
+        // for seconds whenever Details, Settings or the model menu asked for a fresh check.
+        Task(priority: .utility) {
+            await HarnessCatalog.loadLoginShellPathOffMainThread()
+            await HarnessCatalog.findNpmGlobalFolder()
             let ids = HarnessCatalog.all.map(\.id)
             let found = await withTaskGroup(of: HarnessStatus.self) { group -> [String: HarnessStatus] in
-                for id in ids { group.addTask { HarnessDetector.status(for: id) } }
+                for id in ids { group.addTask { await HarnessDetector.status(for: id) } }
                 var all: [String: HarnessStatus] = [:]
                 for await status in group { all[status.id] = status }
                 return all
@@ -673,28 +702,26 @@ final class HarnessCenter: ObservableObject {
             var cursorModels: [HarnessModel]?
             if let cursor = HarnessCatalog.executable(for: "cursor"), found["cursor"]?.loggedIn == true,
                force || cachedCursorAge > 6 * 3600 {
-                let fetched = HarnessModels.fetchCursor(executable: cursor)
+                let fetched = await HarnessModels.fetchCursor(executable: cursor)
                 if !fetched.isEmpty {
                     cursorModels = fetched
                     HarnessModels.writeCache(.init(fetchedAt: Date(), cursor: fetched))
                 }
             }
             var opencodeModels: [HarnessModel] = []
-            if let opencode = HarnessCatalog.executable(for: "opencode") { opencodeModels = HarnessModels.opencode(executable: opencode) }
-            await MainActor.run {
-                self.statuses = found
-                HarnessPrefs.rememberDetectedCodingTarget(statuses: found)
-                if !codex.models.isEmpty { self.models["codex"] = codex.models; self.codexEfforts = codex.efforts }
-                if let cursorModels { self.models["cursor"] = cursorModels }
-                // BrainCatalog's OpenCode list (loaded by Setup) wins when it has one.
-                let brain = BrainCatalog.shared.models[.opencode] ?? []
-                if !brain.isEmpty {
-                    self.models["opencode"] = brain.map { HarnessModel(id: $0, label: $0) }
-                } else if !opencodeModels.isEmpty {
-                    self.models["opencode"] = opencodeModels
-                }
-                self.isRefreshing = false
+            if let opencode = HarnessCatalog.executable(for: "opencode") { opencodeModels = await HarnessModels.opencode(executable: opencode) }
+            self.statuses = found
+            HarnessPrefs.rememberDetectedCodingTarget(statuses: found)
+            if !codex.models.isEmpty { self.models["codex"] = codex.models; self.codexEfforts = codex.efforts }
+            if let cursorModels { self.models["cursor"] = cursorModels }
+            // BrainCatalog's OpenCode list (loaded by Setup) wins when it has one.
+            let brain = BrainCatalog.shared.models[.opencode] ?? []
+            if !brain.isEmpty {
+                self.models["opencode"] = brain.map { HarnessModel(id: $0, label: $0) }
+            } else if !opencodeModels.isEmpty {
+                self.models["opencode"] = opencodeModels
             }
+            self.isRefreshing = false
         }
     }
 }

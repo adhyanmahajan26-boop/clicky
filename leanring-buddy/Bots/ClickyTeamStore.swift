@@ -543,6 +543,11 @@ extension BotsStore {
             return
         }
         let wanted = BotsStore.searchName(name)
+        // Vello on a call, handing a job to itself: its own text chat has its apps, files, routines and team building.
+        if onReport != nil, CallOwnChat.meansOwnChat(name, ceoName: ceo.name) {
+            askOwnChatFromCall(message, ownerWords: ownerWords, ceo: ceo, onReport: onReport)
+            return
+        }
         if wanted == BotsStore.searchName("clicky") {
             orderClicky(message, ownerWords: ownerWords, onReport: onReport)
             return
@@ -583,6 +588,34 @@ extension BotsStore {
         } else {
             let names = (chats.map(\.name) + everyone.filter(\.isOn).map(\.name)).joined(separator: ", ")
             report(name, "There's nobody by that name that's on. Who's here: \(names).")
+        }
+    }
+
+    /// On a call, Vello does a job in its own text chat, where it has everything a typed message gets: its apps (Notion and the rest)
+    /// at their levels, files, routines, team building and coding runs. What the owner said on the call goes in as their message, so
+    /// whatever only the owner's own words may start is judged on those words, never on Vello's. Its answer comes back to the call.
+    private func askOwnChatFromCall(_ task: String, ownerWords: String?, ceo: NativeBot, onReport: ((String) -> Void)?) {
+        let ownerMessage = CallOwnChat.ownerMessage(ownerWordsNewestFirst: ownerWords ?? "")
+        guard ceo.isOn, !ownerMessage.isEmpty else {
+            onReport?("Nothing went to your text chat: there were no words of \(BotPrompts.ownerName)'s to send with it.")
+            return
+        }
+        callTaskNotes[ceo.id] = (CallOwnChat.taskNote(task: task, owner: BotPrompts.ownerName), Date())
+        send(ownerMessage, to: ceo.id)
+        Task { [weak self] in
+            // Its turn may wait for one already going. The answer is its newest message after the owner's, once it's stopped writing.
+            let deadline = Date().addingTimeInterval(BotRunner.turnLimitSeconds + 60)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self else { return }
+                let messages = self.conversation(ceo.id).messages
+                guard self.replying[ceo.id] == nil,
+                      let asked = messages.lastIndex(where: { $0.author == "user" && $0.text == ownerMessage }),
+                      let answer = messages[messages.index(after: asked)...].last(where: { $0.author == ceo.id }) else { continue }
+                onReport?(CallOwnChat.report(answer: answer.text))
+                return
+            }
+            onReport?("Your text chat is still working on it. The answer will be there.")
         }
     }
 

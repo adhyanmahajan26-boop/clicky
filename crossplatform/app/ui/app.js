@@ -13,6 +13,10 @@ let view = { kind: "home" };
 let filter = null;
 const sigs = {};
 let lastSeen = "";
+// Only the newest messages are drawn, as on the Mac: rebuilding a 300-message chat (every message's Markdown and avatar)
+// whenever something in it changed made clicks and scrolling stutter. Older ones are a click away.
+const MESSAGES_PER_PAGE = 40;
+let shownMessages = MESSAGES_PER_PAGE;
 
 document.body.insertAdjacentHTML("afterbegin", TP.defs());
 const light = window.matchMedia("(prefers-color-scheme: light)");
@@ -46,8 +50,10 @@ function once(key, sig, fn) { if (sigs[key] === sig) return; sigs[key] = sig; fn
 /* ---------------- sidebar ---------------- */
 function renderSidebar() {
   const faces = state.faces.slice().sort((a, b) => ORDER.indexOf(a.state) - ORDER.indexOf(b.state) || (a.id === "theo" ? -1 : b.id === "theo" ? 1 : 0));
-  const minute = Math.floor(Date.now() / 60000);
-  const sig = JSON.stringify([faces.map((f) => [f.id, f.state, f.detail, f.unread, f.since]), state.bots.map((b) => [b.name, b.primary]), state.groups, state.teams, sidebarSort(), view, filter, minute]);
+  // Only what changes the rows themselves rebuilds the list. A bot's status line changes with every streamed word and its
+  // time every minute: rebuilding the whole list for those (every half second while a bot wrote) redrew every avatar and
+  // swapped the row under the pointer, so a click that straddled a rebuild was lost. Those are patched in place below.
+  const sig = JSON.stringify([faces.map((f) => [f.id, f.state, f.word, f.unread]), state.bots.map((b) => [b.name, b.primary]), state.groups, state.teams, sidebarSort(), view, filter]);
   once("side", sig, () => {
     $("#brand-face").innerHTML = TP.bot(lookOf("theo"), "awake", 22, { badge: false });
     const c = state.counts || {};
@@ -58,6 +64,28 @@ function renderSidebar() {
     renderBotList(faces);
     renderGroupList();
     document.querySelectorAll(".row.nav[data-pane]").forEach((r) => r.classList.toggle("selected", view.kind === r.dataset.pane));
+  });
+  patchSidebarRows(faces);
+}
+
+// The status line and time of each row, changed in place only where they differ.
+function patchSidebarRows(faces) {
+  const byId = new Map(faces.map((f) => [f.id, f]));
+  document.querySelectorAll("#bots [data-bot]").forEach((row) => {
+    const f = byId.get(row.dataset.bot);
+    if (!f) return;
+    const statusHTML = sidebarStatusHTML(f);
+    if (row.dataset.statusHtml !== statusHTML) {
+      const line = row.querySelector(".st");
+      if (line) line.innerHTML = statusHTML;
+      row.dataset.statusHtml = statusHTML;
+    }
+    const time = sidebarTimeText(f);
+    if (row.dataset.timeText !== time) {
+      const box = row.querySelector(".tm");
+      if (box) box.textContent = time;
+      row.dataset.timeText = time;
+    }
   });
 }
 
@@ -108,15 +136,18 @@ function runCard(run, m) {
 
 /* ---------------- a chat ---------------- */
 async function renderChat() {
-  const r = await invoke({ cmd: "botChat", id: room(), limit: 300 });
-  const msgs = r.result || [];
+  // One more than is shown, to know whether there are earlier ones.
+  const r = await invoke({ cmd: "botChat", id: room(), limit: shownMessages + 1 });
+  const fetched = r.result || [];
+  const hasEarlier = fetched.length > shownMessages;
+  const msgs = hasEarlier ? fetched.slice(fetched.length - shownMessages) : fetched;
   const writing = Object.entries(state.replyingIn || {}).filter(([, x]) => x === room()).map(([b]) => b);
   $("#send").classList.toggle("stop", writing.length > 0);
   $("#send").innerHTML = writing.length ? "&#9632;" : "&#8593;";
   const live = writing.map((b) => [b, (state.live || {})[b] || ""]);
   const faceSig = view.kind === "bot" ? face(view.id).state : "";
   const runSig = state.runs.map((x) => x.id + x.phase + (x.pullRequest || "")).join();
-  const sig = JSON.stringify([view, msgs.length, msgs.length && msgs[msgs.length - 1].id, msgs.map((m) => m.card || "").join(), faceSig, runSig, live.map(([b]) => b), CARDS.sig(), RUNCHOICES.sig()]);
+  const sig = JSON.stringify([view, shownMessages, hasEarlier, msgs.length, msgs.length && msgs[msgs.length - 1].id, msgs.map((m) => m.card || "").join(), faceSig, runSig, live.map(([b]) => b), CARDS.sig(), RUNCHOICES.sig()]);
   const pane = $("#pane");
   if (view.kind === "bot" && msgs.length && lastSeen !== msgs[msgs.length - 1].id + view.id) { lastSeen = msgs[msgs.length - 1].id + view.id; invoke({ cmd: "chatSeen", id: view.id }); }
   if (sigs.chat === sig) {
@@ -130,7 +161,7 @@ async function renderChat() {
   const ownerAfter = (i) => msgs.slice(i + 1).some((x) => x.author === "user");
   // A prompt the owner didn't ask for has its "Start this coding run?" card right after it, which carries the run choices.
   const runCardAfter = (i) => msgs.slice(i + 1, i + 4).some((x) => /^(ask|answered):/.test(x.card || "") && x.card.includes('"kind":"run"'));
-  let html = "", last = null;
+  let html = hasEarlier ? `<div class="earlier"><button class="btn sm ghost" data-earlier>Show earlier messages</button></div>` : "", last = null;
   if (!msgs.length) html = `<div class="empty">${view.kind === "bot" ? botHTML(view.id, 112, { badge: false }) : ""}<div>Say hello to ${esc(view.kind === "bot" ? nameOf(view.id) : (state.groups.find((g) => g.id === view.id) || {}).name)}.</div></div>`;
   msgs.forEach((m, i) => {
     if (m.card && m.card.startsWith("ask:")) { html += CARDS.ask(m, room()); last = null; return; }
@@ -161,6 +192,13 @@ async function renderChat() {
   for (const [b, t] of live) html += `<div class="msg live" data-live="${esc(b)}"><div class="who">${botHTML(b, 28, { badge: false, state: t ? "working" : "thinking" })}${esc(nameOf(b))}</div><div class="body">${md(t || "…")}</div></div>`;
   pane.innerHTML = `<div class="column">${html}</div>`;
   wire(pane);
+  const earlier = pane.querySelector("[data-earlier]");
+  if (earlier) earlier.onclick = () => {
+    // Keep the message that was at the top where it was, as the earlier ones go in above it.
+    const fromBottom = pane.scrollHeight - pane.scrollTop;
+    shownMessages += MESSAGES_PER_PAGE; sigs.chat = null;
+    refresh().then(() => { pane.scrollTop = pane.scrollHeight - fromBottom; });
+  };
   CARDS.wire(pane);
   if (typeof VMSCREENS !== "undefined") VMSCREENS.wire(pane);
   if (atBottom || !sigs.scrolled) { pane.scrollTop = pane.scrollHeight; sigs.scrolled = true; }
@@ -274,7 +312,7 @@ function wireBrains(root, redraw) {
 }
 
 /* ---------------- the loop ---------------- */
-function open(v) { view = v; Object.keys(sigs).forEach((k) => delete sigs[k]); render(); }
+function open(v) { view = v; shownMessages = MESSAGES_PER_PAGE; Object.keys(sigs).forEach((k) => delete sigs[k]); render(); }
 async function refresh() {
   try { state = (await invoke({ cmd: "botsState" })).result || state; } catch (e) { console.error(e); }
   // The tray face and notifications come from the app itself (main.rs watch_faces), so they keep working while this window

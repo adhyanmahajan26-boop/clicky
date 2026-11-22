@@ -1,7 +1,7 @@
 """Teams and whole group chats, for suite.py: Theo asking a group chat with [TELL: group], build discussions (plan, critiques,
 merge, the run), members the owner names without an @, and categories with a manager and the report roll-up. Same stand-in
 engine and helpers as suite.py; `add_cases(suite)` registers them there."""
-import json, time
+import json, os, time
 import lib as T
 from lib import P
 
@@ -13,17 +13,6 @@ def add_cases(S):
     def order_of(msgs):
         names = {v: k for k, v in S.IDS.items()}
         return [names.get(m["author"], m["author"]) for m in msgs if m["author"] not in ("user", "note", "routine") and m.get("text")]
-
-    def team_notes_after(start, count=1, seconds=60):
-        """Vello's notes in Theo's chat from message `start` on, once `count` team notes are there. The ```team block is carried
-        out after the reply is done, and making a squad (each bot saved, the brains checked) can outlast wait_idle's quiet
-        spell on a slow Windows runner, so this waits for the note itself rather than for an idle engine."""
-        def notes():
-            messages = T.chat("theo", 5000)[start:]
-            if sum(1 for m in messages if m.get("card") == "team-note") < count:
-                return None
-            return [m["text"] for m in messages if m["author"] == "note"]
-        return T.wait_until(notes, seconds=seconds) or [m["text"] for m in T.chat("theo", 5000)[start:] if m["author"] == "note"]
 
     def theo_prompts(mark, pattern):
         return [c["prompt"] for c in T.calls(mark) if "You are Vello" in (c.get("system") or "") + (c.get("prompt") or "") and pattern in (c.get("prompt") or "")]
@@ -391,19 +380,19 @@ def add_cases(S):
                             "bots": [{"name": boss, "does": "Runs the dig", "category": squad, "model": "Claude Opus 5.5"}] +
                                     [{"name": w, "does": "Digs", "category": squad, "model": "haiku"} for w in workers]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Setting up the squad.\n```team\n%s\n```" % block}, {"reply": "ok"}])
-        start = len(T.chat("theo", 5000))
+        start = len(T.chat("theo", 400))
         T.say("theo", "Make a Super Digger Squad %s category with %s on Opus 5.5 as manager and ten Haiku workers." % (n, boss))
         idle, secs = T.wait_idle(seconds=90, quiet=3)
-        notes = team_notes_after(start)
         bots = {b["name"]: b for b in T.state()["bots"] if n in b["name"]}
         team = next((t for t in P({"cmd": "teams"})["result"] if t["name"] == squad), None)
+        notes = [m["text"] for m in T.chat("theo", 400)[start:] if m["author"] == "note"]
         switch = json.dumps({"bots": [{"name": workers[0], "model": "sonnet"}]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Switching it.\n```team\n%s\n```" % switch}, {"reply": "ok"}])
-        start2 = len(T.chat("theo", 5000))
+        start2 = len(T.chat("theo", 400))
         T.say("theo", "Switch %s to Sonnet." % workers[0])
         idle2, _ = T.wait_idle(seconds=90, quiet=3)
-        notes2 = team_notes_after(start2)
         switched = next((b for b in T.state()["bots"] if b["name"] == workers[0]), {})
+        notes2 = [m["text"] for m in T.chat("theo", 400)[start2:] if m["author"] == "note"]
         if team: P({"cmd": "teamDelete", "id": team["id"]})
         for b in bots.values(): P({"cmd": "botDelete", "id": b["id"]})
         T.fake("ok")
@@ -416,8 +405,80 @@ def add_cases(S):
                   "note_says_switch": any("%s runs on Claude Sonnet 5.5 now" % workers[0] in t for t in notes2)}
         return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": (notes + notes2)[-2:]}
 
-    @test("TM13", "From chat: a group chat with a head, a long playbook, an 80-character name, a bot renamed with new instructions, and memory set and added once", "teams")
+    @test("TM13", "Settings › Bot teams: a whole ready-made team in one click, a numbered second copy, edits, reset, a category kept as a team, export and import", "teams")
     def tm13():
+        listed = P({"cmd": "readyTeams"})["result"]["teams"]
+        research = next((t for t in listed if t["id"] == "research"), None)
+        before_teams = {t["id"] for t in P({"cmd": "teams"})["result"]}
+        first = P({"cmd": "readyTeamAdd", "id": "research"})
+        second = P({"cmd": "readyTeamAdd", "id": "research"})
+        teams = [t for t in P({"cmd": "teams"})["result"] if t["id"] not in before_teams]
+        bots = {b["name"]: b for b in T.state()["bots"]}
+        desk = next((t for t in teams if t["name"] == "Research Desk"), None)
+        desk2 = next((t for t in teams if t["name"] == "Research Desk 2"), None)
+        lead2 = P({"cmd": "botGet", "id": bots.get("Research Lead 2", {}).get("id", "")}).get("result") or {}
+        theo_notes = [m["text"] for m in T.chat("theo", 400) if m["author"] == "note" and "From Settings › Bot teams" in m["text"]]
+        # Edit, then put Vello's version back.
+        edited = dict(research, name="My Research %s" % T.nonce())
+        saved = P({"cmd": "readyTeamSave", "team": edited})
+        changed = next((t for t in saved["result"]["teams"] if t["id"] == "research"), {})
+        reset = P({"cmd": "readyTeamReset", "id": "research"})
+        back = next((t for t in reset["result"]["teams"] if t["id"] == "research"), {})
+        refused = P({"cmd": "readyTeamSave", "team": dict(research, workers=research["workers"] + [{"name": "vello"}])})
+        # The first desk kept as a team of the owner's own, exported, imported again under a free name.
+        kept = P({"cmd": "readyTeamFromCategory", "id": desk["id"]}) if desk else {"ok": False}
+        kept_id = kept.get("result", {}).get("result", {}).get("id")
+        exported = P({"cmd": "readyTeamExport", "id": kept_id, "save": "downloads"}) if kept_id else {"ok": False}
+        imported = P({"cmd": "readyTeamImport", "text": exported.get("result", {}).get("text", "")})
+        added = imported.get("result", {}).get("result", {}).get("added", [])
+        own_ids = [t["id"] for t in P({"cmd": "readyTeams"})["result"]["teams"] if not t["builtIn"]]
+        for t in teams: P({"cmd": "teamDelete", "id": t["id"]})
+        for name in ["Research Lead", "Web Scout", "Fact Checker", "Brief Writer", "Research Lead 2", "Web Scout 2", "Fact Checker 2", "Brief Writer 2"]:
+            if name in bots: P({"cmd": "botDelete", "id": bots[name]["id"]})
+        for own in own_ids: P({"cmd": "readyTeamRemove", "id": own})
+        checks = {
+            "eight_or_more_teams": len(listed) >= 8 and research is not None and research["manager"]["name"] == "Research Lead",
+            "added": first.get("ok") and desk is not None and len(desk["members"]) == 4 and desk["leader"] == bots.get("Research Lead", {}).get("id"),
+            "second_copy_numbered": second.get("ok") and desk2 is not None and desk2["leader"] == bots.get("Research Lead 2", {}).get("id"),
+            "second_lead_tells_second_scout": "Web Scout 2 finds sources" in lead2.get("instructions", ""),
+            "ceo_told": len(theo_notes) >= 2 and "Research Lead manages Research Desk now" in theo_notes[-2],
+            "edit_marked_changed": saved.get("ok") and changed.get("changed") is True and changed.get("name", "").startswith("My Research"),
+            "reset_back": back.get("name") == "Research Desk" and back.get("changed") is False,
+            "reserved_name_refused": not refused.get("ok") and "keeps for itself" in (refused.get("error") or ""),
+            "category_kept": kept.get("ok") and kept["result"]["result"]["manager"] == "Research Lead" and kept["result"]["result"]["count"] == 4,
+            "exported_to_downloads": exported.get("ok") and "vello-bot-teams" in exported["result"]["text"] and os.path.exists(exported["result"]["saved"]),
+            "imported_under_a_free_name": bool(imported.get("ok")) and added == ["Research Desk 3"],
+        }
+        return all(checks.values()), {**checks, "note": (first.get("result") or {}).get("note"), "added": added}
+
+    @test("TM14", "Asked in chat for a ready-made team, the CEO names it in a team block and Vello makes the whole team; an unknown one is said", "teams")
+    def tm14():
+        block = json.dumps({"teams": ["the sales team", "Moon Base"]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Adding the Sales Team.\n```team\n%s\n```" % block}, {"reply": "ok"}])
+        mark = T.calls_mark()
+        before_teams = {t["id"] for t in P({"cmd": "teams"})["result"]}
+        start = len(T.chat("theo", 400))
+        T.say("theo", "Add the sales team and the moon base team please.")
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        teams = [t for t in P({"cmd": "teams"})["result"] if t["id"] not in before_teams]
+        bots = {b["name"]: b for b in T.state()["bots"]}
+        chat = T.chat("theo", 400)[start:]
+        notes = [m["text"] for m in chat if m["author"] == "note"]
+        shown = [m["text"] for m in chat if m["author"] == "theo"]
+        sales = next((t for t in teams if t["name"] == "Sales Team"), None)
+        told = any("Ready-made teams" in (c.get("system") or "") + (c.get("prompt") or "") and "Super Digger Squad" in (c.get("system") or "") + (c.get("prompt") or "") for c in T.calls(mark))
+        for t in teams: P({"cmd": "teamDelete", "id": t["id"]})
+        for name in ["Sales Lead", "Lead Finder", "Outreach Writer", "Follow-up Keeper"]:
+            if name in bots: P({"cmd": "botDelete", "id": bots[name]["id"]})
+        T.fake("ok")
+        checks = {"sales_team_made": sales is not None and len(sales["members"]) == 4 and sales["leader"] == bots.get("Sales Lead", {}).get("id"),
+                  "note_says_made": any("Vello made 4 bots in Sales Team" in t for t in notes),
+                  "note_says_missing": any("no ready-made team called \"Moon Base\"" in t for t in notes),
+                  "block_hidden": not any("```team" in t for t in shown), "ceo_told_the_teams": told}
+        return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "notes": notes[-1:]}
+
+    @test("TM15", "From chat: a group chat with a head, a long playbook, an 80-character name, a bot renamed with new instructions, and memory set and added once", "teams")
+    def tm15():
         n = T.nonce()
         lead = "Global Super Digger Squad Lead for Commodities and Trade Data %s" % n
         scout, old = "Scout %s" % n, "Ledger %s" % n
@@ -430,14 +491,14 @@ def add_cases(S):
         start = len(T.chat("theo", 5000))
         T.say("theo", "Make a group chat %s with %s at its head, plus %s and %s." % (room, lead, scout, old))
         idle, secs = T.wait_idle(seconds=90, quiet=3)
-        notes = team_notes_after(start)
+        notes = [m["text"] for m in T.chat("theo", 5000)[start:] if m["author"] == "note"]
         second = json.dumps({"bots": [{"name": old, "rename": renamed, "instructions": "You are %s. Count everything twice." % renamed},
                                       {"name": lead, "memory": "Use NSE bhavcopy first."}, {"name": scout, "memory": "Prefer official sources."}]})
         T.fake_script([{"system": sys_has("Vello"), "reply": "Done.\n```team\n%s\n```" % second}, {"reply": "ok"}])
         start2 = len(T.chat("theo", 5000))
         T.say("theo", "Rename %s to %s, change its instructions, and save the sources to their memory." % (old, renamed))
         idle2, _ = T.wait_idle(seconds=90, quiet=3)
-        notes2 = team_notes_after(start2)
+        notes2 = [m["text"] for m in T.chat("theo", 5000)[start2:] if m["author"] == "note"]
         st = T.state()
         bots = {b["name"]: b for b in st["bots"] if n in b["name"]}
         group = next((g for g in st["groups"] if g["name"] == room), None)

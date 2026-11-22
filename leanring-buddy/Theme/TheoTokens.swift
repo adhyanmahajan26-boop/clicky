@@ -30,11 +30,10 @@ enum DS {
         static let textSecondary = ink(\.text2)
         static let textTertiary = ink(\.text3)
         static let textDisabled = ink(\.text3)
-        static let textOnAccent = dynamic { dark in
-            let accent = TheoPalette.accent(accentID, dark: dark)
-            // Black on a bright accent, white on a dark one, whichever the swatch needs.
-            return NSColor(hex: luminance(accent) > 0.32 ? 0x000000 : 0xFFFFFF)
-        }
+        /// Icons and words on an accent fill. Never hard-code white there: on the mono swatch the accent is white too.
+        static let textOnAccent = dynamic { NSColor(hex: TheoPalette.onAccent(accentID, dark: $0)) }
+        /// A switch's track when on. The accent, unless it's too pale to show the switch's white knob.
+        static let switchTint = dynamic { NSColor(hex: TheoPalette.switchTint(accentID, dark: $0)) }
         /// The accent: the primary button, focus ring, send, live dots and the one detail on an icon.
         static let accent = dynamic { NSColor(hex: TheoPalette.accent(accentID, dark: $0)) }
         /// The accent as words and small marks, dark enough to read on a light page.
@@ -83,10 +82,6 @@ enum DS {
         }
 
         private static var accentID: String { UserDefaults.standard.string(forKey: TheoAccent.settingKey) ?? "ember" }
-
-        private static func luminance(_ hex: UInt32) -> Double {
-            0.2126 * Double((hex >> 16) & 0xFF) / 255 + 0.7152 * Double((hex >> 8) & 0xFF) / 255 + 0.0722 * Double(hex & 0xFF) / 255
-        }
     }
 
     enum CornerRadius {

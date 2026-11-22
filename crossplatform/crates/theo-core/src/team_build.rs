@@ -76,10 +76,12 @@ pub struct TeamBuildOrder {
     pub categories: Vec<NewCategory>,
     pub bots: Vec<NewBot>,
     pub groups: Vec<NewGroup>,
+    /// Ready-made teams to add whole, by name ("Research Desk"): `ready_teams::expanding` turns each into its category and bots.
+    pub ready_made_teams: Vec<String>,
 }
 
 impl TeamBuildOrder {
-    pub fn is_empty(&self) -> bool { self.categories.is_empty() && self.bots.is_empty() && self.groups.is_empty() }
+    pub fn is_empty(&self) -> bool { self.categories.is_empty() && self.bots.is_empty() && self.groups.is_empty() && self.ready_made_teams.is_empty() }
 }
 
 /// What the CEO is told (ClickyCore `BotProtocol.teamBuildHowTo`).
@@ -121,7 +123,8 @@ pub fn extract(text: &str) -> (String, Option<TeamBuildOrder>) {
 }
 
 /// The JSON inside the block: {"categories": [{"name", "purpose"?, "manager"?}], "bots": [{"name", "does", "instructions"?,
-/// "category"?, "model"?, "brain"?, "rename"?, "memory"?}], "groups": [{"name", "head"?, "members"}]}.
+/// "category"?, "model"?, "brain"?, "rename"?, "memory"?}], "groups": [{"name", "head"?, "members"}], "teams": ["a ready-made
+/// team's name"]}.
 pub fn parse(body: &str) -> Option<TeamBuildOrder> {
     let object: Value = serde_json::from_str(body.trim()).ok()?;
     let mut order = TeamBuildOrder::default();
@@ -162,9 +165,17 @@ pub fn parse(body: &str) -> Option<TeamBuildOrder> {
             order.categories.push(NewCategory { name: category, purpose: None, manager: None });
         }
     }
+    // Ready-made teams by name, or as {"name": …}.
+    for entry in object.get("teams").and_then(|t| t.as_array()).into_iter().flatten() {
+        let named = entry.get("name").unwrap_or(entry);
+        let Some(name) = cleaned(Some(named), LONGEST_CATEGORY_NAME) else { continue };
+        if order.ready_made_teams.iter().any(|t| same_name(t, &name)) { continue; }
+        order.ready_made_teams.push(name);
+    }
     order.categories.truncate(MOST_CATEGORIES);
     order.bots.truncate(MOST_BOTS);
     order.groups.truncate(MOST_GROUPS);
+    order.ready_made_teams.truncate(crate::ready_teams::MOST_TEAMS_AT_ONCE);
     if order.is_empty() { None } else { Some(order) }
 }
 
@@ -186,7 +197,7 @@ pub fn instructions_for(bot: &NewBot) -> String {
 pub fn owner_asked(text: &str) -> bool {
     if protocol::is_routine_run(text) { return false; }
     static PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-        let things = r"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|group\s*chats?|groups?)";
+        let things = r"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|squads?|crews?|desks?|studios?|office|group\s*chats?|groups?)";
         [
             format!(r"\b(make|makes|making|made|create|creates|creating|add|adding|set\s+up|setup|build|start|spin\s+up|hire|need|want|get|give\s+me)\b[^.?!\n]{{0,60}}\b{things}\b"),
             format!(r"\b(new|another|more|extra)\s+([a-z-]+\s+){{0,3}}{things}\b"),
@@ -405,7 +416,7 @@ pub fn made_bots_sentence(made: &[MadeBot]) -> String {
 }
 
 /// "A", "A and B", "A, B and C".
-fn listed_in_words(items: &[String]) -> String {
+pub fn listed_in_words(items: &[String]) -> String {
     match items.len() {
         0 => String::new(),
         1 => items[0].clone(),
@@ -433,6 +444,38 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
         h.post(ChatMessage::note(format!("{} wrote changes to the bots or categories, but they weren't asked for in your own words here, so Vello didn't make them. Ask for them yourself if you want them.", maker.name)), room);
         return;
     }
+    // Ready-made teams named in the block become their categories and bots here.
+    let bot_names: Vec<String> = h.bots().into_iter().map(|b| b.name).collect();
+    let category_names: Vec<String> = h.layout().sections.iter().map(|s| s.name.clone()).collect();
+    let (order, missing) = crate::ready_teams::expanding(order, &h.ready_teams(), &bot_names, &category_names);
+    let mut text = if order.is_empty() { String::new() } else { make(h, maker, &order).await };
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|m| format!("\"{m}\"")).collect();
+        let line = format!("There's no ready-made team called {} (Settings › Bot teams has the list), so Vello didn't add it.", listed_in_words(&names));
+        text = if text.is_empty() { line } else { format!("{text} {line}") };
+    }
+    // Marked as a team note so the CEO reads it at the start of its next turn (`take_waiting_reports`) and knows what was made.
+    let mut note = ChatMessage::note(text);
+    note.card = Some(TEAM_NOTE_CARD.into());
+    h.post(note, room);
+}
+
+/// Adds a ready-made team from Settings › Bot teams: its category, manager and bots, made on the CEO's brain as if the CEO
+/// had written the block, with numbered names where one is taken. The CEO's chat gets the same note a block gets. Returns it.
+pub async fn add_ready_team(h: &Arc<Harness>, team: &crate::ready_teams::ReadyTeam) -> Result<String, String> {
+    let Some(maker) = h.primary() else { return Err("There's no CEO to make the bots.".into()) };
+    let bot_names: Vec<String> = h.bots().into_iter().map(|b| b.name).collect();
+    let category_names: Vec<String> = h.layout().sections.iter().map(|s| s.name.clone()).collect();
+    let order = crate::ready_teams::order_for(team, &bot_names, &category_names);
+    let text = make(h, &maker, &order).await.replacen("Vello made", "From Settings › Bot teams, Vello made", 1);
+    let mut note = ChatMessage::note(text.clone());
+    note.card = Some(TEAM_NOTE_CARD.into());
+    h.post(note, &maker.id);
+    Ok(text)
+}
+
+/// Makes what `order` asks for, the same way the New bot dialog and New category row do, and says what changed in a few sentences.
+async fn make(h: &Arc<Harness>, maker: &Bot, order: &TeamBuildOrder) -> String {
     let mut made_categories: Vec<String> = vec![];
     let mut made_bots: Vec<MadeBot> = vec![];
     let mut filed: Vec<String> = vec![];
@@ -584,10 +627,7 @@ pub async fn build_for_turn(h: &Arc<Harness>, maker: &Bot, order: TeamBuildOrder
     } else if !made_bots.is_empty() {
         sentences.push("They're in the sidebar, and each one's settings can change its brain, model and apps.".into());
     }
-    // Marked as a team note so the CEO reads it at the start of its next turn (`take_waiting_reports`) and knows what was made.
-    let mut note = ChatMessage::note(sentences.join(" "));
-    note.card = Some(TEAM_NOTE_CARD.into());
-    h.post(note, room);
+    sentences.join(" ")
 }
 
 /// A bot that exists, listed with a new name, instructions, description or memory: changed as its settings would, and said

@@ -209,7 +209,7 @@ the voices and speaks to a file on the Windows runners. The chord, the microphon
 pointing on a real multi-monitor PC need a person ([WINDOWS-PC.md](WINDOWS-PC.md)).
 
 Not in this build yet (the Mac has them): hands-free sessions (double tap), the "Hey Clicky" wake word, doing things on the
-screen (`<actions>`, article highlights and notes), `[WORKER:]` helpers and Clicky's team, the notch pill, `[SNAP:]`
+screen (`<actions>`, article highlights and notes), `[WORKER:]` helpers and Clicky's team, the notch pill, voice calls with Vello (and what Vello can do on one: `[POINTER:]`, `[ROUTINE:]`, `[TELL: Vello:]`), `[SNAP:]`
 screenshots and the local fast path for spoken commands. The Mac's hidden displays would need a signed display driver on
 Windows, so Windows and Linux have VM screens made of hidden browser windows instead (below).
 

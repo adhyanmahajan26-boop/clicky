@@ -77,14 +77,18 @@ public struct TeamBuildOrder: Equatable, Sendable {
     public var categories: [NewCategory]
     public var bots: [NewBot]
     public var groups: [NewGroup]
+    /// Ready-made teams to add whole, by name ("Research Desk"): `ReadyMadeTeams.expanding` turns each into its category
+    /// and bots.
+    public var readyMadeTeams: [String]
 
-    public init(categories: [NewCategory] = [], bots: [NewBot] = [], groups: [NewGroup] = []) {
+    public init(categories: [NewCategory] = [], bots: [NewBot] = [], groups: [NewGroup] = [], readyMadeTeams: [String] = []) {
         self.categories = categories
         self.bots = bots
         self.groups = groups
+        self.readyMadeTeams = readyMadeTeams
     }
 
-    public var isEmpty: Bool { categories.isEmpty && bots.isEmpty && groups.isEmpty }
+    public var isEmpty: Bool { categories.isEmpty && bots.isEmpty && groups.isEmpty && readyMadeTeams.isEmpty }
 
     /// One owner message can't flood the sidebar: at most this many new bots and categories from one answer. Enough for a
     /// manager and a squad of workers in one go.
@@ -116,7 +120,8 @@ public struct TeamBuildOrder: Equatable, Sendable {
     }
 
     /// The JSON inside the block: {"categories": [{"name", "purpose"?, "manager"?}], "bots": [{"name", "does", "instructions"?,
-    /// "category"?, "model"?, "brain"?, "rename"?, "memory"?}], "groups": [{"name", "head"?, "members"}]}.
+    /// "category"?, "model"?, "brain"?, "rename"?, "memory"?}], "groups": [{"name", "head"?, "members"}],
+    /// "teams": ["a ready-made team's name"]}.
     public static func parse(_ body: String) -> TeamBuildOrder? {
         guard let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any] else { return nil }
         var order = TeamBuildOrder()
@@ -158,9 +163,17 @@ public struct TeamBuildOrder: Equatable, Sendable {
             guard let category = bot.category, !order.categories.contains(where: { sameName($0.name, category) }) else { continue }
             order.categories.append(NewCategory(name: category))
         }
+        // Ready-made teams by name, or as {"name": …}.
+        for entry in object["teams"] as? [Any] ?? [] {
+            let named: Any = (entry as? [String: Any])?["name"] ?? entry
+            guard let name = cleaned(named, longest: longestCategoryName),
+                  !order.readyMadeTeams.contains(where: { sameName($0, name) }) else { continue }
+            order.readyMadeTeams.append(name)
+        }
         order.categories = Array(order.categories.prefix(mostCategories))
         order.bots = Array(order.bots.prefix(mostBots))
         order.groups = Array(order.groups.prefix(mostGroups))
+        order.readyMadeTeams = Array(order.readyMadeTeams.prefix(ReadyMadeTeams.mostTeamsAtOnce))
         return order.isEmpty ? nil : order
     }
 
@@ -243,7 +256,7 @@ public enum TeamBuildIntent {
     public static func ownerAsked(_ text: String) -> Bool {
         guard !RoutineIntent.isRoutineRun(text) else { return false }
         let lower = text.lowercased()
-        let things = #"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|group\s*chats?|groups?)"#
+        let things = #"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|squads?|crews?|desks?|studios?|office|group\s*chats?|groups?)"#
         let patterns = [
             // "make a bot", "create two new agents", "add a Sales category", "set up a research team", "hire an assistant"
             #"\b(make|makes|making|made|create|creates|creating|add|adding|set\s+up|setup|build|start|spin\s+up|hire|need|want|get|give\s+me)\b[^.?!\n]{0,60}\b"# + things + #"\b"#,

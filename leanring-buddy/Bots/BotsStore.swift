@@ -230,6 +230,8 @@ final class BotsStore: ObservableObject {
     var queuedResearch: [() -> Void] = []
     /// How many screen jobs in a row a bot has asked for since the owner last spoke to it.
     var screenTurns: [String: Int] = [:]
+    /// What Vello said on a call it would do in its own chat, waiting for that chat's next turn (`askOwnChatFromCall`). Old ones are dropped.
+    var callTaskNotes: [String: (note: String, at: Date)] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
     /// That folder's chats, for the head's next turn, when the owner asked to carry on earlier work.
@@ -616,6 +618,7 @@ final class BotsStore: ObservableObject {
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + catchUp(botID, bot: bot, before: ownerMessageID) + prompt
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
+        if let call = callTaskNotes.removeValue(forKey: botID), call.at > Date().addingTimeInterval(-300) { prompt = "(\(call.note))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.reachNote(for: bot)))\n\n" + prompt }
         if bot.owner == nil { prompt = BotPrompts.awarenessNote(for: bot, room: botID) + prompt }
@@ -2139,14 +2142,16 @@ enum BotPrompts {
                 parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
             }
             parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name), owner: ownerName))
-            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName))
+            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName, readyMadeTeams: ReadyMadeTeamLibrary.shared.teams.map(\.name)))
             let roster = BotsStore.shared.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
             let work = BotsStore.shared.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
         }
         // Vello's own bot keeps making bots and categories when another bot was made CEO (`BotsStore.mayBuildTeam`).
-        if !bot.primary && bot.id == BotsRootView.theoID { parts.append(BotProtocol.teamBuildHowTo(owner: ownerName)) }
+        if !bot.primary && bot.id == BotsRootView.theoID {
+            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName, readyMadeTeams: ReadyMadeTeamLibrary.shared.teams.map(\.name)))
+        }
         if bot.owner == nil {
             parts.append(BotPrompts.routineHowTo)
             parts.append(BotPrompts.codingHowTo)

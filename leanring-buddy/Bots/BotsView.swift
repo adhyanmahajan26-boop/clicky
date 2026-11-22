@@ -333,19 +333,34 @@ struct BotsRootView: View {
         }
     }
 
-    /// Makes a category and opens its page, where it's named, filled and given a manager.
+    /// Makes a category and opens its page, where it's named, filled and given a manager. Beside it, the ready-made teams
+    /// (Settings › Bot teams), to add a whole category with its manager and bots at once.
     private var newCategoryButton: some View {
-        Button(action: newCategory) {
-            HStack(spacing: 6) {
-                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
-                Text("New category").font(.system(size: 11.5))
+        HStack(spacing: 0) {
+            Button(action: newCategory) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                    Text("New category").font(.system(size: 11.5))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+                .padding(.leading, 20).padding(.trailing, 8).frame(height: 30)
+                .contentShape(Rectangle())
             }
-            .foregroundColor(DS.Colors.textTertiary)
-            .padding(.horizontal, 20).frame(height: 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain).pointerCursor()
+            Button { selection.openSettings(.teams) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.3").font(.system(size: 10, weight: .semibold))
+                    Text("Ready-made teams").font(.system(size: 11.5))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+                .padding(.horizontal, 8).frame(height: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).pointerCursor()
+            .help("Add a whole team at once: a manager and its bots")
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain).pointerCursor().padding(.top, 6)
+        .padding(.top, 6)
     }
 
     @ViewBuilder private func itemRow(_ item: String) -> some View {
@@ -371,7 +386,7 @@ struct BotsRootView: View {
         }
         .contextMenu { itemMenu(item) }
         .draggable(item) {
-            Text(itemName(item)).font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 6)
+            Text(itemName(item)).font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textOnAccent).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Capsule().fill(DS.Colors.accent))
         }
     }
@@ -892,10 +907,10 @@ struct BotChatScreen: View {
                             } else if message.author == "routine" {
                                 RoutineMarker(text: message.text, at: message.at)
                             } else if let author = store.bot(message.author) {
-                                let call = message.text.contains("[CHOOSE:") ? BotCallPrompt.parse(message.text) : nil
+                                let call = BotMessageCards.call(for: message)
                                 let brief = BotMessageCards.brief(for: message)
                                 if let brief {
-                                    BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message.text, besides: author))
+                                    BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message, besides: author))
                                 } else if message.text.hasPrefix("Couldn't reply: ") {
                                     ReplyFailureCard(bot: author, message: message)
                                 } else if call?.remainingText.isEmpty != true {
@@ -916,7 +931,7 @@ struct BotChatScreen: View {
                                 if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
                                 if let card = message.card, card.hasPrefix("screen|") { BotScreenGiftCard(card: card) }
                                 if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
-                                if let prompt = BotsT3.promptBlock(in: message.text) {
+                                if let prompt = BotMessageCards.promptBlock(for: message) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     let sentRun = store.t3Runs.first { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) }
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
@@ -977,8 +992,8 @@ struct BotChatScreen: View {
     }
 
     /// The bots a document names, for its cover.
-    private func cast(in text: String, besides author: NativeBot) -> [NativeBot] {
-        store.bots.filter { $0.id != author.id && text.localizedCaseInsensitiveContains($0.name) }
+    private func cast(in message: BotChatMessage, besides author: NativeBot) -> [NativeBot] {
+        BotMessageCards.castIDs(for: message, authorID: author.id, bots: store.bots).compactMap { store.bot($0) }
     }
 
     /// The chat's header: its figure, name, role, a live status line, Studio and everything else under ⋯.
@@ -1019,6 +1034,16 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
+            // Vello's own chat: the call is one click away, not only under More.
+            if bot?.primary == true {
+                Button { TheoCallController.start() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                        Text("Call")
+                    }
+                }
+                .buttonStyle(.theoPrimary).pointerCursor().help("Start a voice call with \(bot?.name ?? "Vello")")
+            }
             if StudioController.hasPanel {
                 Button { withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() } } label: {
                     HStack(spacing: 6) {

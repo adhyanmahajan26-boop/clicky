@@ -392,8 +392,23 @@ public enum BotProtocol {
         "time, and \(owner) can pause, run or delete it."
     }
 
-    /// How the CEO makes new bots and categories when the owner asks for them (`TeamBuildOrder`).
-    public static func teamBuildHowTo(owner: String) -> String {
+    /// How the CEO makes new bots and categories when the owner asks for them (`TeamBuildOrder`). `readyMadeTeams` are the
+    /// names of the teams in Settings › Bot teams, which the block can add whole.
+    public static func teamBuildHowTo(owner: String, readyMadeTeams: [String] = []) -> String {
+        teamBuildBasics(owner: owner) + readyMadeTeamsHowTo(owner: owner, names: readyMadeTeams)
+    }
+
+    /// How to add a whole ready-made team from a ```team block. Empty when there are none.
+    public static func readyMadeTeamsHowTo(owner: String, names: [String]) -> String {
+        guard !names.isEmpty else { return "" }
+        return " Ready-made teams, each a category with a manager and its bots, all written already: " +
+            TeamBuildOrder.listedInWords(names) + ". When \(owner) asks for one of them (or for a team that one of them fits and " +
+            "they agree), put its name in the block's \"teams\" list, as {\"teams\": [\"\(names[0])\"]}, rather than writing its bots " +
+            "out; it can go with the other lists. Adding one again makes a second copy with numbered names. These teams can be " +
+            "changed, and new ones made, in Settings › Bot teams."
+    }
+
+    private static func teamBuildBasics(owner: String) -> String {
         let parts: [String] = [
             "Bots, categories, group chats and managers: you can set them up yourself. When \(owner) asks for a new bot, agent, team, ",
             "category or group chat, a category's manager, a bot moved to another team, or a bot renamed or given new instructions, a new ",
