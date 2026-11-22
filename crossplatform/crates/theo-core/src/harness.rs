@@ -91,6 +91,8 @@ struct Round {
 #[derive(Default)]
 pub struct State {
     pub bots: Vec<Bot>,
+    /// Team blocks being carried out after their turn ended (team_build.rs): the harness is still busy until they're made.
+    pub team_builds_running: usize,
     pub groups: Vec<Group>,
     pub routines: Vec<Routine>,
     pub runs: Vec<CodingRun>,
@@ -935,7 +937,11 @@ impl Harness {
             crate::files::carry_out_for_turn(&me, &bot, &attached_files, &file_saves, &conversation_id, exchange.clone(), opts.from_owner);
             crate::vmscreens::research::start_for_turn(&me, &bot, research_question, &conversation_id, exchange.clone());
             if let Some(order) = team_order {
+                // The bot is free again, but nothing is settled until the bots and categories exist: finding the brains here can
+                // take seconds (each agent's command is looked for), and anyone waiting for Vello to go quiet must wait for this too.
+                me.with(|s| s.team_builds_running += 1);
                 crate::team_build::build_for_turn(&me, &bot, order, &conversation_id, opts.from_owner).await;
+                me.with(|s| s.team_builds_running = s.team_builds_running.saturating_sub(1));
             }
             if clicky_orders > 0 && bot.primary {
                 me.post(ChatMessage::note("Pointer Assistant isn't part of this build of Vello yet, so that order to Pointer Assistant wasn't carried out."), &conversation_id);
@@ -2390,6 +2396,7 @@ impl Harness {
                 "bots": s.bots.iter().map(|b| json!({"id": b.id, "name": b.name, "provider": b.provider, "model": b.model, "enabled": b.is_on(), "primary": b.primary, "description": b.description, "apps": b.apps, "appLevels": b.app_levels})).collect::<Vec<_>>(),
                 "groups": s.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "head": g.head_id, "members": g.member_ids})).collect::<Vec<_>>(),
                 "rounds": s.rounds.keys().collect::<Vec<_>>(),
+                "buildingTeams": s.team_builds_running,
                 "queued": s.queues.iter().filter(|(_, q)| !q.is_empty()).map(|(k, q)| (k.clone(), q.len())).collect::<HashMap<_, _>>(),
             })
         });
@@ -2403,7 +2410,7 @@ impl Harness {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.with(|s| !s.replying.is_empty() || !s.live_exchanges.is_empty() || !s.rounds.is_empty() || s.queues.values().any(|q| !q.is_empty()))
+        self.with(|s| !s.replying.is_empty() || !s.live_exchanges.is_empty() || !s.rounds.is_empty() || s.queues.values().any(|q| !q.is_empty()) || s.team_builds_running > 0)
     }
 }
 

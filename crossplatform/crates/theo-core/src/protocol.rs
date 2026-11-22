@@ -216,6 +216,12 @@ pub fn owner_asked_to_build(text: &str) -> bool {
         return false;
     }
     let lower = text.to_lowercase();
+    // "Open Codex in clicky and tell it to …", "prompt Claude Code in my folder to …": the owner names the coding agent and
+    // what to tell it (the Mac's `CodingHarnessWords.asksToSendToCode`).
+    static OPEN_AND_PROMPT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(open|launch|fire up|boot up|start up|use)\s+(up\s+)?(the\s+)?(codex|claude code|claude|cursor|open ?code|grok|gemini|t3 code|t3)\b.*\b(tell|ask|prompt|have|get|make)\s+(it|him|them)\b|\bprompt\s+(the\s+)?(codex|claude code|claude|cursor|open ?code|grok|gemini|t3 code|t3)\b").unwrap());
+    if OPEN_AND_PROMPT.is_match(&lower) {
+        return true;
+    }
     if Regex::new(r"\bprompt\b").unwrap().is_match(&lower) {
         return false;
     }
@@ -579,5 +585,10 @@ mod tests {
         assert!(owner_asked_to_build("Build it: in a new folder called liar-1, make liar.txt containing the word liar."));
         assert!(!owner_asked_to_build("what's the fix for a squeaky door?"));
         assert!(!owner_asked_to_build("write me a prompt for an app"));
+        assert!(owner_asked_to_build("open codex in clicky and tell it to fix the notch"));
+        assert!(owner_asked_to_build("Open Claude Code in my folder and prompt it to add tests"));
+        assert!(owner_asked_to_build("prompt claude code in clicky to fix the build"));
+        assert!(!owner_asked_to_build("open codex"));
+        assert!(!owner_asked_to_build("what is a good prompt"));
     }
 }

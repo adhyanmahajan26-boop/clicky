@@ -219,6 +219,11 @@ IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
 - All buttons must show a pointer cursor on hover
 - For any interactive element, explicitly think through its hover behavior (cursor, visual feedback, and whether hover should communicate clickability)
 
+### Windows and Linux follow the Mac
+
+- Every change to the Mac app gets the same change in `crossplatform/` (Rust in `crates/theo-core`, UI in `app/ui`, suite cases in `tests/`) in the same PR, wherever Windows and Linux have that feature. Where they don't have it yet (voice calls, the notch, see `crossplatform/docs/PLATFORMS.md`), the PR says so and that list names it.
+- Run `cargo test --workspace` and the matching `python tests/suite.py <cases>` in `crossplatform/` before pushing. Windows builds publish themselves from green `main` runs of "Theo cross-platform", so a red Windows suite holds back every Windows release.
+
 ### Do NOT
 
 - Do not add features, refactor code, or make "improvements" beyond what was asked
