@@ -74,6 +74,7 @@ function teamsListHTML(faces) {
     for (const f of unfiled) html += sidebarBotRow(f);
   }
   html += `<button class="row nav new-category" data-new-category><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New category</button>`;
+  html += `<button class="row nav new-category" data-ready-teams title="Add a whole team at once: a manager and its bots"><svg class="ic" viewBox="0 0 24 24"><path d="M9 3.5h6v5H9zM12 8.5v3M6.5 14.5V13a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v1.5M3.5 14.5h6v5h-6zM14.5 14.5h6v5h-6z"/></svg>Ready-made teams</button>`;
   return html;
 }
 
@@ -114,6 +115,8 @@ function renderBotList(faces) {
   });
   const add = box.querySelector("[data-new-category]");
   if (add) add.onclick = () => newCategory([]);
+  const ready = box.querySelector("[data-ready-teams]");
+  if (ready) ready.onclick = () => { settingsJumpOnDraw = "teams"; open({ kind: "settings" }); };
 }
 
 async function newCategory(members) {
