@@ -892,10 +892,10 @@ struct BotChatScreen: View {
                             } else if message.author == "routine" {
                                 RoutineMarker(text: message.text, at: message.at)
                             } else if let author = store.bot(message.author) {
-                                let call = message.text.contains("[CHOOSE:") ? BotCallPrompt.parse(message.text) : nil
+                                let call = BotMessageCards.call(for: message)
                                 let brief = BotMessageCards.brief(for: message)
                                 if let brief {
-                                    BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message.text, besides: author))
+                                    BriefCardView(card: brief, text: message.text, at: message.at, author: author, cast: cast(in: message, besides: author))
                                 } else if message.text.hasPrefix("Couldn't reply: ") {
                                     ReplyFailureCard(bot: author, message: message)
                                 } else if call?.remainingText.isEmpty != true {
@@ -916,7 +916,7 @@ struct BotChatScreen: View {
                                 if message.card == "settings" { BotSettingsChatCard(botID: author.id) }
                                 if let card = message.card, card.hasPrefix("screen|") { BotScreenGiftCard(card: card) }
                                 if let check = BrowserResearcher.checkID(of: message) { BrowserCheckCard(id: check) }
-                                if let prompt = BotsT3.promptBlock(in: message.text) {
+                                if let prompt = BotMessageCards.promptBlock(for: message) {
                                     let title = BotsT3.projectTitle(in: message.text, prompt: prompt)
                                     let sentRun = store.t3Runs.first { $0.prompt == prompt || ($0.prompt == nil && $0.title == title) }
                                     T3HandoffButton(text: message.text, room: conversationID, prominent: true,
@@ -977,8 +977,8 @@ struct BotChatScreen: View {
     }
 
     /// The bots a document names, for its cover.
-    private func cast(in text: String, besides author: NativeBot) -> [NativeBot] {
-        store.bots.filter { $0.id != author.id && text.localizedCaseInsensitiveContains($0.name) }
+    private func cast(in message: BotChatMessage, besides author: NativeBot) -> [NativeBot] {
+        BotMessageCards.castIDs(for: message, authorID: author.id, bots: store.bots).compactMap { store.bot($0) }
     }
 
     /// The chat's header: its figure, name, role, a live status line, Studio and everything else under ⋯.
