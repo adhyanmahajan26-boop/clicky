@@ -297,7 +297,7 @@ struct TheoPanelView: View {
             HStack(spacing: 9) {
                 ZStack {
                     Circle().fill(isOn ? DS.Colors.accent : Color.white.opacity(0.1))
-                    Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundColor(isOn ? .white : DS.Colors.textSecondary)
+                    Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundColor(isOn ? DS.Colors.textOnAccent : DS.Colors.textSecondary)
                         .symbolEffect(.bounce, options: DS.Motion.isReduced ? .nonRepeating.speed(100) : .default, value: isOn)
                 }
                 .frame(width: 28, height: 28)
@@ -348,10 +348,10 @@ struct TheoPanelView: View {
                 Text(state.isReady ? "Signed in" : state.label).font(.system(size: 11)).foregroundColor(state.isReady ? DS.Colors.success : DS.Colors.warning).help(state.label)
                 if state == .signedOut {
                     Button("Sign in") { close(); TheoSettingsWindowController.show(section: .coding) }
-                        .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
+                        .buttonStyle(.theo(.primary, .small))
                 } else if state == .notInstalled {
                     Button("Set up") { close(); SetupGuideWindowController.show(companionManager: companionManager, step: .harnesses) }
-                        .buttonStyle(.borderedProminent).controlSize(.mini).tint(DS.Colors.accent)
+                        .buttonStyle(.theo(.primary, .small))
                 }
                 Spacer()
                 Menu {

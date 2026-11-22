@@ -36,6 +36,27 @@ final class HairlineTests: XCTestCase {
 
     // MARK: Figure looks
 
+    func testWhatSitsOnTheAccentStaysReadableOnEverySwatch() {
+        // Mono on black is near white: anything drawn on it must be black, never a hard-coded white.
+        XCTAssertEqual(TheoPalette.onAccent("mono", dark: true), 0x000000)
+        XCTAssertEqual(TheoPalette.onAccent("mono", dark: false), 0xFFFFFF)
+        XCTAssertEqual(TheoPalette.onAccent("ember", dark: true), 0x000000)
+        for swatch in TheoPalette.accents {
+            for dark in [true, false] {
+                let fill = TheoPalette.luminance(TheoPalette.accent(swatch.id, dark: dark))
+                let ink = TheoPalette.luminance(TheoPalette.onAccent(swatch.id, dark: dark))
+                XCTAssertGreaterThan(abs(fill - ink), 0.3, "\(swatch.id) dark: \(dark)")
+            }
+        }
+    }
+
+    func testASwitchOnAPaleAccentKeepsItsWhiteKnobVisible() {
+        XCTAssertTrue(TheoPalette.accentIsPale("mono", dark: true))
+        XCTAssertNotEqual(TheoPalette.switchTint("mono", dark: true), TheoPalette.accent("mono", dark: true))
+        XCTAssertEqual(TheoPalette.switchTint("ember", dark: true), 0xFF7A45)
+        XCTAssertEqual(TheoPalette.switchTint("mono", dark: false), 0x161616)
+    }
+
     func testLookRoundTripsThroughJSON() throws {
         let look = CrewLook(shell: "mint", glow: "#60a5fa", hat: .tophat, hatColor: "#a78bfa", antenna: .bolt, eyes: .hearts, extra: .scarf)
         let data = try JSONEncoder().encode(look)

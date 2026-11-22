@@ -173,8 +173,8 @@ struct CategoryScreen: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    MotionSymbol(name: "paperplane.fill", size: 12, weight: .semibold, color: .white, trigger: reporting)
-                    Text("Report to \(store.primary?.name ?? "CEO") now").font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
+                    MotionSymbol(name: "paperplane.fill", size: 12, weight: .semibold, color: DS.Colors.textOnAccent, trigger: reporting)
+                    Text("Report to \(store.primary?.name ?? "CEO") now").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textOnAccent)
                 }
                 .padding(.horizontal, 14).frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Colors.accent))

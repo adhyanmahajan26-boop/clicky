@@ -564,7 +564,8 @@ struct ClickyChatScreen: View {
                         .buttonStyle(.plain).help("Stop")
                     } else {
                         Button(action: send) {
-                            Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
+                            Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold))
+                                .foregroundColor(draft.trimmingCharacters(in: .whitespaces).isEmpty ? .white : DS.Colors.textOnAccent)
                                 .frame(width: 28, height: 28)
                                 .background(Circle().fill(draft.trimmingCharacters(in: .whitespaces).isEmpty ? DS.Colors.textDisabled : DS.Colors.accent))
                         }
