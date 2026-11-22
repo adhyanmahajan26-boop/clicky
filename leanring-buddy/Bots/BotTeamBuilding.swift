@@ -4,7 +4,8 @@
 //
 //  The CEO makes new bots and categories, picks their managers and moves bots between them, when the owner asks in chat. The CEO writes a ```team block
 //  (ClickyCore `TeamBuildOrder`, how-to in `BotProtocol.teamBuildHowTo`); this makes what it asks for, the same way the
-//  New bot sheet and the New category row do, and says what it made in the chat.
+//  New bot sheet and the New category row do, and says what it made in the chat. Ready-made teams (Settings › Bot teams,
+//  ClickyCore `ReadyMadeTeams`) are made the same way, from the block's "teams" list or Settings' Add button.
 //
 
 import ClickyCore
@@ -27,7 +28,34 @@ extension BotsStore {
                  to: conversationID)
             return
         }
+        // Ready-made teams named in the block become their categories and bots here.
+        let expanded = ReadyMadeTeams.expanding(order, library: ReadyMadeTeamLibrary.shared.teams,
+                                                existingBotNames: bots.map(\.name), existingCategoryNames: layout.sections.map(\.name))
+        var sentences = makeTeam(expanded.order, maker: maker)
+        if !expanded.missing.isEmpty {
+            let missing = "There's no ready-made team called " + TeamBuildOrder.listedInWords(expanded.missing.map { "\"\($0)\"" }) +
+                " (Settings › Bot teams has the list), so Vello didn't add it."
+            sentences = expanded.order.isEmpty ? missing : sentences + " " + missing
+        }
+        // Marked as a team note so the CEO reads it at the start of its next turn (`takeWaitingReports`) and knows what was made.
+        post(BotChatMessage(author: Self.noteAuthor, text: sentences, card: Self.teamNoteCard), to: conversationID)
+    }
 
+    /// Adds a ready-made team from Settings › Bot teams: its category, its manager and its bots, made on the CEO's brain as
+    /// if the CEO had written the block, with numbered names where one is taken. The CEO's chat gets the same note a block
+    /// gets, so the CEO knows the team is there. Returns that note for Settings to show.
+    @discardableResult
+    func addReadyMadeTeam(_ team: ReadyMadeTeam) -> String {
+        let order = ReadyMadeTeams.order(for: team, existingBotNames: bots.map(\.name), existingCategoryNames: layout.sections.map(\.name))
+        guard let maker = primary ?? bot(BotsRootView.theoID) else { return "Vello couldn't add the team: there's no CEO to make the bots." }
+        let note = makeTeam(order, maker: maker).replacingOccurrences(of: "Vello made", with: "From Settings › Bot teams, Vello made")
+        post(BotChatMessage(author: Self.noteAuthor, text: note, card: Self.teamNoteCard), to: maker.id)
+        return note
+    }
+
+    /// Makes what `order` asks for, the same way the New bot sheet and the New category row do, and says what changed in a
+    /// few sentences.
+    private func makeTeam(_ order: TeamBuildOrder, maker: NativeBot) -> String {
         var madeCategoryNames: [String] = []
         var madeBots: [TeamBuildOrder.MadeBot] = []
         var filedBotLines: [String] = []
@@ -153,8 +181,7 @@ extension BotsStore {
         } else if !madeBots.isEmpty {
             sentences.append("They're in the sidebar, and each one's settings can change its brain, model and apps.")
         }
-        // Marked as a team note so the CEO reads it at the start of its next turn (`takeWaitingReports`) and knows what was made.
-        post(BotChatMessage(author: Self.noteAuthor, text: sentences.joined(separator: " "), card: Self.teamNoteCard), to: conversationID)
+        return sentences.joined(separator: " ")
     }
 
     /// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.

@@ -4,6 +4,7 @@
 const SETTINGS_SECTIONS = [
   ["about", "About", "Your name and the setup guide."],
   ["products", "Products", "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."],
+  ["teams", "Bot teams", "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."],
   ["brains", "Models & API keys", "Bring your own key for any provider, or use an agent you're signed in to. Any one is enough."],
   ["coding", "Coding runs", "Your coding agents and where builds go."],
   ["connectors", "Connectors", "The apps your bots can use, and what each bot may do with them."],
@@ -49,6 +50,7 @@ async function renderSettingsPage() {
   $("#pane").innerHTML = `<div class="settings"><nav class="set-nav" aria-label="Settings sections"><div class="section-label">Settings</div>${nav}</nav><div class="set-body"><h1>Settings</h1>`
     + section("about", about)
     + section("products", `<div id="settings-products-body"></div>`)
+    + section("teams", `<div id="settings-teams-body"></div>`)
     + section("brains", `<section id="brains-settings"></section>`)
     + section("coding", coding)
     + section("connectors", connectors)
@@ -107,6 +109,11 @@ async function renderSettingsPage() {
   };
   drawBrains(); drawCoding();
   loadBrains().then(() => { drawBrains(); drawCoding(); });
+  // Bot teams (readyteams.js), drawn fresh each time; the sidebar's "Ready-made teams" link scrolls here once it's in.
+  if (typeof drawReadyTeams === "function") {
+    readyTeamsCache = null;
+    drawReadyTeams().then(() => { if (settingsJumpOnDraw) { settingsJump(settingsJumpOnDraw); settingsJumpOnDraw = null; } });
+  }
   drawProjectsFolder();
 
   if (typeof drawUpdatesSettings === "function") { drawUpdatesSettings(); loadUpdates("state"); }

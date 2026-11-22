@@ -145,3 +145,32 @@ dialog menu .grow { flex: 1; }
 body.theo-off #head-actions, body.theo-off #bot-settings, body.theo-off #ctx-menu { display: none; }
 /* A long team list scrolls under the footer, so the Update row stays in view at the bottom (the Mac's always-visible row). */
 #sidebar > .footer { position: sticky; bottom: -12px; margin-bottom: -12px; padding-bottom: 12px; background: var(--bg); z-index: 1; }
+
+/* Settings › Bot teams (readyteams.js) */
+.rt-bar .btns { flex-wrap: wrap; }
+.rt-bar select { background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font: 12.5px var(--body); }
+.rt-file { display: inline-flex; align-items: center; }
+.rt-card { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 12px 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.rt-head { display: flex; align-items: baseline; gap: 8px; }
+.rt-head b { font-size: 15px; }
+.rt-head small { color: var(--t3); font-size: 12px; }
+.rt-head .grow, .rt-actions .grow { flex: 1; }
+.rt-tag { font-size: 11px; color: var(--t2); background: rgba(255,255,255,.06); border-radius: 9px; padding: 1px 7px; }
+.on-light .rt-tag { background: rgba(0,0,0,.05); }
+.rt-purpose { margin: 0; }
+.rt-member { display: flex; align-items: flex-start; gap: 8px; }
+.rt-member .crown { margin-top: 4px; }
+.rt-member .tx { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+.rt-member .tx small { color: var(--t3); font-size: 12px; flex-basis: 100%; }
+.rt-member .tx small.rt-role { flex-basis: auto; font-size: 11px; }
+.rt-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--t3); margin: 8px 3px 0 3px; flex: none; }
+.rt-under { margin: 0 0 0 19px; }
+.rt-actions { margin-top: 4px; }
+#ready-team-dialog { width: 660px; }
+#ready-team-dialog .rt-scroll { max-height: min(62vh, 620px); overflow-y: auto; padding-right: 4px; }
+#ready-team-dialog .lbl { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--t3); margin: 14px 0 6px; }
+#ready-team-dialog .rt-lbl { display: flex; justify-content: space-between; }
+.rt-edit { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--card2); }
+.rt-edit input, .rt-edit textarea { margin-top: 0; }
+.rt-edit-row { display: flex; gap: 8px; }
+.rt-edit-row input[data-f="model"] { width: 230px; flex: none; }

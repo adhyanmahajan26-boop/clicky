@@ -333,19 +333,34 @@ struct BotsRootView: View {
         }
     }
 
-    /// Makes a category and opens its page, where it's named, filled and given a manager.
+    /// Makes a category and opens its page, where it's named, filled and given a manager. Beside it, the ready-made teams
+    /// (Settings › Bot teams), to add a whole category with its manager and bots at once.
     private var newCategoryButton: some View {
-        Button(action: newCategory) {
-            HStack(spacing: 6) {
-                Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
-                Text("New category").font(.system(size: 11.5))
+        HStack(spacing: 0) {
+            Button(action: newCategory) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                    Text("New category").font(.system(size: 11.5))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+                .padding(.leading, 20).padding(.trailing, 8).frame(height: 30)
+                .contentShape(Rectangle())
             }
-            .foregroundColor(DS.Colors.textTertiary)
-            .padding(.horizontal, 20).frame(height: 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain).pointerCursor()
+            Button { selection.openSettings(.teams) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.3").font(.system(size: 10, weight: .semibold))
+                    Text("Ready-made teams").font(.system(size: 11.5))
+                }
+                .foregroundColor(DS.Colors.textTertiary)
+                .padding(.horizontal, 8).frame(height: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).pointerCursor()
+            .help("Add a whole team at once: a manager and its bots")
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain).pointerCursor().padding(.top, 6)
+        .padding(.top, 6)
     }
 
     @ViewBuilder private func itemRow(_ item: String) -> some View {

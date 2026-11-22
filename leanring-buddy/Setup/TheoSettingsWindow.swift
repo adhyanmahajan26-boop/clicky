@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case products, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case products, teams, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: VM screens on any Mac that can make them (it sets them up here in one click), or that's linked to one.
@@ -36,6 +36,7 @@ enum SettingsTab {
         var icon: String {
             switch self {
             case .products: return "team"
+            case .teams: return "bot"
             case .look: return "paint"
             case .devices: return "screen"
             case .studio: return "studio"
@@ -55,6 +56,7 @@ enum SettingsTab {
         var title: String {
             switch self {
             case .products: return "Products"
+            case .teams: return "Bot teams"
             case .look: return "Look"
             case .devices: return "Devices"
             case .studio: return "VM screens"
@@ -74,6 +76,7 @@ enum SettingsTab {
         var subtitle: String {
             switch self {
             case .products: return "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."
+            case .teams: return "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."
             case .look: return "How Vello looks and moves. Click one and it changes right away."
             case .devices: return "Choose which Mac does what."
             case .studio: return "Virtual screens your bots work on, set up in one click, with small live views."
@@ -93,6 +96,7 @@ enum SettingsTab {
         var symbol: String {
             switch self {
             case .products: return "square.grid.2x2.fill"
+            case .teams: return "person.3.fill"
             case .look: return "paintbrush.pointed.fill"
             case .devices: return "laptopcomputer.and.iphone"
             case .studio: return "rectangle.split.2x1"
@@ -112,6 +116,7 @@ enum SettingsTab {
         var colors: [Color] {
             switch self {
             case .products: return TileColors.indigo
+            case .teams: return TileColors.ember
             case .look: return TileColors.violet
             case .devices: return TileColors.teal
             case .studio: return TileColors.graphite
@@ -191,6 +196,7 @@ struct SettingsPage: View {
     @ViewBuilder private var content: some View {
         switch section {
         case .products: ProductsSettingsContent()
+        case .teams: BotTeamsSettingsContent()
         case .look: LookSettingsContent()
         case .devices: DevicesSettingsContent()
         case .studio: StudioSettingsContent()
