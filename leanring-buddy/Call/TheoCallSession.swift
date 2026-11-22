@@ -242,8 +242,15 @@ final class TheoCallSession: ObservableObject {
     private var listenTranscript = CallListenTranscript()
     /// How long each turn waited after the voice stopped, for `uiCallStatus`.
     private(set) var turnWaits: [TimeInterval] = []
-    /// A sound that keeps the gate open with no words in it (a fan, a TV in another language) stops holding the turn after this.
-    private static let longestWordlessSoundSeconds = 3.0
+    /// A sound that keeps the gate open with no words in it (a fan, a TV in another language) stops holding the turn after
+    /// this long, counted from the later of when it started and the last words. Ears that send few partials can go quiet for
+    /// a few seconds in the middle of a long sentence, so this is well beyond that.
+    private static let longestWordlessSoundSeconds = 8.0
+    /// The turn Vello is answering now: if the owner turns out to be still talking before any of the answer is heard, the
+    /// answer is dropped and the turn carries on (`heardFinal`).
+    private var lastReleasedTurn: (words: String, lineID: UUID?)?
+    /// Some of this turn's answer has been heard.
+    private var turnHasSounded = false
 
     init(store: BotsStore, hub: AudioEngineHub, isLive: Bool) {
         self.store = store
@@ -405,7 +412,10 @@ final class TheoCallSession: ObservableObject {
     private func speechStarted() {
         speechStartedAt = Date()
         speechEndedAt = nil
-        if audio.isVoicePlaying || replyInProgress || state == .speaking || state == .thinking {
+        if replyInProgress, !turnHasSounded, lastReleasedTurn != nil {
+            // Vello hadn't said a word yet: the owner is just carrying on.
+            supersedeTheAnswer()
+        } else if audio.isVoicePlaying || replyInProgress || state == .speaking || state == .thinking {
             bargeIn()
         }
         state = .userSpeaking
@@ -464,6 +474,7 @@ final class TheoCallSession: ObservableObject {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A server's own voice detection can beat the gate. Its default wait is half a second of quiet.
         if gate.isSpeaking, speechEndedAt == nil, !words.isEmpty { speechEndedAt = Date().addingTimeInterval(-0.5) }
+        if !words.isEmpty, replyInProgress || audio.isVoicePlaying { supersedeTheAnswer() }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
         if words.isEmpty {
             // A cough, or the room. No new words; whatever was held still waits for its pause.
@@ -495,6 +506,31 @@ final class TheoCallSession: ObservableObject {
         waitForTheEndOfTheTurn()
     }
 
+    /// More words came while Vello was answering, with no new start of speech to cut in on (the voice never stopped, or
+    /// the gate opened before the turn was let go). The answer stops. If none of it was heard yet, the owner was simply
+    /// still going: the answer is taken out and the turn carries on as one, on its own line.
+    private func supersedeTheAnswer() {
+        let answerLineID = theoLineID
+        let answerWasHeard = turnHasSounded
+        let wasAnsweringATurn = replyInProgress
+        bargeIn()
+        guard wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, let lastReleasedTurn else { return }
+        self.lastReleasedTurn = nil
+        if let answerLineID, let answerIndex = lines.firstIndex(where: { $0.id == answerLineID }) { lines.remove(at: answerIndex) }
+        heldTurnWords = lastReleasedTurn.words
+        guard let earlierLineID = lastReleasedTurn.lineID, let earlierIndex = lines.firstIndex(where: { $0.id == earlierLineID }) else {
+            waitForTheEndOfTheTurn()
+            return
+        }
+        heldTurnLineID = earlierLineID
+        // The words now coming in were on a line of their own: they join the earlier one.
+        if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), liveIndex != earlierIndex {
+            lines.remove(at: liveIndex)
+            lines[earlierIndex].isLive = true
+        }
+        waitForTheEndOfTheTurn()
+    }
+
     /// Waits until the owner has been quiet for the patience (longer when the words sound unfinished, shorter for a clear
     /// question), counted from when their voice stopped. Talking again restarts the wait once the new words are in.
     private func waitForTheEndOfTheTurn() {
@@ -505,12 +541,13 @@ final class TheoCallSession: ObservableObject {
                 guard let self, self.state != .ended, !self.heldTurnWords.isEmpty else { return }
                 let now = Date()
                 let lastWords = self.lastWordsAt ?? now
+                let soundOrWordsSince = max(lastWords, self.speechStartedAt ?? lastWords)
                 // Still talking: wait for the voice to stop. A sound with no words in it doesn't hold the turn forever.
-                if self.gate.isSpeaking && now.timeIntervalSince(lastWords) < Self.longestWordlessSoundSeconds {
+                if self.gate.isSpeaking && now.timeIntervalSince(soundOrWordsSince) < Self.longestWordlessSoundSeconds {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     continue
                 }
-                let voiceStopped = self.gate.isSpeaking ? lastWords : (self.speechEndedAt ?? lastWords)
+                let voiceStopped = self.gate.isSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
                 let quietSoFar = now.timeIntervalSince(voiceStopped)
                 let wait = CallTurnEnd.waitSeconds(after: self.heldTurnWords, patienceSeconds: CallSettings.patienceSeconds)
                 if quietSoFar >= wait {
@@ -531,6 +568,7 @@ final class TheoCallSession: ObservableObject {
         heldTurnTask = nil
         isHoldingTurn = false
         turnWaits.append(quietSeconds)
+        lastReleasedTurn = (words, lineID)
         // The line may have been reopened by a sound that brought no words.
         if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) { lines[index].isLive = false }
         takeTurn(words, lineID: lineID)
@@ -611,6 +649,7 @@ final class TheoCallSession: ObservableObject {
         if let speechEndedAt { timing.heard = Date().timeIntervalSince(speechEndedAt) }
         pendingTurnTiming = timing
         replyInProgress = true
+        turnHasSounded = false
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
         controls = CallControlStream()
@@ -658,6 +697,7 @@ final class TheoCallSession: ObservableObject {
 
     private func replyFinished(_ result: Result<String, Error>) {
         replyInProgress = false
+        lastReleasedTurn = nil
         let neverStreamed = firstTextAt == nil
         var unstreamed = ""
         if case .success(let whole) = result, neverStreamed {
@@ -735,6 +775,7 @@ final class TheoCallSession: ObservableObject {
                 guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
                 if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking, self.heldTurnWords.isEmpty {
                     self.speechEndedAt = nil
+                    self.lastReleasedTurn = nil
                     self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst(), owner: BotPrompts.ownerName))
                     return
                 }
@@ -744,6 +785,8 @@ final class TheoCallSession: ObservableObject {
     }
 
     private func voiceStartedSounding() {
+        turnHasSounded = true
+        lastReleasedTurn = nil
         if let speechEndedAt {
             let seconds = Date().timeIntervalSince(speechEndedAt)
             pendingTurnTiming?.firstAudio = seconds

@@ -78,6 +78,11 @@ struct TheoCallView: View {
             header
             CallAvatar(session: session, theo: store.primary).frame(height: 214)
             Text(stateLine).font(.system(size: 14, weight: .medium)).foregroundColor(DS.Colors.textSecondary).animation(nil, value: session.state)
+                .lineLimit(1)
+            if session.isListenMode {
+                Text("Say “Vello, what do you think?” when you want an answer")
+                    .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).padding(.top, 2)
+            }
             transcript
             if let problem = session.problem {
                 Text(problem).font(.system(size: 11)).foregroundColor(DS.Colors.warning).padding(.horizontal, 22).padding(.bottom, 4)
@@ -119,7 +124,7 @@ struct TheoCallView: View {
         case .connecting: return "Connecting…"
         case .listening:
             if session.isMuted { return "You're muted" }
-            return session.isListenMode ? "Just listening. Say “Vello, what do you think?”" : "Listening"
+            return session.isListenMode ? "Just listening" : "Listening"
         case .userSpeaking: return session.isListenMode ? "Just listening" : "Go on"
         case .thinking: return "Thinking"
         case .speaking: return "Vello is talking. Just talk to cut in."
