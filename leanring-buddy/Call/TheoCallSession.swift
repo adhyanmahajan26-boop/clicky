@@ -435,6 +435,12 @@ final class TheoCallSession: ObservableObject {
 
     /// The owner talked over Theo: the voice stops at once and the rest of the reply is dropped.
     private func bargeIn() {
+        // The answer may be fully written and only still playing: that line was cut too.
+        let voiceWasPlaying = audio.isVoicePlaying || state == .speaking
+        if theoLineID == nil, voiceWasPlaying, let answerIndex = lines.lastIndex(where: { $0.who == .theo }),
+           !lines[answerIndex].text.isEmpty, lines[(answerIndex + 1)...].allSatisfy(\.isLive) {
+            lines[answerIndex].wasCut = true
+        }
         voice?.stopNow()
         if replyInProgress { brain?.interrupt() }
         replyInProgress = false
