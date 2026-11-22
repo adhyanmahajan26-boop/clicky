@@ -117,8 +117,10 @@ struct TheoCallView: View {
     private var stateLine: String {
         switch session.state {
         case .connecting: return "Connecting…"
-        case .listening: return session.isMuted ? "You're muted" : "Listening"
-        case .userSpeaking: return "Go on"
+        case .listening:
+            if session.isMuted { return "You're muted" }
+            return session.isListenMode ? "Just listening. Say “Vello, what do you think?”" : "Listening"
+        case .userSpeaking: return session.isListenMode ? "Just listening" : "Go on"
         case .thinking: return "Thinking"
         case .speaking: return "Vello is talking. Just talk to cut in."
         case .ended: return "Call ended"
@@ -155,6 +157,21 @@ struct TheoCallView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain).help(session.isMuted ? "Unmute" : "Mute").keyboardShortcut("m", modifiers: .command)
+                .pointerCursor()
+                Button { session.setListenMode(!session.isListenMode) } label: {
+                    Image(systemName: "ear").font(.system(size: 19, weight: .semibold))
+                        .foregroundColor(session.isListenMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
+                        .frame(width: 58, height: 58)
+                        .background(Circle().fill(session.isListenMode ? Color.white : DS.Colors.hover))
+                        .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(session.isListenMode
+                      ? "Listen mode is on: Vello only listens until you ask it something. Click to talk normally."
+                      : "Listen mode: Vello only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
+                .keyboardShortcut("l", modifiers: .command)
+                .pointerCursor()
                 Button(action: onEnd) {
                     Image(systemName: "phone.down.fill").font(.system(size: 20, weight: .semibold)).foregroundColor(.white)
                         .frame(width: 58, height: 58)
@@ -183,7 +200,7 @@ private struct CallLineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(line.who == .addy ? "You" : "Vello").font(.system(size: 10.5, weight: .semibold))
+            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : "You") : "Vello").font(.system(size: 10.5, weight: .semibold))
                 .foregroundColor(line.who == .addy ? DS.Colors.textTertiary : DS.Colors.accentText)
             if line.text.isEmpty && line.isLive {
                 TypingDots()

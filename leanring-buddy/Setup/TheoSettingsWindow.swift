@@ -587,6 +587,8 @@ struct VoiceSettingsContent: View {
     @AppStorage(CallSettings.languageKey) private var callLanguage = CallSettings.Language.auto.rawValue
     /// Empty until picked: calls then use `CallSettings.automaticModel`.
     @AppStorage(CallSettings.modelKey) private var callModel = ""
+    /// How long a call waits after you stop talking before Vello answers.
+    @AppStorage(CallTurnPatience.settingKey) private var callPatienceSeconds = CallTurnPatience.defaultSeconds
     @ObservedObject private var keys = ProviderKeys.shared
 
     var body: some View {
@@ -612,6 +614,15 @@ struct VoiceSettingsContent: View {
                         ForEach(CallSettings.Language.allCases) { Text($0.title).tag($0.rawValue) }
                     }
                     .labelsHidden().frame(width: 180)
+                }
+                RowDivider()
+                SettingRow(title: "Patience", detail: "How long Vello waits after you stop talking. It waits longer when you sound mid-thought.") {
+                    HStack(spacing: 8) {
+                        Slider(value: $callPatienceSeconds, in: CallTurnPatience.range, step: 0.5).frame(width: 130)
+                        Text(String(format: "%.1f s", callPatienceSeconds))
+                            .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
                 }
                 RowDivider()
                 SettingRow(title: "Thinks with") {
