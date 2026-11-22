@@ -249,14 +249,24 @@ public enum ReadyMadeTeams {
         return library.first { plain($0.name) == wanted }
     }
 
-    /// `name`, or `name 2`, `name 3`, … when one is taken (names match without regard to case).
+    /// `name`, or `name 2`, `name 3`, … when one is taken (names match without regard to case). A name that already ends in
+    /// a number counts on from it: "Research Desk 2" taken gives "Research Desk 3", not "Research Desk 2 2".
     public static func uniqueName(_ name: String, taken: [String], longest: Int) -> String {
         let isTaken: (String) -> Bool = { candidate in taken.contains { TeamBuildOrder.sameName($0, candidate) } }
         guard isTaken(name) else { return name }
+        var base = name
         var number = 2
+        if let space = name.lastIndex(of: " ") {
+            let stem = name[..<space].trimmingCharacters(in: .whitespaces)
+            let tail = name[name.index(after: space)...]
+            if !stem.isEmpty, !tail.isEmpty, tail.count <= 3, tail.allSatisfy({ $0.isASCII && $0.isNumber }), let counted = Int(tail) {
+                base = stem
+                number = counted + 1
+            }
+        }
         while true {
             let suffix = " \(number)"
-            let candidate = String(name.prefix(max(1, longest - suffix.count))).trimmingCharacters(in: .whitespaces) + suffix
+            let candidate = String(base.prefix(max(1, longest - suffix.count))).trimmingCharacters(in: .whitespaces) + suffix
             if !isTaken(candidate) { return candidate }
             number += 1
         }

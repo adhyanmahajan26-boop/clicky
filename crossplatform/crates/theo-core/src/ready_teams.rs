@@ -203,15 +203,21 @@ pub fn problem(team: &ReadyTeam) -> Option<String> {
 
 // MARK: - Adding a team
 
-/// `name`, or `name 2`, `name 3`, … when one is taken (names match without regard to case).
+/// `name`, or `name 2`, `name 3`, … when one is taken (names match without regard to case). A name that already ends in a
+/// number counts on from it: "Research Desk 2" taken gives "Research Desk 3", not "Research Desk 2 2".
 pub fn unique_name(name: &str, taken: &[String], longest: usize) -> String {
     let is_taken = |candidate: &str| taken.iter().any(|t| same_name(t, candidate));
     if !is_taken(name) { return name.to_string(); }
-    let mut number = 2;
+    let (base, mut number) = match name.rsplit_once(' ') {
+        Some((stem, tail)) if !stem.trim().is_empty() && !tail.is_empty() && tail.len() <= 3 && tail.chars().all(|c| c.is_ascii_digit()) => {
+            (stem.trim().to_string(), tail.parse::<usize>().unwrap_or(1) + 1)
+        }
+        _ => (name.to_string(), 2),
+    };
     loop {
         let suffix = format!(" {number}");
         let room = longest.saturating_sub(suffix.chars().count()).max(1);
-        let candidate = format!("{}{suffix}", name.chars().take(room).collect::<String>().trim());
+        let candidate = format!("{}{suffix}", base.chars().take(room).collect::<String>().trim());
         if !is_taken(&candidate) { return candidate; }
         number += 1;
     }
@@ -438,6 +444,12 @@ mod tests {
     fn renaming_leaves_longer_words_and_numbered_names_alone() {
         let renames = vec![("Scout".to_string(), "Scout 2".to_string())];
         assert_eq!(renamed("Scout, Scouting and Scout 3. Ask Scout", &renames), "Scout 2, Scouting and Scout 3. Ask Scout 2");
+    }
+
+    #[test]
+    fn a_numbered_name_counts_on() {
+        assert_eq!(unique_name("Research Desk 2", &["Research Desk 2".into()], 80), "Research Desk 3");
+        assert_eq!(unique_name("Desk 2024", &["Desk 2024".into()], 80), "Desk 2024 2");
     }
 
     #[test]

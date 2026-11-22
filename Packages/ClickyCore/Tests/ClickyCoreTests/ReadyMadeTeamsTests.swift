@@ -57,6 +57,11 @@ struct ReadyMadeTeamsTests {
         #expect(order.bots[2].instructions == team.workers[1].instructions.replacingOccurrences(of: "Research Desk", with: "Research Desk 2"))
     }
 
+    @Test func aNumberedNameCountsOn() {
+        #expect(ReadyMadeTeams.uniqueName("Research Desk 2", taken: ["Research Desk 2"], longest: 80) == "Research Desk 3")
+        #expect(ReadyMadeTeams.uniqueName("Desk 2024", taken: ["Desk 2024"], longest: 80) == "Desk 2024 2")
+    }
+
     @Test func aNumberedNameStaysUnderTheLimit() {
         let long = String(repeating: "x", count: 40)
         let name = ReadyMadeTeams.uniqueName(long, taken: [long], longest: 40)
