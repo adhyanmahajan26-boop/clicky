@@ -62,7 +62,7 @@ struct StudioScreensSection: View {
                     .labelsHidden().frame(width: 130)
                 }
             }
-            row("HiDPI") { Toggle("HiDPI", isOn: spec.hiDPI).labelsHidden().toggleStyle(.switch).tint(DS.Colors.accent) }
+            row("HiDPI") { Toggle("HiDPI", isOn: spec.hiDPI).labelsHidden().toggleStyle(.switch).tint(DS.Colors.switchTint) }
             row("Refresh") {
                 HairlineSegments(options: StudioScreenSpec.refreshRates.map { (String($0), "\($0) Hz") },
                                  selection: Binding(get: { String(spec.wrappedValue.refresh) }, set: { spec.wrappedValue.refresh = Int($0) ?? 60 }))

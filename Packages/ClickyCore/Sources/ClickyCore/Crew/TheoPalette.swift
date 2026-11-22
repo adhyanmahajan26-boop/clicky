@@ -44,6 +44,26 @@ public struct TheoPalette: Equatable, Sendable {
         let swatch = accents.first { $0.id == id } ?? accents[0]
         return dark ? swatch.dark : swatch.light
     }
+
+    /// Black or white, for icons and words drawn on top of an accent fill. A hard-coded white vanishes on a pale swatch
+    /// (mono on black is almost white), so anything on the accent asks here.
+    public static func onAccent(_ id: String, dark: Bool) -> UInt32 {
+        luminance(accent(id, dark: dark)) > 0.32 ? 0x000000 : 0xFFFFFF
+    }
+
+    /// A swatch so pale that a switch's white knob disappears on it (mono on black). Switches then use a grey track.
+    public static func accentIsPale(_ id: String, dark: Bool) -> Bool {
+        luminance(accent(id, dark: dark)) > 0.75
+    }
+
+    /// The colour a switch's track takes when on: the accent, or a mid grey when the accent is too pale for a white knob.
+    public static func switchTint(_ id: String, dark: Bool) -> UInt32 {
+        accentIsPale(id, dark: dark) ? 0x8B8B95 : accent(id, dark: dark)
+    }
+
+    static func luminance(_ hex: UInt32) -> Double {
+        0.2126 * Double((hex >> 16) & 0xFF) / 255 + 0.7152 * Double((hex >> 8) & 0xFF) / 255 + 0.0722 * Double(hex & 0xFF) / 255
+    }
 }
 
 /// Settings › Look › Motion. Off, like macOS's Reduce Motion, stops all animation.
