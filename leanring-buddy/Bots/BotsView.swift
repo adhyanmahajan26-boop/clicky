@@ -1019,6 +1019,16 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
+            // Vello's own chat: the call is one click away, not only under More.
+            if bot?.primary == true {
+                Button { TheoCallController.start() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                        Text("Call")
+                    }
+                }
+                .buttonStyle(.theoPrimary).pointerCursor().help("Start a voice call with \(bot?.name ?? "Vello")")
+            }
             if StudioController.hasPanel {
                 Button { withAnimation(DS.Motion.panel) { studio.panelVisible.toggle() } } label: {
                     HStack(spacing: 6) {
