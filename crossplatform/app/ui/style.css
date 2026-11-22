@@ -68,6 +68,7 @@ h2 { font: 600 15px/1.2 var(--display); margin: 22px 0 10px; }
 .bar i { display: block; height: 100%; width: 40%; background: var(--ok); animation: slide 1.6s ease-in-out infinite; }
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 .empty { text-align: center; color: var(--t3); margin-top: 16vh; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.earlier { display: flex; justify-content: center; }
 .list .crow b { font-weight: 600; }
 table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.grid td, table.grid th { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); }

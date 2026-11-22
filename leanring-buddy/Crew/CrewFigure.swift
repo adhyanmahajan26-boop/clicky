@@ -267,6 +267,16 @@ final class CrewFigureNSView: NSView {
         boopLayer.add(hop, forKey: "boop")
     }
 
+    private static var bodyImages: [String: CGImage] = [:]
+
+    private static func cachedBodyImage(key: String, draw: () -> CGImage?) -> CGImage? {
+        if let known = bodyImages[key] { return known }
+        guard let image = draw() else { return nil }
+        if bodyImages.count > 300 { bodyImages.removeAll() }
+        bodyImages[key] = image
+        return image
+    }
+
     private func rebuild() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -282,10 +292,17 @@ final class CrewFigureNSView: NSView {
         let drawnTier = tier
         backLayer.frame = imageFrame
         backLayer.contentsScale = scale
-        backLayer.contents = PixelDrawing.image(points: size, scale: scale) { PixelDrawing.drawBack(look: drawnLook, isDark: drawnIsDark, in: $0) }
+        // The body is the same picture for every figure with this look, size and theme: drawn once and shared, since a
+        // chat or sidebar redraw makes dozens of figures and drawing each from its SVG parts took a good part of a click.
+        let lookKey = "\(drawnLook)|\(size)|\(scale)"
+        backLayer.contents = Self.cachedBodyImage(key: "back|\(drawnIsDark)|" + lookKey) {
+            PixelDrawing.image(points: size, scale: scale) { PixelDrawing.drawBack(look: drawnLook, isDark: drawnIsDark, in: $0) }
+        }
         frontLayer.frame = imageFrame
         frontLayer.contentsScale = scale
-        frontLayer.contents = PixelDrawing.image(points: size, scale: scale) { PixelDrawing.drawFront(look: drawnLook, tier: drawnTier, in: $0) }
+        frontLayer.contents = Self.cachedBodyImage(key: "front|\(drawnTier)|" + lookKey) {
+            PixelDrawing.image(points: size, scale: scale) { PixelDrawing.drawFront(look: drawnLook, tier: drawnTier, in: $0) }
+        }
         var toPoints = CGAffineTransform(scaleX: unit, y: unit)
         let screenPath = PixelDrawing.rounded(PixelDrawing.screen, PixelDrawing.screenRadius)
         screenLayer.path = screenPath.copy(using: &toPoints)

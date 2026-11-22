@@ -22,6 +22,9 @@ public enum ClickySecrets {
     /// Set once at launch by a test profile (".test", ".test-unittests"), so its keys never overwrite or read the owner's.
     nonisolated(unsafe) public static var serviceSuffix = ""
     static var service: String { "com.personal.clicky.secrets" + serviceSuffix }
+    /// Set once at launch by a test profile: its secrets go in this file and the Keychain is never touched, so a test
+    /// build can't bring up a macOS password prompt (`TestProfileSecretFile`).
+    nonisolated(unsafe) public static var testProfileSecretFile: TestProfileSecretFile?
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cache: [Item: String?] = [:]
 
@@ -29,6 +32,13 @@ public enum ClickySecrets {
         cacheLock.lock()
         if let cached = cache[item] { cacheLock.unlock(); return cached }
         cacheLock.unlock()
+
+        if let testProfileSecretFile {
+            let value = testProfileSecretFile.read(service: service, account: item.rawValue)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let usableValue = value?.isEmpty == false ? value : nil
+            cacheLock.lock(); cache[item] = .some(usableValue); cacheLock.unlock()
+            return usableValue
+        }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -52,6 +62,11 @@ public enum ClickySecrets {
     @discardableResult
     public static func write(_ item: Item, value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let testProfileSecretFile {
+            let written = testProfileSecretFile.write(service: service, account: item.rawValue, value: trimmed)
+            cacheLock.lock(); cache[item] = .some(trimmed.isEmpty ? nil : trimmed); cacheLock.unlock()
+            return written
+        }
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

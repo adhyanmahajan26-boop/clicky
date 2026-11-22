@@ -13,6 +13,7 @@ import AppKit
 import ClickyCore
 import Foundation
 import ObjectiveC
+import Security
 
 enum TheoProfile {
     /// The name after `--profile`: "test", or "test-<anything>" for another separate test instance beside it. Unit tests
@@ -38,6 +39,26 @@ enum TheoProfile {
 
     /// Keychain service suffix, so a test key never overwrites a real one.
     static var keychainSuffix: String { isTest ? "." + (name ?? "test") : "" }
+
+    /// Whether this build is signed by an Apple team (not ad-hoc or unsigned). Only such a build has the same signer as
+    /// the owner's Vello, so only it may read one of the owner's own Keychain items without macOS asking for a password.
+    static let buildHasSigningTeam: Bool = {
+        var selfCode: SecCode?
+        guard SecCodeCopySelf([], &selfCode) == errSecSuccess, let selfCode else { return false }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(selfCode, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        var signingInformation: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &signingInformation) == errSecSuccess,
+              let information = signingInformation as? [String: Any] else { return false }
+        let teamIdentifier = information[kSecCodeInfoTeamIdentifier as String] as? String
+        return teamIdentifier?.isEmpty == false
+    }()
+
+    /// A test profile's secrets (API keys, the Local API token, ClickyCore's secrets), in its own folder instead of the
+    /// Keychain. Nil in the owner's real profile, which keeps them in the Keychain.
+    static let secretFile: TestProfileSecretFile? = isTest
+        ? TestProfileSecretFile(fileURL: testHome.deletingLastPathComponent().appendingPathComponent("test-secrets.json"))
+        : nil
 
     /// Where UserDefaults.standard points in a test profile.
     static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
@@ -70,6 +91,9 @@ enum TheoProfile {
         guard isTest else { return }
         // ClickyCore's own Keychain items (the API key, the voice-server key) get the same suffix as the app's.
         ClickySecrets.serviceSuffix = keychainSuffix
+        // And no secret of a test profile goes near the Keychain: a test build's signature differs from the owner's Vello,
+        // so a Keychain read or write could put a macOS password prompt on the owner's screen.
+        ClickySecrets.testProfileSecretFile = secretFile
         if getenv(homeVariable) == nil {
             makeTestHome()
             setenv(homeVariable, testHome.path, 1)
