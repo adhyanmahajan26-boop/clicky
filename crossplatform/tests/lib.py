@@ -179,7 +179,7 @@ def say(bot, text):
 
 
 def busy(s):
-    return bool(s.get("replying")) or bool(s.get("exchanges")) or bool(s.get("rounds")) or bool(s.get("queued"))
+    return bool(s.get("replying")) or bool(s.get("exchanges")) or bool(s.get("rounds")) or bool(s.get("queued")) or bool(s.get("buildingTeams"))
 
 
 def wait_idle(seconds=120, quiet=2.0, poll=0.25, tick=None):
