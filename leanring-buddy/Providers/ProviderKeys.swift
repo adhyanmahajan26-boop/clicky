@@ -17,7 +17,10 @@ enum ProviderKeychain {
 
     static func get(_ account: String) -> String? {
         // A live Sarvam test reads the owner's key where it lies: nothing is copied or shown.
-        let usesOwnersKey = TheoProfile.isTest && account == "sarvam" && UserDefaults.standard.bool(forKey: "test.sarvam.useOwnerKey")
+        let asksForOwnersKey = TheoProfile.isTest && account == "sarvam" && UserDefaults.standard.bool(forKey: "test.sarvam.useOwnerKey")
+        // Only a build signed by a team can read it without a prompt (it matches the owner's Vello). An ad-hoc or
+        // unsigned test build would put a password box on the owner's screen, so it goes without the key instead.
+        let usesOwnersKey = asksForOwnersKey && TheoProfile.buildHasSigningTeam
         // Any other key of a test profile is in its own file, never the Keychain (`TheoProfile.secretFile`).
         if let secretFile = TheoProfile.secretFile, !usesOwnersKey { return secretFile.read(service: service, account: account) }
         var query: [String: Any] = [
