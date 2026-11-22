@@ -230,6 +230,8 @@ final class BotsStore: ObservableObject {
     var queuedResearch: [() -> Void] = []
     /// How many screen jobs in a row a bot has asked for since the owner last spoke to it.
     var screenTurns: [String: Int] = [:]
+    /// What Vello said on a call it would do in its own chat, waiting for that chat's next turn (`askOwnChatFromCall`). Old ones are dropped.
+    var callTaskNotes: [String: (note: String, at: Date)] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
     /// That folder's chats, for the head's next turn, when the owner asked to carry on earlier work.
@@ -616,6 +618,7 @@ final class BotsStore: ObservableObject {
         prompt = takeWaitingReports(for: bot) + ceoTurnNote(for: bot) + catchUp(botID, bot: bot, before: ownerMessageID) + prompt
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
+        if let call = callTaskNotes.removeValue(forKey: botID), call.at > Date().addingTimeInterval(-300) { prompt = "(\(call.note))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.reachNote(for: bot)))\n\n" + prompt }
         if bot.owner == nil { prompt = BotPrompts.awarenessNote(for: bot, room: botID) + prompt }

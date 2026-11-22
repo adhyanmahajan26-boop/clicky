@@ -114,7 +114,9 @@ enum CallPrompt {
         No markdown, lists, headings, code, emoji or stage directions. Spell out what's awkward to read aloud. Numbers are fine.
         \(OwnerName.startingSentence(owner)) may cut in at any time. If a message starts where your last answer was cut off, just carry on with what they said.
         """
-        rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner)
+        // The apps Vello has in its own text chat, which a call reaches with [TELL: Vello: …].
+        let ownApps = theo.map { bot in BotConnectors.known.filter { bot.apps.contains($0.id) && $0.id != "theo" && !$0.isSkill }.map(\.name) } ?? []
+        rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner, ownChatApps: ownApps)
         switch language {
         case .auto where !language.meansHinglish:
             rules += "\nAnswer in the language \(owner) just used."
@@ -130,6 +132,11 @@ enum CallPrompt {
             parts += BotPrompts.reportingLines(for: theo, store: store)
             let roster = store.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
+            if !TheoProducts.isOn(.clicky) {
+                parts.append("Pointer Assistant is off right now, so a [CLICKY: …] line does nothing until it's on. When \(owner) wants something done on screen, offer to turn it on, and once they say yes put [POINTER: on] before the [CLICKY: …] line.")
+            }
+            let routineNames = store.routines.map(\.name)
+            if !routineNames.isEmpty { parts.append("\(OwnerName.startingSentence(owner))'s routines: " + routineNames.joined(separator: ", ") + ".") }
             let work = store.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
             parts.append(store.runsStatus)
@@ -198,6 +205,8 @@ final class TheoCallSession: ObservableObject {
     private var chunker = CallSpeechChunker()
     /// Keeps Theo's orders to Clicky out of the voice, wherever a tag splits.
     private var orders = ClickyOrderStream()
+    /// Keeps the call's own switches ([POINTER: on], [ROUTINE: …]) out of the voice the same way.
+    private var controls = CallControlStream()
     private var clickyReports: [String] = []
     private var flushTimer: Task<Void, Never>?
     private var replyInProgress = false
@@ -454,6 +463,7 @@ final class TheoCallSession: ObservableObject {
         replyInProgress = true
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
+        controls = CallControlStream()
         let line = Line(who: .theo, text: "", isLive: true)
         lines.append(line)
         theoLineID = line.id
@@ -473,7 +483,9 @@ final class TheoCallSession: ObservableObject {
             firstTextAt = Date()
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
         }
-        let filtered = orders.feed(rawDelta)
+        let switched = controls.feed(rawDelta)
+        switched.controls.forEach(carryOut)
+        let filtered = orders.feed(switched.speech)
         filtered.orders.forEach(orderClicky)
         let delta = filtered.speech
         guard !delta.isEmpty else { return }
@@ -499,15 +511,22 @@ final class TheoCallSession: ObservableObject {
         let neverStreamed = firstTextAt == nil
         var unstreamed = ""
         if case .success(let whole) = result, neverStreamed {
-            let taken = ClickyOrder.extract(from: whole)
+            let switched = CallControlStream.extract(from: whole)
+            switched.controls.forEach(carryOut)
+            let taken = ClickyOrder.extract(from: switched.text)
             unstreamed = taken.text
             taken.orders.forEach(orderClicky)
         }
-        let rest = orders.finish()
-        rest.orders.forEach(orderClicky)
+        let switchedRest = controls.finish()
+        switchedRest.controls.forEach(carryOut)
+        let tail = orders.feed(switchedRest.speech)
+        tail.orders.forEach(orderClicky)
+        let finished = orders.finish()
+        finished.orders.forEach(orderClicky)
+        let restSpeech = tail.speech + finished.speech
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
             lines[index].isLive = false
-            lines[index].text += rest.speech
+            lines[index].text += restSpeech
             if lines[index].text.isEmpty { lines[index].text = unstreamed }
         }
         theoLineID = nil
@@ -516,7 +535,7 @@ final class TheoCallSession: ObservableObject {
             // A reply that never streamed (a CLI that gave only its result) still gets spoken.
             flushTimer?.cancel()
             if neverStreamed { for piece in chunker.feed(unstreamed) { speak(piece) } }
-            for piece in chunker.feed(rest.speech) { speak(piece) }
+            for piece in chunker.feed(restSpeech) { speak(piece) }
             if let piece = chunker.finish() { speak(piece) }
             voice?.endOfTurn()
         case .failure(let error):
@@ -530,8 +549,31 @@ final class TheoCallSession: ObservableObject {
         let addySaid = lines.filter { $0.who == .addy && !$0.isLive }.suffix(6).reversed().map(\.text).joined(separator: "\n")
         // Clicky's helpers finish after Clicky's first answer: their reports come here too.
         store.onCEOReport = { [weak self] report in self?.reportArrived(report) }
+        let toPointerAssistant = ClickyOrder.tellTarget(in: order) == nil
         store.carryOutOrder(order, ownerWords: addySaid) { [weak self] report in
-            self?.reportArrived(report)
+            self?.reportArrived(toPointerAssistant ? "Pointer Assistant: \(report)" : report)
+        }
+    }
+
+    /// One of the call's own switches. Everything said on a call is the owner's own voice, so these run straight away.
+    private func carryOut(_ control: CallControl) {
+        switch control {
+        case .pointerAssistant(let turnOn):
+            let products = TheoProducts.shared
+            if products.isOn(.clicky) != turnOn { products.set(.clicky, on: turnOn) }
+            // On means the spark shows too, not just the product switched on with its cursor hidden.
+            if turnOn, let manager = CompanionManager.current, !manager.isClickyCursorEnabled { manager.setClickyCursorEnabled(true) }
+            store.post(BotChatMessage(author: BotsStore.noteAuthor, text: "Pointer Assistant is \(turnOn ? "on" : "off"), as asked on the call."), to: store.primary?.id ?? "theo")
+        case .runRoutine(let name):
+            let routines = store.routines
+            guard let index = CallControl.routine(named: name, among: routines.map(\.name)) else {
+                let names = routines.map(\.name)
+                reportArrived(names.isEmpty
+                    ? "There are no routines yet, so nothing ran. You can set one up in your text chat."
+                    : "No routine matched \"\(name)\", so nothing ran. The routines are: \(names.joined(separator: ", ")).")
+                return
+            }
+            store.runRoutineNow(routines[index].id)
         }
     }
 
