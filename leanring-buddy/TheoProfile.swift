@@ -39,6 +39,12 @@ enum TheoProfile {
     /// Keychain service suffix, so a test key never overwrites a real one.
     static var keychainSuffix: String { isTest ? "." + (name ?? "test") : "" }
 
+    /// A test profile's secrets (API keys, the Local API token, ClickyCore's secrets), in its own folder instead of the
+    /// Keychain. Nil in the owner's real profile, which keeps them in the Keychain.
+    static let secretFile: TestProfileSecretFile? = isTest
+        ? TestProfileSecretFile(fileURL: testHome.deletingLastPathComponent().appendingPathComponent("test-secrets.json"))
+        : nil
+
     /// Where UserDefaults.standard points in a test profile.
     static var testDefaultsDomain: String { "com.personal.clicky." + (name ?? "test") }
 
@@ -70,6 +76,9 @@ enum TheoProfile {
         guard isTest else { return }
         // ClickyCore's own Keychain items (the API key, the voice-server key) get the same suffix as the app's.
         ClickySecrets.serviceSuffix = keychainSuffix
+        // And no secret of a test profile goes near the Keychain: a test build's signature differs from the owner's Vello,
+        // so a Keychain read or write could put a macOS password prompt on the owner's screen.
+        ClickySecrets.testProfileSecretFile = secretFile
         if getenv(homeVariable) == nil {
             makeTestHome()
             setenv(homeVariable, testHome.path, 1)

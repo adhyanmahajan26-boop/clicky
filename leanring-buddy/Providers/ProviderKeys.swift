@@ -18,13 +18,17 @@ enum ProviderKeychain {
     static func get(_ account: String) -> String? {
         // A live Sarvam test reads the owner's key where it lies: nothing is copied or shown.
         let usesOwnersKey = TheoProfile.isTest && account == "sarvam" && UserDefaults.standard.bool(forKey: "test.sarvam.useOwnerKey")
-        let query: [String: Any] = [
+        // Any other key of a test profile is in its own file, never the Keychain (`TheoProfile.secretFile`).
+        if let secretFile = TheoProfile.secretFile, !usesOwnersKey { return secretFile.read(service: service, account: account) }
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: usesOwnersKey ? "com.theo.providers" : service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        // A test build reading the owner's key must never ask for the password: if macOS wants to ask, the read just fails.
+        if usesOwnersKey { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data,
@@ -36,6 +40,7 @@ enum ProviderKeychain {
     static func set(_ value: String, for account: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return delete(account) }
+        if let secretFile = TheoProfile.secretFile { return secretFile.write(service: service, account: account, value: trimmed) }
         let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -51,6 +56,7 @@ enum ProviderKeychain {
 
     @discardableResult
     static func delete(_ account: String) -> Bool {
+        if let secretFile = TheoProfile.secretFile { return secretFile.write(service: service, account: account, value: nil) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

@@ -28,6 +28,11 @@ enum TheoGatewayToken {
     static let account = "token"
 
     static func read() -> String? {
+        // A test profile's token is in its own file, never the Keychain (`TheoProfile.secretFile`).
+        if let secretFile = TheoProfile.secretFile {
+            guard let token = secretFile.read(service: service, account: account), token.count >= 32 else { return nil }
+            return token
+        }
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
                                     kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?
@@ -41,6 +46,7 @@ enum TheoGatewayToken {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
         let token = "theo_" + bytes.map { String(format: "%02x", $0) }.joined()
+        if let secretFile = TheoProfile.secretFile { return secretFile.write(service: service, account: account, value: token) ? token : nil }
         let match: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
         SecItemDelete(match as CFDictionary)
         var add = match
@@ -50,6 +56,7 @@ enum TheoGatewayToken {
     }
 
     static func remove() {
+        if let secretFile = TheoProfile.secretFile { secretFile.write(service: service, account: account, value: nil); return }
         SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary)
     }
 }
