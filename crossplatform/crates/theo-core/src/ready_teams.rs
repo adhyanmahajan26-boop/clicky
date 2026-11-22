@@ -394,10 +394,11 @@ mod tests {
 
     #[test]
     fn the_catalog_is_the_file_the_mac_has() {
-        let mac = include_str!("../../../../Packages/ClickyCore/Sources/ClickyCore/Team/ReadyMadeTeamsCatalog.swift");
+        // A Windows checkout may turn line ends into CRLF, in either file.
+        let mac = include_str!("../../../../Packages/ClickyCore/Sources/ClickyCore/Team/ReadyMadeTeamsCatalog.swift").replace("\r\n", "\n");
         let start = mac.find("#\"\"\"\n").unwrap() + 5;
         let end = mac.rfind("\n\"\"\"#").unwrap();
-        assert_eq!(mac[start..end].trim(), CATALOG_JSON.trim());
+        assert_eq!(mac[start..end].trim(), CATALOG_JSON.replace("\r\n", "\n").trim());
     }
 
     #[test]
