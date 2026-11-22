@@ -133,7 +133,7 @@ struct TodayView: View {
             .frame(maxWidth: .infinity)
         }
         .background(DS.Colors.background)
-        .task { notes = await Task.detached { ClaudiaLibrary.items() }.value }
+        .task { notes = await ClaudiaLibrary.itemsWithoutBlocking() }
         .onAppear { if !facesKeyShown && !TheoProfile.isTest && ClickySettings.isSetupCompleted { showsFacesKey = true } }
         .sheet(isPresented: $showsFacesKey) {
             FacesKeyView {

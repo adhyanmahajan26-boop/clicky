@@ -22,12 +22,19 @@ function botExists(id) { return state.bots.some((b) => b.id === id); }
 /* ---------------- the sidebar's bots ---------------- */
 function sidebarBotRow(f, opts = {}) {
   const selected = view.kind === "bot" && view.id === f.id ? " selected" : "";
-  const detail = f.detail ? ` · ${esc(f.detail)}` : "";
   const manager = opts.manager ? `<span class="mgr" title="Manages this team">${CROWN_SVG}Manager</span>` : "";
   return `<button class="row brow${selected}" data-bot="${esc(f.id)}"${opts.fixed ? "" : ` draggable="true"`}>${botHTML(f.id, 36)}<span class="tx"><span class="nm"><span class="nm-t">${esc(nameOf(f.id))}</span>${manager}</span>`
-    + `<span class="st"><span class="s-word-${f.state}">${esc(f.word)}</span>${detail}</span></span>`
-    + (f.unread ? `<i class="unread" title="New"></i>` : "") + `<span class="tm">${BUSY_STATES.includes(f.state) ? ago(f.since) : ""}</span></button>`;
+    + `<span class="st">${sidebarStatusHTML(f)}</span></span>`
+    + (f.unread ? `<i class="unread" title="New"></i>` : "") + `<span class="tm">${sidebarTimeText(f)}</span></button>`;
 }
+
+// A row's status line and time: they change with every streamed word and every minute, so app.js patches them in place
+// (patchSidebarRows) instead of rebuilding the whole list.
+function sidebarStatusHTML(f) {
+  const detail = f.detail ? ` · ${esc(f.detail)}` : "";
+  return `<span class="s-word-${f.state}">${esc(f.word)}</span>${detail}`;
+}
+function sidebarTimeText(f) { return BUSY_STATES.includes(f.state) ? ago(f.since) : ""; }
 
 // The CEO always has the top row, whatever the sort.
 function ceoRowHTML(faces) {

@@ -230,7 +230,7 @@ struct NotesTab: View {
         .task {
             // Live refresh: scan off the main thread every 2 s, only touch state when the folder contents changed.
             while !Task.isCancelled {
-                let fresh = await Task.detached(priority: .utility) { ClaudiaLibrary.items() }.value
+                let fresh = await ClaudiaLibrary.itemsWithoutBlocking()
                 if fresh.map({ "\($0.id)\($0.date.timeIntervalSince1970)" }) != items.map({ "\($0.id)\($0.date.timeIntervalSince1970)" }) { items = fresh }
                 let ids = ClaudiaLibrary.selectedIDs
                 if ids != selected { selected = ids }

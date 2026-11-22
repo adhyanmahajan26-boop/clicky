@@ -1,6 +1,6 @@
 # Testing Theo without touching the owner's Mac
 
-Theo has a test profile: `Clicky --profile test` (or `test-<name>` for another one beside it). It's the same app with its own home folder (`~/Library/Application Support/Theo-Test[-name]/home`), preferences domain, Keychain service and pasteboard. It stays out of the Dock and menu bar, never takes focus, and doesn't start the mic, spark overlay, pill or key tap.
+Theo has a test profile: `Clicky --profile test` (or `test-<name>` for another one beside it). It's the same app with its own home folder (`~/Library/Application Support/Theo-Test[-name]/home`), preferences domain and pasteboard. Its secrets (API keys, the Local API token) go in `Theo-Test[-name]/test-secrets.json` (owner-only), never the Keychain, so a test build can't put a macOS password prompt on the owner's screen (`TheoProfile.secretFile`). It stays out of the Dock and menu bar, never takes focus, and doesn't start the mic, spark overlay, pill or key tap.
 
 `Tools/theoui.py` drives it. Clicks are real AppKit events sent from inside the app, so hit testing and controls behave for real, but the owner's pointer never moves.
 
@@ -58,6 +58,7 @@ Products: a fresh test profile has nothing on until Setup's "Pick products" step
 With no Sarvam key: `Tools/mock-sarvam.py` stands in for its REST and sockets. Set `uiSet test.sarvam.base = http://127.0.0.1:8765` and `uiTestKey {provider: "sarvam", value: "anything"}`. For a live test with the owner's saved key: `uiSet test.sarvam.useOwnerKey = true` (the key is read where it is, never copied or shown).
 
 ## Rules
+- Nothing in a test may cause a Keychain or password prompt. Sign test builds like the owner's Vello (copy `Config/Signing.local.xcconfig` into the test checkout): an ad-hoc build that reads any of the owner's own Keychain items brings up a password box. Never run `security`, and leave `test.sarvam.useOwnerKey` off unless the owner asked for a live Sarvam test; it is ignored in an ad-hoc or unsigned build (`TheoProfile.buildHasSigningTeam`).
 - A test profile can hold a copy of real bots signed in as the owner, so its routines never fire on schedule (`test.routines.run` overrides that). An older build has no such gate: pause routines in any copy it might read.
 - A test profile's child processes get its home folder, so never start a browser from one: Chrome comes up as a new, empty copy.
 - A `test-stranger…` profile borrows nothing: no links to the owner's CLI sign-ins, `~/.ssh` or `~/.gitconfig`, and what it starts gets the test home as HOME. Every other test profile borrows as below.

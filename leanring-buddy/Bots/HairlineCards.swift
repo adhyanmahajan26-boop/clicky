@@ -201,6 +201,59 @@ enum BotMessageCards {
         briefs[message.id] = .some(card)
         return card
     }
+
+    // What the chat and the sidebar read out of a saved message, worked out once per message. Each used to scan the
+    // whole text again every time a row or the chat redrew (a [CHOOSE:] search, a ```prompt search, the first line),
+    // for every bot in the sidebar and every message on screen, on each click. A message's id and length key it, so an
+    // edited message (a delegation card filled in) is read again.
+    private static var calls: [String: BotCallPrompt?] = [:]
+    private static var promptBlocks: [String: String?] = [:]
+    private static var firstLines: [String: String] = [:]
+
+    private static func cacheKey(for message: BotChatMessage) -> String { "\(message.id)|\(message.text.utf8.count)" }
+
+    /// The message's [CHOOSE:] card, if it has one.
+    static func call(for message: BotChatMessage) -> BotCallPrompt? {
+        let key = cacheKey(for: message)
+        if let known = calls[key] { return known }
+        let call = message.text.contains("[CHOOSE:") ? BotCallPrompt.parse(message.text) : nil
+        if calls.count > 2_000 { calls.removeAll() }
+        calls[key] = .some(call)
+        return call
+    }
+
+    /// The message's ```prompt block, if it has one.
+    static func promptBlock(for message: BotChatMessage) -> String? {
+        let key = cacheKey(for: message)
+        if let known = promptBlocks[key] { return known }
+        let block = BotsT3.promptBlock(in: message.text)
+        if promptBlocks.count > 2_000 { promptBlocks.removeAll() }
+        promptBlocks[key] = .some(block)
+        return block
+    }
+
+    private static var castIDs: [String: [String]] = [:]
+
+    /// The bots a long answer names, for its cover: every bot's name searched in the whole text, so worked out once per
+    /// message and team.
+    static func castIDs(for message: BotChatMessage, authorID: String, bots: [NativeBot]) -> [String] {
+        let key = cacheKey(for: message) + "|" + bots.map(\.name).joined(separator: "\u{1F}")
+        if let known = castIDs[key] { return known }
+        let found = bots.filter { $0.id != authorID && message.text.localizedCaseInsensitiveContains($0.name) }.map(\.id)
+        if castIDs.count > 400 { castIDs.removeAll() }
+        castIDs[key] = found
+        return found
+    }
+
+    /// The message's first readable line (`BotsStore.firstLine`), for the sidebar's status line.
+    static func firstLine(of message: BotChatMessage) -> String {
+        let key = cacheKey(for: message)
+        if let known = firstLines[key] { return known }
+        let line = BotsStore.firstLine(message.text)
+        if firstLines.count > 2_000 { firstLines.removeAll() }
+        firstLines[key] = line
+        return line
+    }
 }
 
 /// A long answer, read as an article: cover on the left, serif title, excerpt and sections. Opens to the whole thing.

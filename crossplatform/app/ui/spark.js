@@ -222,7 +222,8 @@
     const label = metadata && metadata.currentWebview && metadata.currentWebview.label;
     if (label) return tauri.event.listen(name, handler, { target: { kind: "WebviewWindow", label } });
   }
-  listenHere("spark", (event) => handle(event.payload || {}));
+  // The `if` here had been lost, which made the whole file a syntax error: the spark window never ran on Windows or Linux.
+  if (window.__TAURI__) listenHere("spark", (event) => handle(event.payload || {}));
   // A page opened in a browser (the design check) shows the spark at rest.
   else { cursor = { x: 200, y: 200 }; place(222, 220); showSpark(); }
 })();
