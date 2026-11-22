@@ -241,6 +241,33 @@ final class ClaudiaControlInbox {
             }
             if let leader = command["leader"] as? String, let bot = store.bots.first(where: { $0.name == leader && $0.owner == nil }) { store.setLeader(bot.id, of: section.id) }
             reply(identifier, ok: true, result: ["added": added], error: nil)
+        case "readyTeams":
+            // Settings › Bot teams: {action: list | add | remove | reset | saveCategory, id}. `add` makes the team's category,
+            // manager and bots, as its Add button does; `saveCategory` keeps the category with that id as a team.
+            let library = ReadyMadeTeamLibrary.shared
+            let store = BotsStore.shared
+            let id = command["id"] as? String ?? ""
+            var note: Any = NSNull()
+            switch command["action"] as? String ?? "list" {
+            case "add":
+                guard let team = library.team(id) else { reply(identifier, ok: false, result: nil, error: "No such team."); return }
+                note = store.addReadyMadeTeam(team)
+            case "remove": library.remove(id)
+            case "reset": library.reset(id)
+            case "saveCategory":
+                guard let team = library.saveCategory(id, store: store) else { reply(identifier, ok: false, result: nil, error: "No such category with bots."); return }
+                note = team.id
+            default: break
+            }
+            let teams = library.teams.map { team -> [String: Any] in
+                ["id": team.id, "name": team.name, "manager": team.manager.name, "workers": team.workers.map(\.name),
+                 "builtIn": ReadyMadeTeams.isBuiltIn(team.id), "changed": ReadyMadeTeams.isChanged(team)]
+            }
+            let categories = store.layout.sections.map { section -> [String: Any] in
+                ["id": section.id, "name": section.name, "purpose": section.purpose ?? NSNull(),
+                 "manager": section.leaderID.flatMap { store.bot($0)?.name } ?? NSNull(), "members": store.members(of: section).map(\.name)]
+            }
+            reply(identifier, ok: true, result: ["teams": teams, "categories": categories, "note": note], error: nil)
         case "botCreate":
             // {name, description, instructions, provider, model, group, authority, canMessage, enabled}
             let store = BotsStore.shared

@@ -2142,14 +2142,16 @@ enum BotPrompts {
                 parts.append("Your teammates: " + others.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
             }
             parts.append(ClickyTeamPrompts.theoHowTo(team: team.filter { $0.owner == BotsStore.clickyID }.map(\.name), owner: ownerName))
-            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName))
+            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName, readyMadeTeams: ReadyMadeTeamLibrary.shared.teams.map(\.name)))
             let roster = BotsStore.shared.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
             let work = BotsStore.shared.memoryStore.teamWorkContext()
             if !work.isEmpty { parts.append(work) }
         }
         // Vello's own bot keeps making bots and categories when another bot was made CEO (`BotsStore.mayBuildTeam`).
-        if !bot.primary && bot.id == BotsRootView.theoID { parts.append(BotProtocol.teamBuildHowTo(owner: ownerName)) }
+        if !bot.primary && bot.id == BotsRootView.theoID {
+            parts.append(BotProtocol.teamBuildHowTo(owner: ownerName, readyMadeTeams: ReadyMadeTeamLibrary.shared.teams.map(\.name)))
+        }
         if bot.owner == nil {
             parts.append(BotPrompts.routineHowTo)
             parts.append(BotPrompts.codingHowTo)
