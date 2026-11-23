@@ -181,15 +181,22 @@ public enum CallListenMode {
         return nil
     }
 
-    /// Whether something heard in Listen mode is meant for Vello: its name near the start or the end ("Vello, …",
-    /// "hey Vello …", "… right, Vello?"), or a phrase asking it to speak up.
-    public static func isAddressed(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
+    /// Whether Vello's name is said near the start or the end ("Vello, …", "hey Vello …", "… right, Vello?"). In Listen
+    /// mode that brings Vello back to talking: the owner calling it by name wants it back, and kept in Listen mode it
+    /// answered once and went quiet again, so it seemed stuck there.
+    public static func callsVelloByName(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
         let words = CallTurnEnd.simplifiedWords(utterance)
         guard !words.isEmpty else { return false }
         let names = Set(assistantNames.map { $0.lowercased() })
-        let nearTheStart = words.prefix(3)
-        let nearTheEnd = words.suffix(2)
-        if nearTheStart.contains(where: names.contains) || nearTheEnd.contains(where: names.contains) { return true }
+        return words.prefix(3).contains(where: names.contains) || words.suffix(2).contains(where: names.contains)
+    }
+
+    /// Whether something heard in Listen mode is meant for Vello: its name near the start or the end ("Vello, …",
+    /// "hey Vello …", "… right, Vello?"), or a phrase asking it to speak up.
+    public static func isAddressed(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
+        if callsVelloByName(utterance, assistantNames: assistantNames) { return true }
+        let words = CallTurnEnd.simplifiedWords(utterance)
+        guard !words.isEmpty else { return false }
         let joined = " " + words.joined(separator: " ") + " "
         return speakUpPhrases.contains { joined.contains(" \($0) ") }
     }
@@ -236,7 +243,7 @@ public struct CallListenTranscript: Sendable {
             message += ")"
         }
         message += "\n\(OwnerName.startingSentence(owner)) is now asking you: \(question)\n"
-        message += "(Answer from what you heard and what was said earlier on this call. If they don't say which part, it's the latest topic. Keep it short unless they ask for more."
+        message += "(Answer from what you heard and what was said earlier on this call. If they don't say which part, it's the latest topic. Keep it short unless they ask for more. If they ask you to do something, do it the usual way, with your lines at the end."
         message += staysInListenMode ? " You stay in listen mode afterwards.)" : " Listen mode is over now, so talk as usual.)"
         return message
     }
@@ -317,5 +324,31 @@ public struct CallNearVoice: Equatable, Sendable {
         let sorted = blockLevelsDecibels.sorted()
         let index = min(sorted.count - 1, Int(Double(sorted.count) * 0.8))
         return sorted[index]
+    }
+}
+
+/// When words heard while Vello is still writing its answer stop that answer.
+///
+/// The ears hand over the same words again (a partial repeating what was just said, a final for words already taken), and
+/// each one used to count as the owner cutting in: the answer was thrown away before a word of it was heard, the turn was
+/// let go again at once, and the next repeat threw that answer away too (Air, 23 Nov: 232 answers in a row dropped in
+/// three minutes, none heard, and the owner's last 189 words never answered). Now only new words cut in, and an answer
+/// that hasn't been heard yet is started over at most twice; after that, more words wait for it and are answered next.
+public enum CallCutIn {
+    /// Times one answer, not yet heard, may be dropped and started over with the owner's added words.
+    public static let mostRestartsPerAnswer = 2
+
+    /// Whether `heard` holds at least `atLeast` words that aren't in `alreadyHeard` (the turn being answered and any words
+    /// held since), so it's the owner saying something more rather than the ears repeating themselves.
+    public static func bringsNewWords(_ heard: String, alreadyHeard: String, atLeast: Int = 1) -> Bool {
+        let known = Set(CallTurnEnd.simplifiedWords(alreadyHeard))
+        let newWords = CallTurnEnd.simplifiedWords(heard).filter { !known.contains($0) }
+        return newWords.count >= max(1, atLeast)
+    }
+
+    /// Whether an answer still being written, and not heard yet, is dropped and started over with the new words.
+    /// `restartsSoFar`: how many times this answer was already started over.
+    public static func restartsTheAnswer(restartsSoFar: Int) -> Bool {
+        restartsSoFar < mostRestartsPerAnswer
     }
 }
