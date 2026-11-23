@@ -352,3 +352,35 @@ public enum CallCutIn {
         restartsSoFar < mostRestartsPerAnswer
     }
 }
+
+/// How long Vello may stay quiet on a call. Waiting for the owner to finish is right, but other people talking near the Mac
+/// keep the ears' partial words coming, and those alone must never hold the answer back for good (Air, 23 Nov: Vello sat
+/// quiet for half a minute with people talking round the owner).
+public enum CallQuietLimit {
+    /// The ears' partial words keep a turn open for at most this long after the owner's voice stopped, on top of the wait.
+    public static let longestPartialsHoldSeconds = 1.5
+
+    /// Whether a held turn is let go now. `secondsSinceVoiceStopped`: since the owner's own voice ended (the gate).
+    /// `secondsSincePartialWords`: since the ears last gave partial words, nil if they gave none. `waitSeconds`: what
+    /// `CallTurnEnd.waitSeconds` says for the words held.
+    public static func releasesTurn(secondsSinceVoiceStopped: Double, secondsSincePartialWords: Double?, waitSeconds: Double) -> Bool {
+        let quietSoFar = min(secondsSinceVoiceStopped, secondsSincePartialWords ?? .infinity)
+        if quietSoFar >= waitSeconds { return true }
+        // Partials still coming, but the owner's voice stopped long enough ago: someone else is talking. Answer.
+        return secondsSinceVoiceStopped >= waitSeconds + longestPartialsHoldSeconds
+    }
+
+    /// Once the owner's turn is let go, Vello says a few words of its own if none of its answer has sounded by then, so
+    /// there's never a silence that sounds like it didn't hear.
+    public static let acknowledgeAfterSeconds = 2.5
+
+    /// The few words: short, so the answer follows straight on. `speaksHindi`: the call is in Hindi or Hinglish.
+    /// `readsDevanagari`: the voice reads Devanagari (Sarvam); Apple's voices read Hindi best in Roman letters.
+    public static func acknowledgement(speaksHindi: Bool, readsDevanagari: Bool, turnNumber: Int) -> String {
+        let english = ["One sec.", "Hmm, let me think.", "Okay, give me a second."]
+        let hindiRoman = ["Haan, ek second.", "Hmm, sochne do.", "Achha, ek second."]
+        let hindiDevanagari = ["हाँ, एक सेकंड।", "हम्म, सोचने दो।", "अच्छा, एक सेकंड।"]
+        let lines = speaksHindi ? (readsDevanagari ? hindiDevanagari : hindiRoman) : english
+        return lines[abs(turnNumber) % lines.count]
+    }
+}
