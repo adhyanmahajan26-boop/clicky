@@ -135,6 +135,7 @@ extension BotRunner {
         var text = ""
         var failure: String?
         var seen = ""
+        let turnStarted = Date()
         let exit = try await spawnEngine(botID: bot.id, executable: executable, arguments: arguments, logName: "codex") { line in
             seen += line + "\n"
             guard let event = json(line), let type = event["type"] as? String else { return }
@@ -158,6 +159,13 @@ extension BotRunner {
         if text.isEmpty, let saved = try? String(contentsOf: reply, encoding: .utf8) {
             text = saved.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        // Codex's image tool saves its pictures in its own folder and tells the model they're already on screen. They aren't in
+        // Vello, so they're copied into the bot's memory folder and attached as [FILE:] cards (ClickyCore `EngineMadeImages`).
+        // Only bots the owner talks to show [FILE:] cards; Clicky's own helpers never make pictures.
+        if bot.owner == nil, let threadID = newSession {
+            let copiedNames = copyImagesCodexMade(threadID: threadID, turnStarted: turnStarted, botID: bot.id)
+            text = EngineMadeImages.reply(text, attaching: copiedNames)
+        }
         if text.isEmpty {
             if let limit = usageLimitMessage(engine: "codex", output: seen + (failure ?? "") + exit.logTail) { throw BotRunnerError.usageLimit(limit) }
             if session != nil, saysSessionIsLost((failure ?? "") + exit.logTail) { throw BotRunnerError.lostSession }
@@ -165,6 +173,39 @@ extension BotRunner {
             throw BotRunnerError.failed("Codex stopped (exit \(exit.status)). Details are in ~/Library/Logs/Clicky/bots-codex.log.")
         }
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), newSession)
+    }
+
+    /// Copies the pictures Codex's image tool made on this turn into the bot's memory folder (Codex's own copies stay where
+    /// they are) and returns the names they have there.
+    static func copyImagesCodexMade(threadID: String, turnStarted: Date, botID: String) -> [String] {
+        let engineHome = TheoProfile.borrowsNothing ? TheoProfile.testHome.path : TheoProfile.realHome
+        let codexHome = EngineMadeImages.codexHome(environment: HarnessCatalog.childEnvironment(), home: engineHome)
+        guard let imagesFolder = EngineMadeImages.codexFolder(codexHome: codexHome, threadID: threadID) else { return [] }
+        let fileManager = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
+        guard let contents = try? fileManager.contentsOfDirectory(at: imagesFolder, includingPropertiesForKeys: keys) else { return [] }
+        let listedFiles = contents.compactMap { file -> EngineMadeImages.ListedFile? in
+            guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
+                  let modified = values.contentModificationDate else { return nil }
+            return EngineMadeImages.ListedFile(name: file.lastPathComponent, modified: modified)
+        }
+        let newPictureNames = EngineMadeImages.madeThisTurn(listedFiles, turnStarted: turnStarted)
+        guard !newPictureNames.isEmpty else { return [] }
+        let botFolder = BotMemory.file(botID: botID).deletingLastPathComponent()
+        try? fileManager.createDirectory(at: botFolder, withIntermediateDirectories: true)
+        var copiedNames: [String] = []
+        for pictureName in newPictureNames {
+            let copyName = EngineMadeImages.nameInBotFolder(forOriginal: pictureName) { candidate in
+                fileManager.fileExists(atPath: botFolder.appendingPathComponent(candidate).path)
+            }
+            do {
+                try fileManager.copyItem(at: imagesFolder.appendingPathComponent(pictureName), to: botFolder.appendingPathComponent(copyName))
+                copiedNames.append(copyName)
+            } catch {
+                print("⚠️ Bots: couldn't copy Codex's picture \(pictureName) for \(botID): \(error.localizedDescription)")
+            }
+        }
+        return copiedNames
     }
 
     // MARK: Cursor

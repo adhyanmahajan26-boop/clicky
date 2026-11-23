@@ -1327,6 +1327,7 @@ impl Harness {
             return Err(RunError::Failed("Stopped.".into()));
         }
         self.procs.lock().unwrap().insert(bot.id.clone(), cancel.clone());
+        let turn_started = std::time::SystemTime::now();
         let outcome = engine::run(spec, cancel.clone(), Some(self.registry.clone()), on_text).await;
         {
             let mut procs = self.procs.lock().unwrap();
@@ -1354,6 +1355,15 @@ impl Harness {
         if text.trim().is_empty() {
             if let Some(saved) = codex_reply_file.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
                 text = saved;
+            }
+        }
+        // Codex's image tool saves its pictures in its own folder and tells the model they're already on screen. They aren't in
+        // Vello, so they're copied into the bot's memory folder and attached as [FILE:] cards (files.rs).
+        if provider == "codex" {
+            if let Some(thread) = outcome.session_id.clone().or(new_session.clone()).or(session.clone()) {
+                let codex_home = crate::files::codex_home(std::env::var_os("CODEX_HOME").as_deref(), &crate::paths::home());
+                let copied = crate::files::copy_codex_images_made_this_turn(&codex_home, &thread, turn_started, &self.paths.memory_dir(&bot.id));
+                text = crate::files::reply_attaching(&text, &copied);
             }
         }
         drop(written_for_turn);
