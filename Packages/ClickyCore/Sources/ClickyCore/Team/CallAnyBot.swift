@@ -35,21 +35,62 @@ public enum CallPromptText {
     public struct ChatLine: Equatable, Sendable {
         public var isFromOwner: Bool
         public var text: String
+        /// Who said it when it's neither the owner nor the bot itself (Vello's chat has Pointer Assistant in it too).
+        public var speakerName: String?
+        /// A saved call ("📞 Call with Vello, 3 min" and its transcript), so the next call knows what the last one said.
+        public var isCallRecord: Bool
 
-        public init(isFromOwner: Bool, text: String) {
+        public init(isFromOwner: Bool, text: String, speakerName: String? = nil, isCallRecord: Bool = false) {
             self.isFromOwner = isFromOwner
             self.text = text
+            self.speakerName = speakerName
+            self.isCallRecord = isCallRecord
         }
     }
 
-    /// The end of the bot's own text chat, as Vello's call prompt has it: the last six lines, each on one line.
+    /// How much of the chat a call starts with. It used to be the last six lines cut to 240 characters each, with
+    /// earlier calls left out, so a call forgot what the last call and most of the chat had said (Addy, 23 Nov).
+    /// About 3,000 words: room for a few calls and the typed chat around them, small enough not to slow the first answer.
+    public static let carriedOverCharacters = 12_000
+    /// The most of one typed message that's carried over.
+    public static let longestCarriedMessageCharacters = 1_200
+    /// The most of one earlier call that's carried over: its heading and its end, where the latest topic is.
+    public static let longestCarriedCallCharacters = 4_000
+
+    /// The end of the bot's own text chat, earlier calls included, newest kept first, within `carriedOverCharacters`.
     public static func recentChat(botName: String, owner: String, lines: [ChatLine]) -> String? {
-        let shown = lines.suffix(6).map { line -> String in
-            let who = line.isFromOwner ? OwnerName.startingSentence(owner) : botName
-            return "\(who): " + String(line.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
+        var shown: [String] = []
+        var usedCharacters = 0
+        for line in lines.reversed() {
+            let entry = carriedOver(line, botName: botName, owner: owner)
+            guard !entry.isEmpty else { continue }
+            // The newest line always goes in, so a call never starts knowing nothing.
+            if !shown.isEmpty && usedCharacters + entry.count > carriedOverCharacters { break }
+            shown.insert(entry, at: 0)
+            usedCharacters += entry.count + 1
         }
         guard !shown.isEmpty else { return nil }
-        return "The end of your text chat with \(owner), before this call:\n" + shown.joined(separator: "\n")
+        return "The end of your text chat with \(owner) before this call, earlier calls included, oldest first:\n" + shown.joined(separator: "\n")
+    }
+
+    private static func carriedOver(_ line: ChatLine, botName: String, owner: String) -> String {
+        let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if line.isCallRecord {
+            // "📞 Call with Vello, 3 min" then "**Sam:** …" lines: kept as lines, without the bold marks.
+            let callLines = trimmed.replacingOccurrences(of: "**", with: "").split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard let heading = callLines.first else { return "" }
+            var transcript = callLines.dropFirst().joined(separator: "\n")
+            if transcript.count > longestCarriedCallCharacters {
+                transcript = "(the start of this call is left out) …" + String(transcript.suffix(longestCarriedCallCharacters))
+            }
+            return "[Earlier call] " + heading + (transcript.isEmpty ? "" : "\n" + transcript)
+        }
+        let who = line.isFromOwner ? OwnerName.startingSentence(owner) : (line.speakerName ?? botName)
+        let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+        let cut = oneLine.count > longestCarriedMessageCharacters ? String(oneLine.prefix(longestCarriedMessageCharacters)) + " …" : oneLine
+        return "\(who): " + cut
     }
 
     /// Everything a bot that isn't Vello's own is told for a call: its name and instructions, how to talk, that it only

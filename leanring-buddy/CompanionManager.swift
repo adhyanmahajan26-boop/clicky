@@ -1598,8 +1598,9 @@ final class CompanionManager: ObservableObject {
         return mainPrompt
     }
 
-    /// How many earlier exchanges are sent with each question (text only).
-    private static let conversationHistoryExchangeLimit = 6
+    /// How many earlier exchanges are sent with each question (text only). Six left Pointer Assistant forgetting what was
+    /// said a minute earlier; twelve short spoken exchanges are still a small prompt.
+    private static let conversationHistoryExchangeLimit = 12
 
     /// The first text block: earlier exchanges in words, then what the user
     /// just said. No coordinates, ids or images from earlier turns.
