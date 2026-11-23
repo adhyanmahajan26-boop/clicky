@@ -33,6 +33,9 @@ protocol ConversationBrain: AnyObject {
     func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
     /// Stops the reply in progress; the conversation stays, with what was said so far.
     func interrupt()
+    /// Stops the reply in progress and takes the turn out of the conversation altogether: the owner kept talking before
+    /// any of the answer was heard, and the turn is about to be asked again with all their words (`CallCutIn`).
+    func forgetTheTurnBeingAnswered()
     func stop()
 }
 
@@ -69,6 +72,8 @@ final class OneTurnConversation: ConversationBrain {
     private var currentTask: Task<Void, Never>?
     private var currentTurnText = ""
     private var currentTurnWasInterrupted = false
+    /// The turn being answered is to leave the conversation's memory once its request has ended (`forgetTheTurnBeingAnswered`).
+    private var currentTurnIsForgotten = false
     private var waiting: [WaitingTurn] = []
     var onEnded: ((String) -> Void)?
 
@@ -106,6 +111,7 @@ final class OneTurnConversation: ConversationBrain {
         let turn = waiting.removeFirst()
         currentTurnText = ""
         currentTurnWasInterrupted = false
+        currentTurnIsForgotten = false
         let model = model
         let systemPrompt = systemPrompt
         let sessionIdentifier = keepsHistory ? conversationIdentifier : nil
@@ -132,6 +138,10 @@ final class OneTurnConversation: ConversationBrain {
                 result = .failure(error)
             }
             guard let self else { return }
+            // A turn being asked again leaves no trace: its request may have finished and saved itself just before.
+            if self.currentTurnIsForgotten, let sessionIdentifier {
+                BrainCLIRunner.forgetTurn(turnText: turn.text, session: sessionIdentifier, model: model)
+            }
             // An interrupted turn ends with what was said so far, like Claude Code's interrupt.
             if self.currentTurnWasInterrupted {
                 turn.onDone(.success(self.currentTurnText))
@@ -147,6 +157,12 @@ final class OneTurnConversation: ConversationBrain {
         guard let currentTask else { return }
         currentTurnWasInterrupted = true
         currentTask.cancel()
+    }
+
+    func forgetTheTurnBeingAnswered() {
+        guard currentTask != nil else { return }
+        currentTurnIsForgotten = true
+        interrupt()
     }
 
     func stop() {
@@ -266,6 +282,11 @@ final class ClaudeConversation: ConversationBrain {
         if let data = try? JSONSerialization.data(withJSONObject: request) {
             try? process.standardInputHandle.write(contentsOf: data + Data("\n".utf8))
         }
+    }
+
+    /// Claude Code's kept-open conversation has no way to take a turn back out, so it's interrupted like any other.
+    func forgetTheTurnBeingAnswered() {
+        interrupt()
     }
 
     func stop() {

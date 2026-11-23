@@ -227,6 +227,22 @@ enum BrainCLIRunner {
 }
 
 extension BrainCLIRunner {
+    /// Takes the turn that asked `turnText` out of a conversation's memory (its answer too, if it got one), when it's the
+    /// newest there. A call does this to a turn it's about to ask again with more of the owner's words.
+    @MainActor
+    static func forgetTurn(turnText: String, session: String, model: BrainModel) {
+        if model.provider == .api {
+            let before = APIChat.History.load(session)
+            let after = ForgottenTurn.dropping(turnText: turnText, from: before, role: { $0.role }, text: { $0.text })
+            if after.count != before.count { APIChat.History.save(after, session: session) }
+            return
+        }
+        guard var history = sessionHistories[session], let last = history.last,
+              last.user.trimmingCharacters(in: .whitespacesAndNewlines) == turnText.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        history.removeLast()
+        sessionHistories[session] = history
+    }
+
     /// One turn on the owner's API key: same events as a CLI, so the rest of Clicky doesn't change. The screenshots go
     /// with the user's words, and the model answers with the same tags.
     fileprivate static func runAPITurn(model: BrainModel, systemPrompt: String, contentBlocks: [ClaudeContentBlock], persistentSessionIdentifier: String?,

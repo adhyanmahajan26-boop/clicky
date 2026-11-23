@@ -146,7 +146,10 @@ enum CallPrompt {
         let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id || BotsStore.isCallRecord($0) }.suffix(200)
             .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text, isCallRecord: BotsStore.isCallRecord($0)) }
         return CallPromptText.otherBot(name: bot.name, instructions: bot.personaHead, owner: owner,
-                                       languageRule: languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language),
+                                       // Hindi in Roman letters, whatever the voice: a bot on a small local model wrote
+                                       // garbled Devanagari its English voice couldn't read (Air, 24 Nov), while its Hinglish
+                                       // in Roman letters came out clear.
+                                       languageRule: languageRule(owner: owner, usesSarvamVoice: false, language: language),
                                        reportingLines: BotPrompts.reportingLines(for: bot, store: store),
                                        memorySection: BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath),
                                        recentChat: Array(recent), carriedOverLimit: carriedOverCharacters)
@@ -672,7 +675,7 @@ final class TheoCallSession: ObservableObject {
         lastWordsAt = Date()
         lastPartialWordsAt = lastWordsAt
         guard let index = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) else { return }
-        lines[index].text = lines[index].id == heldTurnLineID && !heldTurnWords.isEmpty ? heldTurnWords + " " + text : text
+        lines[index].text = lines[index].id == heldTurnLineID && !heldTurnWords.isEmpty ? CallHeldWords.adding(text, to: heldTurnWords) : text
     }
 
     /// The ears give their words after about half a second of quiet, far less than people pause mid-thought. The words are
@@ -702,8 +705,10 @@ final class TheoCallSession: ObservableObject {
         // A server's own voice detection can beat the gate. Its default wait is half a second of quiet.
         if isOwnerSpeaking, speechEndedAt == nil, !words.isEmpty { speechEndedAt = Date().addingTimeInterval(-0.5) }
         // The ears handing over words already taken for the turn being answered: a repeat, not more from the owner.
-        let isRepeat = !words.isEmpty && lastReleasedTurn != nil && heldTurnWords.isEmpty
-            && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn)
+        // The same goes for a stretch of speech the ears hand over again while a turn is held (`CallHeldWords`).
+        let isRepeat = !words.isEmpty && (
+            (lastReleasedTurn != nil && heldTurnWords.isEmpty && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn))
+            || (!heldTurnWords.isEmpty && CallHeldWords.adding(words, to: heldTurnWords) == heldTurnWords.trimmingCharacters(in: .whitespacesAndNewlines)))
         if isRepeat { print("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
         if !words.isEmpty, !isRepeat, replyInProgress || audio.isVoicePlaying { ownerWordsCameDuringTheAnswer() }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
@@ -721,7 +726,7 @@ final class TheoCallSession: ObservableObject {
             return
         }
         lastWordsAt = Date()
-        heldTurnWords = heldTurnWords.isEmpty ? words : heldTurnWords + " " + words
+        heldTurnWords = CallHeldWords.adding(words, to: heldTurnWords)
         if let liveIndex {
             lines[liveIndex].text = heldTurnWords
             lines[liveIndex].isLive = false
@@ -758,6 +763,9 @@ final class TheoCallSession: ObservableObject {
         let answerWasHeard = turnHasSounded
         let wasAnsweringATurn = replyInProgress
         print("📞 Call: the owner spoke during the answer (answer heard yet: \(answerWasHeard), still writing: \(wasAnsweringATurn))")
+        // The turn is asked again below with all the owner's words, so its first try leaves the conversation's memory.
+        // Kept, the model saw the same question twice with an answer the owner never heard, and lost the thread.
+        if wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, lastReleasedTurn != nil { brain?.forgetTheTurnBeingAnswered() }
         bargeIn()
         guard wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, let lastReleasedTurn else { return }
         self.lastReleasedTurn = nil
@@ -878,8 +886,8 @@ final class TheoCallSession: ObservableObject {
 
     /// Vello's name as the ears hear it: its own name and the usual mishearings.
     private var assistantNames: [String] {
-        let callBotName = (bot?.name ?? store.primary?.name ?? "vello").lowercased()
-        return CallListenMode.defaultAssistantNames + [callBotName]
+        // Another bot also answers to a word of its name on its own ("Observer"), as people call it.
+        CallListenMode.names(forBotNamed: bot?.name ?? store.primary?.name)
     }
 
     func setListenMode(_ on: Bool) {

@@ -191,6 +191,22 @@ public enum CallListenMode {
         return words.prefix(3).contains(where: names.contains) || words.suffix(2).contains(where: names.contains)
     }
 
+    /// The names a call answers to in Listen mode. Vello's own call: its usual names. Another bot's call: those too, plus
+    /// its whole name and each word of it the ears can catch on its own ("Observer" for "Super Neutral Observer"). A
+    /// short word or an everyday one ("super", "the") is left out, since people say it all the time.
+    public static func names(forBotNamed botName: String?) -> [String] {
+        var names = defaultAssistantNames
+        guard let botName else { return names }
+        let whole = botName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !whole.isEmpty else { return names }
+        names.append(whole)
+        let everydayWords: Set<String> = ["super", "the", "bot", "mister", "miss", "doctor", "agent", "assistant", "helper", "buddy", "hello"]
+        for word in CallTurnEnd.simplifiedWords(whole) where word.count >= 4 && !everydayWords.contains(word) && !names.contains(word) {
+            names.append(word)
+        }
+        return names
+    }
+
     /// Whether something heard in Listen mode is meant for Vello: its name near the start or the end ("Vello, …",
     /// "hey Vello …", "… right, Vello?"), or a phrase asking it to speak up.
     public static func isAddressed(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
@@ -350,6 +366,47 @@ public enum CallCutIn {
     /// `restartsSoFar`: how many times this answer was already started over.
     public static func restartsTheAnswer(restartsSoFar: Int) -> Bool {
         restartsSoFar < mostRestartsPerAnswer
+    }
+}
+
+/// Words the ears hand over for a turn that's still being held. Sarvam's socket can hand over the same stretch of speech
+/// more than once (a partial that turned final, then the final again after a reconnect), and joining them as they came
+/// made turns like "देखो राम भाई मैं कह रहा था तुम्हें सपोर्ट" three times over (Air, 24 Nov), which the model then
+/// answered as nonsense.
+public enum CallHeldWords {
+    /// `held` with `heard` added: nothing when `heard` is already in it word for word, only the new end when `heard`
+    /// starts with what `held` ends with, else the whole of it.
+    public static func adding(_ heard: String, to held: String) -> String {
+        let heardText = heard.trimmingCharacters(in: .whitespacesAndNewlines)
+        let heldText = held.trimmingCharacters(in: .whitespacesAndNewlines)
+        if heardText.isEmpty { return heldText }
+        if heldText.isEmpty { return heardText }
+        let heardWords = heardText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        let heldWords = heldText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        let heardKeys = heardWords.map(comparisonKey)
+        let heldKeys = heldWords.map(comparisonKey)
+        // Said already: the whole stretch is somewhere in what's held.
+        if heardKeys.count <= heldKeys.count {
+            for start in 0...(heldKeys.count - heardKeys.count) where Array(heldKeys[start..<(start + heardKeys.count)]) == heardKeys {
+                return heldText
+            }
+        }
+        // Carries on from where the held words end: only the rest is new.
+        let longestOverlap = min(heldKeys.count, heardKeys.count - 1)
+        if longestOverlap > 0 {
+            for overlap in stride(from: longestOverlap, through: 1, by: -1)
+            where Array(heldKeys.suffix(overlap)) == Array(heardKeys.prefix(overlap)) {
+                // One shared word is often chance ("the", "है"); two or more is the same speech again.
+                guard overlap >= 2 else { break }
+                return heldText + " " + heardWords.dropFirst(overlap).joined(separator: " ")
+            }
+        }
+        return heldText + " " + heardText
+    }
+
+    /// A word for comparing: lower case, without the punctuation around it.
+    static func comparisonKey(_ word: String) -> String {
+        CallTurnEnd.simplifiedWords(word).first ?? word.lowercased()
     }
 }
 
