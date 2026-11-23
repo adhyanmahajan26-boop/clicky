@@ -28,7 +28,11 @@ public enum CallPromptText {
     public static func otherBotHowTo(owner: String) -> String {
         "On this call you only talk. You can't run anything, use your apps, tools or files, or hand work to anyone from here, " +
             "and nothing you write in square brackets reaches anyone, so don't write tags or control lines. " +
-            "If \(owner) asks for something that needs your tools or apps, say so in a sentence: they can ask you in your text chat, where this whole call will be saved."
+            "If \(owner) asks for something that needs your tools or apps, say so in a sentence: they can ask you in your text chat, where this whole call will be saved.\n" +
+            // Air, 24 Nov: other people's talk reached a bot on a small local model mixed into the owner's words, and it
+            // answered the jumble with nonsense.
+            "Other people may be talking near \(owner), and some of their words can end up in what you're given. Keep track of the main topic and who said what, " +
+            "answer what \(owner) asked in complete sentences, and if what you were given doesn't make sense, say in one short sentence that you didn't catch it."
     }
 
     /// One line of a bot's text chat before the call.
