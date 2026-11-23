@@ -298,8 +298,17 @@ final class ClaudiaControlInbox {
             if let model = command["model"] as? String, !model.isEmpty { bot.model = model; bot.effort = nil }
             if let apps = command["apps"] as? [String] { bot.apps = apps }
             if let instructions = command["instructions"] as? String, !instructions.isEmpty { bot.instructions = instructions }
+            // "sarvam:<speaker>" or "apple:<voice id>"; "" goes back to the usual call voice.
+            if let callVoice = command["callVoice"] as? String { bot.callVoice = callVoice.isEmpty ? nil : callVoice }
+            // "instructions" or "nature": makes the bot's own file the way its settings' Open button does, without opening it.
+            if let makeFile = command["makeFile"] as? String {
+                BotOwnFileStore.makeIfMissing(makeFile == "nature" ? .nature : .instructions, bot: bot)
+            }
             store.save(bot)
-            reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary], error: nil)
+            reply(identifier, ok: true, result: ["id": id, "enabled": bot.isOn, "authority": bot.authorityLevel, "primary": bot.primary,
+                                                 "callVoice": bot.callVoice ?? "",
+                                                 "instructionsFile": BotOwnFileStore.file(.instructions, botID: id).path,
+                                                 "natureFile": BotOwnFileStore.file(.nature, botID: id).path], error: nil)
         case "routineAdd":
             // {name, target: bot id, when: "daily 08:00", do}
             let store = BotsStore.shared

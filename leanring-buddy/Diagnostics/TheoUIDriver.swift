@@ -687,8 +687,20 @@ extension TheoUIDriver {
             respond(true, ["wasPlaying": wasPlaying, "playing": manager.speechOutputClient.isPlaying, "stopSeconds": Date().timeIntervalSince(start)], nil)
         case "uiCallStart":
             // `openingWords`: as "hey vello, …" starts a call, with what was said after the name as the first turn.
-            TheoCallController.start(activates: false, openingWords: command["openingWords"] as? String ?? "")
-            settle { respond(true, ["window": TheoCallController.windowNumber as Any? ?? NSNull()], nil) }
+            // `bot`: a bot's id or name for a call with that bot (none: Vello's own).
+            var callBotID: String?
+            if let wanted = command["bot"] as? String, !wanted.isEmpty {
+                guard let found = BotsStore.shared.bot(wanted) ?? BotsStore.shared.bots.first(where: { $0.name.lowercased() == wanted.lowercased() }) else {
+                    respond(false, nil, "No bot \(wanted).")
+                    return true
+                }
+                callBotID = found.id
+            }
+            TheoCallController.start(botID: callBotID, activates: false, openingWords: command["openingWords"] as? String ?? "")
+            settle {
+                respond(true, ["window": TheoCallController.windowNumber as Any? ?? NSNull(), "title": TheoCallController.windowTitle ?? "",
+                               "botID": TheoCallController.session?.botID ?? ""], nil)
+            }
         case "uiCallStatus":
             respond(true, TheoCallController.session?.report() ?? [:], nil)
         case "uiCallMute":

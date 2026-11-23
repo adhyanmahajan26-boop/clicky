@@ -43,6 +43,13 @@ struct APIChatMessage: Codable, Equatable {
 
 enum APIChat {
     static let maxOutputTokens = 8192
+    /// What a call or a one-turn conversation asks an OpenAI-style server for: a thinking model (Qwen 3.x and the like)
+    /// spends thousands of tokens thinking before the answer, and a server's own default can stop it before it answers.
+    static let roomForThinkingTokens = 16_384
+
+    /// The field an OpenAI-style request carries its output limit in: OpenAI itself wants `max_completion_tokens` for its
+    /// newer models, every compatible server takes `max_tokens`.
+    static func outputLimitField(providerID: String) -> String { providerID == "openai" ? "max_completion_tokens" : "max_tokens" }
 
     /// How a provider takes tools, or nil when it can't chat here at all.
     static func wireStyle(for kind: ProviderInfo.Protocol_) -> APIChatWireStyle? {
@@ -59,7 +66,7 @@ enum APIChat {
     /// `fast`: Anthropic's fast mode, sent only for a model that takes it (ClickyCore `ClaudeFastMode`).
     static func request(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
                         tools: [APIChatToolDefinition] = [], toolRounds: [APIChatToolRound] = [], mayCallTools: Bool = true,
-                        fast: Bool = false) -> URLRequest? {
+                        fast: Bool = false, maxOutputTokens openAIOutputLimit: Int? = nil) -> URLRequest? {
         guard let style = wireStyle(for: provider.kind) else { return nil }
         let roundMessages = toolRounds.flatMap { APIChatToolWire.messages(for: $0, style: style) }
         switch style {
@@ -85,6 +92,7 @@ enum APIChat {
             all += messages.map(openAIMessage)
             all += roundMessages
             var body: [String: Any] = ["model": model, "stream": true, "messages": all]
+            if let openAIOutputLimit { body[outputLimitField(providerID: provider.id)] = openAIOutputLimit }
             addTools(tools, mayCallTools: mayCallTools, style: style, to: &body)
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
             return request
@@ -154,7 +162,8 @@ enum APIChat {
     /// Runs one turn and returns the whole answer; `onText` gets the answer so far as it grows. With a `toolbox`, the model may
     /// call its tools: each round's calls are run and sent back, until it answers without asking for more (or the round cap).
     static func stream(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
-                       toolbox: APIChatToolbox? = nil, fast: Bool = false, onText: @MainActor (String) -> Void) async throws -> String {
+                       toolbox: APIChatToolbox? = nil, fast: Bool = false, maxOutputTokens: Int? = nil,
+                       onText: @MainActor (String) -> Void) async throws -> String {
         guard key != nil || provider.keyless || provider.group == .custom else { throw APIChatError.noKey(provider.label) }
         guard request(provider: provider, key: key, model: model, system: system, messages: messages) != nil else {
             throw APIChatError.rejected("\(provider.label) can't be used for chat.")
@@ -165,7 +174,7 @@ enum APIChat {
         let outcome: APIChatToolLoopOutcome
         do {
             outcome = try await runToolLoop(provider: provider, key: key, model: model, system: system, messages: messages,
-                                            tools: offeredTools, toolbox: toolbox, fast: fast, onText: onText)
+                                            tools: offeredTools, toolbox: toolbox, fast: fast, maxOutputTokens: maxOutputTokens, onText: onText)
         } catch APIChatError.toolsRefused(let refusal, let message) {
             // Today's words-only turn, and the chat says why: once for a model that has no tools at all, every time for a one-off.
             switch refusal {
@@ -177,7 +186,7 @@ enum APIChat {
                 wordsOnlyNote = "_(\(provider.label) turned down this bot's tools this time (\(message)), so it answered in words only.)_"
             }
             outcome = try await runToolLoop(provider: provider, key: key, model: model, system: system, messages: messages,
-                                            tools: [], toolbox: nil, fast: fast, onText: onText)
+                                            tools: [], toolbox: nil, fast: fast, maxOutputTokens: maxOutputTokens, onText: onText)
         }
         var answer = outcome.answer
         guard !answer.isEmpty else { return answer }
@@ -199,12 +208,12 @@ enum APIChat {
     /// The tool loop over real requests. A refusal because of the tools only counts on the first request: after that the provider
     /// has already taken them.
     private static func runToolLoop(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
-                                    tools: [APIChatToolDefinition], toolbox: APIChatToolbox?, fast: Bool = false,
+                                    tools: [APIChatToolDefinition], toolbox: APIChatToolbox?, fast: Bool = false, maxOutputTokens: Int? = nil,
                                     onText: @MainActor (String) -> Void) async throws -> APIChatToolLoopOutcome {
         try await APIChatToolLoop.run(
             sendRound: { rounds, mayCallTools, textBeforeThisRound in
                 try await streamRound(provider: provider, key: key, model: model, system: system, messages: messages, tools: tools,
-                                      toolRounds: rounds, mayCallTools: mayCallTools, fast: fast) { roundText in
+                                      toolRounds: rounds, mayCallTools: mayCallTools, fast: fast, maxOutputTokens: maxOutputTokens) { roundText in
                     onText(APIChatToolWire.joinedAnswer(textBeforeThisRound, roundText))
                 }
             },
@@ -217,11 +226,12 @@ enum APIChat {
     /// One request: streams its words to `onRoundText` and collects the tool calls it asks for.
     private static func streamRound(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
                                     tools: [APIChatToolDefinition], toolRounds: [APIChatToolRound], mayCallTools: Bool, fast: Bool = false,
-                                    onRoundText: @MainActor (String) -> Void) async throws -> APIChatRoundReply {
+                                    maxOutputTokens: Int? = nil, onRoundText: @MainActor (String) -> Void) async throws -> APIChatRoundReply {
         let sendsFast = fast && provider.kind == .anthropic && ClaudeFastMode.supports(model: model)
         guard let style = wireStyle(for: provider.kind),
               let request = request(provider: provider, key: key, model: model, system: system, messages: messages,
-                                    tools: tools, toolRounds: toolRounds, mayCallTools: mayCallTools, fast: sendsFast) else {
+                                    tools: tools, toolRounds: toolRounds, mayCallTools: mayCallTools, fast: sendsFast,
+                                    maxOutputTokens: maxOutputTokens) else {
             throw APIChatError.rejected("\(provider.label) can't be used for chat.")
         }
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -229,7 +239,8 @@ enum APIChat {
         // Fast mode has its own rate limit and isn't on every account: when it's turned down, the same round goes again at standard speed.
         if sendsFast, [400, 403, 429, 529].contains(status) {
             return try await streamRound(provider: provider, key: key, model: model, system: system, messages: messages, tools: tools,
-                                         toolRounds: toolRounds, mayCallTools: mayCallTools, fast: false, onRoundText: onRoundText)
+                                         toolRounds: toolRounds, mayCallTools: mayCallTools, fast: false, maxOutputTokens: maxOutputTokens,
+                                         onRoundText: onRoundText)
         }
         if !(200..<300).contains(status) {
             var body = Data()
@@ -246,6 +257,12 @@ enum APIChat {
         var stop: String?
         var notStreamed = ""
         var toolCallCollector = APIChatToolCallCollector()
+        // A thinking model's reasoning is never the answer (ClickyCore `ThinkingText`): a server that separates it sends it
+        // as reasoning_content, which isn't read as text, and a <think> block in the text itself is taken out. A model that
+        // may start mid-think is held until it's sure, unless the server is seen separating its reasoning.
+        var serverSeparatesReasoning = false
+        let mayStartMidThink = ThinkingText.mayThinkWithoutOpeningTag(model: model)
+        var shownSoFar = ""
         for try await line in bytes.lines {
             try Task.checkCancellation()
             if !line.hasPrefix("data:"), !line.hasPrefix("event:"), notStreamed.count < 4000 { notStreamed += line }
@@ -253,10 +270,14 @@ enum APIChat {
             if let error = parsed.error { throw APIChatError.rejected("\(provider.label): \(error)") }
             stop = stopReason(line: line) ?? stop
             if !tools.isEmpty { toolCallCollector.take(line: line, style: style) }
+            if !serverSeparatesReasoning, ThinkingText.lineCarriesReasoning(line) { serverSeparatesReasoning = true }
             if let piece = parsed.text, !piece.isEmpty {
                 text += piece
-                let soFar = text
-                await onRoundText(soFar)
+                let shown = ThinkingText.visible(text, isComplete: false, holdsUntilSure: mayStartMidThink && !serverSeparatesReasoning)
+                if shown != shownSoFar {
+                    shownSoFar = shown
+                    await onRoundText(shown)
+                }
             }
             if parsed.done {
                 ended = true
@@ -269,7 +290,10 @@ enum APIChat {
            let error = errorMessage(in: object) {
             throw APIChatError.rejected("\(provider.label): \(error)")
         }
-        return APIChatRoundReply(text: text, toolCalls: toolCalls, stopReason: stop, endedCleanly: ended)
+        let answer = ThinkingText.visible(text, isComplete: true, holdsUntilSure: mayStartMidThink && !serverSeparatesReasoning)
+        // A held reply shows at the end. Only ever more words: what was already passed on is never taken back mid-turn.
+        if answer.count > shownSoFar.count, answer.hasPrefix(shownSoFar) { await onRoundText(answer) }
+        return APIChatRoundReply(text: answer, toolCalls: toolCalls, stopReason: stop, endedCleanly: ended)
     }
 
     /// Models that said they can't take tools, so they're asked in words only from then on (`v4.apiChat.modelsWithoutTools`,

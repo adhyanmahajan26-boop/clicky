@@ -57,6 +57,8 @@ struct NativeBot: Codable, Identifiable, Equatable {
     var look: CrewLook?
     /// Its last run or reply that failed, until the owner opens its chat, retries, or gives it new work (BotCrew).
     var lastFailure: BotFailureRecord?
+    /// Its own voice on calls: "sarvam:<speaker>" or "apple:<voice id>" (ClickyCore `CallVoiceChoice`). Nil: the usual call voice.
+    var callVoice: String?
 
     var isOn: Bool { enabled ?? true }
     var crewLook: CrewLook { look ?? .standard(id: id, name: name, isPrimary: primary) }
@@ -495,7 +497,17 @@ final class BotsStore: ObservableObject {
         let old = self.bot(bot.id)
         if let index = bots.firstIndex(where: { $0.id == bot.id }) { bots[index] = bot } else { bots.append(bot) }
         writeBots()
+        // With an instructions file, editing the field writes the file: the file is what every prompt reads.
+        if let old, old.instructions != bot.instructions { BotOwnFileStore.instructionsFieldChanged(botID: bot.id, to: bot.instructions) }
         if let old, old.provider != bot.provider { clearEngineSessions(of: bot.id) }
+    }
+
+    /// The settings field shows what the instructions file says, when there is one (the owner may have edited it elsewhere).
+    func takeInstructionsFromFile(_ botID: String) {
+        guard var bot = bot(botID), bot.id != Self.clickyID, let fromFile = BotOwnFileStore.instructionsForTheField(botID: botID),
+              fromFile != bot.instructions.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        bot.instructions = fromFile
+        save(bot)
     }
 
     /// A session belongs to one engine: the new engine starts the conversation fresh (the messages stay).
@@ -2123,7 +2135,7 @@ enum BotPrompts {
     }
 
     static func persona(bot: NativeBot, team: [NativeBot]) -> String {
-        var parts = [bot.instructions, chatStyle, askingStyle, HarnessGuide.pointer(path: BotMemory.guideFile.path)]
+        var parts = [bot.personaHead, chatStyle, askingStyle, HarnessGuide.pointer(path: BotMemory.guideFile.path)]
         let apps = BotConnectors.known.filter { bot.apps.contains($0.id) }
         if !apps.isEmpty {
             parts.append("Apps you can use: \(apps.map(\.name).joined(separator: ", ")). If one isn't available, " +
@@ -2226,7 +2238,7 @@ enum BotPrompts {
         if firstTime {
             // Claude has the persona as its system prompt already; other engines get it here.
             intro.append("You are \(bot.name) in \(ownerName)'s \"\(group.name)\" group chat. " +
-                         (bot.provider == "claude" || bot.provider.hasPrefix("api:") ? bot.instructions : persona(bot: bot, team: team)))
+                         (bot.provider == "claude" || bot.provider.hasPrefix("api:") ? bot.personaHead : persona(bot: bot, team: team)))
             if group.headID == bot.id && !bot.primary {
                 // Theo's CEO instructions already say this; any other head gets it here.
                 intro.append("You lead this group. When \(ownerName) asks to build something, end your final answer with a line \"Project: <short name>\" and the prompt for the coding agent in a ```prompt fenced block.")
@@ -2909,12 +2921,13 @@ extension BotsStore {
         }
     }
 
-    /// A finished voice call goes into the primary bot's chat, whole, so the chat knows what was said.
-    func recordCall(_ lines: [(isOwner: Bool, text: String)], startedAt: Date) {
-        guard let ceo = primary, !lines.isEmpty else { return }
+    /// A finished voice call goes into the chat of the bot it was with (the primary bot's, for a call with Vello), whole,
+    /// so the chat knows what was said.
+    func recordCall(_ lines: [(isOwner: Bool, text: String)], startedAt: Date, botID: String? = nil) {
+        guard let caller = botID.flatMap({ bot($0) }) ?? primary, !lines.isEmpty else { return }
         let minutes = max(1, Int(Date().timeIntervalSince(startedAt) / 60 + 0.5))
-        let transcript = lines.map { "**\($0.isOwner ? OwnerName.startingSentence(BotPrompts.ownerName) : ceo.name):** \($0.text)" }.joined(separator: "\n\n")
-        post(BotChatMessage(author: "routine", text: "\(Self.callMark) Call with \(ceo.name), \(minutes) min\n\n\(transcript)"), to: ceo.id)
+        let transcript = lines.map { "**\($0.isOwner ? OwnerName.startingSentence(BotPrompts.ownerName) : caller.name):** \($0.text)" }.joined(separator: "\n\n")
+        post(BotChatMessage(author: "routine", text: "\(Self.callMark) Call with \(caller.name), \(minutes) min\n\n\(transcript)"), to: caller.id)
     }
 
     fileprivate static let callMark = "📞"

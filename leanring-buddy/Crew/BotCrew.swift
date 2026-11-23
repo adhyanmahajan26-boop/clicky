@@ -114,7 +114,7 @@ extension BotsStore {
             || signedOutEngine(of: bot) != nil
         facts.hasUnseenFailure = bot.lastFailure != nil
         facts.isTyping = state == .typing
-        if bot.primary, let call = TheoCallController.session, TheoCallController.isActive {
+        if let call = TheoCallController.session, TheoCallController.isActive, call.botID == bot.id {
             facts.isListening = call.state == .listening || call.state == .userSpeaking
             facts.isTyping = facts.isTyping || call.state == .speaking
         }

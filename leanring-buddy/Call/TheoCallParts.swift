@@ -112,10 +112,14 @@ final class OneTurnConversation: ConversationBrain {
         currentTask = Task { @MainActor [weak self] in
             let result: Result<String, Error>
             do {
+                // Room for a thinking model to think before it answers (an OpenAI-style server's own default can stop it first).
                 let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)],
                                                                 persistentSessionIdentifier: sessionIdentifier,
-                                                                onTextChunk: { soFar in
+                                                                maxOutputTokens: APIChat.roomForThinkingTokens,
+                                                                onTextChunk: { rawSoFar in
                     guard let self, !self.currentTurnWasInterrupted else { return }
+                    // Never the thinking: APIChat already takes it out, and this catches any brain that writes it inline.
+                    let soFar = ThinkingText.visible(rawSoFar, isComplete: false)
                     // The runner hands over the whole answer so far: pass on only what's new.
                     let previous = self.currentTurnText
                     guard soFar.unicodeScalars.count > previous.unicodeScalars.count, soFar.hasPrefix(previous) else { return }
@@ -123,7 +127,7 @@ final class OneTurnConversation: ConversationBrain {
                     self.currentTurnText = soFar
                     turn.onDelta(delta)
                 })
-                result = .success(finished.text)
+                result = .success(ThinkingText.visible(finished.text, isComplete: true))
             } catch {
                 result = .failure(error)
             }
@@ -761,9 +765,18 @@ final class AppleCallVoice: CallVoice {
     private var turnEnded = false
     private var gotAudio = false
     private var generation = 0
+    /// The bot's own call voice (an installed voice's id), when it has one that's on this Mac.
+    let ownVoice: AVSpeechSynthesisVoice?
 
-    init(audio: CallAudio) {
+    init(audio: CallAudio, voiceIdentifier: String? = nil) {
         self.audio = audio
+        ownVoice = voiceIdentifier.flatMap { AVSpeechSynthesisVoice(identifier: $0) }
+    }
+
+    /// The voice for this text: the bot's own unless the text is Devanagari it can't read, else the usual choice.
+    private func voice(for text: String) -> AVSpeechSynthesisVoice? {
+        if let ownVoice, !(DictationCleanup.containsDevanagari(text) && !ownVoice.language.hasPrefix("hi")) { return ownVoice }
+        return Self.voice(for: text)
     }
 
     /// A voice takes a second or more to load the first time it's used, so it loads now, before anyone is waiting.
@@ -773,7 +786,7 @@ final class AppleCallVoice: CallVoice {
     }
 
     private func warm(_ target: AVSpeechSynthesizer) {
-        guard let voice = Self.voice(for: "Hello") else { return }
+        guard let voice = voice(for: "Hello") else { return }
         let line = AVSpeechUtterance(string: "Hi.")
         line.voice = voice
         target.write(line) { _ in }
@@ -794,7 +807,7 @@ final class AppleCallVoice: CallVoice {
         rendering = true
         let text = queue.removeFirst()
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = Self.voice(for: text)
+        utterance.voice = voice(for: text)
         let turn = generation
         synthesizer.write(utterance) { [weak self] output in
             guard let buffer = output as? AVAudioPCMBuffer else { return }
