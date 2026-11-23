@@ -204,7 +204,15 @@ enum BrainCLIRunner {
                 await MainActor.run {
                     var history = sessionHistories[persistentSessionIdentifier] ?? []
                     history.append((userText, responseText))
-                    sessionHistories[persistentSessionIdentifier] = Array(history.suffix(8))
+                    // The newest turns that fit in about 40,000 words, not just the last eight: these agents hold far more.
+                    var keptCharacters = 0
+                    var firstKept = history.count
+                    for index in stride(from: history.count - 1, through: 0, by: -1) {
+                        keptCharacters += history[index].user.count + history[index].assistant.count
+                        if keptCharacters > ContextBudget.longestLiveHistoryCharacters / 2 && firstKept < history.count { break }
+                        firstKept = index
+                    }
+                    sessionHistories[persistentSessionIdentifier] = Array(history[firstKept...])
                     if sessionHistories.count > 20 { sessionHistories.removeValue(forKey: sessionHistories.keys.first!) }
                 }
             }
@@ -247,8 +255,12 @@ extension BrainCLIRunner {
         messages.append(APIChatMessage(role: "user", text: words.joined(separator: "\n\n"), imagesJPEGBase64: images, imageTypes: imageTypes))
         await onProcessReady?(ClaudeProcessOrigin(spawnDate: Date(), usedStandbyProcess: false, standbyOutcome: nil, retriedAfterBrokenPipe: false))
         await onStreamEvent?(.systemInit(model: model.setting))
+        // As much of the conversation as the model holds; what no longer fits is in its summary (`History.compactLater`).
+        let room = await APIChat.History.roomCharacters(provider: provider, model: parts[1], systemCharacters: systemPrompt.count,
+                                                        wantedAnswerTokens: maxOutputTokens ?? APIChat.maxOutputTokens)
         let answerBox = StreamedAnswer()
-        let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt, messages: messages,
+        let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt,
+                                            messages: APIChat.History.fitting(messages, roomCharacters: room),
                                             maxOutputTokens: maxOutputTokens) { soFar in
             if answerBox.text.isEmpty { onStreamEvent?(.messageStart(id: UUID().uuidString)) }
             // By scalars, not characters: a Hindi vowel sign arriving on its own chunk joins the character before it.
@@ -262,6 +274,8 @@ extension BrainCLIRunner {
         if let persistentSessionIdentifier {
             messages.append(APIChatMessage(role: "assistant", text: text))
             APIChat.History.save(messages, session: persistentSessionIdentifier)
+            await APIChat.History.compactLater(session: persistentSessionIdentifier, provider: provider, key: ProviderKeychain.get(parts[0]),
+                                               model: parts[1], roomCharacters: room)
         }
         await onStreamEvent?(.result(text: text, isError: false, subtype: "success"))
         return ClaudeTurnResult(text: text, resolvedModelIdentifier: model.setting, usage: [:], usageSummary: nil, duration: Date().timeIntervalSince(startTime))
