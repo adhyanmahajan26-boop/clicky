@@ -291,21 +291,32 @@ final class GroundingCoordinator {
         var coldSnapshot = try await makeFullSnapshot(awaitsOCR: false)
         let capturesForOCR = coldSnapshot.screenCaptures
         let coveredRectsByDisplay = coveredRectsCGByDisplay(axElements: coldSnapshot.axElements, captures: capturesForOCR, windowStack: coldSnapshot.windowStack)
-        let pendingOCRTask = Task<[OCRLine], Never> {
-            await withTaskGroup(of: [OCRLine].self) { taskGroup in
+        let ocrByDisplayTask = Task<[CGDirectDisplayID: [OCRLine]], Never> {
+            await withTaskGroup(of: (CGDirectDisplayID, [OCRLine]).self) { taskGroup in
                 for screenCapture in capturesForOCR {
                     let coveredRectsCG = coveredRectsByDisplay[screenCapture.displayID] ?? []
+                    let displayID = screenCapture.displayID
                     taskGroup.addTask {
                         let grayImage = GrayImage(cgImage: screenCapture.nativeImage)
-                        return await Self.recognizeUncoveredLines(in: screenCapture, coveredRectsCG: coveredRectsCG, grayImage: grayImage, level: .accurate).lines
+                        let lines = await Self.recognizeUncoveredLines(in: screenCapture, coveredRectsCG: coveredRectsCG, grayImage: grayImage, level: .accurate).lines
+                        return (displayID, lines)
                     }
                 }
-                var allLines: [OCRLine] = []
-                for await lines in taskGroup { allLines += lines }
-                return allLines
+                var linesByDisplay: [CGDirectDisplayID: [OCRLine]] = [:]
+                for await (displayID, lines) in taskGroup { linesByDisplay[displayID] = lines }
+                return linesByDisplay
             }
         }
         coldSnapshot.ocrLinesByDisplay = [:]
+        // The window in front has next to nothing in AX: without OCR the list would show nothing of it, so wait for it.
+        if ColdPathOCRWait.shouldWait(axElements: coldSnapshot.axElements, windowStack: coldSnapshot.windowStack, cursorCG: cursorCG),
+           let linesByDisplay = await awaitValue(of: ocrByDisplayTask, timeoutNanoseconds: UInt64(ColdPathOCRWait.longestWaitSeconds * 1e9)) {
+            coldSnapshot.ocrLinesByDisplay = linesByDisplay
+            lastTurnStageMilliseconds["coldOCRWait"] = (Date().timeIntervalSince(preparationStart) * 1000).rounded()
+            return await makeGroundedTurn(from: coldSnapshot, cursorCG: cursorCG, isWarm: false, isBadged: isBadged,
+                                          pendingOCRTask: nil, preparationStart: preparationStart, keyUpDate: keyUpDate)
+        }
+        let pendingOCRTask = Task<[OCRLine], Never> { await ocrByDisplayTask.value.values.flatMap { $0 } }
         return await makeGroundedTurn(from: coldSnapshot, cursorCG: cursorCG, isWarm: false, isBadged: isBadged,
                                       pendingOCRTask: pendingOCRTask, preparationStart: preparationStart, keyUpDate: keyUpDate)
     }
@@ -351,7 +362,8 @@ final class GroundingCoordinator {
             }
         }
         var analysisTask: Task<[ScreenAnalysis], Never>? = awaitsOCR && trustedProcessIdentifiers.isEmpty ? startAnalysis(coveredRectsByDisplay: [:]) : nil
-        let axElements = collectAXElements(from: axWalks)
+        var axElements = collectAXElements(from: axWalks)
+        axElements += ownWindowElements(windowStack: windowStack)
         if let enhancedUINote { lastAXWalkStats.insert(enhancedUINote, at: 0) }
         if awaitsOCR && analysisTask == nil {
             analysisTask = startAnalysis(coveredRectsByDisplay: coveredRectsCGByDisplay(axElements: axElements, captures: screenCaptures,
@@ -427,12 +439,18 @@ final class GroundingCoordinator {
                 freshFrontElements += walkResult.elements
                 refreshedProcessIdentifiers.insert(walk.request.processIdentifier)
                 rememberFinishedWalk(walk, result: walkResult)
+                noteFrontWalkSize(walk, result: walkResult)
             } else {
                 walk.cancel()
             }
         }
         lastTurnStageMilliseconds["frontAXCached"] = Double(frontApplicationWalks.filter { $0.cachedElements != nil && $0.request.scope == .frontApplication }.count)
-        refreshedSnapshot.axElements = snapshot.axElements.filter { !refreshedProcessIdentifiers.contains($0.processIdentifier) } + freshFrontElements
+        // Vello's own windows are read again from the inside (no IPC, a few milliseconds).
+        let ownProcessIdentifier = getpid()
+        let freshOwnElements = ownWindowElements(windowStack: windowStack)
+        refreshedSnapshot.axElements = snapshot.axElements.filter {
+            !refreshedProcessIdentifiers.contains($0.processIdentifier) && $0.processIdentifier != ownProcessIdentifier
+        } + freshFrontElements + freshOwnElements
 
         lastTurnStageMilliseconds["frontAX"] = (Double(DispatchTime.now().uptimeNanoseconds - walksStart.uptimeNanoseconds) / 1e6).rounded()
         // OCR: only strips over changed blocks (40 ms budget).
@@ -697,11 +715,29 @@ final class GroundingCoordinator {
             let walkResult = walk.elements(waitingUntil: deadline)
             elements += walkResult.elements
             rememberFinishedWalk(walk, result: walkResult)
+            noteFrontWalkSize(walk, result: walkResult)
             let cachedNote = walk.cachedElements != nil ? " (cached)" : ""
             walkStats.append("\(walk.request.applicationName) \(walk.request.scope) \(walkResult.elements.count)\(cachedNote)\(walkResult.didFinish ? "" : " (deadline)")\(walkResult.error.map { " error \($0)" } ?? "")")
         }
         lastAXWalkStats = walkStats
         return elements
+    }
+
+    /// Vello's own main windows, read in-process (OwnWindowAccessibility):
+    /// the AX walks above never ask this process, so without this its
+    /// sidebar was only ever OCR.
+    private func ownWindowElements(windowStack: WindowStack) -> [GroundingElement] {
+        let ownWindows = OwnWindowAccessibility.elements(windowStack: windowStack)
+        if let note = ownWindows.note { lastAXWalkStats.append(note) }
+        return ownWindows.elements
+    }
+
+    /// How much a walk of the front app found, so an Electron app that's
+    /// already read fine isn't written to (and emptied) on the next ask.
+    private func noteFrontWalkSize(_ walk: PlannedAXWalk, result: (elements: [GroundingElement], didFinish: Bool, error: Error?)) {
+        guard walk.request.scope == .frontApplication, walk.request.isElectron, result.error == nil,
+              result.didFinish || result.elements.count >= EnhancedUserInterfacePolicy.WebContentActivation.elementsMeaningTheTreeIsThere else { return }
+        enhancedUserInterfaceController.recordFrontWalk(processIdentifier: walk.request.processIdentifier, elementCount: result.elements.count)
     }
 
     /// A finished live walk of app windows goes into the cache, and its app

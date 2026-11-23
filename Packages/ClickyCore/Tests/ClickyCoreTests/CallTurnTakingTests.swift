@@ -156,8 +156,36 @@ struct CallNearVoiceTests {
         let start = Date()
         nearVoice.learn(nearStretchLevelDecibels: -25, at: start)
         #expect(!nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(10)))
-        #expect(nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(15 + 3 * 7)))
+        #expect(nearVoice.isNear(levelDecibels: -38, now: start.addingTimeInterval(15 + 3 * 5)))
+        // Never wider than the widest margin, however long the quiet.
+        #expect(!nearVoice.isNear(levelDecibels: -45, now: start.addingTimeInterval(1000)))
         #expect(nearVoice.marginDecibels(now: start.addingTimeInterval(1000)) == CallNearVoice.widestMarginDecibels)
+    }
+
+    // Air, 23 Nov: every stretch let through was learned, so voices just inside the margin dragged the owner's level from
+    // -20 dB down to -32 dB over one call and the room got in.
+    @Test func voicesJustInsideTheMarginDoNotDragTheOwnersLevelDown() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        for level in [-20.0, -21, -19, -20] { nearVoice.learn(nearStretchLevelDecibels: level, at: start) }
+        // Someone a couple of metres away, let through again and again at 6 to 8 dB below the owner.
+        for index in 0..<30 {
+            let level = index.isMultiple(of: 2) ? -26.0 : -28.0
+            #expect(nearVoice.isNear(levelDecibels: level, now: start))
+            nearVoice.learn(nearStretchLevelDecibels: level, at: start)
+        }
+        #expect(nearVoice.ownerLevelDecibels == -20)
+        #expect(!nearVoice.isNear(levelDecibels: -31, now: start.addingTimeInterval(1)))
+    }
+
+    @Test func theOwnerTalkingABitLouderOrSofterStillTeachesTheLevel() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        nearVoice.learn(nearStretchLevelDecibels: -24, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -22, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -25, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -16, at: start)
+        #expect(nearVoice.recentNearLevels.count == 4)
     }
 
     @Test func theLoudLevelIgnoresTheGapsBetweenWords() {

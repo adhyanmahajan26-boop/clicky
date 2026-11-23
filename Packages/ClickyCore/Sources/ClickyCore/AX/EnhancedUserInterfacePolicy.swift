@@ -31,6 +31,28 @@ public enum EnhancedUserInterfacePolicy {
         return configuredBundleIdentifiers.contains(bundleIdentifier)
     }
 
+    /// One write to an app's accessibility switches.
+    public enum FlagWrite: Sendable, Equatable {
+        case enhancedUserInterface(Bool)
+        case manualAccessibility
+    }
+
+    /// The writes that switch an app's full tree on.
+    ///
+    /// Chromium only builds the page's tree when AXEnhancedUserInterface goes false → true. An Electron app is different:
+    /// AXManualAccessibility turns its tree on, and AXEnhancedUserInterface false tears the whole tree down while it
+    /// rebuilds. Writing false → true to the Claude app on an ask left that ask's walk with 0 elements (Air, 23 Nov:
+    /// every turn logged "enhancedUI at ask: set" had "Claude frontApplication 0", so Pointer Assistant couldn't see the
+    /// sidebar; the turns in between, with no write, had 97 to 194 elements and the sidebar). So an Electron app only ever
+    /// gets AXManualAccessibility, which is harmless to write again.
+    public static func flagWrites(isElectron: Bool) -> [FlagWrite] {
+        isElectron ? [.manualAccessibility] : [.enhancedUserInterface(false), .enhancedUserInterface(true)]
+    }
+
+    /// Whether an app that goes to the back gets AXEnhancedUserInterface false again. Never an Electron app: it never
+    /// got the flag, and false would tear its tree down for the next ask.
+    public static func switchesOffWhenLeaving(isElectron: Bool) -> Bool { !isElectron }
+
     public struct ActivatedApplication: Sendable, Equatable {
         public let processIdentifier: pid_t
         public let bundleIdentifier: String?
@@ -133,8 +155,32 @@ public enum EnhancedUserInterfacePolicy {
         public private(set) var failedCycles = 0
         public private(set) var backoffUntil: Date?
         public private(set) var lastReadyAt: Date?
+        /// When a walk of the app found its tree full of things (an Electron app whose window shows no AXWebArea, like
+        /// the Claude app, is read fine all the same). Nil again once a walk finds next to nothing.
+        public private(set) var treeHadContentAt: Date?
+
+        /// A walk with at least this many elements means the tree is there.
+        public static let elementsMeaningTheTreeIsThere = 20
+        /// A walk with fewer than this means it isn't (any more).
+        public static let elementsMeaningTheTreeIsGone = 3
 
         public init() {}
+
+        /// The tree was seen full of things since the app came forward: an ask needn't write or wait.
+        public var treeIsThere: Bool { treeHadContentAt != nil }
+
+        /// A finished walk of the app's windows found this many elements.
+        public mutating func recordWalk(elementCount: Int, at now: Date) {
+            if elementCount >= Self.elementsMeaningTheTreeIsThere {
+                treeHadContentAt = now
+                cycleStartedAt = nil
+                didRewrite = false
+                failedCycles = 0
+                backoffUntil = nil
+            } else if elementCount < Self.elementsMeaningTheTreeIsGone {
+                treeHadContentAt = nil
+            }
+        }
 
         /// A cycle is running: a write was sent less than `followUpDuration` ago.
         public func isWritePending(at now: Date) -> Bool {
