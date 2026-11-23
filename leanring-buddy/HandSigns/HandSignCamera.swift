@@ -4,7 +4,8 @@
 //
 //  The camera for hand signs: AVFoundation at 640×480, and Apple Vision's hand pose on each
 //  frame it keeps (about 12 a second), all on this Mac. Nothing is saved or sent anywhere: each
-//  frame becomes 21 joint positions, handed to HandSignController on the main thread, and is gone.
+//  frame becomes 21 joint positions per hand (up to two hands, since many Indian Sign Language
+//  letters use both), handed to HandSignController on the main thread, and is gone.
 //
 
 import AVFoundation
@@ -36,8 +37,8 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
     static let leastJointConfidence: Float = 0.3
 
     let captureSession = AVCaptureSession()
-    /// Called on the main thread for every analysed frame: the hand, or nil when none was seen.
-    var onHandPose: ((HandPose?) -> Void)?
+    /// Called on the main thread for every analysed frame: the hands seen (none, one or two).
+    var onHandPoses: (([HandPose]) -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "vello.handsigns.session")
     private let videoQueue = DispatchQueue(label: "vello.handsigns.frames", qos: .userInitiated)
@@ -45,7 +46,7 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
     private var isConfigured = false
     private let handPoseRequest: VNDetectHumanHandPoseRequest = {
         let request = VNDetectHumanHandPoseRequest()
-        request.maximumHandCount = 1
+        request.maximumHandCount = 2
         return request
     }()
 
@@ -105,12 +106,12 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
         let frameWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
         let frameHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
 
-        var handPose: HandPose?
+        var handPoses: [HandPose] = []
         let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        if (try? requestHandler.perform([handPoseRequest])) != nil, let observation = handPoseRequest.results?.first {
-            handPose = Self.handPose(from: observation, frameWidth: frameWidth, frameHeight: frameHeight)
+        if (try? requestHandler.perform([handPoseRequest])) != nil, let observations = handPoseRequest.results {
+            handPoses = observations.compactMap { Self.handPose(from: $0, frameWidth: frameWidth, frameHeight: frameHeight) }
         }
-        DispatchQueue.main.async { [weak self] in self?.onHandPose?(handPose) }
+        DispatchQueue.main.async { [weak self] in self?.onHandPoses?(handPoses) }
     }
 
     /// Vision's joints in pixels (so x and y are the same size), y up as Vision gives them.

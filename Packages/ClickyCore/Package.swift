@@ -7,7 +7,8 @@ let package = Package(
     products: [
         .library(name: "ClickyCore", targets: ["ClickyCore"]),
         .executable(name: "cwb-check", targets: ["cwb-check"]),
-        .executable(name: "code-agent-args", targets: ["code-agent-args"])
+        .executable(name: "code-agent-args", targets: ["code-agent-args"]),
+        .executable(name: "fingerspell-eval", targets: ["fingerspell-eval"])
     ],
     dependencies: [
         // Whiteboard math rendering (MTMathImage). Pinned; see docs/v2/PENDING_LIVE_TESTS.md (P4).
@@ -19,6 +20,8 @@ let package = Package(
         .executableTarget(name: "cwb-check", dependencies: ["ClickyCore"]),
         // The Code-mode agent's exact argv/settings as JSON, for Tools/codeprobe.sh.
         .executableTarget(name: "code-agent-args", dependencies: ["ClickyCore"]),
+        // How well Spell to text reads photos of real hands, through Apple Vision: `swift run fingerspell-eval asl <folder>`.
+        .executableTarget(name: "fingerspell-eval", dependencies: ["ClickyCore"]),
         .testTarget(name: "ClickyCoreTests", dependencies: ["ClickyCore"], exclude: ["Fixtures", "Goldens"])
     ],
     swiftLanguageModes: [.v5]

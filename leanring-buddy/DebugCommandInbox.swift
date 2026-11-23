@@ -463,6 +463,8 @@ final class DebugCommandInbox {
 
         case "handSigns":
             // Hand signs: state, on / off, a mode, or a sign as if the camera had seen it held ({action: sign, sign: "thumbsUp"}).
+            // Spell to text: {action: spell, text, send?} sets the spelled text (and sends it), {action: alphabet, alphabet: asl|isl},
+            // {action: destination, destination: vello|pointerAssistant|frontApp}, {action: teach, label} (camera on), {action: forget, label}.
             let handSignController = companionManager.handSignController
             switch commandObject["action"] as? String ?? "state" {
             case "on":
@@ -471,7 +473,7 @@ final class DebugCommandInbox {
                 handSignController.setEnabled(false)
             case "mode":
                 guard let modeName = commandObject["mode"] as? String, let mode = HandSignMode(rawValue: modeName) else {
-                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns mode needs \"mode\": control | speakForMe")
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns mode needs \"mode\": control | speakForMe | spell")
                     return
                 }
                 handSignController.mode = mode
@@ -482,6 +484,25 @@ final class DebugCommandInbox {
                     return
                 }
                 handSignController.perform(sign)
+            case "spell":
+                handSignController.replaceSpelledText(with: commandObject["text"] as? String ?? "")
+                if commandObject["send"] as? Bool == true { handSignController.sendSpelledText() }
+            case "alphabet":
+                guard let alphabetName = commandObject["alphabet"] as? String, let alphabet = FingerspellingAlphabet(rawValue: alphabetName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns alphabet needs \"alphabet\": asl | isl")
+                    return
+                }
+                handSignController.alphabet = alphabet
+            case "destination":
+                guard let destinationName = commandObject["destination"] as? String, let destination = SpelledTextDestination(rawValue: destinationName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns destination needs \"destination\": vello | pointerAssistant | frontApp")
+                    return
+                }
+                handSignController.destination = destination
+            case "teach":
+                handSignController.startTeaching(label: commandObject["label"] as? String ?? "")
+            case "forget":
+                handSignController.forgetTaughtSign(label: commandObject["label"] as? String ?? "")
             default:
                 break
             }

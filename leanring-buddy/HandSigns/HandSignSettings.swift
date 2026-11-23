@@ -2,8 +2,9 @@
 //  HandSignSettings.swift
 //  leanring-buddy
 //
-//  Settings › Pointer Assistant › Hand signs: the switch, what signs do, the camera picture, and each
-//  sign's phrase (what "Speak for me" says), which the owner can rewrite.
+//  Settings › Pointer Assistant › Hand signs: the switch, what signs do, the camera picture, Spell to text
+//  (which alphabet, where the text goes, and teaching it new signs), and each sign's phrase (what
+//  "Speak for me" says), which the owner can rewrite.
 //
 
 import ClickyCore
@@ -13,6 +14,7 @@ struct HandSignSettingsSection: View {
     @ObservedObject var controller: HandSignController
     @State private var isOn = HandSignController.isEnabled
     @State private var phrases = HandSignController.phrases
+    @State private var signToTeach = ""
 
     var body: some View {
         TheoSection(title: "Hand signs", hint: "On this Mac only: the camera picture is read by Apple's hand tracking and never saved or sent. The camera stops while the screen is locked.") {
@@ -33,11 +35,71 @@ struct HandSignSettingsSection: View {
             SettingRow(title: "Show the camera picture", detail: "Off: the panel only shows the sign it sees.") {
                 Toggle("Show the camera picture", isOn: $controller.showsCameraPicture).toggleStyle(.switch).labelsHidden()
             }
+            RowDivider()
+            SettingRow(title: "Spell to text: alphabet", detail: controller.alphabet.detail) {
+                Picker("Alphabet", selection: $controller.alphabet) {
+                    ForEach(FingerspellingAlphabet.allCases, id: \.self) { alphabet in Text(alphabet.displayName).tag(alphabet) }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 240)
+            }
+            RowDivider()
+            SettingRow(title: "Spell to text: send to", detail: controller.destination.detail) {
+                Picker("Send to", selection: $controller.destination) {
+                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(destination.displayName).tag(destination) }
+                }
+                .labelsHidden().frame(width: 220)
+            }
+            RowDivider()
+            teachRow
+            ForEach(controller.taughtSigns.signs, id: \.label) { taughtSign in
+                RowDivider()
+                taughtSignRow(taughtSign)
+            }
             ForEach(HandSign.allCases, id: \.self) { sign in
                 RowDivider()
                 signRow(sign)
             }
         }
+    }
+
+    /// Teach a letter or word: write it, press Teach, and hold the sign to the camera for two seconds.
+    private var teachRow: some View {
+        SettingRow(title: "Teach a sign",
+                   detail: controller.teachingLine.isEmpty
+                       ? "For ISL letters, words, or a letter it misreads on your hand. One hand or two, held still."
+                       : controller.teachingLine) {
+            HStack(spacing: 8) {
+                TextField("Letter or word", text: $signToTeach)
+                    .theoField().frame(width: 140)
+                    .onSubmit { controller.startTeaching(label: signToTeach) }
+                Button(controller.teachingLabel == nil ? "Teach" : "Stop") {
+                    if controller.teachingLabel == nil {
+                        controller.startTeaching(label: signToTeach)
+                    } else {
+                        controller.stopTeaching()
+                    }
+                }
+                .pointerCursor()
+                .help("Hold the sign to the camera; it takes \(TaughtSignBook.examplesWhenTeaching) looks")
+            }
+        }
+    }
+
+    private func taughtSignRow(_ taughtSign: TaughtSign) -> some View {
+        HStack(spacing: 12) {
+            Text(taughtSign.label.count == 1 ? taughtSign.label.uppercased() : "★")
+                .font(.system(size: 16, weight: .bold)).frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(taughtSign.label).font(TheoType.body).foregroundColor(DS.Colors.textPrimary)
+                Text("\(taughtSign.handCount == 2 ? "Two hands" : "One hand"), shown \(taughtSign.examples.count) times")
+                    .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+            }
+            Spacer(minLength: 12)
+            Button("Forget") { controller.forgetTaughtSign(label: taughtSign.label) }
+                .pointerCursor()
+                .help("Forget this taught sign")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
     }
 
     private func signRow(_ sign: HandSign) -> some View {

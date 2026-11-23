@@ -305,11 +305,24 @@ public enum HandSignMode: String, CaseIterable, Codable, Sendable {
     case control
     /// Every sign is said out loud as its phrase, for someone who signs.
     case speakForMe
+    /// Finger-spelled letters (and taught signs) become text, sent on to Vello, Pointer Assistant or the app in
+    /// front. Fingerspelling.swift reads them; the signs above don't act in this mode.
+    case spell
 
     public var displayName: String {
         switch self {
         case .control: return "Control Pointer Assistant"
         case .speakForMe: return "Speak for me"
+        case .spell: return "Spell to text"
+        }
+    }
+
+    /// The short name on the camera panel's buttons.
+    public var shortName: String {
+        switch self {
+        case .control: return "Control"
+        case .speakForMe: return "Speak"
+        case .spell: return "Spell"
         }
     }
 
@@ -317,6 +330,7 @@ public enum HandSignMode: String, CaseIterable, Codable, Sendable {
         switch self {
         case .control: return "Open palm: it listens and talks. Fist: stop. Thumbs up or down: yes or no to what it's asking. One finger up: tell me what's on my screen."
         case .speakForMe: return "Each sign is said out loud as its phrase and shown in big letters, so you can talk to someone with your hands."
+        case .spell: return "Finger-spell letters and they become text. Hand out of the picture ends a word, thumbs down deletes a letter, an open hand with the fingers spread sends it."
         }
     }
 }
@@ -354,6 +368,9 @@ public enum HandSignActions {
 
     public static func action(for sign: HandSign, mode: HandSignMode, phrases: [HandSign: String]) -> HandSignAction {
         switch mode {
+        case .spell:
+            // Spelling reads letters, not these signs (FingerspellingReader).
+            return .nothing
         case .speakForMe:
             let phrase = HandSignPhrases.phrase(for: sign, in: phrases)
             return phrase.isEmpty ? .nothing : .speak(phrase)

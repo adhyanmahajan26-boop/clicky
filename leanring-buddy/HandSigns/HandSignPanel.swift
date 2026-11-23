@@ -4,8 +4,9 @@
 //
 //  The small camera panel shown whenever hand signs are on (so the camera is never on unseen): the
 //  mirrored camera picture (or just a status line, if the owner hid the picture), the sign it sees with
-//  a ring filling while it's held, the two modes, and what was last said or done, in big letters so the
-//  person being talked to can read it too. Bottom right of the main screen; drag it anywhere. It never
+//  a ring filling while it's held, the three modes, and what was last said or done, in big letters so the
+//  person being talked to can read it too. In Spell to text it shows the letters spelled so far, with
+//  Space, Delete, Clear and Send buttons. Bottom right of the main screen; drag it anywhere. It never
 //  takes focus. The close button turns hand signs off.
 //
 
@@ -19,9 +20,12 @@ final class HandSignPanelController {
     private unowned let controller: HandSignController
     private var panel: NSPanel?
     private var pictureSwitchObserver: AnyCancellable?
+    private var modeObserver: AnyCancellable?
     static let width: CGFloat = 272
     static let heightWithPicture: CGFloat = 352
     static let heightWithoutPicture: CGFloat = 176
+    /// Spell to text adds the spelled line and its buttons.
+    static let extraHeightForSpelling: CGFloat = 76
     private static let screenEdgeGap: CGFloat = 20
 
     init(controller: HandSignController) {
@@ -41,17 +45,22 @@ final class HandSignPanelController {
         pictureSwitchObserver = controller.$showsCameraPicture.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.fitHeight(animated: true)
         }
+        modeObserver = controller.$mode.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.fitHeight(animated: true)
+        }
     }
 
     func hide() {
         pictureSwitchObserver = nil
+        modeObserver = nil
         panel?.orderOut(nil)
     }
 
     /// Grows or shrinks from the top edge, so the panel stays where it was put.
     private func fitHeight(animated: Bool) {
         guard let panel else { return }
-        let height = controller.showsCameraPicture ? Self.heightWithPicture : Self.heightWithoutPicture
+        let pictureHeight = controller.showsCameraPicture ? Self.heightWithPicture : Self.heightWithoutPicture
+        let height = pictureHeight + (controller.mode == .spell ? Self.extraHeightForSpelling : 0)
         var frame = panel.frame
         frame.origin.y += frame.height - height
         frame.size = NSSize(width: Self.width, height: height)
@@ -90,12 +99,15 @@ struct HandSignPanelView: View {
                 statusLine
             }
             modePicker
+            if controller.mode == .spell {
+                spellingArea
+            }
             Text(controller.lastLine.isEmpty ? " " : controller.lastLine)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.white)
-                .lineLimit(3)
+                .font(.system(size: controller.mode == .spell ? 12 : 18, weight: .semibold))
+                .foregroundColor(controller.mode == .spell ? .white.opacity(0.7) : .white)
+                .lineLimit(controller.mode == .spell ? 2 : 3)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+                .frame(maxWidth: .infinity, minHeight: controller.mode == .spell ? 18 : 44, alignment: .topLeading)
         }
         .padding(12)
         .frame(width: HandSignPanelController.width, alignment: .top)
@@ -151,7 +163,7 @@ struct HandSignPanelView: View {
                 Circle().trim(from: 0, to: controller.holdProgress)
                     .stroke(Self.ringColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                Text(controller.seenSign?.emoji ?? (controller.handIsVisible ? "✋" : "·")).font(.system(size: 14))
+                Text(chipSymbol).font(.system(size: 14, weight: .bold)).foregroundColor(.white)
             }
             .frame(width: 30, height: 30)
             Text(chipWords).font(.system(size: 12, weight: .medium)).foregroundColor(.white).lineLimit(1)
@@ -160,10 +172,75 @@ struct HandSignPanelView: View {
         .background(Capsule().fill(Color.black.opacity(0.55)))
     }
 
+    private var chipSymbol: String {
+        if controller.mode == .spell || controller.teachingLabel != nil {
+            if let label = controller.seenSpellingLabel, controller.teachingLabel == nil {
+                switch label {
+                case FingerspellingReading.sendLabel: return "🖐"
+                case FingerspellingReading.deleteLabel: return "👎"
+                default: return label.count == 1 ? label.uppercased() : "★"
+                }
+            }
+            return controller.handIsVisible ? "✋" : "·"
+        }
+        return controller.seenSign?.emoji ?? (controller.handIsVisible ? "✋" : "·")
+    }
+
     private var chipWords: String {
         if let problem = controller.problem { return problem }
+        if controller.teachingLabel != nil { return controller.teachingLine }
+        if controller.mode == .spell {
+            switch controller.seenSpellingLabel {
+            case FingerspellingReading.sendLabel?: return "Hold to send"
+            case FingerspellingReading.deleteLabel?: return "Hold to delete a letter"
+            case let label?: return label.count == 1 ? "Letter \(label.uppercased())" : label
+            case nil: return controller.handIsVisible ? "Spell a letter" : "Show me your hand"
+            }
+        }
         if let seenSign = controller.seenSign { return seenSign.displayName }
         return controller.handIsVisible ? "Hold a sign still" : "Show me your hand"
+    }
+
+    /// The letters spelled so far, big enough for the person across the desk, and what to do with them.
+    private var spellingArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(controller.spelledText.text.isEmpty ? "…" : controller.spelledText.text.uppercased())
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .minimumScaleFactor(0.6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                spellingButton("Space", systemImage: "space", help: "End the word") { controller.addSpaceToSpelledText() }
+                spellingButton("Delete", systemImage: "delete.left", help: "Delete the last letter (or hold thumbs down)") { controller.deleteLastSpelledLetter() }
+                spellingButton("Clear", systemImage: "xmark.circle", help: "Start again") { controller.clearSpelledText() }
+                Spacer(minLength: 0)
+                Button {
+                    controller.sendSpelledText()
+                } label: {
+                    Text("Send").font(.system(size: 11.5, weight: .semibold)).foregroundColor(.black)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain).pointerCursor()
+                .help("Send to \(controller.destination.displayName) (or hold an open hand with the fingers spread)")
+            }
+        }
+    }
+
+    private func spellingButton(_ title: String, systemImage: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold)).foregroundColor(.white.opacity(0.85))
+                .frame(width: 30, height: 24)
+                .background(Capsule().fill(Color.white.opacity(0.1)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain).pointerCursor()
+        .help(help)
+        .accessibilityLabel(title)
     }
 
     private var modePicker: some View {
@@ -173,7 +250,7 @@ struct HandSignPanelView: View {
                 Button {
                     controller.mode = mode
                 } label: {
-                    Text(mode == .control ? "Control" : "Speak for me")
+                    Text(mode.shortName)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundColor(isChosen ? .black : .white.opacity(0.85))
                         .padding(.horizontal, 10).padding(.vertical, 5)
