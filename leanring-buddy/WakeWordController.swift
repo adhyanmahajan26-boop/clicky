@@ -49,6 +49,8 @@ final class WakeWordController: ObservableObject {
 
     /// The phrase fired; `initialTurnText` is what followed it in the same breath.
     var onWake: ((_ initialTurnText: String) -> Void)?
+    /// The configured phrase the last wake matched ("hey vello"), set before `onWake`: it says who was called (`WakeTarget`).
+    private(set) var lastWakePhrase: String?
     /// P9: a standalone "stop" heard while Clicky may be talking or acting (CompanionManager decides).
     var onStopCommand: (() -> Void)?
     private(set) var stopCommandCount = 0
@@ -451,6 +453,7 @@ final class WakeWordController: ObservableObject {
             isCapturingTurn = true
             pipeline.beginCapture(for: candidate)
             reevaluate()
+            lastWakePhrase = candidate.match.phrase
             onWake?(candidate.match.remainderText)
 
         case .captureUpdated:

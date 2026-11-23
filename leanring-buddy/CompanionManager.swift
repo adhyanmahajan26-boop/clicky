@@ -805,7 +805,7 @@ final class CompanionManager: ObservableObject {
         wakeWordController.onWake = { [weak self] initialTurnText in self?.wakeWordDidFire(initialTurnText: initialTurnText) }
         wakeWordController.onStopCommand = { [weak self] in self?.wakeStopCommandHeard() }
         wakeWordController.onTurnFinished = { [weak self] turnText in self?.wakeWordTurnDidFinish(turnText: turnText) }
-        wakeWordController.onTurnAbandoned = { [weak self] in self?.wakeWordTurnWasAbandoned() }
+        wakeWordController.onTurnAbandoned = { [weak self] in self?.wakeWordTurnWasAbandoned(startsVelloCall: true) }
         // P8 follow-up window: the answer is done once nothing is thinking, speaking or acting
         // (an action task waiting for a spoken yes counts as done, so the yes needs no wake word).
         wakeWordController.isAnswerBusy = { [weak self] in
@@ -837,9 +837,26 @@ final class CompanionManager: ObservableObject {
         voiceState = .idle
     }
 
+    /// "Hey Vello" was heard and its words are still being heard: they go to a call with Vello, not to Pointer Assistant.
+    private var isHearingVelloWakeTurn = false
+
+    /// Who the last wake phrase called. Vello needs its product on; otherwise its names wake Pointer Assistant, as before.
+    private var lastWakeTarget: WakeTarget {
+        let target = WakeTarget.of(phrase: wakeWordController.lastWakePhrase ?? "", assistantName: ClickySettings.assistantName)
+        return target == .vello && !TheoProducts.isOn(.theo) ? .pointerAssistant : target
+    }
+
     private func wakeWordDidFire(initialTurnText: String) {
         guard !isHandsFreeSessionActive, !pushToTalkRecorder.isDictationInProgress else {
             wakeWordController.cancelCurrentTurn()
+            return
+        }
+        if lastWakeTarget == .vello {
+            // Vello answers on a call, which has its apps (Gmail, Notion, …). Pointer Assistant stays as it was: no spark,
+            // no answer cut off. The words after the name are still heard here, so none are lost while the call starts.
+            isHearingVelloWakeTurn = true
+            NSSound(named: "Pop")?.play()
+            print("👂 Wake word: Vello was called, hearing what follows for the call")
             return
         }
         if TheoLink.shared.clickyRunsHere { groundingCoordinator.prewarm() }
@@ -865,8 +882,15 @@ final class CompanionManager: ObservableObject {
     }
 
     private func wakeWordTurnDidFinish(turnText: String) {
+        if isHearingVelloWakeTurn {
+            isHearingVelloWakeTurn = false
+            guard !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive else { return }
+            startVelloCallFromWake(openingWords: turnText)
+            return
+        }
         guard voiceState == .listening, !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive else { return }
         voiceState = .idle
+        let turnText = WakeTarget.turnText(turnText, for: .pointerAssistant)
         lastTranscript = turnText
         // Latency is measured from the end of speech, as push-to-talk does from key-up.
         sendTranscriptToClaudeWithScreenshot(transcript: turnText, turnOptions: TurnOptions(keyUpDate: Date()))
@@ -894,12 +918,28 @@ final class CompanionManager: ObservableObject {
         if voiceState == .idle { scheduleTransientHideIfNeeded() }
     }
 
-    private func wakeWordTurnWasAbandoned() {
+    /// `startsVelloCall`: "hey vello" with nothing after it still opens the call, so Vello is listening; Escape doesn't.
+    private func wakeWordTurnWasAbandoned(startsVelloCall: Bool) {
+        if isHearingVelloWakeTurn {
+            isHearingVelloWakeTurn = false
+            if startsVelloCall, !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive {
+                startVelloCallFromWake(openingWords: "")
+            }
+            return
+        }
         guard voiceState == .listening, !pushToTalkRecorder.isDictationInProgress else { return }
         voiceState = .idle
         claudeCodeBridge.reapStandbyProcess()
         zoomChecker.reapStandby()
         scheduleTransientHideIfNeeded()
+    }
+
+    /// "Hey Vello …": a call with Vello, whose first turn is what was said after the name. Focus stays where the owner is:
+    /// the call window comes up without taking it.
+    private func startVelloCallFromWake(openingWords: String) {
+        let openingWords = openingWords.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("📞 Wake word: calling Vello (\(openingWords.split(separator: " ").count) words to start with)")
+        TheoCallController.start(activates: false, openingWords: openingWords)
     }
 
     /// "stop listening" turns the wake word off until "start listening" or the menu toggle.
@@ -1314,7 +1354,7 @@ final class CompanionManager: ObservableObject {
         }
         if wakeWordController.isHearingTurn {
             wakeWordController.cancelCurrentTurn()
-            wakeWordTurnWasAbandoned()
+            wakeWordTurnWasAbandoned(startsVelloCall: false)
         }
         // P8: Escape also closes the follow-up window and ends dictation.
         wakeWordController.cancelFollowUp()

@@ -147,7 +147,7 @@ public enum ClickySettingsCatalog {
         ClickySettingsEntry(key: ClickySettings.Keys.wakeEnabled, kind: .toggle(defaultValue: true),
                             explanation: "Listen on-device for the wake phrase. Say \"stop listening\" to turn it off, \"start listening\" (push-to-talk) or the menu to turn it back on."),
         ClickySettingsEntry(key: ClickySettings.Keys.wakePhrases, kind: .textList(defaultValue: WakeWordMatcher.defaultPhrases),
-                            explanation: "Wake phrases: a greeting and a name (\"hey claudia\"). Close spellings and hi/okay count too. Comma separated."),
+                            explanation: "Wake phrases: a greeting and a name. Vello's names (\"hey vello\") start a call with Vello; the others (\"hey pointer\", \"hey claudia\") wake Pointer Assistant. Close spellings and hi/okay count too. Comma separated."),
         ClickySettingsEntry(key: ClickySettings.Keys.wakeLocale, kind: .choice(options: ["auto", "en-IN", "en-US"], defaultValue: "auto"),
                             explanation: "The wake recognizer's language (on-device only). auto tries the other English one if this one keeps failing."),
         ClickySettingsEntry(key: ClickySettings.Keys.wakeFollowUpSeconds, kind: .number(defaultValue: 10, range: 0...30, step: 1),

@@ -282,7 +282,8 @@ final class TheoCallSession: ObservableObject {
 
     // MARK: Start and end
 
-    func start() {
+    /// `openingWords`: what the owner said before the call began ("hey vello, …"), answered as the first turn.
+    func start(openingWords: String = "") {
         // No App Nap or timer coalescing while someone is on the line, even with Theo in the background.
         liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with Vello")
         audio.onBlock = { [weak self] block in self?.handle(block) }
@@ -307,6 +308,11 @@ final class TheoCallSession: ObservableObject {
             problem = error.localizedDescription
         }
         state = .listening
+        // Called with "hey vello, …": the words said with the name are the first turn, answered straight away.
+        if !openingWords.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            takeWordsSaidBeforeTheCall(openingWords)
+            return
+        }
         // Theo says hello: it's what a call does, and it warms up the brain and the voice, so the owner's first question gets
         // the same quick answer as the rest.
         let owner = BotPrompts.ownerName
@@ -693,6 +699,16 @@ final class TheoCallSession: ObservableObject {
         // The line may have been reopened by a sound that brought no words.
         if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) { lines[index].isLive = false }
         takeTurn(words, lineID: lineID)
+    }
+
+    /// Words the owner said before the call could hear them (after "hey vello"): a line of theirs and a turn, like words
+    /// the call's own ears heard. Nothing while Vello is still answering, so an answer is never cut by words from outside.
+    func takeWordsSaidBeforeTheCall(_ words: String) {
+        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state != .ended, !words.isEmpty, !replyInProgress else { return }
+        let line = Line(who: .addy, text: words, isLive: false)
+        lines.append(line)
+        takeTurn(words, lineID: line.id)
     }
 
     /// The owner's whole turn: a Listen mode switch, something heard in Listen mode, or a question for Vello.

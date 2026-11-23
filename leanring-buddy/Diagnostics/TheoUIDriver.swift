@@ -686,7 +686,8 @@ extension TheoUIDriver {
             manager.speechOutputClient.stopVoicesNow()
             respond(true, ["wasPlaying": wasPlaying, "playing": manager.speechOutputClient.isPlaying, "stopSeconds": Date().timeIntervalSince(start)], nil)
         case "uiCallStart":
-            TheoCallController.start(activates: false)
+            // `openingWords`: as "hey vello, …" starts a call, with what was said after the name as the first turn.
+            TheoCallController.start(activates: false, openingWords: command["openingWords"] as? String ?? "")
             settle { respond(true, ["window": TheoCallController.windowNumber as Any? ?? NSNull()], nil) }
         case "uiCallStatus":
             respond(true, TheoCallController.session?.report() ?? [:], nil)
