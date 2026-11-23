@@ -228,6 +228,8 @@ impl Harness {
         self.fire_hook("app-started", json!({"bots": self.with(|s| s.bots.len())}));
         crate::gateway::apply(self);
         crate::vmscreens::attach(self);
+        // Bots move onto the newest model of their family that's offered here, now and twice a day.
+        crate::model_freshness::start(self);
     }
 
     pub fn load(&self) {

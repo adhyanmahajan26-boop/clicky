@@ -19,24 +19,42 @@ public enum ClickyModels {
     public static let opus = "claude-opus-5-5"
     public static let sonnet = "claude-sonnet-5-5"
     public static let haiku = "claude-haiku-5-5"
-    public static let fable = "claude-fable-5-1"
+    public static let fable = "claude-fable-5-2"
 
+    /// The models this build knows about. Newer ones found on this Mac (`ClaudeModelList`) are offered beside them.
     public static let options: [Option] = [
         Option(identifier: opus, label: "Opus 5.5 (smartest)"),
         Option(identifier: sonnet, label: "Sonnet 5.5 (balanced)"),
         Option(identifier: haiku, label: "Haiku 5.5 (fastest)"),
-        Option(identifier: fable, label: "Fable 5.1")
+        Option(identifier: fable, label: "Fable 5.2")
     ]
 
-    /// A Claude Code alias becomes the newest id in that family; ids pass through.
+    public static var bundledIdentifiers: [String] { options.map(\.identifier) }
+
+    /// What the pickers offer: the newest model of each family, bundled or found since (Claude Code's own aliases, an
+    /// Anthropic key's live list), so a model that came out after this build shows up without an update.
+    public static var currentOptions: [Option] {
+        ClaudeModelList.current(discovered: ClaudeModelList.discovered(in: defaults)).map { identifier in
+            if let bundled = options.first(where: { $0.identifier == identifier }) { return bundled }
+            let label = ClaudeModelList.shortLabel(for: identifier)
+            let family = identifier.lowercased()
+            let hint = family.hasPrefix("claude-opus-") ? " (smartest)" : family.hasPrefix("claude-sonnet-") ? " (balanced)"
+                : family.hasPrefix("claude-haiku-") ? " (fastest)" : ""
+            return Option(identifier: identifier, label: label + hint)
+        }
+    }
+
+    /// A Claude Code alias becomes the newest id in that family (found on this Mac, else bundled); ids pass through.
     public static func resolve(_ aliasOrIdentifier: String) -> String {
         let trimmed = aliasOrIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch trimmed.lowercased() {
-        case "", "sonnet": return sonnet
+        let family = trimmed.lowercased().isEmpty ? "sonnet" : trimmed.lowercased()
+        guard ClaudeAliasProbe.aliases.contains(family) else { return trimmed }
+        if let newest = ClaudeModelList.newest(family: family, discovered: ClaudeModelList.discovered(in: defaults)) { return newest }
+        switch family {
         case "opus": return opus
         case "haiku": return haiku
         case "fable": return fable
-        default: return trimmed
+        default: return sonnet
         }
     }
 

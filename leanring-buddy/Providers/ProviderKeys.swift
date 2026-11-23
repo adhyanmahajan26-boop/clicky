@@ -105,7 +105,8 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
     static let builtIn: [ProviderInfo] = [
         ProviderInfo(id: "anthropic", label: "Anthropic", blurb: "Claude models, billed to your API account", group: .models, kind: .anthropic,
                      baseURL: "https://api.anthropic.com/v1", consoleURL: "https://console.anthropic.com/settings/keys", keyHint: "sk-ant-…",
-                     knownModels: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]),
+                     // Anthropic lists 20 models a page unless asked for more.
+                     modelsPath: "/models?limit=1000", knownModels: ClickyModels.bundledIdentifiers),
         ProviderInfo(id: "openai", label: "OpenAI", blurb: "GPT models and Codex on an API key", group: .models, kind: .openAICompatible,
                      baseURL: "https://api.openai.com/v1", consoleURL: "https://platform.openai.com/api-keys", keyHint: "sk-…"),
         ProviderInfo(id: "gemini", label: "Google Gemini", blurb: "Gemini models and Gemini CLI on an API key", group: .models, kind: .openAICompatible,
@@ -211,18 +212,32 @@ struct ProviderInfo: Identifiable, Equatable, Codable {
         return object["message"] as? String ?? object["detail"] as? String ?? object["err_msg"] as? String
     }
 
-    /// Model ids from a provider's list reply: `data[].id`, `models[].name`, or a plain array.
+    /// Model ids from a provider's list reply: `data[].id`, `models[].name`, or a plain array. Newest released first when the
+    /// provider says when each came out (`created` / `created_at`), else in the provider's own order.
     static func modelIDs(from body: Data) -> [String] {
         guard let object = try? JSONSerialization.jsonObject(with: body) else { return [] }
         let list: [Any]
         if let top = object as? [String: Any] { list = top["data"] as? [Any] ?? top["models"] as? [Any] ?? [] } else { list = object as? [Any] ?? [] }
-        let ids = list.compactMap { entry -> String? in
-            if let name = entry as? String { return name }
-            guard let item = entry as? [String: Any] else { return nil }
-            return item["id"] as? String ?? item["name"] as? String
+        let entries = list.enumerated().compactMap { position, entry -> (id: String, released: Double?, position: Int)? in
+            if let name = entry as? String { return (name, nil, position) }
+            guard let item = entry as? [String: Any], let id = item["id"] as? String ?? item["name"] as? String else { return nil }
+            return (id, releaseTime(of: item), position)
         }
+        let ordered = entries.allSatisfy({ $0.released != nil }) ? entries.sorted { ($0.released ?? 0, -$0.position) > ($1.released ?? 0, -$1.position) } : entries
         // Gemini's list says "models/gemini-…"; its chat endpoint wants the bare name.
-        return ids.map { $0.hasPrefix("models/") ? String($0.dropFirst(7)) : $0 }
+        return ordered.map(\.id).map { $0.hasPrefix("models/") ? String($0.dropFirst(7)) : $0 }
+    }
+
+    /// When a listed model came out: OpenAI-style `created` (seconds), or Anthropic's `created_at` (an ISO date).
+    private static func releaseTime(of item: [String: Any]) -> Double? {
+        if let seconds = item["created"] as? Double { return seconds }
+        if let seconds = item["created"] as? Int { return Double(seconds) }
+        guard let text = item["created_at"] as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date.timeIntervalSince1970 }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)?.timeIntervalSince1970
     }
 }
 
@@ -346,9 +361,31 @@ final class ProviderKeys: ObservableObject {
         revision += 1
     }
 
+    /// The chat models to offer for a key: its live list (refreshed at launch and twice a day by `ModelFreshnessController`),
+    /// each family's newest first, else the ones this build knows.
     func models(for provider: ProviderInfo) -> [String] {
-        let live = modelLists[provider.id] ?? []
+        let live = ModelListFilter.chatModels(modelLists[provider.id] ?? [])
         return live.isEmpty ? provider.knownModels : live
+    }
+
+    /// Asks a provider for its models again with the saved key, without touching the key's test result. True when a list came back.
+    @discardableResult
+    func refreshModels(_ providerID: String) async -> Bool {
+        guard let provider = ProviderInfo.info(for: providerID), provider.canChat, let path = provider.modelsPath,
+              let url = URL(string: provider.baseURL + path) else { return false }
+        let key = self.key(for: providerID)
+        guard key != nil || provider.keyless || provider.group == .custom else { return false }
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        ProviderInfo.authorize(&request, provider: provider, key: key)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else { return false }
+        let models = ProviderInfo.modelIDs(from: data)
+        guard !models.isEmpty else { return false }
+        if modelLists[providerID] != models {
+            modelLists[providerID] = models
+            storeModels()
+        }
+        return true
     }
 
     @discardableResult

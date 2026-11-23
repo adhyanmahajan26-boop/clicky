@@ -2123,7 +2123,7 @@ def b06():
             first = turn[0] if turn else {}
             checks.update({
                 provider + "_key_works": saved.get("works") is True and "fake-chat-1" in saved.get("models", []),
-                provider + "_bot_on_a_chat_model": bot["model"] == "fake-chat-1",
+                provider + "_bot_on_a_chat_model": bot["model"] == "fake-chat-2",  # the newest of the key's list
                 provider + "_key_sent_right": bool(turn) and all(r["key_right"] for r in turn),
                 provider + "_tools_offered": "echo__echo" in first.get("tools", []) and "memory_write" in first.get("tools", []),
                 provider + "_send_not_offered": "echo__send_note" not in first.get("tools", ["?"]),
@@ -2200,10 +2200,46 @@ def b08():
     checks = {"nothing_ready_without_a_key": empty.get("anyReady") is False and empty.get("suggested") is None,
               "every_agent_listed_with_install": set(agents) == {"claude", "codex", "cursor", "gemini", "grok", "opencode"} and all(a["install"] and not a["installed"] for a in agents.values()),
               "ready_with_a_key": ready.get("anyReady") is True and ready["claude"]["installed"] is False,
-              "suggests_the_key": suggested.get("engine") == "api:openai" and suggested.get("model") == "fake-chat-1",
+              "suggests_the_key": suggested.get("engine") == "api:openai" and suggested.get("model") == "fake-chat-2",
               "first_bot_answers": first.get("ok") is True and len(answered) == 1 and "fake api ok" in shown,
-              "theo_moved_onto_it": done.get("theoMovedTo", {}) == {"engine": "api:openai", "model": "fake-chat-1"} and theo_after["provider"] == "api:openai"}
+              "theo_moved_onto_it": done.get("theoMovedTo", {}) == {"engine": "api:openai", "model": "fake-chat-2"} and theo_after["provider"] == "api:openai"}
     return all(checks.values()), dict(checks, suggested=suggested, theo_moved=done.get("theoMovedTo"), shown=shown[:120])
+
+
+@test("B09", "Keeping models current: a bot on an older model of its family moves to the newest the key lists, never across families, and not while the switch is off", "brains")
+def b09():
+    api = FakeAPI([])
+    made = []
+    try:
+        P({"cmd": "apiKeySet", "provider": "openai", "key": API_KEY_FOR_TESTS}, timeout=60)
+        def bot_on(model, label):
+            name = "%s %s" % (label, T.nonce()[:4])
+            b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "api:openai"}, timeout=60)["result"]["id"]
+            P({"cmd": "botUpdate", "id": b, "model": model})
+            made.append(b)
+            return b
+        older = bot_on("fake-chat-1", "Older")
+        other_family = bot_on("fake-other-1", "Other")
+        claude = bot_on("claude-sonnet-5", "Sonnet")
+        P({"cmd": "botUpdate", "id": claude, "provider": "claude", "model": "claude-sonnet-5"})
+        P({"cmd": "models", "action": "off"})
+        while_off = P({"cmd": "models", "action": "check"}, timeout=90)["result"]
+        P({"cmd": "models", "action": "on"}, timeout=90)
+        after = P({"cmd": "models", "action": "check"}, timeout=90)["result"]
+        model_of = lambda report, b: next((x["model"] for x in report["bots"] if x["id"] == b), None)
+        lines = [entry.get("line", "") for entry in after.get("moved", [])]
+    finally:
+        for b in made:
+            P({"cmd": "botDelete", "id": b})
+        P({"cmd": "models", "action": "on"})
+        api.stop()
+    checks = {"off_moves_nothing": while_off.get("keepsModelsCurrent") is False and model_of(while_off, older) == "fake-chat-1",
+              "on_moves_to_the_newest": after.get("keepsModelsCurrent") is True and model_of(after, older) == "fake-chat-2",
+              "never_across_families": model_of(after, other_family) == "fake-other-1",
+              "claude_to_its_newest": model_of(after, claude) == "claude-sonnet-5-5",
+              "recorded": any("fake-chat-1 → fake-chat-2" in line for line in lines),
+              "checked": bool(after.get("lastCheck"))}
+    return all(checks.values()), dict(checks, moved=lines[:5])
 
 
 # ---------------------------------------------------------------- Updates, products and setup

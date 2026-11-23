@@ -367,6 +367,28 @@ final class ClaudiaControlInbox {
                                  headID: command["head"] as? String, memberIDs: command["members"] as? [String] ?? [])
             BotsStore.shared.save(group)
             reply(identifier, ok: true, result: ["saved": id], error: nil)
+        case "models":
+            // Keeping models current: {action: state | check | upgrade | on | off}. `check` asks every key and Claude Code again and
+            // then moves choices onto newer models; `upgrade` only moves them, from the lists already known.
+            let freshness = ModelFreshnessController.shared
+            let action = command["action"] as? String ?? "state"
+            Task { @MainActor in
+                switch action {
+                case "check": await freshness.checkNow(force: true)
+                case "upgrade": freshness.upgradeEverything()
+                case "on": freshness.keepsModelsCurrent = true
+                case "off": freshness.keepsModelsCurrent = false
+                default: break
+                }
+                reply(identifier, ok: true, result: ["keepsModelsCurrent": ModelAutoUpgrade.isOn(),
+                                                     "claudeModels": HarnessCatalog.claudeModels.map(\.id),
+                                                     "claudeDiscovered": ClaudeModelList.discovered(),
+                                                     "lastCheck": freshness.lastCheck.map { ISO8601DateFormatter().string(from: $0) as Any } ?? NSNull(),
+                                                     "moved": freshness.history.map { ["at": ISO8601DateFormatter().string(from: $0.at), "line": $0.line] },
+                                                     "bots": BotsStore.shared.bots.map { ["id": $0.id, "provider": $0.provider, "model": $0.model,
+                                                                                           "fast": ($0.fast as Any?) ?? NSNull(), "fastRuns": BotModels.takesFastMode($0)] as [String: Any] }] as [String: Any],
+                      error: nil)
+            }
         case "fastDecisions":
             // What Prism decided lately: the choice and its time, never the words.
             reply(identifier, ok: true, result: ["on": PrismClient.isOn, "decisions": PrismClient.record.all, "lastProblem": PrismClient.lastProblem.value ?? NSNull()], error: nil)

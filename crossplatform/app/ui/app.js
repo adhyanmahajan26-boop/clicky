@@ -401,7 +401,7 @@ function openBotDialog(mode) {
 }
 // The new-bot dialog's brain list (keys first, then agents) and the models it suggests for the one picked. An empty model
 // means the brain's own default.
-const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"];
+const CLAUDE_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-fable-5-2"];
 async function fillBrainPicker() {
   const select = $("#bot-brain");
   const draw = () => {

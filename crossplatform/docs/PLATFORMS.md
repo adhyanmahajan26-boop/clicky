@@ -96,6 +96,12 @@ How each brain runs a bot's turn, and what it may do (nobody is there to approve
 
 A signed-out agent or a used-up plan is said plainly in the chat, once, with where to sign in.
 
+Keeping models current (`model_freshness.rs`, the same rules as the Mac's ClickyCore `Settings/ModelFreshness.swift`): a
+key's model list is read live and put newest first (embedding, speech, image and moderation models left out). At start and
+every 12 hours, with Settings › Brains › Newest models › "Keep models up to date" on (the default), each bot on an older
+model of a family moves to the newest of that same family on offer (Sonnet 5 to Sonnet 5.5, never Sonnet to Opus, never
+onto a dated snapshot or a preview), and what moved is listed there. Control command `models {action: state|check|on|off}`.
+
 ### Coding runs
 
 Coding runs use any coding agent, none required (`coding.rs`, the Mac's `HarnessCoding.headlessArguments`). Which one: the
@@ -182,6 +188,9 @@ Control commands (theod's inbox and the window): `teams`, `teamAdd`, `teamUpdate
 - The app sign-in card for a bot blocked on one connector app (the Mac's `ConnectorHealth.blockingConnector`) and the
   permission card (macOS privacy permissions). The Connectors page shows which apps need a sign-in instead.
 - Theo's own MCP server (`claudia_*` tools) isn't ported.
+- Fast mode for a bot (Claude Opus and Fable only: `fastMode` for Claude Code, `speed: "fast"` on an Anthropic key). Bots
+  here have no fast switch yet. Asking Claude Code which model each alias means today (the Mac's alias probe) isn't ported
+  either: the Claude list here is the bundled one.
 
 ## Clicky (voice and screen helper): Mac and Windows
 

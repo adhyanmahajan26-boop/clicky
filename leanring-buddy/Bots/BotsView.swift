@@ -2215,8 +2215,8 @@ struct BotModelSettings: View {
     @ObservedObject private var catalog = BrainCatalog.shared
 
     private var isClaude: Bool { bot.provider == "claude" }
-
-    static let grokModels = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+    private var offersFastMode: Bool { BotModels.offersFastMode(on: bot.provider) }
+    private var modelTakesFastMode: Bool { ClaudeFastMode.supports(model: bot.model) }
 
     @ObservedObject private var harnesses = HarnessCenter.shared
     @ObservedObject private var keys = ProviderKeys.shared
@@ -2307,9 +2307,11 @@ struct BotModelSettings: View {
             row("Fast mode") {
                 Spacer(minLength: 0)
                 Toggle("Fast mode", isOn: Binding(get: { bot.fast ?? false }, set: { bot.fast = $0; commit() }))
-                    .toggleStyle(.switch).labelsHidden().disabled(!isClaude)
+                    .toggleStyle(.switch).labelsHidden().disabled(!offersFastMode || (!modelTakesFastMode && bot.fast != true))
             }
-            Text(isClaude ? "Applies from the next reply." : "Thinking and fast mode are for Claude models.")
+            Text(!isClaude && !offersFastMode ? "Thinking and fast mode are for Claude models."
+                 : !modelTakesFastMode ? "Fast mode runs only on Claude Opus and Fable, so it's off on \(BotModels.label(bot.model, on: bot.provider)). It costs more per word, and on a Claude plan it's paid from usage credits."
+                 : "Applies from the next reply. Fast mode costs more per word, and on a Claude plan it's paid from usage credits.")
                 .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }

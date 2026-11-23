@@ -463,7 +463,9 @@ pub async fn list_models(harness: &Harness, provider_id: &str) -> Result<Vec<Str
             Ok(response) => {
                 let body: Value = response.into_string().ok().and_then(|text| serde_json::from_str(&text).ok()).ok_or_else(|| format!("{label} answered, but not with a list of models."))?;
                 let listed = body["data"].as_array().or_else(|| body["models"].as_array()).cloned().unwrap_or_default();
-                Ok(listed.iter().filter_map(|model| model["id"].as_str().or_else(|| model["name"].as_str()).map(|id| id.trim_start_matches("models/").to_string())).collect())
+                let ids: Vec<String> = listed.iter().filter_map(|model| model["id"].as_str().or_else(|| model["name"].as_str()).map(|id| id.trim_start_matches("models/").to_string())).collect();
+                // Each family's newest first, so pickers and the first bot's model start on the newest.
+                Ok(crate::model_freshness::newest_first(&ids))
             }
             Err(ureq::Error::Status(status, response)) => {
                 let body = response.into_string().unwrap_or_default();

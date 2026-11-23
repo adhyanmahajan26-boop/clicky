@@ -361,6 +361,9 @@ struct TheoProductionTests {
         #expect(ProviderInfo.modelIDs(from: Data(#"{"models":[{"name":"models/gemini-3"}]}"#.utf8)) == ["gemini-3"])
         #expect(ProviderInfo.modelIDs(from: Data(#"[{"id":"x"}]"#.utf8)) == ["x"])
         #expect(ProviderInfo.modelIDs(from: Data("nope".utf8)).isEmpty)
+        // Newest released first when the provider says when each came out.
+        #expect(ProviderInfo.modelIDs(from: Data(#"{"data":[{"id":"old","created":100},{"id":"new","created":300},{"id":"mid","created":200}]}"#.utf8)) == ["new", "mid", "old"])
+        #expect(ProviderInfo.modelIDs(from: Data(#"{"data":[{"id":"claude-sonnet-5","created_at":"2026-02-01T00:00:00Z"},{"id":"claude-sonnet-5-5","created_at":"2026-09-01T00:00:00Z"}]}"#.utf8)) == ["claude-sonnet-5-5", "claude-sonnet-5"])
     }
 
     @Test func customProviderNeedsAWebAddress() {

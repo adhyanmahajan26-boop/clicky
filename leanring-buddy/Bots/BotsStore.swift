@@ -685,7 +685,11 @@ final class BotsStore: ObservableObject {
             said = "Done. Thinking is **\(thinking ? "on" : "off")**, from my next reply."
         } else if let fast = intent.fast {
             bot.fast = fast
-            said = "Done. Fast mode is **\(fast ? "on" : "off")**, from my next reply."
+            if fast, !BotModels.takesFastMode(bot) {
+                said = "Fast mode is saved as **on**, but it only runs on Claude Opus and Fable, and I'm on **\(BotModels.label(bot.model, on: bot.provider))**. Pick Opus or Fable here and it starts from my next reply."
+            } else {
+                said = "Done. Fast mode is **\(fast ? "on" : "off")**, from my next reply."
+            }
         }
         if bot != original { save(bot) }
         post(BotChatMessage(author: bot.id, text: said, card: "settings"), to: bot.id)
