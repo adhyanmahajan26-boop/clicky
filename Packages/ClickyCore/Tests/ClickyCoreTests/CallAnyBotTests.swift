@@ -126,13 +126,41 @@ struct CallAnyBotTests {
         #expect(CallPromptText.hello(owner: "the owner") == "(The call just connected. Say hello in a few words and stop there.)")
     }
 
-    @Test func recentChatKeepsTheLastSixLines() {
+    @Test func recentChatKeepsTheNewestLinesThatFit() {
         let lines = (1...9).map { CallPromptText.ChatLine(isFromOwner: $0 % 2 == 1, text: "line \($0)") }
         let section = CallPromptText.recentChat(botName: "Ledger", owner: "Sam", lines: lines) ?? ""
-        #expect(!section.contains("line 3"))
+        // Short lines all fit now; six was too few to remember a conversation.
+        #expect(section.contains("Sam: line 1\n"))
         #expect(section.contains("Ledger: line 4"))
         #expect(section.hasSuffix("Sam: line 9"))
         #expect(CallPromptText.recentChat(botName: "Ledger", owner: "Sam", lines: []) == nil)
+        // Past the budget the oldest go first, and the newest always stays.
+        let long = (1...40).map { CallPromptText.ChatLine(isFromOwner: true, text: "message \($0) " + String(repeating: "word ", count: 200)) }
+        let trimmed = CallPromptText.recentChat(botName: "Ledger", owner: "Sam", lines: long) ?? ""
+        #expect(trimmed.count <= CallPromptText.carriedOverCharacters + 200)
+        #expect(trimmed.contains("message 40 "))
+        #expect(!trimmed.contains("message 1 "))
+        let huge = [CallPromptText.ChatLine(isFromOwner: true, text: String(repeating: "x", count: 50_000))]
+        #expect(CallPromptText.recentChat(botName: "Ledger", owner: "Sam", lines: huge)?.contains("Sam: xxx") == true)
+    }
+
+    @Test func aNewCallKnowsWhatTheLastCallSaid() {
+        let lines = [
+            CallPromptText.ChatLine(isFromOwner: true, text: "Find my mails from Ra."),
+            CallPromptText.ChatLine(isFromOwner: false, text: "Ra sent the invoice.", speakerName: "Pointer Assistant"),
+            CallPromptText.ChatLine(isFromOwner: false, text: "📞 Call with Vello, 3 min\n\n**Sam:** Book the dentist for Friday.\n\n**Vello:** Done, 4 pm Friday.", isCallRecord: true),
+        ]
+        let section = CallPromptText.recentChat(botName: "Vello", owner: "Sam", lines: lines) ?? ""
+        #expect(section.contains("Pointer Assistant: Ra sent the invoice."))
+        #expect(section.contains("[Earlier call] 📞 Call with Vello, 3 min\nSam: Book the dentist for Friday.\nVello: Done, 4 pm Friday."))
+        #expect(!section.contains("**"))
+        // A long call keeps its heading and its end, where the latest topic is.
+        let longCall = "📞 Call with Vello, 40 min\n\n" + (1...400).map { "**Sam:** topic \($0) and some more words" }.joined(separator: "\n\n")
+        let kept = CallPromptText.recentChat(botName: "Vello", owner: "Sam", lines: [.init(isFromOwner: false, text: longCall, isCallRecord: true)]) ?? ""
+        #expect(kept.contains("Call with Vello, 40 min"))
+        #expect(kept.contains("topic 400 "))
+        #expect(!kept.contains("topic 1 "))
+        #expect(kept.contains("(the start of this call is left out)"))
     }
 
     @Test func everyBracketLineOfAnotherBotIsTakenOutWhereverItSplits() {

@@ -625,6 +625,9 @@ final class SarvamCallVoice: CallVoice {
     }
 
     func speak(_ text: String) {
+        // Sarvam refuses a piece with no letters at all ("…", an emoji, a lone number) with "Text must contain at least one
+        // character from the allowed languages", and that refusal used to end its voice for the rest of the turn.
+        guard text.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return }
         prepare()
         if !isTurnActive {
             isTurnActive = true

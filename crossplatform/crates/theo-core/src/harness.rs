@@ -34,6 +34,8 @@ pub const RESUME_RETRY_SUFFIX: &str = "so it's asking again now.";
 pub const RESUME_WINDOW_SECS: i64 = 6 * 3600;
 pub const RESUME_RETRIES: usize = 2;
 pub const LONGEST_SHOWN_REPLY: usize = 60_000;
+/// How much of a chat a bot whose engine lost its session starts again with (the Mac's `BotsStore.startOverCharacters`).
+pub const START_OVER_CHARACTERS: usize = 16_000;
 pub const MEMBER_WAIT_SECS: f64 = 90.0;
 
 #[derive(Clone, Debug)]
@@ -993,10 +995,17 @@ impl Harness {
 
     fn start_over_prompt(&self, bot: &Bot, room: &str, prompt: &str) -> String {
         let record = self.conversation(room);
-        let lines: Vec<String> = record.messages.iter().filter(|m| !m.text.is_empty() && m.author != NOTE_AUTHOR).rev().take(8).collect::<Vec<_>>().into_iter().rev().map(|m| {
+        // The newest messages that fit in about 4,000 words, not just the last eight, as on the Mac (`BotsStore.startOverPrompt`).
+        let mut lines: Vec<String> = Vec::new();
+        let mut used_characters = 0usize;
+        for m in record.messages.iter().filter(|m| !m.text.is_empty() && m.author != NOTE_AUTHOR).rev().take(40) {
             let who = if m.author == OWNER_AUTHOR { self.owner() } else { self.bot(&m.author).map(|b| b.name).unwrap_or(m.author.clone()) };
-            format!("{}: {}", who, m.text.chars().take(1500).collect::<String>())
-        }).collect();
+            let line = format!("{}: {}", who, m.text.chars().take(1500).collect::<String>());
+            let length = line.chars().count();
+            if !lines.is_empty() && used_characters + length > START_OVER_CHARACTERS { break; }
+            lines.insert(0, line);
+            used_characters += length + 1;
+        }
         let history = if lines.is_empty() { String::new() } else { format!("(Your earlier session of this chat is gone, so here's the chat so far:\n\n{}\n\nUse it as context.)\n\n", lines.join("\n")) };
         self.first_message(bot, &(history + prompt))
     }

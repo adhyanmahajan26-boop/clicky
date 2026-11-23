@@ -121,8 +121,8 @@ enum CallPrompt {
     static func system(store: BotsStore, bot: NativeBot?, isVellosOwnBot: Bool, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
         guard !isVellosOwnBot, let bot else { return vellosOwn(store: store, theo: bot ?? store.primary, usesSarvamVoice: usesSarvamVoice, language: language) }
         let owner = BotPrompts.ownerName
-        let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id }.suffix(6)
-            .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text) }
+        let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id || BotsStore.isCallRecord($0) }.suffix(40)
+            .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text, isCallRecord: BotsStore.isCallRecord($0)) }
         return CallPromptText.otherBot(name: bot.name, instructions: bot.personaHead, owner: owner,
                                        languageRule: languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language),
                                        reportingLines: BotPrompts.reportingLines(for: bot, store: store),
@@ -167,12 +167,15 @@ enum CallPrompt {
             if !work.isEmpty { parts.append(work) }
             parts.append(store.runsStatus)
             parts.append(store.projectsNote + " On this call, put those words inside the [TELL: …] line. To just make a new empty folder, say it's for your chat afterward.")
-            let recent = store.conversation(theo.id).messages.suffix(6).compactMap { message -> String? in
-                guard message.author == "user" || message.author == theo.id || message.author == BotsStore.clickyID else { return nil }
-                let who = message.author == "user" ? "\(OwnerName.startingSentence(owner)): " : message.author == theo.id ? "Vello: " : "Pointer Assistant: "
-                return who + String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(240))
+            // Typed messages and earlier calls, so a call remembers what the last one said (ClickyCore `CallPromptText.recentChat`).
+            let recent = store.conversation(theo.id).messages.suffix(40).compactMap { message -> CallPromptText.ChatLine? in
+                if message.author == "user" { return CallPromptText.ChatLine(isFromOwner: true, text: message.text) }
+                if message.author == theo.id { return CallPromptText.ChatLine(isFromOwner: false, text: message.text) }
+                if message.author == BotsStore.clickyID { return CallPromptText.ChatLine(isFromOwner: false, text: message.text, speakerName: "Pointer Assistant") }
+                if BotsStore.isCallRecord(message) { return CallPromptText.ChatLine(isFromOwner: false, text: message.text, isCallRecord: true) }
+                return nil
             }
-            if !recent.isEmpty { parts.append("The end of your text chat with \(owner), before this call:\n" + recent.joined(separator: "\n")) }
+            if let chat = CallPromptText.recentChat(botName: theo.name, owner: owner, lines: recent) { parts.append(chat) }
         }
         return parts.joined(separator: "\n\n")
     }

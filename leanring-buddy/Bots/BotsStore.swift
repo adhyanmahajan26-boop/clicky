@@ -1467,9 +1467,21 @@ final class BotsStore: ObservableObject {
     }
 
     /// What a bot is told when its engine lost the chat: the same prompt, with the chat so far.
+    /// How much of a chat a bot whose engine lost its session starts again with.
+    static let startOverCharacters = 16_000
+
     private func startOverPrompt(bot: NativeBot, in conversationID: String, prompt: String) -> String {
-        let lines = conversation(conversationID).messages.filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }.suffix(8).map { message -> String in
-            "\(message.author == "user" ? BotPrompts.ownerName : (self.bot(message.author)?.name ?? message.author)): \(message.text.prefix(1500))"
+        // The newest messages that fit in about 4,000 words (calls included), not just the last eight: a lost session
+        // otherwise came back knowing next to nothing of a long chat.
+        let messages = conversation(conversationID).messages.filter { !$0.text.isEmpty && $0.author != Self.noteAuthor }.suffix(40)
+        var lines: [String] = []
+        var usedCharacters = 0
+        for message in messages.reversed() {
+            let who = message.author == "user" ? BotPrompts.ownerName : Self.isCallRecord(message) ? "Earlier call" : (self.bot(message.author)?.name ?? message.author)
+            let line = "\(who): \(message.text.prefix(Self.isCallRecord(message) ? 4000 : 1500))"
+            if !lines.isEmpty && usedCharacters + line.count > Self.startOverCharacters { break }
+            lines.insert(line, at: 0)
+            usedCharacters += line.count + 1
         }
         let history = lines.isEmpty ? "" : "(Your earlier session of this chat is gone, so here's the chat so far:\n\n\(lines.joined(separator: "\n"))\n\nUse it as context.)\n\n"
         return BotPrompts.firstMessage(bot: bot, team: bots, text: history + prompt)
@@ -2931,6 +2943,11 @@ extension BotsStore {
     }
 
     fileprivate static let callMark = "📞"
+
+    /// A call's transcript saved in the bot's chat by `recordCall`.
+    static func isCallRecord(_ message: BotChatMessage) -> Bool {
+        message.author == "routine" && message.text.hasPrefix(callMark)
+    }
 
     /// Reports that landed in the primary bot's chat since it last spoke, for the top of its next turn; other bots
     /// get nothing. Marked as read here, so each is read once.
