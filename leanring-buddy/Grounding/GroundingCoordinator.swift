@@ -295,10 +295,11 @@ final class GroundingCoordinator {
             await withTaskGroup(of: (CGDirectDisplayID, [OCRLine]).self) { taskGroup in
                 for screenCapture in capturesForOCR {
                     let coveredRectsCG = coveredRectsByDisplay[screenCapture.displayID] ?? []
+                    let displayID = screenCapture.displayID
                     taskGroup.addTask {
                         let grayImage = GrayImage(cgImage: screenCapture.nativeImage)
                         let lines = await Self.recognizeUncoveredLines(in: screenCapture, coveredRectsCG: coveredRectsCG, grayImage: grayImage, level: .accurate).lines
-                        return (screenCapture.displayID, lines)
+                        return (displayID, lines)
                     }
                 }
                 var linesByDisplay: [CGDirectDisplayID: [OCRLine]] = [:]

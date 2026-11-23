@@ -742,7 +742,7 @@ final class DebugCommandInbox {
                  "window": element.windowTitle ?? ""]
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true,
-                  result: ["count": ownWindows.elements.count, "note": ownWindows.note ?? NSNull(), "elements": Array(listed)], errorMessage: nil)
+                  result: ["count": ownWindows.elements.count, "note": ownWindows.note.map { $0 as Any } ?? NSNull(), "elements": Array(listed)], errorMessage: nil)
 
         case "actionsStatus":
             // P7: the current action task (steps, tier decisions, pending confirm), the last one, settings.
