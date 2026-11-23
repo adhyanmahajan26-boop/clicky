@@ -113,21 +113,43 @@ enum CallPrompt {
 
     @MainActor
     static func system(store: BotsStore, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
-        vellosOwn(store: store, theo: store.primary, usesSarvamVoice: usesSarvamVoice, language: language)
+        vellosOwn(store: store, theo: store.primary, usesSarvamVoice: usesSarvamVoice, language: language,
+                  carriedOverCharacters: carriedOverCharacters(brainSetting: CallSettings.model))
+    }
+
+    /// How much of the chat this call's brain has room for at the start (ClickyCore `ContextBudget`): its own context
+    /// window, less the call's instructions and its answer, a quarter of what's left, at most about 13,000 words.
+    @MainActor
+    static func carriedOverCharacters(brainSetting: String) -> Int {
+        let model = BrainModel(setting: brainSetting)
+        let window: Int
+        if let providerID = BrainInventory.apiProviderID(of: model), let provider = ProviderInfo.info(for: providerID) {
+            let modelName = String(model.modelIdentifier.split(separator: "/", maxSplits: 1).last ?? "")
+            window = ContextWindows.knownTokens(provider: provider, model: modelName)
+        } else {
+            window = ContextBudget.windowTokens(model: model.isClaude ? "claude" : model.modelIdentifier, isLocalServer: false)
+        }
+        let answer = ContextBudget.answerTokens(windowTokens: window, wantedAnswerTokens: APIChat.roomForThinkingTokens)
+        // The call's own instructions run to about 20,000 characters with a big team.
+        let room = ContextBudget.historyCharacters(windowTokens: window, answerTokens: answer, instructionsCharacters: 20_000)
+        return ContextBudget.callCarryOverCharacters(historyCharacters: room)
     }
 
     /// The call's prompt for `bot`: Vello's own bot (`isVellosOwnBot`) gets its controls, any other bot only talks.
     @MainActor
-    static func system(store: BotsStore, bot: NativeBot?, isVellosOwnBot: Bool, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
-        guard !isVellosOwnBot, let bot else { return vellosOwn(store: store, theo: bot ?? store.primary, usesSarvamVoice: usesSarvamVoice, language: language) }
+    static func system(store: BotsStore, bot: NativeBot?, isVellosOwnBot: Bool, usesSarvamVoice: Bool, language: CallSettings.Language,
+                       carriedOverCharacters: Int = CallPromptText.carriedOverCharacters) -> String {
+        guard !isVellosOwnBot, let bot else {
+            return vellosOwn(store: store, theo: bot ?? store.primary, usesSarvamVoice: usesSarvamVoice, language: language, carriedOverCharacters: carriedOverCharacters)
+        }
         let owner = BotPrompts.ownerName
-        let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id || BotsStore.isCallRecord($0) }.suffix(40)
+        let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id || BotsStore.isCallRecord($0) }.suffix(200)
             .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text, isCallRecord: BotsStore.isCallRecord($0)) }
         return CallPromptText.otherBot(name: bot.name, instructions: bot.personaHead, owner: owner,
                                        languageRule: languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language),
                                        reportingLines: BotPrompts.reportingLines(for: bot, store: store),
                                        memorySection: BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath),
-                                       recentChat: Array(recent))
+                                       recentChat: Array(recent), carriedOverLimit: carriedOverCharacters)
     }
 
     /// Which language to answer in.
@@ -145,7 +167,7 @@ enum CallPrompt {
     }
 
     @MainActor
-    private static func vellosOwn(store: BotsStore, theo: NativeBot?, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+    private static func vellosOwn(store: BotsStore, theo: NativeBot?, usesSarvamVoice: Bool, language: CallSettings.Language, carriedOverCharacters: Int) -> String {
         let owner = BotPrompts.ownerName
         var parts = [theo?.personaHead ?? "You are Vello."]
         var rules = CallPromptText.talkingRules(owner: owner)
@@ -168,14 +190,14 @@ enum CallPrompt {
             parts.append(store.runsStatus)
             parts.append(store.projectsNote + " On this call, put those words inside the [TELL: …] line. To just make a new empty folder, say it's for your chat afterward.")
             // Typed messages and earlier calls, so a call remembers what the last one said (ClickyCore `CallPromptText.recentChat`).
-            let recent = store.conversation(theo.id).messages.suffix(40).compactMap { message -> CallPromptText.ChatLine? in
+            let recent = store.conversation(theo.id).messages.suffix(200).compactMap { message -> CallPromptText.ChatLine? in
                 if message.author == "user" { return CallPromptText.ChatLine(isFromOwner: true, text: message.text) }
                 if message.author == theo.id { return CallPromptText.ChatLine(isFromOwner: false, text: message.text) }
                 if message.author == BotsStore.clickyID { return CallPromptText.ChatLine(isFromOwner: false, text: message.text, speakerName: "Pointer Assistant") }
                 if BotsStore.isCallRecord(message) { return CallPromptText.ChatLine(isFromOwner: false, text: message.text, isCallRecord: true) }
                 return nil
             }
-            if let chat = CallPromptText.recentChat(botName: theo.name, owner: owner, lines: recent) { parts.append(chat) }
+            if let chat = CallPromptText.recentChat(botName: theo.name, owner: owner, lines: recent, mostCharacters: carriedOverCharacters) { parts.append(chat) }
         }
         return parts.joined(separator: "\n\n")
     }
@@ -353,15 +375,14 @@ final class TheoCallSession: ObservableObject {
         if isLive && !audio.isEchoCancelled { gate.bargeInMarginDecibels = 34 }
         startVoice()
         startEars()
-        let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language)
-        let brain: ConversationBrain
+        // Any other bot thinks with its own engine and model. One that can't take a call says why and what fixes it.
+        let brainSetting: String
         if isVellosOwnBot {
-            brain = ConversationBrains.make(model: CallSettings.model, systemPrompt: prompt, promptFileName: CallPrompt.fileName, effort: "low")
+            brainSetting = CallSettings.model
         } else {
-            // Any other bot thinks with its own engine and model. One that can't take a call says why and what fixes it.
             switch callBrainForOtherBot() {
             case .use(let setting):
-                brain = ConversationBrains.make(model: setting, systemPrompt: prompt, promptFileName: CallPrompt.otherBotFileName, effort: "low")
+                brainSetting = setting
             case .cannotCall(let words):
                 problem = words
                 state = .listening
@@ -369,6 +390,11 @@ final class TheoCallSession: ObservableObject {
                 return
             }
         }
+        // The call starts with as much of the chat as its brain has room for.
+        let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
+                                       carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
+        let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
+                                            promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low")
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {

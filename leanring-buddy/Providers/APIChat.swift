@@ -338,9 +338,63 @@ enum APIChat {
         }
 
         static func save(_ messages: [APIChatMessage], session: String) {
-            // Screenshots aren't kept; the words are, within reason.
-            let trimmed = messages.suffix(60).map { APIChatMessage(role: $0.role, text: $0.text) }
-            try? JSONEncoder().encode(Array(trimmed)).write(to: folder.appendingPathComponent("\(session).json"), options: .atomic)
+            // Screenshots aren't kept; the words are, all of them. What outgrows the model's room is summed up
+            // (`compactLater`), never just dropped.
+            let words = messages.map { APIChatMessage(role: $0.role, text: $0.text) }
+            try? JSONEncoder().encode(words).write(to: folder.appendingPathComponent("\(session).json"), options: .atomic)
+        }
+
+        /// The room for earlier conversation on this model, with these instructions and this much answer.
+        @MainActor
+        static func roomCharacters(provider: ProviderInfo, model: String, systemCharacters: Int, wantedAnswerTokens: Int) async -> Int {
+            let window = await ContextWindows.tokens(provider: provider, model: model)
+            let answer = ContextBudget.answerTokens(windowTokens: window, wantedAnswerTokens: wantedAnswerTokens)
+            return ContextBudget.historyCharacters(windowTokens: window, answerTokens: answer, instructionsCharacters: systemCharacters)
+        }
+
+        /// What goes with this turn: everything that fits, with the summary first if there is one (ClickyCore `ConversationCompaction.fitting`).
+        static func fitting(_ messages: [APIChatMessage], roomCharacters: Int) -> [APIChatMessage] {
+            let plain = messages.map { ConversationCompaction.Message(role: $0.role, text: $0.text) }
+            let fitted = ConversationCompaction.fitting(plain, roomCharacters: roomCharacters)
+            guard fitted != plain else { return messages }
+            // The newest message keeps its screenshots.
+            var result = fitted.map { APIChatMessage(role: $0.role, text: $0.text) }
+            if let last = messages.last, let lastIndex = result.indices.last, result[lastIndex].text == last.text { result[lastIndex] = last }
+            return result
+        }
+
+        @MainActor private static var compacting: Set<String> = []
+
+        /// After a turn: when the conversation has outgrown its room, the same model sums up the oldest part, earlier
+        /// summary included, and that summary replaces it. Runs after the answer, so it never holds a reply back.
+        /// Until it's done (or if it fails), `fitting` keeps each turn inside the window.
+        @MainActor
+        static func compactLater(session: String, provider: ProviderInfo, key: String?, model: String, roomCharacters: Int) {
+            guard !compacting.contains(session) else { return }
+            let before = load(session)
+            let plain = before.map { ConversationCompaction.Message(role: $0.role, text: $0.text) }
+            guard let count = ConversationCompaction.partToSummarize(plain, roomCharacters: roomCharacters) else { return }
+            compacting.insert(session)
+            let request = ConversationCompaction.summaryRequest(for: Array(plain.prefix(count)), owner: BotPrompts.ownerName)
+            Task { @MainActor in
+                defer { compacting.remove(session) }
+                do {
+                    let summary = try await APIChat.stream(provider: provider, key: key, model: model,
+                                                           system: "You write faithful, compact summaries of conversations, keeping every fact that matters.",
+                                                           messages: [APIChatMessage(role: "user", text: request)],
+                                                           maxOutputTokens: APIChat.roomForThinkingTokens) { _ in }
+                    guard !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    // Turns may have come in meanwhile: only replace if the summed-up part is still the start.
+                    let now = load(session)
+                    guard now.count >= count, now.prefix(count).map(\.text) == before.prefix(count).map(\.text) else { return }
+                    let nowPlain = now.map { ConversationCompaction.Message(role: $0.role, text: $0.text) }
+                    let compacted = ConversationCompaction.replacing(nowPlain, firstCount: count, withSummary: summary)
+                    save(compacted.map { APIChatMessage(role: $0.role, text: $0.text) }, session: session)
+                    print("🧠 Summed up the first \(count) messages of a conversation on \(provider.label) (\(ConversationCompaction.totalCharacters(plain)) characters, room \(roomCharacters))")
+                } catch {
+                    print("🧠 Couldn't sum up a long conversation on \(provider.label): \(error.localizedDescription). Its newest part still goes with each turn.")
+                }
+            }
         }
     }
 
@@ -361,10 +415,12 @@ enum APIChat {
         if let saved = try? String(contentsOfFile: memory, encoding: .utf8), !saved.isEmpty { system += "\n\nWhat you remember:\n\(saved.prefix(4000))" }
         let toolbox = await APIChatToolbox.make(for: bot, ownerAsked: ownerAsked, turnLimitSeconds: BotRunner.turnLimitSeconds)
         system += "\n\n" + toolbox.promptSection
+        // As much of the chat as the model holds; the rest is in its summary.
+        let room = await History.roomCharacters(provider: provider, model: bot.model, systemCharacters: system.count, wantedAnswerTokens: maxOutputTokens)
         let answer: String
         do {
-            answer = try await stream(provider: provider, key: key, model: bot.model, system: system, messages: messages, toolbox: toolbox,
-                                      fast: bot.fast ?? false, onText: onText)
+            answer = try await stream(provider: provider, key: key, model: bot.model, system: system, messages: History.fitting(messages, roomCharacters: room),
+                                      toolbox: toolbox, fast: bot.fast ?? false, onText: onText)
         } catch {
             await toolbox.finish()
             throw error
@@ -373,6 +429,7 @@ enum APIChat {
         guard !answer.isEmpty else { throw APIChatError.noAnswer(provider.label) }
         messages.append(APIChatMessage(role: "assistant", text: answer))
         History.save(messages, session: id)
+        await History.compactLater(session: id, provider: provider, key: key, model: bot.model, roomCharacters: room)
         return (answer, id)
     }
 }

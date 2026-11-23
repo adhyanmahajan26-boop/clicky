@@ -58,14 +58,18 @@ public enum CallPromptText {
     public static let longestCarriedCallCharacters = 4_000
 
     /// The end of the bot's own text chat, earlier calls included, newest kept first, within `carriedOverCharacters`.
-    public static func recentChat(botName: String, owner: String, lines: [ChatLine]) -> String? {
+    /// `mostCharacters`: the room the call's model has for it (`ContextBudget.callCarryOverCharacters`); a bigger room
+    /// also lets each message and each call keep more of itself.
+    public static func recentChat(botName: String, owner: String, lines: [ChatLine], mostCharacters: Int = carriedOverCharacters) -> String? {
+        let longestMessage = max(longestCarriedMessageCharacters, mostCharacters / 10)
+        let longestCall = max(longestCarriedCallCharacters, mostCharacters / 3)
         var shown: [String] = []
         var usedCharacters = 0
         for line in lines.reversed() {
-            let entry = carriedOver(line, botName: botName, owner: owner)
+            let entry = carriedOver(line, botName: botName, owner: owner, longestMessage: longestMessage, longestCall: longestCall)
             guard !entry.isEmpty else { continue }
             // The newest line always goes in, so a call never starts knowing nothing.
-            if !shown.isEmpty && usedCharacters + entry.count > carriedOverCharacters { break }
+            if !shown.isEmpty && usedCharacters + entry.count > mostCharacters { break }
             shown.insert(entry, at: 0)
             usedCharacters += entry.count + 1
         }
@@ -73,7 +77,7 @@ public enum CallPromptText {
         return "The end of your text chat with \(owner) before this call, earlier calls included, oldest first:\n" + shown.joined(separator: "\n")
     }
 
-    private static func carriedOver(_ line: ChatLine, botName: String, owner: String) -> String {
+    private static func carriedOver(_ line: ChatLine, botName: String, owner: String, longestMessage: Int, longestCall: Int) -> String {
         let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         if line.isCallRecord {
@@ -82,14 +86,14 @@ public enum CallPromptText {
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             guard let heading = callLines.first else { return "" }
             var transcript = callLines.dropFirst().joined(separator: "\n")
-            if transcript.count > longestCarriedCallCharacters {
-                transcript = "(the start of this call is left out) …" + String(transcript.suffix(longestCarriedCallCharacters))
+            if transcript.count > longestCall {
+                transcript = "(the start of this call is left out) …" + String(transcript.suffix(longestCall))
             }
             return "[Earlier call] " + heading + (transcript.isEmpty ? "" : "\n" + transcript)
         }
         let who = line.isFromOwner ? OwnerName.startingSentence(owner) : (line.speakerName ?? botName)
         let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
-        let cut = oneLine.count > longestCarriedMessageCharacters ? String(oneLine.prefix(longestCarriedMessageCharacters)) + " …" : oneLine
+        let cut = oneLine.count > longestMessage ? String(oneLine.prefix(longestMessage)) + " …" : oneLine
         return "\(who): " + cut
     }
 
@@ -97,7 +101,8 @@ public enum CallPromptText {
     /// talks, the language, who it reports to, its memory and the end of its own chat.
     /// `instructions`: the bot's own, with its nature after them (`BotOwnFiles.personaHead`).
     public static func otherBot(name: String, instructions: String, owner: String, languageRule: String,
-                                reportingLines: [String] = [], memorySection: String? = nil, recentChat lines: [ChatLine] = []) -> String {
+                                reportingLines: [String] = [], memorySection: String? = nil, recentChat lines: [ChatLine] = [],
+                                carriedOverLimit: Int = carriedOverCharacters) -> String {
         let ownInstructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         // Its name first, unless its instructions already start with it.
         var parts = ownInstructions.lowercased().hasPrefix("you are \(name.lowercased())") ? [] : ["You are \(name)."]
@@ -107,7 +112,7 @@ public enum CallPromptText {
         parts.append(rules)
         parts += reportingLines
         if let memorySection, !memorySection.isEmpty { parts.append(memorySection) }
-        if let chat = recentChat(botName: name, owner: owner, lines: lines) { parts.append(chat) }
+        if let chat = recentChat(botName: name, owner: owner, lines: lines, mostCharacters: carriedOverLimit) { parts.append(chat) }
         return parts.joined(separator: "\n\n")
     }
 
