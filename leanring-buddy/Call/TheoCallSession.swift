@@ -618,15 +618,16 @@ final class TheoCallSession: ObservableObject {
         self.lastReleasedTurn = nil
         if let answerLineID, let answerIndex = lines.firstIndex(where: { $0.id == answerLineID }) { lines.remove(at: answerIndex) }
         heldTurnWords = lastReleasedTurn.words
-        guard let earlierLineID = lastReleasedTurn.lineID, let earlierIndex = lines.firstIndex(where: { $0.id == earlierLineID }) else {
+        guard let earlierLineID = lastReleasedTurn.lineID, lines.contains(where: { $0.id == earlierLineID }) else {
             waitForTheEndOfTheTurn()
             return
         }
         heldTurnLineID = earlierLineID
-        // The words now coming in were on a line of their own: they join the earlier one.
-        if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), liveIndex != earlierIndex {
+        // The words now coming in were on a line of their own: they join the earlier one. The earlier line is found again
+        // by its id after the removal: a live line above it shifted it, and the old index crashed the app (Air, 23 Nov).
+        if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive && $0.id != earlierLineID }) {
             lines.remove(at: liveIndex)
-            lines[earlierIndex].isLive = true
+            if let earlierIndex = lines.firstIndex(where: { $0.id == earlierLineID }) { lines[earlierIndex].isLive = true }
         }
         waitForTheEndOfTheTurn()
     }
