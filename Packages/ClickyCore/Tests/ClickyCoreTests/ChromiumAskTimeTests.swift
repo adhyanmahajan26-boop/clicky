@@ -246,3 +246,32 @@ private func chromeTree(webAreaChildren: [MockNode]) -> (app: MockNode, webArea:
     activation.recordWrite(at: t0.addingTimeInterval(30))
     #expect(activation.askWaitSeconds(at: t0.addingTimeInterval(30)) == EnhancedUserInterfacePolicy.askTimeWaitSeconds)
 }
+
+// Air, 23 Nov: every ask that wrote AXEnhancedUserInterface false → true to the Claude app (Electron) walked 0 elements
+// of its window, so Pointer Assistant couldn't see the sidebar; the asks in between read 97 to 194.
+@Test func electronAppsOnlyEverGetManualAccessibility() {
+    #expect(EnhancedUserInterfacePolicy.flagWrites(isElectron: true) == [.manualAccessibility])
+    #expect(!EnhancedUserInterfacePolicy.flagWrites(isElectron: true).contains(.enhancedUserInterface(false)))
+    #expect(EnhancedUserInterfacePolicy.flagWrites(isElectron: false) == [.enhancedUserInterface(false), .enhancedUserInterface(true)])
+    #expect(!EnhancedUserInterfacePolicy.switchesOffWhenLeaving(isElectron: true))
+    #expect(EnhancedUserInterfacePolicy.switchesOffWhenLeaving(isElectron: false))
+}
+
+@Test func aWalkFullOfElementsMeansTheTreeIsThereUntilOneFindsNearlyNothing() {
+    var activation = Activation()
+    let start = Date(timeIntervalSince1970: 1_000)
+    #expect(!activation.treeIsThere)
+    activation.recordWrite(at: start)
+    activation.recordWalk(elementCount: 12, at: start)
+    #expect(!activation.treeIsThere)
+    activation.recordWalk(elementCount: 120, at: start.addingTimeInterval(1))
+    #expect(activation.treeIsThere)
+    // The tree being there ends the write cycle and any backoff.
+    #expect(!activation.isWritePending(at: start.addingTimeInterval(1)))
+    #expect(!activation.isBackedOff(at: start.addingTimeInterval(1)))
+    // A small walk (a dialog in front) doesn't undo it; an empty one does.
+    activation.recordWalk(elementCount: 8, at: start.addingTimeInterval(2))
+    #expect(activation.treeIsThere)
+    activation.recordWalk(elementCount: 0, at: start.addingTimeInterval(3))
+    #expect(!activation.treeIsThere)
+}

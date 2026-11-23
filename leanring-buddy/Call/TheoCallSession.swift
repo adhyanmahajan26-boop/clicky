@@ -469,15 +469,30 @@ final class TheoCallSession: ObservableObject {
     private func speechStarted() {
         speechStartedAt = Date()
         speechEndedAt = nil
-        if replyInProgress, !turnHasSounded, lastReleasedTurn != nil {
-            // Vello hadn't said a word yet: the owner is just carrying on.
-            supersedeTheAnswer()
-        } else if audio.isVoicePlaying || replyInProgress || state == .speaking || state == .thinking {
+        if audio.isVoicePlaying || state == .speaking {
+            // Talking over Vello's voice: it stops at once (the gate already wants a voice well above the speakers).
             bargeIn()
         }
+        // While Vello is still writing, a sound on its own no longer throws the answer away. A cough, a chair, or someone
+        // nearby used to start every answer over (Air, 23 Nov: "the owner spoke during the answer" 25 times in one call,
+        // often with no new words, so the same turn was asked again and again and the answer came late or never). Words
+        // decide instead: `heardPartial` and `heardFinal` cut in once the owner really says something.
         state = .userSpeaking
         startAddyLine()
     }
+
+    /// The owner's words came in while Vello was still answering: if none of the answer was heard yet, the owner was just
+    /// carrying on and the turn goes on as one; otherwise Vello stops.
+    private func ownerWordsCameDuringTheAnswer() {
+        if replyInProgress, !turnHasSounded, lastReleasedTurn != nil {
+            supersedeTheAnswer()
+        } else if replyInProgress || audio.isVoicePlaying || state == .speaking {
+            bargeIn()
+        }
+    }
+
+    /// Words in a partial before it counts as the owner cutting in (one word is too often a cough or the room).
+    static let partialWordsToCutIn = 2
 
     private func speechEnded() {
         // The gate waits out a stretch of quiet to be sure. The clock starts from the voice's real end, before that wait.
@@ -528,6 +543,10 @@ final class TheoCallSession: ObservableObject {
     private func heardPartial(_ text: String) {
         // Vello's own voice coming back through the mic: not the owner, so no line and no turn.
         if isVellosOwnVoiceComingBack(text) || isSomeoneElseTalking() { return }
+        if replyInProgress || audio.isVoicePlaying,
+           text.split(whereSeparator: \.isWhitespace).count >= Self.partialWordsToCutIn {
+            ownerWordsCameDuringTheAnswer()
+        }
         startAddyLine()
         lastWordsAt = Date()
         guard let index = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) else { return }
@@ -560,7 +579,7 @@ final class TheoCallSession: ObservableObject {
         }
         // A server's own voice detection can beat the gate. Its default wait is half a second of quiet.
         if isOwnerSpeaking, speechEndedAt == nil, !words.isEmpty { speechEndedAt = Date().addingTimeInterval(-0.5) }
-        if !words.isEmpty, replyInProgress || audio.isVoicePlaying { supersedeTheAnswer() }
+        if !words.isEmpty, replyInProgress || audio.isVoicePlaying { ownerWordsCameDuringTheAnswer() }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
         if words.isEmpty {
             // A cough, or the room. No new words; whatever was held still waits for its pause.

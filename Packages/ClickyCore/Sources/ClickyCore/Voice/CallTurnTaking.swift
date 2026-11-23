@@ -254,9 +254,15 @@ public struct CallNearVoice: Equatable, Sendable {
     /// After this long with nothing near, the margin widens by one decibel every `looseningSecondsPerDecibel`.
     public static let looseningStartsAfterSeconds = 15.0
     public static let looseningSecondsPerDecibel = 3.0
-    public static let widestMarginDecibels = 20.0
+    public static let widestMarginDecibels = 14.0
     /// Stretches of near speech remembered for the owner's level.
-    public static let rememberedStretches = 8
+    public static let rememberedStretches = 12
+    /// Only a stretch at most this much quieter than the owner's level (or louder) teaches the owner's level.
+    ///
+    /// Every stretch let through used to be learned, so a voice across the room that just made it past the margin pulled
+    /// the owner's level down, which let the next, quieter one through, and so on (Air, 23 Nov: the owner's level slid
+    /// from -20 dB to -32 dB in one call, and voices at -41 dB were the only ones still turned away).
+    public static let learnsWithinDecibels = 4.0
     /// Anything quieter than this is never taken as speech to learn from.
     public static let quietestLearnableDecibels = -65.0
 
@@ -294,10 +300,12 @@ public struct CallNearVoice: Equatable, Sendable {
         lastNearSpeechAt = now
     }
 
-    /// A stretch of near speech ended; `levelDecibels` is its loud level (`loudLevel(of:)`).
+    /// A stretch of near speech ended; `levelDecibels` is its loud level (`loudLevel(of:)`). It's learned only when it's
+    /// about as loud as the owner already is, or louder (`learnsWithinDecibels`).
     public mutating func learn(nearStretchLevelDecibels levelDecibels: Double, at now: Date) {
         lastNearSpeechAt = now
         guard levelDecibels > Self.quietestLearnableDecibels else { return }
+        if let ownerLevelDecibels, levelDecibels < ownerLevelDecibels - Self.learnsWithinDecibels { return }
         recentNearLevels.append(levelDecibels)
         if recentNearLevels.count > Self.rememberedStretches { recentNearLevels.removeFirst(recentNearLevels.count - Self.rememberedStretches) }
     }

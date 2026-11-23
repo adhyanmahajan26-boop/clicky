@@ -732,6 +732,18 @@ final class DebugCommandInbox {
                 reply(commandIdentifier: commandIdentifier, isSuccess: false, result: findError.details, errorMessage: findError.message)
             }
 
+        case "ownWindowElements":
+            // Vello's own main windows as the grounding list reads them (in-process, OwnWindowAccessibility). Read-only.
+            let windowStack = WindowListReader.read(displays: ScreenTopology.current())
+            let ownWindows = OwnWindowAccessibility.elements(windowStack: windowStack)
+            let listed = ownWindows.elements.prefix(80).map { element -> [String: Any] in
+                ["role": element.role.rawValue, "label": element.label ?? "", "value": element.value ?? "",
+                 "frameCG": [element.frameCG.minX, element.frameCG.minY, element.frameCG.width, element.frameCG.height],
+                 "window": element.windowTitle ?? ""]
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["count": ownWindows.elements.count, "note": ownWindows.note ?? NSNull(), "elements": Array(listed)], errorMessage: nil)
+
         case "actionsStatus":
             // P7: the current action task (steps, tier decisions, pending confirm), the last one, settings.
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.actionTaskController.statusSnapshot(), errorMessage: nil)

@@ -6,9 +6,11 @@
 //  listed Chromium/Electron app (`v2.grounding.enhancedUIBundleIDs`) so its
 //  full AX tree is there by the time the user asks, and sets it back to
 //  false when another app comes forward and when Clicky quits (the flag
-//  upsets window managers). Electron apps also get AXManualAccessibility,
-//  as the walk already does. AX writes are IPC: they run on a background
-//  queue, never the main thread. Decisions: EnhancedUserInterfacePolicy.
+//  upsets window managers). Electron apps get AXManualAccessibility only,
+//  never AXEnhancedUserInterface: false → true tore the Claude app's tree
+//  down on every write, so the ask that wrote saw none of its window. AX
+//  writes are IPC: they run on a background queue, never the main thread.
+//  Decisions: EnhancedUserInterfacePolicy.
 //
 //  Chrome builds its page tree ~2 s after the flag goes false → true, and
 //  drops a write sent while it is launching, so after every write a
@@ -26,6 +28,8 @@ final class EnhancedUserInterfaceController {
     private let ax: AXQuerying
     private let axWriteQueue = DispatchQueue(label: "clicky.ax.enhancedUI", qos: .utility)
     private var currentlyEnhancedProcessIdentifier: pid_t?
+    /// Electron apps seen here: they only ever get AXManualAccessibility (EnhancedUserInterfacePolicy.flagWrites).
+    private var electronProcessIdentifiers: Set<pid_t> = []
     private var notificationObservers: [NSObjectProtocol] = []
     /// Per app with the flag: its write cycle / background follow-up state.
     private var activations: [pid_t: WebContentActivation] = [:]
@@ -58,6 +62,7 @@ final class EnhancedUserInterfaceController {
 
     private func frontmostApplicationChanged(to activatedApplication: NSRunningApplication?) {
         guard let activatedApplication else { return }
+        if ElectronDetection.isElectron(activatedApplication) { electronProcessIdentifiers.insert(activatedApplication.processIdentifier) }
         let transition = EnhancedUserInterfacePolicy.transition(
             currentlyEnhancedProcessIdentifier: currentlyEnhancedProcessIdentifier,
             activated: .init(processIdentifier: activatedApplication.processIdentifier, bundleIdentifier: activatedApplication.bundleIdentifier,
@@ -70,9 +75,10 @@ final class EnhancedUserInterfaceController {
             forget(disableProcessIdentifier)
         }
         let isElectron = ElectronDetection.isElectron(activatedApplication)
+        let switchesOffLeavingApplication = transition.disableProcessIdentifier.map(switchesOffWhenLeaving) ?? false
         let ax = ax
         axWriteQueue.async {
-            if let disableProcessIdentifier = transition.disableProcessIdentifier {
+            if let disableProcessIdentifier = transition.disableProcessIdentifier, switchesOffLeavingApplication {
                 ax.setEnhancedUserInterface(false, for: ax.applicationNode(processIdentifier: disableProcessIdentifier))
             }
             if let enableProcessIdentifier = transition.enableProcessIdentifier {
@@ -91,15 +97,37 @@ final class EnhancedUserInterfaceController {
         }
     }
 
-    /// The flag false → true (so Chromium sees a change even when it thinks
-    /// it is already on) plus AXManualAccessibility for Electron (Chrome
-    /// ignores that one: measured, no web tree after 8 s). Runs on the
-    /// write queue.
+    /// Chromium: the flag false → true (so it sees a change even when it
+    /// thinks it is already on). Electron: AXManualAccessibility only, since
+    /// false tears its tree down (EnhancedUserInterfacePolicy.flagWrites).
+    /// Runs on the write queue.
     nonisolated private static func writeFlag(ax: AXQuerying, processIdentifier: pid_t, isElectron: Bool) {
         let applicationNode = ax.applicationNode(processIdentifier: processIdentifier)
-        ax.setEnhancedUserInterface(false, for: applicationNode)
-        ax.setEnhancedUserInterface(true, for: applicationNode)
-        if isElectron { ax.enableManualAccessibility(for: applicationNode) }
+        for write in EnhancedUserInterfacePolicy.flagWrites(isElectron: isElectron) {
+            switch write {
+            case .enhancedUserInterface(let isEnabled): ax.setEnhancedUserInterface(isEnabled, for: applicationNode)
+            case .manualAccessibility: ax.enableManualAccessibility(for: applicationNode)
+            }
+        }
+    }
+
+    private func switchesOffWhenLeaving(_ processIdentifier: pid_t) -> Bool {
+        EnhancedUserInterfacePolicy.switchesOffWhenLeaving(isElectron: electronProcessIdentifiers.contains(processIdentifier))
+    }
+
+    /// A finished walk of the front app found `elementCount` elements. For an
+    /// Electron app with plenty, later asks neither write nor wait: the
+    /// Claude app never shows an AXWebArea, so each ask used to write and
+    /// wait 0.6 s for one, and the write emptied the tree for that very ask.
+    func recordFrontWalk(processIdentifier: pid_t, elementCount: Int) {
+        guard electronProcessIdentifiers.contains(processIdentifier) else { return }
+        var activation = activations[processIdentifier] ?? WebContentActivation()
+        activation.recordWalk(elementCount: elementCount, at: Date())
+        activations[processIdentifier] = activation
+        if activation.treeIsThere {
+            followUpTasks[processIdentifier]?.cancel()
+            followUpTasks[processIdentifier] = nil
+        }
     }
 
     private func forget(_ processIdentifier: pid_t) {
@@ -193,6 +221,7 @@ final class EnhancedUserInterfaceController {
         guard let frontApplication = NSWorkspace.shared.frontmostApplication, frontApplication.processIdentifier != getpid() else { return nil }
         let processIdentifier = frontApplication.processIdentifier
         let isElectron = ElectronDetection.isElectron(frontApplication)
+        if isElectron { electronProcessIdentifiers.insert(processIdentifier) }
         guard EnhancedUserInterfacePolicy.matches(bundleIdentifier: frontApplication.bundleIdentifier, isElectron: isElectron,
                                                   configuredBundleIdentifiers: ClickySettings.enhancedUIBundleIDs) else { return nil }
         let applicationName = Self.name(of: frontApplication)
@@ -209,11 +238,14 @@ final class EnhancedUserInterfaceController {
             return AskTimeResult(processIdentifier: processIdentifier, applicationName: applicationName, state: .ready,
                                  waitedMilliseconds: 0, action: "ready")
         }
+        // An Electron app whose tree a walk already found full: nothing to write or wait for.
+        if isElectron && activation.treeIsThere { return nil }
 
         // Another app (e.g. the other Chrome instance) holds the flag: hand it over.
         let previouslyEnhancedProcessIdentifier = currentlyEnhancedProcessIdentifier
-        let disableProcessIdentifier = previouslyEnhancedProcessIdentifier != processIdentifier ? previouslyEnhancedProcessIdentifier : nil
-        if let disableProcessIdentifier { forget(disableProcessIdentifier) }
+        let previousProcessIdentifier = previouslyEnhancedProcessIdentifier != processIdentifier ? previouslyEnhancedProcessIdentifier : nil
+        if let previousProcessIdentifier { forget(previousProcessIdentifier) }
+        let disableProcessIdentifier = previousProcessIdentifier.flatMap { switchesOffWhenLeaving($0) ? $0 : nil }
         currentlyEnhancedProcessIdentifier = processIdentifier
 
         let now = Date()
@@ -252,6 +284,7 @@ final class EnhancedUserInterfaceController {
         guard let enhancedProcessIdentifier = currentlyEnhancedProcessIdentifier else { return }
         currentlyEnhancedProcessIdentifier = nil
         followUpTasks.values.forEach { $0.cancel() }
+        guard switchesOffWhenLeaving(enhancedProcessIdentifier) else { return }
         let ax = ax
         // Short and bounded (0.25 s AX timeout): the app is about to exit.
         axWriteQueue.sync {
