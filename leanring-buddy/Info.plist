@@ -18,6 +18,8 @@
 	<string>Vello uses your local network to stay in step with Vello on your other Mac.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Vello opens research pages in new Chrome windows on its VM screens, and closes them when it's done.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Vello reads your hand signs with the camera, on this Mac, so you can control Pointer Assistant or have it speak for you. Nothing is recorded.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Vello uses your microphone so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>

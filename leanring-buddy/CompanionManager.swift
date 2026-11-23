@@ -282,6 +282,8 @@ final class CompanionManager: ObservableObject {
     private(set) lazy var actionTaskController = ActionTaskController(companionManager: self)
     /// P8: simple spoken commands done locally (volume, media, windows, apps, tabs…), dictation, their confirms.
     private(set) lazy var voiceCommandController = VoiceCommandController(companionManager: self)
+    /// Hand signs on the camera: open palm to talk, fist to stop, Speak for me (HandSigns/).
+    private(set) lazy var handSignController = HandSignController(companionManager: self)
 
     /// The whiteboard panel and its narration (P4).
     private(set) lazy var boardController = BoardController(companionManager: self)
@@ -493,6 +495,8 @@ final class CompanionManager: ObservableObject {
             self?.updateBrainAgent(for: newVoiceState)
         }
         startWakeWord()
+        // Hand signs: the camera comes back on at launch if the owner left it on.
+        handSignController.startIfEnabled()
         screenContentSeenObserver = NotificationCenter.default.addObserver(forName: .clickyScreenContentSeen, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.noteScreenContentSeen() }
         }
@@ -2119,6 +2123,8 @@ final class CompanionManager: ObservableObject {
     /// Debug inbox: the newest history entry, and Esc as if pressed.
     var lastHistoryEntryForDebug: String? { conversationHistory.last?.assistantResponse }
     func handleEscapeKeyPressedForDebug() { handleEscapeKeyPressed() }
+    /// A fist held up to the camera (hand signs): the same stop as Escape.
+    func stopEverythingLikeEscape() { handleEscapeKeyPressed() }
 
     func copyLastAnswerToPasteboard() {
         guard let lastAnswerText, !lastAnswerText.isEmpty else { return }

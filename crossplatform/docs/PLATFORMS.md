@@ -219,7 +219,7 @@ pointing on a real multi-monitor PC need a person ([WINDOWS-PC.md](WINDOWS-PC.md
 
 Not in this build yet (the Mac has them): hands-free sessions (double tap), the wake word ("hey vello" for a call with Vello, "hey pointer" for Pointer Assistant), doing things on the
 screen (`<actions>`, article highlights and notes), `[WORKER:]` helpers and Clicky's team, the notch pill, voice calls with Vello or any other bot (and what Vello can do on one: `[POINTER:]`, `[ROUTINE:]`, `[TELL: Vello:]`; a bot's own call voice), a bot's own `instructions.md` and `nature.md`, `[SNAP:]`
-screenshots and the local fast path for spoken commands. The Mac's hidden displays would need a signed display driver on
+screenshots, the local fast path for spoken commands and hand signs on the camera. The Mac's hidden displays would need a signed display driver on
 Windows, so Windows and Linux have VM screens made of hidden browser windows instead (below).
 
 ## Dictation (hold a key, talk, the words are typed where you are): Mac and Windows

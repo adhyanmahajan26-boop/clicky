@@ -556,6 +556,7 @@ struct ClickySettingsContent: View {
                     })).toggleStyle(.switch).labelsHidden()
                 }
             }
+            if let manager { HandSignSettingsSection(controller: manager.handSignController) }
             ClickyVoicePicker()
             TheoSection(title: "Also", hint: nil) {
                 linkRow("Cursor style", detail: look.sparkStyle.displayName, section: .look)

@@ -461,6 +461,32 @@ final class DebugCommandInbox {
             perfResult["frameLoopRunning"] = CursorFollowDriver.shared.isRunning && CursorFollowDriver.shared.mode == .fast
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: perfResult, errorMessage: nil)
 
+        case "handSigns":
+            // Hand signs: state, on / off, a mode, or a sign as if the camera had seen it held ({action: sign, sign: "thumbsUp"}).
+            let handSignController = companionManager.handSignController
+            switch commandObject["action"] as? String ?? "state" {
+            case "on":
+                handSignController.setEnabled(true)
+            case "off":
+                handSignController.setEnabled(false)
+            case "mode":
+                guard let modeName = commandObject["mode"] as? String, let mode = HandSignMode(rawValue: modeName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns mode needs \"mode\": control | speakForMe")
+                    return
+                }
+                handSignController.mode = mode
+            case "sign":
+                guard let signName = commandObject["sign"] as? String, let sign = HandSign(rawValue: signName) else {
+                    let signNames = HandSign.allCases.map(\.rawValue).joined(separator: " | ")
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns sign needs \"sign\": \(signNames)")
+                    return
+                }
+                handSignController.perform(sign)
+            default:
+                break
+            }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: handSignController.statusSnapshot(), errorMessage: nil)
+
         case "wakeStatus":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: companionManager.wakeWordController.statusSnapshot(), errorMessage: nil)
 
