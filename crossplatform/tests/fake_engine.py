@@ -314,6 +314,16 @@ if agent in ("codex", "cursor", "gemini", "grok") and mode != "mcp":
         agent_failure(said, 41 if agent == "gemini" else 1)
     if mode in ("overloaded", "error-result"):
         agent_failure("API Error: 529 Overloaded")
+    if mode == "codex-image" and agent == "codex":
+        # Codex's image tool: the picture goes in Codex's own folder for this thread, and the answer doesn't mention it
+        # (it's told the picture is already on screen). Vello copies it into the bot's folder and attaches it (files.rs).
+        codex_home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+        pictures = os.path.join(codex_home, "generated_images", "fake-codex-%d" % os.getpid())
+        os.makedirs(pictures, exist_ok=True)
+        with open(os.path.join(pictures, "exec-%d.png" % os.getpid()), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + read("fake-reply").encode("utf-8"))
+        agent_answer("Here's your monkey eating a banana.")
+        sys.exit(0)
     if mode == "usage-limit" and agent in ("codex", "cursor"):
         agent_failure("You've hit your usage limit. Try again in 3 hours." if agent == "codex" else "You're out of usage. Increase your limit at cursor.com.")
     text = {"reply": lambda: read("fake-reply"), "script": script_reply}.get(mode, lambda: "fake %s ok on %s" % (agent, model or "its default"))()

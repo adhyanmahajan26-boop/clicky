@@ -84,7 +84,8 @@ def fresh():
 def start(wait=None):
     wait = wait or float(os.environ.get("THEO_START_WAIT", "20"))
     global _proc
-    env = dict(os.environ, THEO_FAKE_DIR=str(FAKE_DIR))
+    # Codex's own folder (where its image tool saves pictures) is the test's, never the owner's ~/.codex.
+    env = dict(os.environ, THEO_FAKE_DIR=str(FAKE_DIR), CODEX_HOME=str(ROOT / "codex-home"))
     if not (BIN.parent / ("theo-connectors" + EXE)).exists() and HELPER.exists():
         env.setdefault("THEO_CONNECTORS_BIN", str(HELPER))
     log = open(ROOT / "theod.log", "a")

@@ -261,6 +261,84 @@ pub fn carry_out_for_turn(h: &Harness, bot: &Bot, attached: &[String], saves: &[
     }
 }
 
+// MARK: Pictures an engine's own image tool made (ClickyCore `EngineMadeImages`)
+//
+// Codex's image tool saves each picture in <Codex home>/generated_images/<thread id>/ and tells the model it's already on
+// screen. In Vello it isn't, and a Codex bot runs read-only, so it can't copy the picture into its memory folder and write
+// [FILE:] itself. After a Codex turn Vello copies the pictures made on that turn into the bot's memory folder and adds a
+// [FILE:] line for each, so they arrive as attachment cards like any other file.
+
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
+/// A file written a moment before the turn's clock started still counts (the two clocks are read separately).
+const START_SLACK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Codex's home: `CODEX_HOME` when it's set to an absolute path, else `.codex` in the home folder.
+pub fn codex_home(codex_home_variable: Option<&std::ffi::OsStr>, home: &Path) -> PathBuf {
+    codex_home_variable.map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".codex"))
+}
+
+/// Where Codex keeps one thread's pictures. None for a thread id that could reach outside that folder.
+pub fn codex_images_folder(codex_home: &Path, thread_id: &str) -> Option<PathBuf> {
+    let id = thread_id.trim();
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.starts_with('.') { return None; }
+    Some(codex_home.join("generated_images").join(id))
+}
+
+/// The pictures written on this turn, oldest first, at most as many as one reply may attach. Earlier turns' pictures stay
+/// in the same thread's folder, so they're told apart by when they were written.
+pub fn made_this_turn(files: &[(String, std::time::SystemTime)], turn_started: std::time::SystemTime) -> Vec<String> {
+    let earliest = turn_started.checked_sub(START_SLACK).unwrap_or(turn_started);
+    let mut pictures: Vec<&(String, std::time::SystemTime)> = files.iter()
+        .filter(|(name, modified)| {
+            let extension = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            IMAGE_EXTENSIONS.contains(&extension.as_str()) && *modified >= earliest
+        })
+        .collect();
+    pictures.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    pictures.into_iter().take(MAXIMUM_ATTACHED_PER_REPLY).map(|(name, _)| name.clone()).collect()
+}
+
+/// What the copy in the bot's memory folder is called: "image.png", then "image 2.png", so nothing there is replaced.
+pub fn name_in_bot_folder(original: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    let extension = Path::new(original).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let plain = if extension.is_empty() { "image.png".to_string() } else { format!("image.{extension}") };
+    free_name(&plain, is_taken)
+}
+
+/// The reply with a [FILE:] line for each copied picture, unless the reply already names it.
+pub fn reply_attaching(text: &str, copied: &[String]) -> String {
+    let (_, already, _) = extract(text);
+    let lines: Vec<String> = copied.iter().filter(|name| !already.contains(name)).map(|name| format!("[FILE: {name}]")).collect();
+    if lines.is_empty() { return text.to_string(); }
+    let trimmed = text.trim();
+    if trimmed.is_empty() { lines.join("\n") } else { format!("{trimmed}\n\n{}", lines.join("\n")) }
+}
+
+/// Copies the pictures Codex's image tool made on this turn into the bot's memory folder (Codex's own copies stay where they
+/// are) and returns the names they have there.
+pub fn copy_codex_images_made_this_turn(codex_home: &Path, thread_id: &str, turn_started: std::time::SystemTime, bot_folder: &Path) -> Vec<String> {
+    let Some(images_folder) = codex_images_folder(codex_home, thread_id) else { return vec![] };
+    let Ok(entries) = std::fs::read_dir(&images_folder) else { return vec![] };
+    let listed: Vec<(String, std::time::SystemTime)> = entries.flatten()
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
+            Some((entry.file_name().to_string_lossy().to_string(), metadata.modified().ok()?))
+        })
+        .collect();
+    let new_pictures = made_this_turn(&listed, turn_started);
+    if new_pictures.is_empty() { return vec![]; }
+    let _ = std::fs::create_dir_all(bot_folder);
+    let mut copied = vec![];
+    for picture in new_pictures {
+        let name = name_in_bot_folder(&picture, |candidate| bot_folder.join(candidate).exists());
+        match std::fs::copy(images_folder.join(&picture), bot_folder.join(&name)) {
+            Ok(_) => copied.push(name),
+            Err(e) => eprintln!("[files] couldn't copy Codex's picture {picture}: {e}"),
+        }
+    }
+    copied
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +394,60 @@ mod tests {
     fn the_how_to_names_both_lines_and_the_owner() {
         let text = how_to("Sam");
         assert!(text.contains("[FILE: file name]") && text.contains("[SAVE FILE: file name -> Desktop]") && text.contains("Sam"));
+    }
+
+    #[test]
+    fn codex_keeps_a_threads_pictures_in_its_own_folder_and_no_id_leaves_it() {
+        let home = Path::new("/home/sam/.codex");
+        assert_eq!(codex_images_folder(home, "01a2073b-b691"), Some(home.join("generated_images").join("01a2073b-b691")));
+        assert_eq!(codex_images_folder(home, "../../Documents"), None);
+        assert_eq!(codex_images_folder(home, ".."), None);
+        assert_eq!(codex_images_folder(home, " "), None);
+    }
+
+    #[test]
+    fn only_pictures_written_on_this_turn_are_taken() {
+        let started = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        let at = |seconds: i64| if seconds >= 0 { started + std::time::Duration::from_secs(seconds as u64) } else { started - std::time::Duration::from_secs((-seconds) as u64) };
+        let files = vec![
+            ("exec-old.png".to_string(), at(-600)),
+            ("exec-second.png".to_string(), at(40)),
+            ("exec-first.jpg".to_string(), at(30)),
+            ("notes.txt".to_string(), at(35)),
+            ("exec-just-before.PNG".to_string(), at(-1)),
+        ];
+        assert_eq!(made_this_turn(&files, started), vec!["exec-just-before.PNG", "exec-first.jpg", "exec-second.png"]);
+        let many: Vec<(String, std::time::SystemTime)> = (1..=9).map(|n| (format!("exec-{n}.png"), at(n))).collect();
+        assert_eq!(made_this_turn(&many, started).len(), MAXIMUM_ATTACHED_PER_REPLY);
+    }
+
+    #[test]
+    fn a_picture_comes_into_the_reply_as_a_file_line_once() {
+        assert_eq!(name_in_bot_folder("exec-7626.PNG", |c| c == "image.png" || c == "image 2.png"), "image 3.png");
+        let reply = reply_attaching("Here's your monkey eating a banana.", &["image.png".into(), "image 2.png".into()]);
+        assert_eq!(reply, "Here's your monkey eating a banana.\n\n[FILE: image.png]\n[FILE: image 2.png]");
+        let (_, attached, _) = extract(&reply);
+        assert_eq!(attached, vec!["image.png", "image 2.png"]);
+        assert_eq!(reply_attaching("Here it is.\n[FILE: image.png]", &["image.png".into()]), "Here it is.\n[FILE: image.png]");
+        assert_eq!(reply_attaching("  ", &["image.png".into()]), "[FILE: image.png]");
+    }
+
+    #[test]
+    fn codexs_pictures_from_this_turn_are_copied_into_the_bots_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex_home = dir.path().join(".codex");
+        let pictures = codex_home.join("generated_images").join("thread-1");
+        std::fs::create_dir_all(&pictures).unwrap();
+        std::fs::write(pictures.join("exec-old.png"), b"old").unwrap();
+        let old = std::fs::File::options().write(true).open(pictures.join("exec-old.png")).unwrap();
+        old.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
+        let started = std::time::SystemTime::now();
+        std::fs::write(pictures.join("exec-new.png"), b"monkey").unwrap();
+        let bot_folder = dir.path().join("memory").join("planner");
+        let copied = copy_codex_images_made_this_turn(&codex_home, "thread-1", started, &bot_folder);
+        assert_eq!(copied, vec!["image.png"]);
+        assert_eq!(std::fs::read(bot_folder.join("image.png")).unwrap(), b"monkey");
+        assert!(pictures.join("exec-new.png").exists(), "Codex's own copy stays where it is");
+        assert!(copy_codex_images_made_this_turn(&codex_home, "no-such-thread", started, &bot_folder).is_empty());
     }
 }

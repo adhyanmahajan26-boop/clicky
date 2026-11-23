@@ -1651,6 +1651,33 @@ def w06():
                 "reveal": revealed, "reveal_outside": reveal_outside.get("error"), "not_owner_refused": refused_note}
 
 
+@test("W07", "A picture a Codex bot makes with Codex's image tool reaches the chat as a file card, copied into the bot's folder", "cards")
+def w07():
+    n = T.nonce()
+    name = "Painter %s" % n[:4]
+    b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "codex", "model": "fake-codex-model"})["result"]["id"]
+    try:
+        T.fake_reply("monkey-%s" % n); T.fake("codex-image")
+        T.say(b, "generate an image of a monkey eating a banana"); T.wait_idle()
+        T.fake("ok")
+        msgs = T.chat(b, 30)
+        shown = next((m["text"] for m in msgs if m["author"] == b), "")
+        cards = [json.loads(m["card"][5:]) for m in msgs if (m.get("card") or "").startswith("file:")]
+        card = cards[0] if cards else {}
+        copy = pathlib.Path(card.get("path", ""))
+        in_bot_folder = copy.is_file() and copy.parent.name == b and copy.parent.parent.name == "memory"
+        same_picture = in_bot_folder and copy.read_bytes().endswith(("monkey-%s" % n).encode("utf-8"))
+        # The next turn on the same thread makes no new picture, so nothing old is attached again.
+        T.say(b, "thanks"); T.wait_idle()
+        cards_after = [m for m in T.chat(b, 40) if (m.get("card") or "").startswith("file:")]
+    finally:
+        T.fake("ok")
+        P({"cmd": "botDelete", "id": b})
+    ok = (len(cards) == 1 and card.get("name") == "image.png" and in_bot_folder and same_picture and "[FILE:" not in shown
+          and "monkey eating a banana" in shown and len(cards_after) == 1)
+    return ok, {"cards": cards, "answer_shown": shown[:120], "in_bot_folder": in_bot_folder, "same_picture": same_picture, "cards_after_next_turn": len(cards_after)}
+
+
 def w_prompt(n, extra=""):
     return "Here's the plan.\nProject: Card %s\n%s```prompt\nIn the current folder create card/%s.md containing card %s. Nothing else.\n```" % (n, extra, n, n)
 
