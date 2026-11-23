@@ -241,3 +241,73 @@ public struct CallListenTranscript: Sendable {
         return message
     }
 }
+
+/// Only the voice near the Mac counts on a call. Someone talking two metres away reaches the mic about 10 dB quieter
+/// than the owner a little way from it, so a stretch of speech counts only when it is close to how loud the owner's
+/// own recent speech was. Before anything is learned every voice counts, and the first ones teach it. The owner's
+/// level is the middle of the last few near stretches, so one shout doesn't lock out normal talking, and when nothing
+/// near has been heard for a while the rule slowly loosens, so an owner who moved back from the Mac isn't shut out.
+public struct CallNearVoice: Equatable, Sendable {
+    public static let settingKey = "v4.call.nearVoiceOnly"
+    /// How much quieter than the owner's usual level a voice may be and still count as theirs.
+    public static let nearMarginDecibels = 9.0
+    /// After this long with nothing near, the margin widens by one decibel every `looseningSecondsPerDecibel`.
+    public static let looseningStartsAfterSeconds = 15.0
+    public static let looseningSecondsPerDecibel = 3.0
+    public static let widestMarginDecibels = 20.0
+    /// Stretches of near speech remembered for the owner's level.
+    public static let rememberedStretches = 8
+    /// Anything quieter than this is never taken as speech to learn from.
+    public static let quietestLearnableDecibels = -65.0
+
+    public private(set) var recentNearLevels: [Double] = []
+    public private(set) var lastNearSpeechAt: Date?
+
+    public init() {}
+
+    /// Whether the setting is on: on unless the owner switched it off.
+    public static func isOn(saved: Bool?) -> Bool { saved ?? true }
+
+    /// The owner's usual level, nil until a near stretch was heard.
+    public var ownerLevelDecibels: Double? {
+        guard !recentNearLevels.isEmpty else { return nil }
+        let sorted = recentNearLevels.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// How far below the owner's level a voice may be right now.
+    public func marginDecibels(now: Date) -> Double {
+        guard let lastNearSpeechAt else { return Self.nearMarginDecibels }
+        let quietFor = now.timeIntervalSince(lastNearSpeechAt) - Self.looseningStartsAfterSeconds
+        guard quietFor > 0 else { return Self.nearMarginDecibels }
+        return min(Self.widestMarginDecibels, Self.nearMarginDecibels + quietFor / Self.looseningSecondsPerDecibel)
+    }
+
+    /// Whether speech this loud (the loudest part of it) counts as the owner's.
+    public func isNear(levelDecibels: Double, now: Date) -> Bool {
+        guard let ownerLevelDecibels else { return true }
+        return levelDecibels >= ownerLevelDecibels - marginDecibels(now: now)
+    }
+
+    /// Near speech is going on now.
+    public mutating func heardNearSpeech(at now: Date) {
+        lastNearSpeechAt = now
+    }
+
+    /// A stretch of near speech ended; `levelDecibels` is its loud level (`loudLevel(of:)`).
+    public mutating func learn(nearStretchLevelDecibels levelDecibels: Double, at now: Date) {
+        lastNearSpeechAt = now
+        guard levelDecibels > Self.quietestLearnableDecibels else { return }
+        recentNearLevels.append(levelDecibels)
+        if recentNearLevels.count > Self.rememberedStretches { recentNearLevels.removeFirst(recentNearLevels.count - Self.rememberedStretches) }
+    }
+
+    /// The loud level of a stretch of speech: the 80th percentile of its blocks' levels, so the gaps between words don't
+    /// pull it down and one click doesn't push it up.
+    public static func loudLevel(of blockLevelsDecibels: [Double]) -> Double? {
+        guard !blockLevelsDecibels.isEmpty else { return nil }
+        let sorted = blockLevelsDecibels.sorted()
+        let index = min(sorted.count - 1, Int(Double(sorted.count) * 0.8))
+        return sorted[index]
+    }
+}

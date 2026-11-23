@@ -255,6 +255,24 @@ final class TheoCallSession: ObservableObject {
     private var lastReleasedTurn: (words: String, lineID: UUID?)?
     /// Some of this turn's answer has been heard.
     private var turnHasSounded = false
+    /// Only the voice near the Mac counts (Settings › Voice, on by default): someone talking across the room opens the
+    /// gate too, and the ears write their words down, so a stretch of speech counts only when it's about as loud as the
+    /// owner's own (ClickyCore `CallNearVoice`).
+    private var nearVoice = CallNearVoice()
+    private var nearVoiceOnly: Bool { CallNearVoice.isOn(saved: UserDefaults.standard.object(forKey: CallNearVoice.settingKey) as? Bool) }
+    /// The last few blocks' levels (about 0.4 s), for how loud a stretch of speech starts.
+    private var recentBlockLevels: [Double] = []
+    private static let onsetBlockCount = 8
+    /// The levels of the stretch of speech going on now, and whether it's the owner's.
+    private var stretchBlockLevels: [Double] = []
+    private var stretchIsNear = false
+    /// Stretches of speech, and words, from voices too far away, for `uiCallStatus`.
+    private(set) var farVoicesIgnored = 0
+    private(set) var farWordsDropped = 0
+    /// Words the ears give this long after the owner's own voice last sounded are someone else's.
+    private static let nearWordsWindowSeconds = 3.5
+    /// The owner is talking: the gate is open on a voice near the Mac.
+    private var isOwnerSpeaking: Bool { gate.isSpeaking && stretchIsNear }
 
     init(store: BotsStore, hub: AudioEngineHub, isLive: Bool) {
         self.store = store
@@ -403,14 +421,49 @@ final class TheoCallSession: ObservableObject {
         }
         micLevel = CGFloat(min(max((block.levelDecibels + 55) / 40, 0), 1))
         let voiceIsOn = state == .speaking || audio.isVoicePlaying
+        let now = Date()
+        recentBlockLevels.append(block.levelDecibels)
+        if recentBlockLevels.count > Self.onsetBlockCount { recentBlockLevels.removeFirst(recentBlockLevels.count - Self.onsetBlockCount) }
         let event = gate.feed(levelDecibels: block.levelDecibels, seconds: CallAudioBlock.seconds, otherSideTalking: voiceIsOn)
-        // The ears get the audio before the event is acted on, so the first words aren't missing.
-        ears?.feed(block, isSpeech: gate.isSpeaking)
+        // Whose voice it is, decided before the ears get the audio, so a voice across the room never starts their words.
+        var ownerStartedTalking = false
         switch event {
-        case .speechStarted: speechStarted()
-        case .speechEnded: speechEnded()
-        case nil: break
+        case .speechStarted:
+            stretchBlockLevels = recentBlockLevels
+            stretchIsNear = !nearVoiceOnly || nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
+            if stretchIsNear {
+                ownerStartedTalking = true
+            } else {
+                farVoicesIgnored += 1
+                print("📞 Call: a voice too far from the Mac, ignored (\(Int(recentBlockLevels.max() ?? 0)) dB, the owner's is \(Int(nearVoice.ownerLevelDecibels ?? 0)) dB)")
+            }
+        case .speechEnded, nil:
+            if gate.isSpeaking { stretchBlockLevels.append(block.levelDecibels) }
+            // Someone far away was talking and the owner joined in, louder: from here it's the owner's.
+            if gate.isSpeaking, !stretchIsNear, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
+                stretchIsNear = true
+                ownerStartedTalking = true
+            }
         }
+        if isOwnerSpeaking { nearVoice.heardNearSpeech(at: now) }
+        // The ears get the audio before the event is acted on, so the first words aren't missing.
+        ears?.feed(block, isSpeech: isOwnerSpeaking)
+        if ownerStartedTalking { speechStarted() }
+        if event == .speechEnded {
+            let wasTheOwner = stretchIsNear
+            if wasTheOwner, let loudLevel = CallNearVoice.loudLevel(of: stretchBlockLevels) {
+                nearVoice.learn(nearStretchLevelDecibels: loudLevel, at: now)
+            }
+            stretchIsNear = false
+            stretchBlockLevels = []
+            if wasTheOwner { speechEnded() }
+        }
+    }
+
+    /// Words from the ears that came from someone else in the room: none of the owner's own voice near the Mac lately.
+    private func isSomeoneElseTalking() -> Bool {
+        guard nearVoiceOnly, !isOwnerSpeaking, let lastNearSpeechAt = nearVoice.lastNearSpeechAt else { return false }
+        return Date().timeIntervalSince(lastNearSpeechAt) > Self.nearWordsWindowSeconds
     }
 
     private func speechStarted() {
@@ -474,7 +527,7 @@ final class TheoCallSession: ObservableObject {
 
     private func heardPartial(_ text: String) {
         // Vello's own voice coming back through the mic: not the owner, so no line and no turn.
-        if isVellosOwnVoiceComingBack(text) { return }
+        if isVellosOwnVoiceComingBack(text) || isSomeoneElseTalking() { return }
         startAddyLine()
         lastWordsAt = Date()
         guard let index = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) else { return }
@@ -496,8 +549,17 @@ final class TheoCallSession: ObservableObject {
             }
             return
         }
+        if !words.isEmpty, isSomeoneElseTalking() {
+            // Someone across the room: their words are neither a turn nor a cut-in.
+            farWordsDropped += 1
+            print("📞 Call: dropped words from a voice too far from the Mac (\(words.split(separator: " ").count) words)")
+            if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), lines[liveIndex].id != heldTurnLineID {
+                lines.remove(at: liveIndex)
+            }
+            return
+        }
         // A server's own voice detection can beat the gate. Its default wait is half a second of quiet.
-        if gate.isSpeaking, speechEndedAt == nil, !words.isEmpty { speechEndedAt = Date().addingTimeInterval(-0.5) }
+        if isOwnerSpeaking, speechEndedAt == nil, !words.isEmpty { speechEndedAt = Date().addingTimeInterval(-0.5) }
         if !words.isEmpty, replyInProgress || audio.isVoicePlaying { supersedeTheAnswer() }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
         if words.isEmpty {
@@ -526,7 +588,7 @@ final class TheoCallSession: ObservableObject {
             lines.append(line)
             heldTurnLineID = line.id
         }
-        if !gate.isSpeaking, !replyInProgress, state == .userSpeaking || state == .thinking { state = .listening }
+        if !isOwnerSpeaking, !replyInProgress, state == .userSpeaking || state == .thinking { state = .listening }
         waitForTheEndOfTheTurn()
     }
 
@@ -537,7 +599,7 @@ final class TheoCallSession: ObservableObject {
     /// Vello had just said.
     private func isVellosOwnVoiceComingBack(_ heard: String) -> Bool {
         let voiceIsOn = audio.isVoicePlaying || state == .speaking
-        if voiceIsOn { return !gate.isSpeaking }
+        if voiceIsOn { return !isOwnerSpeaking }
         guard let voiceLastStoppedAt, Date().timeIntervalSince(voiceLastStoppedAt) < 2.0 else { return false }
         let vellosLastWords = lines.last(where: { $0.who == .theo })?.text ?? ""
         return CallEcho.soundsLikeVello(heard, vellosRecentWords: vellosLastWords)
@@ -581,11 +643,11 @@ final class TheoCallSession: ObservableObject {
                 let lastWords = self.lastWordsAt ?? now
                 let soundOrWordsSince = max(lastWords, self.speechStartedAt ?? lastWords)
                 // Still talking: wait for the voice to stop. A sound with no words in it doesn't hold the turn forever.
-                if self.gate.isSpeaking && now.timeIntervalSince(soundOrWordsSince) < Self.longestWordlessSoundSeconds {
+                if self.isOwnerSpeaking && now.timeIntervalSince(soundOrWordsSince) < Self.longestWordlessSoundSeconds {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     continue
                 }
-                let voiceStopped = self.gate.isSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
+                let voiceStopped = self.isOwnerSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
                 let quietSoFar = now.timeIntervalSince(voiceStopped)
                 let wait = CallTurnEnd.waitSeconds(after: self.heldTurnWords, patienceSeconds: CallSettings.patienceSeconds)
                 if quietSoFar >= wait {
@@ -681,7 +743,7 @@ final class TheoCallSession: ObservableObject {
         guard let brain else { return }
         turnNumber += 1
         let turn = turnNumber
-        state = gate.isSpeaking ? .userSpeaking : .thinking
+        state = isOwnerSpeaking ? .userSpeaking : .thinking
         heardAt = Date()
         firstTextAt = nil
         var timing = TurnTiming(ears: earsName, voice: voiceName)
@@ -812,7 +874,7 @@ final class TheoCallSession: ObservableObject {
         Task { @MainActor [weak self] in
             for _ in 0..<90 {
                 guard let self, self.state != .ended, !self.clickyReports.isEmpty else { return }
-                if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.gate.isSpeaking, self.heldTurnWords.isEmpty {
+                if self.state == .listening, !self.replyInProgress, !self.audio.isVoicePlaying, !self.isOwnerSpeaking, self.heldTurnWords.isEmpty {
                     self.speechEndedAt = nil
                     self.lastReleasedTurn = nil
                     self.ask(ClickyTeamPrompts.theoFromCallNote(report: self.clickyReports.removeFirst(), owner: BotPrompts.ownerName))
@@ -884,6 +946,10 @@ final class TheoCallSession: ObservableObject {
             "bargeInSeconds": bargeIns,
             "turnWaitSeconds": turnWaits,
             "echoesDropped": echoesDropped,
+            "nearVoiceOnly": nearVoiceOnly,
+            "ownerLevelDecibels": nearVoice.ownerLevelDecibels as Any? ?? NSNull(),
+            "farVoicesIgnored": farVoicesIgnored,
+            "farWordsDropped": farWordsDropped,
             "patienceSeconds": CallSettings.patienceSeconds,
             "listenMode": isListenMode,
             "holdingTurn": isHoldingTurn,

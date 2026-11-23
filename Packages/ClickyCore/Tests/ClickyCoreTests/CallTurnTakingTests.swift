@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import ClickyCore
 
@@ -121,5 +122,47 @@ extension CallTurnTakingTests {
         #expect(!CallEcho.soundsLikeVello("stop", vellosRecentWords: said))
         #expect(!CallEcho.soundsLikeVello("open Safari", vellosRecentWords: ""))
         #expect(!CallEcho.soundsLikeVello("", vellosRecentWords: said))
+    }
+}
+
+struct CallNearVoiceTests {
+    @Test func everyVoiceCountsUntilTheOwnersLevelIsKnown() {
+        let nearVoice = CallNearVoice()
+        #expect(nearVoice.isNear(levelDecibels: -55, now: Date()))
+        #expect(CallNearVoice.isOn(saved: nil))
+        #expect(!CallNearVoice.isOn(saved: false))
+    }
+
+    @Test func aVoiceAcrossTheRoomDoesNotCount() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        nearVoice.learn(nearStretchLevelDecibels: -28, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -30, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -26, at: start)
+        #expect(nearVoice.ownerLevelDecibels == -28)
+        #expect(nearVoice.isNear(levelDecibels: -33, now: start.addingTimeInterval(2)))
+        #expect(!nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(2)))
+    }
+
+    @Test func oneShoutDoesNotLockOutNormalTalking() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        for level in [-30.0, -29, -31, -10] { nearVoice.learn(nearStretchLevelDecibels: level, at: start) }
+        #expect(nearVoice.isNear(levelDecibels: -36, now: start.addingTimeInterval(1)))
+    }
+
+    @Test func theRuleLoosensAfterALongQuiet() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        nearVoice.learn(nearStretchLevelDecibels: -25, at: start)
+        #expect(!nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(10)))
+        #expect(nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(15 + 3 * 7)))
+        #expect(nearVoice.marginDecibels(now: start.addingTimeInterval(1000)) == CallNearVoice.widestMarginDecibels)
+    }
+
+    @Test func theLoudLevelIgnoresTheGapsBetweenWords() {
+        let levels: [Double] = [-60, -60, -30, -28, -29, -60, -27, -31, -60, -30]
+        #expect(CallNearVoice.loudLevel(of: levels) == -28)
+        #expect(CallNearVoice.loudLevel(of: []) == nil)
     }
 }
