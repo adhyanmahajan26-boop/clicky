@@ -240,3 +240,31 @@ extension CallTurnTakingTests {
         #expect(!CallCutIn.restartsTheAnswer(restartsSoFar: 50))
     }
 }
+
+extension CallTurnTakingTests {
+    /// People talking round the owner keep partial words coming; Vello still answers soon after the owner stopped.
+    @Test func otherPeopleTalkingNeverHoldTheAnswerBack() {
+        let wait = CallTurnEnd.waitSeconds(after: "Safari pe ja", patienceSeconds: 1.5)
+        // The owner just stopped and nothing else is heard: the usual wait.
+        #expect(!CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: 1.0, secondsSincePartialWords: nil, waitSeconds: wait))
+        #expect(CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: wait, secondsSincePartialWords: nil, waitSeconds: wait))
+        // Partials a moment ago (the owner's last words landing late): a little longer.
+        #expect(!CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: wait + 0.2, secondsSincePartialWords: 0.3, waitSeconds: wait))
+        // The room keeps talking, partials every few hundred milliseconds: answered within the cap, never held for good.
+        #expect(CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: wait + CallQuietLimit.longestPartialsHoldSeconds,
+                                            secondsSincePartialWords: 0.1, waitSeconds: wait))
+        #expect(CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: 30, secondsSincePartialWords: 0, waitSeconds: wait))
+        // However long the patience, it's answered within a few seconds of the owner stopping.
+        let longest = CallTurnEnd.longestSeconds + CallQuietLimit.longestPartialsHoldSeconds
+        #expect(longest <= 6)
+        #expect(CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: longest, secondsSincePartialWords: 0, waitSeconds: CallTurnEnd.longestSeconds))
+    }
+
+    @Test func aSlowAnswerStartsWithAFewWords() {
+        #expect(CallQuietLimit.acknowledgeAfterSeconds <= 3)
+        #expect(CallQuietLimit.acknowledgement(speaksHindi: false, readsDevanagari: true, turnNumber: 0) == "One sec.")
+        #expect(CallQuietLimit.acknowledgement(speaksHindi: true, readsDevanagari: false, turnNumber: 0) == "Haan, ek second.")
+        #expect(CallQuietLimit.acknowledgement(speaksHindi: true, readsDevanagari: true, turnNumber: 3) == "हाँ, एक सेकंड।")
+        #expect(CallQuietLimit.acknowledgement(speaksHindi: false, readsDevanagari: false, turnNumber: 1) != "One sec.")
+    }
+}

@@ -695,18 +695,19 @@ final class TheoCallSession: ObservableObject {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     continue
                 }
-                // Counted from the later of the voice stopping and the ears' last partial words: partials still coming
-                // mean the owner is still going, even when the gate's own end of speech is from a while ago.
-                var voiceStopped = self.isOwnerSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
-                if let lastPartialWordsAt = self.lastPartialWordsAt, lastPartialWordsAt > voiceStopped { voiceStopped = lastPartialWordsAt }
-                let quietSoFar = now.timeIntervalSince(voiceStopped)
+                // Partials still coming keep the turn open a little longer, but never for good: people talking near the Mac
+                // keep them coming too, and Vello sat quiet for half a minute (`CallQuietLimit`).
+                let voiceStopped = self.isOwnerSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
+                let secondsSinceVoiceStopped = now.timeIntervalSince(voiceStopped)
+                let secondsSincePartialWords = self.lastPartialWordsAt.map { now.timeIntervalSince($0) }
                 let wait = CallTurnEnd.waitSeconds(after: self.heldTurnWords, patienceSeconds: CallSettings.patienceSeconds)
-                if quietSoFar >= wait {
-                    self.releaseHeldTurn(quietSeconds: quietSoFar)
+                if CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: secondsSinceVoiceStopped,
+                                               secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait) {
+                    self.releaseHeldTurn(quietSeconds: secondsSinceVoiceStopped)
                     return
                 }
                 // Short steps, so a voice that starts again is noticed at once.
-                try? await Task.sleep(nanoseconds: UInt64(min(wait - quietSoFar, 0.2) * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: 150_000_000)
             }
         }
     }
@@ -758,18 +759,18 @@ final class TheoCallSession: ObservableObject {
             // Called by name: Vello comes back to talking, and answers or does what was asked with all it heard.
             if CallListenMode.callsVelloByName(words, assistantNames: assistantNames) {
                 isListenMode = false
-                ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false))
+                ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false), acknowledgesIfSlow: true)
                 return
             }
-            ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: true))
+            ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: true), acknowledgesIfSlow: true)
             return
         }
         // Back from Listen mode with things Vello hasn't been given yet: they come with this turn.
         if listenTranscript.hasUnsent {
-            ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false))
+            ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false), acknowledgesIfSlow: true)
             return
         }
-        ask(words)
+        ask(words, acknowledgesIfSlow: true)
     }
 
     /// Vello's name as the ears hear it: its own name and the usual mishearings.
@@ -806,7 +807,9 @@ final class TheoCallSession: ObservableObject {
 
     // MARK: Words out
 
-    private func ask(_ text: String) {
+    /// `acknowledgesIfSlow`: an answer to the owner. If none of it has sounded `CallQuietLimit.acknowledgeAfterSeconds`
+    /// after the turn was let go, Vello says a few words first, so a slow answer never sounds like it wasn't heard.
+    private func ask(_ text: String, acknowledgesIfSlow: Bool = false) {
         guard let brain else { return }
         turnNumber += 1
         let turn = turnNumber
@@ -833,6 +836,19 @@ final class TheoCallSession: ObservableObject {
             guard let self, self.turnNumber == turn, self.replyInProgress else { return }
             self.replyFinished(result)
         })
+        if acknowledgesIfSlow { acknowledgeIfStillQuiet(turn: turn) }
+    }
+
+    private func acknowledgeIfStillQuiet(turn: Int) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(CallQuietLimit.acknowledgeAfterSeconds * 1_000_000_000))
+            guard let self, self.state != .ended, self.turnNumber == turn, self.replyInProgress,
+                  !self.turnHasSounded, !self.audio.isVoicePlaying, !self.isOwnerSpeaking else { return }
+            let speaksHindi = self.language == .hindi || self.language.meansHinglish
+            let words = CallQuietLimit.acknowledgement(speaksHindi: speaksHindi, readsDevanagari: self.voice is SarvamCallVoice, turnNumber: turn)
+            print("📞 Call: the answer is slow, saying a few words first")
+            self.speak(words)
+        }
     }
 
     private func replyDelta(_ rawDelta: String) {
