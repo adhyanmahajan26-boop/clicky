@@ -47,9 +47,43 @@ public enum HandShapeMeasure {
         [.littleMCP, .littlePIP, .littleDIP, .littleTip]
     ]
 
-    /// The 16 numbers, or nil when a joint is missing (Vision wasn't sure of it) or the hand is too small to read.
-    public static func measure(_ pose: HandPose) -> [Double]? {
-        guard HandJoint.allCases.allSatisfy({ pose[$0] != nil }) else { return nil }
+    /// Most joints that may be hidden and filled in. Some letters hide joints on purpose (M and N tuck the thumb
+    /// under the fingers), and Vision leaves out what it can't see.
+    public static let mostFilledInJoints = 3
+
+    /// Puts back a few hidden joints from the ones beside them on the same finger: a hidden tip carries on the
+    /// finger's last bone, a hidden middle joint goes halfway between its neighbours. Nil when the wrist or a
+    /// knuckle the palm is measured from is missing, or too much is hidden.
+    public static func fillingInHiddenJoints(_ pose: HandPose) -> HandPose? {
+        let frameJoints: [HandJoint] = [.wrist, .indexMCP, .middleMCP, .littleMCP]
+        guard frameJoints.allSatisfy({ pose[$0] != nil }) else { return nil }
+        let missingCount = HandJoint.allCases.filter { pose[$0] == nil }.count
+        if missingCount == 0 { return pose }
+        guard missingCount <= mostFilledInJoints else { return nil }
+        var joints = pose.joints
+        let chains: [[HandJoint]] = [[.thumbCMC, .thumbMP, .thumbIP, .thumbTip]] + fingerJoints
+        func midpoint(_ first: HandPoint, _ second: HandPoint) -> HandPoint { HandPoint(x: (first.x + second.x) / 2, y: (first.y + second.y) / 2) }
+        for chain in chains {
+            // The base of the thumb, if hidden, sits between the wrist and the index knuckle.
+            if joints[chain[0]] == nil, let wrist = joints[.wrist], let indexKnuckle = joints[.indexMCP] { joints[chain[0]] = midpoint(wrist, indexKnuckle) }
+            // Middle joints between two seen ones, then a hidden tip from the last bone.
+            for position in 1..<3 where joints[chain[position]] == nil {
+                if let before = joints[chain[position - 1]], let after = joints[chain[position + 1]] { joints[chain[position]] = midpoint(before, after) }
+            }
+            if joints[chain[3]] == nil, let endJoint = joints[chain[2]], let middleJoint = joints[chain[1]] {
+                joints[chain[3]] = HandPoint(x: endJoint.x + (endJoint.x - middleJoint.x) * 0.8, y: endJoint.y + (endJoint.y - middleJoint.y) * 0.8)
+            }
+            for position in 1..<3 where joints[chain[position]] == nil {
+                if let before = joints[chain[position - 1]], let tip = joints[chain[3]] { joints[chain[position]] = midpoint(before, tip) }
+            }
+        }
+        guard HandJoint.allCases.allSatisfy({ joints[$0] != nil }) else { return nil }
+        return HandPose(joints: joints)
+    }
+
+    /// The 16 numbers, or nil when the hand can't be read: too much of it hidden, or too small.
+    public static func measure(_ seenPose: HandPose) -> [Double]? {
+        guard let pose = fillingInHiddenJoints(seenPose) else { return nil }
         guard let wrist = pose[.wrist], let middleKnuckle = pose[.middleMCP], let indexKnuckle = pose[.indexMCP], let littleKnuckle = pose[.littleMCP] else { return nil }
         let palmLength = wrist.distance(to: middleKnuckle)
         guard palmLength > 0.000_1 else { return nil }

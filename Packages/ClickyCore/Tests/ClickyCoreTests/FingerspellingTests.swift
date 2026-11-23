@@ -84,10 +84,29 @@ struct FingerspellingTests {
         for index in 0..<10 { #expect(abs(sideways[index] - upright[index]) < 0.000_1) }
     }
 
-    @Test func doesNotMeasureAHandWithAMissingJoint() {
-        var pose = Self.hand(Self.allFour, thumb: .tucked)
-        pose.joints[.thumbIP] = nil
-        #expect(HandShapeMeasure.measure(pose) == nil)
+    @Test func fillsInAFewHiddenJointsButNotTheFrameOfTheHand() throws {
+        let wholeHand = Self.hand(Self.allFour, thumb: .tucked)
+        let wholeShape = try #require(HandShapeMeasure.measure(wholeHand))
+        // A thumb tip hidden under the fingers (M, N) is placed on from the joints before it, so the hand still reads.
+        var hiddenThumbTip = wholeHand
+        hiddenThumbTip.joints[.thumbTip] = nil
+        #expect(HandShapeMeasure.measure(hiddenThumbTip)?.count == 16)
+        // A middle joint between two seen ones is put halfway, close to where it was.
+        var hiddenJoint = wholeHand
+        hiddenJoint.joints[.indexDIP] = nil
+        let filledShape = try #require(HandShapeMeasure.measure(hiddenJoint))
+        #expect(abs(filledShape[12] - wholeShape[12]) < 0.05)
+        // No wrist or knuckle: no frame to measure against.
+        var noWrist = wholeHand
+        noWrist.joints[.wrist] = nil
+        #expect(HandShapeMeasure.measure(noWrist) == nil)
+        var noLittleKnuckle = wholeHand
+        noLittleKnuckle.joints[.littleMCP] = nil
+        #expect(HandShapeMeasure.measure(noLittleKnuckle) == nil)
+        // Too much hidden to guess.
+        var mostlyHidden = wholeHand
+        for joint in [HandJoint.thumbTip, .indexTip, .middleTip, .ringTip] { mostlyHidden.joints[joint] = nil }
+        #expect(HandShapeMeasure.measure(mostlyHidden) == nil)
     }
 
     // MARK: Built-in ASL letters
@@ -138,7 +157,8 @@ struct FingerspellingTests {
     @Test func readsATaughtOneHandSignAndPrefersItWhenNearer() {
         var book = TaughtSignBook()
         let shape = Self.hand(["index", "little"], thumb: .tucked)
-        #expect(book.addExample(label: "  Rock ", hands: [shape]))
+        let addedRock = book.addExample(label: "  Rock ", hands: [shape])
+        #expect(addedRock)
         #expect(book.signs == [TaughtSign(label: "rock", handCount: 1, examples: [HandShapeMeasure.measure(shape)!])])
         let reading = FingerspellingReader.read(hands: [Self.transformed(shape, scale: 3, mirrored: true)], alphabet: .asl, taughtSigns: book)
         #expect(reading?.label == "rock")
@@ -153,7 +173,8 @@ struct FingerspellingTests {
         let leftHand = Self.transformed(Self.hand(["index"], thumb: .outToTheSide), mirrored: true)
         let rightHand = Self.transformed(Self.hand(Self.allFour, thumb: .tucked), shiftX: 1.6)
         var book = TaughtSignBook()
-        #expect(book.addExample(label: "A", hands: [leftHand, rightHand]))
+        let addedA = book.addExample(label: "A", hands: [leftHand, rightHand])
+        #expect(addedA)
         #expect(book.signs.first?.handCount == 2)
         #expect(book.signs.first?.examples.first?.count == 35)
         #expect(book.read(hands: [rightHand, leftHand])?.label == "a")
@@ -170,8 +191,10 @@ struct FingerspellingTests {
         let pose = Self.hand(["index"], thumb: .tucked)
         for _ in 0..<(TaughtSignBook.mostExamplesPerSign + 5) { book.addExample(label: "d", hands: [pose]) }
         #expect(book.signs.first?.examples.count == TaughtSignBook.mostExamplesPerSign)
-        #expect(!book.addExample(label: "   ", hands: [pose]))
-        #expect(!book.addExample(label: "x", hands: []))
+        let addedEmptyLabel = book.addExample(label: "   ", hands: [pose])
+        let addedNoHands = book.addExample(label: "x", hands: [])
+        #expect(!addedEmptyLabel)
+        #expect(!addedNoHands)
         book.forget(label: "D")
         #expect(book.signs.isEmpty)
     }

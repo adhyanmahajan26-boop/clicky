@@ -4,6 +4,8 @@
 //
 //  swift run fingerspell-eval asl <folder>             the built-in ASL letters
 //  swift run fingerspell-eval teach <folder> [N]       teach N photos of each sign (default 5), read the rest
+//  swift run fingerspell-eval shapes <folder>          each sign's middle shape (one hand), written as Swift, and
+//                                                      how much each measure spreads: how the built-in shapes are made
 //  swift run fingerspell-eval ... --dump <file.jsonl>  also write the joints Vision found, one photo a line
 //
 //  Nothing here ships in the app; the photos stay where they are.
@@ -77,8 +79,8 @@ if let dumpIndex = arguments.firstIndex(of: "--dump"), dumpIndex + 1 < arguments
     dumpPath = arguments[dumpIndex + 1]
     arguments.removeSubrange(dumpIndex...(dumpIndex + 1))
 }
-guard arguments.count >= 2, ["asl", "teach"].contains(arguments[0]) else {
-    print("usage: fingerspell-eval asl <folder> | teach <folder> [examples per sign] [--dump joints.jsonl]")
+guard arguments.count >= 2, ["asl", "teach", "shapes"].contains(arguments[0]) else {
+    print("usage: fingerspell-eval asl <folder> | teach <folder> [examples per sign] | shapes <folder> [--dump joints.jsonl]")
     exit(2)
 }
 let photos = loadPhotos(in: arguments[1])
@@ -116,6 +118,31 @@ func score(_ photo: Photo, _ reading: FingerspellingReading?) {
         }
     }
     perLabel[photo.label] = tally
+}
+
+func median(_ values: [Double]) -> Double {
+    let sorted = values.sorted()
+    guard !sorted.isEmpty else { return 0 }
+    return sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+}
+
+if arguments[0] == "shapes" {
+    var shapesByLabel: [String: [[Double]]] = [:]
+    for photo in withHands { if let shape = HandShapeMeasure.measure(photo.hands[0]) { shapesByLabel[photo.label, default: []].append(shape) } }
+    let allShapes = shapesByLabel.values.flatMap { $0 }
+    print("measured: \(allShapes.count) of \(withHands.count) photos with a hand")
+    for (label, shapes) in shapesByLabel.sorted(by: { $0.key < $1.key }) {
+        let middle = (0..<16).map { index in (median(shapes.map { $0[index] }) * 10).rounded() / 10 }
+        print("        (\"\(label)\", [" + middle.map { String(format: "%.1f", $0) }.joined(separator: ", ") + "]),  // \(shapes.count) photos")
+    }
+    let spreads = (0..<16).map { index -> Double in
+        let values = allShapes.map { $0[index] }
+        let mean = values.reduce(0, +) / Double(max(1, values.count))
+        let variance = values.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(max(1, values.count))
+        return (variance.squareRoot() * 100).rounded() / 100
+    }
+    print("usualSpread: [" + spreads.map { String(format: "%.2f", $0) }.joined(separator: ", ") + "]")
+    exit(0)
 }
 
 if arguments[0] == "asl" {
