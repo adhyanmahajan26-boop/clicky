@@ -1,11 +1,12 @@
+import Foundation
 import Testing
 @testable import ClickyCore
 
 struct CallTurnTakingTests {
-    @Test func patienceDefaultsToTwoSecondsAndStaysInRange() {
-        #expect(CallTurnPatience.seconds(saved: nil) == 2.0)
-        #expect(CallTurnPatience.seconds(saved: 0) == 2.0)
-        #expect(CallTurnPatience.seconds(saved: 0.3) == 1.0)
+    @Test func patienceDefaultsToASecondAndAHalfAndStaysInRange() {
+        #expect(CallTurnPatience.seconds(saved: nil) == 1.5)
+        #expect(CallTurnPatience.seconds(saved: 0) == 1.5)
+        #expect(CallTurnPatience.seconds(saved: 0.3) == 0.5)
         #expect(CallTurnPatience.seconds(saved: 9) == 4.0)
         #expect(CallTurnPatience.seconds(saved: 2.5) == 2.5)
     }
@@ -13,7 +14,7 @@ struct CallTurnTakingTests {
     @Test func unfinishedWordsWaitLonger() {
         for words in ["So I was thinking that", "I want to build an app and", "Umm", "the thing is,", "Mujhe lagta hai ki", "Matlab", "and then the…", "Tell me about the?"] {
             #expect(CallTurnEnd.ending(of: words) == .soundsUnfinished, "\(words)")
-            #expect(CallTurnEnd.waitSeconds(after: words, patienceSeconds: 2) == 3.5, "\(words)")
+            #expect(CallTurnEnd.waitSeconds(after: words, patienceSeconds: 2) == 3.0, "\(words)")
         }
     }
 
@@ -98,5 +99,70 @@ extension CallTurnTakingTests {
         #expect(message.contains("You were just in listen mode"))
         #expect(message.contains("Listen mode is over now"))
         #expect(!message.contains("You stay in listen mode"))
+    }
+}
+
+extension CallTurnTakingTests {
+    @Test func justListenOnlySwitchesWhenItEndsTheUtterance() {
+        #expect(CallListenMode.command(in: "just listen") == .start)
+        #expect(CallListenMode.command(in: "okay only listen please") == .start)
+        #expect(CallListenMode.command(in: "Vello, listen only for now") == .start)
+        // An ordinary turn that happens to hold the words is not the switch.
+        #expect(CallListenMode.command(in: "just listen to me, open Safari") == nil)
+        #expect(CallListenMode.command(in: "only listen to the first part and tell me") == nil)
+        // Naming the mode still works anywhere in a short utterance.
+        #expect(CallListenMode.command(in: "go into listen mode for this meeting") == .start)
+    }
+
+    @Test func vellosOwnWordsComingBackAreTold() {
+        let said = "Sure, I'll get Pointer Assistant to open Safari and search for flights to Goa."
+        #expect(CallEcho.soundsLikeVello("open Safari and search for flights", vellosRecentWords: said))
+        #expect(CallEcho.soundsLikeVello("I'll get pointer assistant", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("no wait, search for hotels in Delhi instead", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("stop", vellosRecentWords: said))
+        #expect(!CallEcho.soundsLikeVello("open Safari", vellosRecentWords: ""))
+        #expect(!CallEcho.soundsLikeVello("", vellosRecentWords: said))
+    }
+}
+
+struct CallNearVoiceTests {
+    @Test func everyVoiceCountsUntilTheOwnersLevelIsKnown() {
+        let nearVoice = CallNearVoice()
+        #expect(nearVoice.isNear(levelDecibels: -55, now: Date()))
+        #expect(CallNearVoice.isOn(saved: nil))
+        #expect(!CallNearVoice.isOn(saved: false))
+    }
+
+    @Test func aVoiceAcrossTheRoomDoesNotCount() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        nearVoice.learn(nearStretchLevelDecibels: -28, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -30, at: start)
+        nearVoice.learn(nearStretchLevelDecibels: -26, at: start)
+        #expect(nearVoice.ownerLevelDecibels == -28)
+        #expect(nearVoice.isNear(levelDecibels: -33, now: start.addingTimeInterval(2)))
+        #expect(!nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(2)))
+    }
+
+    @Test func oneShoutDoesNotLockOutNormalTalking() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        for level in [-30.0, -29, -31, -10] { nearVoice.learn(nearStretchLevelDecibels: level, at: start) }
+        #expect(nearVoice.isNear(levelDecibels: -36, now: start.addingTimeInterval(1)))
+    }
+
+    @Test func theRuleLoosensAfterALongQuiet() {
+        var nearVoice = CallNearVoice()
+        let start = Date()
+        nearVoice.learn(nearStretchLevelDecibels: -25, at: start)
+        #expect(!nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(10)))
+        #expect(nearVoice.isNear(levelDecibels: -40, now: start.addingTimeInterval(15 + 3 * 7)))
+        #expect(nearVoice.marginDecibels(now: start.addingTimeInterval(1000)) == CallNearVoice.widestMarginDecibels)
+    }
+
+    @Test func theLoudLevelIgnoresTheGapsBetweenWords() {
+        let levels: [Double] = [-60, -60, -30, -28, -29, -60, -27, -31, -60, -30]
+        #expect(CallNearVoice.loudLevel(of: levels) == -28)
+        #expect(CallNearVoice.loudLevel(of: []) == nil)
     }
 }

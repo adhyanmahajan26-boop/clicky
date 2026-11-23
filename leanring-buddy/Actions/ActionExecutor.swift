@@ -556,7 +556,7 @@ final class ActionExecutor {
                 BackgroundInput.postKey(processIdentifier: processIdentifier, combo: combo)
                 return (.done(detail: "sent to the app without changing focus"), nil)
             }
-            guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return (.failed(reason: "a modifier key was held down"), nil) }
+            guard await modifiersAreReleased() else { return (.failed(reason: "a modifier key was held down"), nil) }
             await bringTargetForward(target)
             postKey(combo)
             return (.done(detail: nil), nil)
@@ -690,7 +690,11 @@ final class ActionExecutor {
     // MARK: Click
 
     private func click(_ target: ResolvedActionTarget) async -> ActionStepOutcome {
-        if BackgroundInput.isActive { return await backgroundClick(target) }
+        let targetFrameCG = target.frameCG ?? target.axElement.flatMap(TypeForMeAccessibility.frameCG)
+        if BackgroundInput.staysInBackground(targetFrameCG: targetFrameCG) { return await backgroundClick(target) }
+        // On the owner's screen the app comes forward first: a click in a window behind another one either hits the
+        // window in front ("something is covering it") or happens where the owner can't see it.
+        await bringTargetForward(target)
         if let element = target.axElement {
             let actionNames = Self.actionNames(of: element)
             if actionNames.contains(kAXPressAction as String) || actionNames.isEmpty {
@@ -712,7 +716,7 @@ final class ActionExecutor {
                 if hitProcessIdentifier != expectedProcessIdentifier { return .failed(reason: "something is covering it") }
             }
         }
-        guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return .failed(reason: "a modifier key was held down") }
+        guard await modifiersAreReleased() else { return .failed(reason: "a modifier key was held down") }
         postClick(at: point)
         return .done(detail: "clicked")
     }
@@ -764,7 +768,7 @@ final class ActionExecutor {
     private func type(_ text: String, into target: ResolvedActionTarget, focusesFirst: Bool, pressesReturn: Bool,
                       isCancelled: @escaping () -> Bool) async -> ActionStepOutcome {
         guard var element = target.axElement else { return .failed(reason: "no text field to type into") }
-        let background = BackgroundInput.isActive
+        let background = BackgroundInput.staysInBackground(targetFrameCG: target.frameCG ?? TypeForMeAccessibility.frameCG(of: element))
         let targetProcessIdentifier = target.processIdentifier ?? BackgroundInput.processIdentifier(of: element)
         if background {
             // Theo's own cursor goes to the field and shows it is typing; the owner's pointer and focus stay put.
@@ -774,6 +778,9 @@ final class ActionExecutor {
             VirtualCursor.shared.setTyping(true)
         }
         defer { if background { Task { @MainActor in VirtualCursor.shared.setTyping(false) } } }
+        // On the owner's screen the app comes forward before anything is typed: the words land where the owner can see
+        // them (Safari behind the Claude app got the search and never showed it), and typed keys go to the right app.
+        if !background { await bringTargetForward(target) }
         if focusesFirst {
             let didFocus = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
             if !didFocus, let frame = target.frameCG, frame.width > 0 {
@@ -828,7 +835,7 @@ final class ActionExecutor {
             }
             for chunk in chunks where !background {
                 if isCancelled() { return .cancelled }
-                guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return .failed(reason: "a modifier key was held down") }
+                guard await modifiersAreReleased() else { return .failed(reason: "a modifier key was held down") }
                 for event in TypeForMeSyntheticEvents.unicodeEvents(for: chunk) { event.post(tap: .cghidEventTap) }
                 try? await Task.sleep(nanoseconds: Self.delayBetweenUnicodeChunks)
             }
@@ -860,7 +867,9 @@ final class ActionExecutor {
     private func bringTargetForward(_ target: ResolvedActionTarget) async {
         guard let processIdentifier = target.processIdentifier, processIdentifier != getpid(),
               NSWorkspace.shared.frontmostApplication?.processIdentifier != processIdentifier,
-              let application = NSRunningApplication(processIdentifier: processIdentifier) else { return }
+              let application = NSRunningApplication(processIdentifier: processIdentifier),
+              // A menu bar extra, the Dock or a notification has no front to come to.
+              application.activationPolicy == .regular else { return }
         await BackgroundInput.bringToFront(application)
         try? await Task.sleep(nanoseconds: 150_000_000)
     }
@@ -876,6 +885,30 @@ final class ActionExecutor {
             event.flags = flags
             event.post(tap: .cghidEventTap)
         }
+        // A key event that carries ⌘ (or ⇧ ⌥ ⌃) leaves the HID state thinking that
+        // modifier is still down until a key-up for the modifier itself arrives, so
+        // the next step ("type this") failed with "a modifier key was held down".
+        // Let go of each modifier explicitly, the way a real keyboard does.
+        guard !flags.isEmpty else { return }
+        let modifierKeyCodes: [(flag: CGEventFlags, virtualKey: CGKeyCode)] = [
+            (.maskCommand, 55), (.maskShift, 56), (.maskAlternate, 58), (.maskControl, 59),
+        ]
+        for modifier in modifierKeyCodes where flags.contains(modifier.flag) {
+            guard let releaseEvent = SyntheticEvents.keyEvent(virtualKey: modifier.virtualKey, keyDown: false) else { continue }
+            releaseEvent.flags = []
+            releaseEvent.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Waits a moment for ⌃⌥⌘⇧ to be let go (our own last shortcut, or the owner
+    /// finishing one) instead of failing a step the instant one is down.
+    private func modifiersAreReleased(waitingUpToSeconds longestWaitSeconds: Double = 1.0) async -> Bool {
+        let waitStartedAt = Date()
+        while !TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) {
+            if Date().timeIntervalSince(waitStartedAt) > longestWaitSeconds { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
     }
 
     private func scroll(at point: CGPoint, direction: ActionScrollDirection, amount: Int) {

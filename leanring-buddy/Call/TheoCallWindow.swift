@@ -72,6 +72,9 @@ struct TheoCallView: View {
     @ObservedObject var session: TheoCallSession
     let onEnd: () -> Void
     @ObservedObject private var store = BotsStore.shared
+    /// The call's own settings, right in the call: they were only in Settings › Voice, where they were hard to find.
+    @AppStorage(CallTurnPatience.settingKey) private var callPatienceSeconds = CallTurnPatience.defaultSeconds
+    @AppStorage(CallNearVoice.settingKey) private var nearVoiceOnly = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -115,8 +118,43 @@ struct TheoCallView: View {
                 .foregroundColor(DS.Colors.textSecondary)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            Menu {
+                Section("Patience: how long Vello waits after you stop") {
+                    ForEach(Self.patienceChoices, id: \.self) { seconds in
+                        Button {
+                            callPatienceSeconds = seconds
+                        } label: {
+                            if abs(CallTurnPatience.seconds(saved: callPatienceSeconds) - seconds) < 0.01 {
+                                Label(Self.patienceTitle(seconds), systemImage: "checkmark")
+                            } else {
+                                Text(Self.patienceTitle(seconds))
+                            }
+                        }
+                    }
+                }
+                Section {
+                    Toggle("Only hear voices near the Mac", isOn: $nearVoiceOnly)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "timer").font(.system(size: 11))
+                    Text(String(format: "%.1f s", CallTurnPatience.seconds(saved: callPatienceSeconds))).font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(DS.Colors.textSecondary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("Patience, and whether voices across the room count")
+            .pointerCursor()
         }
         .padding(.leading, 76).padding(.trailing, 16).frame(height: 38)
+    }
+
+    private static let patienceChoices: [Double] = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
+
+    private static func patienceTitle(_ seconds: Double) -> String {
+        let number = String(format: "%.1f s", seconds)
+        if seconds == CallTurnPatience.defaultSeconds { return number + " (usual)" }
+        return seconds < CallTurnPatience.defaultSeconds ? number + " (quicker)" : number + " (lets you think)"
     }
 
     private var stateLine: String {

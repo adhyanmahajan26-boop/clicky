@@ -82,11 +82,14 @@ final class AudioEngineHub {
 
     /// Turns voice processing on and starts the shared engine with the
     /// recognition tap. Returns the mic format the tap delivers.
-    func startVoiceProcessingCapture(tapBlock: @escaping AVAudioNodeTapBlock) throws -> AVAudioFormat {
+    /// `keepsDistanceInLoudness`: a call turns the automatic gain off, which otherwise lifts a quiet voice from across the
+    /// room to the owner's level, so a far voice stays quieter and the call can tell it apart (`CallNearVoice`).
+    func startVoiceProcessingCapture(keepsDistanceInLoudness: Bool = false, tapBlock: @escaping AVAudioNodeTapBlock) throws -> AVAudioFormat {
         guard !isVoiceProcessingActive else { return audioEngine.inputNode.outputFormat(forBus: 0) }
         audioEngine.stop()
         let inputNode = audioEngine.inputNode
         try inputNode.setVoiceProcessingEnabled(true)
+        inputNode.isVoiceProcessingAGCEnabled = !keepsDistanceInLoudness
         do {
             // Voice processing ducks other audio by default (music would go quiet).
             inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(

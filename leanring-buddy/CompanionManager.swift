@@ -2063,6 +2063,18 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// An action task ended: what it did on screen joins the answer it came from, so the next question (the owner's, or
+    /// Vello's next order on a call) knows what was already opened and clicked. Before this the history only held what
+    /// was said, and each order started as if nothing had happened on screen.
+    func rememberActionTaskOutcome(goal: String, report: String) {
+        let note = "[on screen afterwards: \(report)]"
+        if let lastIndex = conversationHistory.indices.last {
+            conversationHistory[lastIndex].assistantResponse += " " + note
+        } else {
+            conversationHistory.append((userTranscript: goal, assistantResponse: note))
+        }
+    }
+
     /// Debug inbox: the newest history entry, and Esc as if pressed.
     var lastHistoryEntryForDebug: String? { conversationHistory.last?.assistantResponse }
     func handleEscapeKeyPressedForDebug() { handleEscapeKeyPressed() }

@@ -491,15 +491,67 @@ extension BotsStore {
             onReport?("Pointer Assistant isn't running.")
             return
         }
+        let actions = manager.actionTaskController
+        // A step waiting for the owner's yes, and this order is that yes (or no), said on the call: it answers the step
+        // rather than starting a new turn, which used to leave the step waiting until it gave up.
+        if actions.isAwaitingConfirmation, let waitingTaskID = actions.activeTaskID,
+           actions.answerConfirmation(withWords: order) || (ownerWords.map { actions.answerConfirmation(withWords: Self.latestLine(of: $0)) } ?? false) {
+            setPhase(.working, job.id)
+            Task { [weak self] in
+                let outcome = await actions.waitForOutcome(ofTask: waitingTaskID, upToSeconds: Self.longestOrderWaitSeconds)
+                let report = outcome ?? "Still working on it on screen."
+                self?.finish(job.id, result: report, succeeded: true)
+                onReport?(report)
+            }
+            return
+        }
+        // The same order twice in a row (a call that said it again while the first was still going) is done once.
+        let normalizedOrder = Self.normalizedOrderWords(order)
+        if Self.clickyOrderLine.contains(where: { !$0.isDone && $0.normalizedOrder == normalizedOrder }) {
+            let line = "Already on it."
+            finish(job.id, result: line, succeeded: true)
+            onReport?(line)
+            return
+        }
+        // Orders take turns: each one waits for the one before it to have finished its steps and reported. Two orders
+        // used to wait on the same "is Pointer Assistant free" check, both started the moment it was, and the second
+        // cancelled the first or was mixed into its steps ("open Safari", then "search this in Safari").
+        let thisOrdersTicket = ClickyOrderTicket(normalizedOrder: normalizedOrder)
+        let ordersAhead = Self.clickyOrderLine.filter { !$0.isDone }
+        Self.clickyOrderLine = ordersAhead + [thisOrdersTicket]
         Task { [weak self] in
-            // A turn the owner has going isn't cut off: the order waits for it (a minute at most).
-            for _ in 0..<200 where manager.voiceState != .idle { try? await Task.sleep(nanoseconds: 300_000_000) }
-            guard let self else { return }
+            let giveUpDate = Date().addingTimeInterval(Self.longestOrderWaitSeconds)
+            while Date() < giveUpDate, ordersAhead.contains(where: { !$0.isDone }) {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            // A turn the owner has going isn't cut off, and neither are the steps of an earlier task still running on
+            // screen. A turn that looks stuck (no answer for a while) isn't waited on for the full three minutes.
+            let ownerTurnGiveUpDate = Date().addingTimeInterval(Self.longestWaitForOwnersTurnSeconds)
+            while Date() < giveUpDate,
+                  (manager.voiceState != .idle && Date() < ownerTurnGiveUpDate) || (actions.isActive && !actions.isAwaitingConfirmation) {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            // The owner moved on from a step that was waiting for their yes.
+            if actions.isAwaitingConfirmation { actions.cancel(reason: "a new order came in", stopsSpeech: false, speaksLine: false) }
+            guard let self else { thisOrdersTicket.isDone = true; return }
             self.setPhase(.working, job.id)
+            print("🧭 Pointer Assistant order starts (\(ordersAhead.count) were ahead): \(order.prefix(80))")
+            let orderTurnStartedAt = Date()
             var options = CompanionManager.TurnOptions(speaksResponse: false, keyUpDate: Date(), onTurnFinished: { [weak self] directory, error in
+                // The answer is written, but its steps on screen only start now: the report waits for them, so Vello
+                // hears what was really done instead of "Done." before anything was clicked.
+                let taskStartedByThisTurn = error == nil ? actions.activeTaskID : nil
                 Task { @MainActor in
                     let said = directory.flatMap { ClaudiaControlInbox.spokenAnswer(inTurn: $0) } ?? ""
-                    let report = error == nil ? (said.isEmpty ? "Done." : said) : "Pointer Assistant couldn't do that: \(error?.localizedDescription ?? "it stopped")."
+                    var report = error == nil ? (said.isEmpty ? "Done." : said) : "Pointer Assistant couldn't do that: \(error?.localizedDescription ?? "it stopped")."
+                    if let taskStartedByThisTurn {
+                        let outcome = await actions.waitForOutcome(ofTask: taskStartedByThisTurn, upToSeconds: Self.longestOrderWaitSeconds)
+                        report = (said.isEmpty ? "" : said + " ") + (outcome ?? "Still working on it on screen.")
+                    } else if error == nil, let startedNothing = actions.lastBlockThatStartedNothing, startedNothing.date >= orderTurnStartedAt {
+                        report = "Nothing was done on screen: \(startedNothing.why)."
+                    }
+                    thisOrdersTicket.isDone = true
+                    print("🧭 Pointer Assistant order reported: \(report.prefix(120))")
                     self?.finish(job.id, result: report, succeeded: error == nil)
                     onReport?(report)
                     if error == nil, let handedTo { self?.acknowledgeHandoff(to: handedTo, task: order, result: report) }
@@ -512,6 +564,28 @@ extension BotsStore {
             options.cameFromOtherMac = cameFromOtherMac
             manager.sendTranscriptToClaudeWithScreenshot(transcript: ClickyTeamPrompts.orderPrefix + order, turnOptions: options)
         }
+    }
+
+    /// How long an order waits for Pointer Assistant to be free, and then for its own steps on screen to end.
+    static let longestOrderWaitSeconds = 180.0
+
+    /// How long an order waits for a turn the owner started themselves (push-to-talk, wake word) to end.
+    static let longestWaitForOwnersTurnSeconds = 30.0
+
+    /// Orders given to Pointer Assistant, oldest first, so each waits for the ones before it.
+    static var clickyOrderLine: [ClickyOrderTicket] = []
+
+    /// An order's words without case, punctuation or extra spaces, to tell the same order said twice.
+    static func normalizedOrderWords(_ order: String) -> String {
+        order.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// The newest of the owner's call lines (they come newest first, one per line).
+    static func latestLine(of ownerWordsNewestFirst: String) -> String {
+        ownerWordsNewestFirst.components(separatedBy: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
     }
 
     /// The bot Clicky's card went to says it has it, in its own chat.
@@ -904,5 +978,16 @@ extension BotImport {
         section.swatch = section.swatch ?? ClickyDuty.categorySwatch
         section.symbol = section.symbol ?? ClickyDuty.categorySymbol
         layout.sections.insert(section, at: 0)
+    }
+}
+
+/// One order in Pointer Assistant's line: done once it has reported (or given up).
+@MainActor
+final class ClickyOrderTicket {
+    let normalizedOrder: String
+    var isDone = false
+
+    init(normalizedOrder: String) {
+        self.normalizedOrder = normalizedOrder
     }
 }

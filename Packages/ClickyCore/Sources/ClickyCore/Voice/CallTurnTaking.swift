@@ -6,7 +6,7 @@
 //
 //  The ears hand over their words after about half a second of quiet. People pause far longer than that in the middle of
 //  a thought, so a call holds those words and waits for a real pause before Vello answers: the owner's Patience setting
-//  (two seconds unless changed), longer when the words sound unfinished ("and…", "so…", "matlab…"), shorter for a clear
+//  (a second and a half unless changed), longer when the words sound unfinished ("and…", "so…", "matlab…"), shorter for a clear
 //  question or a plain "yes". Talking again during the wait just carries on the same turn.
 //
 //  Listen mode: "listen mode" makes Vello only listen, keeping everything it hears; it answers when spoken to ("Vello,
@@ -18,8 +18,9 @@ import Foundation
 /// How long a call waits after the owner's voice stops before Vello answers.
 public enum CallTurnPatience {
     public static let settingKey = "v4.call.patienceSeconds"
-    public static let defaultSeconds = 2.0
-    public static let range: ClosedRange<Double> = 1.0...4.0
+    /// Two seconds made every answer feel slow on top of the ears' own wait, so the default is a second and a half.
+    public static let defaultSeconds = 1.5
+    public static let range: ClosedRange<Double> = 0.5...4.0
 
     /// The saved value, kept inside the range; nothing saved is the default.
     public static func seconds(saved: Double?) -> Double {
@@ -39,11 +40,11 @@ public enum CallTurnEnding: Equatable, Sendable {
 
 public enum CallTurnEnd {
     /// Added to the patience when the words sound unfinished.
-    public static let unfinishedExtraSeconds = 1.5
+    public static let unfinishedExtraSeconds = 1.0
     /// The shortest wait, even for a clear question.
-    public static let shortestSeconds = 0.8
+    public static let shortestSeconds = 0.6
     /// The longest wait, however unfinished it sounds.
-    public static let longestSeconds = 5.5
+    public static let longestSeconds = 4.0
 
     /// Words a thought never ends on, in English and Hinglish: joining words, fillers and words that need a noun after them.
     /// Said last, the owner is still thinking or about to go on, even if the ears put a question mark after it.
@@ -107,6 +108,23 @@ public enum CallTurnEnd {
     }
 }
 
+/// Words the ears heard while Vello's own voice was playing. Echo cancelling never takes all of it out, and the ears
+/// write down whatever is left, so those words are usually Vello hearing itself rather than the owner talking.
+public enum CallEcho {
+    /// How much of what was heard has to be in what Vello just said for it to count as its own voice coming back.
+    public static let sharedWordsShare = 0.6
+
+    /// Whether `heard` is mostly words from `vellosRecentWords` (what Vello's voice said in the last few seconds).
+    public static func soundsLikeVello(_ heard: String, vellosRecentWords: String) -> Bool {
+        let heardWords = CallTurnEnd.simplifiedWords(heard)
+        guard !heardWords.isEmpty else { return false }
+        let spoken = Set(CallTurnEnd.simplifiedWords(vellosRecentWords))
+        guard !spoken.isEmpty else { return false }
+        let shared = heardWords.filter(spoken.contains).count
+        return Double(shared) / Double(heardWords.count) >= sharedWordsShare
+    }
+}
+
 /// What the owner said about Listen mode, if anything.
 public enum CallListenModeCommand: Equatable, Sendable {
     case start
@@ -138,13 +156,28 @@ public enum CallListenMode {
         "tum kya sochte", "aap kya sochte", "kya khayal hai", "tumhara kya", "aapka kya", "क्या लगता है", "क्या सोचते",
     ]
 
+    /// Start phrases that name the mode itself, so they count anywhere in a short utterance.
+    static let namedStartPhrases = ["listen mode", "listening mode"]
+    /// Words that may follow a start phrase and still leave it a switch ("just listen for a bit", "listen only please").
+    static let trailingFillerWords: Set<String> = ["please", "now", "okay", "ok", "for", "a", "bit", "while", "vello", "yaar", "abhi", "thoda"]
+
     public static func command(in utterance: String) -> CallListenModeCommand? {
         let words = CallTurnEnd.simplifiedWords(utterance)
         guard !words.isEmpty, words.count <= longestCommandWords else { return nil }
         let joined = " " + words.joined(separator: " ") + " "
         // "stop listen mode" holds "listen mode", so stopping is checked first.
         if stopPhrases.contains(where: { joined.contains(" \($0) ") }) { return .stop }
-        if startPhrases.contains(where: { joined.contains(" \($0) ") }) { return .start }
+        if namedStartPhrases.contains(where: { joined.contains(" \($0) ") }) { return .start }
+        // "just listen", "only listen": only when that's how the utterance ends. "Just listen to me, open Safari" is an
+        // ordinary turn, and taking it as the switch left Vello silent for the rest of the call.
+        for phrase in startPhrases where !namedStartPhrases.contains(phrase) {
+            let phraseWords = CallTurnEnd.simplifiedWords(phrase)
+            guard let start = words.indices.first(where: { index in
+                index + phraseWords.count <= words.count && Array(words[index..<(index + phraseWords.count)]) == phraseWords
+            }) else { continue }
+            let after = words[(start + phraseWords.count)...]
+            if after.allSatisfy({ trailingFillerWords.contains($0) }) { return .start }
+        }
         return nil
     }
 
@@ -206,5 +239,75 @@ public struct CallListenTranscript: Sendable {
         message += "(Answer from what you heard and what was said earlier on this call. If they don't say which part, it's the latest topic. Keep it short unless they ask for more."
         message += staysInListenMode ? " You stay in listen mode afterwards.)" : " Listen mode is over now, so talk as usual.)"
         return message
+    }
+}
+
+/// Only the voice near the Mac counts on a call. Someone talking two metres away reaches the mic about 10 dB quieter
+/// than the owner a little way from it, so a stretch of speech counts only when it is close to how loud the owner's
+/// own recent speech was. Before anything is learned every voice counts, and the first ones teach it. The owner's
+/// level is the middle of the last few near stretches, so one shout doesn't lock out normal talking, and when nothing
+/// near has been heard for a while the rule slowly loosens, so an owner who moved back from the Mac isn't shut out.
+public struct CallNearVoice: Equatable, Sendable {
+    public static let settingKey = "v4.call.nearVoiceOnly"
+    /// How much quieter than the owner's usual level a voice may be and still count as theirs.
+    public static let nearMarginDecibels = 9.0
+    /// After this long with nothing near, the margin widens by one decibel every `looseningSecondsPerDecibel`.
+    public static let looseningStartsAfterSeconds = 15.0
+    public static let looseningSecondsPerDecibel = 3.0
+    public static let widestMarginDecibels = 20.0
+    /// Stretches of near speech remembered for the owner's level.
+    public static let rememberedStretches = 8
+    /// Anything quieter than this is never taken as speech to learn from.
+    public static let quietestLearnableDecibels = -65.0
+
+    public private(set) var recentNearLevels: [Double] = []
+    public private(set) var lastNearSpeechAt: Date?
+
+    public init() {}
+
+    /// Whether the setting is on: on unless the owner switched it off.
+    public static func isOn(saved: Bool?) -> Bool { saved ?? true }
+
+    /// The owner's usual level, nil until a near stretch was heard.
+    public var ownerLevelDecibels: Double? {
+        guard !recentNearLevels.isEmpty else { return nil }
+        let sorted = recentNearLevels.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// How far below the owner's level a voice may be right now.
+    public func marginDecibels(now: Date) -> Double {
+        guard let lastNearSpeechAt else { return Self.nearMarginDecibels }
+        let quietFor = now.timeIntervalSince(lastNearSpeechAt) - Self.looseningStartsAfterSeconds
+        guard quietFor > 0 else { return Self.nearMarginDecibels }
+        return min(Self.widestMarginDecibels, Self.nearMarginDecibels + quietFor / Self.looseningSecondsPerDecibel)
+    }
+
+    /// Whether speech this loud (the loudest part of it) counts as the owner's.
+    public func isNear(levelDecibels: Double, now: Date) -> Bool {
+        guard let ownerLevelDecibels else { return true }
+        return levelDecibels >= ownerLevelDecibels - marginDecibels(now: now)
+    }
+
+    /// Near speech is going on now.
+    public mutating func heardNearSpeech(at now: Date) {
+        lastNearSpeechAt = now
+    }
+
+    /// A stretch of near speech ended; `levelDecibels` is its loud level (`loudLevel(of:)`).
+    public mutating func learn(nearStretchLevelDecibels levelDecibels: Double, at now: Date) {
+        lastNearSpeechAt = now
+        guard levelDecibels > Self.quietestLearnableDecibels else { return }
+        recentNearLevels.append(levelDecibels)
+        if recentNearLevels.count > Self.rememberedStretches { recentNearLevels.removeFirst(recentNearLevels.count - Self.rememberedStretches) }
+    }
+
+    /// The loud level of a stretch of speech: the 80th percentile of its blocks' levels, so the gaps between words don't
+    /// pull it down and one click doesn't push it up.
+    public static func loudLevel(of blockLevelsDecibels: [Double]) -> Double? {
+        guard !blockLevelsDecibels.isEmpty else { return nil }
+        let sorted = blockLevelsDecibels.sorted()
+        let index = min(sorted.count - 1, Int(Double(sorted.count) * 0.8))
+        return sorted[index]
     }
 }

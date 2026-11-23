@@ -595,6 +595,7 @@ struct VoiceSettingsContent: View {
     @AppStorage(CallSettings.modelKey) private var callModel = ""
     /// How long a call waits after you stop talking before Vello answers.
     @AppStorage(CallTurnPatience.settingKey) private var callPatienceSeconds = CallTurnPatience.defaultSeconds
+    @AppStorage(CallNearVoice.settingKey) private var callNearVoiceOnly = true
     @ObservedObject private var keys = ProviderKeys.shared
 
     var body: some View {
@@ -629,6 +630,10 @@ struct VoiceSettingsContent: View {
                             .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
                             .frame(width: 40, alignment: .trailing)
                     }
+                }
+                RowDivider()
+                SettingRow(title: "Only hear voices near the Mac", detail: "People talking across the room don't count as you. Turn off if you sit far from the Mac.") {
+                    Toggle("Only hear voices near the Mac", isOn: $callNearVoiceOnly).toggleStyle(.switch).labelsHidden()
                 }
                 RowDivider()
                 SettingRow(title: "Thinks with") {

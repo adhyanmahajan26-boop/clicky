@@ -273,7 +273,7 @@ final class CallAudio {
         if isLive {
             let converter = self.converter
             do {
-                _ = try hub.startVoiceProcessingCapture { buffer, _ in converter.append(buffer) }
+                _ = try hub.startVoiceProcessingCapture(keepsDistanceInLoudness: true) { buffer, _ in converter.append(buffer) }
                 isEchoCancelled = true
             } catch {
                 print("📞 Echo cancelling didn't start (\(error.localizedDescription)); the call goes on without it")

@@ -86,7 +86,7 @@ fi
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.2}"
 BUILT=()
 for target in "${TARGETS[@]}"; do
-  if (cd "$CRATE_FOLDER" && cargo build -p "$HELPER_NAME" --locked "${PROFILE_FLAGS[@]}" --target "$target" --target-dir "$CARGO_TARGET"); then
+  if (cd "$CRATE_FOLDER" && cargo build -p "$HELPER_NAME" --locked ${PROFILE_FLAGS[@]+"${PROFILE_FLAGS[@]}"} --target "$target" --target-dir "$CARGO_TARGET"); then
     BUILT+=("$CARGO_TARGET/$target/$PROFILE_FOLDER/$HELPER_NAME")
   else
     warn "building for $target failed. See the build log above."

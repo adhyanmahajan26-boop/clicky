@@ -33,8 +33,26 @@ enum BackgroundInput {
     /// The opt-in escape hatch: act with the real pointer / keyboard focus, as before.
     static var useRealPointer: Bool { UserDefaults.standard.bool(forKey: useRealPointerKey) }
 
-    /// True when actions must stay off the owner's pointer and focus: Theo has a screen and the escape hatch is off.
-    static var isActive: Bool { ClaudiaScreen.picked != nil && !useRealPointer }
+    /// True when actions must stay off the owner's pointer and focus: Vello has a screen of its own, the owner isn't on it
+    /// right now, and the escape hatch is off.
+    ///
+    /// With the pointer on Vello's screen (a laptop's only screen, or the monitor the owner is working on), that screen is
+    /// the owner's too. Acting "in the background" there was the wrong mode: clicks posted to the app's process don't land
+    /// in Electron and Chromium apps (the Claude app's Code tab ignored every one), and an app or search it opened was
+    /// sent behind the owner's front app again, so "search this in Safari" searched without ever showing Safari.
+    static var isActive: Bool {
+        guard let screen = ClaudiaScreen.picked, !useRealPointer else { return false }
+        return !screen.frame.contains(NSEvent.mouseLocation)
+    }
+
+    /// Whether a step on something at this frame stays off the owner's pointer and focus: only while `isActive`, and only
+    /// for something on Vello's own screen. The owner's own windows, on the screens they use, get a real click, so the
+    /// click lands and they see it happen.
+    static func staysInBackground(targetFrameCG frameCG: CGRect?) -> Bool {
+        guard isActive else { return false }
+        guard let frameCG, frameCG.width > 0, frameCG.height > 0, let screen = ClaudiaScreen.picked else { return true }
+        return CGDisplayBounds(screen.displayID).contains(CGPoint(x: frameCG.midX, y: frameCG.midY))
+    }
 
     // MARK: Elements
 

@@ -92,6 +92,11 @@ public struct ActionTaskLoop: Equatable, Sendable {
     public var pendingPageText: String?
     /// P8: the whole article read by read_article (title, URL, source and text), for the next observe turn.
     public var pendingArticleText: String?
+    /// The last block had steps that couldn't be read (a click on "Send" instead of its number). They get one more
+    /// look even when that block said "done", so a misread step is fixed instead of the task ending with nothing done.
+    public private(set) var lastBlockHadUnreadableSteps = false
+    public private(set) var unreadableStepRetries = 0
+    public static let maximumUnreadableStepRetries = 1
 
     public init(goal: String, ownerTranscript: String) {
         self.goal = goal
@@ -128,6 +133,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
 
     /// Records the parser's rejections (they count as "not run").
     public mutating func recordRejections(_ rejections: [ActionStepRejection]) {
+        lastBlockHadUnreadableSteps = !rejections.isEmpty
         for rejection in rejections {
             records.append(ActionStepRecord(number: nextStepNumber, step: .wait(seconds: 0), tier: nil, tierReason: nil,
                                             outcome: .skipped(reason: "step \(rejection.position) (\(rejection.verb ?? "?")) couldn't be read: \(rejection.reason)")))
@@ -140,12 +146,15 @@ public struct ActionTaskLoop: Equatable, Sendable {
         if observeTurnCount >= Self.maximumObserveTurns { return false }
         // A summarize step read the page: Claude still has to write the summary.
         if (pendingPageText != nil || pendingArticleText != nil) && !isStepBudgetExhausted { return true }
-        if planWasDone { return false }
+        if planWasDone {
+            return lastBlockHadUnreadableSteps && unreadableStepRetries < Self.maximumUnreadableStepRetries && !isStepBudgetExhausted
+        }
         return !isStepBudgetExhausted
     }
 
     public mutating func beginObserveTurn() {
         observeTurnCount += 1
+        if lastBlockHadUnreadableSteps { unreadableStepRetries += 1 }
     }
 
     /// The follow-up user text for the observe turn (the new screen follows it).
@@ -174,6 +183,9 @@ public struct ActionTaskLoop: Equatable, Sendable {
         lines.append("")
         if records.contains(where: { if case .refused = $0.outcome { return true } else { return false } }) {
             lines.append("clicky already told the user out loud why a step was refused; don't repeat that at length.")
+        }
+        if lastBlockHadUnreadableSteps {
+            lines.append("some steps couldn't be read and didn't run (see above). use the element's number from the fresh list; text you can see on screen is listed with a number too. the task isn't done until those steps ran.")
         }
         lines.append("the screen lists and screenshots below are fresh: the element ids are new. reply with the next <actions> block, or, when the goal is reached, say so in one short line with no actions block. don't repeat steps that are done, and don't retry refused ones.")
         return lines.joined(separator: "\n")
