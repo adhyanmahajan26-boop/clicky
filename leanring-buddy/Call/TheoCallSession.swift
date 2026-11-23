@@ -146,7 +146,10 @@ enum CallPrompt {
         let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id || BotsStore.isCallRecord($0) }.suffix(200)
             .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text, isCallRecord: BotsStore.isCallRecord($0)) }
         return CallPromptText.otherBot(name: bot.name, instructions: bot.personaHead, owner: owner,
-                                       languageRule: languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language),
+                                       // Hindi in Roman letters, whatever the voice: a bot on a small local model wrote
+                                       // garbled Devanagari its English voice couldn't read (Air, 24 Nov), while its Hinglish
+                                       // in Roman letters came out clear.
+                                       languageRule: languageRule(owner: owner, usesSarvamVoice: false, language: language),
                                        reportingLines: BotPrompts.reportingLines(for: bot, store: store),
                                        memorySection: BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath),
                                        recentChat: Array(recent), carriedOverLimit: carriedOverCharacters)
