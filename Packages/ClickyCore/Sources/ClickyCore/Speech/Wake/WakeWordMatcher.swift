@@ -52,8 +52,9 @@ public struct WakeWordMatch: Equatable, Sendable {
 }
 
 public struct WakeWordMatcher: Sendable {
-    // "hey theo" keeps waking it for a while after the rename to Vello, so an old habit still works.
-    public static let defaultPhrases = ["hey vello", "hey theo", "hey claudia"]
+    // "hey theo" keeps waking it for a while after the rename to Vello, so an old habit still works. Vello's names call
+    // Vello; "hey pointer" ("hey pointer assistant") and "hey claudia" wake Pointer Assistant (`WakeTarget`).
+    public static let defaultPhrases = ["hey vello", "hey theo", "hey pointer", "hey claudia"]
     /// A gap this long between two words starts a new utterance segment.
     public static let segmentPauseSeconds: TimeInterval = 0.6
 
@@ -78,6 +79,7 @@ public struct WakeWordMatcher: Sendable {
         "vello": ["vello", "velo", "vellow", "bello", "vallo", "velloh", "wello", "vellos", "velos", "vela", "vella"],
         "theo": ["theo", "teo", "thio", "tio", "theyo", "theodore", "dio", "deo", "thiyo", "tayo", "leo", "jio", "siri", "thea"],
         "claudia": ["claudia", "cloudia", "clodia", "claudio", "klaudia", "claudya", "claudiya", "clawdia", "klodia", "glaudia", "claudias"],
+        "pointer": ["pointer", "pointers", "poynter", "pointa", "pointor", "pointar"],
         "clicky": ["clicky", "clickey", "kliki", "clicki", "klicky", "kliky", "clickie", "clikki", "cliky", "cliquey", "klickie"]
     ]
 
@@ -86,7 +88,9 @@ public struct WakeWordMatcher: Sendable {
     static let rejectedNearNames: Set<String> = [
         "claude", "claudes", "click", "clicks", "clicked", "clique", "cliche", "clickers", "clicker",
         // One edit from "vello": "hi hello" and "hey hello" are everyday greetings, not a wake.
-        "hello", "cello", "jello", "mello", "yellow", "fellow", "hullo", "helo"
+        "hello", "cello", "jello", "mello", "yellow", "fellow", "hullo", "helo",
+        // One edit from "pointer".
+        "painter", "printer", "pointed", "pointier"
     ]
 
     struct ParsedPhrase: Sendable {

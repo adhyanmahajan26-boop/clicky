@@ -18,17 +18,20 @@ enum TheoCallController {
     static var isActive: Bool { session != nil && session?.state != .ended }
 
     /// Opens the window and starts the call, or brings the running call forward. `activates` false leaves focus alone.
-    static func start(activates: Bool = true) {
+    /// `openingWords`: what the owner already said ("hey vello, find my mails from Sam" → "find my mails from Sam"), the
+    /// call's first turn instead of Vello's hello.
+    static func start(activates: Bool = true, openingWords: String = "") {
         if let window, isActive {
             if activates { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             window.orderFrontRegardless()
+            session?.takeWordsSaidBeforeTheCall(openingWords)
             return
         }
         guard let manager = CompanionManager.current else { return }
         let isLive = !TheoProfile.isTest
         if isLive, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async { MainActor.assumeIsolated { if granted { start(activates: activates) } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { if granted { start(activates: activates, openingWords: openingWords) } } }
             }
             return
         }
@@ -54,7 +57,7 @@ enum TheoCallController {
         }
         if activates { NSApp.activate(ignoringOtherApps: true); created.makeKeyAndOrderFront(nil) }
         created.orderFrontRegardless()
-        session.start()
+        session.start(openingWords: openingWords)
     }
 
     static func end() {
