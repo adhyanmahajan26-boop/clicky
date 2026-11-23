@@ -173,6 +173,14 @@ struct FingerspellingTests {
         #expect(FingerspellingReader.read(hands: [Self.hand(["little"], thumb: .tucked)], alphabet: .asl, taughtSigns: ownLetter)?.label == "e")
     }
 
+    @Test func aTaughtShapeNearTheSendHandIsReadAsTaughtNotSent() {
+        let openHand = Self.hand(Self.allFour, thumb: .outToTheSide, spread: 0.25)
+        var book = TaughtSignBook()
+        book.addExample(label: "r", hands: [Self.hand(Self.allFour, thumb: .outToTheSide, spread: 0.1)])
+        #expect(FingerspellingReader.read(hands: [openHand], alphabet: .isl, taughtSigns: book)?.label == "r")
+        #expect(FingerspellingReader.read(hands: [openHand], alphabet: .isl, taughtSigns: TaughtSignBook())?.label == FingerspellingReading.sendLabel)
+    }
+
     @Test func readsATaughtTwoHandSignAlsoInAMirror() {
         let leftHand = Self.transformed(Self.hand(["index"], thumb: .outToTheSide), mirrored: true)
         let rightHand = Self.transformed(Self.hand(Self.allFour, thumb: .tucked), shiftX: 1.6)

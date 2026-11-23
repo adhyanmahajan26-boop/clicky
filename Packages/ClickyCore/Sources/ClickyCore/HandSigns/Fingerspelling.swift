@@ -11,7 +11,8 @@
 //    hand, near or far, so a shape can be compared with a stored one.
 //  - ASLFingerspelling: the 24 still letters of the American manual alphabet (J and Z move, so they aren't
 //    here), written as those 16 numbers, read by the nearest shape. Checked against real photos of hands
-//    (docs/SIGN-LANGUAGE.md has the numbers): about 87% of letters right on a person it was not tuned on.
+//    through Apple Vision (docs/SIGN-LANGUAGE.md has the numbers): about 7 in 10 letters right on a person it
+//    was not tuned on, M and N almost never.
 //  - TaughtSignBook: signs the owner teaches by showing them a few times, one hand or two, any letter or word.
 //    Indian Sign Language spells most letters with two hands; nothing built in reads those yet, so ISL is
 //    taught.
@@ -410,7 +411,10 @@ public enum FingerspellingReader {
             }
         }
         switch (taughtReading, builtInReading) {
-        case let (taught?, builtIn?): return taught.distance <= builtIn.distance ? taught : builtIn
+        case let (taught?, builtIn?):
+            // A shape the owner taught never sends by mistake: an open-handed ISL letter can look like the send hand.
+            if builtIn.label == FingerspellingReading.sendLabel { return taught }
+            return taught.distance <= builtIn.distance ? taught : builtIn
         case let (taught?, nil): return taught
         case let (nil, builtIn?): return builtIn
         case (nil, nil): return nil
