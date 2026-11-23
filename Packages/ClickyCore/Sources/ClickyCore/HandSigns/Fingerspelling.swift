@@ -49,7 +49,7 @@ public enum HandShapeMeasure {
 
     /// Most joints that may be hidden and filled in. Some letters hide joints on purpose (M and N tuck the thumb
     /// under the fingers), and Vision leaves out what it can't see.
-    public static let mostFilledInJoints = 3
+    public static let mostFilledInJoints = 5
 
     /// Puts back a few hidden joints from the ones beside them on the same finger: a hidden tip carries on the
     /// finger's last bone, a hidden middle joint goes halfway between its neighbours. Nil when the wrist or a
@@ -232,36 +232,41 @@ public enum ASLFingerspelling {
     /// Each still letter of the American manual alphabet as HandShapeMeasure's 16 numbers, in the same order as
     /// `HandShapeMeasure.measureNames`: four reaches, the thumb tip's place, thumb to index and middle tips, index
     /// to middle tip and which side, the hand's tilt, four straightnesses. A folded finger reaches below 0; a
-    /// finger bent flat at the knuckle (M, N) stays straight but reaches little.
+    /// finger bent flat at the knuckle (M, N) stays straight but reaches little. Each is the middle of about 55
+    /// photos of that letter as Apple Vision sees them (`fingerspell-eval shapes`), so they match the app's camera;
+    /// M and N rest on only 5 and 12, since Vision mostly can't see the thumb tucked under the fingers.
     public static let letterShapes: [(letter: String, shape: [Double])] = [
-        ("a", [-0.2, -0.4, -0.4, -0.3, 0.4, 1.5, 0.7, 0.9, 0.3, 0.2, -0.2, 1.0, 0.3, 0.4, 0.5, 0.5]),
-        ("b", [0.8, 0.9, 0.9, 0.7, 0.1, 0.9, 0.9, 1.1, 0.2, 0.2, -0.2, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        ("c", [0.9, 0.9, 0.9, 0.8, 1.1, 1.1, 0.8, 0.9, 0.1, 0.0, -0.6, 0.8, 1.0, 0.9, 0.9, 1.0]),
-        ("d", [0.9, 0.4, 0.3, 0.4, 0.7, 1.0, 1.1, 0.2, 1.0, -0.1, -0.1, 1.0, 1.0, 0.8, 0.7, 0.8]),
-        ("e", [0.0, -0.1, -0.1, -0.1, -0.1, 0.8, 0.4, 0.3, 0.2, 0.2, -0.2, 1.0, 0.1, 0.1, 0.1, 0.2]),
-        ("f", [0.5, 0.8, 0.9, 0.6, 0.8, 1.2, 0.1, 0.6, 0.5, 0.2, 0.1, 1.0, 0.9, 0.9, 0.9, 0.9]),
-        ("g", [1.0, -0.4, -0.5, -0.3, 0.5, 1.3, 1.0, 0.8, 1.5, -0.2, 0.6, 0.8, 1.0, 0.4, 0.6, 0.4]),
-        ("h", [1.0, 1.1, -0.3, -0.3, -0.1, 1.1, 1.0, 1.1, 0.3, 0.2, 0.6, 0.8, 1.0, 1.0, 0.4, 0.6]),
-        ("i", [-0.1, -0.2, -0.3, 0.8, -0.1, 1.1, 0.4, 0.3, 0.2, 0.2, -0.2, 1.0, 0.2, 0.3, 0.3, 1.0]),
-        ("k", [1.0, 1.1, -0.2, -0.2, -0.1, 1.3, 1.0, 0.9, 0.7, 0.7, 0.0, 1.0, 1.0, 1.0, 0.3, 0.4]),
-        ("l", [0.9, -0.4, -0.4, -0.3, 1.2, 1.2, 1.5, 1.2, 1.4, -0.2, -0.4, 0.9, 1.0, 0.4, 0.5, 0.4]),
-        ("m", [0.6, 0.7, 0.6, 0.4, 0.5, -0.1, 0.5, 0.7, 0.4, 0.3, -0.1, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        ("n", [0.0, 0.2, -0.2, -0.3, 1.0, -0.2, 0.8, 1.1, 0.4, 0.2, -0.2, 1.0, 1.0, 1.0, 1.0, 0.9]),
-        ("o", [0.5, 0.5, 0.4, 0.4, 0.7, 1.2, 0.2, 0.2, 0.1, 0.1, -0.2, 1.0, 0.8, 0.7, 0.7, 0.8]),
-        ("p", [1.1, 0.3, 0.2, 0.2, -0.9, 0.9, 1.2, 0.2, 1.1, 0.3, 0.9, 0.5, 1.0, 0.7, 0.7, 0.8]),
-        ("q", [0.9, 0.7, 0.3, 0.2, 1.1, 0.7, 0.9, 0.7, 0.3, 0.0, -0.8, 0.5, 1.0, 0.9, 0.7, 0.8]),
-        ("r", [0.9, 1.0, -0.2, -0.2, -0.3, 1.0, 0.9, 1.0, 0.1, 0.0, -0.1, 1.0, 1.0, 1.0, 0.3, 0.4]),
-        ("s", [-0.1, -0.2, -0.3, -0.2, -0.1, 1.0, 0.4, 0.3, 0.2, 0.2, -0.3, 1.0, 0.2, 0.2, 0.4, 0.4]),
-        ("t", [0.4, -0.3, -0.3, -0.2, 0.8, 1.4, 0.7, 1.0, 0.8, 0.0, -0.4, 0.9, 0.9, 0.4, 0.4, 0.3]),
-        ("u", [0.9, 1.1, -0.3, -0.3, -0.2, 1.0, 1.0, 1.1, 0.2, 0.2, -0.1, 1.0, 1.0, 1.0, 0.4, 0.5]),
-        ("v", [1.0, 1.1, -0.2, -0.2, -0.2, 0.9, 1.3, 1.2, 0.6, 0.6, 0.0, 1.0, 1.0, 1.0, 0.4, 0.5]),
-        ("w", [0.9, 1.0, 1.0, -0.2, -0.3, 0.8, 1.3, 1.2, 0.5, 0.5, -0.1, 1.0, 1.0, 1.0, 1.0, 0.4]),
-        ("x", [0.6, -0.3, -0.3, -0.3, 0.0, 1.0, 0.7, 0.3, 0.9, 0.1, -0.1, 1.0, 1.0, 0.4, 0.5, 0.4]),
-        ("y", [-0.3, -0.4, -0.4, 0.8, 1.1, 1.4, 1.0, 1.3, 0.2, 0.2, 0.0, 1.0, 0.4, 0.4, 0.4, 1.0])
+        ("a", [-0.2, -0.4, -0.5, -0.4, 0.4, 1.7, 0.9, 1.1, 0.3, 0.2, -0.2, 1.0, 0.3, 0.4, 0.4, 0.4]),
+        ("b", [0.9, 0.9, 0.9, 0.7, 0.0, 0.9, 1.0, 1.1, 0.2, 0.2, -0.2, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        ("c", [0.9, 0.8, 0.8, 0.7, 1.2, 0.8, 0.8, 0.8, 0.1, 0.0, -0.2, 0.9, 0.9, 1.0, 1.0, 1.0]),
+        ("d", [0.4, 1.0, 0.9, 0.7, 0.9, 0.9, 0.2, 1.1, 1.1, 0.1, 0.0, 1.0, 0.8, 0.9, 1.0, 1.0]),
+        ("e", [-0.1, -0.1, -0.2, -0.2, -0.2, 0.7, 0.5, 0.3, 0.2, 0.2, -0.3, 1.0, 0.1, 0.1, 0.2, 0.2]),
+        ("f", [0.6, 0.8, 0.9, 0.7, 1.0, 1.1, 0.1, 0.6, 0.6, 0.1, 0.3, 1.0, 0.9, 1.0, 0.9, 0.8]),
+        ("g", [1.0, -0.4, -0.5, -0.3, 0.5, 1.4, 0.9, 0.9, 1.6, -0.3, 0.6, 0.8, 1.0, 0.3, 0.5, 0.4]),
+        ("h", [0.9, 1.0, -0.3, -0.3, -0.2, 1.1, 0.9, 0.9, 0.2, 0.2, 0.6, 0.8, 1.0, 1.0, 0.4, 0.5]),
+        ("i", [-0.1, -0.3, -0.3, 1.0, -0.2, 1.1, 0.5, 0.5, 0.3, 0.2, -0.2, 1.0, 0.1, 0.3, 0.3, 1.0]),
+        ("k", [1.0, 1.0, -0.3, -0.2, -0.1, 1.3, 0.9, 0.8, 0.6, 0.6, 0.0, 1.0, 1.0, 1.0, 0.3, 0.3]),
+        ("l", [1.2, -0.4, -0.4, -0.3, 1.2, 1.5, 1.8, 1.5, 1.7, -0.4, -0.5, 0.9, 1.0, 0.3, 0.3, 0.3]),
+        ("m", [0.2, 0.4, 0.6, 0.2, 1.1, -1.0, 0.7, 0.8, 0.4, 0.3, -0.3, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        ("n", [0.7, 0.9, -0.3, -0.4, 0.5, -0.8, 1.0, 1.3, 0.5, 0.4, 0.1, 1.0, 1.0, 1.0, 0.8, 0.8]),
+        ("o", [0.6, 0.5, 0.5, 0.4, 0.9, 1.0, 0.1, 0.2, 0.1, 0.0, 0.0, 0.9, 0.8, 0.8, 0.8, 0.9]),
+        ("p", [0.5, 0.9, 0.9, 0.5, -1.1, 0.9, 0.3, 1.0, 1.0, 0.0, 0.8, 0.5, 0.8, 1.0, 1.0, 1.0]),
+        ("q", [1.0, 0.2, 0.0, 0.1, -1.2, 0.5, 0.9, 0.8, 0.7, -0.4, 0.8, 0.5, 1.0, 0.6, 0.5, 0.6]),
+        ("r", [1.0, 1.0, -0.3, -0.3, -0.3, 1.0, 0.9, 1.0, 0.1, 0.0, -0.1, 1.0, 1.0, 1.0, 0.3, 0.4]),
+        ("s", [-0.1, -0.2, -0.3, -0.3, -0.1, 1.1, 0.4, 0.4, 0.3, 0.2, -0.3, 1.0, 0.1, 0.2, 0.3, 0.4]),
+        ("t", [0.3, -0.3, -0.4, -0.3, 0.8, 1.5, 0.8, 1.1, 0.7, 0.0, -0.4, 0.9, 0.8, 0.4, 0.4, 0.3]),
+        ("u", [1.0, 1.0, -0.3, -0.3, -0.3, 1.0, 1.1, 1.1, 0.2, 0.2, 0.0, 1.0, 1.0, 1.0, 0.4, 0.4]),
+        ("v", [1.0, 1.0, -0.3, -0.3, -0.3, 0.8, 1.3, 1.2, 0.6, 0.6, 0.0, 1.0, 1.0, 1.0, 0.4, 0.4]),
+        ("w", [0.9, 0.9, 0.7, -0.2, -0.3, 0.9, 1.2, 1.1, 0.4, 0.4, -0.1, 1.0, 1.0, 1.0, 1.0, 0.4]),
+        ("x", [0.7, -0.3, -0.4, -0.3, -0.1, 1.0, 0.8, 0.4, 1.0, 0.1, -0.1, 1.0, 1.0, 0.3, 0.4, 0.4]),
+        ("y", [-0.3, -0.4, -0.4, 1.0, 1.1, 1.6, 1.3, 1.5, 0.2, 0.2, 0.0, 1.0, 0.3, 0.3, 0.4, 1.0])
     ]
 
     /// The "5" hand (all fingers up and spread, thumb out), which isn't a letter: held, it sends.
     public static let sendShape: [Double] = [0.9, 1.0, 0.9, 0.7, 1.0, 0.8, 1.0, 1.3, 0.5, 0.45, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    /// Nearer than a letter has to be, since sending by mistake costs more than a missed letter.
+    public static let sendMostDistance = 1.8
 
     /// The nearest letter (or the send shape), if the hand is near enough to one.
     public static func read(_ pose: HandPose) -> FingerspellingReading? {
@@ -277,7 +282,8 @@ public enum ASLFingerspelling {
             if distance < nearestDistance { nearestDistance = distance; nearestLabel = letter }
         }
         let sendDistance = HandShapeMeasure.distance(shape, sendShape)
-        if sendDistance < nearestDistance { nearestDistance = sendDistance; nearestLabel = FingerspellingReading.sendLabel }
+        // Send must be a clear spread hand: a letter near it (an open R, a B with the thumb out) mustn't send by mistake.
+        if sendDistance < nearestDistance && sendDistance <= sendMostDistance { nearestDistance = sendDistance; nearestLabel = FingerspellingReading.sendLabel }
         guard nearestDistance <= HandShapeMeasure.oneHandMostDistance else { return nil }
         return FingerspellingReading(label: nearestLabel, distance: nearestDistance, isTaught: false)
     }
@@ -397,7 +403,7 @@ public enum FingerspellingReader {
                 builtInReading = ASLFingerspelling.read(firstHand)
             case .isl:
                 // Only the send shape is built in for ISL.
-                if let shape = HandShapeMeasure.measure(firstHand), HandShapeMeasure.distance(shape, ASLFingerspelling.sendShape) <= HandShapeMeasure.oneHandMostDistance {
+                if let shape = HandShapeMeasure.measure(firstHand), HandShapeMeasure.distance(shape, ASLFingerspelling.sendShape) <= ASLFingerspelling.sendMostDistance {
                     builtInReading = FingerspellingReading(label: FingerspellingReading.sendLabel,
                                                            distance: HandShapeMeasure.distance(shape, ASLFingerspelling.sendShape), isTaught: false)
                 }

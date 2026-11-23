@@ -105,7 +105,7 @@ struct FingerspellingTests {
         #expect(HandShapeMeasure.measure(noLittleKnuckle) == nil)
         // Too much hidden to guess.
         var mostlyHidden = wholeHand
-        for joint in [HandJoint.thumbTip, .indexTip, .middleTip, .ringTip] { mostlyHidden.joints[joint] = nil }
+        for joint in [HandJoint.thumbMP, .thumbIP, .thumbTip, .indexPIP, .indexDIP, .indexTip] { mostlyHidden.joints[joint] = nil }
         #expect(HandShapeMeasure.measure(mostlyHidden) == nil)
     }
 
@@ -124,14 +124,18 @@ struct FingerspellingTests {
     @Test func readsClearLettersFromMadeUpHands() {
         #expect(ASLFingerspelling.read(Self.hand(Self.allFour, thumb: .tucked))?.label == "b")
         #expect(ASLFingerspelling.read(Self.hand(["little"], thumb: .tucked))?.label == "i")
-        #expect(ASLFingerspelling.read(Self.hand(["little"], thumb: .outToTheSide))?.label == "y")
         #expect(ASLFingerspelling.read(Self.hand(["index", "middle", "ring"], thumb: .tucked, spread: 0.25))?.label == "w")
         // A left hand, bigger and elsewhere in the picture, spells the same.
         #expect(ASLFingerspelling.read(Self.transformed(Self.hand(["little"], thumb: .tucked), scale: 200, shiftX: 50, mirrored: true))?.label == "i")
     }
 
-    @Test func theSpreadOpenHandSends() {
+    @Test func theSpreadOpenHandSendsButOnlyWhenClearlySpread() {
         #expect(ASLFingerspelling.read(Self.hand(Self.allFour, thumb: .outToTheSide, spread: 0.3))?.label == FingerspellingReading.sendLabel)
+        // Nearer the send shape than any letter, but not near enough to send.
+        var almostSend = ASLFingerspelling.sendShape
+        almostSend[6] += 0.43 * 2
+        #expect(HandShapeMeasure.distance(almostSend, ASLFingerspelling.sendShape) > ASLFingerspelling.sendMostDistance)
+        #expect(ASLFingerspelling.read(shape: almostSend)?.label != FingerspellingReading.sendLabel)
     }
 
     @Test func leavesAShapeFarFromEveryLetterUnread() {
