@@ -556,7 +556,7 @@ final class ActionExecutor {
                 BackgroundInput.postKey(processIdentifier: processIdentifier, combo: combo)
                 return (.done(detail: "sent to the app without changing focus"), nil)
             }
-            guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return (.failed(reason: "a modifier key was held down"), nil) }
+            guard await modifiersAreReleased() else { return (.failed(reason: "a modifier key was held down"), nil) }
             await bringTargetForward(target)
             postKey(combo)
             return (.done(detail: nil), nil)
@@ -716,7 +716,7 @@ final class ActionExecutor {
                 if hitProcessIdentifier != expectedProcessIdentifier { return .failed(reason: "something is covering it") }
             }
         }
-        guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return .failed(reason: "a modifier key was held down") }
+        guard await modifiersAreReleased() else { return .failed(reason: "a modifier key was held down") }
         postClick(at: point)
         return .done(detail: "clicked")
     }
@@ -835,7 +835,7 @@ final class ActionExecutor {
             }
             for chunk in chunks where !background {
                 if isCancelled() { return .cancelled }
-                guard TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) else { return .failed(reason: "a modifier key was held down") }
+                guard await modifiersAreReleased() else { return .failed(reason: "a modifier key was held down") }
                 for event in TypeForMeSyntheticEvents.unicodeEvents(for: chunk) { event.post(tap: .cghidEventTap) }
                 try? await Task.sleep(nanoseconds: Self.delayBetweenUnicodeChunks)
             }
@@ -885,6 +885,30 @@ final class ActionExecutor {
             event.flags = flags
             event.post(tap: .cghidEventTap)
         }
+        // A key event that carries ⌘ (or ⇧ ⌥ ⌃) leaves the HID state thinking that
+        // modifier is still down until a key-up for the modifier itself arrives, so
+        // the next step ("type this") failed with "a modifier key was held down".
+        // Let go of each modifier explicitly, the way a real keyboard does.
+        guard !flags.isEmpty else { return }
+        let modifierKeyCodes: [(flag: CGEventFlags, virtualKey: CGKeyCode)] = [
+            (.maskCommand, 55), (.maskShift, 56), (.maskAlternate, 58), (.maskControl, 59),
+        ]
+        for modifier in modifierKeyCodes where flags.contains(modifier.flag) {
+            guard let releaseEvent = SyntheticEvents.keyEvent(virtualKey: modifier.virtualKey, keyDown: false) else { continue }
+            releaseEvent.flags = []
+            releaseEvent.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Waits a moment for ⌃⌥⌘⇧ to be let go (our own last shortcut, or the owner
+    /// finishing one) instead of failing a step the instant one is down.
+    private func modifiersAreReleased(waitingUpToSeconds longestWaitSeconds: Double = 1.0) async -> Bool {
+        let waitStartedAt = Date()
+        while !TypeForMeSyntheticEvents.areNoModifiersHeld(CGEventSource.flagsState(.hidSystemState)) {
+            if Date().timeIntervalSince(waitStartedAt) > longestWaitSeconds { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
     }
 
     private func scroll(at point: CGPoint, direction: ActionScrollDirection, amount: Int) {

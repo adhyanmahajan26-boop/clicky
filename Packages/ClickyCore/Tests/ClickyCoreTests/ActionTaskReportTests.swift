@@ -38,4 +38,33 @@ struct ActionTaskReportTests {
         #expect(stopped == "Stopped (you pressed Escape) before doing anything on screen.")
         #expect(ActionTaskReport.summary(records: [], ending: .done) == "Nothing was done on screen.")
     }
+
+    @Test func stepsThatCouldNotBeReadAreNamedWhenNothingRan() {
+        var loop = ActionTaskLoop(goal: "send it", ownerTranscript: "type hello in claude and send")
+        loop.recordRejections([ActionStepRejection(position: 1, verb: "click", reason: "click needs the element's number from the list, not its words (\"Send\")")])
+        let report = ActionTaskReport.summary(records: loop.records, ending: .done)
+        #expect(report.hasPrefix("Nothing was done on screen. Steps that didn't run: "))
+        #expect(report.contains("Send"))
+    }
+
+    @Test func aBlockWithUnreadableStepsGetsOneMoreLookEvenWhenItSaidDone() {
+        var loop = ActionTaskLoop(goal: "send it", ownerTranscript: "press send")
+        loop.recordRejections([ActionStepRejection(position: 1, verb: "click", reason: "click needs an element id")])
+        #expect(loop.needsObserveTurn(planWasDone: true, wasCancelled: false))
+        #expect(loop.continuationMessage().contains("couldn't be read"))
+        loop.beginObserveTurn()
+        loop.recordRejections([ActionStepRejection(position: 1, verb: "click", reason: "click needs an element id")])
+        #expect(!loop.needsObserveTurn(planWasDone: true, wasCancelled: false))
+        loop.recordRejections([])
+        #expect(!loop.needsObserveTurn(planWasDone: true, wasCancelled: false))
+    }
+
+    @Test func aClickOnWordsSaysToUseTheNumber() {
+        let parsed = ActionDSL.parse(#"{"goal":"send","steps":[{"do":"click","id":"Send"},{"do":"key","combo":"return"}],"done":true}"#)
+        guard case .success(let plan) = parsed else {
+            Issue.record("the key step should still parse")
+            return
+        }
+        #expect(plan.rejectedSteps.first?.reason.contains("number from the list") == true)
+    }
 }

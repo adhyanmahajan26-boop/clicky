@@ -452,7 +452,12 @@ public enum ActionDSL {
             return .success(.search(query: query, engine: engine))
 
         case "click":
-            guard let elementID = elementIdentifier(object["id"]) else { return reject("click needs an element id") }
+            guard let elementID = elementIdentifier(object["id"]) else {
+                if let label = object["id"] as? String ?? object["text"] as? String, !label.isEmpty {
+                    return reject("click needs the element's number from the list, not its words (\"\(label.prefix(40))\")")
+                }
+                return reject("click needs an element id")
+            }
             return .success(.click(elementID: elementID))
 
         case "type":

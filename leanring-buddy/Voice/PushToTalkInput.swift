@@ -76,7 +76,11 @@ final class PushToTalkKeys {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
         case .keyDown:
-            if event.getIntegerValueField(.keyboardEventKeycode) == Self.escapeKeyCode { escapePressed.send() }
+            // Pointer Assistant presses Esc itself (closing a menu, leaving a field). That
+            // Esc carries our own tag and must not count as the owner pressing Esc, or it
+            // cancelled the very task that pressed it and cut Vello off on a call.
+            let isOurOwnKeyPress = SyntheticEventTag.isTagged(userData: event.getIntegerValueField(.eventSourceUserData))
+            if event.getIntegerValueField(.keyboardEventKeycode) == Self.escapeKeyCode && !isOurOwnKeyPress { escapePressed.send() }
             // Typing a letter while holding the two keys means it's a shortcut, not talking.
             if isHeld { release() }
         case .flagsChanged:

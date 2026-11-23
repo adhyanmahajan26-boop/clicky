@@ -489,6 +489,7 @@ final class TheoCallSession: ObservableObject {
             // The ears wrote down Vello's own voice. Taking it as the owner cut Vello off mid-answer (the voice stopped and
             // the answer was dropped) and then answered its own words, so it's dropped here.
             echoesDropped.append(words)
+            print("📞 Call: dropped Vello's own voice coming back (\(words.split(separator: " ").count) words)")
             if echoesDropped.count > 20 { echoesDropped.removeFirst(echoesDropped.count - 20) }
             if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), lines[liveIndex].id != heldTurnLineID {
                 lines.remove(at: liveIndex)
@@ -549,6 +550,7 @@ final class TheoCallSession: ObservableObject {
         let answerLineID = theoLineID
         let answerWasHeard = turnHasSounded
         let wasAnsweringATurn = replyInProgress
+        print("📞 Call: the owner spoke during the answer (answer heard yet: \(answerWasHeard), still writing: \(wasAnsweringATurn))")
         bargeIn()
         guard wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, let lastReleasedTurn else { return }
         self.lastReleasedTurn = nil
@@ -604,6 +606,7 @@ final class TheoCallSession: ObservableObject {
         heldTurnTask = nil
         isHoldingTurn = false
         turnWaits.append(quietSeconds)
+        print("📞 Call: turn ends after \(String(format: "%.1f", quietSeconds)) s of quiet (\(words.split(separator: " ").count) words)")
         lastReleasedTurn = (words, lineID)
         // The line may have been reopened by a sound that brought no words.
         if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) { lines[index].isLive = false }

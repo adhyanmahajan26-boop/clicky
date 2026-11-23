@@ -38,23 +38,33 @@ public enum ActionTaskReport {
             case .declined: return "\(name) (the owner said no)"
             }
         }
-        let stepsLine = stepWords.isEmpty ? "" : stepWords.joined(separator: ", ")
+        var stepsLine = stepWords.isEmpty ? "" : stepWords.joined(separator: ", ")
+        // Nothing ran at all: say why the steps didn't (a click Pointer Assistant couldn't read), rather than "Done."
+        // or a bare "Nothing was done", so whoever asked can tell it to try again another way.
+        let notRunReasons = records.compactMap { record -> String? in
+            if case .skipped(let reason) = record.outcome { return reason }
+            return nil
+        }
+        let nothingRanBecause = tried.isEmpty && !notRunReasons.isEmpty
+            ? " Steps that didn't run: " + notRunReasons.prefix(3).joined(separator: "; ") + "."
+            : ""
+        if !tried.isEmpty, !notRunReasons.isEmpty { stepsLine += " (\(notRunReasons.count) more didn't run)" }
         switch ending {
         case .done:
             let allDone = tried.allSatisfy { record in
                 if case .done = record.outcome { return true }
                 return false
             }
-            if stepsLine.isEmpty { return "Nothing was done on screen." }
+            if stepsLine.isEmpty { return "Nothing was done on screen." + nothingRanBecause }
             return (allDone ? "Done on screen: " : "Finished, but not every step went through: ") + stepsLine + "."
         case .waitingForYes:
             let question = pendingQuestion.map { " It asked: \($0)" } ?? ""
             return (stepsLine.isEmpty ? "" : "Done so far: \(stepsLine). ") + "Waiting for the owner's yes before the next step.\(question)"
         case .cancelled:
             let reason = cancelReason.map { " (\($0))" } ?? ""
-            return "Stopped\(reason)" + (stepsLine.isEmpty ? " before doing anything on screen." : " after: \(stepsLine).")
+            return "Stopped\(reason)" + (stepsLine.isEmpty ? " before doing anything on screen." + nothingRanBecause : " after: \(stepsLine).")
         case .failed:
-            return "It went wrong" + (stepsLine.isEmpty ? " before doing anything on screen." : " after: \(stepsLine).")
+            return "It went wrong" + (stepsLine.isEmpty ? " before doing anything on screen." + nothingRanBecause : " after: \(stepsLine).")
         }
     }
 }

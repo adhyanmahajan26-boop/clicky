@@ -112,6 +112,9 @@ final class ActionTaskController {
     private(set) var recentEvents: [String] = []
     /// What each recently ended task did on screen, by its agent id (`ActionTaskReport`), for whoever ordered it.
     private var endedTaskReports: [(agentID: String, report: String)] = []
+    /// The last block that started no task at all (unreadable, or actions switched off), so an order's report says
+    /// nothing was done instead of repeating the spoken "on it".
+    private(set) var lastBlockThatStartedNothing: (date: Date, why: String)?
 
     var isActive: Bool { task != nil }
     var isAwaitingConfirmation: Bool { task?.phase == .awaitingConfirmation }
@@ -130,6 +133,7 @@ final class ActionTaskController {
     /// An <actions> block closed in this answer.
     func handleActionsBlock(_ blockBody: String, session: AnswerSession) {
         guard ClickySettings.isActionsEnabled else {
+            lastBlockThatStartedNothing = (Date(), "doing things on screen is turned off")
             session.speakNow("doing things on screen is turned off.")
             return
         }
@@ -141,6 +145,7 @@ final class ActionTaskController {
                 task.didReceiveBlockThisTurn = true
                 finish(status: .failed, line: "i couldn't read my own next steps, so i stopped.", errorDescription: error.explanation)
             } else {
+                lastBlockThatStartedNothing = (Date(), "its steps couldn't be read (\(error.explanation))")
                 session.speakNow("i couldn't read those steps.")
             }
             return
