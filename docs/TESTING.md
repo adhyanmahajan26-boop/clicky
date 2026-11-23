@@ -49,6 +49,8 @@ defaults write com.personal.clicky.test-mba v3.bots.freshStart -bool true
 
 Each test profile is a Mac of its own to the routing rules: its id is `test:<link name>`, and `test.devices.isDesktop` says whether it's a desktop, which makes it the always-on Mac. Two laptops: set it false on both. `uiLink {action: state}` shows `thisMac`, `otherMac` and `routinesRoute`.
 
+The sync folder: give both profiles the same link code, take the link down (`uiLink {action: down}`) and point both at one folder with `uiSyncFolder {action: use, path: "/tmp/vello-sync-test"}`. `uiSyncFolder {action: tick}` runs a round at once; `{action: state}` shows when each side last wrote and read.
+
 `uiLink {action: down | up | state}` takes the link away and brings it back. A profile needs `up` after a restart. `uiSetDefaults {key: "test.engines.missing", value: ["claude"]}` makes an engine count as signed out on that side. Both profiles share one disk, so a folder check can't tell them apart: test a refused folder with a path that doesn't exist anywhere.
 
 To use Accessibility and Speech, start the profile through LaunchServices (`open -g -n Clicky.app --args --profile test-x`), not from a shell, so the app answers for its own permissions. Never ask for a permission in a test.

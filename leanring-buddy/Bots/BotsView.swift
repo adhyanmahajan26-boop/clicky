@@ -887,6 +887,7 @@ struct BotChatScreen: View {
                                 .frame(maxWidth: .infinity)
                         }
                         ForEach(Array(record.messages.enumerated()).suffix(shownMessages), id: \.element.id) { index, message in
+                            if let macName = macToName(before: index) { ChatMacDivider(macName: macName) }
                             if let job = BotsStore.delegationID(of: message).flatMap({ store.delegation($0) }) {
                                 // The pending card gives way to the finished one, which lands at the end of the chat.
                                 if !message.text.isEmpty || job.isLive { DelegationCard(job: job) }
@@ -980,6 +981,14 @@ struct BotChatScreen: View {
                             canStop: canStop, someoneIsWritingHere: !inProgress.isEmpty)
         }
         .onAppear { store.viewing = conversationID }
+    }
+
+    /// "On MacBook Air" before a message written on another Mac than the one before it (ClickyCore `ChatMacMarker`).
+    private func macToName(before index: Int) -> String? {
+        let messages = record.messages
+        guard messages.indices.contains(index) else { return nil }
+        let previousMac = messages[..<index].last(where: { $0.mac != nil })?.mac
+        return ChatMacMarker.macToName(messageMac: messages[index].mac, previousMac: previousMac, thisMac: TheoLink.localName)
     }
 
     /// Changes whenever a run in this chat starts or changes phase.
@@ -1341,6 +1350,23 @@ enum BotAttachments {
             }
         }
         return text
+    }
+}
+
+/// Where a shared chat moved to another Mac: "On MacBook Air", small and centred, like a date line.
+struct ChatMacDivider: View {
+    let macName: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+            Text("On \(TheoLink.shortName(macName))")
+                .font(.system(size: 11, weight: .medium)).foregroundColor(DS.Colors.textTertiary)
+                .fixedSize()
+            Rectangle().fill(DS.Colors.borderSubtle).frame(height: 1)
+        }
+        .padding(.vertical, 2)
+        .help("Written on \(macName)")
     }
 }
 

@@ -23,6 +23,7 @@ enum CrewTestCommands {
         case "uiSeedDemo": return seed()
         case "uiLink": return link(command)
         case "uiNearby": return nearby(command)
+        case "uiSyncFolder": return syncFolder(command)
         case "uiMainMac": return mainMac(command)
         case "uiBotPrompt": return botPrompt(command)
         default:
@@ -46,6 +47,21 @@ enum CrewTestCommands {
         default: break
         }
         return nearby.testState
+    }
+
+    /// The sync folder: {action: state}, {action: use, path}, {action: off}, {action: tick}. Two test profiles given the same
+    /// folder and link code keep in step through it with no link between them (`uiLink {action: down}`).
+    private static func syncFolder(_ command: [String: Any]) -> Any {
+        let syncFolder = LinkSyncFolderController.shared
+        switch command["action"] as? String ?? "state" {
+        case "use":
+            guard let path = command["path"] as? String, !path.isEmpty else { return ["error": "path needed"] }
+            syncFolder.use(folder: URL(fileURLWithPath: path, isDirectory: true))
+        case "off": syncFolder.setEnabled(false)
+        case "tick": syncFolder.tickNowForTest()
+        default: break
+        }
+        return syncFolder.statusReport
     }
 
     /// {action: state} or {action: thisMac} / {action: otherMac}: the main Mac, as Settings › Devices picks it.

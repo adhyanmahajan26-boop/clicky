@@ -100,6 +100,9 @@ struct BotChatMessage: Codable, Identifiable, Equatable {
     var card: String?
     /// In a private thread: the exchange this message belongs to.
     var exchangeID: String?
+    /// The Mac it was written on, by its full name ("Adhyan’s MacBook Air"), so a chat both Macs share says where each part
+    /// happened. Nil for messages from before it was kept.
+    var mac: String? = TheoLink.localName
     /// Its time to the fraction of a second. `at` only keeps whole seconds once saved or sent, and the order of a chat can't depend on that.
     var exact: Double? = Date().timeIntervalSince1970
 
