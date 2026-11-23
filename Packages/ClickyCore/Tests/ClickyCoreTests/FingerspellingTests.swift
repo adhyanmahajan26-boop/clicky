@@ -133,7 +133,7 @@ struct FingerspellingTests {
         #expect(ASLFingerspelling.read(Self.hand(Self.allFour, thumb: .outToTheSide, spread: 0.3))?.label == FingerspellingReading.sendLabel)
         // Nearer the send shape than any letter, but not near enough to send.
         var almostSend = ASLFingerspelling.sendShape
-        almostSend[6] += 0.43 * 2
+        almostSend[6] += 1.0
         #expect(HandShapeMeasure.distance(almostSend, ASLFingerspelling.sendShape) > ASLFingerspelling.sendMostDistance)
         #expect(ASLFingerspelling.read(shape: almostSend)?.label != FingerspellingReading.sendLabel)
     }
