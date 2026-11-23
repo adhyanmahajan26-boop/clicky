@@ -326,3 +326,29 @@ public struct CallNearVoice: Equatable, Sendable {
         return sorted[index]
     }
 }
+
+/// When words heard while Vello is still writing its answer stop that answer.
+///
+/// The ears hand over the same words again (a partial repeating what was just said, a final for words already taken), and
+/// each one used to count as the owner cutting in: the answer was thrown away before a word of it was heard, the turn was
+/// let go again at once, and the next repeat threw that answer away too (Air, 23 Nov: 232 answers in a row dropped in
+/// three minutes, none heard, and the owner's last 189 words never answered). Now only new words cut in, and an answer
+/// that hasn't been heard yet is started over at most twice; after that, more words wait for it and are answered next.
+public enum CallCutIn {
+    /// Times one answer, not yet heard, may be dropped and started over with the owner's added words.
+    public static let mostRestartsPerAnswer = 2
+
+    /// Whether `heard` holds at least `atLeast` words that aren't in `alreadyHeard` (the turn being answered and any words
+    /// held since), so it's the owner saying something more rather than the ears repeating themselves.
+    public static func bringsNewWords(_ heard: String, alreadyHeard: String, atLeast: Int = 1) -> Bool {
+        let known = Set(CallTurnEnd.simplifiedWords(alreadyHeard))
+        let newWords = CallTurnEnd.simplifiedWords(heard).filter { !known.contains($0) }
+        return newWords.count >= max(1, atLeast)
+    }
+
+    /// Whether an answer still being written, and not heard yet, is dropped and started over with the new words.
+    /// `restartsSoFar`: how many times this answer was already started over.
+    public static func restartsTheAnswer(restartsSoFar: Int) -> Bool {
+        restartsSoFar < mostRestartsPerAnswer
+    }
+}

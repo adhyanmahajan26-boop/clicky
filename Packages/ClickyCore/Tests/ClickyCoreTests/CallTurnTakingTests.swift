@@ -218,3 +218,25 @@ extension CallTurnTakingTests {
         #expect(leaving.contains("Listen mode is over now"))
     }
 }
+
+extension CallTurnTakingTests {
+    /// The ears repeating words already taken never drop the answer being written (Air, 23 Nov: 232 answers dropped).
+    @Test func repeatedWordsAreNotACutIn() {
+        let turn = "Safari pe ja aur James Webb telescope search kar"
+        #expect(!CallCutIn.bringsNewWords("Safari pe ja", alreadyHeard: turn))
+        #expect(!CallCutIn.bringsNewWords("safari pe ja aur james webb telescope search kar.", alreadyHeard: turn))
+        #expect(!CallCutIn.bringsNewWords("", alreadyHeard: turn))
+        #expect(CallCutIn.bringsNewWords("aur Wikipedia wala link khol", alreadyHeard: turn))
+        #expect(CallCutIn.bringsNewWords("stop", alreadyHeard: turn))
+        // A partial needs two new words.
+        #expect(!CallCutIn.bringsNewWords("Safari pe ja hmm", alreadyHeard: turn, atLeast: 2))
+        #expect(CallCutIn.bringsNewWords("Safari pe ja, nahi Chrome kholo", alreadyHeard: turn, atLeast: 2))
+    }
+
+    @Test func anUnheardAnswerStartsOverAtMostTwice() {
+        #expect(CallCutIn.restartsTheAnswer(restartsSoFar: 0))
+        #expect(CallCutIn.restartsTheAnswer(restartsSoFar: 1))
+        #expect(!CallCutIn.restartsTheAnswer(restartsSoFar: 2))
+        #expect(!CallCutIn.restartsTheAnswer(restartsSoFar: 50))
+    }
+}
