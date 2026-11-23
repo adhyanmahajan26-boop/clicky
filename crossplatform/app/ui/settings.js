@@ -89,8 +89,10 @@ async function renderSettingsPage() {
     const current = b && b.standIn ? b.standIn.split("|")[0] : "";
     const choices = brainChoices(b).filter(([id]) => id !== "claude");
     box.innerHTML = `${brainsHTML(b)}<h2>When a bot's brain fails</h2><div class="list"><div class="crow"><span class="tx"><b>Answer with</b><small style="white-space:normal">Another brain answers for the turn and the chat says so. The default is Claude Code when it's installed.</small></span>`
-      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`;
+      + `<span class="act many"><select id="stand-in" aria-label="Stand-in brain"><option value="">Claude Code (default)</option>${choices.map(([id, label]) => `<option value="${esc(id)}"${id === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></span></div></div>`
+      + `<h2>Newest models</h2><div class="list" id="models-fresh"></div>`;
     wireBrains(box, drawBrains);
+    drawModelFreshness();
     $("#stand-in").onchange = async (e) => {
       const engine = e.target.value;
       let model = "";
@@ -99,6 +101,20 @@ async function renderSettingsPage() {
       await invoke({ cmd: "standIn", engine, model });
       await loadBrains(); drawBrains(); drawCoding();
     };
+  };
+  // "Keep models up to date": bots on Claude Code or a key move onto the newest model of the same kind (control `models`).
+  const drawModelFreshness = async (action) => {
+    const answer = await invoke({ cmd: "models", action: action || "state" });
+    const box = $("#models-fresh");
+    if (!box || !answer.ok) return;
+    const m = answer.result;
+    const moved = (m.moved || []).slice(0, 5).map((entry) => `<div class="muted">${esc(entry.line)}</div>`).join("");
+    box.innerHTML = settingRowHTML("Keep models up to date", "Moves bots onto the newest model of the same kind, like Sonnet 5 to Sonnet 5.5, when Vello starts and twice a day. It never changes Sonnet to Opus or a mini to a bigger model.",
+        `${TP.pill(m.keepsModelsCurrent ? "ok" : "none", m.keepsModelsCurrent ? "On" : "Off")}<button class="btn sm" id="models-auto">${m.keepsModelsCurrent ? "Turn off" : "Turn on"}</button>`)
+      + settingRowHTML("Model lists", m.lastCheck ? `Last checked ${esc(new Date(m.lastCheck).toLocaleString())}.` : "Not checked yet.", `<button class="btn sm" id="models-check">Check now</button>`)
+      + (moved ? `<div class="crow"><span class="tx"><b>Moved lately</b><small style="white-space:normal">${moved}</small></span></div>` : "");
+    $("#models-auto").onclick = () => drawModelFreshness(m.keepsModelsCurrent ? "off" : "on");
+    $("#models-check").onclick = (e) => { e.target.disabled = true; e.target.textContent = "Checking…"; drawModelFreshness("check"); };
   };
   // Coding runs: which agent does them, and the folder new projects go in.
   const drawCoding = () => {

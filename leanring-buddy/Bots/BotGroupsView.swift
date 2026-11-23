@@ -189,13 +189,20 @@ enum BotModels {
             listed = ProviderInfo.info(for: String(engine.dropFirst(4))).map { ProviderKeys.shared.models(for: $0) } ?? []
         } else {
             switch engine {
-            case "grok": listed = BotModelSettings.grokModels
-            case "claude": listed = BrainCatalog.shared.models[.claude] ?? HarnessCatalog.claudeModels.map(\.id)
+            case "grok": listed = HarnessCenter.shared.models(for: "grok").map(\.id)
+            case "claude": listed = HarnessCatalog.claudeModels.map(\.id)
             case "opencode": listed = BrainCatalog.shared.models[.opencode] ?? HarnessCenter.shared.models(for: "opencode").map(\.id)
             default: listed = HarnessCenter.shared.models(for: engine).map(\.id)
             }
         }
         return listed.contains(current) || current.isEmpty ? listed : [current] + listed
+    }
+
+    /// Fast mode is a Claude switch (Claude Code, or an Anthropic key), and only Opus and Fable run it.
+    static func offersFastMode(on engine: String) -> Bool { engine == "claude" || engine == "api:anthropic" }
+
+    static func takesFastMode(_ bot: NativeBot) -> Bool {
+        offersFastMode(on: bot.provider) && ClaudeFastMode.supports(model: bot.model)
     }
 
     static func label(_ model: String, on engine: String) -> String {

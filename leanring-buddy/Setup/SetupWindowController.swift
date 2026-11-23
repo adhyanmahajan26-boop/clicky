@@ -621,10 +621,10 @@ struct SetupView: View {
 
     func modelPicker(_ title: String, selection: Binding<String>) -> some View {
         Picker(title, selection: selection) {
-            ForEach(ClickyModels.options, id: \.identifier) { option in
+            ForEach(ClickyModels.currentOptions, id: \.identifier) { option in
                 Text(option.label).tag(option.identifier)
             }
-            if !ClickyModels.options.contains(where: { $0.identifier == selection.wrappedValue }) {
+            if !ClickyModels.currentOptions.contains(where: { $0.identifier == selection.wrappedValue }) {
                 Text(selection.wrappedValue).tag(selection.wrappedValue)
             }
         }

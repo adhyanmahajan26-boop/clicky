@@ -162,6 +162,16 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
                 Err(e) => err(&e.to_string()),
             }
         }
+        // Keeping models current: {action: state | check | on | off}. `check` asks every key again and moves bots onto newer models.
+        "models" => {
+            match s(cmd, "action").as_deref().unwrap_or("state") {
+                "check" => { crate::model_freshness::check_now(h).await; }
+                "on" => { h.settings.set(crate::model_freshness::AUTO_UPGRADE_SETTING, json!(true)); crate::model_freshness::upgrade_bots(h).await; }
+                "off" => h.settings.set(crate::model_freshness::AUTO_UPGRADE_SETTING, json!(false)),
+                _ => {}
+            }
+            ok(crate::model_freshness::report(h))
+        }
         "apiModels" => {
             let Some(provider) = s(cmd, "provider") else { return err("Needs provider.") };
             match crate::brains::list_models(h, &provider).await {

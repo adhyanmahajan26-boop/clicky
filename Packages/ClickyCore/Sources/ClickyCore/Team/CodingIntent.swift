@@ -36,7 +36,9 @@ public enum CodingIntent {
     public static func claudeModelID(forHint hint: String) -> String? {
         let parts = hint.split(separator: " ", maxSplits: 1).map(String.init)
         guard let family = parts.first, ["opus", "sonnet", "haiku", "fable"].contains(family) else { return nil }
-        let version = parts.count > 1 ? parts[1] : (family == "fable" ? "5.1" : "5.5")
+        // No version named: the newest of that family (found on this Mac, else the one this build knows).
+        guard parts.count > 1 else { return ClickyModels.resolve(family) }
+        let version = parts[1]
         return "claude-\(family)-\(version.replacingOccurrences(of: ".", with: "-").replacingOccurrences(of: " ", with: "-"))"
     }
 

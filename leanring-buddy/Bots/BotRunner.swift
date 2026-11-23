@@ -458,7 +458,9 @@ enum BotRunner {
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
             var settings: [String: Bool] = [:]
             if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }
-            if let fast = bot.fast { settings["fastMode"] = fast }
+            // Fast mode only runs on Opus and Fable (ClickyCore `ClaudeFastMode`). Asked for on another model, Claude Code would
+            // either ignore it or move the turn to Opus, so it's left off there.
+            if let fast = bot.fast { settings["fastMode"] = fast && ClaudeFastMode.supports(model: bot.model) }
             if !settings.isEmpty, let data = try? JSONSerialization.data(withJSONObject: settings, options: .sortedKeys),
                let json = String(data: data, encoding: .utf8) {
                 arguments += ["--settings", json]

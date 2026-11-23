@@ -16,7 +16,7 @@ import Foundation
 final class BrainCatalog: ObservableObject {
     static let shared = BrainCatalog()
 
-    @Published private(set) var models: [BrainProvider: [String]] = [.claude: ClickyModels.options.map(\.identifier)]
+    @Published private(set) var models: [BrainProvider: [String]] = [.claude: ClickyModels.currentOptions.map(\.identifier)]
     @Published private(set) var notes: [BrainProvider: String] = [:]
     @Published private(set) var isLoading = false
     private var lastLoad: Date?
@@ -28,7 +28,7 @@ final class BrainCatalog: ObservableObject {
             guard parts.count == 2 else { return model.modelIdentifier }
             return "\(parts[1]) · \(ProviderInfo.info(for: parts[0])?.label ?? parts[0])"
         }
-        if model.isClaude, let option = ClickyModels.options.first(where: { $0.identifier == model.modelIdentifier }) { return option.label }
+        if model.isClaude, let option = ClickyModels.currentOptions.first(where: { $0.identifier == model.modelIdentifier }) { return option.label }
         return model.modelIdentifier
     }
 
@@ -38,7 +38,7 @@ final class BrainCatalog: ObservableObject {
         lastLoad = Date()
         isLoading = true
         Task.detached(priority: .utility) {
-            var found: [BrainProvider: [String]] = [.claude: ClickyModels.options.map(\.identifier)]
+            var found: [BrainProvider: [String]] = [.claude: ClickyModels.currentOptions.map(\.identifier)]
             var notes: [BrainProvider: String] = [:]
             let home = FileManager.default.homeDirectoryForCurrentUser
 

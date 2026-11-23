@@ -110,6 +110,9 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
         // app's default MainActor isolation that closure ran on the main thread, inside a first use already waiting there.
         DispatchQueue.global(qos: .utility).async { _ = HarnessCatalog.loginShellPath }
         Task { @MainActor in HarnessCenter.shared.refresh() }
+        // Every key's and subscription's model list, refreshed now and twice a day, and choices moved onto newer models.
+        // Not in a test profile, whose tests ask for it (control `models`).
+        if !TheoProfile.isTest { ModelFreshnessController.shared.start() }
         // Started from a shell, Theo inherits its folder (PWD), and the command-line tools it runs
         // (Claude Code, OpenCode, helpers) then work there. A shell in Downloads or Documents means
         // a privacy prompt in Theo's name, so they always start from home instead.

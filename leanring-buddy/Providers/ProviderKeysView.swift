@@ -22,6 +22,7 @@ struct ProviderKeysView: View {
         ScrollViewReader { proxy in
             VStack(alignment: .leading, spacing: 22) {
                 summary
+                ModelFreshnessSection()
                 group("AI models", hint: "A saved key adds that provider's models to the engine pickers. Open it to choose which: bots, Vello, Pointer Assistant.", providers.filter { $0.group == .models })
                 group("Voice and listening", hint: "Pick which one speaks and listens in Settings › Voice.", providers.filter { $0.group == .voice })
                 group("On this Mac", hint: "Local servers need no key. Test finds out whether they're running.", providers.filter { $0.group == .local })
@@ -67,6 +68,43 @@ struct ProviderKeysView: View {
                 .id(provider.id)
             }
         }
+    }
+}
+
+/// "Keep models up to date": the switch, when the lists were last checked, Check now, and what was moved lately.
+private struct ModelFreshnessSection: View {
+    @ObservedObject private var freshness = ModelFreshnessController.shared
+
+    var body: some View {
+        TheoSection(title: "Newest models", hint: "Vello asks each saved key and each signed-in subscription for its models when it opens and twice a day, so new models show up without an update.") {
+            SettingRow(title: "Keep models up to date",
+                       detail: "Moves bots and Pointer Assistant onto the newest model of the same kind, like Sonnet 5 to Sonnet 5.5. It never changes Sonnet to Opus or a mini to a bigger model.") {
+                Toggle("Keep models up to date", isOn: $freshness.keepsModelsCurrent).toggleStyle(.switch).labelsHidden()
+            }
+            RowDivider()
+            SettingRow(title: "Model lists", detail: lastCheckWords) {
+                Button(freshness.isChecking ? "Checking…" : "Check now") {
+                    Task { await freshness.checkNow(force: true) }
+                }
+                .buttonStyle(.theo(.secondary, .small)).disabled(freshness.isChecking).pointerCursor()
+            }
+            if !freshness.history.isEmpty {
+                RowDivider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Moved lately").font(.system(size: 12, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
+                    ForEach(Array(freshness.history.prefix(5).enumerated()), id: \.offset) { _, entry in
+                        Text("\(entry.line) · \(entry.at.formatted(date: .abbreviated, time: .shortened))")
+                            .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var lastCheckWords: String {
+        guard let lastCheck = freshness.lastCheck else { return "Not checked yet." }
+        return "Last checked \(lastCheck.formatted(.relative(presentation: .named)))."
     }
 }
 

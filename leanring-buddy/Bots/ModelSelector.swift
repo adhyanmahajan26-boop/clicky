@@ -308,13 +308,22 @@ struct ModelSelectorPopover: View {
                 Text(ModelEffort.hint(for: ModelEffort.carriedOver(effort: bot.effort, toLevels: levels)))
                     .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
             }
-            if bot.provider == "claude" {
+            if BotModels.offersFastMode(on: bot.provider) {
                 HStack(spacing: 16) {
-                    claudeToggle("Thinking", isOn: bot.thinking ?? false) { var edited = bot; edited.thinking = $0; store.save(edited) }
+                    if bot.provider == "claude" {
+                        claudeToggle("Thinking", isOn: bot.thinking ?? false) { var edited = bot; edited.thinking = $0; store.save(edited) }
+                    }
                     claudeToggle("Fast mode", isOn: bot.fast ?? false) { var edited = bot; edited.fast = $0; store.save(edited) }
+                        .disabled(!ClaudeFastMode.supports(model: bot.model) && bot.fast != true)
+                        .help(ClaudeFastMode.supports(model: bot.model) ? "Up to 2.5 times faster answers, at a higher price per word"
+                              : "Fast mode runs only on Claude Opus and Fable")
                     Spacer(minLength: 0)
                 }
                 .padding(.top, 2)
+                if bot.fast == true, !ClaudeFastMode.supports(model: bot.model) {
+                    Text("Fast mode is on but only runs on Opus and Fable. Pick one of them above to use it.")
+                        .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.horizontal, 14).padding(.top, 6)
@@ -336,7 +345,8 @@ struct ModelSelectorPopover: View {
         edited.model = model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && switching ? BotModels.startingModel(for: engine) : model.trimmingCharacters(in: .whitespacesAndNewlines)
         let levels = BotModels.efforts(for: engine, model: edited.model)
         edited.effort = ModelEffort.carriedOver(effort: switching ? (bot.effort ?? HarnessPrefs.defaultEffort(engine)) : bot.effort, toLevels: levels)
-        if engine != "claude" { edited.thinking = nil; edited.fast = nil }
+        if engine != "claude" { edited.thinking = nil }
+        if !BotModels.offersFastMode(on: engine) { edited.fast = nil }
         store.save(edited)
         browsing = nil
         typedModel = ""

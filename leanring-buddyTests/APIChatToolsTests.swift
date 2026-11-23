@@ -86,6 +86,20 @@ struct APIChatToolsTests {
         #expect(plain["tool_choice"] == nil)
     }
 
+    @Test func fastModeGoesOnlyToModelsThatTakeIt() throws {
+        let anthropic = try #require(ProviderInfo.builtIn.first { $0.id == "anthropic" })
+        let hello = [APIChatMessage(role: "user", text: "hi")]
+        let opus = try body(APIChat.request(provider: anthropic, key: "K", model: "claude-opus-5-5", system: "S", messages: hello, fast: true))
+        #expect(opus["speed"] as? String == "fast")
+        let sonnet = try body(APIChat.request(provider: anthropic, key: "K", model: "claude-sonnet-5-5", system: "S", messages: hello, fast: true))
+        #expect(sonnet["speed"] == nil)
+        let standard = try body(APIChat.request(provider: anthropic, key: "K", model: "claude-opus-5-5", system: "S", messages: hello))
+        #expect(standard["speed"] == nil)
+        let groq = try #require(ProviderInfo.builtIn.first { $0.id == "groq" })
+        let other = try body(APIChat.request(provider: groq, key: "K", model: "claude-opus-5-5", system: "S", messages: hello, fast: true))
+        #expect(other["speed"] == nil)
+    }
+
     @Test func roundsGoBackAfterTheConversationAndTheLastGoSwitchesToolsOff() throws {
         let round = APIChatToolRound(assistantText: "", calls: [APIChatToolCall(callID: "c1", toolName: "notion__search", argumentsJSON: "{}")],
                                      results: [APIChatToolResult(callID: "c1", text: "Found", isError: false)])

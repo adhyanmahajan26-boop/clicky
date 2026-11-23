@@ -31,12 +31,10 @@ struct HarnessInfo {
 }
 
 enum HarnessCatalog {
-    static let claudeModels: [HarnessModel] = [
-        HarnessModel(id: "claude-opus-5-5", label: "Claude Opus 5.5"),
-        HarnessModel(id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5"),
-        HarnessModel(id: "claude-haiku-5-5", label: "Claude Haiku 5.5"),
-        HarnessModel(id: "claude-fable-5-1", label: "Claude Fable 5.1"),
-    ]
+    /// Claude Code's models: the newest of each family, bundled or found on this Mac since (ClickyCore `ClaudeModelList`).
+    static var claudeModels: [HarnessModel] {
+        ClickyModels.currentOptions.map { HarnessModel(id: $0.identifier, label: "Claude " + ClaudeModelList.shortLabel(for: $0.identifier)) }
+    }
     static let grokModels: [HarnessModel] = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
         .map { HarnessModel(id: $0, label: $0) }
 
@@ -647,6 +645,19 @@ final class HarnessCenter: ObservableObject {
 
     func usesAPIKey(_ harness: String) -> Bool { HarnessPrefs.usesAPIKey(harness) }
     func setUsesAPIKey(_ on: Bool, for harness: String) { objectWillChange.send(); HarnessPrefs.setUsesAPIKey(on, for: harness) }
+
+    /// The lists that don't come from the harness's own command: Claude Code's newest models (bundled, its aliases, an
+    /// Anthropic key's list), and Grok's and Gemini CLI's from a saved xAI or Gemini key (the same model ids). ModelFreshnessController.
+    func useDiscoveredModels() {
+        models["claude"] = HarnessCatalog.claudeModels
+        let keys = ProviderKeys.shared
+        let grokFromKey = ProviderInfo.info(for: "xai").map { keys.hasKey(for: "xai") ? keys.models(for: $0) : [] } ?? []
+        let grok = ModelListFilter.chatModels(grokFromKey.filter { $0.lowercased().hasPrefix("grok-") } + HarnessCatalog.grokModels.map(\.id))
+        models["grok"] = grok.map { HarnessModel(id: $0, label: $0) }
+        let geminiFromKey = ProviderInfo.info(for: "gemini").map { keys.hasKey(for: "gemini") ? keys.models(for: $0) : [] } ?? []
+        let gemini = ModelUpgrade.newestOfEachFamily(geminiFromKey.filter { $0.lowercased().hasPrefix("gemini-") && ModelListFilter.isChatModel($0) })
+        if !gemini.isEmpty { models["gemini"] = gemini.map { HarnessModel(id: $0, label: $0) } }
+    }
 
     /// Re-checks one harness (after a sign-in or install) without touching the others.
     func recheck(_ harness: String) {

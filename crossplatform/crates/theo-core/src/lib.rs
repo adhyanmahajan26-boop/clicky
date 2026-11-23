@@ -32,6 +32,7 @@ pub mod faces;
 pub mod connectors;
 pub mod hub;
 pub mod brains;
+pub mod model_freshness;
 pub mod apichat;
 pub mod setup;
 pub mod routine_edit;
