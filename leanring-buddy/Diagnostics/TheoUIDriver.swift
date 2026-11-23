@@ -482,7 +482,7 @@ enum TheoUIDriver {
             default: break
             }
             settle { respond(true, state(), nil) }
-        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults", "uiLink", "uiNearby", "uiMainMac", "uiBotPrompt":
+        case "uiCrew", "uiStudio", "uiSeedDemo", "uiSetDefaults", "uiLink", "uiNearby", "uiSyncFolder", "uiMainMac", "uiBotPrompt":
             respond(true, CrewTestCommands.run(name, command, in: target), nil)
         case "uiPixel":
             respond(true, PixelTestCommands.run(command), nil)

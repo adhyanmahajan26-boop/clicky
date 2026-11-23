@@ -86,7 +86,8 @@ final class TheoLink: ObservableObject {
     var statusReport: [String: Any] {
         ["clickyHere": clickyRunsHere, "clickyMac": clickyMacNow, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
-         "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials]
+         "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials,
+         "syncFolder": LinkSyncFolderController.shared.statusReport]
     }
 
     // MARK: Where Clicky works
@@ -175,6 +176,13 @@ final class TheoLink: ObservableObject {
         waitingOrders.removeValue(forKey: id)?(report)
     }
 
+    /// The other Mac's name as its sync folder copy gives it, so Settings › Devices can name it while it isn't connected.
+    func rememberOtherMacName(_ name: String) {
+        guard name != Self.localName, name != knownPeerName else { return }
+        knownPeerName = name
+        UserDefaults.standard.set(name, forKey: Self.knownPeerKey)
+    }
+
     // MARK: Pairing
 
     private init() {
@@ -187,6 +195,8 @@ final class TheoLink: ObservableObject {
 
     func start() {
         if isPaired { startNetworking() }
+        // The sync folder keeps both Macs in step through Google Drive, iCloud Drive or any folder, when they can't reach each other.
+        LinkSyncFolderController.shared.start()
         // Not linked yet: Macs nearby can see this one and link to it in one click (Settings › Devices).
         NearbyLinking.shared.update()
     }
@@ -540,6 +550,7 @@ final class TheoLink: ObservableObject {
 
     /// Something just changed: the other Mac hears within a second rather than at the next round.
     func syncSoon() {
+        LinkSyncFolderController.shared.syncSoon()
         guard isHelloDone, !isSyncQueued else { return }
         isSyncQueued = true
         Task { [weak self] in
@@ -650,7 +661,8 @@ final class TheoLink: ObservableObject {
         }
     }
 
-    private func currentDigests() async -> [String: String] {
+    /// Also what the sync folder writes and compares (`LinkSyncFolderController`).
+    func currentDigests() async -> [String: String] {
         var digests = BotsStore.shared.linkDigests
         let memory = BotsStore.shared.memoryStore
         let botIDs = BotsStore.shared.bots.map(\.id)
@@ -779,7 +791,8 @@ struct LinkSettingsContent: View {
                         .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
                 }
             }
-            Text("Bots, group chats, chats, private messages between bots, Pointer Assistant's team and memory stay the same on both. API keys and routines stay on their own Mac: keys don't leave the Keychain, and a routine should only fire once.")
+            if link.isPaired { SyncFolderSettingsSection() }
+            Text("Bots, categories, group chats, chats, private messages between bots, coding runs, Pointer Assistant's team and memory stay the same on both, and each message says which Mac it was written on. API keys stay on their own Mac: they don't leave the Keychain. Routines show on both and fire on one.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }
