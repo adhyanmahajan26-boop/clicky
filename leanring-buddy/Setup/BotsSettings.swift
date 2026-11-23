@@ -76,7 +76,9 @@ struct BotsSettingsContent: View {
         }
         store.rootSections.forEach(addWithChildren)
         // A sub-category whose parent is gone still shows.
-        ordered += store.layout.sections.filter { section in !ordered.contains { $0.id == section.id } }
+        let placedIDs = Set(ordered.map(\.id))
+        let orphans = store.layout.sections.filter { !placedIDs.contains($0.id) }
+        ordered += orphans
         return ordered.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }
     }
 
@@ -410,6 +412,7 @@ private struct DraggableBotRow: ViewModifier {
     let name: String
     let isDraggable: Bool
 
+    @ViewBuilder
     func body(content: Content) -> some View {
         if isDraggable {
             content.draggable(item) {
