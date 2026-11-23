@@ -2,6 +2,7 @@
 // section is on the one page, so other parts of the window can fill their own: Clicky's and Dictation's settings go in
 // #settings-clicky and #settings-dictation, and the "theo-settings" event on document fires each time the page is drawn.
 const SETTINGS_SECTIONS = [
+  ["bots", "Bots & categories", "Every bot and category in one place. Make, rename, move and delete them here."],
   ["about", "About", "Your name and the setup guide."],
   ["products", "Products", "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."],
   ["teams", "Bot teams", "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."],
@@ -48,6 +49,7 @@ async function renderSettingsPage() {
   const login = `<div class="list" id="login-row"></div><p class="muted">Data in ${esc(String(s.data))}.</p>`;
   const nav = SETTINGS_SECTIONS.map(([id, title]) => `<button class="set-nav-item" data-jump="${id}">${esc(title)}</button>`).join("");
   $("#pane").innerHTML = `<div class="settings"><nav class="set-nav" aria-label="Settings sections"><div class="section-label">Settings</div>${nav}</nav><div class="set-body"><h1>Settings</h1>`
+    + section("bots", `<div id="settings-bots-body"></div>`)
     + section("about", about)
     + section("products", `<div id="settings-products-body"></div>`)
     + section("teams", `<div id="settings-teams-body"></div>`)
@@ -125,6 +127,8 @@ async function renderSettingsPage() {
   };
   drawBrains(); drawCoding();
   loadBrains().then(() => { drawBrains(); drawCoding(); });
+  // Bots & categories (botspage.js): every bot and category, with rename, move and delete.
+  if (typeof drawBotsSettings === "function") drawBotsSettings();
   // Bot teams (readyteams.js), drawn fresh each time; the sidebar's "Ready-made teams" link scrolls here once it's in.
   if (typeof drawReadyTeams === "function") {
     readyTeamsCache = null;
@@ -171,7 +175,7 @@ function watchSettingsSections(pane) {
   if (!("IntersectionObserver" in window)) return;
   const items = pane.querySelectorAll(".set-nav-item");
   const mark = (id) => items.forEach((i) => i.classList.toggle("on", i.dataset.jump === id));
-  mark("about");
+  mark(SETTINGS_SECTIONS[0][0]);
   const seen = new Map();
   const watcher = new IntersectionObserver((entries) => {
     entries.forEach((e) => seen.set(e.target.dataset.section, e.isIntersecting ? e.intersectionRatio : 0));

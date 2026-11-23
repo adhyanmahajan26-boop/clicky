@@ -82,6 +82,7 @@ function teamsListHTML(faces) {
   }
   html += `<button class="row nav new-category" data-new-category><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New category</button>`;
   html += `<button class="row nav new-category" data-ready-teams title="Add a whole team at once: a manager and its bots"><svg class="ic" viewBox="0 0 24 24"><path d="M9 3.5h6v5H9zM12 8.5v3M6.5 14.5V13a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v1.5M3.5 14.5h6v5h-6zM14.5 14.5h6v5h-6z"/></svg>Ready-made teams</button>`;
+  html += `<button class="row nav new-category" data-manage-bots title="Settings › Bots & categories: make, rename, move and delete bots"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4"/></svg>Manage bots and categories</button>`;
   return html;
 }
 
@@ -124,6 +125,8 @@ function renderBotList(faces) {
   if (add) add.onclick = () => newCategory([]);
   const ready = box.querySelector("[data-ready-teams]");
   if (ready) ready.onclick = () => { settingsJumpOnDraw = "teams"; open({ kind: "settings" }); };
+  const manage = box.querySelector("[data-manage-bots]");
+  if (manage) manage.onclick = () => { settingsJumpOnDraw = "bots"; open({ kind: "settings" }); };
 }
 
 async function newCategory(members) {
@@ -338,9 +341,18 @@ function drawTeamPage(team, members) {
 let newBotJoinsTeam = null;
 function newBotForTeam(teamId) { newBotJoinsTeam = teamId; openBotDialog({ kind: "new" }); }
 // Called by app.js once a bot is made. True: it joined a team and the team page stays open.
+// Settings › Bots & categories (botspage.js) also sends a new bot to a category, and stays on Settings either way.
 async function teamTakesNewBot(botId) {
   const teamId = newBotJoinsTeam;
   newBotJoinsTeam = null;
+  const fromSettings = typeof newBotFromSettings !== "undefined" && newBotFromSettings && view.kind === "settings";
+  if (typeof newBotFromSettings !== "undefined") newBotFromSettings = false;
+  if (fromSettings) {
+    if (teamId && teamById(teamId)) await invoke({ cmd: "teamMove", bot: botId, team: teamId });
+    await refresh();
+    if (typeof drawBotsSettings === "function") drawBotsSettings();
+    return true;
+  }
   if (!teamId || view.kind !== "team" || view.id !== teamId) return false;
   await invoke({ cmd: "teamMember", id: teamId, bot: botId, action: "add" });
   refresh();

@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case products, teams, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case bots, products, teams, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: VM screens on any Mac that can make them (it sets them up here in one click), or that's linked to one.
@@ -35,6 +35,7 @@ enum SettingsTab {
         /// Its Hairline icon.
         var icon: String {
             switch self {
+            case .bots: return "group"
             case .products: return "team"
             case .teams: return "bot"
             case .look: return "paint"
@@ -55,6 +56,7 @@ enum SettingsTab {
 
         var title: String {
             switch self {
+            case .bots: return "Bots & categories"
             case .products: return "Products"
             case .teams: return "Bot teams"
             case .look: return "Look"
@@ -75,6 +77,7 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
+            case .bots: return "Every bot and category in one place. Make, rename, move and delete them here."
             case .products: return "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."
             case .teams: return "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."
             case .look: return "How Vello looks and moves. Click one and it changes right away."
@@ -95,6 +98,7 @@ enum SettingsTab {
 
         var symbol: String {
             switch self {
+            case .bots: return "folder.fill"
             case .products: return "square.grid.2x2.fill"
             case .teams: return "person.3.fill"
             case .look: return "paintbrush.pointed.fill"
@@ -115,6 +119,7 @@ enum SettingsTab {
 
         var colors: [Color] {
             switch self {
+            case .bots: return TileColors.sky
             case .products: return TileColors.indigo
             case .teams: return TileColors.ember
             case .look: return TileColors.violet
@@ -195,6 +200,7 @@ struct SettingsPage: View {
 
     @ViewBuilder private var content: some View {
         switch section {
+        case .bots: BotsSettingsContent()
         case .products: ProductsSettingsContent()
         case .teams: BotTeamsSettingsContent()
         case .look: LookSettingsContent()

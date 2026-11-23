@@ -18,6 +18,26 @@
 .set-sec h2:not(.set-title) { font-size: 13px; color: var(--t2); margin: 10px 0 2px; }
 .set-sec .crow .act.many input, #owner-name { background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font: 13px var(--body); width: 200px; }
 #projects-folder-input { width: 230px; }
+
+/* ---------- Bots & categories (botspage.js) ---------- */
+.bs-top { justify-content: space-between; }
+.bs-count { font-size: 12px; white-space: nowrap; }
+.bs-head { display: flex; align-items: center; gap: 8px; margin: 12px 2px 0; font-size: 13px; }
+.bs-head .grow { flex: 1; }
+.bs-head select, .bs-row select { background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font: 12px var(--body); max-width: 220px; }
+.bs-row select { width: 150px; }
+.bs-chip { font-size: 11px; color: var(--t2); background: rgba(255,255,255,.06); border-radius: 9px; padding: 1px 7px; font-weight: 500; }
+.on-light .bs-chip { background: rgba(0,0,0,.05); }
+.bs-list { min-height: 44px; transition: background .12s; }
+.bs-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
+.bs-row + .bs-row { border-top: 1px solid var(--line); }
+.bs-row[draggable] { cursor: grab; }
+.bs-row .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bs-row .tx small { color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bs-name { display: flex; align-items: center; gap: 6px; }
+.bs-row .act { display: flex; align-items: center; gap: 4px; flex: none; }
+.bs-empty { display: flex; align-items: center; justify-content: center; min-height: 44px; font-size: 12px; color: var(--t3); }
+.bs-rename { background: var(--card2); color: var(--t1); border: 1px solid var(--acc); border-radius: 6px; padding: 3px 7px; font: 600 13px var(--body); width: 220px; }
 #update-token { width: 170px; }
 @media (max-width: 1000px) { .settings { grid-template-columns: 1fr; } .set-nav { position: static; flex-direction: row; flex-wrap: wrap; } .set-nav .section-label { display: none; } }
 

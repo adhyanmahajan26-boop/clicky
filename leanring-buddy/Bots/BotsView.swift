@@ -219,7 +219,7 @@ struct BotsRootView: View {
             }
             HStack(spacing: 2) {
                 hairlineRow("connectors", "Connectors", isSelected: selection.pane == .connectors, inset: 0) { selection.pane = .connectors }
-                hairlineRow("settings", "Settings", isSelected: false, inset: 0) { selection.openSettings(.look) }
+                hairlineRow("settings", "Settings", isSelected: false, inset: 0) { selection.openSettings(.bots) }
             }
             .padding(.horizontal, 10).padding(.bottom, 12)
         }
@@ -336,31 +336,45 @@ struct BotsRootView: View {
     /// Makes a category and opens its page, where it's named, filled and given a manager. Beside it, the ready-made teams
     /// (Settings › Bot teams), to add a whole category with its manager and bots at once.
     private var newCategoryButton: some View {
-        HStack(spacing: 0) {
-            Button(action: newCategory) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Button(action: newCategory) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
+                        Text("New category").font(.system(size: 11.5))
+                    }
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .padding(.leading, 20).padding(.trailing, 8).frame(height: 30)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).pointerCursor()
+                Button { selection.openSettings(.teams) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.3").font(.system(size: 10, weight: .semibold))
+                        Text("Ready-made teams").font(.system(size: 11.5))
+                    }
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .padding(.horizontal, 8).frame(height: 30)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).pointerCursor()
+                .help("Add a whole team at once: a manager and its bots")
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 6)
+            // Every bot and category on one page, with delete, rename and drag: Settings › Bots & categories.
+            Button { selection.openSettings(.bots) } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold))
-                    Text("New category").font(.system(size: 11.5))
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 10, weight: .semibold))
+                    Text("Manage bots and categories").font(.system(size: 11.5))
                 }
                 .foregroundColor(DS.Colors.textTertiary)
-                .padding(.leading, 20).padding(.trailing, 8).frame(height: 30)
+                .padding(.leading, 20).padding(.trailing, 8).frame(height: 26)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain).pointerCursor()
-            Button { selection.openSettings(.teams) } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.3").font(.system(size: 10, weight: .semibold))
-                    Text("Ready-made teams").font(.system(size: 11.5))
-                }
-                .foregroundColor(DS.Colors.textTertiary)
-                .padding(.horizontal, 8).frame(height: 30)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).pointerCursor()
-            .help("Add a whole team at once: a manager and its bots")
-            Spacer(minLength: 0)
+            .help("Settings › Bots & categories: make, rename, move and delete bots")
         }
-        .padding(.top, 6)
     }
 
     @ViewBuilder private func itemRow(_ item: String) -> some View {

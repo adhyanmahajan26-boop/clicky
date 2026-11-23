@@ -118,7 +118,7 @@ struct TheoHomeView: View {
         case .bots: if case .home = selection.pane, let primary = BotsStore.shared.primary { selection.pane = .bot(primary.id) }
         case .connectors: selection.pane = .connectors
         case .t3: selection.openSettings(.coding)
-        case .settings: selection.openSettings(.look)
+        case .settings: selection.openSettings(.bots)
         }
     }
 
