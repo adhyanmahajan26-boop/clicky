@@ -194,3 +194,27 @@ struct CallNearVoiceTests {
         #expect(CallNearVoice.loudLevel(of: []) == nil)
     }
 }
+
+extension CallTurnTakingTests {
+    /// Saying Vello's name in Listen mode brings it back to talking; asking for its take without the name doesn't.
+    @Test func callingVelloByNameEndsListenMode() {
+        #expect(CallListenMode.callsVelloByName("Vello, send that to Sam"))
+        #expect(CallListenMode.callsVelloByName("hey Vello what was that"))
+        #expect(CallListenMode.callsVelloByName("did you get that, Vello?"))
+        #expect(CallListenMode.callsVelloByName("Wello open my mails"))
+        #expect(!CallListenMode.callsVelloByName("So what do you think about that?"))
+        #expect(!CallListenMode.callsVelloByName("I told everyone Vello can read the mails for us today"))
+        // Still a way to speak up without leaving Listen mode.
+        #expect(CallListenMode.isAddressed("So what do you think about that?"))
+    }
+
+    @Test func spokenToInListenModeMayStillDoThings() {
+        var transcript = CallListenTranscript()
+        transcript.add("We should email Sam about March.")
+        let staying = transcript.messageForVello(asking: "what do you think", owner: "Addy")
+        #expect(staying.contains("If they ask you to do something, do it the usual way"))
+        let leaving = transcript.messageForVello(asking: "Vello, email Sam", owner: "Addy", staysInListenMode: false)
+        #expect(leaving.contains("If they ask you to do something, do it the usual way"))
+        #expect(leaving.contains("Listen mode is over now"))
+    }
+}

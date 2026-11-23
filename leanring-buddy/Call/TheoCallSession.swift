@@ -730,6 +730,12 @@ final class TheoCallSession: ObservableObject {
                 if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) { lines[index].wasOnlyHeard = true }
                 return
             }
+            // Called by name: Vello comes back to talking, and answers or does what was asked with all it heard.
+            if CallListenMode.callsVelloByName(words, assistantNames: assistantNames) {
+                isListenMode = false
+                ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false))
+                return
+            }
             ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: true))
             return
         }

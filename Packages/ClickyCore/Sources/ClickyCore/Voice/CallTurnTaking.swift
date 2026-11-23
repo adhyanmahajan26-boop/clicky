@@ -181,15 +181,22 @@ public enum CallListenMode {
         return nil
     }
 
-    /// Whether something heard in Listen mode is meant for Vello: its name near the start or the end ("Vello, …",
-    /// "hey Vello …", "… right, Vello?"), or a phrase asking it to speak up.
-    public static func isAddressed(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
+    /// Whether Vello's name is said near the start or the end ("Vello, …", "hey Vello …", "… right, Vello?"). In Listen
+    /// mode that brings Vello back to talking: the owner calling it by name wants it back, and kept in Listen mode it
+    /// answered once and went quiet again, so it seemed stuck there.
+    public static func callsVelloByName(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
         let words = CallTurnEnd.simplifiedWords(utterance)
         guard !words.isEmpty else { return false }
         let names = Set(assistantNames.map { $0.lowercased() })
-        let nearTheStart = words.prefix(3)
-        let nearTheEnd = words.suffix(2)
-        if nearTheStart.contains(where: names.contains) || nearTheEnd.contains(where: names.contains) { return true }
+        return words.prefix(3).contains(where: names.contains) || words.suffix(2).contains(where: names.contains)
+    }
+
+    /// Whether something heard in Listen mode is meant for Vello: its name near the start or the end ("Vello, …",
+    /// "hey Vello …", "… right, Vello?"), or a phrase asking it to speak up.
+    public static func isAddressed(_ utterance: String, assistantNames: [String] = defaultAssistantNames) -> Bool {
+        if callsVelloByName(utterance, assistantNames: assistantNames) { return true }
+        let words = CallTurnEnd.simplifiedWords(utterance)
+        guard !words.isEmpty else { return false }
         let joined = " " + words.joined(separator: " ") + " "
         return speakUpPhrases.contains { joined.contains(" \($0) ") }
     }
@@ -236,7 +243,7 @@ public struct CallListenTranscript: Sendable {
             message += ")"
         }
         message += "\n\(OwnerName.startingSentence(owner)) is now asking you: \(question)\n"
-        message += "(Answer from what you heard and what was said earlier on this call. If they don't say which part, it's the latest topic. Keep it short unless they ask for more."
+        message += "(Answer from what you heard and what was said earlier on this call. If they don't say which part, it's the latest topic. Keep it short unless they ask for more. If they ask you to do something, do it the usual way, with your lines at the end."
         message += staysInListenMode ? " You stay in listen mode afterwards.)" : " Listen mode is over now, so talk as usual.)"
         return message
     }
