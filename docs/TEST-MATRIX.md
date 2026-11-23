@@ -8,6 +8,18 @@ How to read the evidence: screenshots are of Theo's own window, in `docs/evidenc
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
 
+## Round 6 (2026-11-23): calls that cut themselves off, and Pointer Assistant's orders
+
+Branch `fix/call-and-pointer-sync`, built and tested on the Mac Studio (not GitHub Actions). What changed is in `AGENTS.md` (Call/, Computer-use actions).
+
+| | What | Evidence |
+|---|---|---|
+| ✅ | ClickyCore: 1,523 Swift Testing tests in 178 suites and 221 XCTest tests pass, including the new echo, "just listen", task report, unreadable-step and patience cases | `swift test` |
+| ✅ | The app builds (Debug, signing off) with no errors | `xcodebuild build` |
+| ⚠️ | The app's own test target didn't run: an unsigned test host hangs before XCTest connects. It needs a signed build | `xcodebuild test` |
+| ⚠️ | A real call (Vello's voice coming back through the speakers, the owner cutting in) and real orders on screen (Safari, the Claude app): not run yet, they need the owner's mic and screen | |
+| ⚠️ | Found on the way, not changed here: the "Connector helper" build phase fails with `PROFILE_FLAGS[@]: unbound variable` (`Tools/build-connectors-helper.sh` line 89), so a local build comes without the helper | build log |
+
 ## Round 5 (2026-11-14): the stranger test
 
 Theo as a brand new user meets it: a fresh profile, its own home folder, no coding agent, nothing of the original developer's (theo-fix-plan package 11). Mac: `Tools/tests/stranger_mac.py`; Windows and Linux: `crossplatform/tests/stranger.py` (see `AGENTS.md`). Run on branch `integration/any-user-all`. GitHub Actions started no job that night (billing), so the Mac and Windows columns wait for CI.
