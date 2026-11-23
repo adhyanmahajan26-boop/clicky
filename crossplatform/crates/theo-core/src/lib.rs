@@ -34,6 +34,7 @@ pub mod hub;
 pub mod brains;
 pub mod model_freshness;
 pub mod apichat;
+pub mod thinking;
 pub mod setup;
 pub mod routine_edit;
 pub mod pdf;

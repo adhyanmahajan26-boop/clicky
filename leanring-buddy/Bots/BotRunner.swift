@@ -330,7 +330,7 @@ enum BotRunner {
             standIn.fast = nil
             // A stand-in gets the persona its own way (Claude: the system prompt); drop the copy an OpenCode first message carries.
             var standInPrompt = prompt
-            if let range = prompt.range(of: "\n\n---\n\n"), prompt.hasPrefix(bot.instructions) {
+            if let range = prompt.range(of: "\n\n---\n\n"), prompt.hasPrefix(bot.personaHead) {
                 standInPrompt = String(prompt[range.upperBound...])
             }
             // The stand-in keeps its own session per engine session, so follow-ups keep their context. The key carries the
@@ -385,7 +385,7 @@ enum BotRunner {
 
     /// What a session was told is decided by these: Theo's wording, and the bot's own instructions, job and apps.
     static func personaFingerprint(_ bot: NativeBot) -> String {
-        BotPersonaRefresh.fingerprint([personaRevision, bot.instructions, bot.description, bot.apps.joined(separator: ",")])
+        BotPersonaRefresh.fingerprint([personaRevision, bot.personaHead, bot.description, bot.apps.joined(separator: ",")])
     }
 
     /// The fingerprint each engine session was last told, newest last, in this profile's own defaults.

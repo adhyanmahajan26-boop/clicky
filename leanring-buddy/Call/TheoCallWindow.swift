@@ -17,10 +17,11 @@ enum TheoCallController {
 
     static var isActive: Bool { session != nil && session?.state != .ended }
 
-    /// Opens the window and starts the call, or brings the running call forward. `activates` false leaves focus alone.
-    /// `openingWords`: what the owner already said ("hey vello, find my mails from Sam" → "find my mails from Sam"), the
-    /// call's first turn instead of Vello's hello.
-    static func start(activates: Bool = true, openingWords: String = "") {
+    /// Opens the window and starts the call, or brings the running call forward. `botID` nil is Vello's own bot; any other
+    /// bot gets a call of its own. One call at a time: asking for another while one runs brings up the running one.
+    /// `activates` false leaves focus alone. `openingWords`: what the owner already said ("hey vello, find my mails from
+    /// Sam" → "find my mails from Sam"), the call's first turn instead of the hello.
+    static func start(botID: String? = nil, activates: Bool = true, openingWords: String = "") {
         if let window, isActive {
             if activates { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             window.orderFrontRegardless()
@@ -31,7 +32,7 @@ enum TheoCallController {
         let isLive = !TheoProfile.isTest
         if isLive, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async { MainActor.assumeIsolated { if granted { start(activates: activates, openingWords: openingWords) } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { if granted { start(botID: botID, activates: activates, openingWords: openingWords) } } }
             }
             return
         }
@@ -39,11 +40,11 @@ enum TheoCallController {
         manager.speechOutputClient.stopPlayback()
         manager.speechOutputClient.audioEngineHub.claimMicrophone(for: .call)
         CompanionSpeechOutput.isZeroVolumeForTests = TheoProfile.isTest || CompanionSpeechOutput.isZeroVolumeForTests
-        let session = TheoCallSession(store: BotsStore.shared, hub: manager.speechOutputClient.audioEngineHub, isLive: isLive)
+        let session = TheoCallSession(store: BotsStore.shared, hub: manager.speechOutputClient.audioEngineHub, isLive: isLive, botID: botID)
         self.session = session
         let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 660),
                                styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-        created.title = "Call with Vello"
+        created.title = "Call with \(session.botName)"
         created.titleVisibility = .hidden
         created.titlebarAppearsTransparent = true
         created.isReleasedWhenClosed = false
@@ -69,6 +70,7 @@ enum TheoCallController {
     }
 
     static var windowNumber: Int? { window?.windowNumber }
+    static var windowTitle: String? { window?.title }
 }
 
 struct TheoCallView: View {
@@ -82,11 +84,11 @@ struct TheoCallView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            CallAvatar(session: session, theo: store.primary).frame(height: 214)
+            CallAvatar(session: session, theo: session.bot ?? store.primary).frame(height: 214)
             Text(stateLine).font(.system(size: 14, weight: .medium)).foregroundColor(DS.Colors.textSecondary).animation(nil, value: session.state)
                 .lineLimit(1)
             if session.isListenMode {
-                Text("Say “Vello, what do you think?” when you want an answer")
+                Text("Say “\(session.botName), what do you think?” when you want an answer")
                     .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).padding(.top, 2)
             }
             transcript
@@ -122,7 +124,7 @@ struct TheoCallView: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             Menu {
-                Section("Patience: how long Vello waits after you stop") {
+                Section("Patience: how long \(session.botName) waits after you stop") {
                     ForEach(Self.patienceChoices, id: \.self) { seconds in
                         Button {
                             callPatienceSeconds = seconds
@@ -168,7 +170,7 @@ struct TheoCallView: View {
             return session.isListenMode ? "Just listening" : "Listening"
         case .userSpeaking: return session.isListenMode ? "Just listening" : "Go on"
         case .thinking: return "Thinking"
-        case .speaking: return "Vello is talking. Just talk to cut in."
+        case .speaking: return "\(session.botName) is talking. Just talk to cut in."
         case .ended: return "Call ended"
         }
     }
@@ -178,7 +180,7 @@ struct TheoCallView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(session.lines) { line in
-                        CallLineView(line: line).id(line.id)
+                        CallLineView(line: line, botName: session.botName).id(line.id)
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
@@ -214,8 +216,8 @@ struct TheoCallView: View {
                 }
                 .buttonStyle(.plain)
                 .help(session.isListenMode
-                      ? "Listen mode is on: Vello only listens until you ask it something. Click to talk normally."
-                      : "Listen mode: Vello only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
+                      ? "Listen mode is on: \(session.botName) only listens until you ask it something. Click to talk normally."
+                      : "Listen mode: \(session.botName) only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
                 .keyboardShortcut("l", modifiers: .command)
                 .pointerCursor()
                 Button(action: onEnd) {
@@ -243,10 +245,11 @@ struct TheoCallView: View {
 
 private struct CallLineView: View {
     let line: TheoCallSession.Line
+    let botName: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : "You") : "Vello").font(.system(size: 10.5, weight: .semibold))
+            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : "You") : botName).font(.system(size: 10.5, weight: .semibold))
                 .foregroundColor(line.who == .addy ? DS.Colors.textTertiary : DS.Colors.accentText)
             if line.text.isEmpty && line.isLive {
                 TypingDots()

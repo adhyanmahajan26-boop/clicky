@@ -1057,9 +1057,10 @@ struct BotChatScreen: View {
                 }
             }
             Spacer()
-            // Vello's own chat: the call is one click away, not only under More.
-            if bot?.primary == true {
-                Button { TheoCallController.start() } label: {
+            // Every bot's own chat: the call is one click away, not only under More. Group chats have none, and Pointer
+            // Assistant has its own push-to-talk.
+            if let callableBot = bot, callableBot.id != BotsStore.clickyID {
+                Button { TheoCallController.start(botID: callableBot.primary ? nil : callableBot.id) } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
                         Text("Call")
@@ -1078,8 +1079,8 @@ struct BotChatScreen: View {
             }
             HairlineIcon(name: "more", size: 18, color: DS.Colors.textSecondary).frame(width: 30, height: 30)
                 .coverMenu(help: "More") {
-                    if bot?.primary == true {
-                        Button { TheoCallController.start() } label: { Label("Call \(bot?.name ?? "Vello")", systemImage: "phone") }
+                    if let callableBot = bot, callableBot.id != BotsStore.clickyID {
+                        Button { TheoCallController.start(botID: callableBot.primary ? nil : callableBot.id) } label: { Label("Call \(callableBot.name)", systemImage: "phone") }
                     }
                     Button {
                         store.clearConversation(conversationID)

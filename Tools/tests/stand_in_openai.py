@@ -3,7 +3,11 @@
 
   python3 stand_in_openai.py <record-folder>      prints the port it listens on, then serves until killed
 
-GET  /v1/models            one model, "stand-in-model"
+GET  /v1/models            "stand-in-model", and three that play thinking models (for the call-any-bot test):
+                           "stand-in-thinker" opens its answer with a <think> block, "stand-in-qwen3-midthink" starts mid-think
+                           (only the closing tag, as when the template put the opening one in the prompt), and
+                           "stand-in-reasoner" sends its thinking as reasoning_content. All three end with a
+                           [TELL: Vello: …] line, which a call with any bot but Vello's own must never speak.
 POST /v1/chat/completions  streamed (SSE) or not. Each request body is saved to <record-folder>/<n>.json (the key is never
                            saved: only whether an Authorization header came). When the request offers a tool named
                            echo__echo and no tool answer is in the messages yet, it asks for that tool once; otherwise it
@@ -15,6 +19,8 @@ RECORD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "stand-in-requests")
 RECORD.mkdir(parents=True, exist_ok=True)
 LOCK = threading.Lock()
 MODEL = "stand-in-model"
+THINKERS = ["stand-in-thinker", "stand-in-qwen3-midthink", "stand-in-reasoner"]
+SECRET = "SECRET-THOUGHT the owner must never hear this"
 TOOL = "echo__echo"
 
 
@@ -47,7 +53,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.rstrip("/").endswith("/models"):
-            return self.send_json(200, {"object": "list", "data": [{"id": MODEL, "object": "model"}]})
+            return self.send_json(200, {"object": "list", "data": [{"id": m, "object": "model"} for m in [MODEL] + THINKERS]})
         self.send_json(404, {"error": {"message": "not here"}})
 
     def do_POST(self):
@@ -82,7 +88,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
 
         chunk({"role": "assistant"})
-        if wants_tool:
+        model = body.get("model")
+        if model in THINKERS and not wants_tool:
+            if model == "stand-in-reasoner":
+                for word in SECRET.split(" "):
+                    chunk({"reasoning_content": word + " "})
+                pieces = text.split(" ")
+            elif model == "stand-in-thinker":
+                pieces = ["<thi", "nk>", SECRET, "</th", "ink>\n\n"] + text.split(" ")
+            else:
+                pieces = [SECRET, "\n</think>\n\n"] + text.split(" ")
+            for piece in pieces + ["\n[TELL: Vello: ", "book the room]"]:
+                chunk({"content": piece if piece.startswith(("<", "\n", SECRET)) or piece.endswith(">") else piece + " "})
+            chunk({}, "stop")
+        elif wants_tool:
             chunk({"tool_calls": [dict(call, index=0)]})
             chunk({}, "tool_calls")
         else:

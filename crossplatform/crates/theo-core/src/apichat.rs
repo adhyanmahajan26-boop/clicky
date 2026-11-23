@@ -734,6 +734,12 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
     let mut collector = ToolCallCollector::default();
     let mut not_streamed = String::new();
     let mut last_shown = std::time::Instant::now() - Duration::from_secs(1);
+    // A thinking model's reasoning is never the answer (`thinking`): reasoning_content isn't read as text, and a <think>
+    // block in the text is taken out. A model that may start mid-think is held until it's sure, unless the server is seen
+    // separating its reasoning.
+    let may_start_mid_think = crate::thinking::may_think_without_opening_tag(body["model"].as_str().unwrap_or(""));
+    let mut server_separates_reasoning = false;
+    let mut raw_text = String::new();
     let reader = std::io::BufReader::new(response.into_reader());
     for line in reader.lines() {
         if cancel.is_cancelled() {
@@ -742,7 +748,7 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
         let line = match line {
             Ok(line) => line,
             Err(error) => {
-                if reply.text.is_empty() && collector.calls().is_empty() {
+                if raw_text.is_empty() && collector.calls().is_empty() {
                     return Err(RoundError::Failed(format!("{}'s answer broke off: {error}", provider.label)));
                 }
                 break;
@@ -759,8 +765,12 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
             reply.stop_reason = reading.stop_reason;
         }
         collector.take(&line, provider.style);
+        if !server_separates_reasoning && crate::thinking::line_carries_reasoning(&line) {
+            server_separates_reasoning = true;
+        }
         if let Some(piece) = reading.text.filter(|piece| !piece.is_empty()) {
-            reply.text.push_str(&piece);
+            raw_text.push_str(&piece);
+            reply.text = crate::thinking::visible(&raw_text, false, may_start_mid_think && !server_separates_reasoning);
             if last_shown.elapsed() >= Duration::from_millis(50) {
                 on_round_text(&reply.text);
                 last_shown = std::time::Instant::now();
@@ -773,7 +783,7 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
     }
     reply.calls = collector.calls();
     // A server that answered with plain JSON instead of a stream (some local ones do when they can't stream).
-    if reply.text.is_empty() && reply.calls.is_empty() && !not_streamed.trim().is_empty() {
+    if raw_text.is_empty() && reply.calls.is_empty() && !not_streamed.trim().is_empty() {
         if let Ok(whole) = serde_json::from_str::<Value>(not_streamed.trim()) {
             if let Some(message) = error_message_in(not_streamed.trim()) {
                 return Err(RoundError::Failed(format!("{}: {message}", provider.label)));
@@ -781,13 +791,14 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
             let text = whole["choices"][0]["message"]["content"].as_str().map(str::to_string).or_else(|| {
                 whole["content"].as_array().map(|blocks| blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join(""))
             });
-            reply.text = text.unwrap_or_default();
+            raw_text = text.unwrap_or_default();
             reply.ended_cleanly = true;
         }
     }
     if reply.stop_reason.is_some() {
         reply.ended_cleanly = true;
     }
+    reply.text = crate::thinking::visible(&raw_text, true, may_start_mid_think && !server_separates_reasoning);
     on_round_text(&reply.text);
     Ok(reply)
 }

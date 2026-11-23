@@ -105,35 +105,54 @@ enum CallSettings {
     }
 }
 
-/// What Theo is told for a call.
+/// What a bot is told for a call: Vello's own bot with its call controls, any other bot to just talk (ClickyCore
+/// `CallPromptText`).
 enum CallPrompt {
     static let fileName = "theo-call-system-prompt.txt"
+    static let otherBotFileName = "bot-call-system-prompt.txt"
 
     @MainActor
     static func system(store: BotsStore, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
-        let theo = store.primary
+        vellosOwn(store: store, theo: store.primary, usesSarvamVoice: usesSarvamVoice, language: language)
+    }
+
+    /// The call's prompt for `bot`: Vello's own bot (`isVellosOwnBot`) gets its controls, any other bot only talks.
+    @MainActor
+    static func system(store: BotsStore, bot: NativeBot?, isVellosOwnBot: Bool, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+        guard !isVellosOwnBot, let bot else { return vellosOwn(store: store, theo: bot ?? store.primary, usesSarvamVoice: usesSarvamVoice, language: language) }
         let owner = BotPrompts.ownerName
-        var parts = [theo?.instructions ?? "You are Vello."]
-        var rules = """
-        You are on a live voice call with \(owner) right now. Everything you write is read aloud at once by a voice.
-        Talk the way a friend does on the phone: warm, relaxed and natural, in everyday words with contractions. Usually one to three short sentences. Start with the answer; your first sentence should be short, because it's spoken while you're still writing the rest.
-        Sound like a person, not an assistant: react the way people do when it fits ("oh nice", "hmm", "fair enough"), but don't open every reply the same way, don't repeat back what \(owner) said, and skip filler like "great question" or "I'd be happy to help". Ask at most one question back, and only when you need the answer.
-        No markdown, lists, headings, code, emoji or stage directions. Spell out what's awkward to read aloud. Numbers are fine.
-        \(OwnerName.startingSentence(owner)) may cut in at any time. If a message starts where your last answer was cut off, just carry on with what they said.
-        """
+        let recent = store.conversation(bot.id).messages.filter { $0.author == "user" || $0.author == bot.id }.suffix(6)
+            .map { CallPromptText.ChatLine(isFromOwner: $0.author == "user", text: $0.text) }
+        return CallPromptText.otherBot(name: bot.name, instructions: bot.personaHead, owner: owner,
+                                       languageRule: languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language),
+                                       reportingLines: BotPrompts.reportingLines(for: bot, store: store),
+                                       memorySection: BotMemoryPrompt.section(BotMemory.read(botID: bot.id), path: bot.memoryPath),
+                                       recentChat: Array(recent))
+    }
+
+    /// Which language to answer in.
+    static func languageRule(owner: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+        switch language {
+        case .auto where !language.meansHinglish:
+            return "Answer in the language \(owner) just used."
+        case .auto, .hinglish:
+            return usesSarvamVoice
+                ? "Answer in the language \(owner) just used: English in English, Hindi in Hindi written in Devanagari, Hinglish as Hinglish with the Hindi in Devanagari and the English in Latin letters."
+                : "Answer in the language \(owner) just used: English in English, Hindi or Hinglish in Roman letters, the way people text it, since this voice reads Roman letters best."
+        case .english: return "Answer in English."
+        case .hindi: return usesSarvamVoice ? "Answer in Hindi, in Devanagari." : "Answer in Hindi, in Devanagari, keeping it simple."
+        }
+    }
+
+    @MainActor
+    private static func vellosOwn(store: BotsStore, theo: NativeBot?, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+        let owner = BotPrompts.ownerName
+        var parts = [theo?.personaHead ?? "You are Vello."]
+        var rules = CallPromptText.talkingRules(owner: owner)
         // The apps Vello has in its own text chat, which a call reaches with [TELL: Vello: …].
         let ownApps = theo.map { bot in BotConnectors.known.filter { bot.apps.contains($0.id) && $0.id != "theo" && !$0.isSkill }.map(\.name) } ?? []
         rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner, ownChatApps: ownApps)
-        switch language {
-        case .auto where !language.meansHinglish:
-            rules += "\nAnswer in the language \(owner) just used."
-        case .auto, .hinglish:
-            rules += usesSarvamVoice
-                ? "\nAnswer in the language \(owner) just used: English in English, Hindi in Hindi written in Devanagari, Hinglish as Hinglish with the Hindi in Devanagari and the English in Latin letters."
-                : "\nAnswer in the language \(owner) just used: English in English, Hindi or Hinglish in Roman letters, the way people text it, since this voice reads Roman letters best."
-        case .english: rules += "\nAnswer in English."
-        case .hindi: rules += usesSarvamVoice ? "\nAnswer in Hindi, in Devanagari." : "\nAnswer in Hindi, in Devanagari, keeping it simple."
-        }
+        rules += "\n" + languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language)
         parts.append(rules)
         if let theo {
             parts += BotPrompts.reportingLines(for: theo, store: store)
@@ -156,6 +175,18 @@ enum CallPrompt {
             if !recent.isEmpty { parts.append("The end of your text chat with \(owner), before this call:\n" + recent.joined(separator: "\n")) }
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    /// "Grok", "LM Studio", "Codex": a bot's engine as the owner knows it.
+    @MainActor
+    static func engineName(of bot: NativeBot) -> String {
+        if let setting = BotEngineChoice(provider: bot.provider, model: bot.model).brainSetting { return BrainAvailability.name(of: setting) }
+        switch bot.provider {
+        case "grok": return "Grok"
+        case "gemini": return "Gemini CLI"
+        case "t3": return "T3 Code"
+        default: return bot.provider.capitalized
+        }
     }
 
     /// What the voice shouldn't read: markdown marks and the like.
@@ -211,6 +242,15 @@ final class TheoCallSession: ObservableObject {
     private let audio: CallAudio
     private let isLive: Bool
     private let store: BotsStore
+    /// Who's on the call: Vello's own bot, or any other bot. Only Vello's own has the call controls.
+    let bot: NativeBot?
+    let isVellosOwnBot: Bool
+    /// The bot's id, for "is this the call with that bot".
+    var botID: String { bot?.id ?? store.primary?.id ?? "theo" }
+    /// The bot's name, for the call's lines, title and state.
+    var botName: String { bot?.name ?? "Vello" }
+    /// Keeps another bot's bracket lines out of the voice (it has none of Vello's controls).
+    private var bracketLines = CallBracketLineStream()
     private var brain: ConversationBrain?
     private var ears: CallEars?
     private var voice: CallVoice?
@@ -278,10 +318,18 @@ final class TheoCallSession: ObservableObject {
     /// The owner is talking: the gate is open on a voice near the Mac.
     private var isOwnerSpeaking: Bool { gate.isSpeaking && stretchIsNear }
 
-    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool) {
+    /// `botID` nil, or Vello's own bot's id: the call with Vello. Any other bot: a call with that bot.
+    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil) {
         self.store = store
         self.isLive = isLive
         audio = CallAudio(hub: hub, isLive: isLive)
+        if let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
+            bot = chosen
+            isVellosOwnBot = false
+        } else {
+            bot = store.primary
+            isVellosOwnBot = true
+        }
     }
 
     // MARK: Start and end
@@ -289,7 +337,7 @@ final class TheoCallSession: ObservableObject {
     /// `openingWords`: what the owner said before the call began ("hey vello, …"), answered as the first turn.
     func start(openingWords: String = "") {
         // No App Nap or timer coalescing while someone is on the line, even with Theo in the background.
-        liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with Vello")
+        liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with \(botName)")
         audio.onBlock = { [weak self] block in self?.handle(block) }
         audio.onDrained = { [weak self] in self?.voiceDrained() }
         do {
@@ -302,8 +350,22 @@ final class TheoCallSession: ObservableObject {
         if isLive && !audio.isEchoCancelled { gate.bargeInMarginDecibels = 34 }
         startVoice()
         startEars()
-        let prompt = CallPrompt.system(store: store, usesSarvamVoice: voice is SarvamCallVoice, language: language)
-        let brain = ConversationBrains.make(model: CallSettings.model, systemPrompt: prompt, promptFileName: CallPrompt.fileName, effort: "low")
+        let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language)
+        let brain: ConversationBrain
+        if isVellosOwnBot {
+            brain = ConversationBrains.make(model: CallSettings.model, systemPrompt: prompt, promptFileName: CallPrompt.fileName, effort: "low")
+        } else {
+            // Any other bot thinks with its own engine and model. One that can't take a call says why and what fixes it.
+            switch callBrainForOtherBot() {
+            case .use(let setting):
+                brain = ConversationBrains.make(model: setting, systemPrompt: prompt, promptFileName: CallPrompt.otherBotFileName, effort: "low")
+            case .cannotCall(let words):
+                problem = words
+                state = .listening
+                sayWithoutThinking(words)
+                return
+            }
+        }
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {
@@ -319,10 +381,19 @@ final class TheoCallSession: ObservableObject {
         }
         // Theo says hello: it's what a call does, and it warms up the brain and the voice, so the owner's first question gets
         // the same quick answer as the rest.
-        let owner = BotPrompts.ownerName
-        ask(OwnerName.isUnset(owner)
-            ? "(The call just connected. Say hello in a few words and stop there.)"
-            : "(The call just connected. Say hello to \(owner) in a few words and stop there.)")
+        ask(CallPromptText.hello(owner: BotPrompts.ownerName))
+    }
+
+    /// The brain for a call with a bot that isn't Vello's own: its own engine and model, when that works here.
+    private func callBrainForOtherBot() -> CallBrainChoice {
+        guard let bot else { return .use(brainSetting: CallSettings.model) }
+        let engine = BotEngineChoice(provider: bot.provider, model: bot.model)
+        let choice = CallBrainChoice.forBot(named: bot.name, engine: engine, engineName: CallPrompt.engineName(of: bot), inventory: BrainAvailability.inventory)
+        // A Claude bot with no model picked thinks with Claude's usual call model.
+        if case .use(let setting) = choice, BrainModel(setting: setting).isClaude, BrainModel(setting: setting).modelIdentifier.isEmpty {
+            return .use(brainSetting: ClickyModels.sonnet)
+        }
+        return choice
     }
 
     func end() {
@@ -335,7 +406,8 @@ final class TheoCallSession: ObservableObject {
         voice?.shutDown()
         brain?.stop()
         audio.close()
-        store.recordCall(lines.filter { !$0.text.isEmpty }.map { ($0.who == .addy, $0.wasOnlyHeard ? "(heard in listen mode) " + $0.text : $0.text) }, startedAt: startedAt)
+        store.recordCall(lines.filter { !$0.text.isEmpty }.map { ($0.who == .addy, $0.wasOnlyHeard ? "(heard in listen mode) " + $0.text : $0.text) },
+                         startedAt: startedAt, botID: isVellosOwnBot ? nil : bot?.id)
     }
 
     func setMuted(_ muted: Bool) {
@@ -345,13 +417,15 @@ final class TheoCallSession: ObservableObject {
 
     private func startVoice() {
         // The call speaks with Sarvam whenever its key is saved, whichever voice Clicky uses.
+        // A bot with its own call voice speaks with it; otherwise the usual call voice.
         if let key = ProviderKeychain.get("sarvam") {
             let voiceLanguage = language.sarvamVoice
-            let speaker = SarvamClient.speaker(SarvamVoiceConfig.speaker, in: voiceLanguage.setting)
+            let ownSpeaker = CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .sarvam)
+            let speaker = SarvamClient.speaker(ownSpeaker ?? SarvamVoiceConfig.speaker, in: voiceLanguage.setting)
             let sarvam = SarvamCallVoice(audio: audio, apiKey: key, speaker: speaker, languageCode: voiceLanguage.code, pace: SarvamVoiceConfig.pace)
             use(voice: sarvam)
         } else {
-            use(voice: AppleCallVoice(audio: audio))
+            use(voice: AppleCallVoice(audio: audio, voiceIdentifier: CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .apple)))
         }
     }
 
@@ -366,7 +440,7 @@ final class TheoCallSession: ObservableObject {
 
     private func voiceFailed(_ message: String, pieces: [String]) {
         problem = "Sarvam's voice stopped (\(message)), using the Mac voice."
-        let replacement = AppleCallVoice(audio: audio)
+        let replacement = AppleCallVoice(audio: audio, voiceIdentifier: CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .apple))
         use(voice: replacement)
         for piece in pieces { replacement.speak(piece) }
         if !replyInProgress { replacement.endOfTurn() }
@@ -775,8 +849,8 @@ final class TheoCallSession: ObservableObject {
 
     /// Vello's name as the ears hear it: its own name and the usual mishearings.
     private var assistantNames: [String] {
-        let primaryName = store.primary?.name.lowercased() ?? "vello"
-        return CallListenMode.defaultAssistantNames + [primaryName]
+        let callBotName = (bot?.name ?? store.primary?.name ?? "vello").lowercased()
+        return CallListenMode.defaultAssistantNames + [callBotName]
     }
 
     func setListenMode(_ on: Bool) {
@@ -824,6 +898,7 @@ final class TheoCallSession: ObservableObject {
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
         controls = CallControlStream()
+        bracketLines = CallBracketLineStream()
         let line = Line(who: .theo, text: "", isLive: true)
         lines.append(line)
         theoLineID = line.id
@@ -856,11 +931,17 @@ final class TheoCallSession: ObservableObject {
             firstTextAt = Date()
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
         }
-        let switched = controls.feed(rawDelta)
-        switched.controls.forEach(carryOut)
-        let filtered = orders.feed(switched.speech)
-        filtered.orders.forEach(orderClicky)
-        let delta = filtered.speech
+        let delta: String
+        if isVellosOwnBot {
+            let switched = controls.feed(rawDelta)
+            switched.controls.forEach(carryOut)
+            let filtered = orders.feed(switched.speech)
+            filtered.orders.forEach(orderClicky)
+            delta = filtered.speech
+        } else {
+            // Another bot has none of Vello's controls: its bracket lines are taken out and never spoken.
+            delta = bracketLines.feed(rawDelta)
+        }
         guard !delta.isEmpty else { return }
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) { lines[index].text += delta }
         for piece in chunker.feed(delta) { speak(piece) }
@@ -885,24 +966,32 @@ final class TheoCallSession: ObservableObject {
         lastReleasedTurn = nil
         let neverStreamed = firstTextAt == nil
         var unstreamed = ""
-        if case .success(let whole) = result, neverStreamed {
-            let switched = CallControlStream.extract(from: whole)
-            switched.controls.forEach(carryOut)
-            let taken = ClickyOrder.extract(from: switched.text)
-            unstreamed = taken.text
-            taken.orders.forEach(orderClicky)
+        let restSpeech: String
+        if isVellosOwnBot {
+            if case .success(let whole) = result, neverStreamed {
+                let switched = CallControlStream.extract(from: whole)
+                switched.controls.forEach(carryOut)
+                let taken = ClickyOrder.extract(from: switched.text)
+                unstreamed = taken.text
+                taken.orders.forEach(orderClicky)
+            }
+            let switchedRest = controls.finish()
+            switchedRest.controls.forEach(carryOut)
+            let tail = orders.feed(switchedRest.speech)
+            tail.orders.forEach(orderClicky)
+            let finished = orders.finish()
+            finished.orders.forEach(orderClicky)
+            restSpeech = tail.speech + finished.speech
+        } else {
+            if case .success(let whole) = result, neverStreamed { unstreamed = CallBracketLineStream.strip(whole) }
+            restSpeech = bracketLines.finish()
         }
-        let switchedRest = controls.finish()
-        switchedRest.controls.forEach(carryOut)
-        let tail = orders.feed(switchedRest.speech)
-        tail.orders.forEach(orderClicky)
-        let finished = orders.finish()
-        finished.orders.forEach(orderClicky)
-        let restSpeech = tail.speech + finished.speech
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
             lines[index].isLive = false
             lines[index].text += restSpeech
             if lines[index].text.isEmpty { lines[index].text = unstreamed }
+            // A tag taken off the end leaves its line break behind.
+            lines[index].text = lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         theoLineID = nil
         switch result {
@@ -1024,6 +1113,8 @@ final class TheoCallSession: ObservableObject {
     func report() -> [String: Any] {
         [
             "state": String(describing: state), "ears": earsName, "voice": voiceName, "muted": isMuted, "problem": problem ?? "",
+            "botID": botID, "botName": botName, "isVellosOwnBot": isVellosOwnBot, "botCallVoice": bot?.callVoice ?? "",
+            "appleVoiceUsed": (voice as? AppleCallVoice)?.ownVoice?.identifier ?? "",
             "timings": timings.map { timing in
                 ["heardSeconds": timing.heard as Any? ?? NSNull(), "firstTextSeconds": timing.firstText as Any? ?? NSNull(),
                  "firstAudioSeconds": timing.firstAudio as Any? ?? NSNull(), "ears": timing.ears, "voice": timing.voice] as [String: Any]

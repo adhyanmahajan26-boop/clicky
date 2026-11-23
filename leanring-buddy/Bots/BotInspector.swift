@@ -10,6 +10,7 @@
 //
 
 import AppKit
+import AVFoundation
 import ClickyCore
 import Combine
 import SwiftUI
@@ -50,12 +51,23 @@ struct BotInspector: View {
                             .font(.system(size: 12.5)).scrollContentBackground(.hidden)
                             .padding(8).frame(minHeight: 130)
                             .background(RoundedRectangle(cornerRadius: 10).fill(DS.Colors.hover))
+                        BotOwnFileButtons(bot: bot) {
+                            commit()
+                        }
                         Button { NSWorkspace.shared.open(BotMemory.guideFile) } label: {
                             Label("Read the harness guide", systemImage: "book")
                                 .font(.system(size: 12, weight: .medium))
                         }
                         .buttonStyle(.theo(.ghost, .small))
                         .pointerCursor()
+                    }
+                    if bot.id != BotsStore.clickyID {
+                        InspectorSection("Calls", hint: "Talk with \(bot.name) out loud. The voice is the one its calls speak with.") {
+                            BotCallSettings(bot: bot) { voice in
+                                draft?.callVoice = voice
+                                commit()
+                            }
+                        }
                     }
                     apps(bot)
                     schedules(bot)
@@ -82,8 +94,14 @@ struct BotInspector: View {
         .frame(width: 340)
         .clipped()
         .background(DS.Colors.surface1)
-        .onAppear { draft = store.bot(botID) }
-        .onChange(of: botID) { _, id in draft = store.bot(id) }
+        .onAppear {
+            store.takeInstructionsFromFile(botID)
+            draft = store.bot(botID)
+        }
+        .onChange(of: botID) { _, id in
+            store.takeInstructionsFromFile(id)
+            draft = store.bot(id)
+        }
         // A change made elsewhere (make primary, the sidebar's on/off, the control inbox) shows here,
         // unless an edit of this column is still waiting to be saved.
         .onReceive(store.$bots) { bots in
@@ -514,3 +532,87 @@ struct AppLogo: View {
     }
 }
 
+
+
+/// "Open instructions file" and "Open nature file": the bot's own files in its memory folder, made if they aren't there
+/// yet, opened in the owner's editor (ClickyCore `BotOwnFiles`).
+struct BotOwnFileButtons: View {
+    let bot: NativeBot
+    /// Called first, so the field's latest words are saved before the instructions file is made from them.
+    let beforeOpening: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                beforeOpening()
+                NSWorkspace.shared.open(BotOwnFileStore.makeIfMissing(.instructions, bot: bot))
+            } label: {
+                Label("Open instructions file", systemImage: "doc.text").font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.theo(.ghost, .small))
+            .pointerCursor()
+            .help("instructions.md in \(bot.name)'s folder. When it's there, it is \(bot.name)'s instructions, and this field writes to it.")
+            Button {
+                NSWorkspace.shared.open(BotOwnFileStore.makeIfMissing(.nature, bot: bot))
+            } label: {
+                Label("Open nature file", systemImage: "person.text.rectangle").font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.theo(.ghost, .small))
+            .pointerCursor()
+            .help("nature.md in \(bot.name)'s folder: its personality, read right after its instructions in chats and calls.")
+        }
+    }
+}
+
+/// A bot's Call button and its own call voice, from the voices the call's voice engine offers now (Sarvam's speakers when
+/// its key is saved, else the Mac's installed voices). "Usual call voice" keeps the one every call uses.
+struct BotCallSettings: View {
+    let bot: NativeBot
+    let onVoiceChange: (String?) -> Void
+    @State private var choices: [(id: String, title: String)] = []
+    @State private var engine = CallVoiceChoice.Engine.apple
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { TheoCallController.start(botID: bot.primary ? nil : bot.id) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                    Text("Call")
+                }
+            }
+            .buttonStyle(.theoPrimary).pointerCursor().help("Start a voice call with \(bot.name)")
+            Picker("Voice", selection: Binding(get: { CallVoiceChoice.voiceID(saved: bot.callVoice, engine: engine) ?? "" }, set: { picked in
+                onVoiceChange(picked.isEmpty ? nil : CallVoiceChoice.saved(engine: engine, voiceID: picked))
+            })) {
+                Text("Usual call voice").tag("")
+                ForEach(choices, id: \.id) { choice in Text(choice.title).tag(choice.id) }
+            }
+            .labelsHidden()
+            .help(engine == .sarvam ? "Sarvam voices: the same person speaks the call's language." : "Voices installed on this Mac.")
+        }
+        .onAppear { loadChoices() }
+    }
+
+    private func loadChoices() {
+        if ProviderKeychain.get("sarvam") != nil {
+            engine = .sarvam
+            choices = SarvamClient.v4VoiceGroups.flatMap { group in
+                group.speakers.map { speaker -> (id: String, title: String) in
+                    let title = SarvamClient.voiceTitle(speaker)
+                    return (speaker, "\(title.name), \(title.style) (\(group.title))")
+                }
+            }
+        } else {
+            engine = .apple
+            choices = BotCallSettings.appleVoices()
+        }
+    }
+
+    /// The Mac's own voices, best quality first within each language, novelty voices left out.
+    static func appleVoices() -> [(id: String, title: String)] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { !$0.voiceTraits.contains(.isNoveltyVoice) }
+            .sorted { ($0.language, -$0.quality.rawValue, $0.name) < ($1.language, -$1.quality.rawValue, $1.name) }
+            .map { voice in (voice.identifier, "\(voice.name) (\(voice.language)\(voice.quality == .premium ? ", premium" : voice.quality == .enhanced ? ", enhanced" : ""))") }
+    }
+}

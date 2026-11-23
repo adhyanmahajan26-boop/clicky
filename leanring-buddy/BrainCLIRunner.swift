@@ -53,13 +53,14 @@ enum BrainCLIRunner {
 
     static func runTurn(model: BrainModel, systemPrompt: String, contentBlocks: [ClaudeContentBlock],
                         persistentSessionIdentifier: String? = nil,
+                        maxOutputTokens: Int? = nil,
                         onTextChunk: @MainActor @Sendable (String) -> Void,
                         onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)? = nil,
                         onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)? = nil) async throws -> ClaudeTurnResult {
         let startTime = Date()
         if model.provider == .api {
             return try await runAPITurn(model: model, systemPrompt: systemPrompt, contentBlocks: contentBlocks, persistentSessionIdentifier: persistentSessionIdentifier,
-                                        startTime: startTime, onTextChunk: onTextChunk, onStreamEvent: onStreamEvent, onProcessReady: onProcessReady)
+                                        maxOutputTokens: maxOutputTokens, startTime: startTime, onTextChunk: onTextChunk, onStreamEvent: onStreamEvent, onProcessReady: onProcessReady)
         }
         guard let executableURL = locateExecutable(for: model.provider) else { throw BrainCLIRunnerError.notInstalled(model.provider) }
 
@@ -221,7 +222,7 @@ extension BrainCLIRunner {
     /// One turn on the owner's API key: same events as a CLI, so the rest of Clicky doesn't change. The screenshots go
     /// with the user's words, and the model answers with the same tags.
     fileprivate static func runAPITurn(model: BrainModel, systemPrompt: String, contentBlocks: [ClaudeContentBlock], persistentSessionIdentifier: String?,
-                                       startTime: Date, onTextChunk: @MainActor @Sendable (String) -> Void,
+                                       maxOutputTokens: Int? = nil, startTime: Date, onTextChunk: @MainActor @Sendable (String) -> Void,
                                        onStreamEvent: (@MainActor @Sendable (CLIStreamEvent) -> Void)?,
                                        onProcessReady: (@MainActor @Sendable (ClaudeProcessOrigin) -> Void)?) async throws -> ClaudeTurnResult {
         let parts = model.modelIdentifier.split(separator: "/", maxSplits: 1).map(String.init)
@@ -247,7 +248,8 @@ extension BrainCLIRunner {
         await onProcessReady?(ClaudeProcessOrigin(spawnDate: Date(), usedStandbyProcess: false, standbyOutcome: nil, retriedAfterBrokenPipe: false))
         await onStreamEvent?(.systemInit(model: model.setting))
         let answerBox = StreamedAnswer()
-        let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt, messages: messages) { soFar in
+        let answer = try await APIChat.stream(provider: provider, key: ProviderKeychain.get(parts[0]), model: parts[1], system: systemPrompt, messages: messages,
+                                            maxOutputTokens: maxOutputTokens) { soFar in
             if answerBox.text.isEmpty { onStreamEvent?(.messageStart(id: UUID().uuidString)) }
             // By scalars, not characters: a Hindi vowel sign arriving on its own chunk joins the character before it.
             let delta = String(String.UnicodeScalarView(soFar.unicodeScalars.dropFirst(answerBox.text.unicodeScalars.count)))

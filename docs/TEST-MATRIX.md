@@ -8,6 +8,19 @@ How to read the evidence: screenshots are of Theo's own window, in `docs/evidenc
 
 **This matrix is not all green.** The ⚠️ rows are real gaps. The biggest: a physical mouse click on the real window hasn't been done by me, only by the app's own events.
 
+## Round 7 (2026-11-23): calls with any bot, thinking models, a bot's own voice and files
+
+Branch `feat/call-any-bot`, built and tested on the Mac Studio (not GitHub Actions). What changed is in `AGENTS.md` (Call/, A bot's own files).
+
+| | What | Evidence |
+|---|---|---|
+| ✅ | ClickyCore: every Swift Testing and XCTest test passes, with the new `ThinkingTextTests`, `CallAnyBotTests` and `BotOwnFilesTests` (thinking stripped however it's sent and only ever growing while streamed, another bot's prompt with nothing of Vello's controls, bracket lines out wherever they split, which brain a bot's call uses and the fix when it can't, the own files' caps and cut notice, a bot's call voice per engine) | `swift test` |
+| ✅ | Windows and Linux core: `thinking.rs` with its tests, used by `apichat.rs`; `cargo test --workspace` passes | `cargo test` |
+| ✅ | The app builds (Debug, signed) with no errors | `xcodebuild build` |
+| ✅ | In a test profile on a stand-in brain (`Tools/tests/call_any_bot.py`, 25 checks): a call with another bot is titled with its name, thinks with its own model with room to think, has its name, instructions, nature, memory and chat and none of Vello's controls, never speaks or shows thinking (opening `<think>`, mid-think, `reasoning_content`) or a `[TELL: …]` line; a second bot while a call runs brings up the running one; a bot on Grok says on the call it can't take one, with the fix; a bot's own Mac voice is the one its call uses; `instructions.md` wins over the field and `nature.md` comes right after; normal chat on an API key shows no thinking; the transcript lands in that bot's chat | `~/jstest/bot-calls-run*/results.json` |
+| ⚠️ | A real call with another bot on the owner's mic and a real local thinking model (LM Studio's Qwen 3.8 27B): not run here, Vello is busy on the Studio. A bot's Sarvam voice: only unit-tested (no Sarvam key in the test profile) | |
+| ⚠️ | Windows and Linux have no calls yet, nor a bot's own files or call voice (`crossplatform/docs/PLATFORMS.md`) | |
+
 ## Round 6 (2026-11-23): calls that cut themselves off, and Pointer Assistant's orders
 
 Branch `fix/call-and-pointer-sync`, built and tested on the Mac Studio (not GitHub Actions). What changed is in `AGENTS.md` (Call/, Computer-use actions).

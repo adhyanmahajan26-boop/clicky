@@ -197,6 +197,60 @@ extension BotsStore {
 }
 
 /// A bot's memory file, in Theo's own folder. It used to be in ~/.t3/bots, which now belongs to stock T3 Code.
+/// A bot's own files beside its memory, for the owner to edit in any editor (ClickyCore `BotOwnFiles`): `instructions.md`
+/// is its instructions when it's there, `nature.md` its nature, right after them in every prompt.
+enum BotOwnFileStore {
+    enum Kind { case instructions, nature }
+
+    static func file(_ kind: Kind, botID: String) -> URL {
+        BotMemory.file(botID: botID).deletingLastPathComponent()
+            .appendingPathComponent(kind == .instructions ? BotOwnFiles.instructionsFileName : BotOwnFiles.natureFileName)
+    }
+
+    /// The file's text, or nil when there's none. A file over the limit gets the cut notice as its first line, once.
+    static func text(_ kind: Kind, botID: String) -> String? {
+        let url = file(kind, botID: botID)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        if let noticed = BotOwnFiles.addingCutNoticeIfNeeded(text) { try? noticed.write(to: url, atomically: true, encoding: .utf8) }
+        return text
+    }
+
+    /// Makes the file if it isn't there (instructions start as the settings field, nature with a note on what it's for) and
+    /// returns where it is, for "Open instructions file" / "Open nature file".
+    @discardableResult
+    static func makeIfMissing(_ kind: Kind, bot: NativeBot) -> URL {
+        let url = file(kind, botID: bot.id)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return url }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let starting = kind == .instructions ? BotOwnFiles.newInstructionsFile(field: bot.instructions) : BotOwnFiles.newNatureFile(botName: bot.name)
+        try? starting.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// The settings field was edited: an instructions file there takes the new text (a first-line comment is kept).
+    static func instructionsFieldChanged(botID: String, to field: String) {
+        let url = file(.instructions, botID: botID)
+        guard let current = try? String(contentsOf: url, encoding: .utf8), BotOwnFiles.body(of: current) != field.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        let firstLine = current.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        let keepsComment = firstLine.hasPrefix("<!--") && firstLine.hasSuffix("-->") && firstLine != BotOwnFiles.cutNotice()
+        let text = (keepsComment ? firstLine + "\n" : "") + BotOwnFiles.newInstructionsFile(field: field)
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// The instructions file's text, for the settings field to show (nil without a file).
+    static func instructionsForTheField(botID: String) -> String? {
+        text(.instructions, botID: botID).map { BotOwnFiles.body(of: $0) }
+    }
+}
+
+extension NativeBot {
+    /// What every prompt of its starts with: its instructions (the instructions file's when there is one) and its nature.
+    var personaHead: String {
+        BotOwnFiles.personaHead(field: instructions, instructionsFile: BotOwnFileStore.text(.instructions, botID: id),
+                                natureFile: BotOwnFileStore.text(.nature, botID: id))
+    }
+}
+
 enum BotMemory {
     static let relativeFolder = "Library/Application Support/Theo/Bots/memory"
 
