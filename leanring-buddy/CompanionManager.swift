@@ -743,6 +743,20 @@ final class CompanionManager: ObservableObject {
 
         // The wake listener gives up the mic until key-up.
         speechOutputClient.audioEngineHub.claimMicrophone(for: .pushToTalk)
+        // Pointer Assistant is Vello's hands now: the words start a call with Vello, which sees the screen and acts itself.
+        let wordsGoToVello = VelloHands.answersEveryVoice
+        if wordsGoToVello {
+            pendingKeyboardShortcutStartTask?.cancel()
+            pendingKeyboardShortcutStartTask = Task {
+                await pushToTalkRecorder.startPushToTalkFromKeyboardShortcut(currentDraftText: "", updateDraftText: { _ in }) { [weak self] words in
+                    guard let self else { return }
+                    self.lastTranscript = words
+                    print("🗣️ Heard for Vello: \(words.split(separator: " ").count) words")
+                    self.startVelloCallFromWake(openingWords: words)
+                }
+            }
+            return
+        }
         if TheoLink.shared.clickyRunsHere { groundingCoordinator.prewarm() }
         transientHideTask?.cancel()
         transientHideTask = nil
@@ -844,10 +858,10 @@ final class CompanionManager: ObservableObject {
     /// "Hey Vello" was heard and its words are still being heard: they go to a call with Vello, not to Pointer Assistant.
     private var isHearingVelloWakeTurn = false
 
-    /// Who the last wake phrase called. Vello needs its product on; otherwise its names wake Pointer Assistant, as before.
+    /// Who the last wake phrase called: Vello, whichever name was said ("hey pointer" too), since Pointer Assistant is
+    /// Vello's hands now. With Vello's product off every name wakes the old screen turn, as before.
     private var lastWakeTarget: WakeTarget {
-        let target = WakeTarget.of(phrase: wakeWordController.lastWakePhrase ?? "", assistantName: ClickySettings.assistantName)
-        return target == .vello && !TheoProducts.isOn(.theo) ? .pointerAssistant : target
+        VelloHands.answersEveryVoice ? .vello : .pointerAssistant
     }
 
     private func wakeWordDidFire(initialTurnText: String) {
@@ -889,7 +903,8 @@ final class CompanionManager: ObservableObject {
         if isHearingVelloWakeTurn {
             isHearingVelloWakeTurn = false
             guard !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive else { return }
-            startVelloCallFromWake(openingWords: turnText)
+            // "hey pointer assistant, open notes" matched on "pointer": the call starts at "open notes".
+            startVelloCallFromWake(openingWords: WakeTarget.turnText(turnText, for: .pointerAssistant))
             return
         }
         guard voiceState == .listening, !pushToTalkRecorder.isDictationInProgress, !isHandsFreeSessionActive else { return }
@@ -942,7 +957,7 @@ final class CompanionManager: ObservableObject {
     /// the call window comes up without taking it.
     private func startVelloCallFromWake(openingWords: String) {
         let openingWords = openingWords.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("📞 Wake word: calling Vello (\(openingWords.split(separator: " ").count) words to start with)")
+        print("📞 Calling Vello (\(openingWords.split(separator: " ").count) words to start with)")
         TheoCallController.start(activates: false, openingWords: openingWords)
     }
 
@@ -1014,6 +1029,12 @@ final class CompanionManager: ObservableObject {
     func startHandsFreeSession() {
         guard TheoProducts.isOn(.clicky) else { return }
         guard !isHandsFreeSessionActive else { return }
+        // Hands-free is a call with Vello now: it listens, talks and uses the screen the whole time.
+        if VelloHands.answersEveryVoice {
+            NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+            startVelloCallFromWake(openingWords: "")
+            return
+        }
 
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
         stopBuddySpeechAndCancelResponse()
@@ -2133,7 +2154,11 @@ final class CompanionManager: ObservableObject {
     var lastHistoryEntryForDebug: String? { conversationHistory.last?.assistantResponse }
     func handleEscapeKeyPressedForDebug() { handleEscapeKeyPressed() }
     /// A fist held up to the camera (hand signs): the same stop as Escape.
-    func stopEverythingLikeEscape() { handleEscapeKeyPressed() }
+    func stopEverythingLikeEscape() {
+        // Vello's steps on a call stop too (the Escape key stops them by itself, as any key press does; a fist doesn't).
+        if actionTaskController.isRunningCallTask { actionTaskController.cancel(reason: "you held up a fist", stopsSpeech: false, speaksLine: false) }
+        handleEscapeKeyPressed()
+    }
 
     func copyLastAnswerToPasteboard() {
         guard let lastAnswerText, !lastAnswerText.isEmpty else { return }
@@ -2158,6 +2183,19 @@ final class CompanionManager: ObservableObject {
     }
 
     private(set) var lastFlightSource: CompanionFlightSource = .screen
+
+    /// Flies the companion beside an element on the real screen (its rect, CG): Vello's point step on a call.
+    func flyCompanion(toScreenRectCG rectCG: CGRect) {
+        let displays = ScreenTopology.current()
+        guard let display = displays.first(where: { $0.boundsCG.contains(rectCG.center) }) ?? displays.first else { return }
+        let markObstacles = markController.marks.map { MarkLayout.padded($0.rectCG) }
+        let landing = CompanionLanding.landing(target: rectCG, visible: display.visibleCG, obstacles: markObstacles)
+        markController.companionRect = landing
+        detectedElementScreenLocation = ScreenTopology.appKit(fromCG: landing.center, flipH: ScreenTopology.mainDisplayHeight)
+        detectedElementDisplayFrame = display.frameAppKit
+        pointTargetCG = rectCG
+        lastFlightSource = .screen
+    }
 
     /// Flies the companion beside a board element (its rect on screen, CG).
     func flyCompanion(toBoardRectCG rectCG: CGRect) {

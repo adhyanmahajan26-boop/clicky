@@ -414,6 +414,8 @@ public enum ActionTierClassifier {
             return ActionTierDecision(.free, "reading the page")
         case .readArticle:
             return ActionTierDecision(.free, "reading the article (scrolling at most)")
+        case .point:
+            return ActionTierDecision(.free, "pointing only, nothing is pressed")
         case .notes:
             return ActionTierDecision(.free, "clicky's notes panel only")
         case .selectCopy:

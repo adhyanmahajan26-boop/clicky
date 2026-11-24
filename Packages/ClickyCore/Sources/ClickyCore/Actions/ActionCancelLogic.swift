@@ -56,10 +56,15 @@ public enum ActionCancelDecision: Equatable, Sendable {
 
 public struct ActionCancelLogic: Equatable, Sendable {
     public static let mouseJitterTolerance: CGFloat = 3
+    /// While Vello works on a call the owner's hand often rests on the trackpad: a brush of it moved the pointer a few
+    /// points and stopped the work ("you moved the mouse" ended seven tasks on the Air). Only a real move counts then.
+    public static let handsFreeMouseTolerance: CGFloat = 80
     public static let syntheticPointerGraceSeconds: TimeInterval = 0.15
 
     public private(set) var isArmed = false
     public private(set) var accumulatedMouseDistance: CGFloat = 0
+    /// How far the mouse may move before it counts as the owner taking over.
+    public private(set) var mouseTolerance: CGFloat = ActionCancelLogic.mouseJitterTolerance
     private var lastSyntheticPointerEventTime: TimeInterval?
     /// Mouse moves before this uptime don't cancel (right after a click on the confirm card).
     private var mouseMovesExcusedUntilUptime: TimeInterval?
@@ -68,8 +73,9 @@ public struct ActionCancelLogic: Equatable, Sendable {
 
     public init() {}
 
-    public mutating func arm(excusingMouseMovesUntilUptime: TimeInterval? = nil) {
+    public mutating func arm(excusingMouseMovesUntilUptime: TimeInterval? = nil, mouseTolerance: CGFloat = ActionCancelLogic.mouseJitterTolerance) {
         isArmed = true
+        self.mouseTolerance = mouseTolerance
         accumulatedMouseDistance = 0
         hasCancelled = false
         mouseMovesExcusedUntilUptime = excusingMouseMovesUntilUptime
@@ -101,7 +107,7 @@ public struct ActionCancelLogic: Equatable, Sendable {
             }
             if let mouseMovesExcusedUntilUptime, event.timestamp < mouseMovesExcusedUntilUptime { return .ignore }
             accumulatedMouseDistance += hypot(deltaX, deltaY)
-            guard accumulatedMouseDistance > Self.mouseJitterTolerance else { return .ignore }
+            guard accumulatedMouseDistance > mouseTolerance else { return .ignore }
             reason = "you moved the mouse"
         case .mouseDown: reason = "you clicked"
         case .mouseDragged: reason = "you dragged the mouse"
