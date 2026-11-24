@@ -295,6 +295,8 @@ final class TheoCallSession: ObservableObject {
     /// This reply answers the screen work (an observe or look turn) or carried steps: its end is reported to the task.
     private var replyIsScreenWork = false
     private var replyHadBlock = false
+    /// This reply's block went to the steps: a [LOOK] in the same reply is moot, since the steps look again when they end.
+    private var replyStartedSteps = false
     /// The owner's words this reply answers, for the safety tiers ("delete it" said by the owner).
     private var replyOwnerWords = ""
     /// After this reply the brain is shown the screen with these words ([LOOK], or a stray Pointer Assistant line).
@@ -959,6 +961,7 @@ final class TheoCallSession: ObservableObject {
         guard let brain else { return }
         replyIsScreenWork = isScreenWork
         replyHadBlock = false
+        replyStartedSteps = false
         looksAfterReply = nil
         if let ownerWords { replyOwnerWords = ownerWords }
         turnNumber += 1
@@ -1215,7 +1218,8 @@ final class TheoCallSession: ObservableObject {
         turnActedOnTheCall = true
         switch piece {
         case .look:
-            if looksAfterReply == nil { looksAfterReply = CallHands.lookMessage(owner: BotPrompts.ownerName) }
+            print("🖐️ Vello's hands: asked to look")
+            if looksAfterReply == nil, !replyStartedSteps { looksAfterReply = CallHands.lookMessage(owner: BotPrompts.ownerName) }
         case .actions(let body):
             replyHadBlock = true
             startSteps(body)
@@ -1242,6 +1246,9 @@ final class TheoCallSession: ObservableObject {
         }
         let ownerWords = replyOwnerWords
         let replyStillOpen = replyInProgress
+        // The steps look again when they end, so a [LOOK] in this reply (before or after the block) isn't sent as well.
+        replyStartedSteps = true
+        looksAfterReply = nil
         Task { @MainActor [weak self] in
             guard let self, self.state != .ended else { return }
             var grounded = self.lastShownScreen
@@ -1306,7 +1313,8 @@ final class TheoCallSession: ObservableObject {
             defer { self?.screenTurnPump = nil }
             while let self, self.state != .ended, !self.waitingScreenTurns.isEmpty {
                 guard !Task.isCancelled else { return }
-                if self.replyInProgress || self.isOwnerSpeaking || !self.heldTurnWords.isEmpty || self.isHoldingTurn {
+                let stepsUnderWay = CompanionManager.current?.actionTaskController.isCallBatchUnderWay == true
+                if self.replyInProgress || self.isOwnerSpeaking || !self.heldTurnWords.isEmpty || self.isHoldingTurn || stepsUnderWay {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     continue
                 }

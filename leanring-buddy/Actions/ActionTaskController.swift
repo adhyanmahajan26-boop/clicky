@@ -205,6 +205,14 @@ final class ActionTaskController {
     /// The task running now is Vello's call's.
     var isRunningCallTask: Bool { task?.callHooks != nil }
 
+    /// The call's steps are being carried out right now (or wait for a yes). A new turn for the brain waits for them: a look
+    /// taken mid-batch shows the screen half changed, and a block written from it replaced the steps still running (the
+    /// Studio test on 25 Nov: TextEdit "not up yet", so it was opened again and the first job thrown away twice).
+    var isCallBatchUnderWay: Bool {
+        guard let task, task.callHooks != nil else { return false }
+        return task.isBatchRunning || task.phase == .countdown || task.phase == .executing
+    }
+
     /// Vello's call wrote an `<actions>` block. It starts the call's task, or is the next batch of the one waiting for it.
     /// `groundedTurn`: the screen the brain was last shown, whose ids the block uses. Returns words for the brain when nothing
     /// could start (unreadable, switched off), nil when steps are running.
