@@ -63,8 +63,8 @@ gives each frame's hands and body (61 landmarks, Tools/signs/SPEC.md); a stretch
 small Core ML models and becomes a line of words, sent to Vello's chat, Pointer Assistant or the app in front.
 
 **ISL reading has only been shown to work for the signers it learned from.** Every number below that is high was
-measured on the same people the models were trained on. On other people it is far weaker (ISL-CSLTR below), so expect
-"?" often.
+measured on the same people the models were trained on. On INCLUDE signers it never saw it gets about 7 in 10 words
+right, and on another dataset's signers (ISL-CSLTR) almost none, so expect "?" often.
 
 What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels in the repo; a model in the data folder
 `~/Library/Application Support/Theo/SignModels` is taken first), float16, 12 MB in all:
@@ -79,7 +79,9 @@ What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels i
 
 | What | Measured on | Result |
 | --- | --- | --- |
-| Word model, whole clip | INCLUDE's official test list (813 clips; the same 7 signers as training, since INCLUDE names no signers) | 96.9% right first guess, 99.5% in the top 5 |
+| Word model, whole clip | INCLUDE's official test list (813 clips). INCLUDE names no signers, and its lists share them: the test clips are other takes by people in training | 96.9% right first guess, 99.5% in the top 5 |
+| Word model, signers it never saw | INCLUDE leave-one-signer-out: 4 signers held out in turn (2 men, 2 women, 1,115 clips), each model trained without them (120 epochs, Tools/signs/studio/include_signers) | 69.6% right first guess, 89.3% in the top 5 (63.8% to 76.5% by signer) |
+| The same, trained with the hand turn and camera height changes | The same 4 held-out signers | 72.6% right first guess, 90.9% in the top 5 (66.1% to 78.4% by signer); not yet the model that ships |
 | Through the app's own pipeline, threshold off | The same test list, 815 clips, read as the camera would (`sign-eval clips`) | 95.3% right |
 | With the 0.95 threshold | The same 815 clips | 78.9% answered, 98.4% right when it answers, 21.1% shown as "?" |
 | With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (2,190 taught and 251 never-taught test clips) | Taught signs: 80% answered, 99% right when answered; never-taught signs wrongly given a word 8.8% of the time |
@@ -91,17 +93,33 @@ What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels i
 Float16 and float32 read exactly alike on the INCLUDE test clips and the built streams, and on the unseen signer's
 letters; on 455 multimodal photos 454 got the same top letter.
 
-### Why it doesn't carry over to other signers yet (first findings)
+### Why it doesn't carry over to other signers yet (round 7 findings)
 
-- ISL-CSLTR's other signers are seated and filmed closer; INCLUDE's stand. Their landmarks are as good as INCLUDE's
-  (a raised hand is found in 78% of frames, INCLUDE 69%), so it isn't the camera picture.
-- Cutting INCLUDE's clips to their signing part (no rise from rest, no drop back) still reads 94.5%, so it isn't the
-  rests either.
-- Even in the stretch of a CSLTR sentence that looks most like the word, its description sits far from INCLUDE's
-  clips of that word (median cosine distance 0.79, against 0.10 for INCLUDE's own test clips and 0.50 to the
-  nearest other word). At least one word, BEAUTIFUL, is a different sign in the two datasets (a hand circling the face
-  in INCLUDE, an open hand raised high in CSLTR). ISL has regional variants, and seven signers aren't enough to learn
-  a sign apart from the person making it.
+- **INCLUDE has about 26 signers, not a handful, and its official split mixes them.** Each signer signs a word about
+  three times, so a test clip's signer is in training. The camera's file numbers and where the body sits in the
+  picture split the 4,280 clips into 56 recording sessions; one frame from each, looked at by eye, named 26 people
+  (sessions that might be one person were merged, so a held-out signer can't leak back in). On signers it never saw,
+  the word model gets 69.6%, against 96.9% on the shared split.
+- **Changing the person while training helps a little.** Training with made-up changes of the person rather than the
+  sign (Tools/signs `--person-changes`: each bone a little longer or shorter, each hand turned up to 20 degrees about
+  its wrist, the camera a little higher or lower, uneven speed) raised unseen-signer accuracy to 71.9% (+2.3 points,
+  better for all 4 held-out signers). Leaving each change out in turn: the hand turn helps most (without it 70.4%),
+  then the camera height (70.9%); bone lengths and uneven speed don't help (without them 72.9% and 72.6%). Those
+  two alone (`--person-changes hand_turn,perspective`) give the best: 72.6% right first guess, 90.9% in the top 5
+  (+3.0 points, better for all 4 signers). A smaller model (width 128) with stronger dropout did worse (67.1%; with the
+  changes 68.6%). One seed each, so differences of a point or two are within noise.
+- **ISL-CSLTR's signers mostly use other signs.** Its "single-sign" clips are whole sentences named after a key word
+  (it has no word-level videos, only still photos), so the word model was asked to find the word inside the sentence.
+  A word of the sentence comes top somewhere in 26% of cases (4% for words not in it); pointing signs (I, you, he)
+  are at chance. Even the stretch that looks most like the word sits far from INCLUDE's clips of it (median cosine
+  distance 0.82, against 0.10 for INCLUDE's own test clips and 0.52 to the nearest other word). By eye: BEAUTIFUL is
+  a hand circling the face in INCLUDE and an open hand raised high in CSLTR; COLD is two shivering fists in INCLUDE
+  and isn't shivered in CSLTR; HAPPY is two hands brushing up the chest in INCLUDE and one hand at the chest and chin
+  in CSLTR. ISL has regional variants; CSLTR isn't trained on, since it would teach two signs for one word.
+- **It isn't the camera picture or the rests.** CSLTR's 1080p landmarks are as good as INCLUDE's (a raised hand is
+  found in 78% of frames, INCLUDE 69%); its 240x320 phone videos are weaker (51%), and upscaling them 4x before Vision
+  finds more hands (60% → 67% of raised-wrist frames on 6 clips) with under a third of the jitter. Cutting INCLUDE's clips to their signing part
+  (no rise from rest, no drop back) still reads 94.5%.
 
 ### What it can't read
 
