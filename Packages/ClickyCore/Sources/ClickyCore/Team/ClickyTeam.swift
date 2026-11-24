@@ -419,6 +419,7 @@ public enum ClickyTeamPrompts {
             "Pointer Assistant works for you: it sees \(owner)'s screens, points at things, acts on screen, opens apps, files and folders, researches and remembers. To have it do something, put [CLICKY: what to do, in plain words]. " +
             "To turn Pointer Assistant on or off when \(owner) asks, put [POINTER: on] or [POINTER: off]. " +
             "To run one of \(owner)'s routines now, put [ROUTINE: its name]. " +
+            "When \(owner) says you're in an X Space, a group call or a room where other people will talk to you too, put [GROUP: on], and [GROUP: off] once it's just the two of you again. " +
             "For anything that needs your apps, files, routines or team, such as reading \(owner)'s Notion, checking mail, setting up a routine, making a bot or saving a file, hand it to yourself in your own text chat with [TELL: Vello: what to do]. \(apps) " +
             "To give work to another bot or a group chat, put [TELL: its exact name: what to do]. " +
             "When \(owner) says to open or send something to a coding agent (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), even to just prompt it in a project or folder, use [TELL: that harness: the full instructions], with the folder as the projects note below says. It runs in a terminal in that folder, on a card in your chat, and the word cancel there stops the run going on. " +
