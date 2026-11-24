@@ -127,26 +127,47 @@ public enum CallGroupMode {
         return lines.map { ($0.isOwner ? ownerWord : "Someone") + ": " + $0.text }.joined(separator: "\n")
     }
 
+    /// Passes in a row after which Vello is nudged to join in. On the Air (24 Nov, build 202611242224) it let 60 turns in
+    /// a row pass in a Space, so to everyone there it seemed to have stopped hearing.
+    public static let passesBeforeNudge = 3
+
+    /// Whether a group turn is meant for the bot: its name anywhere in it, not only at the start or end as in a two-person
+    /// call, since in a Space the ears run several people's words together ("… haan Velo tum batao kya lagta hai …"), or
+    /// a "what do you think".
+    public static func isAddressed(_ words: String, assistantNames: [String] = CallListenMode.defaultAssistantNames) -> Bool {
+        if CallListenMode.isAddressed(words, assistantNames: assistantNames) { return true }
+        let names = Set(assistantNames.map { $0.lowercased() })
+        return CallTurnEnd.simplifiedWords(words).contains(where: names.contains)
+    }
+
     /// The turn for the brain in group mode: what was heard since it last spoke, by speaker as far as can be told, and how
-    /// to take part. `isAddressed`: its name or a "what do you think" was in it.
-    public static func message(lines: [HeardLine], owner: String, botName: String, isAddressed: Bool) -> String {
+    /// to take part. `isAddressed`: its name or a "what do you think" was in it. `passesInARow`: turns it let pass since it
+    /// last spoke.
+    public static func message(lines: [HeardLine], owner: String, botName: String, isAddressed: Bool, passesInARow: Int = 0) -> String {
         let ownerWord = hasNoName(owner) ? "the owner" : owner
         let labelOwner = hasNoName(owner) ? "Owner" : owner
-        var message = "(Group call: you're in an X Space or a room with \(ownerWord) and other people, and they can all hear you. "
+        var message = "(Group call: you're in an X Space or a room with \(ownerWord) and other people, and they can all hear you. \(ownerWord) brought you in so people can talk with you. "
         message += "Here is what was said since you last spoke. Who said it is a guess from how loud it was: \"\(labelOwner)\" is the voice right at the Mac, \"Someone\" is anyone else, and words can be misheard.)\n"
         message += labelled(lines, owner: owner)
-        message += "\n(Take part like one more person in the conversation. Answer when someone talks to you, even with your name a bit off ("
+        message += "\n(Take part like one more person in the conversation, someone who enjoys talking. Answer when someone talks to you, even with your name a bit off ("
         message += misheardNames(for: botName).joined(separator: ", ")
-        message += "), asks you something, or when you have something genuinely worth adding. Otherwise write only \(passMarker) and nothing else: "
-        message += "never say you're staying quiet or listening. Keep it to one or two short sentences, the way people talk in a Space, answer the person who spoke to you, and use the language they're using."
-        message += isAddressed ? " You were just spoken to, so answer.)" : ")"
+        message += "), when \(ownerWord) says something you can respond to, when someone asks a question to the room, or when you have a quick reaction, joke or thought that fits. "
+        message += "Write only \(passMarker) and nothing else when the talk is clearly between other people and anything you'd say would interrupt: never say you're staying quiet or listening. "
+        message += "Keep it to one or two short sentences, the way people talk in a Space, answer the person who spoke to you, and use the language they're using."
+        if isAddressed {
+            message += " You were just spoken to, so answer.)"
+        } else if passesInARow >= passesBeforeNudge {
+            message += " You've been quiet for \(passesInARow) turns, and people may think you can't hear them: say something short and relevant now, a reaction or a thought on what's being discussed.)"
+        } else {
+            message += ")"
+        }
         return message
     }
 
     /// How the ears tend to write the bot's name, for the brain to recognise it.
     static func misheardNames(for botName: String) -> [String] {
         let name = botName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty || name.lowercased() == "vello" { return ["Velo", "Bello", "Fellow", "Hello Vello"] }
+        if name.isEmpty || name.lowercased() == "vello" { return ["Velo", "Bello", "Fellow", "Hello Vello", "वेलो"] }
         return [name]
     }
 
@@ -162,5 +183,21 @@ public enum CallGroupMode {
             return turnOn ? "Theek hai, main sabke saath hoon. Jab baat bane, bolunga." : "Theek hai, ab sirf hum dono."
         }
         return turnOn ? "Okay, I'm in. I'll jump in when it fits." : "Okay, just us again."
+    }
+}
+
+/// Sarvam's listening socket closing in the middle of a call. It used to hand the rest of the call to Apple's recognizer
+/// at once, which hears a noisy Hinglish Space poorly (Air, 24 Nov: "Sarvam's listening stopped, using Apple", and then
+/// Vello seemed to stop hearing). Now Sarvam is reconnected, and only a socket that keeps dropping falls back to Apple.
+public enum CallEarsReconnect {
+    /// Reconnects allowed within `windowSeconds` before falling back to Apple.
+    public static let mostReconnects = 4
+    public static let windowSeconds = 120.0
+    /// How long Apple listens before Sarvam is tried again.
+    public static let backToSarvamAfterSeconds = 45.0
+
+    /// Whether to reconnect Sarvam now, given when it was last reconnected on this call.
+    public static func reconnects(earlierReconnects: [Date], now: Date) -> Bool {
+        earlierReconnects.filter { now.timeIntervalSince($0) < windowSeconds }.count < mostReconnects
     }
 }

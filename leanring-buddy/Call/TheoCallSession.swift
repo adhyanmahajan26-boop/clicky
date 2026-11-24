@@ -530,13 +530,38 @@ final class TheoCallSession: ObservableObject {
     }
 
     private func earsFailed(_ message: String) {
+        guard state != .ended else { return }
         guard !(ears is AppleCallEars) else {
+            print("📞 Call: Apple's listening stopped: \(message)")
             problem = message
             return
         }
-        problem = "Sarvam's listening stopped (\(message)), using Apple on this Mac."
+        // Sarvam's socket closed mid-call: reconnect it rather than hand the call to Apple, which hears a busy Space poorly.
+        let now = Date()
+        if let key = ProviderKeychain.get("sarvam"), CallEarsReconnect.reconnects(earlierReconnects: sarvamReconnects, now: now) {
+            sarvamReconnects.append(now)
+            print("📞 Call: Sarvam's listening stopped (\(message)), reconnecting")
+            use(ears: SarvamCallEars(apiKey: key, languageCode: language.sarvamListening))
+            return
+        }
+        print("📞 Call: Sarvam's listening keeps stopping (\(message)), using Apple for now")
+        problem = "Sarvam's listening keeps stopping (\(message)), using Apple on this Mac for now."
         use(ears: appleEars())
+        // Sarvam is tried again in a while, so one bad minute doesn't leave the rest of the call on Apple.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(CallEarsReconnect.backToSarvamAfterSeconds * 1_000_000_000))
+            guard let self, self.state != .ended, self.ears is AppleCallEars, let key = ProviderKeychain.get("sarvam") else { return }
+            print("📞 Call: trying Sarvam's listening again")
+            self.sarvamReconnects = []
+            self.problem = nil
+            self.use(ears: SarvamCallEars(apiKey: key, languageCode: self.language.sarvamListening))
+        }
     }
+
+    /// When Sarvam's listening was reconnected on this call (`CallEarsReconnect`).
+    private var sarvamReconnects: [Date] = []
+    /// Group turns Vello let pass since it last spoke, so it's nudged to join in (`CallGroupMode.passesBeforeNudge`).
+    private var groupPassesInARow = 0
 
     func changeLanguage(_ new: CallSettings.Language) {
         guard new != language else { return }
@@ -877,7 +902,7 @@ final class TheoCallSession: ObservableObject {
                 let releases: Bool
                 if self.isGroupMode {
                     // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
-                    wait = CallGroupMode.waitSeconds(ownWait: wait, isAddressed: CallListenMode.isAddressed(self.heldTurnWords, assistantNames: self.assistantNames))
+                    wait = CallGroupMode.waitSeconds(ownWait: wait, isAddressed: CallGroupMode.isAddressed(self.heldTurnWords, assistantNames: self.assistantNames))
                     releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
                                                           secondsHeld: now.timeIntervalSince(self.heldTurnStartedAt ?? now))
@@ -974,8 +999,9 @@ final class TheoCallSession: ObservableObject {
         // A group: what was heard, by who it sounded like, and Vello answers only when it fits ([PASS] otherwise).
         if isGroupMode {
             let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: true, text: words)]
-            let isAddressed = CallListenMode.isAddressed(words, assistantNames: assistantNames)
-            ask(CallGroupMode.message(lines: heard, owner: owner, botName: botName, isAddressed: isAddressed), acknowledgesIfSlow: isAddressed)
+            let isAddressed = CallGroupMode.isAddressed(words, assistantNames: assistantNames)
+            ask(CallGroupMode.message(lines: heard, owner: owner, botName: botName, isAddressed: isAddressed, passesInARow: groupPassesInARow),
+                acknowledgesIfSlow: isAddressed)
             return
         }
         // Back from Listen mode with things Vello hasn't been given yet: they come with this turn.
@@ -1160,7 +1186,8 @@ final class TheoCallSession: ObservableObject {
             if let emptyLineID { lines.removeAll { $0.id == emptyLineID } }
             if state == .thinking { state = .listening }
             voice?.endOfTurn()
-            print("📞 Call: \(botName) let that one pass")
+            groupPassesInARow += 1
+            print("📞 Call: \(botName) let that one pass (\(groupPassesInARow) in a row)")
             return
         }
         switch result {
@@ -1256,6 +1283,7 @@ final class TheoCallSession: ObservableObject {
 
     private func voiceStartedSounding() {
         turnHasSounded = true
+        groupPassesInARow = 0
         restartsOfThisAnswer = 0
         lastReleasedTurn = nil
         if let speechEndedAt {

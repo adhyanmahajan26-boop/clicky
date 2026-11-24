@@ -69,4 +69,33 @@ struct CallGroupModeTests {
         #expect(CallGroupMode.acknowledgement(turnOn: true, speaksHindi: true, readsDevanagari: true).contains("सबके साथ"))
         #expect(CallGroupMode.acknowledgement(turnOn: false, speaksHindi: true, readsDevanagari: false) == "Theek hai, ab sirf hum dono.")
     }
+
+    @Test func itsNameAnywhereInAMergedTurnCallsIt() {
+        #expect(CallGroupMode.isAddressed("haan bilkul sahi hai Velo tum batao kya lagta hai is market mein"))
+        #expect(CallGroupMode.isAddressed("what do you think about this"))
+        #expect(!CallGroupMode.isAddressed("haan bilkul sahi hai market aaj phir down hai"))
+    }
+
+    @Test func afterSomePassesItIsNudgedToJoinIn() {
+        let lines = [CallGroupMode.HeardLine(isOwner: false, text: "the market is down again")]
+        let fresh = CallGroupMode.message(lines: lines, owner: "Addy", botName: "Vello", isAddressed: false, passesInARow: 1)
+        #expect(!fresh.contains("You've been quiet"))
+        let quiet = CallGroupMode.message(lines: lines, owner: "Addy", botName: "Vello", isAddressed: false,
+                                          passesInARow: CallGroupMode.passesBeforeNudge)
+        #expect(quiet.contains("You've been quiet for 3 turns"))
+        let spokenTo = CallGroupMode.message(lines: lines, owner: "Addy", botName: "Vello", isAddressed: true, passesInARow: 9)
+        #expect(!spokenTo.contains("You've been quiet"))
+        #expect(spokenTo.hasSuffix("You were just spoken to, so answer.)"))
+    }
+
+    @Test func sarvamIsReconnectedUntilItKeepsDropping() {
+        let now = Date()
+        #expect(CallEarsReconnect.reconnects(earlierReconnects: [], now: now))
+        let three = (1...3).map { now.addingTimeInterval(Double(-$0 * 10)) }
+        #expect(CallEarsReconnect.reconnects(earlierReconnects: three, now: now))
+        let four = (1...4).map { now.addingTimeInterval(Double(-$0 * 10)) }
+        #expect(!CallEarsReconnect.reconnects(earlierReconnects: four, now: now))
+        let old = (1...4).map { now.addingTimeInterval(-CallEarsReconnect.windowSeconds - Double($0)) }
+        #expect(CallEarsReconnect.reconnects(earlierReconnects: old, now: now))
+    }
 }
