@@ -45,6 +45,20 @@ func wordEditDistance(_ readWords: [String], _ signedWords: [String]) -> Int {
     return previousRow[signedWords.count]
 }
 
+/// How many words two lists share in the same order (longest common subsequence): the read words that were right.
+func wordsInOrderInBoth(_ readWords: [String], _ signedWords: [String]) -> Int {
+    guard !readWords.isEmpty, !signedWords.isEmpty else { return 0 }
+    var previousRow = [Int](repeating: 0, count: signedWords.count + 1)
+    for readWord in readWords {
+        var currentRow = [Int](repeating: 0, count: signedWords.count + 1)
+        for (signedIndex, signedWord) in signedWords.enumerated() {
+            currentRow[signedIndex + 1] = readWord == signedWord ? previousRow[signedIndex] + 1 : max(previousRow[signedIndex + 1], currentRow[signedIndex])
+        }
+        previousRow = currentRow
+    }
+    return previousRow[signedWords.count]
+}
+
 /// Where a clip's body is: the median shoulder midpoint and shoulder width, x counted in picture heights. Nil when
 /// the shoulders are never seen.
 private func bodyPlacement(of frames: [SignLandmarkFrame], widthOverHeight: Float) -> (centreX: Float, centreY: Float, width: Float)? {
@@ -126,6 +140,9 @@ func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throw
     var random = SeededRandomSource(seed: options.seed)
     var signedWordTotal = 0
     var wordPipelineEdits = 0
+    var wordsRead = 0
+    var wordsReadRight = 0
+    var unclearSigns = 0
     var editsBySignCount: [Int: (words: Int, wordPipeline: Int, streams: Int)] = [:]
     var examples: [String] = []
     let glideFrameCount = 6
@@ -163,6 +180,9 @@ func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throw
                                             readingSettings: options.readingSettings)
         let wordPipelineWords = entries.compactMap { $0.token }.map { comparableText($0.text) }.filter { !$0.isEmpty }
         let wordPipelineEditCount = wordEditDistance(wordPipelineWords, signedWords)
+        wordsRead += wordPipelineWords.count
+        wordsReadRight += wordsInOrderInBoth(wordPipelineWords, signedWords)
+        unclearSigns += entries.filter { $0.kind == .unclear }.count
 
         signedWordTotal += signedWords.count
         wordPipelineEdits += wordPipelineEditCount
@@ -179,6 +199,7 @@ func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throw
     func rate(_ edits: Int, _ words: Int) -> String { words > 0 ? String(format: "%.1f%%", 100 * Double(edits) / Double(words)) : "-" }
     print("streams: \(options.streamCount) of 2–5 \(options.split ?? "") clips each (seed \(options.seed)), \(signedWordTotal) signed words")
     print("word error rate (\(scorer.sentenceModel != nil ? "sentence model for runs, word model for lone signs" : "word model on each stretch")): \(rate(wordPipelineEdits, signedWordTotal))")
+    print("words read \(wordsRead), right (in order) \(wordsReadRight) = \(rate(wordsReadRight, wordsRead)) of those read; unclear signs \(unclearSigns)")
     for signCount in editsBySignCount.keys.sorted() {
         let counts = editsBySignCount[signCount]!
         print("  \(signCount) signs (\(counts.streams) streams): \(rate(counts.wordPipeline, counts.words))")

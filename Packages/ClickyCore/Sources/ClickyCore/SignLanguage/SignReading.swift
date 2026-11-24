@@ -92,8 +92,8 @@ public struct SignReadingSettings: Equatable, Sendable {
     public static let leastUnclearGuessProbabilityToMention: Float = 0.3
 
     /// A word the sentence model reads in a run of signs counts only at this confidence (the highest probability its
-    /// rows reached); under it the word becomes an unclear sign. Chosen on INCLUDE's validation streams.
-    public var leastSentenceWordConfidence: Float = 0.5
+    /// rows reached); under it the word becomes an unclear sign. 0.7 is the lowest where 95% of the words it lets through were right on INCLUDE's validation streams (150 streams, 2–5 signs, no rests).
+    public var leastSentenceWordConfidence: Float = 0.7
 
     public init(
         leastWordProbability: Float = 0.25,
