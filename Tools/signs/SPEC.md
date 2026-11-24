@@ -46,7 +46,8 @@ dataset is a folder of those plus `manifest.csv`:
 
 `clip_id,dataset,language,label,signer,split,fps,width,height,frames,source`
 
-`language` is `asl` or `isl`; `label` is the word or the spelled phrase in lower case; `split` is the
+`language` is `asl` or `isl`; `label` is the word or the spelled phrase in lower case (a clip of several signs
+in a row has them in order with `|` between, `i|go|school`, since one sign's own name may hold a space); `split` is the
 dataset's own `train` / `val` / `test` when it has one by signer, else empty; `source` is `apple` or
 `mediapipe`; `width` and `height` are the picture's, 0 when the dataset doesn't say.
 
@@ -99,9 +100,10 @@ dataset filmed at 25 or 60, a camera that slows down in dim light) are brought t
 `k` was taken at time `τk` (`k / fps` for a file, the camera's own time stamps in the app, where the rate is
 `(T − 1) / (τlast − τ0)` over the stretch). New frame `j` is at `τ0 + j / 30`, for every such time up to `τlast`
 (plus a millionth of a second, so rounding can't drop the last one). With `i` the last frame at or before that
-time and `f` how far the time is from frame `i` to frame `i + 1` (0 to 1): a point seen in both takes the place
-that far along the line between them and the smaller of the two confidences; any other point is copied as it is
-from the nearer frame (`i` when `f < 0.5`, else `i + 1`). `Tools/signs/tests/golden/frame_rate/` holds examples
+time and `f` how far the time is from frame `i` to frame `i + 1` (0 to 1, rounded to 6 decimal places): `f = 0`
+copies frame `i` and `f = 1` copies frame `i + 1`; otherwise a point seen in both takes the place that far along
+the line between them and the smaller of the two confidences, and any other point is copied as it is from the
+nearer frame (`i` when `f < 0.5`, else `i + 1`). `Tools/signs/tests/golden/frame_rate/` holds examples
 both sides are checked against.
 
 **Order.** A stretch of frames is first brought to 30 frames a second when it needs it, then cut to run from the
@@ -120,9 +122,20 @@ second. Frame-to-frame change is worked out inside the model, not here.
 | `SignWordsASL.mlpackage` | one ASL sign | 96 frames | a score per word in `SignWordsASL.labels.json`, and a description of the sign (as many numbers as the model is wide), which is what a sign the owner teaches is compared by |
 | `SignWordsISL.mlpackage` | one ISL sign | 96 frames | the same for `SignWordsISL.labels.json` |
 | `SignSpellASL.mlpackage` | ASL finger-spelling on the move | 256 frames | 128 rows of scores, one per 2 frames (CTC): score 0 is the blank, score `i + 1` is character `i` of `SignSpellASL.labels.json` |
-| `SignSpellISL.mlpackage` | one still ISL letter (two hands) | 1 frame | a score per letter |
+| `SignSpellISL.mlpackage` | one still ISL letter (two hands) | 1 frame | a score per letter in `SignSpellISL.labels.json` |
+| `SignSentencesASL.mlpackage` | a run of ASL signs without rests | 384 frames | 192 rows of scores, one per 2 frames (CTC): score 0 is the blank, score `i + 1` is word `i` of `SignSentencesASL.labels.json` |
+| `SignSentencesISL.mlpackage` | a run of ISL signs without rests | 384 frames | the same for `SignSentencesISL.labels.json` |
 
 A sign longer than the model's frames is thinned evenly to fit; a shorter one is padded at the end.
+
+The sentence models are trained on sentences joined from single-sign clips (and any real continuous clips), so
+their numbers on joined sentences are not numbers on real fluent signing.
+
+A word or letter model that has been calibrated has `<name>.reading.json` beside it:
+`{"leastWordProbability", "rightWhenAnsweredOnValidation", "answeredOnValidation", "temperature"}`. Its `scores`
+are already divided by `temperature`, so a plain softmax gives calibrated probabilities; the app answers only when
+the top probability is at least `leastWordProbability` and says the sign is unclear otherwise. The other two
+numbers are what that threshold did on the validation signers.
 
 ## 5. Honest measuring
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -71,6 +72,10 @@ MIRRORED_POINT_PAIRS = (
 MANIFEST_FILE_NAME = "manifest.csv"
 PACKED_FRAMES_FILE_NAME = "frames.npy"
 PACKED_OFFSETS_FILE_NAME = "offsets.npy"
+# Written last by `pack`: says the packed frames are at 30 a second (SPEC section 3, "Frame rate"). A pack made
+# before that rule has no such file, so it counts as not packed and is packed again on first use.
+PACKED_DESCRIPTION_FILE_NAME = "packed.json"
+PACKED_DESCRIPTION = {"frames_per_second": 30, "frame_rate_rule": "SPEC section 3, Frame rate"}
 MANIFEST_COLUMNS = (
     "clip_id",
     "dataset",
@@ -199,8 +204,17 @@ def pack(folder: str | os.PathLike) -> None:
     `frames.npy` is every clip's frames one after another, float32 `[total_frames, 61, 3]`, in manifest row order;
     `offsets.npy` is int64 `[clip_count, 2]` holding each clip's (first frame, frame count). Reading thousands of
     tiny files per epoch is slow, while one memory-mapped file is fast and shared by every loader process.
+
+    Each clip is brought to 30 frames a second from its manifest `fps` on the way in (`signs/frame_rate.py`), so
+    every model, in training and evaluation, only ever sees 30 a second; offsets count the packed frames.
     """
+    # Imported here because frame_rate is a small leaf module and this keeps landmarks importable on its own.
+    from .frame_rate import resample_clip_to_30_per_second, resampled_frame_count
+
     folder = Path(folder)
+    # Until the new pack is complete, the folder must not look packed (the old description could vouch for a
+    # half-replaced pack).
+    (folder / PACKED_DESCRIPTION_FILE_NAME).unlink(missing_ok=True)
     clip_records = read_manifest(folder)
     clip_frame_counts = []
     for clip_record in clip_records:
@@ -211,7 +225,7 @@ def pack(folder: str | os.PathLike) -> None:
             raise ValueError(
                 f"{clip_record.clip_id}: manifest says {clip_record.frames} frames, file has {clip_array.shape[0]}"
             )
-        clip_frame_counts.append(clip_array.shape[0])
+        clip_frame_counts.append(resampled_frame_count(clip_array.shape[0], clip_record.fps))
 
     clip_frame_counts_array = np.asarray(clip_frame_counts, dtype=np.int64)
     clip_offsets = np.zeros((len(clip_records), 2), dtype=np.int64)
@@ -232,18 +246,27 @@ def pack(folder: str | os.PathLike) -> None:
         version=(1, 0),
     )
     for clip_record, (first_frame, frame_count) in zip(clip_records, clip_offsets):
-        packed_frames[first_frame : first_frame + frame_count] = read_clip(folder / f"{clip_record.clip_id}.npy")
+        packed_frames[first_frame : first_frame + frame_count] = resample_clip_to_30_per_second(
+            read_clip(folder / f"{clip_record.clip_id}.npy"), clip_record.fps
+        )
     packed_frames.flush()
     del packed_frames
     with open(temporary_offsets_path, "wb") as offsets_file:
         np.lib.format.write_array(offsets_file, clip_offsets, version=(1, 0), allow_pickle=False)
     os.replace(temporary_frames_path, folder / PACKED_FRAMES_FILE_NAME)
     os.replace(temporary_offsets_path, folder / PACKED_OFFSETS_FILE_NAME)
+    (folder / PACKED_DESCRIPTION_FILE_NAME).write_text(json.dumps(PACKED_DESCRIPTION, sort_keys=True), encoding="utf-8")
 
 
 def is_packed(folder: str | os.PathLike) -> bool:
     folder = Path(folder)
-    return (folder / PACKED_FRAMES_FILE_NAME).exists() and (folder / PACKED_OFFSETS_FILE_NAME).exists()
+    if not ((folder / PACKED_FRAMES_FILE_NAME).exists() and (folder / PACKED_OFFSETS_FILE_NAME).exists()):
+        return False
+    try:
+        packed_description = json.loads((folder / PACKED_DESCRIPTION_FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return packed_description == PACKED_DESCRIPTION
 
 
 class PackedDataset:
@@ -261,6 +284,9 @@ class PackedDataset:
         self.clip_offsets = np.load(self.folder / PACKED_OFFSETS_FILE_NAME, allow_pickle=False)
         if len(self.clip_offsets) != len(self.clip_records):
             raise ValueError(f"{self.folder}: offsets.npy and manifest.csv disagree on the clip count; pack again")
+        # The packed clips are at 30 frames a second, so a clip's frame count is the packed one, not the file's.
+        for clip_record, (first_frame, packed_frame_count) in zip(self.clip_records, self.clip_offsets):
+            clip_record.frames = int(packed_frame_count)
         self._packed_frames = None
 
     def __len__(self) -> int:

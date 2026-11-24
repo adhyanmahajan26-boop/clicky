@@ -6,7 +6,13 @@ Each file holds `name`, `description`, `width`, `height` (0 = unknown), `landmar
 `centre` ([T][2], in aspect-corrected units). Landmarks are rounded to 4 decimals before the features are made,
 so the file's landmarks are exactly what the features came from; features and sizes are rounded to 6 decimals.
 
-    python -m signs.make_golden            # writes Tools/signs/tests/golden/
+It also writes `tests/golden/frame_rate/*.json` (SPEC section 3, "Frame rate"), each with `name`, `description`,
+`times` ([T] seconds), `landmarks` ([T][61][3]) and `resampled` ([T2][61][3], the landmarks at 30 frames a
+second, or the landmarks themselves when the rule leaves them alone). Times are rounded to 6 decimals and
+landmarks to 4 before resampling; the resampled numbers are rounded to 6. They live in their own folder because
+the Swift `SignFeatures` test reads every `*.json` directly in `tests/golden/`.
+
+    python -m signs.make_golden            # writes Tools/signs/tests/golden/ and its frame_rate/ folder
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from .features import compute_feature_details
+from .frame_rate import resample_to_30_per_second
 from .landmarks import (
     CONFIDENCE,
     HAND_JOINT_COUNT,
@@ -30,6 +37,7 @@ from .landmarks import (
 )
 
 DEFAULT_GOLDEN_FOLDER = Path(__file__).resolve().parent.parent / "tests" / "golden"
+DEFAULT_FRAME_RATE_GOLDEN_FOLDER = DEFAULT_GOLDEN_FOLDER / "frame_rate"
 
 # A right hand pointing up, in units where the wrist-to-middle-knuckle distance is 1 (y down, as in the picture).
 RIGHT_HAND_SHAPE = np.array(
@@ -215,11 +223,127 @@ def write_golden_files(golden_folder=DEFAULT_GOLDEN_FOLDER) -> list[Path]:
     return written_paths
 
 
+# ---- frame rate (SPEC section 3, "Frame rate") ----------------------------------------------------------------
+
+
+def _signer_frame(clip: np.ndarray, frame: int, progress: float, with_right_hand=True, with_left_hand=True) -> None:
+    """Body in place, the right hand sweeping right and up as `progress` goes from 0 to 1, the left hand still."""
+    place_body(clip, frame, sway=0.01 * progress)
+    if with_right_hand:
+        place_hand(clip, frame, RIGHT_HAND_START, (0.36 + 0.12 * progress, 0.62 - 0.10 * progress), 0.06,
+                   tilt_degrees=20 * progress)
+    if with_left_hand:
+        place_hand(clip, frame, LEFT_HAND_START, (0.63, 0.60), 0.055)
+
+
+def _file_times(frame_count: int, frames_per_second: float, first_time: float = 0.0) -> list[float]:
+    return [first_time + frame / frames_per_second for frame in range(frame_count)]
+
+
+def frame_rate_golden_cases() -> list[dict]:
+    """Each case's points keep one confidence while seen, except where a case says otherwise, so a time that lands
+    exactly on a frame or half way between two (25 and 60 a second do) can't make Swift and Python differ."""
+    cases = []
+
+    clip = empty_clip(11)
+    for frame in range(11):
+        _signer_frame(clip, frame, frame / 10)
+    cases.append(dict(name="fps_25", times=_file_times(11, 25), landmarks=clip,
+                      description="25 a second for 0.4 s: 11 frames become 13; every point seen throughout."))
+
+    clip = empty_clip(13)
+    for frame in range(13):
+        _signer_frame(clip, frame, frame / 12)
+    cases.append(dict(name="fps_60", times=_file_times(13, 60), landmarks=clip,
+                      description="60 a second for 0.2 s: 13 frames become 7; every point seen throughout."))
+
+    clip = empty_clip(8)
+    for frame in range(8):
+        _signer_frame(clip, frame, frame / 7, with_right_hand=frame != 6, with_left_hand=frame >= 3)
+    make_missing(clip, [3], [NOSE])
+    clip[5:, RIGHT_HAND_START + 8, CONFIDENCE] = 0.6  # the index fingertip less sure later on: the smaller is kept
+    # At 15 a second every other new frame is half way between two old ones; after rounding the times, the pairs
+    # 1-2 and 4-5 are exactly half way, so nothing comes or goes between those two pairs' frames.
+    cases.append(dict(name="fps_15_points_come_and_go", times=_file_times(8, 15), landmarks=clip,
+                      description="15 a second: 8 frames become 15. The right hand is lost in frame 6, the left hand "
+                                  "comes in at frame 3, the nose is lost in frame 3 and a fingertip's confidence drops "
+                                  "from frame 5: points seen on one side only are copied from the nearer frame."))
+
+    uneven_times = [3.217, 3.269, 3.315, 3.368, 3.414, 3.466, 3.52, 3.567]
+    clip = empty_clip(8)
+    for frame in range(8):
+        _signer_frame(clip, frame, frame / 7, with_left_hand=frame != 5)
+    clip[:, LEFT_SHOULDER, CONFIDENCE] = [0.8, 0.7, 0.9, 0.6, 0.8, 0.75, 0.85, 0.8]
+    cases.append(dict(name="uneven_camera_times_about_20", times=uneven_times, landmarks=clip,
+                      description="Camera time stamps about 20 a second, unevenly spaced and not starting at 0 "
+                                  "(rate 7 / 0.35 s = 20): 8 frames become 11. The left hand is lost in frame 5 and a "
+                                  "shoulder's confidence changes from frame to frame."))
+
+    clip = empty_clip(6)
+    for frame in range(6):
+        _signer_frame(clip, frame, frame / 5)
+    cases.append(dict(name="fps_29_97_unchanged", times=_file_times(6, 29.97), landmarks=clip,
+                      description="29.97 a second is between 27 and 33: returned unchanged."))
+
+    clip = empty_clip(1)
+    _signer_frame(clip, 0, 0.5)
+    cases.append(dict(name="single_frame", times=[0.5], landmarks=clip,
+                      description="One frame: the rate is unknown, so it is returned unchanged."))
+
+    clip = empty_clip(2)
+    _signer_frame(clip, 0, 0.0, with_left_hand=False)
+    _signer_frame(clip, 1, 1.0, with_right_hand=False)
+    clip[1, 42:55, CONFIDENCE] = 0.6
+    cases.append(dict(name="two_frames", times=[0.0, 0.11], landmarks=clip,
+                      description="Two frames 0.11 s apart (about 9 a second) become 4. The right hand is only in "
+                                  "the first, the left only in the second; the body is less sure in the second, so "
+                                  "its slid points take the smaller confidence."))
+
+    for case in cases:
+        case["times"] = [round(float(time), 6) for time in case["times"]]
+        case["landmarks"] = np.round(case["landmarks"].astype(np.float64), 4).astype(np.float32)
+    return cases
+
+
+def frame_rate_golden_file_text(case: dict) -> str:
+    resampled = resample_to_30_per_second(case["landmarks"], case["times"])
+    landmark_lines = [
+        _compact_json_list([[_rounded(value, 4) for value in point] for point in frame])
+        for frame in case["landmarks"].tolist()
+    ]
+    resampled_lines = [
+        _compact_json_list([[_rounded(value) for value in point] for point in frame]) for frame in resampled.tolist()
+    ]
+    text_lines = ["{"]
+    for field_name in ("name", "description"):
+        text_lines.append(f" {json.dumps(field_name)}: {json.dumps(case[field_name], ensure_ascii=False)},")
+    text_lines.append(f' "times": {_compact_json_list([_rounded(time) for time in case["times"]])},')
+    for field_name, field_lines in (("landmarks", landmark_lines), ("resampled", resampled_lines)):
+        text_lines.append(f" {json.dumps(field_name)}: [")
+        text_lines.append(",\n".join("  " + line for line in field_lines))
+        text_lines.append(" ]" + ("," if field_name != "resampled" else ""))
+    text_lines.append("}")
+    return "\n".join(text_lines) + "\n"
+
+
+def write_frame_rate_golden_files(golden_folder=DEFAULT_FRAME_RATE_GOLDEN_FOLDER) -> list[Path]:
+    golden_folder = Path(golden_folder)
+    golden_folder.mkdir(parents=True, exist_ok=True)
+    written_paths = []
+    for case in frame_rate_golden_cases():
+        golden_path = golden_folder / f"{case['name']}.json"
+        golden_path.write_text(frame_rate_golden_file_text(case), encoding="utf-8")
+        written_paths.append(golden_path)
+    return written_paths
+
+
 def main(argument_list=None) -> None:
     argument_parser = argparse.ArgumentParser(description="Write the golden feature files for the Swift test.")
     argument_parser.add_argument("--output", default=str(DEFAULT_GOLDEN_FOLDER))
     parsed_arguments = argument_parser.parse_args(argument_list)
     for written_path in write_golden_files(parsed_arguments.output):
+        print(f"wrote {written_path}")
+    for written_path in write_frame_rate_golden_files(Path(parsed_arguments.output) / "frame_rate"):
         print(f"wrote {written_path}")
 
 

@@ -30,7 +30,9 @@ def load_evaluation_model(checkpoint: dict):
     elif checkpoint["task"] == SPELL_TASK_NAME:
         model = build_spell_model(checkpoint["encoder_settings"], len(checkpoint["labels"]))
     else:
-        raise ValueError(f"unknown checkpoint task {checkpoint['task']!r}")
+        from .extra_tasks import build_extra_task_model  # the sentence and letter models
+
+        return build_extra_task_model(checkpoint)
     model.load_state_dict(checkpoint["ema_state"]["model"])
     return model.eval()
 
@@ -58,6 +60,12 @@ def evaluate_checkpoint(
         data_folders = [str(Path(data_folder).resolve()) for data_folder in data_folders]
     else:
         data_folders = checkpoint["data_folders"]
+    from .extra_tasks import EXTRA_TASK_NAMES, evaluate_extra_task_checkpoint  # the sentence and letter models
+
+    if checkpoint["task"] in EXTRA_TASK_NAMES:
+        results = evaluate_extra_task_checkpoint(checkpoint, split, data_folders, device, batch_size, workers, landmark_source)
+        return {"checkpoint": str(checkpoint_path), "task": checkpoint["task"], "epoch": checkpoint["epoch"],
+                "split": split, "landmark_source": landmark_source or "all", **results}
     sources = load_sources(data_folders)
     sample_references, signer_splits = assign_splits(
         sources,

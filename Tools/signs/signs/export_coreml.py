@@ -7,6 +7,10 @@ words and 256 for spelling. Outputs: words `scores` [1, words] and `description`
 [1, N / 2, characters + 1], log-probabilities with the CTC blank at index 0. The labels file is a JSON list: the
 words, or the characters (character i is score index i + 1).
 
+A sentence or still-letter checkpoint is exported the same way (`signs/extra_tasks.py`). When `signs.calibrate`
+has written `<checkpoint>.calibration.json` next to a word or letter checkpoint, the exported scores are divided
+by its temperature and `<name>.reading.json` is written beside the model.
+
 coremltools is only imported when converting, so everything else works without it.
 """
 
@@ -19,19 +23,22 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from .calibrate import read_calibration_for_export, write_reading_file
 from .evaluate import load_evaluation_model
+from .extra_tasks import extra_task_export_module
 from .features import FEATURE_COUNT
 from .training import load_checkpoint
 
 
 class _WordExportWrapper(nn.Module):
-    def __init__(self, word_model: nn.Module):
+    def __init__(self, word_model: nn.Module, temperature: float = 1.0):
         super().__init__()
         self.word_model = word_model
+        self.temperature = float(temperature)  # from signs.calibrate; 1.0 leaves the scores as they are
 
     def forward(self, features: torch.Tensor, mask: torch.Tensor):
         scores, description = self.word_model(features, mask)
-        return scores, description
+        return scores / self.temperature, description
 
 
 class _SpellExportWrapper(nn.Module):
@@ -46,16 +53,18 @@ class _SpellExportWrapper(nn.Module):
         return log_probabilities
 
 
-def trace_checkpoint(checkpoint: dict) -> tuple[torch.jit.ScriptModule, int, list[str]]:
+def trace_checkpoint(checkpoint: dict, temperature: float = 1.0) -> tuple[torch.jit.ScriptModule, int, list[str]]:
     """Traces the checkpoint's EMA model on its fixed input shape. Returns (traced, frame count, output names)."""
     model = load_evaluation_model(checkpoint)
     frame_count = int(checkpoint["frame_count"])
     if checkpoint["task"] == "words":
-        export_module = _WordExportWrapper(model).eval()
+        export_module = _WordExportWrapper(model, temperature).eval()
         output_names = ["scores", "description"]
-    else:
+    elif checkpoint["task"] == "spelling":
         export_module = _SpellExportWrapper(model).eval()
         output_names = ["scores"]
+    else:
+        export_module, output_names = extra_task_export_module(checkpoint, model, temperature)
     example_features = torch.zeros(1, frame_count, FEATURE_COUNT)
     example_mask = torch.ones(1, frame_count)
     with torch.no_grad():
@@ -63,7 +72,7 @@ def trace_checkpoint(checkpoint: dict) -> tuple[torch.jit.ScriptModule, int, lis
     return traced, frame_count, output_names
 
 
-def export_checkpoint(checkpoint_path: str, output_path: str, use_float16: bool = False) -> Path:
+def export_checkpoint(checkpoint_path: str, output_path: str, use_float16: bool = False, calibration_path: str | None = None) -> Path:
     try:
         import coremltools
         import numpy
@@ -71,7 +80,8 @@ def export_checkpoint(checkpoint_path: str, output_path: str, use_float16: bool 
         raise SystemExit("coremltools is needed for export: pip install coremltools") from import_error
 
     checkpoint = load_checkpoint(checkpoint_path)
-    traced, frame_count, output_names = trace_checkpoint(checkpoint)
+    calibration = read_calibration_for_export(checkpoint_path, checkpoint, calibration_path)
+    traced, frame_count, output_names = trace_checkpoint(checkpoint, calibration["temperature"] if calibration else 1.0)
     compute_precision = coremltools.precision.FLOAT16 if use_float16 else coremltools.precision.FLOAT32
     core_ml_model = coremltools.convert(
         traced,
@@ -94,6 +104,8 @@ def export_checkpoint(checkpoint_path: str, output_path: str, use_float16: bool 
     labels_path = output_path.with_name(output_path.stem + ".labels.json")
     with open(labels_path, "w", encoding="utf-8") as labels_file:
         json.dump(checkpoint["labels"], labels_file, ensure_ascii=False)
+    if calibration:
+        write_reading_file(output_path, calibration)
     return output_path
 
 
@@ -102,8 +114,13 @@ def main(argument_list=None) -> None:
     argument_parser.add_argument("--checkpoint", required=True)
     argument_parser.add_argument("--output", required=True, help="e.g. SignWordsASL.mlpackage")
     argument_parser.add_argument("--float16", action="store_true", help="store and compute in float16")
+    argument_parser.add_argument(
+        "--calibration", default=None, help="a signs.calibrate file (default: <checkpoint>.calibration.json when there)"
+    )
     parsed_arguments = argument_parser.parse_args(argument_list)
-    written_path = export_checkpoint(parsed_arguments.checkpoint, parsed_arguments.output, parsed_arguments.float16)
+    written_path = export_checkpoint(
+        parsed_arguments.checkpoint, parsed_arguments.output, parsed_arguments.float16, parsed_arguments.calibration
+    )
     print(f"wrote {written_path} and {written_path.stem}.labels.json")
 
 
