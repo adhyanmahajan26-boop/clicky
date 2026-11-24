@@ -329,6 +329,8 @@ final class TheoCallSession: ObservableObject {
     private var brainNameForWords = "the brain"
     /// Turns on this call the brain gave no answer to: the first says why, later ones are short (ClickyCore `CallBrainFailure`).
     private var brainFailures = 0
+    /// This turn's answer switched something on the call or gave Pointer Assistant an order: it did answer, even with no words.
+    private var turnActedOnTheCall = false
     /// When the ears last gave words in a partial: the owner is still going, so the turn isn't let go yet.
     private var lastPartialWordsAt: Date?
     /// Only the voice near the Mac counts (Settings › Voice, on by default): someone talking across the room opens the
@@ -942,6 +944,7 @@ final class TheoCallSession: ObservableObject {
         pendingTurnTiming = timing
         replyInProgress = true
         turnHasSounded = false
+        turnActedOnTheCall = false
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
         controls = CallControlStream()
@@ -1033,15 +1036,26 @@ final class TheoCallSession: ObservableObject {
             if case .success(let whole) = result, neverStreamed { unstreamed = CallBracketLineStream.strip(whole) }
             restSpeech = bracketLines.finish()
         }
+        var answerText = ""
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
             lines[index].isLive = false
             lines[index].text += restSpeech
             if lines[index].text.isEmpty { lines[index].text = unstreamed }
             // A tag taken off the end leaves its line break behind.
             lines[index].text = lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+            answerText = lines[index].text
         }
+        let emptyLineID = theoLineID
         theoLineID = nil
         switch result {
+        case .success where CallBrainFailure.isSilentAnswer(spokenText: answerText + unstreamed, actedOnTheCall: turnActedOnTheCall):
+            // The turn "succeeded" with nothing to say (Air, 24 Nov: after a model switch Vello went quiet with no error).
+            // Said out loud like any failure, so it never sounds like the call went dead.
+            flushTimer?.cancel()
+            if let emptyLineID { lines.removeAll { $0.id == emptyLineID } }
+            problem = "\(brainNameForWords): \(CallBrainFailure.emptyAnswerReason.lowercased())."
+            if state == .thinking { state = .listening }
+            sayTheBrainFailed(CallBrainFailure.emptyAnswerReason)
         case .success:
             // A reply that never streamed (a CLI that gave only its result) still gets spoken.
             flushTimer?.cancel()
@@ -1070,6 +1084,7 @@ final class TheoCallSession: ObservableObject {
 
     /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
     private func orderClicky(_ order: String) {
+        turnActedOnTheCall = true
         let addySaid = lines.filter { $0.who == .addy && !$0.isLive }.suffix(6).reversed().map(\.text).joined(separator: "\n")
         // Clicky's helpers finish after Clicky's first answer: their reports come here too.
         store.onCEOReport = { [weak self] report in self?.reportArrived(report) }
@@ -1081,6 +1096,7 @@ final class TheoCallSession: ObservableObject {
 
     /// One of the call's own switches. Everything said on a call is the owner's own voice, so these run straight away.
     private func carryOut(_ control: CallControl) {
+        turnActedOnTheCall = true
         switch control {
         case .pointerAssistant(let turnOn):
             let products = TheoProducts.shared
