@@ -1,11 +1,12 @@
 //
 //  sign-extract: videos and photos to Apple Vision landmarks for Sign to text training (Tools/signs/SPEC.md).
 //
-//  sign-extract videos --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N] [--max-fps 30]
-//  sign-extract images --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N]
+//  sign-extract videos --list <file.tsv> --out <folder> [--face] [--no-pad-body] [--jobs N] [--max-fps 30]
+//  sign-extract images --list <file.tsv> --out <folder> [--face] [--no-pad-body] [--jobs N]
 //
-//  --pad-body runs the body pose on the picture placed in a bigger canvas: needed for close head-and-shoulders
-//  framing (phone selfies, laptop cameras), where Vision otherwise finds no body at all.
+//  The body pose runs on the picture placed in a bigger canvas (SPEC section 1): close head-and-shoulders framing
+//  (phone selfies, laptop cameras) otherwise gives no body at all. --no-pad-body runs it on the picture itself,
+//  only to compare with older extractions. (--pad-body is still accepted and changes nothing.)
 //
 //  The list has `clip_id<TAB>absolute path` per line. Each clip becomes `<out>/<clip_id>.npy` ([T, 61, 3] float32)
 //  and a row in `<out>/extract.csv`; a clip whose `.npy` already exists is skipped, so a stopped run just starts
@@ -70,8 +71,8 @@ struct ClipExtractionResult {
 
 func printUsageAndExit() -> Never {
     print("""
-    usage: sign-extract videos --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N] [--max-fps 30]
-           sign-extract images --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N]
+    usage: sign-extract videos --list <file.tsv> --out <folder> [--face] [--no-pad-body] [--jobs N] [--max-fps 30]
+           sign-extract images --list <file.tsv> --out <folder> [--face] [--no-pad-body] [--jobs N]
     The list has clip_id<TAB>absolute path per line.
     """)
     exit(2)
@@ -92,7 +93,7 @@ func parseOptions(arguments: [String]) -> ExtractionOptions {
     var listPath: String?
     var outputFolderPath: String?
     var readsFace = false
-    var padsPictureForBody = false
+    var padsPictureForBody = true
     var jobCount = defaultJobCount()
     var maximumFramesPerSecond = 30.0
     var argumentIndex = 1
@@ -107,6 +108,7 @@ func parseOptions(arguments: [String]) -> ExtractionOptions {
         case "--out": outputFolderPath = nextValue()
         case "--face": readsFace = true
         case "--pad-body": padsPictureForBody = true
+        case "--no-pad-body": padsPictureForBody = false
         case "--jobs":
             guard let parsedJobCount = Int(nextValue()), parsedJobCount > 0 else { printUsageAndExit() }
             jobCount = parsedJobCount
