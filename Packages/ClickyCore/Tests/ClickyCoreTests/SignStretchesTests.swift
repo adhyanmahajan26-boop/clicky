@@ -105,6 +105,28 @@ struct SignStretchesTests {
         #expect(finder.secondsSinceLastStretchEnded(at: Self.time(ofFrame: 81)) == Self.time(ofFrame: 16))
     }
 
+    @Test func aStretchCarriesTheTimeOfEveryFrameItKept() {
+        // Uneven times (a camera that drops frames now and then): each kept frame keeps its own time.
+        var finder = SignStretchFinder()
+        let wristHeights: [Float?] = Self.repeated(Self.restingWristY, 6) + Self.repeated(Self.raisedWristY, 30) + Self.repeated(Self.restingWristY, 30)
+        var times: [Double] = []
+        var stretch: SignStretch?
+        for (frameNumber, wristY) in wristHeights.enumerated() {
+            let time = Double(frameNumber) * Self.frameInterval + (frameNumber % 3 == 0 ? Self.frameInterval / 2 : 0)
+            times.append(time)
+            if case .ended(let endedStretch)? = finder.observe(Self.frame(number: frameNumber, wristY: wristY), at: time) {
+                stretch = endedStretch
+            }
+        }
+        let endedStretch = try! #require(stretch)
+        #expect(endedStretch.frameTimes.count == endedStretch.frames.count)
+        for (frame, frameTime) in zip(endedStretch.frames, endedStretch.frameTimes) {
+            #expect(frameTime == times[Self.frameNumber(of: frame)])
+        }
+        #expect(endedStretch.startTime == endedStretch.frameTimes.first)
+        #expect(endedStretch.endTime == endedStretch.frameTimes.last)
+    }
+
     @Test func isInStretchFollowsTheStretch() {
         var finder = SignStretchFinder()
         _ = Self.feed(Self.repeated(nil, 10) + Self.repeated(Self.raisedWristY, 1), into: &finder)

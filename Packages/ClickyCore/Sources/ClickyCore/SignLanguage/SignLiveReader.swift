@@ -201,9 +201,6 @@ public struct SignLiveReader {
 
     private var stretchFinder: SignStretchFinder
     private var autoSend: SignAutoSend
-    /// The times of the frames seen lately, oldest first, so a finished stretch's frames get their own times back
-    /// (`SignStretch` keeps only its first and last). Bounded: see `recordFrameTime`.
-    private var recentFrameTimes: [Double] = []
     private var nextSequenceNumber = 0
     /// The next outcome to put on the line; later ones wait in `outcomesWaitingForEarlierOnes`.
     private var nextSequenceNumberToAdd = 0
@@ -263,14 +260,12 @@ public struct SignLiveReader {
         pictureWidth = width
         pictureHeight = height
         stretchFinder = SignStretchFinder(settings: stretchSettings, pictureWidth: width, pictureHeight: height)
-        recentFrameTimes = []
     }
 
     /// Forgets a sign being made right now (the camera paused mid-sign: after a lock the hands are elsewhere), and
     /// the wait before sending by itself, but keeps the line and any sign already being read.
     public mutating func forgetSignInProgress() {
         stretchFinder.reset()
-        recentFrameTimes = []
         autoSend = SignAutoSend(restSecondsBeforeSending: autoSend.restSecondsBeforeSending)
     }
 
@@ -280,7 +275,6 @@ public struct SignLiveReader {
     public mutating func observe(_ frame: SignLandmarkFrame, at time: Double) -> [SignLiveEvent] {
         var events: [SignLiveEvent] = []
         lastFrameTime = time
-        recordFrameTime(time)
         if let stretchEvent = stretchFinder.observe(frame, at: time) {
             switch stretchEvent {
             case .started:
@@ -481,36 +475,10 @@ public struct SignLiveReader {
             readerIdentifier: readerIdentifier,
             sequenceNumber: sequenceNumber,
             frames: stretch.frames,
-            frameTimes: frameTimes(of: stretch),
+            frameTimes: stretch.frameTimes,
             pictureWidth: pictureWidth,
             pictureHeight: pictureHeight
         )
-    }
-
-    /// A stretch is a run of frames in a row ending at `endTime`, so its times are the last `frames.count` recorded
-    /// times up to that one. When that can't be found (it always can, unless times repeat oddly), the times are
-    /// spread evenly from start to end.
-    private func frameTimes(of stretch: SignStretch) -> [Double] {
-        let frameCount = stretch.frames.count
-        if let endIndex = recentFrameTimes.lastIndex(of: stretch.endTime), endIndex + 1 >= frameCount {
-            let candidateTimes = Array(recentFrameTimes[(endIndex + 1 - frameCount)...endIndex])
-            if candidateTimes.first == stretch.startTime {
-                return candidateTimes
-            }
-        }
-        guard frameCount > 1 else { return [stretch.startTime] }
-        let stepSeconds = (stretch.endTime - stretch.startTime) / Double(frameCount - 1)
-        return (0..<frameCount).map { frameIndex in stretch.startTime + Double(frameIndex) * stepSeconds }
-    }
-
-    /// Keeps at least as many times as the longest stretch can hold (plus room for its lead-in), dropping the older
-    /// half in one go when it doubles, so the cost per frame stays tiny.
-    private mutating func recordFrameTime(_ time: Double) {
-        recentFrameTimes.append(time)
-        let timesNeeded = SignStretchFinder.mostFramesInOneStretch + max(stretchSettings.leadInFrames, 0) + max(stretchSettings.framesToStart, 1) + 8
-        if recentFrameTimes.count > 2 * timesNeeded {
-            recentFrameTimes.removeFirst(recentFrameTimes.count - timesNeeded)
-        }
     }
 }
 

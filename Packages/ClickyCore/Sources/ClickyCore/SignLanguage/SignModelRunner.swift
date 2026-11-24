@@ -196,7 +196,7 @@ public final class SignModelRunner {
     static func compiledModelURL(for modelURL: URL, cacheFolder: URL) throws -> URL {
         if modelURL.pathExtension == "mlmodelc" { return modelURL }
         let fileManager = FileManager.default
-        let cachedURL = cacheFolder.appendingPathComponent(modelBaseName(of: modelURL) + ".mlmodelc", isDirectory: true)
+        let cachedURL = cacheFolder.appendingPathComponent(SignModelFiles.modelBaseName(of: modelURL) + ".mlmodelc", isDirectory: true)
         if fileManager.fileExists(atPath: cachedURL.path),
            let cachedDate = newestModificationDate(under: cachedURL),
            let sourceDate = newestModificationDate(under: modelURL),

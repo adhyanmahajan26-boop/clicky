@@ -56,19 +56,21 @@ public struct SignStretchSettings: Equatable, Sendable {
 
 // MARK: - Stretches and events
 
-/// One sign's frames, lead-in and lead-out included. `startTime` and `endTime` are the times of the first and
-/// last frame kept.
+/// One sign's frames, lead-in and lead-out included, each with the time the camera gave it (`frameTimes`, the same
+/// count as `frames`), so a stretch can be brought to 30 frames a second from its own times.
 public struct SignStretch: Equatable, Sendable {
     public var frames: [SignLandmarkFrame]
-    public var startTime: Double
-    public var endTime: Double
+    public var frameTimes: [Double]
 
-    public init(frames: [SignLandmarkFrame], startTime: Double, endTime: Double) {
+    public init(frames: [SignLandmarkFrame], frameTimes: [Double]) {
+        precondition(frames.count == frameTimes.count, "a stretch needs one time per frame")
         self.frames = frames
-        self.startTime = startTime
-        self.endTime = endTime
+        self.frameTimes = frameTimes
     }
 
+    /// The times of the first and last frame kept.
+    public var startTime: Double { frameTimes.first ?? 0 }
+    public var endTime: Double { frameTimes.last ?? 0 }
     public var seconds: Double { endTime - startTime }
 }
 
@@ -204,17 +206,10 @@ public struct SignStretchFinder: Sendable {
         raisedFramesInARow = 0
         recentIdleFrames = Array(leftoverFrames.suffix(idleFrameCapacity))
 
-        guard raisedSeconds >= settings.shortestStretchSeconds,
-              let firstKeptFrame = keptFrames.first,
-              let lastKeptFrame = keptFrames.last
-        else { return .droppedTooShort }
+        guard raisedSeconds >= settings.shortestStretchSeconds, let lastKeptFrame = keptFrames.last else { return .droppedTooShort }
 
         lastStretchEndTime = lastKeptFrame.time
-        return .ended(SignStretch(
-            frames: keptFrames.map { $0.frame },
-            startTime: firstKeptFrame.time,
-            endTime: lastKeptFrame.time
-        ))
+        return .ended(SignStretch(frames: keptFrames.map { $0.frame }, frameTimes: keptFrames.map { $0.time }))
     }
 
     /// The rest line is `shoulder midpoint y + restLineBelowShouldersInShoulderWidths × shoulder width`, the width
