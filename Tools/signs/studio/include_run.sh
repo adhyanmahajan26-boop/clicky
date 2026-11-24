@@ -37,7 +37,7 @@ while IFS=$'\t' read -r zip_name zip_bytes zip_url; do
   # clip list: clip_id <TAB> absolute path <TAB> path inside the dataset (as the official lists write it)
   list=$STATE/${zip_name%.zip}.tsv
   ( cd $WORK/${zip_name%.zip} && find . -type f \( -iname '*.mov' -o -iname '*.mp4' -o -iname '*.avi' \) | sed 's|^\./||' | sort ) | while IFS= read -r relative_path; do
-    clip_id=$(echo "${relative_path%.*}" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')
+    clip_id=$(echo "${relative_path%.*}" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//')
     printf "include_%s\t%s\t%s\n" "$clip_id" "$WORK/${zip_name%.zip}/$relative_path" "$relative_path"
   done > $list
   clips=$(wc -l < $list | tr -d ' ')
