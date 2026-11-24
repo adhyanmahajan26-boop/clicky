@@ -242,3 +242,51 @@ struct BotOwnFilesTests {
         #expect(CallVoiceChoice.voiceID(saved: "apple:", engine: .apple) == nil)
     }
 }
+
+struct CallBrainFailureTests {
+    @Test func theFirstFailureSaysWhichBrainAndWhy() {
+        let words = CallBrainFailure.spokenWords(brainName: "LM Studio", detail: "Could not connect to the server", failuresSoFar: 0,
+                                                 speaksHindi: false, readsDevanagari: false)
+        #expect(words == "Sorry, I didn't get an answer from LM Studio. Could not connect to the server.")
+    }
+
+    @Test func laterFailuresAreShort() {
+        let words = CallBrainFailure.spokenWords(brainName: "LM Studio", detail: "Could not connect to the server", failuresSoFar: 2,
+                                                 speaksHindi: false, readsDevanagari: false)
+        #expect(words == "Still no answer from LM Studio.")
+    }
+
+    @Test func hindiCallsHearItInTheirScript() {
+        let devanagari = CallBrainFailure.spokenWords(brainName: "LM Studio", detail: "", failuresSoFar: 0, speaksHindi: true, readsDevanagari: true)
+        #expect(devanagari == "माफ़ करना, LM Studio से जवाब नहीं आया।")
+        let roman = CallBrainFailure.spokenWords(brainName: "LM Studio", detail: "", failuresSoFar: 0, speaksHindi: true, readsDevanagari: false)
+        #expect(roman == "Sorry yaar, LM Studio se jawab nahi aaya.")
+    }
+
+    @Test func aLongErrorIsCutToItsFirstLineAndAWordBoundary() {
+        let detail = String(repeating: "overloaded ", count: 40) + "\nstack trace line"
+        let reason = CallBrainFailure.shortReason(detail)
+        #expect(reason.count <= CallBrainFailure.longestReasonCharacters + 1)
+        #expect(!reason.contains("stack"))
+        #expect(reason.hasSuffix("overloaded."))
+    }
+
+    @Test func anEmptyAnswerIsSilentUnlessTheBrainActed() {
+        #expect(CallBrainFailure.isSilentAnswer(spokenText: "", actedOnTheCall: false))
+        #expect(CallBrainFailure.isSilentAnswer(spokenText: " \n ", actedOnTheCall: false))
+        #expect(!CallBrainFailure.isSilentAnswer(spokenText: "", actedOnTheCall: true))
+        #expect(!CallBrainFailure.isSilentAnswer(spokenText: "Haan, bolo.", actedOnTheCall: false))
+    }
+
+    @Test func anEmptyAnswerIsSaidWithItsReason() {
+        let words = CallBrainFailure.spokenWords(brainName: "Claude Fable 5.2", detail: CallBrainFailure.emptyAnswerReason, failuresSoFar: 0,
+                                                 speaksHindi: false, readsDevanagari: false)
+        #expect(words == "Sorry, I didn't get an answer from Claude Fable 5.2. It sent back an empty answer.")
+    }
+
+    @Test func hangingUpIsNeverSaid() {
+        #expect(CallBrainFailure.isTheCallsOwnDoing("The call ended."))
+        #expect(CallBrainFailure.isTheCallsOwnDoing("The operation couldn’t be completed. (Swift.CancellationError error 1.)"))
+        #expect(!CallBrainFailure.isTheCallsOwnDoing("The brain stopped."))
+    }
+}
