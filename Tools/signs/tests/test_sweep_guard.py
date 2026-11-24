@@ -74,3 +74,14 @@ def test_the_sweep_scripts_require_sweeps_and_a_budget(script):
     result = subprocess.run([sys.executable, str(studio / script)], capture_output=True, text=True,
                             env={"HOME": "/nonexistent-home-for-the-test", "PATH": "/usr/bin:/bin"})
     assert result.returncode != 0 and "required" in result.stderr
+
+
+def test_the_guard_loads_in_the_python_the_jobs_run_with():
+    """The jobs run with macOS's own /usr/bin/python3 (3.9), where `int | None` only works as a postponed annotation."""
+    import shutil, subprocess
+    system_python = "/usr/bin/python3"
+    if not shutil.which(system_python):
+        pytest.skip("no /usr/bin/python3")
+    studio = Path(__file__).resolve().parent.parent / "studio"
+    result = subprocess.run([system_python, "-c", "import sweep_guard"], cwd=studio, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -8,6 +8,8 @@
 - at start it prints the planned download for the sweeps asked for;
 - what has been read is kept in a small ledger, so nothing already extracted is downloaded again.
 """
+from __future__ import annotations
+
 import json
 import os
 import shutil
