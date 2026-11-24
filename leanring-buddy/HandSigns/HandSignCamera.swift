@@ -164,7 +164,7 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
         guard !mainThreadIsBehind else { return }
         lastSignFrameTime = frameTime
 
-        let visionReader = signVisionReader ?? SignVisionReader(readsFace: true)
+        let visionReader = signVisionReader ?? SignVisionReader(readsFace: SignVisionReader.cameraReadsFace)
         signVisionReader = visionReader
         guard let frame = try? visionReader.readLandmarks(pixelBuffer: pixelBuffer, orientation: .up) else { return }
         let pictureWidth = CVPixelBufferGetWidth(pixelBuffer)

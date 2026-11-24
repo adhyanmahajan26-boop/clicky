@@ -77,7 +77,7 @@ struct VideoReadSummary {
 func readVideoFrames(
     videoURL: URL,
     maximumFramesPerSecond: Double,
-    handleKeptFrame: (CVPixelBuffer, CGImagePropertyOrientation, _ uprightWidthOverHeight: Float) throws -> Void
+    handleKeptFrame: (CVPixelBuffer, CGImagePropertyOrientation) throws -> Void
 ) throws -> VideoReadSummary {
     let asset = AVURLAsset(url: videoURL)
     let videoTracks = try waitForAsyncResult { try await asset.loadTracks(withMediaType: .video) }
@@ -91,7 +91,6 @@ func readVideoFrames(
     let uprightWidth = orientationSwapsWidthAndHeight(orientation) ? storedHeight : storedWidth
     let uprightHeight = orientationSwapsWidthAndHeight(orientation) ? storedWidth : storedHeight
     guard uprightWidth > 0, uprightHeight > 0 else { throw ExtractionError("the video has no picture size") }
-    let uprightWidthOverHeight = Float(uprightWidth) / Float(uprightHeight)
 
     let assetReader = try AVAssetReader(asset: asset)
     // Bi-planar 4:2:0 is what the decoder makes anyway and Vision reads it directly, so no colour conversion is paid.
@@ -117,7 +116,7 @@ func readVideoFrames(
     func keep(_ sampleBuffer: CMSampleBuffer) throws {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         try autoreleasepool {
-            try handleKeptFrame(pixelBuffer, orientation, uprightWidthOverHeight)
+            try handleKeptFrame(pixelBuffer, orientation)
         }
         keptFrameCount += 1
     }

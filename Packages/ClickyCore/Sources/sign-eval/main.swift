@@ -383,7 +383,7 @@ func evaluateVideo(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
     let trackInfo = try waitForAsyncResult { try await SignVideoLandmarks.loadTrackInfo(videoURL: videoURL) }
     print("video: \(videoURL.lastPathComponent), \(trackInfo.uprightWidth)×\(trackInfo.uprightHeight), \(String(format: "%.1f", trackInfo.nominalFramesPerSecond)) frames a second")
 
-    let visionReader = SignVisionReader(readsFace: true)
+    let visionReader = SignVisionReader(readsFace: SignVisionReader.cameraReadsFace)
     var reader = SignLiveReader(
         language: options.language,
         pictureWidth: Double(trackInfo.uprightWidth),

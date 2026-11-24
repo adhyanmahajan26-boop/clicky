@@ -47,6 +47,10 @@ public final class SignVisionReader {
     /// Whether the mouth and brows are read too (points 55–60). They are kept in the landmarks but are not features yet.
     public let readsFace: Bool
 
+    /// The app's camera (and anything standing in for it) does not read the face: mouth and brows are not features
+    /// yet, and the face request costs time every frame. `sign-extract --face` still reads it for the datasets.
+    public static let cameraReadsFace = false
+
     private let handPoseRequest: VNDetectHumanHandPoseRequest
     private let bodyPoseRequest: VNDetectHumanBodyPoseRequest
     private let faceLandmarksRequest: VNDetectFaceLandmarksRequest?

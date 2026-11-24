@@ -549,7 +549,7 @@ final class HandSignController: ObservableObject {
             do {
                 let trackInfo = try await SignVideoLandmarks.loadTrackInfo(videoURL: fileURL)
                 var timedFrames: [(SignLandmarkFrame, Double)] = []
-                let visionReader = SignVisionReader(readsFace: true)
+                let visionReader = SignVisionReader(readsFace: SignVisionReader.cameraReadsFace)
                 try SignVideoLandmarks.readFrames(trackInfo: trackInfo, visionReader: visionReader) { frame, frameTime in
                     timedFrames.append((frame, frameTime))
                 }
