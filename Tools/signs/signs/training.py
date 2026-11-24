@@ -7,6 +7,7 @@ import copy
 import json
 import math
 import os
+import sys
 import random
 import time
 from pathlib import Path
@@ -37,6 +38,10 @@ def seed_everything(seed: int) -> None:
 
 
 def default_worker_count() -> int:
+    """No worker processes on macOS: they are started with "spawn", which re-imports torch in every worker every
+    epoch (measured on the Mac Studio, 708 INCLUDE clips: 35 s an epoch with 4 workers, 1.1 s with none)."""
+    if sys.platform == "darwin":
+        return 0
     return min(8, os.cpu_count() or 1)
 
 
@@ -266,13 +271,77 @@ def make_loader(dataset, batch_size: int, worker_count: int, shuffle: bool, seed
 
     shuffle_generator = torch.Generator()
     shuffle_generator.manual_seed(seed)
-    return DataLoader(
+    if worker_count == 0:
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=0,
+            collate_fn=collate_function,
+            drop_last=drop_last,
+            generator=shuffle_generator,
+        )
+    # Batches cross from the workers as NumPy arrays and become tensors here. Tensors returned by a worker go
+    # through torch's shared memory, which on macOS starts torch_shm_manager processes that never exit and keep the
+    # training run (and pytest) from finishing.
+    worker_collate = _NumpyBatchCollate(collate_function)
+    worker_loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=worker_count,
-        collate_fn=collate_function,
+        collate_fn=worker_collate,
         drop_last=drop_last,
         generator=shuffle_generator,
         persistent_workers=False,
     )
+    return _TensorBatches(worker_loader)
+
+
+def _tensors_to_numpy(value):
+    if isinstance(value, torch.Tensor):
+        return value.numpy()
+    if isinstance(value, dict):
+        return {key: _tensors_to_numpy(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_tensors_to_numpy(item) for item in value)
+    return value
+
+
+def _numpy_to_tensors(value):
+    if isinstance(value, np.ndarray):
+        return torch.from_numpy(value)
+    if isinstance(value, dict):
+        return {key: _numpy_to_tensors(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_numpy_to_tensors(item) for item in value)
+    return value
+
+
+class _NumpyBatchCollate:
+    """Runs in a worker: the usual collate, then every tensor in the batch turned into a NumPy array (picklable,
+    so it is sent through the worker's pipe rather than shared memory)."""
+
+    def __init__(self, collate_function=None):
+        self.collate_function = collate_function
+
+    def __call__(self, samples):
+        from torch.utils.data import default_collate
+
+        batch = (self.collate_function or default_collate)(samples)
+        return _tensors_to_numpy(batch)
+
+
+class _TensorBatches:
+    """Iterates a worker DataLoader and turns its NumPy batches back into tensors."""
+
+    def __init__(self, loader):
+        self.loader = loader
+        self.dataset = loader.dataset
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        for batch in self.loader:
+            yield _numpy_to_tensors(batch)
