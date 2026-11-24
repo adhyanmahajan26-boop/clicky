@@ -16,6 +16,10 @@
 //     0.15 s of a tagged pointer event Clicky just posted is ignored
 //     (WindowServer can emit one for the warp). Keys and clicks are never
 //     excused.
+//   - after the owner's click on the confirm card: moves until the given
+//     uptime are ignored (`arm(excusingMouseMovesUntilUptime:)`), since the
+//     hand is still on the mouse; it used to cancel the very step he had
+//     just said yes to ("confirmed by click", then "you moved the mouse").
 //  While disarmed (idle, waiting for Claude, waiting for the owner's yes)
 //  nothing cancels: the owner's click on the confirm card is his answer.
 //
@@ -57,15 +61,18 @@ public struct ActionCancelLogic: Equatable, Sendable {
     public private(set) var isArmed = false
     public private(set) var accumulatedMouseDistance: CGFloat = 0
     private var lastSyntheticPointerEventTime: TimeInterval?
+    /// Mouse moves before this uptime don't cancel (right after a click on the confirm card).
+    private var mouseMovesExcusedUntilUptime: TimeInterval?
     /// Once cancelled, stays cancelled until re-armed (one cancel per run).
     public private(set) var hasCancelled = false
 
     public init() {}
 
-    public mutating func arm() {
+    public mutating func arm(excusingMouseMovesUntilUptime: TimeInterval? = nil) {
         isArmed = true
         accumulatedMouseDistance = 0
         hasCancelled = false
+        mouseMovesExcusedUntilUptime = excusingMouseMovesUntilUptime
     }
 
     public mutating func disarm() {
@@ -92,6 +99,7 @@ public struct ActionCancelLogic: Equatable, Sendable {
                event.timestamp >= lastSyntheticPointerEventTime {
                 return .ignore
             }
+            if let mouseMovesExcusedUntilUptime, event.timestamp < mouseMovesExcusedUntilUptime { return .ignore }
             accumulatedMouseDistance += hypot(deltaX, deltaY)
             guard accumulatedMouseDistance > Self.mouseJitterTolerance else { return .ignore }
             reason = "you moved the mouse"

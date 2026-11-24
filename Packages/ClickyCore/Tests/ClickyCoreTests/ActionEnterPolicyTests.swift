@@ -147,9 +147,10 @@ struct ActionEnterTierTests {
         #expect(decide(.click(elementID: 3), sendButton, said: "reply thanks").tier == .confirm)
         #expect(decide(.click(elementID: 3), sendButton, said: "reply thanks and send it").tier == .countdown)
         #expect(decide(.click(elementID: 3), sendButton, said: "reply thanks and bhej do").tier == .countdown)
-        // Other confirm buttons stay confirm.
+        // Other confirm buttons wait for a yes unless the owner asked for that very thing.
         let deleteButton = ActionTargetFacts(bundleIdentifier: "com.apple.mail", applicationName: "Mail", groundingRole: .button, label: "Delete")
-        #expect(decide(.click(elementID: 3), deleteButton, said: "delete it and send it").tier == .confirm)
+        #expect(decide(.click(elementID: 3), deleteButton, said: "reply thanks and send it").tier == .confirm)
+        #expect(decide(.click(elementID: 3), deleteButton, said: "delete it and send it").tier == .countdown)
     }
 
     @Test func refusedStepsCarryASpokenReason() {
@@ -158,9 +159,9 @@ struct ActionEnterTierTests {
         #expect(decision.tier == .refused)
         #expect(decision.refusalLine(for: Self.typeAndEnter).contains("password"))
         #expect(!decision.refusalLine(for: Self.typeAndEnter).isEmpty)
-        // Return into System Settings: still a yes first, even when asked.
+        // Return into System Settings: the countdown first, even when asked (hands-free: no yes needed).
         let settings = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Wi-Fi")
-        #expect(decide(Self.returnKey, settings, said: "press enter").tier == .confirm)
+        #expect(decide(Self.returnKey, settings, said: "press enter").tier == .countdown)
     }
 
     // MARK: Terminals
@@ -247,7 +248,7 @@ struct ActionEnterTierTests {
         #expect(decide(Self.returnKey, buyButton, said: "get me that charger").tier == .confirm)
         let settingsToggle = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Wi-Fi",
                                                role: "AXCheckBox", label: "Wi-Fi")
-        #expect(decide(Self.returnKey, settingsToggle, said: "press enter").tier == .confirm)
+        #expect(decide(Self.returnKey, settingsToggle, said: "press enter").tier == .countdown)
         // An ordinary focused button: same countdown as a click, free when the owner asked for Enter.
         let okButton = ActionTargetFacts(bundleIdentifier: "com.apple.Preview", applicationName: "Preview", role: "AXButton", label: "Open")
         #expect(decide(Self.returnKey, okButton, said: "show me that file").tier == .countdown)

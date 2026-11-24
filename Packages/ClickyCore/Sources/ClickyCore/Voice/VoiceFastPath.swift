@@ -614,6 +614,15 @@ public enum VoiceFastPathPolicy {
     public static func decide(_ command: VoiceFastPathCommand, facts: VoiceFastPathFacts, transcript: String) -> VoiceFastPathDecision {
         let context = ActionTurnContext(ownerTranscript: transcript)
         let tierDecision = tier(for: command, facts: facts, context: context)
+        // Closing a window with unsaved changes still asks, whatever tier the close key itself has.
+        if tierDecision.tier != .refused, facts.frontWindowHasUnsavedChanges {
+            switch command {
+            case .key(.closeTab), .key(.closeWindow):
+                return .confirm(prompt: "That window has unsaved changes. Close it anyway?", reason: "unsaved changes")
+            default:
+                break
+            }
+        }
         switch tierDecision.tier {
         case .refused:
             return .refuse(reason: tierDecision.reason)

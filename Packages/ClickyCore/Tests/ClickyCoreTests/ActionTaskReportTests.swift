@@ -32,7 +32,7 @@ struct ActionTaskReportTests {
         let records = [record(1, .openApp(name: "Mail", bundleIdentifier: nil), .done(detail: nil))]
         let waiting = ActionTaskReport.summary(records: records, ending: .waitingForYes, pendingQuestion: "should i press send?")
         #expect(waiting.contains("Done so far: open Mail."))
-        #expect(waiting.contains("Waiting for the owner's yes"))
+        #expect(waiting.contains("Waiting for the owner to say yes out loud"))
         #expect(waiting.contains("should i press send?"))
         let stopped = ActionTaskReport.summary(records: [], ending: .cancelled, cancelReason: "you pressed Escape")
         #expect(stopped == "Stopped (you pressed Escape) before doing anything on screen.")

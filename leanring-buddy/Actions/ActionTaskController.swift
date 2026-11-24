@@ -9,10 +9,12 @@
 //  2. The batch runs step by step while Claude's narration plays. Each step
 //     is resolved (ActionExecutor.resolve, read only), classified
 //     (ActionTierClassifier) and then:
-//       free → run · countdown → 1.5 s in the notch first · confirm → the
-//       batch pauses on a confirm card + "should i …?" until the owner says
-//       yes (next utterance) or clicks Confirm (a Return he didn't ask for:
-//       "Press enter? Say yes.", 6 s) · refused → not run, Clicky says why
+//       free → run · countdown → 1.5 s in the notch first · confirm (only
+//       sends, buys, deletes and the like) → the batch pauses on a confirm
+//       card + "should i …? say yes or no." and the wake listener stays open
+//       for the answer, so a spoken yes is enough; nobody has to click the
+//       card (a click still counts, and moving the mouse away from the card
+//       doesn't cancel what follows) · refused → not run, Clicky says why
 //       out loud right away, the rest of the batch is dropped, Claude hears
 //       why.
 //     After a screen-changing step, later steps naming ids are skipped as
@@ -112,6 +114,11 @@ final class ActionTaskController {
     private(set) var recentEvents: [String] = []
     /// What each recently ended task did on screen, by its agent id (`ActionTaskReport`), for whoever ordered it.
     private var endedTaskReports: [(agentID: String, report: String)] = []
+    /// After a click on the confirm card the owner's hand is still on the mouse: moves until this uptime don't cancel.
+    private var mouseMovesExcusedUntilUptime: TimeInterval?
+    static let mouseMovesExcusedAfterCardClickSeconds: TimeInterval = 2.5
+    /// What a task stopped by newer words reports, so Pointer Assistant (and Vello) never pick the old goal back up.
+    nonisolated static let replacedByNewerRequestReason = "a newer request replaced it, so don't go back to it"
     /// The last block that started no task at all (unreadable, or actions switched off), so an order's report says
     /// nothing was done instead of repeating the spoken "on it".
     private(set) var lastBlockThatStartedNothing: (date: Date, why: String)?
@@ -223,7 +230,8 @@ final class ActionTaskController {
     private func runBatch(plan: ActionPlan, steps: [ActionStep], groundedTurn: GroundedTurn, session: AnswerSession?,
                           screenChangedEarlier: Bool, approvedFirstStep: Bool) async {
         guard let task else { return }
-        inputMonitor.arm()
+        inputMonitor.arm(excusingMouseMovesUntilUptime: mouseMovesExcusedUntilUptime)
+        mouseMovesExcusedUntilUptime = nil
         defer { if self.task === task { inputMonitor.disarm() } }
         var screenChanged = screenChangedEarlier
         var stoppedEarly = false
@@ -410,7 +418,8 @@ final class ActionTaskController {
             approvePendingStep(how: "the call")
             return true
         }
-        switch ActionConfirmReply.parse(words) {
+        // Vello passes the yes on in its own words ("Yes, Addy confirmed. Click Displays."): the opening yes counts.
+        switch ActionConfirmReply.parseRelayed(words) {
         case .yes:
             approvePendingStep(how: "the call")
             return true
@@ -429,9 +438,12 @@ final class ActionTaskController {
         guard let task else { return }
         inputMonitor.disarm()
         let appName = target.facts?.applicationName.map { " in \($0)" } ?? ""
-        let question = decision.confirmQuestion ?? "should i \(step.shortDescription)\(appName)? \(decision.reason). say yes, or click confirm."
+        let question = decision.confirmQuestion ?? "should i \(step.shortDescription)\(appName)? \(decision.reason). say yes or no."
         let isReturnStep = step.pressesReturn
         let lifetime = decision.confirmWindowSeconds ?? Self.confirmationLifetime
+        // Hands-free: the wake listener takes the next words without "hey pointer", so the yes or no is just said.
+        // (On a call the call's own ears hear it and Vello passes it on; in a hands-free session that mic hears it.)
+        companionManager.wakeWordController.keepFollowUpOpen(forSeconds: lifetime)
         task.pendingConfirmation = PendingConfirmation(steps: remainingSteps, plan: plan, groundedTurn: groundedTurn, session: session,
                                                        screenChangedEarlier: screenChangedEarlier, question: question, createdAt: Date(),
                                                        isReturnStep: isReturnStep,
@@ -467,6 +479,9 @@ final class ActionTaskController {
         task.pendingConfirmation = nil
         note("confirmed by \(how)")
         companionManager.agentsCenter.log(task.agentID, "confirmed by \(how)")
+        if how == "click" {
+            mouseMovesExcusedUntilUptime = ProcessInfo.processInfo.systemUptime + Self.mouseMovesExcusedAfterCardClickSeconds
+        }
         startBatch(plan: pending.plan, steps: pending.steps, groundedTurn: pending.groundedTurn, session: pending.session,
                    screenChangedEarlier: pending.screenChangedEarlier, approvedFirstStep: true)
     }
@@ -522,7 +537,7 @@ final class ActionTaskController {
             cancel(reason: "you said stop", stopsSpeech: true)
             return true
         }
-        cancel(reason: "you asked for something else", stopsSpeech: false, speaksLine: false)
+        cancel(reason: Self.replacedByNewerRequestReason, stopsSpeech: false, speaksLine: false)
         return false
     }
 
@@ -599,6 +614,9 @@ final class ActionTaskController {
     /// Stops the task now. `stopsSpeech`: also cut Clicky's narration and any answer in flight.
     func cancel(reason: String, stopsSpeech: Bool, speaksLine: Bool = true) {
         guard let task else { return }
+        // The "look again" turn this task already sent: its answer would plan more steps for the old goal and, with
+        // the task gone, start it over as a new one (the owner's "it keeps doing the old thing after I said a new one").
+        let ownObserveTurnIsInFlight = task.phase == .waitingForModel && task.isAnswerTurnOpen && task.loop.observeTurnCount > 0
         task.isCancelled = true
         task.cancelReason = reason
         batchTask?.cancel()
@@ -607,7 +625,7 @@ final class ActionTaskController {
             task.loop.record(step, tier: .confirm, tierReason: nil, outcome: .cancelled)
         }
         finish(status: .cancelled, line: speaksLine ? "stopped: \(reason)." : nil, errorDescription: nil)
-        if stopsSpeech { companionManager.stopBuddySpeechAndCancelResponse() }
+        if stopsSpeech || ownObserveTurnIsInFlight { companionManager.stopBuddySpeechAndCancelResponse() }
     }
 
     private func finish(status: AgentStatus, line: String?, errorDescription: String? = nil) {

@@ -128,6 +128,60 @@ public enum CallPromptText {
     }
 }
 
+/// What a call says out loud when its brain gives no answer. Before this, a failed turn only set the call window's problem
+/// line, so on the phone it sounded like the bot had gone mute (Air, 24 Nov: Super Neutral Observer on LM Studio said
+/// nothing for a whole call, not even hello).
+public enum CallBrainFailure {
+    /// The longest reason read out: an error can carry a whole stderr.
+    public static let longestReasonCharacters = 160
+
+    /// Endings that are the call's own doing, never said: hanging up, a turn being replaced.
+    public static func isTheCallsOwnDoing(_ detail: String) -> Bool {
+        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "The call ended." || trimmed.contains("CancellationError")
+    }
+
+    /// The first line of an error, cut at a word near `longestReasonCharacters`, ending in a full stop.
+    public static func shortReason(_ detail: String) -> String {
+        let firstLine = detail.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !firstLine.isEmpty else { return "" }
+        var reason = firstLine
+        if reason.count > longestReasonCharacters {
+            let cut = reason.prefix(longestReasonCharacters)
+            reason = cut.lastIndex(of: " ").map { String(cut[..<$0]) } ?? String(cut)
+        }
+        if let last = reason.last, !".!?।".contains(last) { reason += "." }
+        return reason
+    }
+
+    /// What's said as the reason when the brain finished its turn with nothing to say: a model that spent the whole answer
+    /// thinking, or one that came back empty after a model switch. Before, that turn ended "successfully" in silence.
+    public static let emptyAnswerReason = "It sent back an empty answer"
+
+    /// A finished turn that left the owner with nothing: no words to say, and no call control or order to Pointer
+    /// Assistant carried out (those are answers too, and their reports come back as words later).
+    public static func isSilentAnswer(spokenText: String, actedOnTheCall: Bool) -> Bool {
+        !actedOnTheCall && spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The words. `brainName`: what thinks for the call as the owner knows it ("Claude Sonnet 5.5", "LM Studio").
+    /// `failuresSoFar`: earlier failed turns on this call, so the reason is said once and later ones are short.
+    public static func spokenWords(brainName: String, detail: String, failuresSoFar: Int, speaksHindi: Bool, readsDevanagari: Bool) -> String {
+        if failuresSoFar > 0 {
+            if speaksHindi { return readsDevanagari ? "\(brainName) से अब भी जवाब नहीं आया।" : "\(brainName) se ab bhi jawab nahi aaya." }
+            return "Still no answer from \(brainName)."
+        }
+        let opening: String
+        if speaksHindi {
+            opening = readsDevanagari ? "माफ़ करना, \(brainName) से जवाब नहीं आया।" : "Sorry yaar, \(brainName) se jawab nahi aaya."
+        } else {
+            opening = "Sorry, I didn't get an answer from \(brainName)."
+        }
+        let reason = shortReason(detail)
+        return reason.isEmpty ? opening : "\(opening) \(reason)"
+    }
+}
+
 /// Which brain answers a call with a bot that isn't Vello's own: that bot's own engine and model, or plain words for
 /// why it can't take the call and what fixes it.
 public enum CallBrainChoice: Equatable, Sendable {

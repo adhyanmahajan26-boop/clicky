@@ -210,14 +210,36 @@ struct ActionTierTests {
     }
 
     @Test func sendPostBuyDeleteButtonsNeedConfirm() {
-        let labels = ["Send", "Send now", "Post", "Submit", "Publish", "Buy now", "Place order", "Pay $12.00", "Checkout", "Delete", "Remove",
-                      "Move to Trash", "Save changes", "Save", "Confirm", "OK", "Don\u{2019}t Save", "Discard", "Subscribe", "Sign out", "Apply"]
+        let labels = ["Send", "Send now", "Post", "Submit", "Publish", "Buy now", "Place order", "Pay $12.00", "Checkout", "Delete",
+                      "Move to Trash", "Don\u{2019}t Save", "Discard", "Subscribe", "Sign out", "Merge pull request"]
         for label in labels {
             let decision = ActionTierClassifier.classify(.click(elementID: 1), target: Self.chromeElement(.button, label), context: Self.plainContext)
             #expect(decision.tier == .confirm, "\(label): \(decision.reason)")
         }
         // Even a link named Delete.
         #expect(tier(.click(elementID: 1), Self.chromeElement(.link, "Delete account")) == .confirm)
+    }
+
+    /// Hands-free (the owner, 2026-11-24: "what is the point of having hands free machine if i have to click"): saving,
+    /// OK, Apply and the like only get the countdown, so a task carries on without anyone pressing a confirm card.
+    @Test func saveOkApplyAndTheLikeOnlyGetTheCountdown() {
+        for label in ["Remove", "Save changes", "Save", "Confirm", "OK", "Apply", "Allow", "Install", "Sign in", "Archive"] {
+            let decision = ActionTierClassifier.classify(.click(elementID: 1), target: Self.chromeElement(.button, label), context: Self.plainContext)
+            #expect(decision.tier == .countdown, "\(label): \(decision.reason)")
+        }
+    }
+
+    @Test func theOwnersOwnWordsAreTheYesForThatButtonButNeverForMoney() {
+        let delete = Self.chromeElement(.button, "Delete")
+        #expect(tier(.click(elementID: 1), delete, said: "delete it") == .countdown)
+        #expect(tier(.click(elementID: 1), delete, said: "theo asks: click Delete on the old draft") == .countdown)
+        #expect(tier(.click(elementID: 1), delete, said: "don't delete it, just look") == .confirm)
+        #expect(tier(.click(elementID: 1), delete, said: "delete mat karo") == .confirm)
+        #expect(tier(.click(elementID: 1), delete, said: "delete it but ask me first") == .confirm)
+        #expect(tier(.click(elementID: 1), Self.chromeElement(.button, "Merge pull request"), said: "merge it") == .countdown)
+        // Buying and paying always wait for a spoken yes.
+        #expect(tier(.click(elementID: 1), Self.chromeElement(.button, "Buy now"), said: "buy it") == .confirm)
+        #expect(tier(.click(elementID: 1), Self.chromeElement(.button, "Pay $12.00"), said: "pay for it") == .confirm)
     }
 
     @Test func wordsInsideOtherWordsDontCount() {
@@ -277,10 +299,17 @@ struct ActionTierTests {
         #expect(tier(.scroll(elementID: nil, direction: .down, amount: 2), terminal) == .free)
     }
 
-    @Test func systemSettingsChangesNeedConfirmAndPrivacyIsRefused() {
+    @Test func systemSettingsChangesGetTheCountdownAndPrivacyIsRefused() {
         let settings = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Appearance",
                                          groundingRole: .radio, label: "Dark")
-        #expect(tier(.click(elementID: 1), settings) == .confirm)
+        // Live 2026-11-24 on the Air: "click Displays" and the red close button each waited for a click on the confirm card.
+        #expect(tier(.click(elementID: 1), settings) == .countdown)
+        let displaysRow = ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences", applicationName: "System Settings", windowTitle: "Appearance",
+                                            groundingRole: .text, label: "Displays")
+        #expect(tier(.click(elementID: 1), displaysRow) == .countdown)
+        // Spotlight with System Settings in front was held for a yes too; it's the whole Mac's key.
+        #expect(tier(.key(ActionKeyCombo.parse("cmd+space")!), settings) == .free)
+        #expect(tier(.type(elementID: 1, text: "x", pressesReturn: false), settings) == .countdown)
         #expect(tier(.openApp(name: "System Settings", bundleIdentifier: nil), ActionTargetFacts(bundleIdentifier: "com.apple.systempreferences")) == .free)
         #expect(tier(.scroll(elementID: 1, direction: .down, amount: 3), settings) == .free)
         var privacy = settings
@@ -339,15 +368,15 @@ struct ActionTierTests {
     }
 
     /// Live 2026-11-13: "press the device settings for me on this app" with Theo's own window in front. Clicky saw only the
-    /// desktop and asked which app. Theo's main windows are now seen; pressing there waits for the owner's yes.
-    @Test func theosMainWindowWaitsForAYesAndItsPanelsStayRefused() {
+    /// desktop and asked which app. Theo's main windows are now seen; pressing there gets the countdown (hands-free, 2026-11-24).
+    @Test func theosMainWindowGetsTheCountdownAndItsPanelsStayRefused() {
         let settingsButton = ActionTargetFacts(bundleIdentifier: "com.personal.clicky", applicationName: "Vello", windowTitle: "Vello", groundingRole: .text,
                                                label: "Devices", isOwnApplication: true, isOwnMainWindow: true)
         let click = ActionTierClassifier.classify(.click(elementID: 1), target: settingsButton, context: ActionTurnContext(ownerTranscript: "press the device settings"))
-        #expect(click.tier == .confirm)
-        #expect(click.confirmQuestion?.contains("Vello") == true)
-        #expect(tier(.key(ActionKeyCombo.parse("cmd+f")!), settingsButton) == .confirm)
-        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: false), settingsButton) == .confirm)
+        #expect(click.tier == .countdown)
+        #expect(click.reason.contains("Vello"))
+        #expect(tier(.key(ActionKeyCombo.parse("cmd+f")!), settingsButton) == .countdown)
+        #expect(tier(.type(elementID: 1, text: "hi", pressesReturn: false), settingsButton) == .countdown)
         #expect(tier(.scroll(elementID: nil, direction: .down, amount: 3), settingsButton) == .free)
         #expect(tier(.highlight(targets: [.element(1)], notes: []), settingsButton) == .free)
         // The confirm card, notch or spark are Theo's too, but never main windows: still refused, so Clicky can't approve itself.
@@ -381,8 +410,9 @@ struct ActionTierTests {
     }
 
     @Test func destructiveKeyCombos() {
+        // The app's own "save changes?" sheet still asks before work is lost, so these only get the countdown.
         for combo in ["cmd+q", "cmd+w", "cmd+delete", "cmd+s", "cmd+shift+w"] {
-            #expect(tier(.key(ActionKeyCombo.parse(combo)!), Self.chrome) == .confirm, "\(combo)")
+            #expect(tier(.key(ActionKeyCombo.parse(combo)!), Self.chrome) == .countdown, "\(combo)")
         }
         for combo in ["cmd+opt+esc", "cmd+shift+q", "ctrl+cmd+q", "cmd+shift+delete", "shift+cmd+opt+q"] {
             #expect(tier(.key(ActionKeyCombo.parse(combo)!), Self.chrome) == .refused, "\(combo)")
