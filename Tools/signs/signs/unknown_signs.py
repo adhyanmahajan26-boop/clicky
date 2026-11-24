@@ -412,6 +412,29 @@ def run_folds(data_folder, language: str, output_folder, fold_count: int = 3, fr
     return result
 
 
+def validation_answers_at(checkpoint_path: str, temperature: float, threshold: float, device_choice: str = "auto") -> tuple[float, float]:
+    """Share of validation clips answered at `threshold`, and share right among those."""
+    from .calibrate import softmax_with_temperature
+    from .data import WordClipDataset, assign_splits, load_sources, references_in_split
+    from .evaluate import load_evaluation_model
+    from .splits import VALIDATION_SPLIT
+    from .training import load_checkpoint, pick_device
+
+    checkpoint = load_checkpoint(checkpoint_path)
+    device = pick_device(device_choice)
+    model = load_evaluation_model(checkpoint).to(device)
+    sources = load_sources(checkpoint["data_folders"])
+    references, _ = assign_splits(sources, checkpoint["seed"], saved_signer_splits=checkpoint["signer_splits"], language=checkpoint["language"])
+    dataset = WordClipDataset(sources, references_in_split(references, VALIDATION_SPLIT), list(checkpoint["labels"]), None,
+                              checkpoint["seed"], checkpoint["frame_count"])
+    scores, _ = _scores_and_descriptions(model, dataset, device)
+    probabilities = softmax_with_temperature(scores, temperature)
+    true_numbers = np.array([dataset.word_number_by_word[reference.label] for reference in dataset.sample_references])
+    answered = probabilities.max(axis=1) >= threshold
+    right = probabilities.argmax(axis=1) == true_numbers
+    return float(answered.mean()) if len(answered) else 0.0, float((answered & right).sum() / max(answered.sum(), 1))
+
+
 def apply_threshold(checkpoint_path: str, folds_path: str) -> dict:
     """Puts the held-out-words threshold into the full model's calibration file (made by `signs.calibrate`, whose
     temperature stays), with the numbers it was chosen from; `export_coreml` copies them into `.reading.json`."""
@@ -423,6 +446,10 @@ def apply_threshold(checkpoint_path: str, folds_path: str) -> dict:
     chosen = folds["chosen"]
     calibration["leastWordProbabilityFromValidation"] = calibration["leastWordProbability"]
     calibration["leastWordProbability"] = chosen["threshold"]
+    # What the new threshold does on the full model's own validation signers (the old numbers were for the old one).
+    answered_share, right_share = validation_answers_at(checkpoint_path, calibration["temperature"], chosen["threshold"])
+    calibration["answeredOnValidation"] = answered_share
+    calibration["rightWhenAnsweredOnValidation"] = right_share
     calibration["leastWordProbabilityChosenFrom"] = {
         "rule": f"lowest top-probability threshold where never-taught signs are wrongly answered at most {folds['most_wrongly_answered']:.0%} of the time",
         "folds": folds["folds"], "fractionHeldOut": folds["fraction_held_out"], "seed": folds["seed"],
