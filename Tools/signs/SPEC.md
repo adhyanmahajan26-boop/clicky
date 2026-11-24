@@ -33,6 +33,14 @@ a hand with fewer than 12 joints seen is dropped), body from `VNDetectHumanBodyP
 mouth and brows from `VNDetectFaceLandmarksRequest` when asked for. Which hand is which is decided by
 `SignHandSides` in ClickyCore (section 2), never by Python, so the app and the extractor always agree.
 
+**The body pose runs on a padded picture.** Vision's body pose finds nobody in a close head-and-shoulders picture
+(a laptop or phone camera at arm's length: shoulders in 0 of 68 frames of a clip where they are plainly there).
+So the app and the extractor (`sign-extract --pad-body`) both shrink the upright picture to at most 640 pixels on
+its long side, put it at the top middle of a mid-grey canvas 2 times as wide and 1.6 times as tall, run the body
+pose on that, and turn the points back into the picture's own 0 to 1; a point that lands outside the picture
+counts as not seen. Hands and face are read from the picture itself. On half-body video the padded and plain
+body pose agree to within 0.006 of the picture, which is why INCLUDE's clips, extracted before this rule, stand.
+
 A clip on disk is `<clip id>.npy` (NumPy format 1.0, little-endian float32, C order, shape `[T, 61, 3]`). A
 dataset is a folder of those plus `manifest.csv`:
 
