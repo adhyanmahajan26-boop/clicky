@@ -3,7 +3,7 @@
 
 Sweep k takes, for every sign, the next 24 train, 4 val and 8 test videos, going round the participants in turn
 (one video of each participant, then the next of each, ...) so signers are spread evenly. Each batch of signs is
-downloaded (4 connections: Addy's line tops out near 4), extracted with sign-extract (padded body pose, --face,
+downloaded (12 connections, so it keeps its share of the line next to INCLUDE's 32), extracted with sign-extract (padded body pose, --face,
 4 processes), checked, and its videos deleted. Manifest rows are appended to <landmarks>/manifest.csv.
 
 Sweep 0 is special: every video of the pilot signs (hello, thankyou), re-extracted with the padded body pose.
@@ -22,7 +22,9 @@ LISTING = DATA / "logs/popsign-v21-listing.json"
 OUT = DATA / "landmarks/popsign"
 WORK = DATA / "downloads/popsign"
 STATE = DATA / "logs/popsign-state"
-EXTRACTOR = DATA / "tools/sign-extract-padded"
+# An installed copy, refreshed by hand after a build that passed its checks, so a `swift build` in a worktree
+# never hands a running job a half-written binary.
+EXTRACTOR = DATA / "tools/bin/sign-extract"
 FETCH_MANY = DATA / "tools/fetch_many.py"
 PER_SWEEP = {"train": 24, "val": 4, "test": 8}
 SIGNS_PER_BATCH = 25
@@ -102,7 +104,7 @@ def extract_batch(batch_name, jobs):
         target.mkdir(parents=True, exist_ok=True)
         names_file = target / "names.txt"
         names_file.write_text("\n".join(names) + "\n")
-        subprocess.run([sys.executable, str(FETCH_MANY), f"{BASE}{split}/{urllib.parse.quote(sign)}/", str(target), str(names_file), "4"],
+        subprocess.run([sys.executable, str(FETCH_MANY), f"{BASE}{split}/{urllib.parse.quote(sign)}/", str(target), str(names_file), "12"],
                        stdout=subprocess.DEVNULL)
     lines = []
     for split, sign, name in todo:

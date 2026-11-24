@@ -45,7 +45,7 @@ while IFS=$'\t' read -r zip_name zip_bytes zip_url; do
   cut -f1,2 $list > $list.2col
   awk -v prefix="$STATE/slice." '{ print > (prefix (NR % 4)) }' $list.2col
   for slice in $STATE/slice.[0-3](N); do
-    $TOOLS/sign-extract videos --list $slice --out $OUT --face --jobs 4 > $slice.log 2>&1 &
+    $TOOLS/bin/sign-extract videos --list $slice --out $OUT --face --jobs 4 > $slice.log 2>&1 &
   done
   wait
   extracted=$(date +%s)

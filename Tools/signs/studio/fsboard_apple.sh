@@ -14,7 +14,7 @@ for r in json.load(open('$CHOSEN')):
     if os.path.exists(path): print(f'fsboard-apple-{stem}\t{path}')
 " > $STATE/list.tsv
 awk -v prefix="$STATE/slice." '{ print > (prefix (NR % 4)) }' $STATE/list.tsv
-for slice in $STATE/slice.[0-3](N); do ~/sign-data/tools/sign-extract-padded videos --list $slice --out $OUT --face --jobs 4 > $slice.log 2>&1 & done
+for slice in $STATE/slice.[0-3](N); do ~/sign-data/tools/bin/sign-extract videos --list $slice --out $OUT --face --jobs 4 > $slice.log 2>&1 & done
 wait
 grep -h "^done:" $STATE/slice.*.log
 rm -f $STATE/slice.*

@@ -176,7 +176,7 @@ Everything lives under `~/sign-data/` (never in the repo):
 
 | Folder | What |
 | --- | --- |
-| `tools/` | copies of `Tools/signs/studio/*`, the built `sign-extract` (`sign-extract-padded` is the padded-body build) |
+| `tools/` | copies of `Tools/signs/studio/*`, the built `sign-extract` (`bin/sign-extract` is the installed extractor the jobs run, copied there by hand after a build that passed its checks) |
 | `venv/` | Python 3.12, torch 2.7.0 (MPS), coremltools 9.0 (its newest supported torch), numpy, pandas, pyarrow, pytest |
 | `downloads/` | videos and zips while they are being read; each is deleted once its landmarks exist |
 | `landmarks/<dataset>/` | SPEC clips + `manifest.csv` + `extract.csv` (one row a clip) + `failed.tsv` |
@@ -189,7 +189,7 @@ Setup:
 cd ~/sign-data && uv venv --python 3.12 venv
 VIRTUAL_ENV=~/sign-data/venv uv pip install "torch==2.7.0" coremltools numpy pandas pyarrow pytest
 cd <repo>/Packages/ClickyCore && swift build -c release --product sign-extract
-cp .build/release/sign-extract ~/sign-data/tools/sign-extract-padded
+mkdir -p ~/sign-data/tools/bin && cp .build/release/sign-extract ~/sign-data/tools/bin/sign-extract
 cp <repo>/Tools/signs/studio/* ~/sign-data/tools/
 cd <repo>/Tools/signs && ~/sign-data/venv/bin/python -m pytest tests -q
 ```
@@ -213,7 +213,17 @@ signdata.cc.gatech.edu already reach it), so jobs that download at the same time
 
 FSboard (finger-spelling, CC BY 4.0, `https://signdata.cc.gatech.edu/data/fsboard/`): its published landmark shards
 are scrambled (see `signs/fsboard_source.py`), so `python -m signs.fsboard_source convert` refuses them; FSboard
-has to be read from `video_clips/` with `sign-extract`. `studio/fsboard_gap.py` compares Apple's landmarks with
+is read from `video_clips/` with `sign-extract` instead, as a sample in sweeps:
+
+```bash
+# needs the four metadata files in ~/sign-data/downloads/fsboard/ (daun_v3-{train,validation,test}.json, dmk_v3-train.json)
+nohup /usr/bin/python3 ~/sign-data/tools/fsboard_sweeps.py --sweeps 5 > ~/sign-data/logs/fsboard.log 2>&1 &
+```
+
+Sweep k is 8,000 train clips (4,000 daun_v3, 4,000 dmk_v3), 600 daun_v3 validation and 600 test, picked with a
+fixed seed, one clip of each signer in turn, never `sensitiveContent`, never the 200 kept as `fsboard-apple`. Each
+clip keeps only the signed part (the metadata's annotation times, 0.25 s either side); dataset `fsboard`,
+source `apple`, FSboard's own splits. `studio/fsboard_gap.py` compares Apple's landmarks with
 what survives of FSboard's MediaPipe ones on the same clips.
 
 Smoke check of the whole path on whatever INCLUDE has so far (a smoke number, not a result):
