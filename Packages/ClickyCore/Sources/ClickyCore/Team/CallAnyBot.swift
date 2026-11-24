@@ -154,6 +154,16 @@ public enum CallBrainFailure {
         return reason
     }
 
+    /// What's said as the reason when the brain finished its turn with nothing to say: a model that spent the whole answer
+    /// thinking, or one that came back empty after a model switch. Before, that turn ended "successfully" in silence.
+    public static let emptyAnswerReason = "It sent back an empty answer"
+
+    /// A finished turn that left the owner with nothing: no words to say, and no call control or order to Pointer
+    /// Assistant carried out (those are answers too, and their reports come back as words later).
+    public static func isSilentAnswer(spokenText: String, actedOnTheCall: Bool) -> Bool {
+        !actedOnTheCall && spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The words. `brainName`: what thinks for the call as the owner knows it ("Claude Sonnet 5.5", "LM Studio").
     /// `failuresSoFar`: earlier failed turns on this call, so the reason is said once and later ones are short.
     public static func spokenWords(brainName: String, detail: String, failuresSoFar: Int, speaksHindi: Bool, readsDevanagari: Bool) -> String {

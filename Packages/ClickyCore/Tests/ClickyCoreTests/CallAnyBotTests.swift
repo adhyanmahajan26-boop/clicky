@@ -271,6 +271,19 @@ struct CallBrainFailureTests {
         #expect(reason.hasSuffix("overloaded."))
     }
 
+    @Test func anEmptyAnswerIsSilentUnlessTheBrainActed() {
+        #expect(CallBrainFailure.isSilentAnswer(spokenText: "", actedOnTheCall: false))
+        #expect(CallBrainFailure.isSilentAnswer(spokenText: " \n ", actedOnTheCall: false))
+        #expect(!CallBrainFailure.isSilentAnswer(spokenText: "", actedOnTheCall: true))
+        #expect(!CallBrainFailure.isSilentAnswer(spokenText: "Haan, bolo.", actedOnTheCall: false))
+    }
+
+    @Test func anEmptyAnswerIsSaidWithItsReason() {
+        let words = CallBrainFailure.spokenWords(brainName: "Claude Fable 5.2", detail: CallBrainFailure.emptyAnswerReason, failuresSoFar: 0,
+                                                 speaksHindi: false, readsDevanagari: false)
+        #expect(words == "Sorry, I didn't get an answer from Claude Fable 5.2. It sent back an empty answer.")
+    }
+
     @Test func hangingUpIsNeverSaid() {
         #expect(CallBrainFailure.isTheCallsOwnDoing("The call ended."))
         #expect(CallBrainFailure.isTheCallsOwnDoing("The operation couldn’t be completed. (Swift.CancellationError error 1.)"))
