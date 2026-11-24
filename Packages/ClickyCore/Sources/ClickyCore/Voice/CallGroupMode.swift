@@ -116,17 +116,22 @@ public enum CallGroupMode {
         return lines
     }
 
+    /// No usable name: the unset placeholder or a blank one, so a line never starts with a bare ": ".
+    private static func hasNoName(_ owner: String) -> Bool {
+        OwnerName.isUnset(owner) || owner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The lines as they're shown and saved: "Addy: …" and "Someone: …", one per line.
     public static func labelled(_ lines: [HeardLine], owner: String) -> String {
-        let ownerWord = OwnerName.isUnset(owner) ? "Owner" : owner
+        let ownerWord = hasNoName(owner) ? "Owner" : owner
         return lines.map { ($0.isOwner ? ownerWord : "Someone") + ": " + $0.text }.joined(separator: "\n")
     }
 
     /// The turn for the brain in group mode: what was heard since it last spoke, by speaker as far as can be told, and how
     /// to take part. `isAddressed`: its name or a "what do you think" was in it.
     public static func message(lines: [HeardLine], owner: String, botName: String, isAddressed: Bool) -> String {
-        let ownerWord = OwnerName.isUnset(owner) ? "the owner" : owner
-        let labelOwner = OwnerName.isUnset(owner) ? "Owner" : owner
+        let ownerWord = hasNoName(owner) ? "the owner" : owner
+        let labelOwner = hasNoName(owner) ? "Owner" : owner
         var message = "(Group call: you're in an X Space or a room with \(ownerWord) and other people, and they can all hear you. "
         message += "Here is what was said since you last spoke. Who said it is a guess from how loud it was: \"\(labelOwner)\" is the voice right at the Mac, \"Someone\" is anyone else, and words can be misheard.)\n"
         message += labelled(lines, owner: owner)
